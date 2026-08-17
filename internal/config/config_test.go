@@ -656,6 +656,56 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "tracker.handoff_state")
 	})
 
+	// --- HandoffEvidence subtests ---
+
+	t.Run("HandoffEvidence/DefaultsToObserved", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := cfg.Tracker.HandoffEvidence; got != HandoffEvidenceObserved {
+			t.Errorf("Tracker.HandoffEvidence = %q, want %q", got, HandoffEvidenceObserved)
+		}
+	})
+
+	for _, policy := range []HandoffEvidencePolicy{
+		HandoffEvidenceObserved,
+		HandoffEvidenceStrict,
+		HandoffEvidenceOff,
+	} {
+		t.Run("HandoffEvidence/Valid/"+string(policy), func(t *testing.T) {
+			t.Parallel()
+			cfg, err := NewServiceConfig(map[string]any{
+				"tracker": map[string]any{"handoff_evidence": string(policy)},
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := cfg.Tracker.HandoffEvidence; got != policy {
+				t.Errorf("Tracker.HandoffEvidence = %q, want %q", got, policy)
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name  string
+		value any
+	}{
+		{name: "empty", value: ""},
+		{name: "unknown", value: "required"},
+		{name: "wrong_case", value: "Observed"},
+		{name: "non_string", value: true},
+	} {
+		t.Run("HandoffEvidence/Invalid/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewServiceConfig(map[string]any{
+				"tracker": map[string]any{"handoff_evidence": tt.value},
+			})
+			assertConfigErrorField(t, err, "tracker.handoff_evidence")
+		})
+	}
+
 	t.Run("MaxSessions/DefaultIsZero", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{})

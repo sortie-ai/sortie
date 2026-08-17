@@ -39,9 +39,10 @@ const (
 	actionSweepCleanup = "sweep_cleanup"
 	actionSweepExpired = "sweep_expired"
 
-	handoffSuccess = "success"
-	handoffError   = "error"
-	handoffSkipped = "skipped"
+	handoffSuccess  = "success"
+	handoffError    = "error"
+	handoffSkipped  = "skipped"
+	handoffWithheld = "withheld"
 )
 
 // Budget reason values recorded in [State.BudgetExhaustedReason] and the

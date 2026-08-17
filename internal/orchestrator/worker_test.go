@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // --- Test helpers ---
@@ -2434,6 +2436,288 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSkipped)
 		}
 	})
+}
+
+func TestRunWorkerAttempt_HandoffEvidenceBaselineBoundary(t *testing.T) {
+	t.Run("full preparation captures after pre-run hook", func(t *testing.T) {
+		root := t.TempDir()
+		cfg := defaultWorkerConfig(root)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
+		cfg.Hooks.AfterCreate = `
+git init
+git config user.email test@example.com
+git config user.name Test
+git commit --allow-empty -m initial
+`
+		cfg.Hooks.BeforeRun = `printf 'prepared\n' > hook-output.txt`
+		ec := newExitCapture()
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		})
+		result := ec.waitResult(t)
+
+		if result.HandoffEvidenceBaseline == nil {
+			t.Fatalf("HandoffEvidenceBaseline is nil; capture error: %v", result.HandoffEvidenceBaselineError)
+		}
+		change, err := workspace.CompareHandoffEvidenceBaseline(context.Background(), result.WorkspacePath, *result.HandoffEvidenceBaseline)
+		if err != nil {
+			t.Fatalf("CompareHandoffEvidenceBaseline: %v", err)
+		}
+		if change.CommitMoved || change.WorktreeChanged {
+			t.Errorf("pre-run hook output counted as agent work: %+v", change)
+		}
+	})
+
+	t.Run("agent start runs after baseline capture", func(t *testing.T) {
+		root := t.TempDir()
+		cfg := defaultWorkerConfig(root)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
+		cfg.Hooks.AfterCreate = `
+git init
+git config user.email test@example.com
+git config user.name Test
+git commit --allow-empty -m initial
+`
+		cfg.Hooks.BeforeRun = `printf 'prepared\n' > hook-output.txt`
+		ec := newExitCapture()
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					if err := os.WriteFile(filepath.Join(params.WorkspacePath, "hook-output.txt"), []byte("changed by agent start\n"), 0o600); err != nil {
+						t.Fatalf("update hook output: %v", err)
+					}
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		})
+		result := ec.waitResult(t)
+
+		if result.HandoffEvidenceBaseline == nil {
+			t.Fatalf("HandoffEvidenceBaseline is nil; capture error: %v", result.HandoffEvidenceBaselineError)
+		}
+		change, err := workspace.CompareHandoffEvidenceBaseline(context.Background(), result.WorkspacePath, *result.HandoffEvidenceBaseline)
+		if err != nil {
+			t.Fatalf("CompareHandoffEvidenceBaseline: %v", err)
+		}
+		if !change.WorktreeChanged {
+			t.Errorf("change = %+v, want StartSession mutation after baseline", change)
+		}
+	})
+
+	t.Run("ensure-only path reaches the same boundary", func(t *testing.T) {
+		root := t.TempDir()
+		issue := workerTestIssue()
+		ensured, err := workspace.Ensure(root, issue.Identifier)
+		if err != nil {
+			t.Fatalf("workspace.Ensure: %v", err)
+		}
+		initGitRepo(t, ensured.Path)
+		cfg := defaultWorkerConfig(root)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
+		ec := newExitCapture()
+
+		RunWorkerAttempt(context.Background(), issue, nil, WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					if err := os.WriteFile(filepath.Join(params.WorkspacePath, "review-output.txt"), []byte("work\n"), 0o600); err != nil {
+						t.Fatalf("write review output: %v", err)
+					}
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Posture:                PostureReview,
+		})
+		result := ec.waitResult(t)
+
+		if result.HandoffEvidenceBaseline == nil {
+			t.Fatalf("HandoffEvidenceBaseline is nil; capture error: %v", result.HandoffEvidenceBaselineError)
+		}
+		change, err := workspace.CompareHandoffEvidenceBaseline(context.Background(), result.WorkspacePath, *result.HandoffEvidenceBaseline)
+		if err != nil {
+			t.Fatalf("CompareHandoffEvidenceBaseline: %v", err)
+		}
+		if !change.WorktreeChanged {
+			t.Errorf("change = %+v, want Ensure-path StartSession mutation", change)
+		}
+	})
+}
+
+func TestRunWorkerAttempt_HandoffEvidencePolicyIsFrozen(t *testing.T) {
+	root := t.TempDir()
+	cfg := defaultWorkerConfig(root)
+	cfg.Agent.MaxTurns = 1
+	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
+	cfg.Hooks.AfterCreate = `
+git init
+git config user.email test@example.com
+git config user.name Test
+git commit --allow-empty -m initial
+`
+	ec := newExitCapture()
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+				cfg.Tracker.HandoffEvidence = config.HandoffEvidenceOff
+				return domain.Session{ID: "sess-1"}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	})
+	result := ec.waitResult(t)
+
+	if got := result.HandoffEvidencePolicy; got != config.HandoffEvidenceObserved {
+		t.Errorf("HandoffEvidencePolicy = %q, want frozen %q", got, config.HandoffEvidenceObserved)
+	}
+	if result.HandoffEvidenceBaseline == nil {
+		t.Fatalf("HandoffEvidenceBaseline is nil; capture error: %v", result.HandoffEvidenceBaselineError)
+	}
+}
+
+func TestRunWorkerAttempt_HandoffEvidenceOffSkipsCapture(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		policy         config.HandoffEvidencePolicy
+		wantCaptureErr bool
+	}{
+		{name: "observed attempts capture", policy: config.HandoffEvidenceObserved, wantCaptureErr: true},
+		{name: "off skips capture", policy: config.HandoffEvidenceOff, wantCaptureErr: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = 1
+			cfg.Tracker.HandoffEvidence = tt.policy
+			ec := newExitCapture()
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+				TrackerAdapter:         &mockTrackerAdapter{},
+				AgentAdapter:           &mockAgentAdapter{},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+			})
+			result := ec.waitResult(t)
+
+			if result.HandoffEvidenceBaseline != nil {
+				t.Errorf("HandoffEvidenceBaseline = %+v, want nil for non-Git workspace", result.HandoffEvidenceBaseline)
+			}
+			if got := result.HandoffEvidenceBaselineError != nil; got != tt.wantCaptureErr {
+				t.Errorf("capture error present = %v, want %v (error: %v)", got, tt.wantCaptureErr, result.HandoffEvidenceBaselineError)
+			}
+		})
+	}
+}
+
+func TestRunWorkerAttempt_AfterRunCommitPushCountsAsHandoffWork(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, filepath.Dir(remote), "init", "--bare", remote)
+	cfg := defaultWorkerConfig(root)
+	cfg.Agent.MaxTurns = 1
+	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
+	cfg.Hooks.AfterCreate = fmt.Sprintf(`
+git init
+git config user.email test@example.com
+git config user.name Test
+git commit --allow-empty -m initial
+git branch -M main
+git remote add origin %q
+git push -u origin main
+`, remote)
+	cfg.Hooks.AfterRun = `
+git add agent-output.txt
+git commit -m after-run
+git push origin HEAD
+`
+	ec := newExitCapture()
+	var agentWorkspace string
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				agentWorkspace = params.WorkspacePath
+				return domain.Session{ID: "sess-1"}, nil
+			},
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if err := os.WriteFile(filepath.Join(agentWorkspace, "agent-output.txt"), []byte("work\n"), 0o600); err != nil {
+					t.Fatalf("write agent output: %v", err)
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	})
+	result := ec.waitResult(t)
+
+	if result.HandoffEvidenceBaseline == nil {
+		t.Fatalf("HandoffEvidenceBaseline is nil; capture error: %v", result.HandoffEvidenceBaselineError)
+	}
+	if got := strings.TrimSpace(handoffEvidenceGitOutput(t, result.WorkspacePath, "status", "--porcelain")); got != "" {
+		t.Fatalf("workspace is dirty after after_run commit/push: %q", got)
+	}
+	change, err := workspace.CompareHandoffEvidenceBaseline(context.Background(), result.WorkspacePath, *result.HandoffEvidenceBaseline)
+	if err != nil {
+		t.Fatalf("CompareHandoffEvidenceBaseline: %v", err)
+	}
+	if !change.CommitMoved {
+		t.Fatalf("change = %+v, want commit movement from after_run", change)
+	}
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, result.IssueID, "To Do")
+	params := handoffEvidenceExitParams(t, store, tracker, &spyMetrics{})
+	params.ActiveStates = []string{"To Do"}
+	HandleWorkerExit(state, result, params)
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1 for clean after_run commit", len(tracker.transitionCalls))
+	}
+}
+
+func handoffEvidenceGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+	return string(output)
 }
 
 // TestRunWorkerAttempt_MCPConfig covers MCP config generation, which

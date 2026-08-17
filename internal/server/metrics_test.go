@@ -357,6 +357,7 @@ func TestPromMetricsCounters(t *testing.T) {
 		m.IncHandoffTransitions("success")
 		m.IncHandoffTransitions("success")
 		m.IncHandoffTransitions("skipped")
+		m.IncHandoffTransitions("withheld")
 
 		families := gatherFamilies(t, m)
 		if got := counterValue(t, families, "sortie_handoff_transitions_total", map[string]string{"result": "success"}); got != 2 {
@@ -364,6 +365,9 @@ func TestPromMetricsCounters(t *testing.T) {
 		}
 		if got := counterValue(t, families, "sortie_handoff_transitions_total", map[string]string{"result": "skipped"}); got != 1 {
 			t.Errorf("sortie_handoff_transitions_total{result=skipped} = %v, want 1", got)
+		}
+		if got := counterValue(t, families, "sortie_handoff_transitions_total", map[string]string{"result": "withheld"}); got != 1 {
+			t.Errorf("sortie_handoff_transitions_total{result=withheld} = %v, want 1", got)
 		}
 	})
 

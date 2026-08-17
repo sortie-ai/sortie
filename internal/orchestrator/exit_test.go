@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // --- Test doubles ---
@@ -1523,6 +1524,403 @@ func exitStateWithIssue(t *testing.T, issueID, issueState string) *State {
 	state := exitState(t, issueID, nil)
 	state.Running[issueID].Issue.State = issueState
 	return state
+}
+
+func handoffEvidenceGitWorkspace(t *testing.T) (string, *workspace.HandoffEvidenceBaseline) {
+	t.Helper()
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	baseline, err := workspace.CaptureHandoffEvidenceBaseline(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("CaptureHandoffEvidenceBaseline: %v", err)
+	}
+	return dir, &baseline
+}
+
+func handoffEvidenceExitParams(t *testing.T, store *mockExitStore, tracker *mockTrackerAdapter, metrics domain.Metrics) HandleWorkerExitParams {
+	t.Helper()
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.TerminalStates = []string{"Done"}
+	params.Metrics = metrics
+	return params
+}
+
+func TestHandleWorkerExit_HandoffEvidenceObservedAbsenceWithholds(t *testing.T) {
+	const issueID = "HE-ABSENT"
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	state.Running[issueID].ContinuationContext = map[string]any{"review_comments": "preserved"}
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	params.CommentsConfig.OnCompletion = true
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		TurnsCompleted:          2,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+	t.Cleanup(func() { CancelRetry(state, issueID) })
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("completion comment posted for withheld run: %+v", tracker.commentCalls)
+	}
+	if got := tracker.fetchStatesCalls.Load(); got != 0 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 0 before a withheld handoff", got)
+	}
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("claim released after withheld handoff, want issue to remain active and claimed")
+	}
+	retry, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("retry not scheduled after withheld handoff")
+	}
+	if retry.scheduledDelayMS != backoffBaseMS {
+		t.Errorf("retry delay = %d, want exponential-backoff base %d", retry.scheduledDelayMS, backoffBaseMS)
+	}
+	if retry.scheduledDelayMS == continuationDelayMS {
+		t.Errorf("retry used continuation delay %d", continuationDelayMS)
+	}
+	if retry.ContinuationContext == nil || retry.ContinuationContext["review_comments"] != "preserved" {
+		t.Errorf("retry ContinuationContext = %#v, want preserved", retry.ContinuationContext)
+	}
+	if !strings.Contains(retry.Error, string(handoffAbsenceObserved)) {
+		t.Errorf("retry Error = %q, want verdict %q", retry.Error, handoffAbsenceObserved)
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory calls = %d, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "failed" {
+		t.Errorf("RunHistory.Status = %q, want failed", got)
+	}
+	if store.runHistories[0].Error == nil || !strings.Contains(*store.runHistories[0].Error, string(handoffAbsenceObserved)) {
+		t.Errorf("RunHistory.Error = %v, want absence verdict", store.runHistories[0].Error)
+	}
+	if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
+		t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
+	}
+	if len(spy.retries) != 1 || spy.retries[0] != triggerError {
+		t.Errorf("retries = %v, want [%s]", spy.retries, triggerError)
+	}
+	for _, want := range []string{
+		`msg="handoff withheld by evidence policy"`,
+		`verdict="absence of work observed"`,
+		"turns_completed=2",
+		"issue_id=" + issueID,
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log output missing %q\ngot: %s", want, logs.String())
+		}
+	}
+}
+
+func TestHandleWorkerExit_HandoffEvidenceWorkspaceChangesPermitHandoff(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, dir string)
+	}{
+		{
+			name: "commit moved",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("work\n"), 0o600); err != nil {
+					t.Fatalf("write work file: %v", err)
+				}
+				runGit(t, dir, "add", "work.txt")
+				runGit(t, dir, "commit", "-m", "work")
+			},
+		},
+		{
+			name: "working tree changed",
+			mutate: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("work\n"), 0o600); err != nil {
+					t.Fatalf("write work file: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, baseline := handoffEvidenceGitWorkspace(t)
+			tt.mutate(t, dir)
+			const issueID = "HE-WORK"
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{}
+			spy := &spyMetrics{}
+			state := exitStateWithIssue(t, issueID, "In Progress")
+			params := handoffEvidenceExitParams(t, store, tracker, spy)
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:                 issueID,
+				Identifier:              issueID + "-ident",
+				ExitKind:                WorkerExitNormal,
+				WorkspacePath:           dir,
+				HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+				HandoffEvidenceBaseline: baseline,
+				AgentAdapter:            "mock",
+			}, params)
+
+			if len(tracker.transitionCalls) != 1 {
+				t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+			}
+			if len(store.runHistories) != 1 || store.runHistories[0].Status != "succeeded" {
+				t.Errorf("run histories = %+v, want one succeeded row", store.runHistories)
+			}
+			if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSuccess {
+				t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSuccess)
+			}
+		})
+	}
+}
+
+func TestHandleWorkerExit_HandoffEvidencePriorSCMMetadataPermitsHandoff(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(t *testing.T, dir string)
+	}{
+		{
+			name: "pushed commit",
+			write: func(t *testing.T, dir string) {
+				writeSCMMetadata(t, dir, "feature/issue", "pushed-sha")
+			},
+		},
+		{
+			name: "pull request",
+			write: func(t *testing.T, dir string) {
+				writePRSCMMetadata(t, dir, 42, "acme", "repo", "feature/issue", "")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const issueID = "HE-SCM"
+			dir := t.TempDir()
+			tt.write(t, dir)
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{}
+			state := exitStateWithIssue(t, issueID, "In Progress")
+			params := handoffEvidenceExitParams(t, store, tracker, &spyMetrics{})
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:               issueID,
+				Identifier:            issueID + "-ident",
+				ExitKind:              WorkerExitNormal,
+				WorkspacePath:         dir,
+				HandoffEvidencePolicy: config.HandoffEvidenceObserved,
+				AgentAdapter:          "mock",
+			}, params)
+
+			if len(tracker.transitionCalls) != 1 {
+				t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+			}
+			if store.runHistories[0].Status != "succeeded" {
+				t.Errorf("RunHistory.Status = %q, want succeeded", store.runHistories[0].Status)
+			}
+		})
+	}
+}
+
+func TestHandleWorkerExit_HandoffEvidenceNonGitPolicies(t *testing.T) {
+	dir := t.TempDir()
+	_, baselineErr := workspace.CaptureHandoffEvidenceBaseline(context.Background(), dir)
+	if !errors.Is(baselineErr, workspace.ErrNotGitWorkspace) {
+		t.Fatalf("baseline error = %v, want ErrNotGitWorkspace", baselineErr)
+	}
+
+	t.Run("observed permits undeterminable evidence", func(t *testing.T) {
+		const issueID = "HE-NONGIT-OBS"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                      issueID,
+			Identifier:                   issueID + "-ident",
+			ExitKind:                     WorkerExitNormal,
+			TurnsCompleted:               1,
+			WorkspacePath:                dir,
+			HandoffEvidencePolicy:        config.HandoffEvidenceObserved,
+			HandoffEvidenceBaselineError: baselineErr,
+			AgentAdapter:                 "mock",
+		}, params)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+		}
+		if store.runHistories[0].Status != "succeeded" {
+			t.Errorf("RunHistory.Status = %q, want succeeded", store.runHistories[0].Status)
+		}
+		if strings.Contains(logs.String(), "handoff withheld by evidence policy") {
+			t.Errorf("observed policy withheld undeterminable evidence\nlogs: %s", logs.String())
+		}
+		if !strings.Contains(logs.String(), "handoff evidence not determinable") {
+			t.Errorf("missing undeterminable info record\nlogs: %s", logs.String())
+		}
+	})
+
+	t.Run("strict withholds undeterminable evidence", func(t *testing.T) {
+		const issueID = "HE-NONGIT-STRICT"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                      issueID,
+			Identifier:                   issueID + "-ident",
+			ExitKind:                     WorkerExitNormal,
+			TurnsCompleted:               1,
+			WorkspacePath:                dir,
+			HandoffEvidencePolicy:        config.HandoffEvidenceStrict,
+			HandoffEvidenceBaselineError: baselineErr,
+			AgentAdapter:                 "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+		}
+		if store.runHistories[0].Status != "failed" || store.runHistories[0].Error == nil ||
+			!strings.Contains(*store.runHistories[0].Error, string(handoffEvidenceUndetermined)) {
+			t.Errorf("RunHistory = %+v, want failed with undeterminable verdict", store.runHistories[0])
+		}
+		if !strings.Contains(logs.String(), "handoff evidence not determinable") ||
+			!strings.Contains(logs.String(), "handoff withheld by evidence policy") {
+			t.Errorf("strict policy logs missing info or warning\nlogs: %s", logs.String())
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
+		}
+	})
+}
+
+func TestHandleWorkerExit_HandoffEvidenceOffPreservesOldBehavior(t *testing.T) {
+	const issueID = "HE-OFF"
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                      issueID,
+		Identifier:                   issueID + "-ident",
+		ExitKind:                     WorkerExitNormal,
+		WorkspacePath:                filepath.Join(t.TempDir(), "does-not-exist"),
+		HandoffEvidencePolicy:        config.HandoffEvidenceOff,
+		HandoffEvidenceBaselineError: errors.New("must not be consulted"),
+		AgentAdapter:                 "mock",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+	if store.runHistories[0].Status != "succeeded" || store.runHistories[0].Error != nil {
+		t.Errorf("RunHistory = %+v, want old succeeded disposition", store.runHistories[0])
+	}
+	if strings.Contains(logs.String(), "handoff evidence") || strings.Contains(logs.String(), "handoff withheld") {
+		t.Errorf("off policy emitted evidence record\nlogs: %s", logs.String())
+	}
+	if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSuccess {
+		t.Errorf("handoffTransitions = %v, want only [%s]", spy.handoffTransitions, handoffSuccess)
+	}
+}
+
+func TestHandleWorkerExit_HandoffEvidenceOnlyAppliesToEligibleHandoff(t *testing.T) {
+	t.Run("no handoff state keeps the continuation disposition", func(t *testing.T) {
+		const issueID = "HE-NO-HANDOFF"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.ActiveStates = []string{"In Progress"}
+		params.Metrics = spy
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                      issueID,
+			Identifier:                   issueID + "-ident",
+			ExitKind:                     WorkerExitNormal,
+			HandoffEvidencePolicy:        config.HandoffEvidenceStrict,
+			HandoffEvidenceBaselineError: errors.New("must not be consulted"),
+			AgentAdapter:                 "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+
+		retry := state.RetryAttempts[issueID]
+		if retry == nil || retry.scheduledDelayMS != continuationDelayMS {
+			t.Errorf("retry = %+v, want existing continuation disposition", retry)
+		}
+		if store.runHistories[0].Status != "succeeded" {
+			t.Errorf("RunHistory.Status = %q, want succeeded", store.runHistories[0].Status)
+		}
+		if strings.Contains(logs.String(), "handoff evidence") || len(spy.handoffTransitions) != 0 {
+			t.Errorf("ineligible path consulted evidence; metrics=%v logs=%s", spy.handoffTransitions, logs.String())
+		}
+	})
+
+	t.Run("terminal disposition wins before evidence", func(t *testing.T) {
+		const issueID = "HE-TERMINAL"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                      issueID,
+			Identifier:                   issueID + "-ident",
+			ExitKind:                     WorkerExitNormal,
+			ObservedIssueState:           "Done",
+			HandoffEvidencePolicy:        config.HandoffEvidenceStrict,
+			HandoffEvidenceBaselineError: errors.New("must not be consulted"),
+			AgentAdapter:                 "mock",
+		}, params)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+		}
+		if store.runHistories[0].Status != "succeeded" {
+			t.Errorf("RunHistory.Status = %q, want succeeded terminal suppression", store.runHistories[0].Status)
+		}
+		if strings.Contains(logs.String(), "handoff evidence") {
+			t.Errorf("terminal path consulted evidence\nlogs: %s", logs.String())
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSkipped {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSkipped)
+		}
+	})
 }
 
 func TestHandleWorkerExit_HandoffTransitionSucceeds(t *testing.T) {

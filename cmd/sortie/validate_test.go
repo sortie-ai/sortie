@@ -2974,6 +2974,48 @@ Do {{ .issue.title }}.
 `, kind, handoff)
 }
 
+func TestValidateRejectsInvalidHandoffEvidenceOffline(t *testing.T) {
+	t.Parallel()
+
+	workflow := []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+  handoff_state: Human Review
+  handoff_evidence: required
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+	wfPath := writeCustomWorkflowFile(t, t.TempDir(), workflow)
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Error("validateOutput.Valid = true, want false")
+	}
+	const wantCheck = "config.tracker.handoff_evidence"
+	diagnostic := diagWithCheck(out.Errors, wantCheck)
+	if diagnostic == nil {
+		t.Fatalf("validateOutput.Errors = %v, want diagnostic %q", out.Errors, wantCheck)
+	}
+	if !strings.Contains(diagnostic.Message, "observed, strict, or off") {
+		t.Errorf("diagnostic.Message = %q, want allowed policy names", diagnostic.Message)
+	}
+}
+
 // TestValidateHandoffStateCollisionEveryTrackerKind verifies that a
 // handoff_state colliding with active_states or terminal_states is a hard
 // error for every registered tracker kind. The rule is enforced by the

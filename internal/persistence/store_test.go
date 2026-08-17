@@ -2570,6 +2570,41 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_IgnoresFailedAndEmptyWorksp
 	}
 }
 
+func TestLoadLatestSuccessfulRunsForReactionRecovery_PrefersProducingRunOverLaterFailedRun(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	producing := appendRecoveryRun(t, s, "ISS-EVIDENCE", "PROJ-E", 1, recentCompletedAt(2))
+	errorText := "handoff withheld: absence of work observed under observed policy"
+	appendOrFatal(t, s, RunHistory{
+		IssueID:      "ISS-EVIDENCE",
+		Identifier:   "PROJ-E",
+		Attempt:      2,
+		AgentAdapter: "mock",
+		Workspace:    "/ws/PROJ-E",
+		StartedAt:    recentCompletedAt(1),
+		CompletedAt:  recentCompletedAt(1),
+		Status:       "failed",
+		Error:        &errorText,
+	})
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 1", len(got))
+	}
+	if got[0].ID != producing.ID || got[0].Attempt != producing.Attempt {
+		t.Errorf("recovery run = (id=%d, attempt=%d), want earlier successful run (id=%d, attempt=%d)",
+			got[0].ID, got[0].Attempt, producing.ID, producing.Attempt)
+	}
+}
+
 func TestLoadLatestSuccessfulRunsForReactionRecovery_DisplayIDRoundTrip(t *testing.T) {
 	t.Parallel()
 
