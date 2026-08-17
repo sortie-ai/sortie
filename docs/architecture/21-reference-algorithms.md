@@ -389,7 +389,74 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 on_worker_exit(issue_id, reason, state):
   running_entry = state.running.remove(issue_id)
   state = add_runtime_seconds_to_totals(state, running_entry)
-  sqlite.persist_run_attempt(running_entry, reason)  # persist before scheduling retry
+
+  status = status_for_exit(reason)
+  run_error = worker_result.error
+  handoff_path = false
+  evidence_withheld = false
+  evidence_work_observed = false
+  absence_parked = false
+
+  # A normal exit resolves the conditions of its handoff disposition
+  # here, ahead of the persist, because a withheld handoff is what
+  # decides the status this run records. The persist still precedes any
+  # retry the dispositions schedule, and those dispositions are still
+  # taken in order below; this pass only reads what they will test.
+  if reason == normal:
+    # The resolved observation feeds the terminal test and nothing else.
+    # The active test reads the dispatch-time snapshot, because the most
+    # common non-active state at a normal exit is the handoff state
+    # itself, applied by the agent through its own tracker calls.
+    observation = resolve_terminal_observation(running_entry, worker_result)
+    terminal = is_terminal_state(observation, cfg.tracker.terminal_states)
+    is_active = is_active_state(running_entry.issue.state, cfg.tracker.active_states)
+    drives_state = dispatch_drives_issue_state(running_entry)
+    blocked_soft_stop = is_blocked_soft_stop(running_entry, worker_result)
+    handoff_path = cfg.tracker.handoff_state is not empty and is_active
+        and not blocked_soft_stop and drives_state
+
+    # The evidence verdict is a fifth condition on the handoff path, read
+    # only where those four already select it and no terminal observation
+    # suppresses the exit. It can withhold a handoff write and can never
+    # cause one (Section 11.5). Under `off` no verdict is computed at all
+    # and the four-condition decision stands.
+    policy = worker_result.handoff_evidence_policy  # frozen at dispatch
+    if handoff_path and not terminal and policy != "off":
+      evidence = evaluate_handoff_evidence(worker_result)
+      absence = evidence.verdict == "absence of work observed"
+      undeterminable = evidence.verdict == "evidence not determinable"
+      evidence_withheld = absence or (undeterminable and policy == "strict")
+      if evidence_withheld:
+        # A withheld handoff is an unsuccessful run even though the agent
+        # process exited normally, so the persisted status is failed with
+        # the verdict named as its cause (Section 19.2).
+        metrics.inc_handoff_transitions("withheld")
+        status = "failed"
+        run_error = handoff_evidence_failure(policy, evidence.verdict)
+      elif evidence.verdict == "work observed":
+        evidence_work_observed = true
+
+  sqlite.persist_run_attempt(running_entry, status, run_error)
+
+  # The absence sequence is reconstructed from run_history rather than
+  # from a verdict column (Section 19.2), so both steps below follow the
+  # row written above: the reset marks that row as the end of the previous
+  # sequence, and the count reads only what follows the last reset. Work
+  # observed clears the sequence at once, ahead of the tracker write the
+  # handoff disposition may still attempt, so a failed write cannot
+  # restore the old count.
+  if evidence_work_observed:
+    sqlite.reset_handoff_absence_sequence(issue_id)
+  elif evidence_withheld:
+    absences = sqlite.consecutive_handoff_absences(issue_id)
+    ceiling = cfg.agent.max_sessions if cfg.agent.max_sessions > 0 else 3
+    log_warn("handoff withheld by evidence policy", evidence.verdict, absences)
+    if absences >= ceiling:
+      # The sequence stops at the ceiling: parking cancels the retry,
+      # releases the claim, and holds the issue out of dispatch until a
+      # later tick observes a release (Section 14.2).
+      park_issue(state, issue_id, reason="handoff_absence")
+      absence_parked = true
 
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
@@ -404,8 +471,8 @@ on_worker_exit(issue_id, reason, state):
     # drives issue state, park the issue instead of merely releasing the
     # claim, so it stays out of dispatch until a later tick observes a
     # release (Section 14.2).
-    if is_blocked_soft_stop(running_entry, worker_result):
-      if dispatch_drives_issue_state(running_entry):
+    if blocked_soft_stop:
+      if drives_state:
         park_issue(state, issue_id, reason="agent_blocked")
       else:
         cancel_retry(state, issue_id)
@@ -418,27 +485,33 @@ on_worker_exit(issue_id, reason, state):
     # dispatch-time snapshot) reports a terminal state. Overwriting a
     # terminal decision with the handoff state would undo it, so no
     # handoff, retry, or reaction follows.
-    observation = resolve_terminal_observation(running_entry, worker_result)
-    if is_terminal_state(observation, cfg.tracker.terminal_states):
+    if terminal:
       cancel_retry(state, issue_id)
       state.claimed.remove(issue_id)
       log_info("handoff suppressed for terminal issue", observation)
       notify_observers()
       return state
 
-    # The resolved observation feeds the terminal test above and nothing
-    # else. The active test reads the dispatch-time snapshot, because the
-    # most common non-active state at a normal exit is the handoff state
-    # itself, applied by the agent through its own tracker calls.
-    is_active = is_active_state(running_entry.issue.state, cfg.tracker.active_states)
-    drives_state = dispatch_drives_issue_state(running_entry)
-    handoff_taken = false
-
     # Disposition 3: a handoff state is configured, the issue is still
-    # active, and the dispatch drives issue state. Perform the handoff
-    # transition (Section 11.5).
-    if cfg.tracker.handoff_state is not empty and is_active and drives_state:
-      handoff_taken = true
+    # active, and the dispatch drives issue state. The evidence verdict
+    # resolved above decides which arm runs: a verdict that permits the
+    # write performs the handoff transition (Section 11.5), and one that
+    # withholds it makes no tracker write at all.
+    if handoff_path and evidence_withheld:
+      # A withheld verdict makes no tracker transition and leaves the
+      # issue in its active state. The exit is a failure even though the
+      # agent process exited normally, so it takes the ordinary
+      # exponential-backoff failure lane under the same retry-slot
+      # arbitration, not the short continuation lane. Parking at the
+      # ceiling above already cancelled the sequence and released the
+      # claim, so nothing further is scheduled for it here.
+      if not absence_parked and retry_slot_incumbent(state, issue_id) is nil:
+        state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
+          identifier: running_entry.identifier,
+          error: format("worker exited: %run_error")
+        })
+
+    elif handoff_path:
       result = perform_handoff_transition(issue_id, cfg.tracker.handoff_state)
       if result.ok:
         if retry_slot_incumbent(state, issue_id) is nil:
@@ -502,7 +575,7 @@ on_worker_exit(issue_id, reason, state):
     # disposition 6, and its retained claim counts as released here
     # exactly as an ordinary released claim would.
     still_claimed = (issue_id in state.claimed) and not claim_protected_for_incumbent
-    if was_claimed and (handoff_taken or still_claimed):
+    if was_claimed and (handoff_path or still_claimed):
       scm = read_scm_metadata(workspace_path) if workspace_path is not empty else nil
 
       # CI is rewritten on every exit so it always carries the ref the
