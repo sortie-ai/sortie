@@ -83,7 +83,7 @@ should return:
 - `rate_limits` (latest coding-agent rate limit payload, if available)
 - `budget_exhausted_count` (number of issues currently blocked by a re-dispatch budget; always present)
 - `budget_exhausted` (sorted list of blocked issue IDs; omitted when the set is empty)
-- `budget_exhausted_reason` (map from blocked issue ID to the budget that fired, `token_budget` or `session_budget`, token taking precedence when both are exhausted for one issue; omitted when the set is empty). The exhausted set and its reasons are rebuilt per tick from the budget ceilings (Section 8.4); an issue's reason entry exists exactly when that issue is in `budget_exhausted`.
+- `budget_exhausted_reason` (map from blocked issue ID to the gate that fired, `handoff_absence`, `token_budget` or `session_budget`; `handoff_absence` takes precedence over both budgets and `token_budget` takes precedence over `session_budget` when one issue reaches more than one gate; omitted when the set is empty). The exhausted set and its reasons are rebuilt per tick from those gates (Section 8.4); an issue's reason entry exists exactly when that issue is in `budget_exhausted`.
 
 Recommended snapshot error modes:
 

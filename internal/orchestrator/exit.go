@@ -37,6 +37,7 @@ type WorkerExitStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
+	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -297,6 +298,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	var terminal bool
 	var evidenceResult handoffEvidenceResult
 	var evidenceWithheld bool
+	var evidenceWorkObserved bool
 	var evidenceErr error
 	if workerResult.ExitKind == WorkerExitNormal {
 		issueIsActive = len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
@@ -323,8 +325,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				metrics.IncHandoffTransitions(handoffWithheld)
 			} else if evidenceResult.Verdict == handoffWorkObserved {
 				// A positive verdict resets the runtime gate immediately. The
-				// successful run_history row below supplies the durable reset even
-				// when the later tracker handoff write fails.
+				// durable reset recorded after the run_history write below holds
+				// even when the later tracker handoff write fails.
+				evidenceWorkObserved = true
 				clearHandoffAbsenceGate(state, workerResult.IssueID)
 			}
 		}
@@ -386,6 +389,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		log.Error("failed to persist run history",
 			slog.Any("error", err),
 		)
+	}
+
+	if evidenceWorkObserved {
+		if err := params.Store.ResetHandoffAbsenceSequence(ctx, workerResult.IssueID); err != nil {
+			log.Error("failed to reset handoff absence sequence",
+				slog.Any("error", err),
+			)
+		}
 	}
 
 	consecutiveAbsences := 0

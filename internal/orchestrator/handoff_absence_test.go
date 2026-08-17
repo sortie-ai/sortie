@@ -270,6 +270,71 @@ func TestHandleWorkerExitWorkObservedResetsAbsenceSequenceBeforeHandoffWrite(t *
 	if len(tracker.transitionCalls) != 1 {
 		t.Errorf("TransitionIssue calls = %d, want 1 failing handoff attempt", len(tracker.transitionCalls))
 	}
+	if len(store.absenceResetOf) != 1 || store.absenceResetOf[0] != issueID {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want [%s]", store.absenceResetOf, issueID)
+	}
+}
+
+func TestHandleWorkerExitSucceededWithoutVerdictKeepsAbsenceSequence(t *testing.T) {
+	const issueID = "ABS-BLOCKED"
+	store := &mockExitStore{}
+	seedMockHandoffAbsences(store, issueID, 2)
+	tracker := newRecordingHandoffTracker()
+	blockedState := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
+	params.TrackerAdapter = tracker
+
+	// A blocked soft stop records "succeeded" and carries no evidence verdict,
+	// so it must neither reset the sequence nor advance it.
+	blockedDir, blockedBaseline := handoffEvidenceGitWorkspace(t)
+	HandleWorkerExit(blockedState, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-BLOCKED",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           blockedDir,
+		SoftStop:                true,
+		SoftStopReason:          "blocked",
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: blockedBaseline,
+		AgentAdapter:            "mock",
+	}, params)
+
+	if len(store.runHistories) == 0 || store.runHistories[len(store.runHistories)-1].Status != "succeeded" {
+		t.Fatalf("blocked soft stop recorded %+v, want a succeeded row", store.runHistories)
+	}
+	if len(store.absenceResetOf) != 0 {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want none without a work-observed verdict", store.absenceResetOf)
+	}
+	counts, err := store.QueryConsecutiveHandoffAbsenceCounts(context.Background(), []string{issueID})
+	if err != nil {
+		t.Fatalf("QueryConsecutiveHandoffAbsenceCounts: %v", err)
+	}
+	if got := counts[issueID]; got != 2 {
+		t.Fatalf("consecutive absences after a blocked soft stop = %d, want 2", got)
+	}
+
+	// The next absence is therefore the third, and reaches the ceiling instead
+	// of restarting a sequence the soft stop appeared to have cleared.
+	absentDir, absentBaseline := handoffEvidenceGitWorkspace(t)
+	absentState := exitStateWithIssue(t, issueID, "In Progress")
+	HandleWorkerExit(absentState, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-BLOCKED",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           absentDir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: absentBaseline,
+		AgentAdapter:            "mock",
+	}, params)
+	absentState.TrackerOpsWg.Wait()
+	t.Cleanup(func() { CancelRetry(absentState, issueID) })
+
+	if _, ok := absentState.BudgetExhausted[issueID]; !ok {
+		t.Error("third consecutive absence did not park the issue")
+	}
+	if calls := tracker.labels(); len(calls) != 1 {
+		t.Errorf("AddLabel calls = %+v, want one parking call", calls)
+	}
 }
 
 func TestHandleRetryTimerKeepsRecoveredExhaustedAbsenceParkedWhenLabelFails(t *testing.T) {
@@ -306,6 +371,169 @@ func TestHandleRetryTimerKeepsRecoveredExhaustedAbsenceParkedWhenLabelFails(t *t
 	}
 	if !strings.Contains(logs.String(), "handoff absence escalation label failed") {
 		t.Errorf("missing label failure log\nlogs: %s", logs.String())
+	}
+}
+
+func TestHandleWorkerExitReportsAbsenceResetFailure(t *testing.T) {
+	const issueID = "ABS-RESET-ERR"
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("work\n"), 0o600); err != nil {
+		t.Fatalf("write work file: %v", err)
+	}
+
+	store := &mockExitStore{absenceResetErr: errors.New("database is locked")}
+	seedMockHandoffAbsences(store, issueID, 1)
+	tracker := newRecordingHandoffTracker()
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
+	params.TrackerAdapter = tracker
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-RESET-ERR",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+	t.Cleanup(func() { CancelRetry(state, issueID) })
+
+	if !strings.Contains(logs.String(), "failed to reset handoff absence sequence") {
+		t.Errorf("missing reset failure log\nlogs: %s", logs.String())
+	}
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue calls = %d, want 1: the handoff was withheld by a bookkeeping failure", len(tracker.transitionCalls))
+	}
+}
+
+func TestHandleRetryTimerFallsBackWhenAbsenceQueryFails(t *testing.T) {
+	const issueID = "ABS-QUERY-ERR"
+	store := &mockRetryStore{absenceCountErr: errors.New("database is locked")}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-QUERY", "In Progress")}
+	state := retryState(t, issueID, "PROJ-QUERY", 3)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 0
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleRetryTimer(state, issueID, params)
+	state.TrackerOpsWg.Wait()
+
+	if !strings.Contains(logs.String(), "handoff absence count query failed") {
+		t.Errorf("missing query failure log\nlogs: %s", logs.String())
+	}
+	if _, ok := state.BudgetExhausted[issueID]; !ok {
+		t.Error("an unanswerable absence query resumed an exhausted sequence")
+	}
+	if tracker.fetchCount != 0 {
+		t.Errorf("FetchIssueByID calls = %d, want 0 after parking", tracker.fetchCount)
+	}
+}
+
+func TestRebuildBudgetExhaustedRetainsAbsenceParkingOnQueryError(t *testing.T) {
+	const issueID = "ABS-REBUILD-ERR"
+	issue := candidateIssue(issueID, "PROJ-REBUILD", "To Do")
+	cfg := config.ServiceConfig{}
+	store := &stubStore{absenceCountErr: errors.New("database is locked")}
+	state := NewState(1000, 1, nil, AgentTotals{})
+	state.BudgetExhausted[issueID] = struct{}{}
+	state.BudgetExhaustedReason[issueID] = budgetReasonHandoffAbsence
+	orchestrator := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  newRecordingHandoffTracker(),
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg},
+		Store:           store,
+	})
+
+	orchestrator.rebuildBudgetExhausted(context.Background(), cfg, []domain.Issue{issue})
+
+	if got := state.BudgetExhaustedReason[issueID]; got != budgetReasonHandoffAbsence {
+		t.Errorf("BudgetExhaustedReason = %q, want the parking retained across a query error", got)
+	}
+	if ShouldDispatch(issue, state, []string{"To Do"}, []string{"Done"}) {
+		t.Error("a query error released a parked issue")
+	}
+}
+
+func TestHandleRetryTimerExemptsReactionContinuationFromAbsenceGate(t *testing.T) {
+	const issueID = "ABS-REACTION"
+	store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-REACTION", "In Progress")}
+	state := retryState(t, issueID, "PROJ-REACTION", 1)
+	state.RetryAttempts[issueID].ReactionKind = ReactionKindReview
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 0
+
+	HandleRetryTimer(state, issueID, params)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.fetchCount != 1 {
+		t.Errorf("FetchIssueByID calls = %d, want 1: the reaction retry was cancelled by unrelated absences", tracker.fetchCount)
+	}
+	if len(tracker.addedLabels) != 0 {
+		t.Errorf("AddLabel calls = %v, want none for a reaction continuation", tracker.addedLabels)
+	}
+	if _, ok := state.BudgetExhausted[issueID]; ok {
+		t.Error("reaction continuation parked by the handoff-absence ceiling")
+	}
+}
+
+func TestHandleRetryTimerSkipsAbsenceGateUnderOffPolicy(t *testing.T) {
+	const issueID = "ABS-OFF-RETRY"
+	store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-OFF", "In Progress")}
+	state := retryState(t, issueID, "PROJ-OFF", 1)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 0
+	params.HandoffEvidencePolicy = config.HandoffEvidenceOff
+
+	HandleRetryTimer(state, issueID, params)
+	state.TrackerOpsWg.Wait()
+
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("absence query ran for %v under the off policy, want no query", store.absenceCountedIssueIDs)
+	}
+	if _, ok := state.BudgetExhausted[issueID]; ok {
+		t.Error("issue parked under the off policy")
+	}
+}
+
+func TestRebuildBudgetExhaustedSkipsAbsenceGateUnderOffPolicy(t *testing.T) {
+	const issueID = "ABS-OFF"
+	issue := candidateIssue(issueID, "PROJ-OFF", "To Do")
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{HandoffEvidence: config.HandoffEvidenceOff},
+	}
+	store := &stubStore{absenceCounts: map[string]int{issueID: 5}}
+	tracker := newRecordingHandoffTracker()
+	state := NewState(1000, 1, nil, AgentTotals{})
+	state.BudgetExhausted[issueID] = struct{}{}
+	state.BudgetExhaustedReason[issueID] = budgetReasonHandoffAbsence
+	orchestrator := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg},
+		Store:           store,
+	})
+
+	orchestrator.rebuildBudgetExhausted(context.Background(), cfg, []domain.Issue{issue})
+	state.TrackerOpsWg.Wait()
+
+	if store.absenceQueryCalls != 0 {
+		t.Errorf("absence query ran %d times under the off policy, want 0", store.absenceQueryCalls)
+	}
+	if !ShouldDispatch(issue, state, []string{"To Do"}, []string{"Done"}) {
+		t.Error("the off policy left an issue gated by the absence ceiling")
+	}
+	if calls := tracker.labels(); len(calls) != 0 {
+		t.Errorf("AddLabel calls = %+v, want none under the off policy", calls)
 	}
 }
 

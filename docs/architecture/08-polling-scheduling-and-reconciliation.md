@@ -116,11 +116,15 @@ Per-issue token budget (cost ceiling):
   either is reached, so whichever fills first across polling cycles is the one that fires. When
   a single evaluation finds both exhausted, the reported and logged reason names the token
   budget; the block itself is identical regardless of which ceiling triggered it.
-- The per-tick rebuild of the exhausted-issue set accounts for both ceilings: it runs the
-  session-count batch query when `max_sessions > 0` and the token-sum batch query when
-  `max_tokens > 0`, and unions the results. Each blocked issue carries a machine-readable
-  reason (`token_budget` or `session_budget`, token taking precedence) surfaced in the runtime
-  snapshot beside the exhausted set.
+- The per-tick rebuild of the exhausted-issue set accounts for these ceilings and for the
+  consecutive handoff-absence ceiling (§14.2): it runs the session-count batch query when
+  `max_sessions > 0`, the token-sum batch query when `max_tokens > 0`, and the absence-count
+  batch query when `tracker.handoff_evidence` is not `off`, and unions the results. Each
+  blocked issue carries a machine-readable reason (`handoff_absence`, `token_budget` or
+  `session_budget`, absence taking precedence over both budgets and token over session)
+  surfaced in the runtime snapshot beside the exhausted set. Under `handoff_evidence: off` no
+  absence is recorded and none is queried, so the rebuild is skipped entirely when both budgets
+  are also disabled.
 - If the token query fails, the check fails open and dispatch proceeds, matching the session
   check. A token sum recorded before the token columns were added reads as zero.
 - A sum below the ceiling that includes at least one unmeasured run allows the dispatch and

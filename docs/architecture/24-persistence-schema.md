@@ -65,7 +65,9 @@ changed.
 
 No column stores the handoff-evidence verdict. The verdict is logged and counted, and a withheld
 run carries it in the existing `error` field. In particular, this change adds no evidence field to
-`run_history` and requires no rewrite of historical rows.
+`run_history` and requires no rewrite of historical rows. Because `succeeded` does not assert that
+work was observed, it cannot serve as the reset for a consecutive-absence sequence; that reset is
+recorded per issue in `handoff_absence_resets` below.
 
 A row with `tokens_measured = 0` always carries zero in all four token columns; the invariant
 runs in one direction only, because a measured run can legitimately report a zero spend. Every
@@ -142,6 +144,26 @@ text and this schema attaches no meaning to it beyond equality.
 fingerprint", and the row's lifecycle after that point is the owning kind's to define. Most kinds
 treat the row as spent. The merge-completion kind (§11G.4) instead retains a dispatched row rather
 than deleting it, because deleting it would let the next poll observe the same merge as new.
+
+**`handoff_absence_resets`**: end of a consecutive handoff-absence sequence (migration 013)
+
+| Column         | Type    | Notes                                                              |
+| -------------- | ------- | ------------------------------------------------------------------ |
+| `issue_id`     | TEXT PK | Tracker-internal issue ID                                          |
+| `reset_run_id` | INTEGER | Highest `run_history.id` for the issue at the reset; `0` when none |
+| `updated_at`   | TEXT    | ISO-8601 timestamp                                                 |
+
+One row per issue, written only when a run's evidence verdict is `work observed`. The
+consecutive-absence count (§14.2) is the number of the issue's absence-marked `run_history` rows
+with an `id` above `reset_run_id`, so the count returns to zero the moment a work-observed run is
+recorded and cannot be restored by a later handoff-write failure. Outcomes that carry no verdict
+never write here, which is what keeps a blocked soft stop, a reaction run, an undeterminable verdict
+or a run under `handoff_evidence: off` from resetting a sequence they say nothing about.
+
+The reset point is read from `run_history` inside the write, so a work-observed run whose own
+history row could not be persisted still clears the absences recorded before it. This table holds no
+verdict history: it is a per-issue position that is overwritten, and deleting a row only restores
+the issue's full recorded absence sequence.
 
 ### 19.3 Migration Strategy
 

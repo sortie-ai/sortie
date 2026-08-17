@@ -38,6 +38,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, and sets the field to `off`.
   ([#768](https://github.com/sortie-ai/sortie/issues/768))
 
+- An issue whose runs keep producing nothing is now parked instead of
+  being dispatched again indefinitely. Sortie counts the consecutive
+  withheld handoffs on each issue and, on reaching the ceiling, attaches
+  the escalation label configured under
+  `reactions.review_comments.escalation_label` (`needs-human` when that
+  block or value is absent), stops the retry sequence, and dispatches
+  the issue no further. The ceiling is `agent.max_sessions` where the
+  deployment sets one and `3` otherwise, which is the first attempt plus
+  two more. Parking is announced with the issue, how many consecutive
+  empty runs were seen, the ceiling, and the label applied, so a parked
+  issue can be told apart from an abandoned one. A run that produces
+  work clears the count at once; a run that ends without an evidence
+  verdict, such as an agent reporting itself blocked, leaves the count
+  where it stood. The count is neither kept nor consulted under
+  `tracker.handoff_evidence: off`, and a review-comment or CI
+  continuation retry is never stopped by this ceiling.
+  ([#769](https://github.com/sortie-ai/sortie/issues/769))
+
 ### Fixed
 
 - Adapter endpoint validation errors no longer print credentials
@@ -90,6 +108,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it previously recorded none, and passes that outcome to the
   `after_run` hook in place of `disabled`.
   ([#813](https://github.com/sortie-ai/sortie/issues/813))
+
+### Migrations
+
+- Add the `handoff_absence_resets` table, recording per issue where its
+  consecutive-absence count was last cleared by an observed piece of
+  work. An issue with no row there has its recorded empty runs counted
+  in full, so an upgrade carries any absences already in the database
+  into the new ceiling.
 
 ## [1.19.0] - 2026-08-12
 

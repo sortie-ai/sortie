@@ -88,10 +88,15 @@
     of full agent sessions. Turn, tool, or model-iteration limits inside one session do not set this
     ceiling and are not comparable to it.
   - On reaching the ceiling, cancel this retry sequence, apply the primary-dispatch parking label,
-    and release the claim. Ceiling exhaustion is an eligibility gate rather than only a cancelled
-    timer: ordinary polling and restart recovery must not silently begin another run in the same
-    exhausted absence sequence. Its representation is an implementation detail; the rule requires
-    neither a second numeric setting nor a durable verdict column on `run_history`.
+    and release the claim. The sequence cancelled is the primary-dispatch one the count is kept for:
+    a reaction continuation retry on the same issue carries its own sequence, cannot record an
+    absence, and is not cancelled here. Ceiling exhaustion is an eligibility gate rather than only a
+    cancelled timer: ordinary polling and restart recovery must not silently begin another run in
+    the same exhausted absence sequence. Its representation is an implementation detail; the rule
+    requires neither a second numeric setting nor a durable verdict column on `run_history`.
+  - Under `tracker.handoff_evidence: off` no absence is ever recorded, so neither the count nor the
+    gate is evaluated on any path: polling, retry firing, and worker exit all skip it. The policy
+    costs nothing and no issue is parked by this mechanism while it is selected.
   - The parking label is the resolved non-empty
     `reactions.review_comments.escalation_label` captured when the orchestrator starts, or
     `needs-human` when that block or value is absent or empty. This lookup deliberately reuses only
