@@ -208,10 +208,10 @@ func isGeneratedMergeRefPipeline(pipeline *gitlabPipeline, prNumber int) bool {
 // merge request's own sha; a merged-results or merge-train pipeline
 // generated for this merge request is exempt from that comparison,
 // through [isGeneratedMergeRefPipeline], because no REST field relates
-// its SHA to the merge request head. A head pipeline describing a
-// superseded commit resolves to CIGatePending with one WARN naming both
-// SHAs and the pipeline id, before either the exemption or the manual
-// arm are considered. A merge request whose response carries a head
+// its SHA to the merge request head. A head pipeline that is not exempt
+// and describes a superseded commit resolves to CIGatePending with one
+// WARN naming both SHAs and the pipeline id, before the manual arm is
+// considered. A merge request whose response carries a head
 // pipeline but no head SHA of its own fails as a [*domain.SCMError] of
 // kind [domain.ErrSCMPayload], since head identity cannot be established
 // against an absent head. A skipped pipeline resolves to CIGateSuccess,
