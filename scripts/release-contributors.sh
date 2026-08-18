@@ -1,6 +1,6 @@
 #!/bin/sh
-# Build the "New Contributors" and "Contributors" sections of the release notes
-# and export them for the release.footer template in .goreleaser.yaml.
+# Build the "New Contributors" section of the release notes and export it for
+# the release.footer template in .goreleaser.yaml.
 #
 # Usage:
 #   scripts/release-contributors.sh <tag> [previous-tag]
@@ -24,8 +24,6 @@ serghei-dev sergeyklay
 
 NEWLINE='
 '
-
-AVATAR_SIZE=64
 
 log() {
 	printf 'release-contributors: %s\n' "$*" >&2
@@ -136,46 +134,11 @@ for login in $first_timers; do
 	new_count=$((new_count + 1))
 done
 
-# Neither block is newline-padded: the footer template owns the blank lines that
-# separate them from the horizontal rules.
+# The block is not newline-padded: the footer template owns the blank lines that
+# separate it from the horizontal rule.
 new_contributors=''
 if [ -n "$entries" ]; then
 	new_contributors="## New Contributors${NEWLINE}${NEWLINE}${entries}"
-fi
-
-# Commit-derived, not pull-request-derived: work pushed straight to the default
-# branch carries no pull request and would otherwise go uncredited.
-if [ -n "$prev" ]; then
-	commit_logins=$(gh api \
-		"repos/${repo}/compare/${prev}...${target}?per_page=100" \
-		-q '.commits[].author.login // empty' | canonicalize)
-else
-	commit_logins=$(printf '%s\n' "$pairs" | awk 'NF { print $1 }')
-fi
-
-logins=$(printf '%s\n' "$commit_logins" |
-	awk 'NF { c[$1]++ } END { for (l in c) printf "%d\t%s\n", c[l], l }' |
-	sort -k1,1nr -k2,2 |
-	cut -f2)
-
-avatars=''
-all_count=0
-for login in $logins; do
-	if is_bot "$login"; then
-		continue
-	fi
-	all_count=$((all_count + 1))
-	avatar="<a href=\"https://github.com/${login}\" title=\"@${login}\"><img src=\"https://github.com/${login}.png?size=${AVATAR_SIZE}\" width=\"${AVATAR_SIZE}\" height=\"${AVATAR_SIZE}\" alt=\"@${login}\" /></a>"
-	if [ -z "$avatars" ]; then
-		avatars="$avatar"
-	else
-		avatars="${avatars} ${avatar}"
-	fi
-done
-
-contributors=''
-if [ -n "$avatars" ]; then
-	contributors="---${NEWLINE}${NEWLINE}### Contributors${NEWLINE}${NEWLINE}${avatars}"
 fi
 
 emit() {
@@ -191,6 +154,5 @@ emit() {
 }
 
 emit RELEASE_NEW_CONTRIBUTORS "$new_contributors"
-emit RELEASE_CONTRIBUTORS "$contributors"
 
-log "${new_count} new contributor(s), ${all_count} contributor(s) after bot filtering"
+log "${new_count} new contributor(s) after bot filtering"

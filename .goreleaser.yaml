@@ -121,9 +121,6 @@ release:
     owner: sortie-ai
     name: sortie
   name_template: "{{ .ProjectName }} {{ .Version }}"
-  # Contributor sections come from scripts/release-contributors.sh. envOrDefault,
-  # not .Env: templates run with missingkey=error, so a run without those
-  # variables would fail instead of dropping the sections.
   footer: |
     {{ envOrDefault "RELEASE_NEW_CONTRIBUTORS" "" }}
 
@@ -132,8 +129,6 @@ release:
     **Full changelog**: https://github.com/sortie-ai/sortie/blob/{{ .Tag }}/CHANGELOG.md
 
     **Diff**: https://github.com/sortie-ai/sortie/compare/{{ .PreviousTag }}...{{ .Tag }}
-
-    {{ envOrDefault "RELEASE_CONTRIBUTORS" "" }}
   draft: false
   prerelease: auto
   make_latest: true
