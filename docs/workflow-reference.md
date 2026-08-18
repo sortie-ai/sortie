@@ -2414,18 +2414,53 @@ is intended for local testing and CI workflows where a live tracker is not avail
 claude-code:
   permission_mode: bypassPermissions
   model: claude-sonnet-4-20250514
+  fallback_model: claude-haiku-4-5
   max_turns: 50
   max_budget_usd: 5
+  effort: high
+  allowed_tools: "Read Edit Bash(git diff *)"
+  disallowed_tools: WebFetch
+  system_prompt: Prefer table-driven tests.
+  mcp_config: ./mcp-servers.json
+  session_persistence: true
 ```
 
-The `claude-code` block is forwarded to the Claude Code adapter, which maps these fields
-to CLI flags.
+The `claude-code` block is forwarded to the Claude Code adapter, which runs
+`claude -p --output-format stream-json --verbose` once per turn and maps these fields to
+CLI flags. Values are forwarded unchanged, and the adapter validates none of them. What
+the CLI does with an invalid value differs per flag: `--permission-mode` is rejected at
+launch, `--effort` falls back to the default effort with a warning, and an unknown model
+name reaches the API and fails there. A key whose YAML value has the wrong type is
+ignored and the default applies.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `claude-code.permission_mode` | string | _(absent)_ | Forwarded to `--permission-mode`. Values: `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, `manual` (an alias for `default`), and `plan`. When absent, the adapter passes `--dangerously-skip-permissions` instead. |
+| `claude-code.model` | string | _(absent)_ | Forwarded to `--model`. Accepts a model alias such as `sonnet`, or a full model name. |
+| `claude-code.fallback_model` | string | _(absent)_ | Forwarded to `--fallback-model`. Accepts one model or a comma-separated chain. Covers model availability only; see the fallback note below. |
+| `claude-code.max_turns` | integer | _(absent)_ | Forwarded to `--max-turns` when greater than zero. Claude Code's own agentic turn budget within one invocation. |
+| `claude-code.max_budget_usd` | number | _(absent)_ | Forwarded to `--max-budget-usd` when greater than zero. Spend cap for one invocation. The counter restarts on every turn, including resumed ones, so the ceiling for a whole session is this value times `agent.max_turns`. |
+| `claude-code.effort` | string | _(absent)_ | Forwarded to `--effort`. Values: `low`, `medium`, `high`, `xhigh`, `max`, and `ultracode`, which starts the session at `xhigh` with ultracode enabled. The accepted set depends on the model. |
+| `claude-code.allowed_tools` | string | _(absent)_ | Forwarded to `--allowedTools` as a single argument. A comma- or space-separated list of tools that run without a permission prompt, including scoped rules such as `Bash(git diff *)`. |
+| `claude-code.disallowed_tools` | string | _(absent)_ | Forwarded to `--disallowedTools` as a single argument. A comma- or space-separated deny list. A bare tool name removes that tool from the model's context; a scoped rule leaves the tool available and denies only matching calls. |
+| `claude-code.system_prompt` | string | _(absent)_ | Forwarded to `--append-system-prompt`. The text is appended to the default system prompt rather than replacing it. Claude Code's built-in tool instructions stay in effect. |
+| `claude-code.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--mcp-config`, which takes a single configuration path. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. |
+| `claude-code.session_persistence` | boolean | `true` | When `false`, adds `--no-session-persistence` and Claude Code writes no session file to disk. The adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag reads the persisted session, so with persistence off every turn after the first exits non-zero with `No conversation found with session ID`. |
 
 > **Important:** `agent.max_turns` (orchestrator turn-loop limit) and
 > `claude-code.max_turns` (CLI `--max-turns` flag) are distinct values. The orchestrator
 > limit controls how many turns the worker runs before exiting. The adapter limit controls
 > the Claude Code CLI's internal turn budget. They serve different purposes and should
 > typically have different values.
+
+> **Important:** `claude-code.fallback_model` covers model availability, not provider
+> exhaustion. Claude Code switches to the fallback when the primary model is overloaded,
+> unavailable (a retired model, for example), or returns another non-retryable server
+> error. Authentication, billing, rate-limit, request-size, and transport errors never
+> trigger a switch; they follow their normal retry and error handling. The switch lasts
+> for the current turn only; the next turn starts on the primary model. Claude Code caps
+> a chain at three models after removing duplicates and ignores the rest. The adapter
+> forwards the configured string unchanged.
 
 **Codex adapter:**
 

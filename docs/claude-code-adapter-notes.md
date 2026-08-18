@@ -77,13 +77,13 @@ marked "Not passed" are part of the CLI surface but never appear in a Sortie inv
 | `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                      | **(always)** Carries the rendered turn prompt.                                      |
 | `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                                | **(always)** The adapter's only event source.                                       |
 | `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                      | **(always)** Needed for full event visibility.                                      |
-| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation.                               | Passed when `claude-code.max_turns` is set. Availability is an open question below. |
+| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation (print mode only). Absent from `claude --help`, but accepted and honored. | Passed when `claude-code.max_turns` is set.                                          |
 | `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only). Exits with error when exceeded.  | Passed when `claude-code.max_budget_usd` is set.                                     |
 | `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                           | Passed when `claude-code.model` is set.                                              |
-| `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                       | Passed when `claude-code.fallback_model` is set.                                     |
-| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `max`.                                             | Passed when `claude-code.effort` is set.                                             |
-| `--allowedTools <tools>`             | Space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`.  | Passed when `claude-code.allowed_tools` is set.                                       |
-| `--disallowedTools <tools>`          | Tools to remove from model context entirely.                                                  | Passed when `claude-code.disallowed_tools` is set.                                    |
+| `--fallback-model <model>`           | Fallback used when the primary model is overloaded, unavailable, or returns another non-retryable server error (print mode only). Accepts a comma-separated chain, capped at three models after duplicate removal. | Passed when `claude-code.fallback_model` is set.                                     |
+| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode`. An unrecognized value is not rejected: the CLI warns and uses the default effort. | Passed when `claude-code.effort` is set.                                             |
+| `--allowedTools <tools>`             | Comma- or space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`. | Passed when `claude-code.allowed_tools` is set.                                       |
+| `--disallowedTools <tools>`          | Deny rules, in the same format. A bare tool name removes that tool from the model's context; a scoped rule such as `Bash(rm *)` leaves the tool available and denies only matching calls. | Passed when `claude-code.disallowed_tools` is set.                                    |
 | `--append-system-prompt <text>`      | Append text to the system prompt. Preserves built-in capabilities.                            | Passed when `claude-code.system_prompt` is set.                                       |
 | `--mcp-config <path>`                | Path to MCP server configuration JSON.                                                        | Passed with the worker-generated config path; see MCP server configuration.          |
 | `--tools <tools>`                    | Restrict available built-in tools. `""` = none, `"default"` = all.                            | Not passed.                                                                          |
@@ -114,7 +114,7 @@ marked "Not passed" are part of the CLI surface but never appear in a Sortie inv
 | Flag                                   | Description                                                                                    | Adapter usage                                                        |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `--dangerously-skip-permissions`       | Bypass all permission prompts. No user confirmation required.                                  | Passed when `claude-code.permission_mode` is unset.                  |
-| `--permission-mode <mode>`             | Set permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. | Passed instead when `claude-code.permission_mode` is set.            |
+| `--permission-mode <mode>`             | Set permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`, or `manual` as an alias for `default`. Any other value is rejected before the session starts; the allowed-choices list the parser prints omits `default`, which is nonetheless accepted. | Passed instead when `claude-code.permission_mode` is set.            |
 | `--permission-prompt-tool <tool>`      | MCP tool to handle permission prompts programmatically in non-interactive mode.                | Not passed.                                                          |
 | `--allow-dangerously-skip-permissions` | Enable bypassing as an option without activating it.                                           | Not passed.                                                          |
 
@@ -755,14 +755,14 @@ falls back to the zero value, except `session_persistence`, which defaults to `t
 
 | Config key                        | Type    | Description                                                                                                                                                 |
 | --------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claude-code.permission_mode`     | string  | Permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. Replaces the default `--dangerously-skip-permissions`.           |
+| `claude-code.permission_mode`     | string  | Permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`, `manual`. Replaces the default `--dangerously-skip-permissions`. |
 | `claude-code.model`               | string  | Model override (e.g., `claude-sonnet-4-6`). Maps to `--model`.                                                                                              |
-| `claude-code.fallback_model`      | string  | Fallback model for rate-limit resilience. Maps to `--fallback-model`.                                                                                       |
+| `claude-code.fallback_model`      | string  | Fallback for model availability failures, not for rate limits. Maps to `--fallback-model`. |
 | `claude-code.max_turns`           | integer | Claude Code internal max turns per invocation. Maps to `--max-turns` when greater than zero.                                                                |
 | `claude-code.max_budget_usd`      | number  | Cost cap per invocation. Maps to `--max-budget-usd` when greater than zero.                                                                                 |
-| `claude-code.effort`              | string  | Reasoning effort: `low`, `medium`, `high`, `max`. Maps to `--effort`.                                                                                       |
-| `claude-code.allowed_tools`       | string  | Space-separated tool list. Maps to `--allowedTools`.                                                                                                        |
-| `claude-code.disallowed_tools`    | string  | Space-separated denied tool list. Maps to `--disallowedTools`.                                                                                              |
+| `claude-code.effort`              | string  | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, `ultracode`. Maps to `--effort`. |
+| `claude-code.allowed_tools`       | string  | Comma- or space-separated tool list. Maps to `--allowedTools`. |
+| `claude-code.disallowed_tools`    | string  | Comma- or space-separated denied tool list. Maps to `--disallowedTools`. |
 | `claude-code.system_prompt`       | string  | Additional system prompt text. Maps to `--append-system-prompt`.                                                                                            |
 | `claude-code.mcp_config`          | string  | Path to an operator MCP config JSON. Merged by the worker; see MCP server configuration.                                                                    |
 | `claude-code.session_persistence` | boolean | If `false`, passes `--no-session-persistence`. Default: `true`.                                                                                              |
@@ -870,13 +870,6 @@ async with ClaudeSDKClient(options=options) as client:
 
 ## Open questions
 
-- **Does the CLI accept `--max-turns`?** The flag is documented in the GitHub Actions
-  `claude_args` reference and does not appear in `claude --help` on v2.1.76, which leaves open
-  whether it is an SDK-and-settings surface rather than a CLI flag. `buildArgs` passes it whenever
-  `claude-code.max_turns` is configured, so an unsupported flag would break every turn of such a
-  workflow. Probe: run `claude -p 'reply with ok' --max-turns 1 --output-format stream-json
-  --verbose` against the pinned binary and read the parser exit code and the first stdout line; a
-  rejected flag fails before any JSON is emitted.
 - **What `type` values do task messages carry on the wire?** The message shapes are documented by
   their SDK type names (`TaskStartedMessage`, `TaskProgressMessage`, `TaskNotificationMessage`),
   not by the `type` string that `ParseLine` switches on, so they land in the default arm as
@@ -887,11 +880,14 @@ async with ClaudeSDKClient(options=options) as client:
 
 ## Sources
 
-Local probe:
+Local probes:
 
 - `claude --help` on CLI v2.1.76 (flag surface and version pin).
+- `claude --help` and headless `-p` runs on CLI 2.1.234: accepted `--permission-mode` values,
+  `--effort` levels and its warn-and-ignore handling, `--allowedTools` separators, `--max-turns`
+  acceptance, and the resume behaviour of `--no-session-persistence`.
 
-Anthropic first-party documentation, read March 2026:
+Anthropic first-party documentation, read March 2026 and the CLI reference re-read August 2026:
 
 - Claude Code CLI reference: flags, headless (`-p`) mode, permission modes, session storage.
 - Claude Code `stream-json` output reference: message union, system subtypes, content blocks,
