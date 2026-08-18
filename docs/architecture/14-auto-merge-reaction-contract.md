@@ -149,7 +149,8 @@ to `NOT_REQUIRED`, and this table proceeds to the merge. Enforcing review on Com
 means assigning a reviewer, because the platform offers no server-side alternative.
 `GetMergeability` maps GitLab's single `detailed_merge_status` value: `mergeable` to `clean`,
 `conflict` to `dirty`, `unchecked`, `checking`, `preparing`, and `approvals_syncing` to `unknown`,
-and every other value, recognized or not, to `blocked`, logging an unrecognized one at WARN. It
+and every other value to `blocked`, logging at WARN only a value outside the set the platform
+documents. It
 never yields `unstable`, because a pipeline whose only failing job is allowed to fail reports
 success and leaves the merge request `mergeable`, and this table treats `clean` and `unstable`
 identically. The value names one blocking condition at a time and recomputes: approving a merge

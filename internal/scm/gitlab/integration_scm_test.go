@@ -278,6 +278,15 @@ func TestIntegration_GetMergeability(t *testing.T) {
 	})
 
 	t.Run("draft_blocked", func(t *testing.T) {
+		concrete, ok := adapter.(*GitLabSCMAdapter)
+		if !ok {
+			t.Fatalf("adapter type = %T, want *GitLabSCMAdapter", adapter)
+		}
+		prevLog := concrete.log
+		log, buf := newCapturingLogger()
+		concrete.log = log
+		defer func() { concrete.log = prevLog }()
+
 		status, err := adapter.GetMergeability(ctx, draftIID, owner, repo)
 		if err != nil {
 			t.Fatalf("GetMergeability(!%d): %v", draftIID, err)
@@ -287,6 +296,23 @@ func TestIntegration_GetMergeability(t *testing.T) {
 		}
 		if !status.Draft {
 			t.Errorf("GetMergeability(!%d).Draft = false, want true", draftIID)
+		}
+
+		// A settled draft on this deployment reports draft_status on
+		// every read, so the Debug record's attribute pins the observed
+		// wire value positively rather than resting on the WARN's
+		// absence alone, which would pass identically for an unsettled
+		// computing value.
+		logOutput := buf.String()
+		if want := "detailed_merge_status=draft_status"; !strings.Contains(logOutput, want) {
+			t.Errorf("GetMergeability(!%d) log output = %q, want it to carry %q", draftIID, logOutput, want)
+		}
+		const debugMsg = "gitlab reported a non-mergeable detailed_merge_status"
+		if n := strings.Count(logOutput, debugMsg); n != 1 {
+			t.Errorf("GetMergeability(!%d): occurrences of %q in log output = %d, want 1 (log output: %q)", draftIID, debugMsg, n, logOutput)
+		}
+		if strings.Contains(logOutput, "unrecognized gitlab detailed_merge_status value") {
+			t.Errorf("GetMergeability(!%d) log output = %q, want no unrecognized-value WARN", draftIID, logOutput)
 		}
 	})
 
