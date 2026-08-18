@@ -2209,7 +2209,7 @@ the deployments where they were observed and are not generalized to any deployme
 Sending `remove_source_branch: false` on `POST /projects/:id/merge_requests` overrides the project
 setting: the create response echoes `force_remove_source_branch: false`, and the branch then
 survived for the whole observation window on both deployments, 20 s (58 polls) on the self-managed
-instance and 25 s (40 polls) on GitLab.com **[live-CE]** **[live-SaaS]**. A branch the forge
+instance **[live-CE]** and 25 s (40 polls) on GitLab.com **[live-SaaS]**. A branch the forge
 reaped and a branch the caller deleted are indistinguishable at this route: both answer a
 subsequent `DELETE` with `404 {"message":"404 Branch Not Found"}`, byte-identical, on both
 deployments **[live-CE]** **[live-SaaS]**. Neither route may produce `ErrSCMConflict`, whatever
