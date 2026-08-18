@@ -1383,6 +1383,9 @@ load-bearing rather than incidental:
   `rel="next"` link, with exactly 100 entries on page one, because the adapter sends
   `per_page=100` **[live-CE]**) to assert note pagination, and one non-`issue` work item to
   assert the `issue_type=issue` exclusion.
+- A merge-flow fixture that asserts on a branch after merging its merge request opens that
+  merge request with source-branch removal disabled: the governing project setting defaults to
+  removal, and the removal is asynchronous, so a fixture that leaves it enabled races the reap.
 
 ---
 
@@ -2188,11 +2191,29 @@ which is what `adaptertest.AssertBranchAbsentDisposition` pins. `RemoveLabel` di
 already-absent case the other way, returning nil
 (`adaptertest.AssertLabelAbsentDisposition`), so the two must not be written from one template.
 Branch names containing a slash MUST be percent-encoded: `feat%2Fnested-name` deleted
-successfully **[live-CE]**. Note that `should_remove_source_branch: true` on the merge call is
-asynchronous; the branch was still readable immediately after a 200 merge response
-**[live-CE]**, so `DeleteBranch` must tolerate both the branch being present and it having
-already been reaped. Neither route may produce `ErrSCMConflict`, whatever status it returns:
-only the merge write path promotes.
+successfully **[live-CE]**. The reap is asynchronous, and it is governed by the merge request's
+own `force_remove_source_branch` rather than by any field the merge call itself sends: the branch
+was still readable immediately after a 200 merge response **[live-CE]**, so `DeleteBranch` must
+tolerate both the branch being present and it having already been reaped. `force_remove_source_branch`
+is resolved at creation from the project's `remove_source_branch_after_merge` when the create
+request omits `remove_source_branch`; the adapter's own merge call sends no field that influences
+it. `remove_source_branch_after_merge` is `true` by default: a project created with no
+merge-behavior field set on the pinned Community Edition 19.2.1 image carries it **[live-CE]**,
+and it is also `true` on the GitLab.com lab project **[live-SaaS]** and on the project
+`scripts/gitlab-integration-provision.sh` creates **[live-CE]**. The reap window is variable and
+can fall below a client's own post-merge round-trip cost, which is what makes a delete-after-merge
+assertion a race rather than a sequence: the branch survived 0.739 s after a squash merge on
+GitLab.com **[live-SaaS]**, 0.513 s and 2.011 s in two trials on the self-managed instance
+**[live-CE]**, and 1.123 s on the provisioned container **[live-CE]**; these windows are scoped to
+the deployments where they were observed and are not generalized to any deployment not measured.
+Sending `remove_source_branch: false` on `POST /projects/:id/merge_requests` overrides the project
+setting: the create response echoes `force_remove_source_branch: false`, and the branch then
+survived for the whole observation window on both deployments, 20 s (58 polls) on the self-managed
+instance **[live-CE]** and 25 s (40 polls) on GitLab.com **[live-SaaS]**. A branch the forge
+reaped and a branch the caller deleted are indistinguishable at this route: both answer a
+subsequent `DELETE` with `404 {"message":"404 Branch Not Found"}`, byte-identical, on both
+deployments **[live-CE]** **[live-SaaS]**. Neither route may produce `ErrSCMConflict`, whatever
+status it returns: only the merge write path promotes.
 
 ### 7. Bot classification
 

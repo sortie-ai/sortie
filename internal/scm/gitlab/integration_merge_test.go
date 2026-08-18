@@ -161,19 +161,33 @@ func (f *gitlabMergeFixture) commitFile(t *testing.T, project, branch, path, con
 }
 
 // openMR opens a merge request from source to target and returns its
-// iid.
+// iid. It opens the merge request with source-branch removal disabled:
+// the project setting governing removal defaults to removing the
+// source branch, the removal is asynchronous, and a test that asserts
+// on the branch after the merge would otherwise be racing that reap.
+// Dropping this would silently reintroduce that race.
+//
+// It also decodes and checks the create response's own copy of the
+// setting, so a forge that ignores the request fails this setup step
+// rather than a later subtest that would misread the symptom as a
+// delete defect.
 func (f *gitlabMergeFixture) openMR(t *testing.T, project, source, target, title string) int {
 	t.Helper()
 	resp := f.do(t, http.MethodPost, "/projects/"+project+"/merge_requests", map[string]any{
-		"source_branch": source,
-		"target_branch": target,
-		"title":         title,
+		"source_branch":        source,
+		"target_branch":        target,
+		"title":                title,
+		"remove_source_branch": false,
 	})
 	var mr struct {
-		IID int `json:"iid"`
+		IID                     int  `json:"iid"`
+		ForceRemoveSourceBranch bool `json:"force_remove_source_branch"`
 	}
 	if err := json.Unmarshal(resp, &mr); err != nil {
 		t.Fatalf("unmarshal create merge request response: %v", err)
+	}
+	if mr.ForceRemoveSourceBranch {
+		t.Fatalf("merge request !%d force_remove_source_branch = %v, want %v", mr.IID, true, false)
 	}
 	return mr.IID
 }
@@ -484,6 +498,10 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 		t.Skip("MergePR_AlreadyMerged subtest failed; skipping DeleteBranch subtests")
 	}
 
+	// head is still present here because openMR opened the merge request
+	// with source-branch removal disabled, so the forge did not reap it
+	// on merge. This subtest exercises the adapter's own delete, not the
+	// forge's asynchronous one.
 	t.Run("DeleteBranch", func(t *testing.T) {
 		if err := adapter.DeleteBranch(ctx, owner, repo, head); err != nil {
 			t.Fatalf("DeleteBranch(%q): %v", head, err)
