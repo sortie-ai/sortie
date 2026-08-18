@@ -29,3 +29,5 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0020](0020-withhold-handoff-on-observed-absence-of-work.md) | Withhold the Handoff Transition Only When Absence of Work Is Observed | Accepted |
 | [0021](0021-run-self-review-before-ending-on-the-completion-signal.md) | Run Self-Review Before Ending the Run on the Completion Signal | Accepted |
 | [0022](0022-release-a-parked-issue-on-a-human-gesture.md) | Release a Parked Issue on a Human Gesture in the Tracker | Accepted |
+| [0023](0023-scope-the-ci-verdict-to-the-current-head.md) | Scope the CI Verdict to the Pull Request's Current Head | Accepted |
+| [0024](0024-start-a-new-feedback-epoch-when-the-head-moves.md) | Start a New Feedback Epoch When the Pull Request Head Moves | Accepted |
