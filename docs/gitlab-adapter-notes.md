@@ -1568,7 +1568,10 @@ values come from `MergeRequests::Mergeability::DetailedMergeStatusService#execut
 first-party [Merge requests API reference](https://docs.gitlab.com/api/merge_requests/), which
 documents the same 24 wire strings **[docs]**. Seven values were observed directly in REST
 bodies: `preparing`, `checking`, `mergeable`, `conflict`, `draft_status`, `not_open`, and
-`ci_still_running` **[live-CE]**. The rest are **[live-CE]** at schema level only.
+`ci_still_running` **[live-CE]**. The remaining seventeen were not observed in a REST body
+during this characterization and rest on **[source]** and **[docs]**. Their GraphQL counterparts
+are **[live-CE]** through schema introspection, which is a property of the GraphQL enum; the REST
+surface publishes no enum to introspect.
 
 **The Community Edition source file and the running instance disagree, and the gap is
 resolved.** `app/graphql/types/merge_requests/detailed_merge_status_enum.rb` declares **22**
@@ -1619,8 +1622,9 @@ adapter simply never emits `unstable`, matching the Gitea adapter, which never e
 affirmative and computing arms is a blocking reason, so an unfamiliar value from a newer
 instance is far more likely to be a new blocker than a new computing state. Both arms
 re-enqueue, so this choice is about not misreporting a permanent blocker as transient. The
-adapter logs at WARN only a value outside the documented set, the union of the two vocabularies
-above; a documented blocking value stays available to the operator at Debug rather than WARN.
+adapter logs at WARN only a value outside the documented wire set, the 24 REST strings above.
+A GraphQL-only spelling is not a wire value, so it is unexpected and does trip the WARN. A
+documented blocking value stays available to the operator at Debug rather than WARN.
 The set has only grown across the releases sampled (`v16.11.0-ee` declares 16 values,
 `v17.11.0-ee` declares 21, `v18.5.0-ee` declares 22, each a subset of the pinned 24), so a
 deployment older than the pinned version reports a subset of it and never trips the WARN for a
