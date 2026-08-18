@@ -2435,7 +2435,7 @@ ignored and the default applies.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `claude-code.permission_mode` | string | _(absent)_ | Forwarded to `--permission-mode`. Values: `acceptEdits`, `auto`, `bypassPermissions`, `dontAsk`, `manual` (an alias for `default`), and `plan`. When absent, the adapter passes `--dangerously-skip-permissions` instead. |
+| `claude-code.permission_mode` | string | _(absent)_ | Forwarded to `--permission-mode`. Values: `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, `manual` (an alias for `default`), and `plan`. When absent, the adapter passes `--dangerously-skip-permissions` instead. |
 | `claude-code.model` | string | _(absent)_ | Forwarded to `--model`. Accepts a model alias such as `sonnet`, or a full model name. |
 | `claude-code.fallback_model` | string | _(absent)_ | Forwarded to `--fallback-model`. Accepts one model or a comma-separated chain. Covers model availability only; see the fallback note below. |
 | `claude-code.max_turns` | integer | _(absent)_ | Forwarded to `--max-turns` when greater than zero. Claude Code's own agentic turn budget within one invocation. |
