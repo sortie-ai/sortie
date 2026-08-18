@@ -95,7 +95,7 @@ func TestGetMergeability_StatusTable(t *testing.T) {
 		{"checking maps to unknown", "checking", domain.MergeabilityUnknown, false},
 		{"preparing maps to unknown", "preparing", domain.MergeabilityUnknown, false},
 		{"approvals_syncing maps to unknown", "approvals_syncing", domain.MergeabilityUnknown, false},
-		{"an unrecognized value maps to blocked and logs a warning", "need_rebase", domain.MergeabilityBlocked, true},
+		{"a documented blocking value maps to blocked and logs no warning", "need_rebase", domain.MergeabilityBlocked, false},
 		{"an empty value maps to blocked and logs a warning", "", domain.MergeabilityBlocked, true},
 	}
 
@@ -141,6 +141,202 @@ func quoteIfEmpty(s string) string {
 		return `""`
 	}
 	return s
+}
+
+// --- GetMergeability: expected blocking values ---
+
+func TestGetMergeability_ExpectedBlockingValues(t *testing.T) {
+	t.Parallel()
+
+	// Every blocking wire value the platform documents, listed literally
+	// rather than derived from mapMergeability's own set, so the test and
+	// the implementation cannot drift together. The five values whose REST
+	// spelling diverges from their GraphQL enum name are included here
+	// spelled as the wire reports them.
+	statuses := []string{
+		"ci_must_pass",
+		"ci_still_running",
+		"commits_status",
+		"discussions_not_resolved",
+		"draft_status",
+		"locked_lfs_files",
+		"merge_time",
+		"need_rebase",
+		"not_open",
+		"jira_association_missing",
+		"locked_paths",
+		"merge_request_blocked",
+		"not_approved",
+		"requested_changes",
+		"security_policy_pipeline_check",
+		"security_policy_violations",
+		"status_checks_must_pass",
+		"title_regex",
+	}
+
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mergeRequestFixture(t, map[string]any{"detailed_merge_status": status})
+			srv := serveJSON(t, fixture)
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			log, buf := newCapturingLogger()
+			adapter.log = log
+
+			got, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo)
+			if err != nil {
+				t.Fatalf("GetMergeability(%q): unexpected error: %v", status, err)
+			}
+			if got.Mergeability != domain.MergeabilityBlocked {
+				t.Errorf("GetMergeability(%q).Mergeability = %q, want %q", status, got.Mergeability, domain.MergeabilityBlocked)
+			}
+
+			logOutput := buf.String()
+			if strings.Contains(logOutput, "unrecognized gitlab detailed_merge_status value") {
+				t.Errorf("GetMergeability(%q) logged the unrecognized-value WARN, want none (log output: %q)", status, logOutput)
+			}
+		})
+	}
+}
+
+// --- GetMergeability: unexpected values ---
+
+func TestGetMergeability_UnexpectedValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{"a GraphQL-only spelling for merge_request_blocked is unexpected", "blocked_status"},
+		{"a GraphQL-only spelling for title_regex is unexpected", "title_not_matching"},
+		{"a value no sampled GitLab release has declared is unexpected", "future_release_check"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mergeRequestFixture(t, map[string]any{"detailed_merge_status": tt.status})
+			srv := serveJSON(t, fixture)
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			log, buf := newCapturingLogger()
+			adapter.log = log
+
+			got, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo)
+			if err != nil {
+				t.Fatalf("GetMergeability(%q): unexpected error: %v", tt.status, err)
+			}
+			if got.Mergeability != domain.MergeabilityBlocked {
+				t.Errorf("GetMergeability(%q).Mergeability = %q, want %q", tt.status, got.Mergeability, domain.MergeabilityBlocked)
+			}
+
+			logOutput := buf.String()
+			const msg = "unrecognized gitlab detailed_merge_status value"
+			if n := strings.Count(logOutput, msg); n != 1 {
+				t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", msg, n, logOutput)
+			}
+			if want := "detailed_merge_status=" + quoteIfEmpty(tt.status); !strings.Contains(logOutput, want) {
+				t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+			}
+		})
+	}
+}
+
+// --- GetMergeability: the non-mergeable Debug record ---
+
+func TestGetMergeability_NonMergeableDebugRecord(t *testing.T) {
+	t.Parallel()
+
+	const debugMsg = "gitlab reported a non-mergeable detailed_merge_status"
+	const warnMsg = "unrecognized gitlab detailed_merge_status value"
+
+	t.Run("not_open logs the debug record naming the value and the merge request", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{"detailed_merge_status": "not_open"})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		got, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetMergeability: unexpected error: %v", err)
+		}
+		if got.Mergeability != domain.MergeabilityBlocked {
+			t.Errorf("GetMergeability().Mergeability = %q, want %q", got.Mergeability, domain.MergeabilityBlocked)
+		}
+
+		logOutput := buf.String()
+		if n := strings.Count(logOutput, debugMsg); n != 1 {
+			t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", debugMsg, n, logOutput)
+		}
+		if want := "detailed_merge_status=not_open"; !strings.Contains(logOutput, want) {
+			t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+		}
+		if want := "pr_number=" + strconv.Itoa(testPRNumber); !strings.Contains(logOutput, want) {
+			t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+		}
+		if strings.Contains(logOutput, warnMsg) {
+			t.Errorf("log output = %q, want no unrecognized-value WARN", logOutput)
+		}
+	})
+
+	t.Run("a second blocking value also logs the debug record", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{"detailed_merge_status": "draft_status"})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		if _, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo); err != nil {
+			t.Fatalf("GetMergeability: unexpected error: %v", err)
+		}
+
+		logOutput := buf.String()
+		if n := strings.Count(logOutput, debugMsg); n != 1 {
+			t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", debugMsg, n, logOutput)
+		}
+		if want := "detailed_merge_status=draft_status"; !strings.Contains(logOutput, want) {
+			t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+		}
+	})
+
+	t.Run("a mergeable value logs no debug record", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{"detailed_merge_status": "mergeable"})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		if _, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo); err != nil {
+			t.Fatalf("GetMergeability: unexpected error: %v", err)
+		}
+
+		logOutput := buf.String()
+		if strings.Contains(logOutput, debugMsg) {
+			t.Errorf("log output = %q, want no non-mergeable debug record for a mergeable value", logOutput)
+		}
+		if strings.Contains(logOutput, warnMsg) {
+			t.Errorf("log output = %q, want no unrecognized-value WARN for a mergeable value", logOutput)
+		}
+	})
 }
 
 // --- GetMergeability: merged and open dispositions ---

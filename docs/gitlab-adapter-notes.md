@@ -1538,43 +1538,62 @@ blocker at a time with undocumented precedence (see [mergeability](#2-mergeabili
 
 ### 2. Mergeability
 
-`detailed_merge_status` is a single string naming **one** blocking condition. The version-exact
-enumeration was read from the live instance's own GraphQL schema, which is the authority for
-this deployment rather than the upstream default branch:
+`detailed_merge_status` is a single string naming **one** blocking condition. The adapter
+classifies against the wire vocabulary the REST surface actually reports, which is 24 values
+across two groups:
 
 ```
-approvals_syncing  blocked_status  checking  ci_must_pass  ci_still_running
-commits_status  conflict  discussions_not_resolved  draft_status
-external_status_checks  jira_association  locked_lfs_files  locked_paths
-mergeable  merge_time  need_rebase  not_approved  not_open  preparing
-requested_changes  security_policies_violations  security_policy_pipeline_check
-title_not_matching  unchecked
+mergeable  conflict  unchecked  checking  preparing  approvals_syncing
 ```
 
-24 values **[live-CE]**. REST renders them lowercase snake_case; the GraphQL enum renders the
-same symbols upper-case. Six were observed directly in REST bodies: `preparing`, `checking`,
-`mergeable`, `conflict`, `draft_status`, and `not_open` **[live-CE]**. The rest are
-**[live-CE]** at schema level only.
+```
+ci_must_pass  ci_still_running  commits_status  discussions_not_resolved
+draft_status  locked_lfs_files  merge_time  need_rebase  not_open
+jira_association_missing  locked_paths  merge_request_blocked  not_approved
+requested_changes  security_policy_pipeline_check  security_policy_violations
+status_checks_must_pass  title_regex
+```
 
-**The source file and the running instance disagree, and the gap was not fully explained.**
-`app/graphql/types/merge_requests/detailed_merge_status_enum.rb` declares **22** values, and the
-file is byte-identical at the `v19.2.1-ee` tag and on the upstream default branch (its last
-change was 2025-04-15, confirmed through the repository commit history) **[source]**. The
-running Community Edition 19.2.1 instance serves **24**, adding `requested_changes` and
-`security_policy_pipeline_check` **[live-CE]**. The file ends with
-`DetailedMergeStatusEnum.prepend_mod_with(...)`, the hook an Enterprise module uses to extend it,
-but the expected `ee/app/graphql/types/merge_requests/detailed_merge_status_enum.rb` path returns
-404 **[source]**, so **the file that contributes the two extra values was not located**. This is
-carried into the [open questions](#open-questions) rather than resolved by inference.
+The GraphQL enum and the REST surface spell five of those values differently: `blocked_status`
+is `merge_request_blocked`, `external_status_checks` is `status_checks_must_pass`,
+`jira_association` is `jira_association_missing`, `security_policies_violations` is
+`security_policy_violations`, and `title_not_matching` is `title_regex`. REST does not render
+the GraphQL enum's own spelling in lowercase snake_case; the two vocabularies are independently
+named identifiers that agree on nineteen strings and diverge on five.
 
-Two consequences hold regardless of where the extra values come from:
+The two vocabularies were established independently and cross-checked against each other. The
+24 GraphQL names come from the live instance's own introspection **[live-CE]**. The 24 wire
+values come from `MergeRequests::Mergeability::DetailedMergeStatusService#execute` and the
+`set_identifier` declaration on each of its check services **[source]**, and agree with the
+first-party [Merge requests API reference](https://docs.gitlab.com/api/merge_requests/), which
+documents the same 24 wire strings **[docs]**. Seven values were observed directly in REST
+bodies: `preparing`, `checking`, `mergeable`, `conflict`, `draft_status`, `not_open`, and
+`ci_still_running` **[live-CE]**. The remaining seventeen were not observed in a REST body
+during this characterization and rest on **[source]** and **[docs]**. Their GraphQL counterparts
+are **[live-CE]** through schema introspection, which is a property of the GraphQL enum; the REST
+surface publishes no enum to introspect.
+
+**The Community Edition source file and the running instance disagree, and the gap is
+resolved.** `app/graphql/types/merge_requests/detailed_merge_status_enum.rb` declares **22**
+values, and the file is byte-identical at the `v19.2.1-ee` tag and on the upstream default
+branch (its last change was 2025-04-15, confirmed through the repository commit history)
+**[source]**. The running Community Edition 19.2.1 instance serves **24**, adding
+`requested_changes` and `security_policy_pipeline_check`. Both come from
+`ee/app/graphql/ee/types/merge_requests/detailed_merge_status_enum.rb`, which prepends them onto
+the Community Edition enum through `DetailedMergeStatusEnum.prepend_mod_with(...)` **[source]**.
+The pinned instance also serves Enterprise-only GraphQL types (`Epic`, `ApprovalRule`,
+`MergeRequestApprovalState`) while reporting `enterprise: false` **[live-CE]**, which is what
+makes the two Enterprise-sourced values reachable in its schema despite the instance identifying
+as Community Edition.
+
+Two consequences hold regardless of edition:
 
 - **A declared value is not a reachable value.** Enum membership describes the schema surface,
   not what a licensed check can actually emit. `not_approved` is declared and, as shown above,
   cannot occur on Community Edition because no approval rule exists to produce it.
-- **The mapping MUST have a default arm.** The list is demonstrably not closed against the source
-  file, so an adapter that switches exhaustively over 22 or even 24 values will meet a string it
-  does not know.
+- **The mapping MUST have a default arm.** The list is demonstrably not closed against the
+  Community Edition source file, so an adapter that switches exhaustively over 22 or even 24
+  values will meet a string it does not know.
 
 **Mapping to `domain.MergeabilityState`:**
 
@@ -1599,11 +1618,17 @@ request in that state reports `mergeable` and maps to `clean`. The warning is vi
 The merge state machine treats `clean` and `unstable` identically, so nothing is lost; the
 adapter simply never emits `unstable`, matching the Gitea adapter, which never emits it either.
 
-**Unrecognized values map to `blocked`, not `unknown`.** Every value in the live enum other than
-`mergeable` and the four computing states is a blocking reason, so an unfamiliar value from a
-newer instance is far more likely to be a new blocker than a new computing state. Both arms
+**A value outside the documented set maps to `blocked`, not `unknown`.** Every value outside the
+affirmative and computing arms is a blocking reason, so an unfamiliar value from a newer
+instance is far more likely to be a new blocker than a new computing state. Both arms
 re-enqueue, so this choice is about not misreporting a permanent blocker as transient. The
-adapter SHOULD log the unrecognized value at WARN.
+adapter logs at WARN only a value outside the documented wire set, the 24 REST strings above.
+A GraphQL-only spelling is not a wire value, so it is unexpected and does trip the WARN. A
+documented blocking value stays available to the operator at Debug rather than WARN.
+The set has only grown across the releases sampled (`v16.11.0-ee` declares 16 values,
+`v17.11.0-ee` declares 21, `v18.5.0-ee` declares 22, each a subset of the pinned 24), so a
+deployment older than the pinned version reports a subset of it and never trips the WARN for a
+value this adapter already expects.
 
 **Robustness to masking, which the mapping MUST assume.** GitLab returns one value even when
 several conditions block at once, and the precedence between them is neither documented nor
@@ -1907,9 +1932,9 @@ A project that enables the "Pipelines must succeed" setting
 (`only_allow_merge_if_pipeline_succeeds: true`) never reaches the CI read at all.
 There a merge request whose head pipeline is `manual` reports
 `detailed_merge_status: "ci_still_running"` while `merge_status` stays `can_be_merged`
-**[live-CE]**, which is outside `mapMergeability`'s
-recognized set and lands in its `blocked` arm, so the auto-merge precondition table stops on
-mergeability before it calls `GetCIStatus`. The value is `ci_still_running` rather than
+**[live-CE]**, which `mapMergeability` classifies as an expected blocking value and maps to
+`blocked`, so the auto-merge precondition table stops on mergeability before it calls
+`GetCIStatus`, and the read produces no WARN. The value is `ci_still_running` rather than
 `ci_must_pass` because the reason is chosen by `diff_head_pipeline_considered_in_progress?`,
 which under that setting reduces to `!pipeline.complete?`, and `manual` is not one of the four
 completed statuses
@@ -1917,8 +1942,7 @@ completed statuses
 [`app/models/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/merge_request.rb),
 [`app/models/concerns/ci/has_status.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/ci/has_status.rb))
 **[source]**. `ci_still_running` is one of the 24 values the instance's own `DetailedMergeStatus`
-enum declares **[live-CE]**, and it reaches `mapMergeability`'s unrecognized arm, so the adapter
-logs one WARN naming it on each such read.
+enum declares **[live-CE]**.
 
 A `skipped` pipeline created by a `[ci skip]` commit carries no commit-status entry at all,
 rather than one entry per skipped job: the pipeline-creation chain halts before it seeds any
@@ -2402,7 +2426,7 @@ Stated plainly, with the degradation rather than a workaround:
 | Merge-request approval Community/Enterprise split | [`lib/api/merge_request_approvals.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_request_approvals.rb) and [`ee/lib/ee/api/merge_request_approvals.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/ee/lib/ee/api/merge_request_approvals.rb) | Live: `approvals` route matched, `approval_state` did not |
 | Per-reviewer review state route and entity | [`lib/api/merge_requests.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_requests.rb) and [`lib/api/entities/merge_request_reviewer.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/merge_request_reviewer.rb) | Live: state read as `unreviewed`, `approved`, and `unapproved` in turn. Route is defined outside `ee/` and is undocumented in the reference docs |
 | Review-state enum | [`app/models/concerns/merge_request_reviewer_state.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/merge_request_reviewer_state.rb) | Six values; the `ee/` override path returns 404. Corroborated by the live instance's `MergeRequestReviewState` GraphQL enum |
-| `detailed_merge_status` enumeration | The live instance's own GraphQL introspection, and [`app/graphql/types/merge_requests/detailed_merge_status_enum.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/graphql/types/merge_requests/detailed_merge_status_enum.rb) | 24 values on 19.2.1 against 22 on the upstream default branch; six confirmed in REST bodies |
+| `detailed_merge_status` enumeration | Live introspection for the 24 GraphQL names; [`app/services/merge_requests/mergeability/detailed_merge_status_service.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/services/merge_requests/mergeability/detailed_merge_status_service.rb) and each check service's `set_identifier` declaration for the 24 wire values; the [Merge requests API reference](https://docs.gitlab.com/api/merge_requests/) as the independent cross-check | Seven values confirmed in REST bodies; all three sources agree on the 24-value set and its five divergent spellings |
 | Merge-endpoint check ordering, the 405 constant, and the conditional `sha` requirement | [`lib/api/merge_requests.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_requests.rb) (`build_merge_params`, `check_sha_param!`, `execute_merge`, `not_allowed!`) | Live: all five response classes provoked in order |
 | Absence of a bot marker on embedded users | [`lib/api/entities/note.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/note.rb) and [`lib/api/entities/user_basic.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/user_basic.rb) | Live: identical author key sets for a token-bot note and a human note; `bot` present only on `GET /users/:id` |
 | Single-value `detailed_merge_status` masking | [gitlab-org/gitlab#570458](https://gitlab.com/gitlab-org/gitlab/-/issues/570458) | Upstream issue report; the precedence itself was not reproduced here |
@@ -2430,7 +2454,7 @@ that would settle it.
 | Does self-managed Community Edition 19.2.1 support granular access tokens, and what does introspection report? | Decides whether scope preflight can be trusted on self-managed | Create a granular token on a self-managed Community Edition instance and read `/personal_access_tokens/self` |
 | At what `iids[]` count does a deployment return `414`? | Sets the batch chunk size for reconciliation | Increase `iids[]` count against a representative front-end web server configuration |
 | Do 409 or 422 statuses occur anywhere on the nine operations' routes? | Two rows of the error mapping are unexercised | Provoke a conflict or unprocessable-entity condition on the issue routes |
-| Which file contributes `requested_changes` and `security_policy_pipeline_check` to a Community Edition instance's `DetailedMergeStatus` enum? | The Community Edition source file declares 22 values and the running instance serves 24, so the enum cannot be enumerated from the source path alone, and it is unclear whether either value is reachable without a license | Locate the module reached by `DetailedMergeStatusEnum.prepend_mod_with`, and check whether its mergeability checks are license-gated at runtime |
+| Can `requested_changes` or `security_policy_pipeline_check` actually occur on a deployment reporting `enterprise: false`? | Both values are declared by `ee/app/graphql/ee/types/merge_requests/detailed_merge_status_enum.rb` and reach the schema regardless, but whether their producing checks run without a license was not established | Construct a merge request that trips either check on a Community Edition instance and confirm the value is reported rather than a license refusal |
 | What is the precedence order among simultaneously blocking `detailed_merge_status` values? | Decides how many poll ticks a merge request needs to clear several blockers, and whether any blocker can be starved indefinitely | Construct a merge request that is simultaneously conflicted, draft, and unapproved, and record which value is reported as each condition is cleared in turn |
 | Does `require_sha_for_merge?` vary by namespace or instance, and what governs it? | The adapter always sends `sha`, so behavior is safe either way, but a wrong error message would mislead an operator whose instance does not require it | Read `require_sha_for_merge?` on a second namespace, and on an instance where the merge call succeeds without `sha` |
 | Can a reviewer reach `requested_changes` on Community Edition through the web UI, and does the REST `reviewers` route then report it? | The `FetchPendingReviews` selection rests on that state being reachable; only `approved` and `unapproved` were produced through the API | Drive the "request changes" action in the Community Edition web UI, then re-read `GET .../merge_requests/:iid/reviewers` |

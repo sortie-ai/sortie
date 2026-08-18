@@ -79,13 +79,40 @@ func (a *GitLabSCMAdapter) fetchMergeRequest(ctx context.Context, prNumber int, 
 	return mr, nil
 }
 
+// gitlabExpectedBlockingStatuses holds the wire values GitLab's REST
+// surface reports for its mergeability checks. These are the check
+// services' own identifiers, not the names their GraphQL enum counterparts
+// carry, so a future edit correcting a spelling toward the GraphQL
+// vocabulary would reintroduce the drift this set closes.
+var gitlabExpectedBlockingStatuses = map[string]struct{}{
+	"ci_must_pass":                   {},
+	"ci_still_running":               {},
+	"commits_status":                 {},
+	"discussions_not_resolved":       {},
+	"draft_status":                   {},
+	"locked_lfs_files":               {},
+	"merge_time":                     {},
+	"need_rebase":                    {},
+	"not_open":                       {},
+	"jira_association_missing":       {},
+	"locked_paths":                   {},
+	"merge_request_blocked":          {},
+	"not_approved":                   {},
+	"requested_changes":              {},
+	"security_policy_pipeline_check": {},
+	"security_policy_violations":     {},
+	"status_checks_must_pass":        {},
+	"title_regex":                    {},
+}
+
 // mapMergeability classifies a GitLab detailed_merge_status value into a
-// [domain.MergeabilityState]. recognized is false for any value outside
-// the four documented arms, including an empty or absent field, which
-// still maps to [domain.MergeabilityBlocked] because every remaining
-// value in the live enum is a blocking reason.
+// [domain.MergeabilityState]. The classification covers every value the
+// platform documents for this field: expected reports whether status is
+// one of them. A value outside that set still maps to
+// [domain.MergeabilityBlocked], because every documented value other
+// than the affirmative and computing ones is a blocking reason.
 // [domain.MergeabilityUnstable] is never returned.
-func mapMergeability(status string) (state domain.MergeabilityState, recognized bool) {
+func mapMergeability(status string) (state domain.MergeabilityState, expected bool) {
 	switch status {
 	case "mergeable":
 		return domain.MergeabilityClean, true
@@ -93,9 +120,11 @@ func mapMergeability(status string) (state domain.MergeabilityState, recognized 
 		return domain.MergeabilityDirty, true
 	case "unchecked", "checking", "preparing", "approvals_syncing":
 		return domain.MergeabilityUnknown, true
-	default:
-		return domain.MergeabilityBlocked, false
 	}
+	if _, ok := gitlabExpectedBlockingStatuses[status]; ok {
+		return domain.MergeabilityBlocked, true
+	}
+	return domain.MergeabilityBlocked, false
 }
 
 // GetMergeability returns the merge precondition state for the given PR,
@@ -106,6 +135,14 @@ func mapMergeability(status string) (state domain.MergeabilityState, recognized 
 // MergeCommitSHA is populated only when the merge request's state is
 // "merged", so an identifier reported on an open merge request is never
 // asserted as a merge.
+//
+// A detailed_merge_status value outside the platform's documented set,
+// including an absent or empty field, produces one WARN naming the
+// observed value. A documented value that resolves to
+// [domain.MergeabilityBlocked] produces one Debug record naming the
+// observed value and the merge request; the record reports what GitLab
+// returned, not that a block exists, since the same value can be the one
+// a later read observes on a merge request that has since merged.
 func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, owner, repo string) (domain.PRMergeStatus, error) {
 	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -118,10 +155,14 @@ func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 		mergeCommitSHA = mr.MergeCommitSHA
 	}
 
-	state, recognized := mapMergeability(mr.DetailedMergeStatus)
-	if !recognized {
+	state, expected := mapMergeability(mr.DetailedMergeStatus)
+	if !expected {
 		a.log.Warn("unrecognized gitlab detailed_merge_status value",
 			slog.String("detailed_merge_status", mr.DetailedMergeStatus))
+	} else if state == domain.MergeabilityBlocked {
+		a.log.Debug("gitlab reported a non-mergeable detailed_merge_status",
+			slog.String("detailed_merge_status", mr.DetailedMergeStatus),
+			slog.Int("pr_number", prNumber))
 	}
 
 	return domain.PRMergeStatus{

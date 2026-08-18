@@ -156,6 +156,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists in neither branch and never match the head by design.
   ([#828](https://github.com/sortie-ai/sortie/issues/828))
 
+- GitLab: mergeability reads no longer warn about values GitLab
+  documents and the adapter already handles. A draft merge request, one
+  that is no longer open, and one whose pipeline is still running each
+  logged `unrecognized gitlab detailed_merge_status value` at WARN on
+  every poll for as long as the condition held, burying the diagnostic
+  that exists to surface a value a newer GitLab release introduced. The
+  warning is now raised only for a value outside the set GitLab's API
+  documents, and every mergeability verdict is unchanged. Licensed
+  instances stop warning on five further blocking values, among them
+  failing status checks and security policy violations, which the
+  adapter had been matching against the wrong spelling. A merge request
+  held back by a merge check is now reported at DEBUG, naming the value
+  and the merge request it came from.
+  ([#829](https://github.com/sortie-ai/sortie/issues/829))
+
 ### Migrations
 
 - Add the `handoff_absence_resets` table, recording per issue where its
