@@ -34,6 +34,8 @@ type mockReconcileStore struct {
 	getFingerprintCalls    int
 	markDispatchedCalls    int
 	deleteFingerprintCalls int
+	deleteFingerprintIssue string
+	deleteFingerprintKind  string
 }
 
 var _ ReconcileStore = (*mockReconcileStore)(nil)
@@ -67,8 +69,10 @@ func (m *mockReconcileStore) MarkReactionDispatched(_ context.Context, _, _ stri
 	return nil
 }
 
-func (m *mockReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+func (m *mockReconcileStore) DeleteReactionFingerprint(_ context.Context, issueID, kind string) error {
 	m.deleteFingerprintCalls++
+	m.deleteFingerprintIssue = issueID
+	m.deleteFingerprintKind = kind
 	return nil
 }
 
@@ -1125,7 +1129,7 @@ func TestReleaseTerminalIssueState_IssueIsolation(t *testing.T) {
 	}
 }
 
-func TestReleaseTerminalIssueState_NoSideEffects(t *testing.T) {
+func TestReleaseTerminalIssueState_OnlyCleansMissingSHAObservation(t *testing.T) {
 	t.Parallel()
 
 	cc := &cancelCounter{}
@@ -1142,9 +1146,14 @@ func TestReleaseTerminalIssueState_NoSideEffects(t *testing.T) {
 	ReconcileRunningIssues(state, params)
 
 	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 ||
-		store.markDispatchedCalls != 0 || store.deleteFingerprintCalls != 0 {
-		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want all 0",
+		store.markDispatchedCalls != 0 || store.deleteFingerprintCalls != 1 {
+		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want 0,0,0,1",
 			store.upsertFingerprintCalls, store.getFingerprintCalls, store.markDispatchedCalls, store.deleteFingerprintCalls)
+	}
+	if store.deleteFingerprintIssue != terminalReleaseIssueID || store.deleteFingerprintKind != mergeCompletionMissingSHAObservationKind {
+		t.Errorf("DeleteReactionFingerprint = (%q, %q), want (%q, %q)",
+			store.deleteFingerprintIssue, store.deleteFingerprintKind,
+			terminalReleaseIssueID, mergeCompletionMissingSHAObservationKind)
 	}
 	if len(store.savedEntries) != 0 {
 		t.Errorf("SaveRetryEntry calls = %d, want 0", len(store.savedEntries))

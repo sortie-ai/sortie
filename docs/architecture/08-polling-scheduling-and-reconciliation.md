@@ -344,8 +344,10 @@ Part J: Merge completion reconciliation (when `reactions.merge_completion` is co
   whose issue is currently claimed. Stop an entry whose issue has left the configured handoff
   state.
 - Fetch mergeability via `SCMAdapter.GetMergeability`; re-enqueue with backoff on a transport
-  error, and re-enqueue on the poll interval while the pull request is not yet reported merged
-  or reports no merge commit identifier.
+  error. While the pull request is not yet reported merged, re-enqueue on the poll interval without
+  starting the missing-identifier clock. On the first merged response with no commit identifier,
+  persist a thirty-minute first-seen observation and use exponential pending backoff, floored at
+  the poll interval. At or after the deadline, persist the one-shot escalation marker and stop.
 - Upsert the merge commit identifier into `reaction_fingerprints` under kind
   `merge-completion`; skip an entry already latched to that identifier.
 - Call `TrackerAdapter.TransitionIssue` to the configured `target_state`. Route a failure by
@@ -353,9 +355,10 @@ Part J: Merge completion reconciliation (when `reactions.merge_completion` is co
   transport and API failures, escalate immediately for auth and payload failures, and stop
   without escalating for a not-found issue.
 - Unlike the CI, review, bot-review, merge-conflict, and auto-merge kinds in this list, a pending
-  entry of this kind carries no expiry, the same posture as the label-review and label-fix kinds
-  (Parts H and I): a merge can wait on human review for days, so the entry is bounded instead by
-  the issue leaving the handoff state and by the pending-reaction recovery lookback.
+  entry of this kind carries no general expiry, the same posture as the label-review and label-fix
+  kinds (Parts H and I): a merge can wait on human review for days. Only the post-merge
+  missing-identifier condition has the fixed thirty-minute bound; the entry is also bounded by the
+  issue leaving the handoff state and by the pending-reaction recovery lookback.
 - Placed last so a merge the orchestrator performed earlier in the same tick, in Part G, is
   observed on this same pass.
 - See §11G for the full contract.
@@ -435,4 +438,3 @@ Rules that govern the pass:
 - Each pass that produced a candidate set emits exactly one summary record, including a pass over
   zero keys and a pass that removed nothing (Section 13.1). A pass that could not list the
   workspace root emits no summary and removes nothing.
-

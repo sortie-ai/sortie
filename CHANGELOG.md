@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Merge-completion polling no longer retries forever when a forge reports a pull request merged
+  but never supplies its merge commit identifier. The first such response starts a persisted
+  thirty-minute grace period with exponential polling backoff; if the identifier is still absent,
+  Sortie applies the configured escalation once and stops without transitioning the issue. Time
+  spent waiting for review does not count toward the grace period, restarts do not reset it, and a
+  real identifier that appears later still follows the normal exactly-once transition path.
+  ([#777](https://github.com/sortie-ai/sortie/issues/777))
+
 - Adapter endpoint validation errors no longer print credentials
   embedded in the configured `endpoint`. A Jira or GitLab endpoint
   written as `scheme://user:secret@host` that fails validation is now

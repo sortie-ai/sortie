@@ -145,6 +145,16 @@ fingerprint", and the row's lifecycle after that point is the owning kind's to d
 treat the row as spent. The merge-completion kind (§11G.4) instead retains a dispatched row rather
 than deleting it, because deleting it would let the next poll observe the same merge as new.
 
+The internal `merge-completion-missing-sha` observation kind reuses this table without changing the
+normal `merge-completion` fingerprint. Its `fingerprint` is normalized `owner/repo#number`,
+`updated_at` is the first time that PR identity was reported merged without a commit identifier,
+and `dispatched` means the bounded-wait escalation has been attempted. Its observation upsert has
+stricter timestamp semantics than an ordinary fingerprint upsert: the same identity preserves
+`updated_at`, while a different identity replaces it and resets `dispatched`. Marking this
+observation dispatched also preserves `updated_at`, so a restart cannot reset or obscure the
+thirty-minute grace-period origin. The row is deleted when a real commit identifier appears or the
+issue/PR leaves the merge-completion lifecycle.
+
 **`handoff_absence_resets`**: end of a consecutive handoff-absence sequence (migration 013)
 
 | Column         | Type    | Notes                                                              |

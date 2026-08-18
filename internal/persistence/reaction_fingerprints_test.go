@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func mustOpenStore(t *testing.T) *Store {
@@ -249,5 +250,67 @@ func TestUpsertReactionFingerprint_MultipleKindsIndependent(t *testing.T) {
 	}
 	if reviewDispatched {
 		t.Error("GetReactionFingerprint(review_comments) dispatched = true, want false (independent of ci)")
+	}
+}
+
+func TestReactionObservationLifecycle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s := mustOpenStore(t)
+	const (
+		issueID = "ISS-OBS"
+		kind    = "merge-completion-missing-sha"
+	)
+	firstSeen := time.Date(2026, 8, 18, 9, 0, 0, 123, time.UTC)
+
+	observation, err := s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#17", firstSeen)
+	if err != nil {
+		t.Fatalf("UpsertReactionObservation(insert): %v", err)
+	}
+	if !observation.FirstObservedAt.Equal(firstSeen) || observation.Dispatched {
+		t.Errorf("UpsertReactionObservation(insert) = %+v, want first_seen=%v dispatched=false", observation, firstSeen)
+	}
+
+	// Re-observing the same PR must not refresh the grace-period origin.
+	later := firstSeen.Add(20 * time.Minute)
+	observation, err = s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#17", later)
+	if err != nil {
+		t.Fatalf("UpsertReactionObservation(same identity): %v", err)
+	}
+	if !observation.FirstObservedAt.Equal(firstSeen) || observation.Dispatched {
+		t.Errorf("UpsertReactionObservation(same identity) = %+v, want first_seen=%v dispatched=false", observation, firstSeen)
+	}
+
+	if err := s.MarkReactionObservationDispatched(ctx, issueID, kind); err != nil {
+		t.Fatalf("MarkReactionObservationDispatched: %v", err)
+	}
+	observation, err = s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#17", later.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("UpsertReactionObservation(after mark): %v", err)
+	}
+	if !observation.FirstObservedAt.Equal(firstSeen) || !observation.Dispatched {
+		t.Errorf("UpsertReactionObservation(after mark) = %+v, want first_seen=%v dispatched=true", observation, firstSeen)
+	}
+
+	// A new PR identity starts a fresh grace period and clears escalation.
+	newFirstSeen := later.Add(5 * time.Minute)
+	observation, err = s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#18", newFirstSeen)
+	if err != nil {
+		t.Fatalf("UpsertReactionObservation(new identity): %v", err)
+	}
+	if !observation.FirstObservedAt.Equal(newFirstSeen) || observation.Dispatched {
+		t.Errorf("UpsertReactionObservation(new identity) = %+v, want first_seen=%v dispatched=false", observation, newFirstSeen)
+	}
+
+	if err := s.DeleteReactionFingerprint(ctx, issueID, kind); err != nil {
+		t.Fatalf("DeleteReactionFingerprint(observation): %v", err)
+	}
+	fingerprint, dispatched, err := s.GetReactionFingerprint(ctx, issueID, kind)
+	if err != nil {
+		t.Fatalf("GetReactionFingerprint(after observation cleanup): %v", err)
+	}
+	if fingerprint != "" || dispatched {
+		t.Errorf("GetReactionFingerprint(after observation cleanup) = (%q, %v), want (\"\", false)", fingerprint, dispatched)
 	}
 }
