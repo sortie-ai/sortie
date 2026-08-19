@@ -41,6 +41,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comment.
   ([#777](https://github.com/sortie-ai/sortie/issues/777))
 
+- The `ci_failure` reaction now evaluates the pull request's current
+  head on every pass and keeps watching after a passing result, so a
+  commit pushed later that fails CI is observed and receives a fix
+  continuation. Previously the watch retired on the first passing
+  result and the commit it polled never advanced past the one the agent
+  handed off, so a branch could sit on a failing commit with its linked
+  issue stuck in the review state and no escalation raised. A new head
+  restores the attempt budget only when Sortie can establish that the
+  commit is not its own work, so an agent cannot extend its own budget
+  by pushing. The watch ends when the pull request merges or closes,
+  and otherwise after `reactions.ci_failure.watch_window_ms`
+  (default `86400000`, twenty-four hours) with no new commit; `0`
+  removes that bound, and applying the configured fix label re-arms a
+  pull request by hand.
+  ([#871](https://github.com/sortie-ai/sortie/issues/871))
+
+### Changed
+
+- `reactions.ci_failure` now resolves the pull request's current head
+  through the same SCM provider every other active SCM-backed reaction
+  uses, so a deployment naming `reactions.ci_failure` with one provider
+  and another active SCM-backed reaction with a different provider now
+  fails at startup instead of running with a currency-blind CI watch.
+  The previously accepted shape, two providers across the active
+  SCM-backed reactions including `ci_failure`, is no longer valid; name
+  one forge across every active SCM-backed reaction, including
+  `ci_failure`, to start again.
+  ([#871](https://github.com/sortie-ai/sortie/issues/871))
+
 ## [1.20.0] - 2026-08-18
 
 ### Added

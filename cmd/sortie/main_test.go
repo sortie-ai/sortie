@@ -1426,6 +1426,160 @@ Fix issue {{ .issue.identifier }}.
 `, issuesPath, workspaceRoot)
 }
 
+// ciFailureOnlyWorkflow returns a WORKFLOW.md configuring only
+// reactions.ci_failure with a valid provider and no other SCM-backed
+// reaction, so a successful startup demonstrates that a CI-only
+// deployment constructs an SCM adapter on its own.
+func ciFailureOnlyWorkflow(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+github:
+  api_key: "unused"
+  project: "acme/widgets"
+
+reactions:
+  ci_failure:
+    provider: github
+    max_retries: 2
+    escalation: label
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// ciFailureWorkflowMismatchedProviders returns a WORKFLOW.md where
+// reactions.ci_failure and reactions.review_comments name different SCM
+// providers, which should cause startup to fail with exit code 1 and
+// name reactions.ci_failure among the conflicting kinds.
+func ciFailureWorkflowMismatchedProviders(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+github:
+  api_key: "unused"
+  project: "acme/widgets"
+
+reactions:
+  review_comments:
+    provider: gitlab
+  ci_failure:
+    provider: github
+    max_retries: 2
+    escalation: label
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// TestRunCIFailureOnly_ConstructsSCMAdapter verifies that a WORKFLOW.md
+// configuring only reactions.ci_failure with a valid provider constructs
+// an SCM adapter and starts normally, rather than skipping SCM
+// construction because no other SCM-backed reaction is active.
+// No t.Parallel: calls t.Chdir.
+func TestRunCIFailureOnly_ConstructsSCMAdapter(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, ciFailureOnlyWorkflow(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "CI feedback enabled") {
+		t.Errorf(`expected "CI feedback enabled" in log, got:\n%s`, logs)
+	}
+	if strings.Contains(logs, "unknown SCM adapter kind") || strings.Contains(logs, "failed to construct SCM adapter") {
+		t.Errorf("SCM adapter construction failed for a CI-only deployment; stderr:\n%s", logs)
+	}
+}
+
+// TestRunCIFailure_MismatchedProviders verifies that reactions.ci_failure
+// active alongside another active SCM-backed reaction naming a different
+// provider fails startup with exit code 1, and the emitted error names
+// reactions.ci_failure among the conflicting kinds.
+// No t.Parallel: calls t.Chdir.
+func TestRunCIFailure_MismatchedProviders(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, ciFailureWorkflowMismatchedProviders(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (mismatched providers); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "must use the same provider") {
+		t.Errorf("expected 'must use the same provider' in error log, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "ci_failure") {
+		t.Errorf("expected the conflicting kinds to name ci_failure, got:\n%s", logs)
+	}
+}
+
 // TestRunAutoMerge_EmptyProvider verifies that when reactions.auto_merge.provider
 // is empty, the server starts normally and does NOT log "auto_merge reaction
 // enabled" (spec Test 6 at the wiring layer).

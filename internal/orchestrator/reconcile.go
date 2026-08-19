@@ -30,6 +30,7 @@ type ReconcileStore interface {
 		observedAt time.Time,
 	) (persistence.ReactionObservation, error)
 	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
+	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
 }
 
 var _ ReconcileStore = (*persistence.Store)(nil)
@@ -90,14 +91,11 @@ type ReconcileParams struct {
 	// Only read when CIProvider is non-nil.
 	CIFeedback config.CIFeedbackConfig
 
-	// CIPendingTTL is the maximum age of a PendingReaction entry before
-	// it is dropped and a warning is logged. Protects against indefinite
-	// spinning when the CI provider is unreachable and no new worker exit
-	// refreshes the entry. Zero or negative disables TTL enforcement
-	// entirely. Production callers should set this to a positive value
-	// (e.g. [ciPendingDefaultTTL]); test helpers that do not set NowFunc
-	// may leave it zero to preserve legacy behavior.
-	CIPendingTTL time.Duration
+	// CIWatchWindow bounds the age of a CI PendingReaction entry, measured
+	// from the last recorded head and falling back to the entry's
+	// creation time before any head is recorded. Zero or negative
+	// disables the bound. Supplied from reactions.ci_failure.watch_window_ms.
+	CIWatchWindow time.Duration
 
 	// SCMAdapter provides review comment fetching. When non-nil, the
 	// reconcile loop polls review comments for issues with PR metadata.

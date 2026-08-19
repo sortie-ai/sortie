@@ -346,7 +346,7 @@ func recoverPendingReactionKinds(
 		}
 	}
 
-	if params.CIProvider != nil && meta.Branch != "" {
+	if params.CIProvider != nil && params.SCMAdapter != nil && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" && meta.Branch != "" {
 		key := ReactionKey(run.IssueID, ReactionKindCI)
 		if _, exists := state.PendingReactions[key]; !exists {
 			state.PendingReactions[key] = &PendingReaction{
@@ -356,9 +356,18 @@ func recoverPendingReactionKinds(
 				Attempt:    run.Attempt,
 				Kind:       ReactionKindCI,
 				CreatedAt:  now,
+				// HeadRecordedAt is left zero: a head recorded by a
+				// previous process cannot bound this process's
+				// attribution query, so the first pass after a restart
+				// records a baseline and classifies it unknown rather
+				// than resetting a counter against a boundary this
+				// process never observed.
 				KindData: &CIReactionData{
-					Branch: meta.Branch,
-					SHA:    meta.SHA,
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+					Branch:   meta.Branch,
+					SHA:      meta.SHA,
 				},
 				AgentKind:  run.AgentAdapter,
 				RuleName:   run.RuleName,

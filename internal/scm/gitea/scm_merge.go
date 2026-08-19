@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -22,6 +23,7 @@ type giteaPullRequest struct {
 	Merged             bool        `json:"merged"`
 	MergeCommitSHA     *string     `json:"merge_commit_sha"`
 	Draft              bool        `json:"draft"`
+	State              string      `json:"state"`
 	RequestedReviewers []giteaUser `json:"requested_reviewers"`
 	Head               struct {
 		SHA string `json:"sha"`
@@ -103,6 +105,7 @@ func (a *GiteaSCMAdapter) GetMergeability(ctx context.Context, prNumber int, own
 		BaseBranch:     pr.Base.Ref,
 		Merged:         pr.Merged,
 		MergeCommitSHA: mergeCommitSHA,
+		Closed:         strings.EqualFold(pr.State, "closed"),
 	}, nil
 }
 

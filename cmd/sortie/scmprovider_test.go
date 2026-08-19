@@ -94,6 +94,25 @@ func TestScmProviderConflict(t *testing.T) {
 			wantConflict:          true,
 		},
 		{
+			name: "ci_failure active alongside a different provider",
+			kinds: []scmReactionKind{
+				{name: "review_comments", active: true, provider: "github"},
+				{name: "ci_failure", active: true, provider: "gitlab"},
+			},
+			wantActiveKinds:       []string{"review_comments", "ci_failure"},
+			wantDistinctProviders: []string{"github", "gitlab"},
+			wantConflict:          true,
+		},
+		{
+			name: "ci_failure active alone",
+			kinds: []scmReactionKind{
+				{name: "ci_failure", active: true, provider: "github"},
+			},
+			wantActiveKinds:       []string{"ci_failure"},
+			wantDistinctProviders: []string{"github"},
+			wantConflict:          false,
+		},
+		{
 			name: "all inactive kinds",
 			kinds: []scmReactionKind{
 				{name: "review_comments", active: false, provider: "github"},

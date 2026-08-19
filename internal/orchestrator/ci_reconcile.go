@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,10 +20,6 @@ const ciPendingBackoffBaseDefault = 10 * time.Second
 
 // ciPendingBackoffCap is the maximum interval between CI status checks.
 const ciPendingBackoffCap = 5 * time.Minute
-
-// ciPendingDefaultTTL is the default lifetime of a PendingReaction entry.
-// Entries older than this are dropped on the next reconcile tick.
-const ciPendingDefaultTTL = 30 * time.Minute
 
 // computeCIPendingDelay returns the backoff delay for a CI pending re-check
 // at the given attempt count. Attempt 0 returns zero (immediate). Each
@@ -46,15 +43,20 @@ func computeCIPendingDelay(base time.Duration, attempts int) time.Duration {
 	return delay
 }
 
-// reconcileCIStatus polls CI status for each CI-kind entry in
-// state.PendingReactions. Called from ReconcileRunningIssues after
-// reconcileTrackerState. Skipped entirely when params.CIProvider is nil.
+// reconcileCIStatus resolves the pull request's current head for each
+// CI-kind entry in state.PendingReactions and polls CI status for that
+// head. Called from ReconcileRunningIssues after reconcileTrackerState.
+// Skipped entirely when params.CIProvider or params.SCMAdapter is nil.
 //
 // Entries that are not yet due (PendingRetryAt in the future) are
 // re-enqueued without making an API call, applying exponential backoff.
-// Entries older than the configured TTL are dropped and a warning is logged.
+// An entry's age is measured from the last head this process recorded,
+// falling back to the entry's creation time before any head is recorded;
+// past params.CIWatchWindow the entry and its attempt counter are dropped
+// and a warning is logged. A zero or negative CIWatchWindow disables the
+// bound.
 func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
-	if params.CIProvider == nil {
+	if params.CIProvider == nil || params.SCMAdapter == nil {
 		return
 	}
 
@@ -63,7 +65,6 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		now = params.NowFunc().UTC()
 	}
 
-	ttl := params.CIPendingTTL
 	base := time.Duration(state.PollIntervalMS) * time.Millisecond
 
 	for key, pending := range state.PendingReactions {
@@ -82,12 +83,17 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		}
 
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
+		rkey := ReactionKey(pending.IssueID, ReactionKindCI)
 
-		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
-			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindCI))
-			entryLog.Warn("ci pending entry exceeded ttl, dropping",
-				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
-				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
+		ageBasis := pending.CreatedAt
+		if !pending.HeadRecordedAt.IsZero() {
+			ageBasis = pending.HeadRecordedAt
+		}
+		if params.CIWatchWindow > 0 && now.Sub(ageBasis) > params.CIWatchWindow {
+			delete(state.ReactionAttempts, rkey)
+			entryLog.Warn("ci watch window elapsed, dropping",
+				slog.Int64("window_ms", int64(params.CIWatchWindow/time.Millisecond)),
+				slog.Int64("age_ms", int64(now.Sub(ageBasis)/time.Millisecond)),
 			)
 			continue
 		}
@@ -97,38 +103,122 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			continue
 		}
 
-		ref := ciData.SHA
-		if ref == "" {
-			ref = ciData.Branch
+		status, mergeErr := params.SCMAdapter.GetMergeability(ctx, ciData.PRNumber, ciData.Owner, ciData.Repo)
+		if mergeErr != nil {
+			var scmErr *domain.SCMError
+			if errors.As(mergeErr, &scmErr) && scmErr.Kind == domain.ErrSCMNotFound {
+				delete(state.ReactionAttempts, rkey)
+				entryLog.Warn("ci watch pull request not found, dropping",
+					slog.Int("pr_number", ciData.PRNumber),
+				)
+				continue
+			}
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
+			entryLog.Warn("ci mergeability fetch failed, retrying with backoff",
+				slog.Any("error", mergeErr),
+				slog.Int("pending_attempts", pending.PendingAttempts),
+				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
+			)
+			state.PendingReactions[key] = pending
+			continue
 		}
 
-		// Fingerprint dedup: upsert the fingerprint row (resets dispatched
-		// when the ref changes) and skip entries already dispatched for this
-		// exact ref. Errors are non-fatal — best-effort dedup.
-		if err := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindCI, ref); err != nil {
-			entryLog.Warn("failed to upsert reaction fingerprint",
-				slog.Any("error", err),
+		// The merged check runs before the closed check so a provider
+		// whose closed state subsumes merging still ends the watch
+		// through the merged branch and logs the merge rather than a
+		// close.
+		if status.Merged {
+			delete(state.ReactionAttempts, rkey)
+			entryLog.Info("ci watch ended: pull request merged",
+				slog.String("head_sha", status.HeadSHA),
 			)
+			continue
 		}
-		storedFP, dispatched, fpErr := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindCI)
-		if fpErr != nil {
-			entryLog.Warn("failed to get reaction fingerprint, proceeding without dedup",
-				slog.Any("error", fpErr),
-			)
-		} else if storedFP == ref && dispatched {
-			entryLog.Debug("CI reaction already dispatched for this ref, skipping",
-				slog.String("ref", ref),
+		if status.Closed {
+			delete(state.ReactionAttempts, rkey)
+			entryLog.Info("ci watch ended: pull request closed without merging",
+				slog.Int("pr_number", ciData.PRNumber),
 			)
 			continue
 		}
 
-		result, err := params.CIProvider.FetchCIStatus(ctx, ref)
+		if status.HeadSHA == "" {
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
+			entryLog.Debug("ci deferred: empty head sha",
+				slog.Int("pr_number", ciData.PRNumber),
+			)
+			state.PendingReactions[key] = pending
+			continue
+		}
+
+		// The epoch record is read before it is written, because this
+		// pass needs the previous head to detect a change; an
+		// upsert-then-read ordering would always read back the value
+		// just written and no head change would ever be detected. The
+		// durable observation helper is not used here: its timestamp
+		// survives a restart, and the attribution boundary this pass
+		// maintains (PendingReaction.HeadRecordedAt) deliberately must
+		// not.
+		storedHead, dispatched, fpErr := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindCI)
+		if fpErr != nil {
+			entryLog.Warn("failed to get ci reaction fingerprint, proceeding without epoch detection",
+				slog.Any("error", fpErr),
+			)
+			// A read failure suppresses epoch detection for this pass
+			// rather than fabricate one: treating it as a head change
+			// would reset the retry budget on a database error, which
+			// is the unsafe direction.
+			storedHead = status.HeadSHA
+			dispatched = false
+		}
+
+		if storedHead != status.HeadSHA {
+			// The durable head advances before the runtime boundary does.
+			// The transition restarts the watch clock and re-arms the
+			// once-per-epoch escalation, so applying it against a record
+			// that did not advance would repeat both on every later pass:
+			// the age basis would never grow old enough to elapse, and the
+			// escalation would fire once per pass instead of once per
+			// epoch. Deferring costs one poll and keeps the entry bounded.
+			if upsertErr := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindCI, status.HeadSHA); upsertErr != nil {
+				pending.PendingAttempts++
+				delay := computeCIPendingDelay(base, pending.PendingAttempts)
+				pending.PendingRetryAt = now.Add(delay)
+				entryLog.Warn("failed to upsert reaction fingerprint, deferring the epoch transition",
+					slog.Any("error", upsertErr),
+					slog.Int("pending_attempts", pending.PendingAttempts),
+					slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
+				)
+				state.PendingReactions[key] = pending
+				continue
+			}
+			// The epoch transition already clears dispatched through the
+			// fingerprint upsert; the status read below proceeds
+			// unconditionally on this branch, so the local dispatched
+			// value needs no update here.
+			applyCIEpochTransition(state, params, pending, rkey, storedHead, status.HeadSHA, now, ctx, entryLog)
+		} else if dispatched {
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
+			entryLog.Debug("CI reaction already dispatched for this head, skipping",
+				slog.String("head_sha", status.HeadSHA),
+			)
+			state.PendingReactions[key] = pending
+			continue
+		}
+
+		result, err := params.CIProvider.FetchCIStatus(ctx, status.HeadSHA)
 		if err != nil {
 			pending.PendingAttempts++
 			delay := computeCIPendingDelay(base, pending.PendingAttempts)
 			pending.PendingRetryAt = now.Add(delay)
 			entryLog.Warn("ci status fetch failed, retrying with backoff",
-				slog.String("ref", ref),
+				slog.String("head_sha", status.HeadSHA),
 				slog.Any("error", err),
 				slog.Int("pending_attempts", pending.PendingAttempts),
 				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
@@ -140,19 +230,16 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		metrics.IncCIStatusChecks(string(result.Status))
 
-		rkey := ReactionKey(pending.IssueID, ReactionKindCI)
-
 		switch result.Status {
 		case domain.CIStatusPassing:
 			delete(state.ReactionAttempts, rkey)
-			if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {
-				entryLog.Warn("failed to delete reaction fingerprint on CI pass",
-					slog.Any("error", err),
-				)
-			}
-			entryLog.Info("CI passing, no action needed",
-				slog.String("ref", ref),
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
+			entryLog.Info("CI passing on current head, continuing to watch",
+				slog.String("head_sha", status.HeadSHA),
 			)
+			state.PendingReactions[key] = pending
 
 		case domain.CIStatusPending:
 			pending.PendingAttempts++
@@ -160,7 +247,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			pending.PendingRetryAt = now.Add(delay)
 			state.PendingReactions[key] = pending
 			entryLog.Debug("CI pending, will re-check after backoff",
-				slog.String("ref", ref),
+				slog.String("head_sha", status.HeadSHA),
 				slog.Int("pending_attempts", pending.PendingAttempts),
 				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
 			)
@@ -168,16 +255,18 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		case domain.CIStatusFailing:
 			if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
 				logRetrySlotDeferral(entryLog, ReactionKindCI, incumbent)
-				pending.CreatedAt = now
+				pending.PendingAttempts++
+				delay := computeCIPendingDelay(base, pending.PendingAttempts)
+				pending.PendingRetryAt = now.Add(delay)
 				state.PendingReactions[key] = pending
 			} else {
-				handleCIFailure(state, params, pending, result, ref, entryLog, ctx, metrics)
+				handleCIFailure(state, params, pending, result, status.HeadSHA, now, base, entryLog, ctx, metrics)
 			}
 
 		default:
 			entryLog.Warn("CI status provider returned unrecognized status, re-enqueueing",
 				slog.String("status", string(result.Status)),
-				slog.String("ref", ref),
+				slog.String("head_sha", status.HeadSHA),
 			)
 			metrics.IncCIStatusChecks("error")
 			pending.PendingAttempts++
@@ -185,6 +274,48 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			state.PendingReactions[key] = pending
 		}
 	}
+}
+
+// applyCIEpochTransition applies the runtime consequences of a detected
+// pull request head change: it resets the backoff counter and the
+// per-head escalation flag unconditionally, resets the CI retry budget
+// only when [classifyHeadChange] positively establishes that the change
+// is not the orchestrator's own work, and records the new head as the
+// boundary for the next attribution query.
+//
+// applyCIEpochTransition never dispatches a continuation and never
+// writes to the tracker; a continuation follows only if the caller's
+// subsequent status read then finds a failing verdict.
+func applyCIEpochTransition(
+	state *State,
+	params ReconcileParams,
+	pending *PendingReaction,
+	rkey string,
+	previousHead, newHead string,
+	now time.Time,
+	ctx context.Context,
+	log *slog.Logger,
+) {
+	attribution := classifyHeadChange(state, params, pending, now, ctx)
+
+	// Unconditional: a changed head voids every prior conclusion.
+	pending.PendingAttempts = 0
+	pending.EscalatedForCurrentHead = false
+
+	// Conditional: a needless reset costs an unbounded loop.
+	resetAttempts := attribution == headChangeNotOurs
+	if resetAttempts {
+		delete(state.ReactionAttempts, rkey)
+	}
+
+	pending.HeadRecordedAt = now
+
+	log.Info("CI reaction head changed",
+		slog.String("previous_head", previousHead),
+		slog.String("head", newHead),
+		slog.String("attribution", string(attribution)),
+		slog.Bool("attempts_reset", resetAttempts),
+	)
 }
 
 // handleCIFailure records a CI failure in run_history, increments the
@@ -196,12 +327,12 @@ func handleCIFailure(
 	pending *PendingReaction,
 	result domain.CIResult,
 	ref string,
+	now time.Time,
+	base time.Duration,
 	log *slog.Logger,
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
-	now := time.Now().UTC()
-
 	ciRunHistory := persistence.RunHistory{
 		IssueID:        pending.IssueID,
 		Identifier:     pending.Identifier,
@@ -226,7 +357,7 @@ func handleCIFailure(
 	maxRetries := params.CIFeedback.MaxRetries
 
 	if attempts > maxRetries {
-		escalateCIFailure(state, params, pending, result, ref, attempts, log, ctx, metrics)
+		escalateCIFailure(state, params, pending, result, ref, attempts, now, base, log, ctx, metrics)
 		return
 	}
 
@@ -261,11 +392,17 @@ func handleCIFailure(
 	)
 }
 
-// escalateCIFailure handles the case where CI fix retries are exhausted.
-// It applies the configured escalation action (label or comment), cancels
-// the retry, releases the claim, and clears the CI reaction's own pending
-// entry, counter, and fingerprint. Sibling reaction kinds for the same
-// issue are left untouched.
+// escalateCIFailure handles the case where the CI retry budget has been
+// spent for the commit currently recorded. It applies the configured
+// escalation action (label or comment) at most once per recorded head,
+// cancels the retry, and releases the claim so the issue does not stay
+// reserved by a reaction that has stopped dispatching. The pending
+// entry, its attempt counter, and its fingerprint row all survive: the
+// counter must stay over budget so no further continuation dispatches
+// until a new epoch resets it, and the row is the epoch record. The
+// entry is re-enqueued with backoff so the watch continues past
+// exhaustion. Sibling reaction kinds for the same issue are left
+// untouched.
 func escalateCIFailure(
 	state *State,
 	params ReconcileParams,
@@ -273,74 +410,82 @@ func escalateCIFailure(
 	result domain.CIResult,
 	ref string,
 	attempts int,
+	now time.Time,
+	base time.Duration,
 	log *slog.Logger,
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
-	log.Warn("CI fix retries exhausted, escalating",
-		slog.String("ref", ref),
-		slog.Int("attempts", attempts),
-		slog.Int("max_retries", params.CIFeedback.MaxRetries),
-	)
+	if !pending.EscalatedForCurrentHead {
+		log.Warn("CI fix retries exhausted, escalating",
+			slog.String("ref", ref),
+			slog.Int("attempts", attempts),
+			slog.Int("max_retries", params.CIFeedback.MaxRetries),
+		)
 
-	switch params.CIFeedback.Escalation {
-	case "label":
-		label := params.CIFeedback.EscalationLabel
-		if label == "" {
-			label = "needs-human"
-		}
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			m := metrics
-			escalLog := log
-			escalAction := params.CIFeedback.Escalation
+		switch params.CIFeedback.Escalation {
+		case "label":
+			label := params.CIFeedback.EscalationLabel
+			if label == "" {
+				label = "needs-human"
+			}
+			if params.TrackerAdapter != nil {
+				issueID := pending.IssueID
+				tracker := params.TrackerAdapter
+				m := metrics
+				escalLog := log
+				escalAction := params.CIFeedback.Escalation
 
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
+				state.TrackerOpsWg.Go(func() {
+					dctx, cancel := context.WithTimeout(
+						context.WithoutCancel(ctx), 30*time.Second)
+					defer cancel()
 
-				if err := tracker.AddLabel(dctx, issueID, label); err != nil {
-					escalLog.Warn("CI escalation label failed",
-						slog.Any("error", err),
-					)
-					m.IncCIEscalations("error")
-				} else {
-					m.IncCIEscalations(escalAction)
-				}
-			})
-		}
-
-	case "comment", "":
-		commentText := buildCIEscalationComment(result, ref, attempts)
-		if params.TrackerAdapter != nil {
-			issueID := pending.IssueID
-			tracker := params.TrackerAdapter
-			m := metrics
-			escalLog := log
-			ct := commentText
-			escalAction := params.CIFeedback.Escalation
-			if escalAction == "" {
-				escalAction = "comment"
+					if err := tracker.AddLabel(dctx, issueID, label); err != nil {
+						escalLog.Warn("CI escalation label failed",
+							slog.Any("error", err),
+						)
+						m.IncCIEscalations("error")
+					} else {
+						m.IncCIEscalations(escalAction)
+					}
+				})
 			}
 
-			state.TrackerOpsWg.Go(func() {
-				dctx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), 30*time.Second)
-				defer cancel()
-
-				if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
-					escalLog.Warn("CI escalation comment failed",
-						slog.Any("error", err),
-					)
-					m.IncCIEscalations("error")
-				} else {
-					m.IncCIEscalations(escalAction)
+		case "comment", "":
+			commentText := buildCIEscalationComment(result, ref, attempts)
+			if params.TrackerAdapter != nil {
+				issueID := pending.IssueID
+				tracker := params.TrackerAdapter
+				m := metrics
+				escalLog := log
+				ct := commentText
+				escalAction := params.CIFeedback.Escalation
+				if escalAction == "" {
+					escalAction = "comment"
 				}
-			})
+
+				state.TrackerOpsWg.Go(func() {
+					dctx, cancel := context.WithTimeout(
+						context.WithoutCancel(ctx), 30*time.Second)
+					defer cancel()
+
+					if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
+						escalLog.Warn("CI escalation comment failed",
+							slog.Any("error", err),
+						)
+						m.IncCIEscalations("error")
+					} else {
+						m.IncCIEscalations(escalAction)
+					}
+				})
+			}
 		}
 	}
+
+	// Set regardless of the tracker write's outcome: the write runs in
+	// a detached goroutine whose result this pass cannot observe.
+	pending.EscalatedForCurrentHead = true
 
 	CancelRetry(state, pending.IssueID)
 
@@ -352,16 +497,15 @@ func escalateCIFailure(
 
 	delete(state.Claimed, pending.IssueID)
 
-	// Scoped to this kind's own slot: a sibling reaction's pending
-	// entry, counter, and fingerprint for the same issue survive a
-	// CI-only escalation.
-	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindCI))
-	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindCI))
-	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {
-		log.Warn("failed to delete reaction fingerprint during CI escalation",
-			slog.Any("error", err),
-		)
-	}
+	// The entry, its attempt counter, and its fingerprint row are left
+	// untouched: this scope is limited to this kind's own slot, so a
+	// sibling reaction's pending entry, counter, and fingerprint for the
+	// same issue survive a CI-only escalation. The entry re-enqueues
+	// with backoff so the watch continues past exhaustion.
+	pending.PendingAttempts++
+	delay := computeCIPendingDelay(base, pending.PendingAttempts)
+	pending.PendingRetryAt = now.Add(delay)
+	state.PendingReactions[ReactionKey(pending.IssueID, ReactionKindCI)] = pending
 }
 
 // buildCIEscalationComment builds a plain-text escalation comment for

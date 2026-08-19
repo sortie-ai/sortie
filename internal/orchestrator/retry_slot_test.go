@@ -192,9 +192,9 @@ func retrySlotParams(store ReconcileStore, ci domain.CIStatusProvider, scm domai
 		Ctx:               context.Background(),
 		Logger:            discardLogger(),
 
-		CIProvider:   ci,
-		CIFeedback:   config.CIFeedbackConfig{MaxRetries: 2, Escalation: "label", EscalationLabel: "needs-human"},
-		CIPendingTTL: ciPendingDefaultTTL,
+		CIProvider:    ci,
+		CIFeedback:    config.CIFeedbackConfig{MaxRetries: 2, Escalation: "label", EscalationLabel: "needs-human"},
+		CIWatchWindow: 30 * time.Minute,
 
 		SCMAdapter:       scm,
 		ReviewConfig:     ReviewReactionConfig{Escalation: "label", EscalationLabel: "needs-human", PollIntervalMS: 60_000, DebounceMS: 30_000, MaxContinuationTurns: 3},
@@ -220,7 +220,7 @@ func retrySlotCIPending(issueID string, createdAt time.Time) *PendingReaction {
 		Attempt:    1,
 		Kind:       ReactionKindCI,
 		CreatedAt:  createdAt,
-		KindData:   &CIReactionData{Branch: "feature/x"},
+		KindData:   &CIReactionData{PRNumber: 50, Owner: "acme", Repo: "widgets", Branch: "feature/x"},
 	}
 }
 
@@ -288,6 +288,7 @@ func TestRetrySlot_LabelReviewDefersToCI(t *testing.T) {
 	store := newRetrySlotStore()
 	ci := &retrySlotCI{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
 	scm := &retrySlotSCM{
+		mergeStatus: domain.PRMergeStatus{HeadSHA: "ci-sha-1"},
 		labelEvents: []domain.LabelEvent{labelEvent("1", "sortie:review", "alice", true, now.Add(-1*time.Minute))},
 	}
 	params := retrySlotParams(store, ci, scm, nil, func() time.Time { return now })
@@ -485,6 +486,7 @@ func TestRetrySlot_LivenessWithHandoffConfigured(t *testing.T) {
 	store := newRetrySlotStore()
 	ci := &retrySlotCI{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
 	scm := &retrySlotSCM{
+		mergeStatus: domain.PRMergeStatus{HeadSHA: "ci-sha-liveness"},
 		labelEvents: []domain.LabelEvent{labelEvent("1", "sortie:review", "alice", true, now.Add(-1*time.Minute))},
 	}
 	tracker := &mockReconcileTracker{states: map[string]string{}}
@@ -572,7 +574,8 @@ func TestRetrySlot_LivenessNoHandoffConfigured(t *testing.T) {
 
 	store := newRetrySlotStore()
 	ci := &retrySlotCI{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
-	params := retrySlotParams(store, ci, &retrySlotSCM{}, nil, func() time.Time { return now })
+	scm := &retrySlotSCM{mergeStatus: domain.PRMergeStatus{HeadSHA: "ci-sha-2"}}
+	params := retrySlotParams(store, ci, scm, nil, func() time.Time { return now })
 
 	// Tick while the continuation worker runs: ci takes the free slot.
 	ReconcileRunningIssues(state, params)
@@ -652,8 +655,9 @@ func TestRetrySlot_DeferralRecordReportsContinuationForEmptyKindIncumbent(t *tes
 
 	store := newRetrySlotStore()
 	ci := &retrySlotCI{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	scm := &retrySlotSCM{mergeStatus: domain.PRMergeStatus{HeadSHA: "ci-sha-3"}}
 	handler := &sweepLogHandler{}
-	params := retrySlotParams(store, ci, &retrySlotSCM{}, nil, func() time.Time { return now })
+	params := retrySlotParams(store, ci, scm, nil, func() time.Time { return now })
 	params.Logger = slog.New(handler)
 
 	ReconcileRunningIssues(state, params)
@@ -682,30 +686,60 @@ func TestRetrySlot_TTLRefreshOnArbitrationDeferral(t *testing.T) {
 		state.Claimed[issueID] = struct{}{}
 		state.RetryAttempts[issueID] = &RetryEntry{IssueID: issueID, Attempt: 1, ReactionKind: ReactionKindLabelFix}
 		ciKey := ReactionKey(issueID, ReactionKindCI)
+		// CreatedAt is deliberately far in the past: an arbitration
+		// deferral no longer refreshes it, so only the head-recorded
+		// boundary set on the first pass keeps the entry alive past
+		// this starting point.
 		state.PendingReactions[ciKey] = retrySlotCIPending(issueID, tick1.Add(-29*time.Minute))
 
 		store := newRetrySlotStore()
 		ci := &retrySlotCI{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+		scm := &retrySlotSCM{mergeStatus: domain.PRMergeStatus{HeadSHA: "ci-sha-ttl"}}
 		now := tick1
 		handler := &sweepLogHandler{}
-		params := retrySlotParams(store, ci, &retrySlotSCM{}, nil, func() time.Time { return now })
+		params := retrySlotParams(store, ci, scm, nil, func() time.Time { return now })
 		params.Logger = slog.New(handler)
 
-		ticks := []time.Time{tick1, tick1.Add(15 * time.Minute), tick1.Add(32 * time.Minute)}
-		for _, tickNow := range ticks {
+		var recordedCreatedAt time.Time
+		var recordedHeadAt time.Time
+		ticks := []time.Time{tick1, tick1.Add(15 * time.Minute)}
+		for i, tickNow := range ticks {
 			now = tickNow
 			ReconcileRunningIssues(state, params)
 
 			entry, ok := state.PendingReactions[ciKey]
 			if !ok {
-				t.Fatalf("ci pending entry dropped at tick %v; want re-enqueued", tickNow)
+				t.Fatalf("ci pending entry dropped at tick %v; want re-enqueued (still inside the watch window)", tickNow)
 			}
-			if !entry.CreatedAt.Equal(tickNow) {
-				t.Errorf("CreatedAt at tick %v = %v, want %v", tickNow, entry.CreatedAt, tickNow)
+			if i == 0 {
+				recordedCreatedAt = entry.CreatedAt
+				recordedHeadAt = entry.HeadRecordedAt
+				if recordedHeadAt.IsZero() {
+					t.Fatal("HeadRecordedAt still zero after the first pass; want set by the first epoch transition")
+				}
+			} else {
+				if !entry.CreatedAt.Equal(recordedCreatedAt) {
+					t.Errorf("CreatedAt at tick %v = %v, want unchanged %v (an arbitration deferral must not refresh it)", tickNow, entry.CreatedAt, recordedCreatedAt)
+				}
+				if !entry.HeadRecordedAt.Equal(recordedHeadAt) {
+					t.Errorf("HeadRecordedAt at tick %v = %v, want unchanged %v (the head never changed)", tickNow, entry.HeadRecordedAt, recordedHeadAt)
+				}
 			}
 		}
-		if handler.countByMessage("ci pending entry exceeded ttl, dropping") != 0 {
-			t.Error("TTL-drop Warn emitted despite the CreatedAt refresh; want none")
+		if handler.countByMessage("ci watch window elapsed, dropping") != 0 {
+			t.Error("watch-window drop logged while still inside the window; want none")
+		}
+
+		// Past the watch window measured from the recorded head, the
+		// entry drops even though it has been deferring the whole time.
+		now = tick1.Add(32 * time.Minute)
+		ReconcileRunningIssues(state, params)
+
+		if _, ok := state.PendingReactions[ciKey]; ok {
+			t.Error("ci pending entry present past the watch window measured from HeadRecordedAt; want dropped")
+		}
+		if handler.countByMessage("ci watch window elapsed, dropping") != 1 {
+			t.Errorf(`"ci watch window elapsed, dropping" logged %d times, want 1`, handler.countByMessage("ci watch window elapsed, dropping"))
 		}
 	})
 

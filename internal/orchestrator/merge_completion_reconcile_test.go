@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -277,6 +278,14 @@ func (s *mgcStoreFake) MarkReactionObservationDispatched(ctx context.Context, is
 	rec.dispatched = true
 	s.fingerprints[key] = rec
 	return nil
+}
+
+// CountWorkerRunsCompletedSince returns a non-nil error, matching the
+// conservative default [unsupportedReactionObservationStore] supplies
+// elsewhere in this package: this merge-completion test double is not
+// expected to answer an attribution query.
+func (s *mgcStoreFake) CountWorkerRunsCompletedSince(context.Context, string, time.Time) (int, error) {
+	return 0, errors.New("worker run count is unsupported by this test double")
 }
 
 // has reports the fingerprint record for the issue's merge-completion

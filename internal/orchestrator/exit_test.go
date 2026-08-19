@@ -124,6 +124,14 @@ func (m *mockExitStore) DeleteParkedIssue(_ context.Context, issueID string) err
 	return m.deleteParkedErr
 }
 
+// CountWorkerRunsCompletedSince returns a non-nil error, matching the
+// conservative default [unsupportedReactionObservationStore] supplies
+// elsewhere in this package: this reaction-exit test double is not
+// expected to answer an attribution query.
+func (m *mockExitStore) CountWorkerRunsCompletedSince(_ context.Context, _ string, _ time.Time) (int, error) {
+	return 0, errors.New("worker run count is unsupported by this test double")
+}
+
 // --- Test helpers ---
 
 // baseTime is a fixed reference time for deterministic tests.
@@ -2592,7 +2600,7 @@ func TestHandleWorkerExit_ObservationEqualsHandoffStatePerformsHandoffAndEnqueue
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/T-9", "sha9")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/T-9", "sha9")
 
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{
@@ -2611,6 +2619,7 @@ func TestHandleWorkerExit_ObservationEqualsHandoffStatePerformsHandoffAndEnqueue
 	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
 	params.HandoffState = "ai:in-review"
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:            "T-9",
@@ -2683,7 +2692,7 @@ func TestHandleWorkerExit_HappyPathUnchangedWithVerificationRead(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/T-11", "sha11")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/T-11", "sha11")
 
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{
@@ -2702,6 +2711,7 @@ func TestHandleWorkerExit_HappyPathUnchangedWithVerificationRead(t *testing.T) {
 	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
 	params.HandoffState = "ai:in-review"
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:            "T-11",
@@ -2903,7 +2913,7 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesCIPendingReaction(t
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/HO-C1", "cafebabe")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/HO-C1", "cafebabe")
 
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{}
@@ -2913,6 +2923,7 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesCIPendingReaction(t
 	params.HandoffState = "In Review"
 	params.ActiveStates = []string{"In Progress"}
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "HO-C1",
@@ -2942,6 +2953,15 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesCIPendingReaction(t
 	if !ok {
 		t.Fatalf("KindData type = %T, want *CIReactionData", ci.KindData)
 	}
+	if ciData.PRNumber != 77 {
+		t.Errorf("CIReactionData.PRNumber = %d, want 77", ciData.PRNumber)
+	}
+	if ciData.Owner != "acme" {
+		t.Errorf("CIReactionData.Owner = %q, want %q", ciData.Owner, "acme")
+	}
+	if ciData.Repo != "widgets" {
+		t.Errorf("CIReactionData.Repo = %q, want %q", ciData.Repo, "widgets")
+	}
 	if ciData.Branch != "feature/HO-C1" {
 		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/HO-C1")
 	}
@@ -2954,7 +2974,7 @@ func TestHandleWorkerExit_HandoffTransitionFails_PopulatesCIPendingReaction(t *t
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/HO-C2", "cafebabe")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/HO-C2", "cafebabe")
 
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{
@@ -2968,6 +2988,7 @@ func TestHandleWorkerExit_HandoffTransitionFails_PopulatesCIPendingReaction(t *t
 	params.HandoffState = "In Review"
 	params.ActiveStates = []string{"In Progress"}
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "HO-C2",
@@ -2991,6 +3012,15 @@ func TestHandleWorkerExit_HandoffTransitionFails_PopulatesCIPendingReaction(t *t
 	ciData, ok := ci.KindData.(*CIReactionData)
 	if !ok {
 		t.Fatalf("KindData type = %T, want *CIReactionData", ci.KindData)
+	}
+	if ciData.PRNumber != 77 {
+		t.Errorf("CIReactionData.PRNumber = %d, want 77", ciData.PRNumber)
+	}
+	if ciData.Owner != "acme" {
+		t.Errorf("CIReactionData.Owner = %q, want %q", ciData.Owner, "acme")
+	}
+	if ciData.Repo != "widgets" {
+		t.Errorf("CIReactionData.Repo = %q, want %q", ciData.Repo, "widgets")
 	}
 	if ciData.Branch != "feature/HO-C2" {
 		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/HO-C2")
@@ -4696,12 +4726,13 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/ci-test", "abc123")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/ci-test", "abc123")
 
 	store := &mockExitStore{}
 	state := exitState(t, "CI-ISS-1", nil)
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CI-ISS-1",
@@ -4714,11 +4745,20 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	rkey := ReactionKey("CI-ISS-1", ReactionKindCI)
 	entry, ok := state.PendingReactions[rkey]
 	if !ok {
-		t.Fatal("PendingReactions[CI-ISS-1:ci] missing; want entry after normal exit with branch")
+		t.Fatal("PendingReactions[CI-ISS-1:ci] missing; want entry after normal exit with pull request identity")
 	}
 	ciData, ok := entry.KindData.(*CIReactionData)
 	if !ok {
 		t.Fatal("KindData is not *CIReactionData")
+	}
+	if ciData.PRNumber != 77 {
+		t.Errorf("CIReactionData.PRNumber = %d, want 77", ciData.PRNumber)
+	}
+	if ciData.Owner != "acme" {
+		t.Errorf("CIReactionData.Owner = %q, want %q", ciData.Owner, "acme")
+	}
+	if ciData.Repo != "widgets" {
+		t.Errorf("CIReactionData.Repo = %q, want %q", ciData.Repo, "widgets")
 	}
 	if ciData.Branch != "feature/ci-test" {
 		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/ci-test")
@@ -4728,6 +4768,54 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	}
 	if entry.IssueID != "CI-ISS-1" {
 		t.Errorf("PendingReaction.IssueID = %q, want %q", entry.IssueID, "CI-ISS-1")
+	}
+}
+
+// TestHandleWorkerExit_CIProvider_MissingPRIdentity_NoPendingReaction
+// verifies that worker-exit CI seeding requires the full pull request
+// identity quadruple, one subtest per missing field, mirroring the
+// predicate every sibling PR-backed reaction kind already enforces.
+func TestHandleWorkerExit_CIProvider_MissingPRIdentity_NoPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		prNumber int
+		owner    string
+		repo     string
+		branch   string
+	}{
+		{"zero PRNumber", 0, "acme", "widgets", "feature/x"},
+		{"empty Owner", 77, "", "widgets", "feature/x"},
+		{"empty Repo", 77, "acme", "", "feature/x"},
+		{"empty Branch", 77, "acme", "widgets", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			writePRSCMMetadata(t, wsPath, tt.prNumber, tt.owner, tt.repo, tt.branch, "abc123")
+
+			store := &mockExitStore{}
+			state := exitState(t, "CI-ISS-MISSING", nil)
+			params := defaultExitParams(t, store)
+			params.CIProvider = &ciProviderStubExit{}
+			params.SCMAdapter = &scmAdapterStubExit{}
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:       "CI-ISS-MISSING",
+				Identifier:    "CI-ISS-MISSING-ident",
+				ExitKind:      WorkerExitNormal,
+				AgentAdapter:  "mock",
+				WorkspacePath: wsPath,
+			}, params)
+
+			if _, ok := state.PendingReactions[ReactionKey("CI-ISS-MISSING", ReactionKindCI)]; ok {
+				t.Errorf("PendingReactions populated with %s; want absent (full PR identity required)", tt.name)
+			}
+		})
 	}
 }
 
@@ -4762,6 +4850,7 @@ func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingReaction(t *testing
 	state := exitState(t, "CI-ISS-3", nil)
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	// WorkspacePath is empty — worker exited before workspace preparation.
 	HandleWorkerExit(state, WorkerResult{
@@ -4794,6 +4883,7 @@ func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingReaction(t *testing.
 	state := exitState(t, "CI-ISS-4", nil)
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CI-ISS-4",
@@ -4812,12 +4902,13 @@ func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMMetadata(t, wsPath, "feature/ci-test", "sha999")
+	writePRSCMMetadata(t, wsPath, 77, "acme", "widgets", "feature/ci-test", "sha999")
 
 	store := &mockExitStore{}
 	state := exitState(t, "CI-ISS-5", nil)
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
+	params.SCMAdapter = &scmAdapterStubExit{}
 
 	// SoftStop: claim is released before the CI check; PendingReactions must not be populated.
 	HandleWorkerExit(state, WorkerResult{

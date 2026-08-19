@@ -1,0 +1,17 @@
+{
+  "id": 500009,
+  "number": 6,
+  "title": "Add Gitea SCM read operations",
+  "state": "closed",
+  "mergeable": false,
+  "merged": false,
+  "merged_at": null,
+  "draft": false,
+  "user": { "login": "alice" },
+  "requested_reviewers": [],
+  "head": { "sha": "sha-clean-001", "ref": "feature/gitea-scm-reads" },
+  "base": { "ref": "main" },
+  "html_url": "https://git.example.com/acme/widgets/pulls/6",
+  "created_at": "2026-07-10T08:00:00Z",
+  "updated_at": "2026-07-19T09:30:00Z"
+}

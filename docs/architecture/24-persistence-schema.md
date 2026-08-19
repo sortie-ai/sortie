@@ -140,6 +140,13 @@ comment set last acted on, the git ref last checked, a journal high-water mark, 
 identifier, whichever value identifies "the same observation" for that kind. The column is opaque
 text and this schema attaches no meaning to it beyond equality.
 
+The `ci` row holds the pull request head this process last evaluated, not a ref captured once at
+worker exit; `updated_at` is refreshed on every evaluation, including one that finds the head
+unchanged, so it names the last evaluation rather than a first-seen timestamp for this kind. A
+differing stored head is this kind's head-change detection, and the row is never deleted: neither a
+passing result nor an escalation removes it, because it is the durable half of the feedback epoch
+record (§11A.9).
+
 `dispatched` likewise means "the action this kind performs has been performed for this
 fingerprint", and the row's lifecycle after that point is the owning kind's to define. Most kinds
 treat the row as spent. The merge-completion kind (§11G.4) instead retains a dispatched row rather

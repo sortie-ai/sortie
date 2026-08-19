@@ -103,6 +103,14 @@ type PRMergeStatus struct {
 	// MergeCommitSHA is the merge commit identifier reported by the
 	// provider. Set only when Merged is true.
 	MergeCommitSHA string
+
+	// Closed reports whether the provider considers the pull request
+	// no longer open. It is true for a pull request closed without
+	// merging and, on providers whose closed state subsumes merging,
+	// for a merged one as well, so a caller that wants the
+	// closed-without-merge condition tests Closed && !Merged rather
+	// than Closed alone.
+	Closed bool
 }
 
 // MergeResult carries the outcome of a successful merge call.

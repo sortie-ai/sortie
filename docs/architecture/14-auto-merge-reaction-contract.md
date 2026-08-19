@@ -49,8 +49,10 @@ The auto-merge reaction introduces the following domain types:
   `CIConclusion`, `Draft` (bool, separate from `Mergeability`), `Mergeability`
   (`MergeabilityState`), `HeadSHA`, `BranchName`, `BaseBranch` (the PR's target branch, added for
   merge-conflict detection, §11E.1), `Merged` (bool reporting whether the pull request has
-  merged, added for the post-merge closure reaction, ADR-0017), and `MergeCommitSHA` (the merge
-  commit identifier, set only when `Merged` is true, added by the same reaction). `ReviewDecision`
+  merged, added for the post-merge closure reaction, ADR-0017), `MergeCommitSHA` (the merge
+  commit identifier, set only when `Merged` is true, added by the same reaction), and `Closed`
+  (bool reporting whether the provider considers the pull request no longer open, primarily read
+  by the CI reaction, §11A.9). `ReviewDecision`
   and `CIConclusion` are unset by `GetMergeability`; callers obtain those from dedicated reads.
 - `MergeResult`: struct carrying `SHA` (merge commit SHA), `Merged` (bool reporting whether the
   merge completed), and `Message` (provider-supplied status text). The already-merged case is

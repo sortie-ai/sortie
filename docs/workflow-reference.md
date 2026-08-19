@@ -818,6 +818,9 @@ ci_feedback:
 | `escalation`       | string  | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
 | `escalation_label` | string  | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
 
+The deprecated `ci_feedback` section exposes no `watch_window_ms` key. A deployment that still uses
+this section receives the default value described in Section 2.10.
+
 **Activation pattern:** CI feedback has no `enabled` flag. The feature is active when
 `ci_feedback.kind` is present and non-empty. Omit the entire `ci_feedback` section to
 disable the feature:
@@ -921,9 +924,10 @@ under `reactions` identifies a reaction kind.
 **Reload behavior:** every field of every reaction kind is read once when the orchestrator
 is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only
 on the next restart. `reactions.ci_failure` is the single exception: the orchestrator folds
-it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`, and
-`escalation_label` from the reloaded config on each tick. Its `max_log_lines` still requires
-a restart, because the CI provider is constructed once at process start.
+it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`,
+`escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its
+`max_log_lines` still requires a restart, because the CI provider is constructed once at
+process start.
 
 **Escalation recurrence:** `escalation: label` is idempotent (re-applying a
 present label is a no-op); `escalation: comment` posts a new comment each time
@@ -964,14 +968,15 @@ SCM reaction in one workflow MUST name the same provider.
 #### Reaction kind: `ci_failure`
 
 Equivalent to the deprecated `ci_feedback` section. Configures the CI failure feedback
-loop. The orchestrator polls CI status for Sortie-created branches and dispatches
-continuation turns when CI fails.
+loop. The orchestrator resolves the pull request's current head on each pass and polls CI
+status for that head, dispatching continuation turns when CI fails on it.
 
 Additional fields (via Extra):
 
-| Field           | Type    | Default | Dynamic Reload   | Description                                                           |
-| --------------- | ------- | ------- | ---------------- | --------------------------------------------------------------------- |
-| `max_log_lines` | integer | `50`    | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative. |
+| Field             | Type    | Default      | Dynamic Reload | Description                                                                                                             |
+| ----------------- | ------- | ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `max_log_lines`   | integer | `50`         | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative.                                   |
+| `watch_window_ms` | integer | `86400000`   | Every tick        | Bounds a pending entry's age, measured from the last recorded head. `0` removes the clock bound. Must be non-negative. |
 
 Example:
 

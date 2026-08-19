@@ -23,7 +23,9 @@ import (
 
 // unsupportedReactionObservationStore lets unrelated store doubles satisfy
 // the compile-time interface while failing loudly if a merge-completion test
-// accidentally uses a double without real observation semantics.
+// accidentally uses a double without real observation semantics. It also
+// supplies a safe, conservative default for CountWorkerRunsCompletedSince
+// for any store double that does not implement its own.
 type unsupportedReactionObservationStore struct{}
 
 func (unsupportedReactionObservationStore) UpsertReactionObservation(
@@ -36,6 +38,15 @@ func (unsupportedReactionObservationStore) UpsertReactionObservation(
 
 func (unsupportedReactionObservationStore) MarkReactionObservationDispatched(context.Context, string, string, string) error {
 	panic("reaction observation persistence is unsupported by this test double")
+}
+
+// CountWorkerRunsCompletedSince returns a non-nil error rather than
+// (0, nil), so a store double that does not override this method drives
+// classifyHeadChange to the conservative "unknown" verdict instead of
+// silently resolving "notOurs" for every test that never considered
+// attribution.
+func (unsupportedReactionObservationStore) CountWorkerRunsCompletedSince(context.Context, string, time.Time) (int, error) {
+	return 0, errors.New("worker run count is unsupported by this test double")
 }
 
 // mockReconcileStore records calls to ReconcileStore methods and returns
