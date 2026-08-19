@@ -235,10 +235,11 @@ per-issue conversation set.
 
 ### Process lifetime and cancellation
 
-Kiro CLI exposes no native per-turn timeout flag on `chat` (local `chat --help`), so an
-external bound is the only upper limit on a turn, and the login-hang hazard above makes it
-mandatory rather than optional. Cancelling the context passed to `RunTurn` is what stops a
-Kiro subprocess: `agentcore.ForkPerTurnSession` puts the process in its own group, sends
+Kiro CLI exposes no native per-turn timeout flag on `chat` (local `chat --help`), so
+`agent.turn_timeout_ms` supplies the external wall-clock bound on a turn. The login-hang
+hazard above is caught by stall detection, described below, not by that bound. Cancelling
+the context passed to `RunTurn` is what stops a Kiro subprocess:
+`agentcore.ForkPerTurnSession` puts the process in its own group, sends
 SIGTERM to that group through `procutil.SignalGraceful`, waits the five-second
 `stopGracePeriod`, and then sends SIGKILL. `KiroAdapter.StopSession` reaches the same path
 through `ForkPerTurnSession.Stop`. On SIGTERM the process terminates and the shell reports
@@ -545,7 +546,7 @@ Resulting `domain.TurnResult.ExitReason`, as `kiro.KiroAdapter` and the
 | Any other non-zero exit that is not a signal or 127 | `turn_failed` with `domain.ErrPortExit` and the message `exit code N` |
 | Exit 127 | `turn_failed` with `domain.ErrAgentNotFound`; the skeleton handles this arm before the adapter's finalizer, so it is not `startup_failed` |
 | SIGTERM or SIGKILL, or a cancelled context | `turn_cancelled` with `domain.ErrTurnCancelled` |
-| No-credential launch that hangs | Prevented by the credential preflight; a hang that reaches a cancelled context yields `turn_cancelled` |
+| No-credential launch that hangs | Prevented by the credential preflight in local mode; a hang that reaches a cancelled context yields `turn_cancelled` |
 
 The shared disposition rule in `agentcore.DecideTurn` treats a zero exit code with no positive
 work signal as a failed turn, and that signal is ordinarily a per-turn token count. Headless

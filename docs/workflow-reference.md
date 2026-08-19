@@ -2590,14 +2590,14 @@ is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`.
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command. |
+| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the canary is skipped and the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command instead. |
 
 **Token usage and budgets:** The Kiro adapter emits no token-usage events.
 `kiro-cli` does not report token counts on the headless path (only an abstract
 credits figure on stderr), so `TurnResult.Usage` is the zero value and
 `token_rates.kiro` produces no cost estimate. Token-based budget enforcement
-does not apply to Kiro; the `agent.turn_timeout_ms` is the only effective
-backstop and is mandatory because `kiro-cli` has no native per-turn timeout.
+does not apply to Kiro; `agent.turn_timeout_ms` is the wall-clock budget
+bound. A turn that goes silent is caught first by `agent.stall_timeout_ms`.
 
 **MCP:** Under `KIRO_API_KEY` authentication the backend `GetProfile` gate
 disables MCP. A workspace `mcp.json` is not loaded and `--require-mcp-startup`

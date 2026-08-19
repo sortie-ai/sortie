@@ -39,8 +39,8 @@ agent:
   command: kiro-cli
   max_turns: 5
   max_concurrent_agents: 4
-  # Kiro has no native per-turn timeout switch; this orchestrator-side
-  # deadline is the only backstop on a stuck headless turn.
+  # Kiro has no native per-turn timeout switch; turn_timeout_ms is the
+  # wall-clock bound; stall_timeout_ms below catches a silent turn.
   turn_timeout_ms: 1800000
   stall_timeout_ms: 300000
   max_retry_backoff_ms: 300000
@@ -66,8 +66,9 @@ server:
 
      The Kiro adapter launches one "kiro-cli chat --no-interactive"
      subprocess per turn. Headless Kiro emits no structured output, so
-     budget enforcement is time-based: the turn_timeout_ms above is the
-     only backstop and no token-usage events are emitted.
+     budget enforcement is time-based: turn_timeout_ms above is the
+     budget bound; stall_timeout_ms catches a silent turn, and no
+     token-usage events are emitted.
 
      Required env vars:
        GITHUB_TOKEN          Fine-grained PAT with Issues read/write
