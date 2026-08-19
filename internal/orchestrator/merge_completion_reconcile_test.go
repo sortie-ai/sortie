@@ -50,6 +50,12 @@ type mgcTrackerFake struct {
 	commentErr    error
 	addLabelCalls []mgcLabelCall
 	commentCalls  []mgcCommentCall
+
+	// addLabelCtx and commentCtx capture the context of the last
+	// AddLabel/CommentIssue call so tests can verify it is the same
+	// context handed to a follow-up store write, not an independent one.
+	addLabelCtx context.Context
+	commentCtx  context.Context
 }
 
 var _ domain.TrackerAdapter = (*mgcTrackerFake)(nil)
@@ -86,13 +92,15 @@ func (f *mgcTrackerFake) TransitionIssue(_ context.Context, issueID, target stri
 	return f.transitionErr
 }
 
-func (f *mgcTrackerFake) CommentIssue(_ context.Context, issueID, text string) error {
+func (f *mgcTrackerFake) CommentIssue(ctx context.Context, issueID, text string) error {
 	f.commentCalls = append(f.commentCalls, mgcCommentCall{issueID: issueID, text: text})
+	f.commentCtx = ctx
 	return f.commentErr
 }
 
-func (f *mgcTrackerFake) AddLabel(_ context.Context, issueID, label string) error {
+func (f *mgcTrackerFake) AddLabel(ctx context.Context, issueID, label string) error {
 	f.addLabelCalls = append(f.addLabelCalls, mgcLabelCall{issueID: issueID, label: label})
+	f.addLabelCtx = ctx
 	return f.addLabelErr
 }
 
@@ -163,6 +171,12 @@ type mgcStoreFake struct {
 	markObservationCalls int
 	deleteCalls          int
 	deleteRetryCalls     int
+
+	// markObservationCtx captures the context of the last
+	// MarkReactionObservationDispatched call so tests can verify it is
+	// the same context handed to the preceding tracker write, not an
+	// independent one.
+	markObservationCtx context.Context
 }
 
 var _ ReconcileStore = (*mgcStoreFake)(nil)
@@ -249,8 +263,9 @@ func (s *mgcStoreFake) UpsertReactionObservation(
 	}, nil
 }
 
-func (s *mgcStoreFake) MarkReactionObservationDispatched(_ context.Context, issueID, kind, fingerprint string) error {
+func (s *mgcStoreFake) MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error {
 	s.markObservationCalls++
+	s.markObservationCtx = ctx
 	if s.markObservationErr != nil {
 		return s.markObservationErr
 	}
@@ -1693,5 +1708,71 @@ func TestReconcileTrackerState_TerminalReleasePreservesFingerprints(t *testing.T
 	rkey := ReactionKey(issueID, ReactionKindMergeCompletion)
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry survived terminal release; want removed")
+	}
+}
+
+// The tracker write (AddLabel or CommentIssue) and the follow-up durable
+// marker write must share the exact same deadline context, not two
+// independent 30-second timeouts, or the goroutine as a whole can run
+// past trackerOpsDrainTimeout.
+
+func TestReconcileMergeCompletion_MissingSHAEscalationSharesDeadlineWithMarkerWrite(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		escalation string
+	}{
+		{name: "label", escalation: "label"},
+		{name: "comment", escalation: "comment"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueID := "MGC-MISSING-DEADLINE-" + tt.escalation
+			state := mgcStateWithPending(issueID, 55)
+			store := newMGCStore()
+			tracker := &mgcTrackerFake{states: map[string]string{issueID: "In Review"}}
+			scm := &mgcSCMFake{fn: func(int, string, string) (domain.PRMergeStatus, error) {
+				return mergedMissingSHAStatus(), nil
+			}}
+			params := mgcParams(store, scm, tracker)
+			params.MergeCompletionConfig.Escalation = tt.escalation
+			now := mgcBaseTime
+			params.NowFunc = func() time.Time { return now }
+
+			reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+			now = now.Add(31 * time.Minute)
+			reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+			state.TrackerOpsWg.Wait()
+
+			observation, ok := store.missingSHAObservation(issueID)
+			if !ok || !observation.dispatched {
+				t.Fatalf("missing-SHA observation = %+v, ok=%v, want dispatched=true after escalation delivery", observation, ok)
+			}
+
+			var trackerCtx context.Context
+			switch tt.escalation {
+			case "label":
+				if len(tracker.addLabelCalls) != 1 {
+					t.Fatalf("AddLabel calls = %d, want 1", len(tracker.addLabelCalls))
+				}
+				trackerCtx = tracker.addLabelCtx
+			case "comment":
+				if len(tracker.commentCalls) != 1 {
+					t.Fatalf("CommentIssue calls = %d, want 1", len(tracker.commentCalls))
+				}
+				trackerCtx = tracker.commentCtx
+			}
+
+			if trackerCtx == nil || store.markObservationCtx == nil {
+				t.Fatalf("captured contexts = tracker:%v marker:%v, want both non-nil", trackerCtx, store.markObservationCtx)
+			}
+			if trackerCtx != store.markObservationCtx {
+				t.Errorf("MarkReactionObservationDispatched context = %v, want the identical context passed to the %s tracker write (one shared deadline, not two)", store.markObservationCtx, tt.escalation)
+			}
+		})
 	}
 }
