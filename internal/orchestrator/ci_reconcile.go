@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // ciPendingBackoffBaseDefault is the fallback base interval for CI-pending
@@ -366,6 +367,11 @@ func escalateCIFailure(
 // buildCIEscalationComment builds a plain-text escalation comment for
 // CI failures that exceeded the retry budget. Plain text is used so the
 // comment renders consistently across all tracker adapters.
+//
+// The comment names exactly the checks the verdict counted as failing,
+// obtaining that classification from [scmcore.IsFailingConclusion]
+// rather than restating it, so the named checks never disagree with the
+// verdict that triggered the escalation.
 func buildCIEscalationComment(result domain.CIResult, ref string, attempts int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "CI fix retries exhausted\n\n")
@@ -376,14 +382,14 @@ func buildCIEscalationComment(result domain.CIResult, ref string, attempts int) 
 	}
 
 	for _, cr := range result.CheckRuns {
-		switch cr.Conclusion {
-		case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut, domain.CheckConclusionCancelled:
-			fmt.Fprintf(&b, "- %s: %s", cr.Name, cr.Conclusion)
-			if cr.DetailsURL != "" {
-				fmt.Fprintf(&b, " (details: %s)", cr.DetailsURL)
-			}
-			b.WriteString("\n")
+		if !scmcore.IsFailingConclusion(cr.Conclusion) {
+			continue
 		}
+		fmt.Fprintf(&b, "- %s: %s", cr.Name, cr.Conclusion)
+		if cr.DetailsURL != "" {
+			fmt.Fprintf(&b, " (details: %s)", cr.DetailsURL)
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\nManual intervention required.")

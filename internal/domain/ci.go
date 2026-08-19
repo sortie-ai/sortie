@@ -9,16 +9,17 @@ import (
 type CIStatus string
 
 const (
-	// CIStatusPending indicates CI checks are still running or no
-	// checks have been reported yet.
+	// CIStatusPending indicates CI checks are still running, no
+	// checks have been reported yet, or a completed check concluded
+	// cancelled while no check is failing.
 	CIStatusPending CIStatus = "pending"
 
 	// CIStatusPassing indicates all checks have completed
 	// successfully.
 	CIStatusPassing CIStatus = "passing"
 
-	// CIStatusFailing indicates at least one check has completed
-	// with a failure conclusion.
+	// CIStatusFailing indicates at least one check completed with a
+	// failure or timed-out conclusion.
 	CIStatusFailing CIStatus = "failing"
 )
 

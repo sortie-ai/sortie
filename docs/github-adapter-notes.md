@@ -664,8 +664,9 @@ conclusion.
 | Observation | Returned conclusion |
 | ----------- | ------------------- |
 | No statuses and no check runs | `""` (no signal) |
-| Any run whose conclusion is failure, timed out, or cancelled | `"failing"` |
-| Every run reports completed status and none failed | `"success"` |
+| Any run whose conclusion is failure or timed out | `"failing"` |
+| A completed run's conclusion is cancelled, and no run is failing | `"pending"` |
+| Every run reports completed status and none failed or is cancelled | `"success"` |
 | Anything else | `"pending"` |
 
 Idempotent and read-only. The empty string means "no required checks exist on this pull

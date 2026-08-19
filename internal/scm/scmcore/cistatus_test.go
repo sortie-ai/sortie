@@ -54,12 +54,12 @@ func TestAggregateCIStatus(t *testing.T) {
 			want: domain.CIStatusPending,
 		},
 		{
-			name: "cancelled returns Failing",
+			name: "cancelled with success returns Pending",
 			runs: []domain.CheckRun{
 				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
 				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
 			},
-			want: domain.CIStatusFailing,
+			want: domain.CIStatusPending,
 		},
 		{
 			name: "timed_out returns Failing",
@@ -67,6 +67,38 @@ func TestAggregateCIStatus(t *testing.T) {
 				run(domain.CheckRunStatusCompleted, domain.CheckConclusionTimedOut),
 			},
 			want: domain.CIStatusFailing,
+		},
+		{
+			name: "all cancelled returns Pending",
+			runs: []domain.CheckRun{
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
+			},
+			want: domain.CIStatusPending,
+		},
+		{
+			name: "cancelled with failure returns Failing",
+			runs: []domain.CheckRun{
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionFailure),
+			},
+			want: domain.CIStatusFailing,
+		},
+		{
+			name: "cancelled with timed_out returns Failing",
+			runs: []domain.CheckRun{
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionTimedOut),
+			},
+			want: domain.CIStatusFailing,
+		},
+		{
+			name: "cancelled with in_progress returns Pending",
+			runs: []domain.CheckRun{
+				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
+				run(domain.CheckRunStatusInProgress, domain.CheckConclusionPending),
+			},
+			want: domain.CIStatusPending,
 		},
 		{
 			name: "all neutral and skipped completed returns Passing",
@@ -136,14 +168,14 @@ func TestFailingCount(t *testing.T) {
 			want: 1,
 		},
 		{
-			name: "counts failure timed_out and cancelled",
+			name: "counts failure and timed_out but not cancelled",
 			runs: []domain.CheckRun{
 				run(domain.CheckConclusionFailure),
 				run(domain.CheckConclusionTimedOut),
 				run(domain.CheckConclusionCancelled),
 				run(domain.CheckConclusionSuccess),
 			},
-			want: 3,
+			want: 2,
 		},
 		{
 			name: "empty slice returns 0",
@@ -166,6 +198,52 @@ func TestFailingCount(t *testing.T) {
 			got := scmcore.FailingCount(tt.runs)
 			if got != tt.want {
 				t.Errorf("FailingCount: got %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeGate(t *testing.T) {
+	t.Parallel()
+
+	run := func(conclusion domain.CheckConclusion) domain.CheckRun {
+		return domain.CheckRun{Status: domain.CheckRunStatusCompleted, Conclusion: conclusion}
+	}
+
+	tests := []struct {
+		name string
+		runs []domain.CheckRun
+		want scmcore.CIGate
+	}{
+		{
+			name: "empty slice returns CIGateAbsent",
+			runs: []domain.CheckRun{},
+			want: scmcore.CIGateAbsent,
+		},
+		{
+			name: "cancelled with no failing conclusion returns CIGatePending",
+			runs: []domain.CheckRun{
+				run(domain.CheckConclusionCancelled),
+				run(domain.CheckConclusionSuccess),
+			},
+			want: scmcore.CIGatePending,
+		},
+		{
+			name: "cancelled with a failing conclusion returns CIGateFailing",
+			runs: []domain.CheckRun{
+				run(domain.CheckConclusionCancelled),
+				run(domain.CheckConclusionFailure),
+			},
+			want: scmcore.CIGateFailing,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := scmcore.MergeGate(tt.runs)
+			if got != tt.want {
+				t.Errorf("MergeGate: got %q, want %q", got, tt.want)
 			}
 		})
 	}

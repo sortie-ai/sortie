@@ -450,7 +450,7 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 	}{
 		{"success maps to CIGateSuccess", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "success"})}, "success", false, ""},
 		{"failed maps to CIGateFailing", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "failed"})}, "failing", false, ""},
-		{"canceled maps to CIGateFailing", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "canceled"})}, "failing", false, ""},
+		{"canceled maps to CIGatePending", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "canceled"})}, "pending", false, ""},
 		{"an unrecognized status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "expired"})}, "pending", true, "expired"},
 		{"an empty head_pipeline status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": ""})}, "pending", true, ""},
 		{"a nil head_pipeline maps to CIGateAbsent (empty string)", map[string]any{"head_pipeline": nil}, "", false, ""},

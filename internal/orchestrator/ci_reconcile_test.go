@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // --- Test doubles ---
@@ -302,6 +303,93 @@ func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_CancelledOnly_NoRetrySpent covers the case where a
+// ref's only completed checks are a cancelled run alongside a successful
+// one. The fixture's Status and FailingCount are derived from the declared
+// check-run set via scmcore.AggregateCIStatus and scmcore.FailingCount,
+// rather than written as literals, so a classifier regression reddens this
+// test rather than passing it vacuously.
+func TestReconcileCIStatus_CancelledOnly_NoRetrySpent(t *testing.T) {
+	t.Parallel()
+
+	runs := []domain.CheckRun{
+		{Name: "build", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionCancelled},
+		{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionSuccess},
+	}
+
+	state := stateWithPendingReaction(t, "ISS-CI-CANCELLED", "feature/cancelled-only", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{
+		Status:       scmcore.AggregateCIStatus(runs),
+		FailingCount: scmcore.FailingCount(runs),
+		CheckRuns:    runs,
+	}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.ReactionAttempts[ReactionKey("ISS-CI-CANCELLED", ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts set after cancelled-only result; want unchanged (unset)")
+	}
+	if len(store.runHistories) != 0 {
+		t.Errorf("AppendRunHistory call count = %d, want 0", len(store.runHistories))
+	}
+	if _, ok := state.RetryAttempts["ISS-CI-CANCELLED"]; ok {
+		t.Error("retry scheduled after cancelled-only result; want none")
+	}
+	entry, ok := state.PendingReactions[ReactionKey("ISS-CI-CANCELLED", ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry not re-enqueued after cancelled-only result; want re-enqueued")
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingReactions entry PendingAttempts = %d, want 1", entry.PendingAttempts)
+	}
+	if metrics.ciStatusChecks["pending"] != 1 {
+		t.Errorf(`IncCIStatusChecks("pending") = %d, want 1`, metrics.ciStatusChecks["pending"])
+	}
+}
+
+// TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry covers the
+// shape in which a cancellation coexists with a genuine failure on the same
+// ref: the pass still takes the failing arm. The fixture is derived the
+// same way as TestReconcileCIStatus_CancelledOnly_NoRetrySpent, so this
+// test fails against any classifier in which a cancelled run masks a
+// failing sibling.
+func TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry(t *testing.T) {
+	t.Parallel()
+
+	runs := []domain.CheckRun{
+		{Name: "build", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionCancelled},
+		{Name: "test", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
+	}
+
+	state := stateWithPendingReaction(t, "ISS-CI-CANCELLED-FAIL", "feature/cancelled-with-failure", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{
+		Status:       scmcore.AggregateCIStatus(runs),
+		FailingCount: scmcore.FailingCount(runs),
+		CheckRuns:    runs,
+	}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if state.ReactionAttempts[ReactionKey("ISS-CI-CANCELLED-FAIL", ReactionKindCI)] != 1 {
+		t.Errorf("ReactionAttempts[ISS-CI-CANCELLED-FAIL] = %d, want 1", state.ReactionAttempts[ReactionKey("ISS-CI-CANCELLED-FAIL", ReactionKindCI)])
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory call count = %d, want 1", len(store.runHistories))
+	}
+	if store.runHistories[0].Status != "ci_failed" {
+		t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "ci_failed")
+	}
+	if _, ok := state.RetryAttempts["ISS-CI-CANCELLED-FAIL"]; !ok {
+		t.Error("retry not scheduled after cancelled-with-failure result; want scheduled")
+	}
+}
+
 func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	t.Parallel()
 
@@ -536,7 +624,7 @@ func TestBuildCIEscalationComment(t *testing.T) {
 		{
 			name: "only failure check runs included",
 			result: domain.CIResult{
-				FailingCount: 3,
+				FailingCount: 2,
 				CheckRuns: []domain.CheckRun{
 					{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionSuccess},
 					{Name: "test", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
@@ -546,8 +634,8 @@ func TestBuildCIEscalationComment(t *testing.T) {
 			},
 			ref:            "feature/x",
 			attempts:       2,
-			wantContains:   []string{"test", "deploy", "e2e"},
-			wantNotContain: []string{"lint"},
+			wantContains:   []string{"test", "deploy"},
+			wantNotContain: []string{"lint", "e2e"},
 		},
 		{
 			name: "check run without details URL omits link",
