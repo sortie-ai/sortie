@@ -1221,11 +1221,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			TurnsCompleted: &turnsCompleted,
 			TurnTimeoutMS:  cfg.Agent.TurnTimeoutMS,
 		})
-		// A blocked signal read inside the phase only replaces the
-		// pending reason when one is already pending: a run admitted
-		// by turn-budget exhaustion carries no reason into the phase
-		// and must carry none out of it, so its exit is unchanged.
-		if pendingSoftStopReason != "" && phaseSignal == workspace.StatusBlocked {
+		// A blocked signal read inside the phase becomes the run's soft-stop
+		// reason unconditionally, on whichever admission path the run took.
+		if phaseSignal == workspace.StatusBlocked {
 			pendingSoftStopReason = string(workspace.StatusBlocked)
 		}
 	} else if pendingSoftStopReason != "" {

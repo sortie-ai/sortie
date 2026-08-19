@@ -5307,6 +5307,72 @@ func TestRunWorkerAttempt_InPhaseBlockedOnFixTurn(t *testing.T) {
 	}
 }
 
+// TestRunWorkerAttempt_TurnBudgetInPhaseBlockedOnFixTurn_BecomesSoftStop
+// verifies that a blocked signal read after a fix turn, on a run the
+// agent.max_turns exit admitted to the phase, ends the phase and becomes
+// the run's soft-stop reason, with the iteration record naming the signal
+// while preserving the review turn's own verdict.
+func TestRunWorkerAttempt_TurnBudgetInPhaseBlockedOnFixTurn_BecomesSoftStop(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2 // exhausted without any coding-turn signal
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         2, // room for a fix turn before the cap
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewFixPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "blocked")
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+	if len(result.ReviewMetadata.Iterations) == 0 {
+		t.Fatal("Iterations is empty, want the aborted iteration recorded")
+	}
+	last := result.ReviewMetadata.Iterations[len(result.ReviewMetadata.Iterations)-1]
+	if !strings.Contains(last.VerdictParseError, "blocked") {
+		t.Errorf("last iteration VerdictParseError = %q, want to name %q", last.VerdictParseError, "blocked")
+	}
+	if last.Verdict != "iterate" {
+		t.Errorf("last iteration Verdict = %q, want %q (the review turn's verdict must survive the fix-turn abort)", last.Verdict, "iterate")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+}
+
 // TestRunWorkerAttempt_CompletionSignalRecordsReviewMetadata verifies that
 // a run ending on the completion signal records review metadata and that
 // its after_run hook receives a SORTIE_SELF_REVIEW_STATUS value other
@@ -5505,14 +5571,14 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseNeedsHumanReview(t *testing.T) {
 	}
 }
 
-// TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_KeepsNormalExit pins the
-// W-9 scope condition: an in-phase blocked signal read during the phase
-// the agent.max_turns exit admits MUST NOT become the run's soft-stop
-// reason, because that admission carried no reason into the phase. This
-// is the regression the maintainer's turn-budget ruling protects: a run
-// that exhausts its coding-turn budget and then blocks during review
-// keeps the exit it has always taken.
-func TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_KeepsNormalExit(t *testing.T) {
+// TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_BecomesSoftStop pins that
+// an in-phase blocked signal read during the phase an agent.max_turns
+// exit admits becomes the run's soft-stop reason, the same disposition
+// the phase gives a blocked signal read on the completion-signal
+// admission: a run that exhausts its coding-turn budget and then blocks
+// during review ends with the blocked disposition, not the ordinary
+// completed-run disposition.
+func TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_BecomesSoftStop(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -5549,11 +5615,11 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_KeepsNormalExit(t *testing.T)
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
 	result := ec.waitResult(t)
 
-	if result.SoftStop {
-		t.Error("SoftStop = true, want false (an in-phase blocked on the turn-budget path must not become the run's reason)")
+	if !result.SoftStop {
+		t.Error("SoftStop = false, want true (an in-phase blocked on the turn-budget path must become the run's reason)")
 	}
-	if result.SoftStopReason != "" {
-		t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
 	}
 	if result.ReviewMetadata == nil {
 		t.Fatal("ReviewMetadata = nil, want non-nil")

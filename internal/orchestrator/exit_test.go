@@ -36,6 +36,11 @@ type mockExitStore struct {
 	absenceResetAt map[string]int
 	absenceResetOf []string
 
+	// absenceCountedIssueIDs records every issue ID QueryConsecutiveHandoffAbsenceCounts
+	// was called with, mirroring the mockRetryStore instrumentation of the
+	// same call.
+	absenceCountedIssueIDs []string
+
 	parkedIssues     []persistence.ParkedIssue
 	deletedParkedIDs []string
 	upsertParkedErr  error
@@ -77,6 +82,7 @@ func (m *mockExitStore) DeleteRetryEntry(_ context.Context, issueID string) erro
 }
 
 func (m *mockExitStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, issueIDs []string) (map[string]int, error) {
+	m.absenceCountedIssueIDs = append(m.absenceCountedIssueIDs, issueIDs...)
 	if m.absenceCountErr != nil {
 		return nil, m.absenceCountErr
 	}
@@ -4457,6 +4463,73 @@ func TestHandleWorkerExitBlockedDrivingDispatchParksIssue(t *testing.T) {
 	calls := tracker.labels()
 	if len(calls) != 1 || calls[0].issueID != "BLK-1" || calls[0].label != "needs-human" {
 		t.Errorf("AddLabel calls = %+v, want one needs-human call for BLK-1", calls)
+	}
+}
+
+// TestHandleWorkerExitBlockedWithReviewMetadataTakesBlockedDisposition
+// verifies that a blocked soft stop carrying non-nil review metadata, on a
+// dispatch configured for a handoff transition, is parked exactly as any
+// other blocked soft stop and never enters the handoff path: no tracker
+// transition, no retry, the claim released, a park row with reason
+// agent_blocked, a succeeded run_history row with no error, no handoff
+// metric, and no handoff-evidence query or reset.
+func TestHandleWorkerExitBlockedWithReviewMetadataTakesBlockedDisposition(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "BLK-RM", "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	params.HandoffParkingLabel = "needs-human"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "BLK-RM",
+		Identifier:     "BLK-RM-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "blocked",
+		ReviewMetadata: &domain.ReviewMetadata{FinalVerdict: "iterate"},
+	}, params)
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if _, ok := state.RetryAttempts["BLK-RM"]; ok {
+		t.Error("retry entry remains after parking")
+	}
+	if _, ok := state.Claimed["BLK-RM"]; ok {
+		t.Error("claim remains after parking")
+	}
+	entry, ok := state.Parked["BLK-RM"]
+	if !ok {
+		t.Fatal("issue not parked after a blocked soft stop with review metadata")
+	}
+	if entry.Reason != parkReasonAgentBlocked {
+		t.Errorf("Parked[BLK-RM].Reason = %q, want %q", entry.Reason, parkReasonAgentBlocked)
+	}
+	if len(store.parkedIssues) != 1 || store.parkedIssues[0].IssueID != "BLK-RM" {
+		t.Errorf("UpsertParkedIssue calls = %+v, want one call for BLK-RM", store.parkedIssues)
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory calls = %d, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want succeeded", got)
+	}
+	if store.runHistories[0].Error != nil {
+		t.Errorf("RunHistory.Error = %v, want nil", store.runHistories[0].Error)
+	}
+	if len(spy.handoffTransitions) != 0 {
+		t.Errorf("handoffTransitions = %v, want none", spy.handoffTransitions)
+	}
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("QueryConsecutiveHandoffAbsenceCounts calls = %v, want none", store.absenceCountedIssueIDs)
+	}
+	if len(store.absenceResetOf) != 0 {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want none", store.absenceResetOf)
 	}
 }
 
