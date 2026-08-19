@@ -29,6 +29,12 @@ func retentionWorkflow(days int) []byte {
 	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nworkspace:\n  retention_days: %d\n---\nDo the task for {{ .issue.title }}.\n", days)
 }
 
+// turnTimeoutWorkflow returns a minimal WORKFLOW.md content with the given
+// agent.turn_timeout_ms value.
+func turnTimeoutWorkflow(ms int) []byte {
+	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nagent:\n  turn_timeout_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", ms)
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
@@ -259,6 +265,39 @@ func TestManager_ReloadRetainsOnInvalidRetentionDays(t *testing.T) {
 	}
 	if got := mgr.Config().Workspace.RetentionDays; got != 30 {
 		t.Errorf("after failed Reload: Config().Workspace.RetentionDays = %d, want 30 (retained)", got)
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+	}
+}
+
+// TestManager_ReloadRetainsOnInvalidTurnTimeoutMS verifies that a reload
+// whose agent.turn_timeout_ms fails validation leaves the previously
+// loaded configuration in force rather than disabling the bound or
+// terminating the process.
+func TestManager_ReloadRetainsOnInvalidTurnTimeoutMS(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, turnTimeoutWorkflow(1800000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := mgr.Config().Agent.TurnTimeoutMS; got != 1800000 {
+		t.Fatalf("initial Config().Agent.TurnTimeoutMS = %d, want 1800000", got)
+	}
+
+	mustWriteFile(t, path, turnTimeoutWorkflow(0))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error")
+	}
+	if got := mgr.Config().Agent.TurnTimeoutMS; got != 1800000 {
+		t.Errorf("after failed Reload: Config().Agent.TurnTimeoutMS = %d, want 1800000 (retained)", got)
 	}
 	if mgr.LastLoadError() == nil {
 		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")

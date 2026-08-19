@@ -908,7 +908,7 @@ func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "looks good"}},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -970,7 +970,7 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 		},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1021,7 +1021,7 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 		},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1062,7 +1062,7 @@ func TestSelfReviewLoop_MissingVerdict(t *testing.T) {
 	// Adapter writes no verdict file.
 	adapter := &verdictWriter{wsPath: wsPath, verdicts: nil}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1090,7 +1090,7 @@ func TestSelfReviewLoop_TurnError(t *testing.T) {
 
 	adapter := &failOnFirstAdapter{wsPath: wsPath}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1120,7 +1120,7 @@ func TestSelfReviewLoop_StatusBlocked(t *testing.T) {
 	// Adapter writes "blocked" status signal during the first review turn.
 	adapter := &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1159,7 +1159,7 @@ func TestSelfReviewLoop_ContextCancelled(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "done"}},
 	}
 
-	meta, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1192,7 +1192,7 @@ func TestSelfReviewLoop_ProgressEvents(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "good"}},
 	}
 
-	runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1235,7 +1235,7 @@ func TestSelfReviewLoop_ReviewSummaryWritten(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "ok"}},
 	}
 
-	runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1349,7 +1349,7 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 				cancel()
 			}
 
-			_, signal := runSelfReviewLoop(ctx, RunSelfReviewParams{
+			_, signal, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 				Session:        domain.Session{ID: "sess"},
 				Issue:          selfReviewIssue(),
 				WorkspacePath:  wsPath,
@@ -1390,7 +1390,7 @@ func TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues(t *testing.T) {
 		},
 	}
 
-	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1433,7 +1433,7 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 
 	adapter := &repeatingNeedsReviewAdapter{t: t, wsPath: wsPath}
 
-	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,

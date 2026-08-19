@@ -29,6 +29,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `agent.command` is preserved as a shell command string
+- A non-positive `agent.turn_timeout_ms` is rejected at config parse time; an absent key takes
+  the default
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - Prompt template renders `issue`, `attempt`, and `run`
 - Prompt rendering fails on unknown variables (strict mode)
@@ -158,6 +160,13 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error
 - Stall detection kills stalled sessions and schedules retry
+- A turn exceeding the configured turn timeout ends the attempt with the `turn_timeout` failure
+  and schedules a retry, while a worker whose context was already cancelled keeps its
+  cancellation disposition; this is the enforcing side of the property Section 17.5 lists as
+  "Turn timeout is enforced"
+- A self-review turn expiry ends the attempt the same way, while every other self-review failure
+  (diff generation, a verification command, a verdict parse, a `blocked` status) still exits
+  normally
 - Slot exhaustion requeues retries with explicit error reason
 - Dispatch-time in-progress transition calls `TransitionIssue` when `tracker.in_progress_state`
   is configured

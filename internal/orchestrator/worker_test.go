@@ -5661,3 +5661,538 @@ func TestRunWorkerAttempt_StatusSignalLogLines(t *testing.T) {
 		}
 	})
 }
+
+// --- Turn-timeout enforcement (issue #834) ---
+
+// boundedTurnStub is a domain.AgentAdapter.RunTurn stub that emits an
+// event on every tick of interval until ctx is done or natural elapses,
+// whichever comes first. natural must exceed whatever turn-timeout bound
+// the calling test configures, by a margin the test can measure: with no
+// deadline applied anywhere, the stub returns successfully at natural and
+// assertions expecting a timeout fail on a completed turn instead of the
+// test blocking on it.
+type boundedTurnStub struct {
+	natural time.Duration
+}
+
+// boundedTurnStubEventInterval is the fixed tick at which boundedTurnStub
+// emits an event while its RunTurn call is still running.
+const boundedTurnStubEventInterval = 10 * time.Millisecond
+
+func (s *boundedTurnStub) runTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	ticker := time.NewTicker(boundedTurnStubEventInterval)
+	defer ticker.Stop()
+	timer := time.NewTimer(s.natural)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return domain.TurnResult{}, ctx.Err()
+		case <-timer.C:
+			return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+		case <-ticker.C:
+			if params.OnEvent != nil {
+				params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC()})
+			}
+		}
+	}
+}
+
+// newBoundedTurnFn returns a mockAgentAdapter.runTurnFn-shaped stub (see
+// boundedTurnStub).
+func newBoundedTurnFn(natural time.Duration) func(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	stub := &boundedTurnStub{natural: natural}
+	return stub.runTurn
+}
+
+// linesWithAttr returns every line of a slog TextHandler's output carrying
+// the given attribute key, isolating one structured log record from
+// others the same code path may also emit.
+func linesWithAttr(logOutput, key string) []string {
+	var lines []string
+	for line := range strings.SplitSeq(logOutput, "\n") {
+		if strings.Contains(line, key+"=") {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+func TestRunWorkerAttempt_TurnTimeoutExpires(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.TurnTimeoutMS = 150
+	cfg.Agent.StallTimeoutMS = 0
+	cfg.Agent.MaxTurns = 1
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	runTurnFn := newBoundedTurnFn(2 * time.Second)
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{runTurnFn: runTurnFn},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 logger,
+	}
+
+	start := time.Now()
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	elapsed := time.Since(start)
+	result := ec.waitResult(t)
+
+	var agentErr *domain.AgentError
+	if !errors.As(result.Error, &agentErr) {
+		t.Fatalf("result.Error = %v (%T), want *domain.AgentError", result.Error, result.Error)
+	}
+	if agentErr.Kind != domain.ErrTurnTimeout {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+	}
+	if elapsed >= 1*time.Second {
+		t.Errorf("RunWorkerAttempt took %v, want well under the stub's 2s natural duration", elapsed)
+	}
+
+	lines := linesWithAttr(logBuf.String(), "turn_timeout_ms")
+	if len(lines) != 1 {
+		t.Fatalf("WARN records carrying turn_timeout_ms = %d, want 1; log:\n%s", len(lines), logBuf.String())
+	}
+	if !strings.Contains(lines[0], "level=WARN") {
+		t.Errorf("record = %q, want level=WARN", lines[0])
+	}
+	if !strings.Contains(lines[0], "turn_timeout_ms=150") {
+		t.Errorf("record = %q, want turn_timeout_ms=150", lines[0])
+	}
+	if !strings.Contains(lines[0], "turn_number=1") {
+		t.Errorf("record = %q, want turn_number=1", lines[0])
+	}
+}
+
+func TestRunWorkerAttempt_TurnTimeoutSchedulesRetry(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.TurnTimeoutMS = 150
+	cfg.Agent.StallTimeoutMS = 0
+	cfg.Agent.MaxTurns = 1
+
+	runTurnFn := newBoundedTurnFn(2 * time.Second)
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{runTurnFn: runTurnFn},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitError {
+		t.Fatalf("ExitKind = %q, want %q (a deadline placed on the worker context instead of the turn would yield %q and no retry entry)",
+			result.ExitKind, WorkerExitError, WorkerExitCancelled)
+	}
+
+	store := &mockExitStore{}
+	state := exitStateWithIssue(t, result.IssueID, "To Do")
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, result, params)
+
+	retryEntry, ok := state.RetryAttempts[result.IssueID]
+	if !ok {
+		t.Fatal("retry not scheduled after turn-timeout error exit")
+	}
+	if want := NextAttempt(nil); retryEntry.Attempt != want {
+		t.Errorf("retry Attempt = %d, want %d", retryEntry.Attempt, want)
+	}
+}
+
+func TestRunWorkerAttempt_CancellationNotReportedAsTimeout(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.TurnTimeoutMS = 60_000 // far above the stub's natural duration
+	cfg.Agent.MaxTurns = 1
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	runTurnFn := newBoundedTurnFn(5 * time.Second)
+	ec := newExitCapture()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{runTurnFn: runTurnFn},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 logger,
+	}
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	RunWorkerAttempt(ctx, workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitCancelled {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitCancelled)
+	}
+	var agentErr *domain.AgentError
+	if errors.As(result.Error, &agentErr) && agentErr.Kind == domain.ErrTurnTimeout {
+		t.Errorf("result.Error classified as turn_timeout on a plain cancellation: %v", result.Error)
+	}
+	if lines := linesWithAttr(logBuf.String(), "turn_timeout_ms"); len(lines) != 0 {
+		t.Errorf("WARN records carrying turn_timeout_ms = %v, want none on a cancellation", lines)
+	}
+}
+
+func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses touch command")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "after_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.TurnTimeoutMS = 150
+	cfg.Agent.ReadTimeoutMS = 5000
+	cfg.Agent.StallTimeoutMS = 0
+	cfg.Agent.MaxTurns = 1
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
+
+	runTurnFn := newBoundedTurnFn(2 * time.Second)
+	ec := newExitCapture()
+
+	// The context itself must be inspected inside the StopSession call:
+	// stopSessionBestEffort's own deferred cancel fires as soon as the
+	// call returns, so a context object captured here and inspected only
+	// after RunWorkerAttempt returns would always read back canceled.
+	var (
+		stopCalledMu    sync.Mutex
+		stopCalled      bool
+		stopErrAtCall   error
+		stopDeadline    time.Time
+		stopHadDeadline bool
+	)
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: runTurnFn,
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				stopCalledMu.Lock()
+				stopCalled = true
+				stopErrAtCall = ctx.Err()
+				stopDeadline, stopHadDeadline = ctx.Deadline()
+				stopCalledMu.Unlock()
+				return nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	stopCalledMu.Lock()
+	called, errAtCall, deadline, hadDeadline := stopCalled, stopErrAtCall, stopDeadline, stopHadDeadline
+	stopCalledMu.Unlock()
+
+	if !called {
+		t.Fatal("StopSession was never called")
+	}
+	if errAtCall != nil {
+		t.Errorf("StopSession context already done at call time: %v, want live", errAtCall)
+	}
+	if !hadDeadline {
+		t.Fatal("StopSession context has no deadline")
+	}
+	if remaining := time.Until(deadline); remaining <= 3*time.Second || remaining > 5*time.Second {
+		t.Errorf("StopSession context deadline = %v from now, want in (3s, 5s], reflecting read_timeout_ms=5000 rather than the 150ms turn bound", remaining)
+	}
+
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("after_run marker file not found: %v (teardown must still run after a turn timeout)", err)
+	}
+}
+
+func TestRunWorkerAttempt_NonPositiveTurnTimeoutSubstitutesDefault(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value int
+	}{
+		{name: "zero", value: 0},
+		{name: "negative", value: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			cfg := defaultWorkerConfig(tmpDir)
+			cfg.Agent.TurnTimeoutMS = tt.value
+			cfg.Agent.MaxTurns = 1
+
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+			ec := newExitCapture()
+
+			deps := WorkerDeps{
+				TrackerAdapter:         &mockTrackerAdapter{},
+				AgentAdapter:           &mockAgentAdapter{}, // default RunTurn completes immediately
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 logger,
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+			result := ec.waitResult(t)
+
+			if result.ExitKind != WorkerExitNormal {
+				t.Fatalf("ExitKind = %q, want %q (a non-positive bound must still bound the turn at the package default, not skip it)",
+					result.ExitKind, WorkerExitNormal)
+			}
+
+			lines := linesWithAttr(logBuf.String(), "configured_turn_timeout_ms")
+			if len(lines) != 1 {
+				t.Fatalf("WARN records carrying configured_turn_timeout_ms = %d, want 1; log:\n%s", len(lines), logBuf.String())
+			}
+			if want := fmt.Sprintf("configured_turn_timeout_ms=%d", tt.value); !strings.Contains(lines[0], want) {
+				t.Errorf("record = %q, want it to contain %q", lines[0], want)
+			}
+		})
+	}
+}
+
+func TestRunWorkerAttempt_SelfReviewTurnTimeoutFailsAttempt(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.TurnTimeoutMS = 150
+	cfg.Agent.StallTimeoutMS = 0
+	cfg.Agent.MaxTurns = 1
+	cfg.Tracker.HandoffState = "Human Review"
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         2,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	reviewTurnFn := newBoundedTurnFn(2 * time.Second)
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if isSelfReviewTurnPrompt(params.Prompt) {
+					return reviewTurnFn(ctx, session, params)
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 logger,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	var agentErr *domain.AgentError
+	if !errors.As(result.Error, &agentErr) {
+		t.Fatalf("result.Error = %v (%T), want *domain.AgentError", result.Error, result.Error)
+	}
+	if agentErr.Kind != domain.ErrTurnTimeout {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+	}
+	if result.ExitKind != WorkerExitError {
+		t.Errorf("ExitKind = %q, want %q (a self-review turn expiry must fail the attempt, not degrade it)", result.ExitKind, WorkerExitError)
+	}
+	if !strings.Contains(result.Error.Error(), "iteration 1") {
+		t.Errorf("error text = %q, want it to name iteration 1", result.Error.Error())
+	}
+	if !strings.Contains(result.Error.Error(), "review turn") {
+		t.Errorf("error text = %q, want it to name the review turn", result.Error.Error())
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata is nil, want non-nil")
+	}
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, result.IssueID, "To Do")
+	params := handoffEvidenceExitParams(t, store, tracker, &domain.NoopMetrics{})
+	params.CommentsConfig.OnFailure = true
+
+	HandleWorkerExit(state, result, params)
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.commentCalls) != 1 {
+		t.Errorf("commentCalls = %v, want exactly 1 failure comment", tracker.commentCalls)
+	}
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("transitionCalls = %v, want 0 (no handoff attempted on a phase failure exit, even with handoff_state configured)", tracker.transitionCalls)
+	}
+
+	lines := linesWithAttr(logBuf.String(), "turn_timeout_ms")
+	if len(lines) != 1 {
+		t.Fatalf("WARN records carrying turn_timeout_ms = %d, want 1; log:\n%s", len(lines), logBuf.String())
+	}
+	if !strings.Contains(lines[0], "level=WARN") {
+		t.Errorf("record = %q, want level=WARN", lines[0])
+	}
+	if !strings.Contains(lines[0], "iteration=1") {
+		t.Errorf("record = %q, want iteration=1", lines[0])
+	}
+	if !strings.Contains(lines[0], "review_turn=review") {
+		t.Errorf("record = %q, want review_turn=review", lines[0])
+	}
+	if strings.Contains(lines[0], "turn_number=") {
+		t.Errorf("record = %q, want no turn_number attribute for a phase-turn expiry", lines[0])
+	}
+}
+
+func TestRunWorkerAttempt_SelfReviewNonTimeoutTurnErrorStillExitsNormal(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         2,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if isSelfReviewTurnPrompt(params.Prompt) {
+					return domain.TurnResult{}, fmt.Errorf("simulated turn error")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q (a non-timeout phase turn error must not fail the attempt)", result.ExitKind, WorkerExitNormal)
+	}
+	if result.Error != nil {
+		t.Errorf("result.Error = %v, want nil on a normal exit", result.Error)
+	}
+}
+
+func TestRunWorkerAttempt_TurnTimeoutBoundIsAttemptStartSnapshot(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	baseCfg := defaultWorkerConfig(tmpDir)
+	baseCfg.Agent.MaxTurns = 1
+	baseCfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	const attemptStartBoundMS = 10_000 // T
+	const postSwitchBoundMS = 100      // U
+
+	var useSecondConfig atomic.Bool
+	configFunc := func() config.ServiceConfig {
+		cfg := baseCfg
+		if useSecondConfig.Load() {
+			cfg.Agent.TurnTimeoutMS = postSwitchBoundMS
+		} else {
+			cfg.Agent.TurnTimeoutMS = attemptStartBoundMS
+		}
+		return cfg
+	}
+
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if isSelfReviewTurnPrompt(params.Prompt) {
+					// Between U (100ms) and T (10s): correct under T, expires under U.
+					time.Sleep(300 * time.Millisecond)
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				}
+				// The primary-loop coding turn: flip the switch after this
+				// turn's own work is done but before returning, so the
+				// phase's later reviewCfg := deps.ConfigFunc() read has
+				// already observed the flip by the time it runs.
+				useSecondConfig.Store(true)
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             configFunc,
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.Error != nil {
+		t.Errorf("result.Error = %v, want nil (the self-review turn must be bounded by the attempt-start T, not a later re-read of U)", result.Error)
+	}
+}

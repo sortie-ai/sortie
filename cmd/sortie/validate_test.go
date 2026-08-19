@@ -1879,6 +1879,70 @@ func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
 	}
 }
 
+// nonPositiveTurnTimeoutWorkflow returns workflow content with a
+// non-positive agent.turn_timeout_ms and otherwise valid tracker/agent
+// fields, offline (the file tracker makes no network call).
+func nonPositiveTurnTimeoutWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+  turn_timeout_ms: 0
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateNonPositiveTurnTimeoutMSJSON verifies that a non-positive
+// agent.turn_timeout_ms is reported as an error diagnostic with check
+// name config.agent.turn_timeout_ms, offline (the file tracker makes no
+// network call).
+func TestValidateNonPositiveTurnTimeoutMSJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, nonPositiveTurnTimeoutWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	found := false
+	for _, d := range out.Errors {
+		if d.Check == "config.agent.turn_timeout_ms" {
+			found = true
+			if d.Message != "must be greater than 0" {
+				t.Errorf("diagnostic.Message = %q, want %q", d.Message, "must be greater than 0")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "config.agent.turn_timeout_ms")
+	}
+}
+
 // TestValidateWorkspaceRetentionDaysValid covers R1 and R5: an in-range
 // workspace.retention_days value in the front matter is recognized by
 // the schema and produces no warnings, offline (the file tracker makes

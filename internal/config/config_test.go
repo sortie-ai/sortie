@@ -2017,6 +2017,46 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 	})
 }
 
+func TestNewServiceConfig_AgentTurnTimeoutMS(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Zero", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"turn_timeout_ms": 0}})
+		assertConfigErrorField(t, err, "agent.turn_timeout_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+	})
+
+	t.Run("Negative", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"turn_timeout_ms": -1}})
+		assertConfigErrorField(t, err, "agent.turn_timeout_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+	})
+
+	t.Run("AbsentKeyDefaults", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.TurnTimeoutMS", 3600000, cfg.Agent.TurnTimeoutMS)
+	})
+
+	t.Run("NullValueDefaults", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"turn_timeout_ms": nil}})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.TurnTimeoutMS", 3600000, cfg.Agent.TurnTimeoutMS)
+	})
+}
+
 // TestPopulateCIFeedbackFromReactions exercises the bridge function that
 // maps a ReactionConfig for the "ci_failure" kind into a CIFeedbackConfig.
 func TestPopulateCIFeedbackFromReactions(t *testing.T) {

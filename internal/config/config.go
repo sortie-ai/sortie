@@ -576,12 +576,22 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 
 	command := extractString(m, "command")
 
-	turnTimeoutMS, err := coerceIntField(m, "turn_timeout_ms", "agent.turn_timeout_ms")
-	if err != nil {
-		return AgentConfig{}, err
+	turnTimeoutMS := 3600000
+	if v, exists := m["turn_timeout_ms"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return AgentConfig{}, &ConfigError{
+				Field:   "agent.turn_timeout_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		turnTimeoutMS = parsed
 	}
-	if turnTimeoutMS == 0 {
-		turnTimeoutMS = 3600000
+	if turnTimeoutMS <= 0 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.turn_timeout_ms",
+			Message: "must be greater than 0",
+		}
 	}
 
 	readTimeoutMS, err := coerceIntField(m, "read_timeout_ms", "agent.read_timeout_ms")

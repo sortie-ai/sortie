@@ -172,7 +172,9 @@ type AgentConfig struct {
 	Command string
 
 	// TurnTimeoutMS is the maximum duration in milliseconds for a
-	// single agent turn.
+	// single agent turn. The value is always positive: the
+	// configuration layer rejects a non-positive one rather than
+	// treating it as a sentinel that disables the bound.
 	TurnTimeoutMS int
 
 	// ReadTimeoutMS is the request/response timeout in milliseconds
