@@ -19,6 +19,8 @@ import (
 // mockRetryStore records calls to RetryTimerStore methods and returns
 // configurable errors.
 type mockRetryStore struct {
+	unsupportedReactionObservationStore
+
 	savedEntries   []persistence.RetryEntry
 	deletedIssueID []string
 

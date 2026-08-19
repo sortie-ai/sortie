@@ -87,12 +87,14 @@ func (s *Store) UpsertReactionObservation(
 }
 
 // MarkReactionObservationDispatched sets dispatched=1 without changing the
-// observation's first-seen timestamp. It is a no-op when the row is absent.
-func (s *Store) MarkReactionObservationDispatched(ctx context.Context, issueID, kind string) error {
+// observation's first-seen timestamp, but only while the row still carries
+// the expected fingerprint. It is a no-op when the row is absent or has been
+// replaced by a newer observation.
+func (s *Store) MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE reaction_fingerprints SET dispatched = 1
-		WHERE issue_id = ? AND kind = ?`,
-		issueID, kind,
+		WHERE issue_id = ? AND kind = ? AND fingerprint = ?`,
+		issueID, kind, fingerprint,
 	)
 	return err
 }

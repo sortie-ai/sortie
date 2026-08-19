@@ -10,7 +10,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
-	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
 // mergeCompletionPendingBackoffBase is the floor for the merge-completion
@@ -28,23 +27,8 @@ const mergeCompletionMissingSHAGracePeriod = 30 * time.Minute
 // mergeCompletionMissingSHAObservationKind is an internal persistence kind,
 // not a pending reaction kind. Its fingerprint is the normalized pull-request
 // identity, its updated_at is the first missing-SHA observation time, and its
-// dispatched bit records whether the one-shot escalation has been attempted.
+// dispatched bit records whether the operator escalation was delivered.
 const mergeCompletionMissingSHAObservationKind = "merge-completion-missing-sha"
-
-// mergeCompletionObservationStore is the persistence capability used only by
-// the missing-SHA observation state machine. Keeping it separate from
-// ReconcileStore avoids exposing this reaction-specific first-seen semantic to
-// unrelated reconcilers.
-type mergeCompletionObservationStore interface {
-	UpsertReactionObservation(
-		ctx context.Context,
-		issueID, kind, fingerprint string,
-		observedAt time.Time,
-	) (persistence.ReactionObservation, error)
-	MarkReactionObservationDispatched(ctx context.Context, issueID, kind string) error
-}
-
-var _ mergeCompletionObservationStore = (*persistence.Store)(nil)
 
 // mergeCompletionDueEntry is a pending merge-completion entry that has
 // passed its retry-delay check and is ready for this tick's tracker
@@ -235,13 +219,6 @@ func processMergeCompletionEntry(
 		handleMergeCompletionMissingSHA(state, params, key, pending, data, now, pollInterval, entryLog, ctx)
 		return
 	}
-	if clearErr := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, mergeCompletionMissingSHAObservationKind); clearErr != nil {
-		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
-		entryLog.Warn("failed to clear merge_completion missing-SHA observation before transition",
-			slog.Any("error", clearErr),
-		)
-		return
-	}
 
 	if upsertErr := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeCompletion, status.MergeCommitSHA); upsertErr != nil {
 		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
@@ -259,6 +236,7 @@ func processMergeCompletionEntry(
 		return
 	}
 	if storedFP == status.MergeCommitSHA && dispatched {
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 		entryLog.Debug("merge_completion already transitioned for this merge",
 			slog.String("merge_commit_sha", status.MergeCommitSHA),
 		)
@@ -283,6 +261,7 @@ func processMergeCompletionEntry(
 		)
 		return
 	}
+	clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 	entryLog.Info("merge_completion transitioned issue to terminal state",
 		slog.String("target_state", params.MergeCompletionConfig.TargetState),
 		slog.Int("pr_number", data.PRNumber),
@@ -292,9 +271,10 @@ func processMergeCompletionEntry(
 
 // handleMergeCompletionMissingSHA persists the first time a specific pull
 // request is reported merged without a commit identifier. It retries with the
-// pending-entry backoff during the fixed grace period, then durably marks the
-// observation escalated before dropping the entry and issuing the configured
-// operator notification.
+// pending-entry backoff during the fixed grace period, then drops the entry
+// and issues the configured operator notification. A successful notification
+// marks the observation dispatched; a failed one remains eligible for a later
+// fresh pending entry to retry without reopening the current polling loop.
 func handleMergeCompletionMissingSHA(
 	state *State,
 	params ReconcileParams,
@@ -306,15 +286,8 @@ func handleMergeCompletionMissingSHA(
 	log *slog.Logger,
 	ctx context.Context,
 ) {
-	observationStore, ok := params.Store.(mergeCompletionObservationStore)
-	if !ok {
-		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
-		log.Error("merge_completion store does not support missing-SHA observations")
-		return
-	}
-
 	identity := mergeCompletionPRIdentity(data)
-	observation, err := observationStore.UpsertReactionObservation(
+	observation, err := params.Store.UpsertReactionObservation(
 		ctx,
 		pending.IssueID,
 		mergeCompletionMissingSHAObservationKind,
@@ -334,7 +307,7 @@ func handleMergeCompletionMissingSHA(
 	waited := max(now.Sub(observation.FirstObservedAt), time.Duration(0))
 	if observation.Dispatched {
 		delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
-		log.Warn("merge_completion missing-SHA observation already escalated, stopping",
+		log.Warn("merge_completion missing-SHA escalation already delivered, stopping",
 			slog.String("repository", data.Owner+"/"+data.Repo),
 			slog.Int("pr_number", data.PRNumber),
 			slog.Duration("waited", waited),
@@ -354,22 +327,8 @@ func handleMergeCompletionMissingSHA(
 		return
 	}
 
-	if err := observationStore.MarkReactionObservationDispatched(
-		ctx,
-		pending.IssueID,
-		mergeCompletionMissingSHAObservationKind,
-	); err != nil {
-		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
-		log.Warn("failed to mark merge_completion missing-SHA observation escalated",
-			slog.Any("error", err),
-			slog.String("repository", data.Owner+"/"+data.Repo),
-			slog.Int("pr_number", data.PRNumber),
-		)
-		return
-	}
-
 	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
-	log.Warn("merge_completion stopped after merge commit identifier remained missing",
+	log.Error("merge_completion stopped after merge commit identifier remained missing",
 		slog.String("repository", data.Owner+"/"+data.Repo),
 		slog.Int("pr_number", data.PRNumber),
 		slog.Duration("waited", waited),
@@ -471,6 +430,7 @@ func routeTransitionFailure(
 				slog.Any("error", markErr),
 			)
 		}
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, log, ctx)
 		delete(state.ReactionAttempts, rkey)
 		log.Warn("merge_completion issue not found, stopping",
 			slog.Any("error", err),
@@ -552,9 +512,10 @@ func escalateMergeCompletion(
 }
 
 // escalateMergeCompletionMissingSHA sends the configured operator signal for
-// an expired missing-SHA observation. The observation is already durably
-// marked dispatched and the pending entry is already absent, so a failing
-// label or comment call is logged but never reopens polling.
+// an expired missing-SHA observation. The pending entry is already absent. A
+// successful write durably marks the observation dispatched; a failed write
+// leaves it undispatched so only delivery can be retried by a later fresh
+// pending entry, without reopening this process's polling loop.
 func escalateMergeCompletionMissingSHA(
 	state *State,
 	params ReconcileParams,
@@ -567,6 +528,23 @@ func escalateMergeCompletionMissingSHA(
 	issueID := pending.IssueID
 	tracker := params.TrackerAdapter
 	escalLog := log
+	markDelivered := func() {
+		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+
+		if err := params.Store.MarkReactionObservationDispatched(
+			markCtx,
+			issueID,
+			mergeCompletionMissingSHAObservationKind,
+			mergeCompletionPRIdentity(data),
+		); err != nil {
+			escalLog.Error("merge_completion missing-SHA escalation delivered but marker write failed; a fresh pending entry may repeat delivery",
+				slog.Any("error", err),
+				slog.String("repository", data.Owner+"/"+data.Repo),
+				slog.Int("pr_number", data.PRNumber),
+			)
+		}
+	}
 
 	switch params.MergeCompletionConfig.Escalation {
 	case "label":
@@ -576,12 +554,14 @@ func escalateMergeCompletionMissingSHA(
 			defer cancel()
 
 			if err := tracker.AddLabel(dctx, issueID, label); err != nil {
-				escalLog.Warn("merge_completion missing-SHA escalation label failed; polling remains stopped",
+				escalLog.Error("merge_completion missing-SHA escalation label failed; polling remains stopped and a fresh pending entry can retry delivery",
 					slog.Any("error", err),
 					slog.String("repository", data.Owner+"/"+data.Repo),
 					slog.Int("pr_number", data.PRNumber),
 				)
+				return
 			}
+			markDelivered()
 		})
 
 	case "comment":
@@ -595,12 +575,14 @@ func escalateMergeCompletionMissingSHA(
 			defer cancel()
 
 			if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
-				escalLog.Warn("merge_completion missing-SHA escalation comment failed; polling remains stopped",
+				escalLog.Error("merge_completion missing-SHA escalation comment failed; polling remains stopped and a fresh pending entry can retry delivery",
 					slog.Any("error", err),
 					slog.String("repository", data.Owner+"/"+data.Repo),
 					slog.Int("pr_number", data.PRNumber),
 				)
+				return
 			}
+			markDelivered()
 		})
 	}
 }

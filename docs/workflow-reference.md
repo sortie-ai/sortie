@@ -1401,10 +1401,12 @@ merge reports a different commit identifier. A pull request may remain unmerged 
 of time without starting a failure clock. When the provider first reports `Merged: true` with no
 commit identifier, Sortie records that PR identity separately and waits thirty minutes, retrying
 with exponential pending backoff floored at `poll_interval_ms`. If the identifier is still absent
-on the first poll at or after the deadline, Sortie records the escalation as sent, applies the
-configured label or comment once, and stops polling that pending entry without transitioning the
-issue. The first-seen time and escalation marker survive restarts. A real identifier that appears
-later clears this temporary observation and follows the normal merge-commit fingerprint path.
+on the first poll at or after the deadline, Sortie stops polling that pending entry without
+transitioning the issue and attempts the configured label or comment. Delivery is recorded only
+after that tracker write succeeds. A failure does not restart the stopped polling loop; a later
+fresh pending entry, including one recovered after restart, can retry the undelivered notification.
+If such a later entry instead observes a real identifier, it follows the normal merge-commit
+fingerprint path and clears the temporary observation after that latch completes.
 `max_retries` applies only to failed tracker transitions, not to this grace period.
 
 **Failure matrix:**

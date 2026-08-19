@@ -97,6 +97,8 @@ func (f observerFunc) OnStateChange() { f() }
 
 // stubStore implements [OrchestratorStore] with call tracking.
 type stubStore struct {
+	unsupportedReactionObservationStore
+
 	mu              sync.Mutex
 	runHistories    []persistence.RunHistory
 	aggregates      []persistence.AggregateMetrics
@@ -132,6 +134,8 @@ type stubStore struct {
 	listParkedIssues   []persistence.ParkedIssue
 	listParkedIssueErr error
 }
+
+var _ OrchestratorStore = (*stubStore)(nil)
 
 func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	s.mu.Lock()

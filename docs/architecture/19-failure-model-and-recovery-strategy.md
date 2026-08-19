@@ -170,17 +170,21 @@
   dispatch is retried and a CI check re-enqueues, but a dispatch-time in-progress transition
   failure is only logged and never retried, and a handoff transition failure on a soft-stop worker
   exit releases the claim without scheduling a continuation; both fail quietly with no re-attempt
-  to follow. Escalation failures, including merge-completion's own, are logged and counted but do
-  not reopen the dropped entry (see the escalation bullet above). What distinguishes
-  merge-completion is not the absence of any fallback, but where that fallback lives: within a
-  single process run, an escalated merge-completion transition fires once and nothing later in
-  that run revisits it. Across a restart, or a subsequent worker exit on the same issue, escalation
-  deliberately leaves the fingerprint row undispatched (§11G.4), so a freshly seeded pending entry
-  reconciles the same merge commit and retries the transition the escalated attempt could not
-  complete. This is why every disposition above ends in a bounded retry followed by escalation, an
-  immediate escalation, or an explicit logged stop, and never a silent drop: escalation is the
-  operator-visible signal within a run, and the undispatched fingerprint is what gives the
-  transition another chance across one.
+  to follow. Escalation failures do not reopen the dropped entry within the same process run (see
+  the escalation bullet above). What distinguishes merge-completion is not the absence of any
+  fallback, but where that fallback lives. A failed transition escalation deliberately leaves the
+  normal merge fingerprint undispatched (§11G.4), so a freshly seeded pending entry reconciles the
+  same merge commit and retries the transition the escalated attempt could not complete.
+
+  Missing-identifier escalation follows the same cross-run posture without changing that normal
+  fingerprint: its separate observation is marked dispatched only after the operator label or
+  comment is delivered. A failed write leaves the expired observation undispatched and the current
+  pending entry dropped. A later worker exit or startup recovery may seed a fresh entry, which
+  retries only that undelivered operator signal and drops again; it neither restarts the
+  thirty-minute grace period nor restores an in-process polling loop. This is why every disposition
+  above ends in a bounded retry followed by escalation, an immediate escalation, or an explicit
+  logged stop, and never a silent drop: the durable undispatched state gives the failed action
+  another chance across a fresh entry.
 
 ### 14.3 Partial State Recovery (Restart)
 

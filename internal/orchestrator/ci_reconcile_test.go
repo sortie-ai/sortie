@@ -33,6 +33,8 @@ func (m *mockCIProvider) FetchCIStatus(_ context.Context, _ string) (domain.CIRe
 // configurable errors. Parallel to mockReconcileStore but distinct so
 // ci_reconcile_test.go is self-contained.
 type ciReconcileStore struct {
+	unsupportedReactionObservationStore
+
 	savedEntries    []persistence.RetryEntry
 	deletedIssueIDs []string
 	runHistories    []persistence.RunHistory

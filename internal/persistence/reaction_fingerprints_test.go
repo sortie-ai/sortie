@@ -282,7 +282,7 @@ func TestReactionObservationLifecycle(t *testing.T) {
 		t.Errorf("UpsertReactionObservation(same identity) = %+v, want first_seen=%v dispatched=false", observation, firstSeen)
 	}
 
-	if err := s.MarkReactionObservationDispatched(ctx, issueID, kind); err != nil {
+	if err := s.MarkReactionObservationDispatched(ctx, issueID, kind, "owner/repo#17"); err != nil {
 		t.Fatalf("MarkReactionObservationDispatched: %v", err)
 	}
 	observation, err = s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#17", later.Add(time.Minute))
@@ -301,6 +301,18 @@ func TestReactionObservationLifecycle(t *testing.T) {
 	}
 	if !observation.FirstObservedAt.Equal(newFirstSeen) || observation.Dispatched {
 		t.Errorf("UpsertReactionObservation(new identity) = %+v, want first_seen=%v dispatched=false", observation, newFirstSeen)
+	}
+
+	// A delayed delivery from the old PR must not mark the replacement PR.
+	if err := s.MarkReactionObservationDispatched(ctx, issueID, kind, "owner/repo#17"); err != nil {
+		t.Fatalf("MarkReactionObservationDispatched(stale identity): %v", err)
+	}
+	observation, err = s.UpsertReactionObservation(ctx, issueID, kind, "owner/repo#18", newFirstSeen.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("UpsertReactionObservation(after stale mark): %v", err)
+	}
+	if observation.Dispatched {
+		t.Error("UpsertReactionObservation(after stale mark) dispatched = true, want false")
 	}
 
 	if err := s.DeleteReactionFingerprint(ctx, issueID, kind); err != nil {

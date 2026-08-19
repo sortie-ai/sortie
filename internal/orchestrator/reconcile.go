@@ -24,7 +24,15 @@ type ReconcileStore interface {
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
+	UpsertReactionObservation(
+		ctx context.Context,
+		issueID, kind, fingerprint string,
+		observedAt time.Time,
+	) (persistence.ReactionObservation, error)
+	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
 }
+
+var _ ReconcileStore = (*persistence.Store)(nil)
 
 // ReconcileParams holds the dependencies for [ReconcileRunningIssues] that
 // are not part of the core [State]. This separates pure state mutation from
@@ -462,9 +470,8 @@ type terminalReleaseCounts struct {
 // releaseTerminalIssueState drops one issue's runtime reaction bookkeeping
 // and its dispatch claim: every pending reaction entry, every reaction
 // attempt counter, the pending retry, and the claim. It performs no
-// tracker call, source-control call, or workspace removal. Durable reaction
-// fingerprints remain untouched except for the internal merge-completion
-// missing-SHA observation, which no longer applies once the issue is terminal.
+// tracker call, no source-control call, no reaction-fingerprint read or
+// write, and no workspace removal.
 //
 // entryLog must already carry issue_id and issue_identifier, derived by
 // the caller before this function deletes the entries that hold the
@@ -498,12 +505,6 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 			slog.Any("error", err),
 		)
 	}
-	if err := store.DeleteReactionFingerprint(ctx, issueID, mergeCompletionMissingSHAObservationKind); err != nil {
-		entryLog.Warn("failed to clear merge_completion missing-SHA observation for terminal issue",
-			slog.Any("error", err),
-		)
-	}
-
 	if _, exists := state.Claimed[issueID]; exists {
 		delete(state.Claimed, issueID)
 		counts.ClaimReleased = true

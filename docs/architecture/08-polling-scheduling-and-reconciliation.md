@@ -347,7 +347,9 @@ Part J: Merge completion reconciliation (when `reactions.merge_completion` is co
   error. While the pull request is not yet reported merged, re-enqueue on the poll interval without
   starting the missing-identifier clock. On the first merged response with no commit identifier,
   persist a thirty-minute first-seen observation and use exponential pending backoff, floored at
-  the poll interval. At or after the deadline, persist the one-shot escalation marker and stop.
+  the poll interval. At or after the deadline, stop polling and attempt the configured escalation;
+  mark it delivered only after the tracker write succeeds. A failed write leaves the current entry
+  stopped but allows a later fresh entry to retry delivery without restarting the grace period.
 - Upsert the merge commit identifier into `reaction_fingerprints` under kind
   `merge-completion`; skip an entry already latched to that identifier.
 - Call `TrackerAdapter.TransitionIssue` to the configured `target_state`. Route a failure by
