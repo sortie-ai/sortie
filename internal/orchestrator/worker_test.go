@@ -6196,3 +6196,38 @@ func TestRunWorkerAttempt_TurnTimeoutBoundIsAttemptStartSnapshot(t *testing.T) {
 		t.Errorf("result.Error = %v, want nil (the self-review turn must be bounded by the attempt-start T, not a later re-read of U)", result.Error)
 	}
 }
+
+// TestRunBoundedTurn_ExpiryWithNilAdapterError verifies that an adapter
+// reporting success after its context expired is still classified as a
+// turn timeout, with the deadline substituted as the wrapped cause so the
+// rendered error names something rather than trailing off.
+func TestRunBoundedTurn_ExpiryWithNilAdapterError(t *testing.T) {
+	t.Parallel()
+
+	adapter := &mockAgentAdapter{
+		runTurnFn: func(ctx context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+			<-ctx.Done()
+			return domain.TurnResult{}, nil
+		},
+	}
+
+	_, err := runBoundedTurn(
+		context.Background(),
+		adapter,
+		domain.Session{ID: "sess"},
+		domain.RunTurnParams{},
+		50,
+		discardLogger(),
+	)
+
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("err = %v (%T), want *domain.AgentError", err, err)
+	}
+	if agentErr.Kind != domain.ErrTurnTimeout {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the deadline substituted as the wrapped cause", err)
+	}
+}
