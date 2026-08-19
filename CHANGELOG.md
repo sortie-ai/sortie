@@ -64,11 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses, so a deployment naming `reactions.ci_failure` with one provider
   and another active SCM-backed reaction with a different provider now
   fails at startup instead of running with a currency-blind CI watch.
-  The previously accepted shape, two providers across the active
-  SCM-backed reactions including `ci_failure`, is no longer valid; name
-  one forge across every active SCM-backed reaction, including
-  `ci_failure`, to start again.
-  ([#871](https://github.com/sortie-ai/sortie/issues/871))
+  `sortie validate` now reports the same conflict offline, under the
+  `reactions.scm_provider_conflict` check. The previously accepted
+  shape, two providers across the active SCM-backed reactions including
+  `ci_failure`, is no longer valid; name one forge across every active
+  SCM-backed reaction, including `ci_failure`, to start again.
+  ([#871](https://github.com/sortie-ai/sortie/issues/871),
+  [#890](https://github.com/sortie-ai/sortie/issues/890))
 
 ## [1.20.0] - 2026-08-18
 
