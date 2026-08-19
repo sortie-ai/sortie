@@ -1808,10 +1808,16 @@ each enumerate exactly those 13 values (`created`, `waiting_for_resource`, `prep
 | --- | --- |
 | `null` (no pipeline for the head SHA) | `""` |
 | `success`, `skipped` | `"success"` |
-| `failed`, `canceled` | `"failing"` |
+| `failed` | `"failing"` |
+| `canceled` | `"pending"`: the pipeline reached no conclusion, so the gate withholds green without asserting failure |
 | `created`, `waiting_for_resource`, `preparing`, `waiting_for_callback`, `pending`, `running`, `canceling`, `scheduled` | `"pending"` (still settling) |
 | `manual` | the verdict `scmcore.MergeGate` computes over the pipeline's own job set, at the cost of one extra request (see below) |
 | any other value, including the empty string | `"pending"`, and logs one WARN naming the observed value |
+
+For a `canceled` head pipeline the gate answers `"pending"` from `head_pipeline.status` alone and
+issues no job-set read (`mapPipelineStatus`, `internal/scm/gitlab/scm_merge.go`), unlike `manual`.
+The answer is the withhold-green verdict this table states, not a fold of that pipeline's own
+jobs; what a `canceled` pipeline's job set actually contains is not established here.
 
 **The table above applies only when `head_pipeline.sha` matches the merge request's own `sha`,
 compared case-insensitively.** A difference means the platform has not caught up with a new
@@ -1824,9 +1830,10 @@ pipeline's id, rather than reporting the status the superseded pipeline carries.
 dispositions actually change: a superseded pipeline reporting `success` or `skipped` no longer
 answers `"success"`, and a superseded `manual` pipeline whose job set would fold to `success` no
 longer pays for the job-set read below at all. A superseded `failed`, `canceled`, or one of the
-eight settling statuses already answered a non-merge-eligible value and still does. A `null`
-`head_pipeline` is unaffected by the comparison and keeps its `""`: the platform reports a
-genuinely uncovered head with `head_pipeline: null` and `detailed_merge_status: "mergeable"`
+eight settling statuses already answered a non-merge-eligible value (`"failing"` or `"pending"`)
+and still does. A `null` `head_pipeline` is unaffected by the comparison and keeps its `""`: the
+platform reports a genuinely uncovered head with `head_pipeline: null` and
+`detailed_merge_status: "mergeable"`
 **[live-CE]**, a shape the wire distinguishes from a superseded pipeline, so the two are never
 conflated.
 

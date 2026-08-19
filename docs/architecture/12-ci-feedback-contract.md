@@ -42,25 +42,31 @@ CIResult:
 
 | Value | Meaning |
 |-------|---------|
-| `pending` | CI checks are still running or no checks have been reported. |
+| `pending` | CI checks are still running, no checks have been reported, or a completed check concluded `cancelled` while no check is failing. |
 | `passing` | All checks completed successfully. |
-| `failing` | At least one check completed with a failure, timed-out, or cancelled conclusion. |
+| `failing` | At least one check completed with a failure or timed-out conclusion. |
 
-The aggregate treats exactly three completed conclusions as failing: `failure`, `timed_out`, and
-`cancelled`. A `neutral` or `skipped` conclusion is non-failing, and an unmappable platform
-conclusion maps to `pending`, which is also non-failing. Whether the aggregate defers is decided by
-the run's `status`, not its conclusion: a run that has not completed holds the aggregate at
-`pending`, while a completed run carrying a `pending` conclusion counts toward `passing`.
+Two completed conclusions are failing: `failure` and `timed_out`. A completed check whose
+conclusion is `cancelled` reached no result, so it is neither a passing nor a failing statement
+about the commit: it withholds a passing verdict without asserting a failing one. A `neutral` or
+`skipped` conclusion is non-failing, and an unmappable platform conclusion maps to `pending`, which
+is also non-failing. The aggregate answers in that order: failing when any run's conclusion is
+`failure` or `timed_out`; otherwise pending when a run has not completed or a completed run
+concluded `cancelled`; otherwise passing. A completed run carrying a `pending` conclusion still
+counts toward `passing`.
 
 Every forge that exposes both a CI provider and a source-control merge-gate read applies this one
-aggregation rule, so neither reader can invent its own definition of failing. The two can still
-reach different verdicts when they read different signals: on GitHub the CI provider reads check
-runs only, while the merge gate reads the combined commit status as well, so a commit whose sole
-failing signal is a legacy commit status is passing to one and failing to the other. On GitLab the
-CI provider derives its verdict from the normalized run set. The merge gate reads the platform's
-own pipeline aggregate for every pipeline status whose aggregate is a function of the failing set,
-and falls back to that same normalized run set for the one status where it is not: a pipeline
-blocked on a manual action. What remains is the shape where the platform reports a
+aggregation rule, so neither reader can invent its own definition of failing. Only the GitHub and
+GitLab adapters can produce a `cancelled` conclusion; Gitea's commit-status vocabulary has no
+equivalent, so the shared rule governs a case two of the three adapters can reach. The two readers
+can still reach different verdicts when they read different signals: on GitHub the CI provider
+reads check runs only, while the merge gate reads the combined commit status as well, so a commit
+whose sole failing signal is a legacy commit status is passing to one and failing to the other. On
+GitLab the CI provider derives its verdict from the normalized run set. The merge gate answers from
+the platform's own pipeline aggregate for every status except a pipeline blocked on a manual
+action, which is the one status resolved from that pipeline's own job set; a `canceled` pipeline
+answers pending, withholding green without asserting failure, in step with what a cancelled
+conclusion does to the aggregate. What remains is the shape where the platform reports a
 settled, non-failing pipeline that carries no run at all: the merge gate answers from the
 aggregate, and the CI provider answers `pending` from an empty run set.
 
@@ -193,9 +199,11 @@ When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
   issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second
   timeout.
-- `escalation: comment`: post a plain-text comment listing the ref, attempt count, failing check
-  names, conclusions, and details URLs. The comment call runs in a detached goroutine with a
-  30-second timeout.
+- `escalation: comment`: post a plain-text comment listing the ref, attempt count, and the names,
+  conclusions, and details URLs of exactly the checks the verdict counted as failing. The reaction
+  layer applies the same shared classification rather than restating the conclusion set; it MUST
+  NOT import an adapter package. The comment call runs in a detached goroutine with a 30-second
+  timeout.
 
 After escalation:
 

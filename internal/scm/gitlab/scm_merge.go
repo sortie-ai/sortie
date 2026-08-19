@@ -206,14 +206,19 @@ func (a *GitLabSCMAdapter) fetchPipelineStatuses(ctx context.Context, owner, rep
 // gives when asked about a status its merge-gate caller, [GitLabSCMAdapter.GetCIStatus],
 // resolves for itself from that pipeline's own job set, rather than a
 // value the gate holds until the shape settles on its own.
+//
+// canceled reports no conclusion about the code: the pipeline reached no
+// result, so the gate answers what folding that pipeline's own jobs
+// would answer, which is [scmcore.CIGatePending] unless a sibling job
+// failed.
 func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
 	switch status {
 	case "success", "skipped":
 		return scmcore.CIGateSuccess, true
-	case "failed", "canceled":
+	case "failed":
 		return scmcore.CIGateFailing, true
 	case "created", "waiting_for_resource", "preparing", "waiting_for_callback",
-		"pending", "running", "canceling", "scheduled", "manual":
+		"pending", "running", "canceling", "canceled", "scheduled", "manual":
 		return scmcore.CIGatePending, true
 	default:
 		return scmcore.CIGatePending, false

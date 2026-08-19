@@ -33,7 +33,7 @@ const (
 	CIGateAbsent CIGate = ""
 )
 
-// IsFailingConclusion reports whether conclusion is one of the three
+// IsFailingConclusion reports whether conclusion is one of the two
 // conclusions the aggregate and the merge gate both treat as failing.
 //
 // Callers that need the rule for something other than a verdict, such as
@@ -41,40 +41,57 @@ const (
 // conclusion set.
 func IsFailingConclusion(conclusion domain.CheckConclusion) bool {
 	switch conclusion {
-	case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut, domain.CheckConclusionCancelled:
+	case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut:
 		return true
 	default:
 		return false
 	}
 }
 
+// isInconclusiveConclusion reports whether conclusion means the run
+// reached no result, so it is neither a passing nor a failing statement
+// about the commit and therefore withholds a passing verdict without
+// producing a failing one.
+//
+// Adding a conclusion to this predicate withholds green from every
+// forge and both readers, the CI verdict and the merge gate, since both
+// derive from [AggregateCIStatus].
+func isInconclusiveConclusion(conclusion domain.CheckConclusion) bool {
+	return conclusion == domain.CheckConclusionCancelled
+}
+
 // AggregateCIStatus reports the pipeline verdict a normalized check-run
-// set implies: pending for an empty set, failing when any run's
-// conclusion is failure, timed_out, or cancelled, passing when every run
-// has completed with none of those conclusions, and pending otherwise.
+// set implies, answering in this order: failing when any run's
+// conclusion satisfies [IsFailingConclusion]; otherwise pending when any
+// run has not completed or any completed run's conclusion satisfies
+// isInconclusiveConclusion; otherwise passing. The empty or nil set
+// answers pending. A completed run whose conclusion is cancelled holds
+// the aggregate at pending unless another run forces failing.
 func AggregateCIStatus(runs []domain.CheckRun) domain.CIStatus {
 	if len(runs) == 0 {
 		return domain.CIStatusPending
 	}
 
-	allCompleted := true
-	anyFailed := false
+	anyFailing := false
+	anyWithholds := false
 	for _, run := range runs {
 		if run.Status != domain.CheckRunStatusCompleted {
-			allCompleted = false
+			anyWithholds = true
+		} else if isInconclusiveConclusion(run.Conclusion) {
+			anyWithholds = true
 		}
 		if IsFailingConclusion(run.Conclusion) {
-			anyFailed = true
+			anyFailing = true
 		}
 	}
 
-	if anyFailed {
+	if anyFailing {
 		return domain.CIStatusFailing
 	}
-	if allCompleted {
-		return domain.CIStatusPassing
+	if anyWithholds {
+		return domain.CIStatusPending
 	}
-	return domain.CIStatusPending
+	return domain.CIStatusPassing
 }
 
 // FailingCount counts the runs AggregateCIStatus treats as failing.

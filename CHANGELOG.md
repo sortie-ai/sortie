@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A check run cancelled by a newer commit no longer spends a retry from
+  the `reactions.ci_failure` budget. The CI verdict counts only
+  `failure` and `timed_out` as failing; a cancelled check now withholds
+  green instead of asserting failure, holding the verdict at pending, so
+  it dispatches no fix continuation and appends no failure to run
+  history. A required workflow configured to cancel its own in-flight
+  runs when a newer commit lands was spending the whole bounded budget
+  on ordinary pushes, so a commit that genuinely failed later went
+  unremediated. The merge gate answers by the same rule and reports such
+  a head as pending rather than failing, which on GitLab also covers a
+  `canceled` pipeline status. The escalation raised on budget exhaustion
+  now names exactly the checks the verdict counted as failing.
+  ([#831](https://github.com/sortie-ai/sortie/issues/831))
+
 ## [1.20.0] - 2026-08-18
 
 ### Added
