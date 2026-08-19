@@ -32,6 +32,7 @@ The specification under `docs/architecture/` is the contract implementation foll
 - **Counts in prose.** "has nine parts", "three tables", "two packages implement". A new pass, table, or implementation makes them false and nobody notices. Flag the count, and propose a formulation that states the ordering or the property instead.
 - **Enumerations that must grow.** Adapter lists, reaction kind lists, supported-forge tables. If the PR adds a member, every enumeration of that set is a review target.
 - **Operator-visible surface, separate repository.** The docs site lives outside this repository. A PR adding a config field, environment variable, CLI flag, or reaction kind cannot update it here. Flag the gap so it is tracked; do not ask for a file this repository does not hold.
+- **A changelog bullet in the wrong version section.** A diff hunk header names the category (`### Fixed`), never the enclosing `## [x.y.z]` heading, so a bullet inserted into an already-released section reviews as clean. Resolve each added hunk's line number to the nearest preceding `## [` heading and require `[Unreleased]`, then check the bullet appends to the bottom of its category and wraps to its neighbours' width.
 - **Accepted decision records are immutable.** `docs/decisions/` records what was decided and why. Do not propose adding issue numbers, section numbers, or line numbers to one; do not re-litigate a decision recorded there. If the code contradicts an accepted record, that is the finding.
 
 ## Orchestrator state: the defects that survive unit tests
