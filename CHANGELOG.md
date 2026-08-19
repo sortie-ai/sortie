@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now names exactly the checks the verdict counted as failing.
   ([#831](https://github.com/sortie-ai/sortie/issues/831))
 
+- Merge-completion polling no longer retries forever when a forge
+  reports a pull request merged but never supplies its merge commit
+  identifier. The first such response starts a persisted thirty-minute
+  grace period with exponential polling backoff; if the identifier is
+  still absent, Sortie stops without transitioning the issue and sends
+  the configured escalation. Time spent waiting for review does not
+  count toward the grace period, restarts do not reset it, and failed
+  escalation delivery can be retried by a later fresh pending entry
+  without reopening the stopped polling loop. If such a later entry
+  observes a real identifier, it follows the normal exactly-once
+  transition path. A retry can occasionally redeliver the escalation
+  instead of delivering it for the first time, when the tracker write
+  succeeded but the internal marker that records delivery failed to
+  write: a label escalation repeats harmlessly, because reapplying a
+  present label is a no-op, but a comment escalation posts a second
+  comment.
+  ([#777](https://github.com/sortie-ai/sortie/issues/777))
+
 ## [1.20.0] - 2026-08-18
 
 ### Added
@@ -75,16 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#769](https://github.com/sortie-ai/sortie/issues/769))
 
 ### Fixed
-
-- Merge-completion polling no longer retries forever when a forge reports a pull request merged
-  but never supplies its merge commit identifier. The first such response starts a persisted
-  thirty-minute grace period with exponential polling backoff; if the identifier is still absent,
-  Sortie stops without transitioning the issue and sends the configured escalation. Time spent
-  waiting for review does not count toward the grace period, restarts do not reset it, and failed
-  escalation delivery can be retried by a later fresh pending entry without reopening the stopped
-  polling loop. If such a later entry observes a real identifier, it follows the normal
-  exactly-once transition path.
-  ([#777](https://github.com/sortie-ai/sortie/issues/777))
 
 - Adapter endpoint validation errors no longer print credentials
   embedded in the configured `endpoint`. A Jira or GitLab endpoint

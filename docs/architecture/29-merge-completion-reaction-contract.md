@@ -128,12 +128,14 @@ restart the grace-period clock.
 
 At expiry, while the identifier is still absent, the pass drops the pending entry, logs the
 permanent polling stop at error level, and emits the configured escalation (§11G.6). It never calls
-`TransitionIssue` and never writes a successful merge fingerprint for this condition. A successful
-tracker write marks the internal observation `dispatched` only if it still names the same pull
-request; a failed write leaves it undispatched
-without reopening the current process's polling loop. If a later fresh pending entry sees the same
-expired identity and the identifier is still absent, it retries the undelivered tracker write once
-and drops again. Once delivery is marked, a fresh entry stops without repeating it.
+`TransitionIssue` and never writes a successful merge fingerprint for this condition. The internal
+observation is marked `dispatched` only once both the tracker write and its follow-up marker write
+succeed; a failure in either leaves it undispatched, without reopening the current process's
+polling loop. When only the marker write failed, the notification was already delivered, so the
+retry described in §11G.6 redelivers it rather than delivering it for the first time. If a later
+fresh pending entry sees the same expired identity and the identifier is still absent, it retries
+the undelivered path once and drops again. Once delivery is marked, a fresh entry stops without
+repeating it.
 
 If a later fresh pending entry instead observes a real identifier, it may perform the normal
 transition and then clear the internal observation as described above. While a merge-completion
@@ -220,16 +222,21 @@ names the repository, pull request number, elapsed wait, stop reason, configured
 manual follow-up. The label posture emits an operator-facing log carrying the same identifying
 and manual-action context.
 
-Both actions run in a detached `TrackerOpsWg` goroutine with a thirty-second timeout, so a slow or
-failing tracker call does not block the reconcile tick. An escalation failure (the label or
-comment write itself errors) does not reopen the pending entry: the
-entry was already dropped from `state.PendingReactions` before the escalation ran, and it stays
-dropped regardless of whether the escalation call succeeds. The missing-identifier stop and any
-failure to deliver its operator signal are logged at error level. Its observation is marked
-`dispatched` only after the tracker write succeeds. A failed write therefore remains eligible for
-one delivery retry when a later worker exit or startup recovery seeds a fresh pending entry; it
-does not restart the grace period or create an in-process polling loop. Once marked, the same
-identity never repeats the operator signal.
+Both the tracker write and the follow-up marker write that records delivery run in one detached
+`TrackerOpsWg` goroutine under a single shared thirty-second deadline, so a slow or failing tracker
+call does not block the reconcile tick and the goroutine as a whole stays within the budget the
+shutdown drain assumes for it. An escalation failure (the label or comment write itself errors)
+does not reopen the pending entry: the entry was already dropped from `state.PendingReactions`
+before the escalation ran, and it stays dropped regardless of whether the escalation call succeeds.
+The missing-identifier stop and any failure to deliver its operator signal are logged at error
+level. Its observation is marked `dispatched` only after both the tracker write and the follow-up
+marker write succeed. If the tracker write succeeds but the marker write itself fails, the
+notification has already reached the operator even though the observation is left recorded as
+undelivered, so the one delivery retry a later worker exit or startup recovery performs redelivers
+rather than delivering for the first time: `label` repeats harmlessly, because re-applying a
+present label is a no-op, while `comment` posts a second comment. Neither failure mode restarts the
+grace period or creates an in-process polling loop. Once marked, the same identity never repeats
+the operator signal.
 
 ### 11G.7 State machine
 
