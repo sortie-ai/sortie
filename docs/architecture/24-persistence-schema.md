@@ -186,17 +186,18 @@ safe expiry from `updated_at` alone or it would re-arm a one-shot escalation.
 One row per issue, written only when a run's evidence verdict is `work observed`. The
 consecutive-absence count (§14.2) is the number of the issue's absence-marked `run_history` rows
 with an `id` above `reset_run_id`, so the count returns to zero the moment a work-observed run is
-recorded and cannot be restored by a later handoff-write failure. Outcomes that carry no verdict
-never write here, which is what keeps a blocked soft stop, a reaction run, an undeterminable verdict
-or a run under `handoff_evidence: off` from resetting a sequence they say nothing about.
+recorded and cannot be restored by a later handoff-write failure. A run outcome that carries no
+verdict never writes here on its own account, which is what keeps a blocked soft stop, a reaction
+run, an undeterminable verdict, or a run under `handoff_evidence: off` from resetting a sequence
+that run says nothing about.
 
 The reset point is read from `run_history` inside the write, so a work-observed run whose own
 history row could not be persisted still clears the absences recorded before it. This table holds no
 verdict history: it is a per-issue position that is overwritten, and deleting a row only restores
 the issue's full recorded absence sequence. A work-observed run is no longer the table's only
-writer: releasing a parked issue whose park reason is the consecutive-absence ceiling (below) also
-writes a reset here, so the loop does not immediately re-derive the exhausted count and park the
-issue again on the tick that released it.
+writer: releasing a parked issue, whatever reason the park carries, also writes a reset here, so the
+loop does not immediately re-derive the exhausted count and park the issue again on the tick that
+released it.
 
 **`parked_issues`**: issues held out of primary dispatch until a human acts (migration 014)
 

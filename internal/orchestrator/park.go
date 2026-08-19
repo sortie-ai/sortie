@@ -142,10 +142,8 @@ func unparkIssue(ctx context.Context, state *State, issueID, trigger string, sto
 	if err := store.DeleteParkedIssue(ctx, issueID); err != nil {
 		log.Error("failed to delete park record", slog.Any("error", err))
 	}
-	if entry.Reason == parkReasonHandoffAbsence {
-		if err := store.ResetHandoffAbsenceSequence(ctx, issueID); err != nil {
-			log.Error("failed to reset handoff absence sequence after unpark", slog.Any("error", err))
-		}
+	if err := store.ResetHandoffAbsenceSequence(ctx, issueID); err != nil {
+		log.Error("failed to reset handoff absence sequence after unpark", slog.Any("error", err))
 	}
 
 	log.Info("issue unparked",

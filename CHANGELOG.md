@@ -69,6 +69,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silence rather than duration.
   ([#834](https://github.com/sortie-ai/sortie/issues/834))
 
+- An agent that writes `blocked` to its status file during a self-review
+  turn now ends the run as a blocked soft stop however the run entered
+  that phase. Previously the signal was honoured only when the agent had
+  signalled completion; a run that entered self-review by exhausting
+  `agent.max_turns` had it discarded and finished as an ordinary
+  completed run, so the issue moved to `tracker.handoff_state` where one
+  is configured, or was dispatched again on a continuation retry, over
+  work the agent had just reported it could not carry further. Such a
+  run now takes no handoff transition and schedules no retry: the claim
+  is released and the issue is parked, held out of dispatch until a
+  human changes its state or removes the parking label. Releasing a
+  parked issue now also clears its consecutive handoff-absence count
+  whatever reason parked it, so a release no longer leaves a count
+  behind that would park the issue again sooner than expected.
+  ([#856](https://github.com/sortie-ai/sortie/issues/856))
+
 ### Changed
 
 - `reactions.ci_failure` now resolves the pull request's current head
