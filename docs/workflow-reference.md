@@ -971,6 +971,8 @@ Equivalent to the deprecated `ci_feedback` section. Configures the CI failure fe
 loop. The orchestrator resolves the pull request's current head on each pass and polls CI
 status for that head, dispatching continuation turns when CI fails on it.
 
+Its `provider` must match the provider of every other active SCM reaction.
+
 Additional fields (via Extra):
 
 | Field             | Type    | Default      | Dynamic Reload | Description                                                                                                             |
