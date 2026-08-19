@@ -23,8 +23,12 @@ Recognized values:
   and releases the issue claim. Where the dispatch drives issue state, it also parks the issue: it
   records a durable park and applies the parking label, and holds the issue out of dispatch until
   it observes a change in the issue's tracker state or the removal of a parking label it has
-  confirmed reached the tracker (Section 14.2). This value never enters the self-review phase
-  (Section 7); it remains an immediate exit whether or not self-review is configured.
+  confirmed reached the tracker (Section 14.2). Read after a coding turn, this value never enters
+  the self-review phase (Section 7); it remains an immediate exit whether or not self-review is
+  configured. Written during a phase turn instead, `blocked` ends the phase and gives the run this
+  same disposition, distinguished from the coding-turn read by the phase's own tail work: the
+  review-summary write and the non-`disabled` `SORTIE_SELF_REVIEW_STATUS` value the `after_run`
+  hook then receives (Section 13.8).
 - `needs-human-review`: agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
   `tracker.handoff_state` is configured, the issue is in an active tracker state, and the dispatch

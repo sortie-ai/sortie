@@ -358,12 +358,13 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   // Self-review phase (between turn loop exit and session teardown). The gate
   // that already admits an exhausted turn budget also admits pending_reason
   // when it is empty or names the completion signal; a pending "blocked"
-  // reason skips the phase.
+  // reason skips the phase. A "blocked" signal the phase itself reports
+  // becomes the run's soft-stop reason whichever admission the gate granted.
   review_metadata = null
   phase_err = null
   cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms (R-9)
   signal_admits = pending_reason == "" OR pending_reason == "needs-human-review"
-  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND signal_admits:
+  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND deps.Posture.DrivesIssueState() AND signal_admits:
     if pending_reason != "":
       log_info("agent signaled completion, entering self-review", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
@@ -371,7 +372,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
       turn_timeout_ms=turn_timeout_ms  // the attempt-start snapshot, bounding both phase turns
     )
-    if pending_reason != "" AND phase_signal == "blocked":
+    if phase_signal == "blocked":
       pending_reason = "blocked"
   else if pending_reason != "":
     log_info("agent signaled status, exiting worker", issue.id, pending_reason)

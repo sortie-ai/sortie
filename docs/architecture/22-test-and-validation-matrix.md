@@ -140,9 +140,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   fetch did not return
 - Parking on the consecutive handoff-absence ceiling and parking on a blocked soft stop produce
   the same durable record shape, differing only in the reason attributed to the park
-- Releasing an absence-ceiling park resets its consecutive-absence count, and the same poll tick
-  does not immediately re-derive the exhausted count and park the issue again
-- Releasing a `blocked` park does not touch the consecutive-absence count
+- Releasing a park resets its consecutive-absence count whatever reason the park carries; for a
+  released absence-ceiling park, the same poll tick does not immediately re-derive the exhausted
+  count and park the issue again
 - A park held under `tracker.handoff_evidence: off` is not released by the policy, and no new
   absence park is taken while the policy is set
 - A retry-lane absence park records no observed tracker state; the next poll tick backfills it
@@ -338,7 +338,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   admitted it
 - A `needs-human-review` signal read inside self-review is consumed and does not abort the loop
 - A `blocked` signal read inside self-review aborts the phase, and becomes the run's exit reason
-  on a run the completion signal admitted
+  on either admission path into the phase
 - A deployment with self-review disabled treats the completion signal exactly as before, ending
   the run without entering the phase
 - On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author

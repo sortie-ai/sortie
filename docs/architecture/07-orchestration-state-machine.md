@@ -52,8 +52,10 @@ A run attempt transitions through these phases:
 6. `SelfReviewing`, entered only when `self_review.enabled` is true and the coding turn
    loop completed successfully (not on turn failure). The loop leaves that state in two ways
    this phase admits: exhausting the configured turn budget, and the agent writing the
-   completion signal to the status file. It is never entered from a `blocked` signal, which
-   remains an immediate exit regardless of configuration.
+   completion signal to the status file. Read after a coding turn, a `blocked` signal never
+   admits the run to this state; it remains an immediate exit regardless of configuration. A
+   `blocked` signal the agent writes during a phase turn instead ends the phase and gives the
+   run the blocked disposition of Section 7.3, on either of the two admissions above.
 7. `Finishing`
 8. `Succeeded`
 9. `Failed`
