@@ -534,7 +534,7 @@ startup error rather than a notification posted nowhere.
 Timeouts:
 
 - `agent.read_timeout_ms`: request/response timeout during startup and sync requests
-- `agent.turn_timeout_ms`: total turn stream timeout
+- `agent.turn_timeout_ms`: enforced by orchestrator based on wall-clock duration
 - `agent.stall_timeout_ms`: enforced by orchestrator based on event inactivity
 
 Error mapping (recommended normalized categories):
