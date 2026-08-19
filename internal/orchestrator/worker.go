@@ -447,8 +447,11 @@ func exitKindForErr(ctx context.Context) WorkerExitKind {
 }
 
 // defaultTurnTimeoutMS is the fallback bound runBoundedTurn applies
-// when it receives a non-positive turnTimeoutMS, matching the config
-// layer's own default for agent.turn_timeout_ms.
+// when it receives a non-positive turnTimeoutMS. It repeats the config
+// layer's default for agent.turn_timeout_ms. Because that layer rejects
+// a non-positive value outright, the fallback is unreachable from a
+// parsed configuration; it exists so an AgentConfig assembled in code
+// cannot leave a turn unbounded.
 const defaultTurnTimeoutMS = 3_600_000
 
 // runBoundedTurn calls adapter.RunTurn under a deadline derived from
@@ -498,7 +501,7 @@ func runBoundedTurn(
 		}
 		return result, &domain.AgentError{
 			Kind:    domain.ErrTurnTimeout,
-			Message: fmt.Sprintf("turn exceeded the configured %d ms bound; the adapter then reported", effectiveMS),
+			Message: fmt.Sprintf("turn exceeded the configured %d ms bound; the adapter's own report follows", effectiveMS),
 			Err:     cause,
 		}
 	}
