@@ -129,54 +129,81 @@ Orchestrator behavior on CI errors:
 CI status reconciliation runs as Part C of active run reconciliation (Section 8.5), after tracker
 state refresh. The flow is:
 
-1. Skip entirely when neither `ci_feedback.kind` nor `reactions.ci_failure.provider` is configured
-   (no `CIStatusProvider` constructed).
+1. Skip entirely when `ci_feedback.kind`/`reactions.ci_failure.provider` is not configured (no
+   `CIStatusProvider` constructed), or when no SCM adapter is configured (no `SCMAdapter`
+   constructed).
 2. For each entry in `pending_reactions` with kind `ci`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
-   b. Determine the ref (SHA preferred, branch as fallback) and apply fingerprint deduplication
-      (Section 11A.5). Entries already dispatched for this exact ref are dropped for this tick.
-   c. Call `CIStatusProvider.FetchCIStatus` with the ref.
-   d. On fetch error: re-enqueue the entry with an exponential backoff delay derived from the
+   b. Check the watch window (Section 11A.9): past `watch_window_ms` from the last recorded head,
+      drop the entry and its attempt counter.
+   c. Resolve the pull request's current head via `SCMAdapter.GetMergeability`, passing the pull
+      request number, owner, and repo carried in the entry's data. This runs on every due pass; the
+      ref is never a value captured once at worker exit.
+   d. On an `ErrSCMNotFound` failure: drop the entry and its attempt counter; the watch ends.
+   e. On any other failure: re-enqueue the entry with an exponential backoff delay derived from the
       poll interval and the pending attempt count; continue.
-   e. On `passing`: clear `reaction_attempts` for the issue and kind, and delete the fingerprint
-      row.
-   f. On `pending`: re-enqueue the entry with the same exponential backoff as the fetch-error
-      path.
-   g. On `failing`: handle CI failure (see Section 11A.6).
+   f. If the pull request is merged: drop the entry and its attempt counter; the watch ends. If the
+      pull request is closed without merging: same outcome. The merged check runs before the closed
+      check, so a provider whose closed state subsumes merging still ends the watch through the
+      merged branch.
+   g. If the resolved head is empty: re-enqueue with backoff, recording no head and spending no
+      attempt.
+   h. Apply fingerprint deduplication against the resolved head (Section 11A.5). A differing stored
+      head opens a new epoch (Section 11A.9) before the status read. Entries already dispatched for
+      the resolved head are dropped for this tick with backoff, skipping the status read.
+   i. Call `CIStatusProvider.FetchCIStatus` with the resolved head.
+   j. On fetch error: re-enqueue the entry with an exponential backoff delay derived from the poll
+      interval and the pending attempt count; continue.
+   k. On `passing`: clear `reaction_attempts` for the issue and kind and keep watching, re-enqueuing
+      the entry rather than retiring it, so a later commit on the same pull request is still
+      observed.
+   l. On `pending`: re-enqueue the entry with the same exponential backoff as the fetch-error path.
+   m. On `failing`: handle CI failure (see Section 11A.6).
+
+Every branch that does not end the watch re-enqueues the entry.
 
 ### 11A.5 Fingerprint and deduplication
 
-Before calling `FetchCIStatus`, the reconcile pass deduplicates against the same ref. The
-fingerprint value is the ref itself (`CIReactionData.SHA`, falling back to `CIReactionData.Branch`),
-the identical string passed to the status fetch. Unlike the merge-conflict (Section 11E.4) and
-review (Section 11B.7) fingerprints, which each hash their input with SHA-256, the CI fingerprint
-is stored as the raw ref string with no hashing.
+The stored fingerprint value is the pull request head this process last evaluated, read live from
+`PRMergeStatus.HeadSHA` on the same pass, not a ref captured once at worker exit. Unlike the
+merge-conflict (Section 11E.4) and review (Section 11B.7) fingerprints, which each hash their input
+with SHA-256, the CI fingerprint is stored as the raw head string with no hashing.
 
-The pass upserts the ref into `reaction_fingerprints` (kind `ci`) and reads the row back. The
-upsert resets `dispatched` to false whenever the stored fingerprint differs from the ref being
-upserted, so a new SHA (or a branch ref that has moved to a new SHA) always re-arms the entry for a
-fresh CI-fix dispatch. When the read-back fingerprint matches the current ref and `dispatched` is
-already true, the entry is dropped for this tick rather than re-enqueued: CI status is not polled
-again for that ref until a later worker exit or startup recovery creates a new pending entry.
+The pass reads the `reaction_fingerprints` row (kind `ci`) before writing it, because the pass
+needs the previous head to detect a change: an upsert-then-read ordering would always read back the
+value just written, and no head change would ever be detected. A stored value that differs from the
+resolved head opens a new epoch (Section 11A.9): the pass applies the epoch transition, then
+upserts the resolved head, which resets `dispatched` to false and re-arms the entry for a fresh
+CI-fix dispatch. When the stored head equals the resolved head and `dispatched` is already true, the
+entry is dropped for this tick with backoff rather than proceeding to a status read: CI status is
+not polled again for that head until a later worker exit, startup recovery, or a further head change
+creates or re-arms a pending entry.
+
 Fingerprint errors are logged and treated as non-fatal, but the two directions differ. A failed
-upsert does not disable dedup: the read-back still runs, so a stored row matching the current ref
-and already marked dispatched still drops the entry. Only a failed read-back skips dedup entirely,
-and the pass then proceeds to `FetchCIStatus` rather than dropping the entry.
+upsert is best-effort: the pass proceeds, and the next pass re-detects the same head change and
+re-applies the transition, which is idempotent for one head. A failed read suppresses epoch
+detection for that pass rather than fabricate a change: treating a read failure as a head change
+would reset the retry budget on a database error.
 
 The `dispatched` flag is not set anywhere in this reconcile pass. `handleCIFailure` (Section 11A.6)
 schedules the CI-fix continuation through the shared retry machinery with `ReactionKind` set to
 `ci`; the flag is marked only once that continuation retry actually fires and dispatches, in the
 shared retry-dispatch path, not in the CI reconcile pass itself.
 
-The fingerprint row is deleted, not merely left stale, when the episode closes: on a `passing`
-result (Section 11A.4) and during escalation (Section 11A.7).
+The fingerprint row is never deleted for kind `ci`. It is the epoch record: neither a `passing`
+result (Section 11A.4) nor escalation (Section 11A.7) removes it, because doing so would erase the
+head this process last evaluated and make the next pass read a head change that did not happen.
 
 ### 11A.6 CI failure handling
 
-When CI status is `failing`, the pass first consults the retry slot (Section 7.5). A non-nil
-incumbent means the pass defers: it re-enqueues the pending entry unchanged except for a
-refreshed `CreatedAt`, and none of the steps below run for this tick — no run-history row is
-appended, no counter increments, and escalation is not evaluated.
+The failing verdict describes the head resolved on this same pass (Section 11A.4), never a value
+captured at worker exit. When CI status is `failing`, the pass first consults the retry slot
+(Section 7.5). A non-nil incumbent means the pass defers: it re-enqueues the pending entry with
+backoff, and none of the steps below run for this tick: no run-history row is appended, no counter
+increments, and escalation is not evaluated. The retry-slot deferral and the fingerprint dedup
+(Section 11A.5) both run before any attempt-counter increment: the fingerprint dedup on the current
+head's prior pass, and the retry-slot deferral on this pass, so a continuation already queued for
+the issue cannot spend a second attempt.
 
 On a free slot:
 
@@ -205,13 +232,17 @@ When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
   NOT import an adapter package. The comment call runs in a detached goroutine with a 30-second
   timeout.
 
-After escalation:
+Escalation is a per-epoch soft stop, not a terminal action. The configured action applies at most
+once per recorded head: a further pass over an already-escalated head neither re-applies the action
+nor dispatches. After escalation:
 
 - Cancel any pending retry for the issue.
 - Delete the persisted retry entry from SQLite.
 - Release the claim (`delete claimed[issue_id]`).
-- Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
-- Delete the reaction fingerprint row for kind `ci`.
+- The pending entry, its `reaction_attempts` counter, and its reaction fingerprint row for kind `ci`
+  all survive. The counter stays over budget so no further continuation dispatches until a new
+  epoch resets it (Section 11A.9), and the fingerprint row is the epoch record. The entry
+  re-enqueues with backoff rather than being dropped, so the watch continues past exhaustion.
 
 Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do
 not block claim release.
@@ -259,4 +290,45 @@ excerpt is a real job trace, fetched under a byte cap and sanitized, which is th
 has no equivalent for. The trace route ignores a range request, so a trace exceeding the cap yields
 the tail of the fetched prefix rather than the true tail, and an entry that is an externally
 reported status rather than a pipeline job has no trace at all, leaving the excerpt empty.
+
+### 11A.9 The head watch and the feedback epoch
+
+The pull request's current head is the reaction's subject. Every due pass resolves the head live
+through `SCMAdapter.GetMergeability` (Section 11A.4); there is no ref captured once and frozen for
+the entry's lifetime.
+
+**Age and the watch window.** The entry's age is measured from `HeadRecordedAt`, the UTC time this
+process last recorded a head, falling back to the entry's creation time before any head has been
+recorded. `reactions.ci_failure.watch_window_ms` bounds that age (default `86400000`, twenty-four
+hours; `0` removes the clock bound). Past the window, the entry and its attempt counter are dropped
+and a warning is logged; the fingerprint row is left intact. The watch also ends, whatever the clock
+says, on merge, on close, on a missing pull request (`ErrSCMNotFound`), and when the tracker issue
+reaches a `tracker.terminal_states` state.
+
+**The epoch.** An epoch is the span over which the pull request's head is one commit. The
+`reaction_fingerprints` row for kind `ci` is the durable epoch record: it holds the head this
+process last evaluated, read before it is written on every pass (Section 11A.5). A stored value that
+differs from the freshly resolved head closes the current epoch and opens a new one. The reaction
+re-arms on the transition: the fingerprint upsert clears `dispatched`, so a failing verdict on the
+new head is not deduplicated against the old one.
+
+**Attribution.** On an epoch transition the orchestrator classifies the change as positively not its
+own work, or as unknown; there is no third answer, and in particular no answer that names a person.
+The change is `not_orchestrator` only when no worker session for the issue ran between the recorded
+head and the read: no live entry in the in-memory running, retry, or claimed state, and no
+`run_history` row completed inside the interval (excluding `ci_failed` rows, which record a verdict
+this reaction observed rather than a worker session). Every failure path, including the first
+observation and any observation immediately after a restart, answers unknown. The backoff counter
+(`PendingAttempts`) and the per-head escalation flag (`EscalatedForCurrentHead`) reset
+unconditionally on every transition; the `reaction_attempts` retry budget resets only when the
+answer is `not_orchestrator`. A transition never dispatches by itself: a continuation follows only
+if the pass's subsequent status read then finds a failing verdict.
+
+**Identity in seeding and recovery.** The reaction's data (`CIReactionData`) carries the pull request
+number, owner, and repository alongside the branch and the head at worker exit, because resolving a
+head requires knowing which pull request to ask about. Worker-exit seeding and startup recovery both
+require this identity in full; a workspace whose SCM metadata names a branch but no pull request
+gets no CI watch. A recovered entry leaves `HeadRecordedAt` zero, so the first pass after a restart
+records a baseline and classifies it unknown rather than resetting a counter against a boundary this
+process never observed.
 

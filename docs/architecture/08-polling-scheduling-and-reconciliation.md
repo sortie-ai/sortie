@@ -196,16 +196,30 @@ Part B: Tracker state refresh
 Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
-  - Deduplicate before fetching: a stored fingerprint equal to the current ref and already
-    marked dispatched drops the entry for this pass (§11A.5).
-  - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
+  - Resolve the pull request's current head via `SCMAdapter.GetMergeability` before deduplicating:
+    the fingerprint compares against this pass's live head, not a ref captured at worker exit
+    (§11A.4, §11A.5).
+  - If the call fails with `ErrSCMNotFound`: drop the entry and its attempt counter and log a
+    warning; the watch ends.
+  - If the call fails for any other reason: log a warning and re-enqueue with an exponential
+    backoff delay derived from the poll interval and the pending attempt count.
+  - If the pull request is merged, or closed without merging: drop the entry and its attempt
+    counter and log; the watch ends. The merged check runs first, so a provider whose closed state
+    subsumes merging still ends the watch through the merged branch.
+  - If the resolved head is empty: re-enqueue with backoff, recording no head and spending no
+    attempt.
+  - Deduplicate against the resolved head: a stored fingerprint equal to the current head and
+    already marked dispatched drops the entry for this pass; a stored fingerprint that differs
+    opens a new epoch (§11A.5).
+  - Call `CIStatusProvider.FetchCIStatus` with the resolved head.
   - If the call fails: log a warning, re-enqueue with an exponential backoff delay derived from
     the poll interval and the pending attempt count, and continue to the next entry.
-  - If status is `passing`: clear reaction attempts for the issue and kind, and delete the
-    fingerprint row.
+  - If status is `passing`: clear reaction attempts for the issue and kind and keep watching; the
+    entry re-enqueues rather than retiring, so a later commit's failure is still observed.
   - If status is `pending`: re-enqueue with the same exponential backoff as the fetch-error path.
   - If status is `failing`: consult the retry slot before handling as a CI failure; a non-nil
     incumbent defers instead of dispatching (Section 7.5, Section 7.3 "CI Status Failing").
+  - Every branch that does not end the watch re-enqueues the entry.
 
 Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
 

@@ -17,11 +17,12 @@ There is the same YAML-versus-runtime asymmetry §11C.4 documents for auto-merge
 ### 11E.1 SCMAdapter interface
 
 Conflict detection reuses the existing `GetMergeability` read. No new method is added to the
-`SCMAdapter` interface. The interface's `PRMergeStatus` return type gains one additive field:
+`SCMAdapter` interface. The interface's `PRMergeStatus` return type carries these additive fields:
 
 ```go
-// PRMergeStatus addition:
+// PRMergeStatus additions:
 BaseBranch string
+Closed     bool
 ```
 
 `BaseBranch` carries the PR target (base) branch name, for example `"main"` or `"develop"`. Every
@@ -30,6 +31,11 @@ no additional request cost: the GitHub and Gitea adapters from that object's bas
 adapter from the merge request's target branch. Other callers of `GetMergeability` (the auto-merge
 reconcile pass) ignore the new field. Platform-specific field names do not leave the adapter
 package; the orchestrator reads only the domain field.
+
+`Closed` reports whether the provider considers the pull request no longer open, populated from the
+same pull-request object at no additional request cost. A provider whose closed state subsumes
+merging reports both, so a caller that wants the closed-without-merge condition tests
+`Closed && !Merged` rather than `Closed` alone. The CI reaction (§11A.9) is the primary reader.
 
 ### 11E.2 Detection rule
 
@@ -219,6 +225,8 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 | pending | Reconcile tick, `Mergeability != dirty` | pending | Delete fingerprint; delete per-episode counter; re-enqueue. Episode closes. |
 | pending | Reconcile tick, `Mergeability == dirty`, precondition guard fails (empty HeadSHA or BaseBranch) | pending | Re-enqueue at `now + poll_interval`; do not increment counter. |
 | pending | Reconcile tick, `Mergeability == dirty`, fingerprint dispatched for this head | pending | Re-enqueue at `now + poll_interval`; do not increment counter. |
+| pending | Reconcile tick, `Mergeability == dirty`, new head this reaction has not dispatched for, attribution `not_orchestrator` | pending | Delete the per-episode counter before incrementing, so the reported attempt count is `1` rather than continuing to climb across successive conflicting heads; record `HeadRecordedAt`. |
+| pending | Reconcile tick, `Mergeability == dirty`, new head this reaction has not dispatched for, attribution `unknown` | pending | Leave the per-episode counter at its prior value; record `HeadRecordedAt`. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; mark dispatched; count dispatched. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts > MaxRetries` | escalated | Increment per-episode counter; apply escalation; delete slot, fingerprint, and per-episode counter. MUST NOT release the claim or clear sibling slots (§11E.5). |
 | pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the `merge-conflict` pending entry and its per-episode counter, cancel and delete the issue's retry, and release the claim; `reaction_fingerprints` is left intact. |
