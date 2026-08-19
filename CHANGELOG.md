@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pull request by hand.
   ([#871](https://github.com/sortie-ai/sortie/issues/871))
 
+- `agent.turn_timeout_ms` is now enforced. A turn that exceeds the
+  configured bound ends, the attempt is recorded as failed with the
+  `turn_timeout` reason, and a retry is scheduled with the usual
+  exponential backoff. The bound covers self-review turns too: a
+  self-review turn that exceeds it fails the attempt rather than
+  completing it, so such a run is retried instead of handed off.
+  Previously the value was parsed and reported by `sortie resolve` but
+  applied nowhere, so nothing bounded a turn whose agent kept producing
+  output; stall detection could not cover the gap, because it measures
+  silence rather than duration.
+  ([#834](https://github.com/sortie-ai/sortie/issues/834))
+
 ### Changed
 
 - `reactions.ci_failure` now resolves the pull request's current head
@@ -71,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SCM-backed reaction, including `ci_failure`, to start again.
   ([#871](https://github.com/sortie-ai/sortie/issues/871),
   [#890](https://github.com/sortie-ai/sortie/issues/890))
+
+- A non-positive `agent.turn_timeout_ms` is now rejected at startup, by
+  `sortie validate`, and on reload. `0` or a negative number is no
+  longer accepted; `0` did not disable the bound before either, it
+  silently meant one hour. Unlike `agent.stall_timeout_ms`, this bound
+  cannot be disabled.
+  ([#834](https://github.com/sortie-ai/sortie/issues/834))
 
 ## [1.20.0] - 2026-08-18
 

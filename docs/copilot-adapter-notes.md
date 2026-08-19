@@ -504,7 +504,7 @@ orchestrator re-checks tracker state and decides whether to run another.
 
 | Timeout                  | Source      | Enforcement                                                                                                                                                                                           |
 | ------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter on `domain.AgentConfig`, and no code path reads it. See "Open questions".                                                                                                          |
+| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter on `domain.AgentConfig`, and no code path on the Copilot side reads it; the orchestrator applies the bound per turn on the context it passes to `RunTurn`.                                                                                                          |
 | `agent.read_timeout_ms`  | WORKFLOW.md | The adapter enforces no read deadline. The worker uses this value only to bound its best-effort `StopSession` call.                                                                                    |
 | `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the orchestrator, not the adapter. `reconcileStalled` in `internal/orchestrator/reconcile.go` compares `LastAgentTimestamp` against the threshold and cancels the worker's context.        |
 
@@ -514,11 +514,11 @@ and API cost.
 
 ### Context cancellation
 
-`RunTurn` receives the worker's context. On cancellation, whether from stall reconciliation or
-from the tracker reporting the issue terminal, `exec.CommandContext` signals the process group
-gracefully through `procutil.SignalGraceful` and force-terminates the tree after the 5-second
-`WaitDelay`. The skeleton reports the turn as `turn_cancelled` with `ErrTurnCancelled`,
-carrying whatever usage had accumulated.
+`RunTurn` receives the worker's context. On cancellation, whether from stall reconciliation, from
+the tracker reporting the issue terminal, or from the orchestrator's per-turn deadline expiring,
+`exec.CommandContext` signals the process group gracefully through `procutil.SignalGraceful` and
+force-terminates the tree after the 5-second `WaitDelay`. The skeleton reports the turn as
+`turn_cancelled` with `ErrTurnCancelled`, carrying whatever usage had accumulated.
 
 ---
 
@@ -604,9 +604,10 @@ without producing output, treating as failure".
 | `copilot --version` canary fails                | `agent_not_found`       |
 | No GitHub authentication source                 | `agent_not_found`       |
 
-Turn outcomes use the categories in the exit-code table above. `response_timeout`,
-`turn_timeout`, and `turn_input_required` are unreachable for this adapter: it enforces no read
-or turn deadline, and `--no-ask-user` is passed on every invocation.
+Turn outcomes use the categories in the exit-code table above. `response_timeout` and
+`turn_input_required` are unreachable for this adapter: it enforces no read or turn deadline of
+its own, and `--no-ask-user` is passed on every invocation. `turn_timeout` is reachable: the
+orchestrator produces it on the adapter's return once its derived turn deadline expires.
 
 ### Known issues in the wild
 
@@ -1045,10 +1046,6 @@ the `subagentStop` hook can intercept and block subagent completion.
   fallback-on-failure behavior makes this immaterial to the adapter, which only checks that one
   source exists. Settle it by setting three valid tokens for distinct accounts and reading back
   the authenticated identity.
-- Whether `agent.turn_timeout_ms` is meant to bind this adapter. The value reaches
-  `domain.AgentConfig.TurnTimeoutMS` and no code reads it, so a turn is bounded only by
-  `stall_timeout_ms` and worker cancellation. Settle it against the agent adapter contract in
-  `docs/architecture/10-agent-adapter-contract.md`, not by probing the CLI.
 
 [cli-help-ref]: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference "GitHub Copilot CLI command reference (includes flags such as --no-ask-user)"
 
