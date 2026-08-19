@@ -319,15 +319,13 @@ func handleCIFailure(
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
-	completedAt := time.Now().UTC()
-
 	ciRunHistory := persistence.RunHistory{
 		IssueID:        pending.IssueID,
 		Identifier:     pending.Identifier,
 		DisplayID:      pending.DisplayID,
 		Attempt:        pending.Attempt,
-		StartedAt:      completedAt.Format(time.RFC3339),
-		CompletedAt:    completedAt.Format(time.RFC3339),
+		StartedAt:      now.Format(time.RFC3339),
+		CompletedAt:    now.Format(time.RFC3339),
 		Status:         "ci_failed",
 		Error:          stringPtr("CI checks failed on ref " + ref),
 		TokensMeasured: true,
