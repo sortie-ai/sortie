@@ -177,16 +177,30 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		}
 
 		if storedHead != status.HeadSHA {
+			// The durable head advances before the runtime boundary does.
+			// The transition restarts the watch clock and re-arms the
+			// once-per-epoch escalation, so applying it against a record
+			// that did not advance would repeat both on every later pass:
+			// the age basis would never grow old enough to elapse, and the
+			// escalation would fire once per pass instead of once per
+			// epoch. Deferring costs one poll and keeps the entry bounded.
+			if upsertErr := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindCI, status.HeadSHA); upsertErr != nil {
+				pending.PendingAttempts++
+				delay := computeCIPendingDelay(base, pending.PendingAttempts)
+				pending.PendingRetryAt = now.Add(delay)
+				entryLog.Warn("failed to upsert reaction fingerprint, deferring the epoch transition",
+					slog.Any("error", upsertErr),
+					slog.Int("pending_attempts", pending.PendingAttempts),
+					slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
+				)
+				state.PendingReactions[key] = pending
+				continue
+			}
 			// The epoch transition already clears dispatched through the
 			// fingerprint upsert; the status read below proceeds
 			// unconditionally on this branch, so the local dispatched
 			// value needs no update here.
 			applyCIEpochTransition(state, params, pending, rkey, storedHead, status.HeadSHA, now, ctx, entryLog)
-			if upsertErr := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindCI, status.HeadSHA); upsertErr != nil {
-				entryLog.Warn("failed to upsert reaction fingerprint",
-					slog.Any("error", upsertErr),
-				)
-			}
 		} else if dispatched {
 			pending.PendingAttempts++
 			delay := computeCIPendingDelay(base, pending.PendingAttempts)

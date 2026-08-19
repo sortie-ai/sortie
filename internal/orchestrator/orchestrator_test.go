@@ -2807,10 +2807,11 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Fatal("PendingReactions entry dropped on the first tick; want kept (well inside the 24h window)")
 		}
 
-		// Reload with a watch window smaller than the wall-clock gap to
-		// the next tick, and let that gap actually elapse; the reconcile
-		// pass must pick up the new bound on the very next tick.
-		time.Sleep(20 * time.Millisecond)
+		// Age the entry deterministically rather than sleeping for a
+		// wall-clock gap: push the recorded head an hour into the past,
+		// then reload a window far smaller than that. The assertion then
+		// tests the reload path itself instead of racing a loaded runner.
+		state.PendingReactions[rkey].HeadRecordedAt = time.Now().UTC().Add(-time.Hour)
 		cfg.CIFeedback.WatchWindowMS = 5
 		wm.setConfig(cfg)
 

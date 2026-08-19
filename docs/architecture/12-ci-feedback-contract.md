@@ -179,11 +179,13 @@ entry is dropped for this tick with backoff rather than proceeding to a status r
 not polled again for that head until a later worker exit, startup recovery, or a further head change
 creates or re-arms a pending entry.
 
-Fingerprint errors are logged and treated as non-fatal, but the two directions differ. A failed
-upsert is best-effort: the pass proceeds, and the next pass re-detects the same head change and
-re-applies the transition, which is idempotent for one head. A failed read suppresses epoch
-detection for that pass rather than fabricate a change: treating a read failure as a head change
-would reset the retry budget on a database error.
+Fingerprint errors are logged, and the two directions differ. A failed upsert defers the epoch
+transition: the entry is re-enqueued with backoff and the pass ends without applying it, because the
+durable head must advance before the runtime boundary does. The transition restarts the watch clock
+and re-arms the once-per-epoch escalation, so applying it against a record that did not advance
+repeats both on every later pass, and the age basis never grows old enough for the watch window to
+elapse. A failed read suppresses epoch detection for that pass rather than fabricate a change:
+treating a read failure as a head change would reset the retry budget on a database error.
 
 The `dispatched` flag is not set anywhere in this reconcile pass. `handleCIFailure` (Section 11A.6)
 schedules the CI-fix continuation through the shared retry machinery with `ReactionKind` set to

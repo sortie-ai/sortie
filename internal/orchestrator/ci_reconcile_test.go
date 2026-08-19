@@ -2466,3 +2466,63 @@ func TestReconcileCIStatus_ThreeSelfPushedFixCommits_EscalateAfterTotalBudget(t 
 		t.Errorf(`IncCIEscalations("label") = %d, want 1 (escalated once the total budget was exceeded)`, metrics.ciEscalations["label"])
 	}
 }
+
+// TestReconcileCIStatus_UpsertFailure_DefersEpochTransition verifies that a
+// failed fingerprint upsert defers the epoch transition instead of applying
+// it against a durable record that did not advance. The transition restarts
+// the watch clock and re-arms the once-per-epoch escalation, so applying it
+// on every pass while the write keeps failing would leave the entry unable
+// to age out and would let the escalation fire once per pass.
+func TestReconcileCIStatus_UpsertFailure_DefersEpochTransition(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-UPSERTFAIL"
+	recordedAt := time.Now().UTC().Add(-time.Hour)
+
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	state.PendingReactions[rkey].HeadRecordedAt = recordedAt
+	state.PendingReactions[rkey].EscalatedForCurrentHead = true
+	state.ReactionAttempts[rkey] = 1
+
+	store := &ciReconcileStore{
+		getFingerprintResult: "old-head",
+		upsertFingerprintErr: errors.New("database is locked"),
+	}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "new-head"}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	// Two passes: one failed write is a deferral, and a second proves the
+	// age basis does not creep forward while the write keeps failing.
+	for range 2 {
+		if entry, ok := state.PendingReactions[rkey]; ok {
+			entry.PendingRetryAt = time.Time{}
+		}
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	}
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a failed fingerprint upsert; want re-enqueued")
+	}
+	if !entry.HeadRecordedAt.Equal(recordedAt) {
+		t.Errorf("HeadRecordedAt = %v, want %v (unchanged: the durable head never advanced)", entry.HeadRecordedAt, recordedAt)
+	}
+	if !entry.EscalatedForCurrentHead {
+		t.Error("EscalatedForCurrentHead cleared while the durable head never advanced; the soft stop would re-escalate every pass")
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1 (untouched by a deferred transition)", issueID, state.ReactionAttempts[rkey])
+	}
+	if entry.PendingAttempts != 2 {
+		t.Errorf("PendingAttempts = %d, want 2 (backoff advanced once per failed pass)", entry.PendingAttempts)
+	}
+	if store.upsertFingerprintCalls != 2 {
+		t.Errorf("upsert attempts = %d, want 2 (retried on the next pass)", store.upsertFingerprintCalls)
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times after a failed upsert; want 0 (the pass ends before the status read)", ci.calls)
+	}
+}
