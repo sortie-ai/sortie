@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -39,6 +40,10 @@ type RunSelfReviewParams struct {
 	Logger         *slog.Logger
 	Metrics        domain.Metrics
 	TurnsCompleted *int
+
+	// TurnTimeoutMS bounds each agent turn the phase runs. Sourced
+	// from the attempt-start config snapshot, not re-read per turn.
+	TurnTimeoutMS int
 }
 
 // maxVerdictFileBytes is the cap on .sortie/review_verdict.json reads.
@@ -440,11 +445,12 @@ func writeReviewSummary(workspacePath string, meta domain.ReviewMetadata, logger
 	}
 }
 
-func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal) {
+func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal, error) {
 	maxIter := params.Config.MaxIterations
 	iterations := make([]domain.ReviewIterationRecord, 0, maxIter)
 	logger := params.Logger
 	terminalSignal := workspace.StatusNone
+	var expiryErr error
 
 	if params.OnProgress != nil {
 		params.OnProgress(selfReviewProgressMsg{
@@ -496,13 +502,13 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			)
 		}
 
-		_, turnErr := params.AgentAdapter.RunTurn(ctx, params.Session, domain.RunTurnParams{
+		_, turnErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
 			Prompt: reviewPrompt,
 			Issue:  params.Issue,
 			OnEvent: func(event domain.AgentEvent) {
 				params.OnEvent(params.Issue.ID, event)
 			},
-		})
+		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "review"))
 		if turnErr != nil {
 			logger.Warn("self-review turn failed",
 				slog.Int("iteration", i),
@@ -515,6 +521,10 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 				VerificationResults: verificationResults,
 				VerdictParseError:   fmt.Sprintf("turn error: %v", turnErr),
 			})
+			var agentErr *domain.AgentError
+			if errors.As(turnErr, &agentErr) && agentErr.Kind == domain.ErrTurnTimeout {
+				expiryErr = fmt.Errorf("self-review review turn (iteration %d): %w", i, turnErr)
+			}
 			break
 		}
 
@@ -602,18 +612,29 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 		fixPrompt := buildFixPrompt(verdict, parseErr, i, maxIter)
 
-		_, fixErr := params.AgentAdapter.RunTurn(ctx, params.Session, domain.RunTurnParams{
+		_, fixErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
 			Prompt: fixPrompt,
 			Issue:  params.Issue,
 			OnEvent: func(event domain.AgentEvent) {
 				params.OnEvent(params.Issue.ID, event)
 			},
-		})
+		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "fix"))
 		if fixErr != nil {
 			logger.Warn("self-review fix turn failed",
 				slog.Int("iteration", i),
 				slog.Any("error", fixErr),
 			)
+			var agentErr *domain.AgentError
+			if errors.As(fixErr, &agentErr) && agentErr.Kind == domain.ErrTurnTimeout {
+				expiryErr = fmt.Errorf("self-review fix turn (iteration %d): %w", i, fixErr)
+				note := fmt.Sprintf("turn timeout: %v", fixErr)
+				last := &iterations[len(iterations)-1]
+				if last.VerdictParseError == "" {
+					last.VerdictParseError = note
+				} else {
+					last.VerdictParseError += "; " + note
+				}
+			}
 			break
 		}
 
@@ -666,5 +687,5 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 	params.Metrics.IncSelfReviewSessions(finalVerdict)
 
-	return meta, terminalSignal
+	return meta, terminalSignal, expiryErr
 }

@@ -246,6 +246,12 @@ exit status 143 (128 + 15); on SIGKILL, 137 (128 + 9). The skeleton detects the 
 `procutil.WasSignaled` and returns `domain.EventTurnCancelled` with `domain.ErrTurnCancelled`
 before the adapter's own finalizer runs.
 
+The orchestrator now derives a per-turn deadline from `agent.turn_timeout_ms` and passes it on
+the context given to `RunTurn`, the same inheritance mechanism every other adapter relies on: a
+Go context deadline propagates to `agentcore.ForkPerTurnSession`'s own `context.WithCancel`
+re-derivation, so an expiry cancels the Kiro subprocess through the same signal-then-force-kill
+path described above.
+
 Stall detection still reaches Kiro turns despite the absent event stream: every non-empty
 stdout line becomes a `domain.EventNotification` carrying a fresh
 timestamp, and `orchestrator.HandleAgentEvent` advances `LastAgentTimestamp` from it, which
@@ -653,12 +659,6 @@ projection, while Kiro emits only a human transcript.
   Builder ID working while IAM Identity Center fails. Settled by repeating the workspace
   `mcp.json` probe (`mcp list` plus `chat --no-interactive --require-mcp-startup`) under a
   Builder ID login.
-- What enforces `agent.turn_timeout_ms` for a Kiro turn. The value reaches adapters through
-  `orchestrator.toDomainAgentConfig` as `domain.AgentConfig.TurnTimeoutMS`, and
-  `kiro.sessionState` stores it without reading it, but no deadline derived from it appears on
-  the path that calls `RunTurn`; `orchestrator.reconcileStalled` cancels on
-  `stall_timeout_ms` only. Settled by tracing the worker's turn context in
-  `internal/orchestrator`.
 
 ## Sources
 

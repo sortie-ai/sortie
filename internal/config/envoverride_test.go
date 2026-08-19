@@ -482,6 +482,13 @@ func TestApplyEnvOverrides(t *testing.T) {
 		assertEnvOverrideError(t, err, "workspace.retention_days", "SORTIE_WORKSPACE_RETENTION_DAYS")
 	})
 
+	t.Run("agent turn timeout override zero fails config construction", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_TURN_TIMEOUT_MS", "0")
+
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "agent.turn_timeout_ms", "must be greater than 0")
+	})
+
 	t.Run("top-level SORTIE_DB_PATH", func(t *testing.T) {
 		t.Setenv("SORTIE_DB_PATH", "/data/sortie.db")
 

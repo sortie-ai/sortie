@@ -197,6 +197,9 @@ Fields:
   - HTTP-based agent adapters do not require a local command.
 - `turn_timeout_ms` (integer)
   - Default: `3600000` (1 hour)
+  - Must be positive. A non-positive value is rejected when the configuration is parsed.
+  - Unlike `stall_timeout_ms` below, this bound cannot be disabled: it is the last wall-clock
+    stop on an unattended turn, so no non-positive value switches it off.
 - `read_timeout_ms` (integer)
   - Default: `5000`
 - `stall_timeout_ms` (integer)
