@@ -54,8 +54,11 @@ func IsFailingConclusion(conclusion domain.CheckConclusion) bool {
 // producing a failing one.
 //
 // Adding a conclusion to this predicate withholds green from every
-// forge and both readers, the CI verdict and the merge gate, since both
-// derive from [AggregateCIStatus].
+// reader that folds the normalized run set: the CI verdict on every
+// forge, and the merge gate wherever it derives from
+// [AggregateCIStatus]. A forge whose merge gate maps a platform-level
+// pipeline aggregate directly does not pass through this predicate, and
+// has to be kept in step at that mapping instead.
 func isInconclusiveConclusion(conclusion domain.CheckConclusion) bool {
 	return conclusion == domain.CheckConclusionCancelled
 }
