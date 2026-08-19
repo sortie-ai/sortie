@@ -45,12 +45,20 @@ type OrchestratorStore interface {
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
+	UpsertReactionObservation(
+		ctx context.Context,
+		issueID, kind, fingerprint string,
+		observedAt time.Time,
+	) (persistence.ReactionObservation, error)
+	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
 	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
 	ListParkedIssues(ctx context.Context) ([]persistence.ParkedIssue, error)
 }
+
+var _ OrchestratorStore = (*persistence.Store)(nil)
 
 // Observer receives notifications when orchestrator state changes.
 // Implementations must not block and must not mutate state.

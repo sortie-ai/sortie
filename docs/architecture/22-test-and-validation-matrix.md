@@ -296,7 +296,17 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   or has left the handoff state, and defers one whose issue is still claimed
 - Merge-completion transitions the issue to `target_state` once per merge commit identifier, and a
   second reconcile of the same identifier performs no further transition
-- A merged pull request reporting no merge commit identifier re-enqueues rather than latching
+- An unmerged pull request can remain pending beyond thirty minutes without creating a missing-SHA
+  observation; the first merged-without-SHA response starts a persisted thirty-minute grace period
+- Missing-SHA checks use exponential pending backoff without consulting transition `max_retries`;
+  a real SHA transitions normally and clears the observation only after the normal latch completes,
+  while expiry drops pending, emits the configured escalation, and performs no transition
+- Missing-SHA observation tests cover restart persistence, same-identity timestamp preservation,
+  delivered-escalation suppression, later-fresh-entry real-SHA recovery, new-PR reset, lifecycle
+  cleanup, best-effort delete ordering, external escalation failure remaining stopped in-process,
+  and a later fresh entry retrying only undelivered escalation
+- Generic terminal release remains fingerprint-agnostic and leaves both normal fingerprints and
+  internal missing-SHA observations intact
 - Merge-completion transition failure routes by tracker error kind: transport and API retry with
   backoff to `max_retries` then escalate, auth and payload escalate immediately, and not-found
   stops while marking the fingerprint dispatched
@@ -417,4 +427,3 @@ network access, or external service permissions are unavailable.
   containing at least one completed-failing run, one in-progress run, and one completed-success
   run, confirming the provider's aggregate status and failing count agree with the forge decision
   core.
-

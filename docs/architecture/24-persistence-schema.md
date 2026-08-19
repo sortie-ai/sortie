@@ -145,6 +145,29 @@ fingerprint", and the row's lifecycle after that point is the owning kind's to d
 treat the row as spent. The merge-completion kind (§11G.4) instead retains a dispatched row rather
 than deleting it, because deleting it would let the next poll observe the same merge as new.
 
+The internal `merge-completion-missing-sha` observation kind reuses this table without changing the
+normal `merge-completion` fingerprint. Its `fingerprint` is normalized `owner/repo#number`,
+`updated_at` is the first time that PR identity was reported merged without a commit identifier,
+and `dispatched` means the bounded-wait escalation was successfully delivered. Its observation upsert has
+stricter timestamp semantics than an ordinary fingerprint upsert: the same identity preserves
+`updated_at`, while a different identity replaces it and resets `dispatched`. Marking this
+observation dispatched happens only after the configured tracker write succeeds, only if the row
+still carries the same PR identity, and also preserves `updated_at`, so a restart cannot reset or
+obscure the thirty-minute grace-period origin. A failed
+tracker write leaves the expired observation undispatched; the current pending entry remains
+dropped, while a later fresh entry can retry only that delivery.
+
+Cleanup is owned by an active merge-completion pass. Such a pass deletes the observation when it
+sees a different pull request identity, a missing pull request, an issue missing from the tracker
+response, an issue outside the handoff state, or a real commit identifier whose normal merge latch
+has completed. Generic terminal-state release deliberately leaves every `reaction_fingerprints`
+row intact. Consequently, after the bounded stop has removed the last pending entry, a later human
+transition by itself is not observed and this internal row may remain indefinitely. The residue is
+inert: the same delivered identity stops, a different identity resets it, and a later fresh entry
+with a real identifier clears it after the normal latch completes. Because `updated_at` is frozen
+at first observation, any future retention job MUST handle this kind explicitly; it MUST NOT infer
+safe expiry from `updated_at` alone or it would re-arm a one-shot escalation.
+
 **`handoff_absence_resets`**: end of a consecutive handoff-absence sequence (migration 013)
 
 | Column         | Type    | Notes                                                              |

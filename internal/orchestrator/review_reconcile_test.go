@@ -78,6 +78,8 @@ func (m *mockSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) e
 
 // reviewReconcileStore is a self-contained ReconcileStore for review tests.
 type reviewReconcileStore struct {
+	unsupportedReactionObservationStore
+
 	savedEntries    []persistence.RetryEntry
 	deletedIssueIDs []string
 

@@ -22,6 +22,8 @@ import (
 // reconcileLabelFixCommands never reads the flag: a fresh event past the
 // stored mark still dispatches regardless of its value.
 type labelFixDispatchedFlagStore struct {
+	unsupportedReactionObservationStore
+
 	mark       string
 	dispatched bool
 

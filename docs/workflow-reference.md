@@ -1393,12 +1393,25 @@ where a completion state was meant closes finished work under the wrong label, a
 validator can detect that mistake, because it is a judgement about the issue rather than a
 configuration shape.
 
-**Idempotency key:** the fingerprint is the merge commit identifier reported by the
-provider, not the pull request number, persisted in the `reaction_fingerprints` SQLite table
-under a kind distinct from every other reaction. A row is created on the first observed
-merge, retained (never deleted) once the transition succeeds, and re-armed only when a later
-merge reports a different commit identifier. `Merged: true` with no reported commit
-identifier is treated as no observation rather than as a failure.
+**Idempotency key:** the fingerprint is the merge commit identifier reported by the provider, not
+the pull request number, persisted in the `reaction_fingerprints` SQLite table under a kind
+distinct from every other reaction. A row is created on the first observed merge, retained (never
+deleted) once the transition succeeds, and re-armed only when a later merge reports a different
+commit identifier. A pull request may remain unmerged for any length of time without starting a
+failure clock. When the provider first reports `Merged: true` with no commit identifier, Sortie
+records that PR identity separately and waits thirty minutes, retrying with exponential pending
+backoff floored at `poll_interval_ms`. If the identifier is still absent on the first poll at or
+after the deadline, Sortie stops polling that pending entry without transitioning the issue and
+attempts the configured label or comment. Delivery is recorded only after that tracker write
+succeeds. A failure does not restart the stopped polling loop; a later fresh pending entry,
+including one recovered after restart, can retry the undelivered notification. If the tracker write
+succeeds but the follow-up marker write itself fails, the notification has already reached the
+operator even though the observation stays recorded as undelivered; a later fresh pending entry
+then delivers it a second time. `escalation: label` repeats harmlessly, because re-applying a
+present label is a no-op; `escalation: comment` posts the operator a duplicate comment. If such a
+later entry instead observes a real identifier, it follows the normal merge-commit fingerprint path
+and clears the temporary observation after that latch completes. `max_retries` applies only to
+failed tracker transitions, not to this grace period.
 
 **Failure matrix:**
 
@@ -1417,11 +1430,12 @@ construction verdict cannot diverge. Environment indirection through `$VAR` is n
 for any field in this block, matching every other reaction kind.
 
 **Request cost:** each parked issue costs one tracker issue-state read and one pull-request
-read per poll interval, plus one tracker write per observed merge. On a forge tracker the
-tracker and the SCM adapter share one credential against one host, so the steady-state cost
-approaches two requests per parked issue per poll interval. A deployment with many
-simultaneously parked issues SHOULD raise `poll_interval_ms` above the default rather than
-accept it.
+read per poll interval while it is unmerged, plus one tracker write per observed merge. A merged
+pull request missing its commit identifier backs off rather than issuing a forge read on every
+fixed poll. On a forge tracker the tracker and the SCM adapter share one credential against one
+host, so the steady-state unmerged cost approaches two requests per parked issue per poll
+interval. A deployment with many simultaneously parked issues SHOULD raise `poll_interval_ms`
+above the default rather than accept it.
 
 **Cross-kind isolation:** CI-failure and review escalations are scoped to their own kind:
 each clears only its own pending entry, attempt counter, and fingerprint, so merge-completion

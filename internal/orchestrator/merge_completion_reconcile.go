@@ -19,6 +19,17 @@ import (
 // below.
 const mergeCompletionPendingBackoffBase = 10 * time.Second
 
+// mergeCompletionMissingSHAGracePeriod bounds the time spent waiting for a
+// forge to populate a merge commit identifier after it first reports the pull
+// request as merged.
+const mergeCompletionMissingSHAGracePeriod = 30 * time.Minute
+
+// mergeCompletionMissingSHAObservationKind is an internal persistence kind,
+// not a pending reaction kind. Its fingerprint is the normalized pull-request
+// identity, its updated_at is the first missing-SHA observation time, and its
+// dispatched bit records whether the operator escalation was delivered.
+const mergeCompletionMissingSHAObservationKind = "merge-completion-missing-sha"
+
 // mergeCompletionDueEntry is a pending merge-completion entry that has
 // passed its retry-delay check and is ready for this tick's tracker
 // state read.
@@ -150,10 +161,12 @@ func processMergeCompletionEntry(
 
 	stateName, known := statesByID[pending.IssueID]
 	if !known {
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 		entryLog.Warn("merge_completion issue not found in tracker state response, dropping")
 		return
 	}
 	if _, terminal := terminalSet[strings.ToLower(stateName)]; terminal {
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 		entryLog.Info("merge_completion issue already terminal, dropping",
 			slog.String("state", stateName),
 		)
@@ -165,6 +178,7 @@ func processMergeCompletionEntry(
 		return
 	}
 	if !strings.EqualFold(stateName, params.HandoffState) {
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 		entryLog.Info("merge_completion stopped: issue left the handoff state",
 			slog.String("state", stateName),
 		)
@@ -175,6 +189,7 @@ func processMergeCompletionEntry(
 	if mergeErr != nil {
 		var scmErr *domain.SCMError
 		if errors.As(mergeErr, &scmErr) && scmErr.Kind == domain.ErrSCMNotFound {
+			clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 			entryLog.Warn("merge_completion pull request not found, dropping",
 				slog.Int("pr_number", data.PRNumber),
 			)
@@ -189,16 +204,19 @@ func processMergeCompletionEntry(
 	}
 
 	if !status.Merged {
+		clearMergeCompletionMissingSHAObservationForChangedPR(
+			params.Store,
+			pending.IssueID,
+			mergeCompletionPRIdentity(data),
+			entryLog,
+			ctx,
+		)
 		pending.PendingRetryAt = now.Add(pollInterval)
 		state.PendingReactions[key] = pending
 		return
 	}
 	if status.MergeCommitSHA == "" {
-		pending.PendingRetryAt = now.Add(pollInterval)
-		state.PendingReactions[key] = pending
-		entryLog.Warn("merge_completion merged pull request reported no merge commit",
-			slog.Int("pr_number", data.PRNumber),
-		)
+		handleMergeCompletionMissingSHA(state, params, key, pending, data, now, pollInterval, entryLog, ctx)
 		return
 	}
 
@@ -218,6 +236,7 @@ func processMergeCompletionEntry(
 		return
 	}
 	if storedFP == status.MergeCommitSHA && dispatched {
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 		entryLog.Debug("merge_completion already transitioned for this merge",
 			slog.String("merge_commit_sha", status.MergeCommitSHA),
 		)
@@ -242,11 +261,129 @@ func processMergeCompletionEntry(
 		)
 		return
 	}
+	clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, entryLog, ctx)
 	entryLog.Info("merge_completion transitioned issue to terminal state",
 		slog.String("target_state", params.MergeCompletionConfig.TargetState),
 		slog.Int("pr_number", data.PRNumber),
 		slog.String("merge_commit_sha", status.MergeCommitSHA),
 	)
+}
+
+// handleMergeCompletionMissingSHA persists the first time a specific pull
+// request is reported merged without a commit identifier. It retries with the
+// pending-entry backoff during the fixed grace period, then drops the entry
+// and issues the configured operator notification. A successful notification
+// marks the observation dispatched; a failed one remains eligible for a later
+// fresh pending entry to retry without reopening the current polling loop.
+func handleMergeCompletionMissingSHA(
+	state *State,
+	params ReconcileParams,
+	key string,
+	pending *PendingReaction,
+	data *MergeCompletionReactionData,
+	now time.Time,
+	pollInterval time.Duration,
+	log *slog.Logger,
+	ctx context.Context,
+) {
+	identity := mergeCompletionPRIdentity(data)
+	observation, err := params.Store.UpsertReactionObservation(
+		ctx,
+		pending.IssueID,
+		mergeCompletionMissingSHAObservationKind,
+		identity,
+		now,
+	)
+	if err != nil {
+		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
+		log.Warn("failed to persist merge_completion missing-SHA observation",
+			slog.Any("error", err),
+			slog.String("repository", data.Owner+"/"+data.Repo),
+			slog.Int("pr_number", data.PRNumber),
+		)
+		return
+	}
+
+	waited := max(now.Sub(observation.FirstObservedAt), time.Duration(0))
+	if observation.Dispatched {
+		delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
+		log.Error("merge_completion missing-SHA escalation already delivered, stopping",
+			slog.String("repository", data.Owner+"/"+data.Repo),
+			slog.Int("pr_number", data.PRNumber),
+			slog.Duration("waited", waited),
+			slog.String("manual_action", "verify the merge and transition the tracker issue manually if appropriate"),
+		)
+		return
+	}
+	if waited < mergeCompletionMissingSHAGracePeriod {
+		backoffMergeCompletionReenqueue(state, key, pending, now, pollInterval)
+		log.Warn("merge_completion merged pull request reported no merge commit, waiting with backoff",
+			slog.String("repository", data.Owner+"/"+data.Repo),
+			slog.Int("pr_number", data.PRNumber),
+			slog.Duration("waited", waited),
+			slog.Duration("grace_period", mergeCompletionMissingSHAGracePeriod),
+			slog.Int("pending_attempts", pending.PendingAttempts),
+		)
+		return
+	}
+
+	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
+	log.Error("merge_completion stopped after merge commit identifier remained missing",
+		slog.String("repository", data.Owner+"/"+data.Repo),
+		slog.Int("pr_number", data.PRNumber),
+		slog.Duration("waited", waited),
+		slog.String("reason", "pull request is merged but the forge did not provide a merge commit identifier"),
+		slog.String("manual_action", "verify the merge and transition the tracker issue manually if appropriate"),
+	)
+	escalateMergeCompletionMissingSHA(state, params, pending, data, waited, log, ctx)
+}
+
+// mergeCompletionPRIdentity returns the normalized identity used only by the
+// missing-SHA observation. It deliberately does not replace the real merge
+// commit identifier used by the normal merge-completion idempotency latch.
+func mergeCompletionPRIdentity(data *MergeCompletionReactionData) string {
+	owner := strings.ToLower(strings.TrimSpace(data.Owner))
+	repo := strings.ToLower(strings.TrimSpace(data.Repo))
+	return fmt.Sprintf("%s/%s#%d", owner, repo, data.PRNumber)
+}
+
+// clearMergeCompletionMissingSHAObservation removes stale anomaly state when
+// the issue or pull request leaves the merge-completion lifecycle. Cleanup is
+// best effort because these paths already have a definitive stop condition.
+func clearMergeCompletionMissingSHAObservation(
+	store ReconcileStore,
+	issueID string,
+	log *slog.Logger,
+	ctx context.Context,
+) {
+	if err := store.DeleteReactionFingerprint(ctx, issueID, mergeCompletionMissingSHAObservationKind); err != nil {
+		log.Warn("failed to clear merge_completion missing-SHA observation",
+			slog.Any("error", err),
+		)
+	}
+}
+
+// clearMergeCompletionMissingSHAObservationForChangedPR removes an old
+// anomaly marker when a fresh pending entry identifies a different, currently
+// unmerged pull request. The new PR does not receive an observation until it
+// is itself first reported merged without a commit identifier.
+func clearMergeCompletionMissingSHAObservationForChangedPR(
+	store ReconcileStore,
+	issueID, currentIdentity string,
+	log *slog.Logger,
+	ctx context.Context,
+) {
+	storedIdentity, _, err := store.GetReactionFingerprint(ctx, issueID, mergeCompletionMissingSHAObservationKind)
+	if err != nil {
+		log.Warn("failed to inspect merge_completion missing-SHA observation for PR change",
+			slog.Any("error", err),
+		)
+		return
+	}
+	if storedIdentity == "" || storedIdentity == currentIdentity {
+		return
+	}
+	clearMergeCompletionMissingSHAObservation(store, issueID, log, ctx)
 }
 
 // backoffMergeCompletionReenqueue increments the pending entry's attempt
@@ -293,6 +430,7 @@ func routeTransitionFailure(
 				slog.Any("error", markErr),
 			)
 		}
+		clearMergeCompletionMissingSHAObservation(params.Store, pending.IssueID, log, ctx)
 		delete(state.ReactionAttempts, rkey)
 		log.Warn("merge_completion issue not found, stopping",
 			slog.Any("error", err),
@@ -373,6 +511,84 @@ func escalateMergeCompletion(
 	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
 }
 
+// escalateMergeCompletionMissingSHA sends the configured operator signal for
+// an expired missing-SHA observation. The pending entry is already absent. A
+// successful write durably marks the observation dispatched; a failed write
+// leaves it undispatched so only delivery can be retried by a later fresh
+// pending entry, without reopening this process's polling loop.
+//
+// The tracker write and the marker write share one 30-second deadline
+// instead of each getting its own, so the goroutine as a whole stays
+// within the budget trackerOpsDrainTimeout assumes for a single
+// TrackerOpsWg goroutine.
+func escalateMergeCompletionMissingSHA(
+	state *State,
+	params ReconcileParams,
+	pending *PendingReaction,
+	data *MergeCompletionReactionData,
+	waited time.Duration,
+	log *slog.Logger,
+	ctx context.Context,
+) {
+	issueID := pending.IssueID
+	tracker := params.TrackerAdapter
+	escalLog := log
+	markDelivered := func(dctx context.Context) {
+		if err := params.Store.MarkReactionObservationDispatched(
+			dctx,
+			issueID,
+			mergeCompletionMissingSHAObservationKind,
+			mergeCompletionPRIdentity(data),
+		); err != nil {
+			escalLog.Error("merge_completion missing-SHA escalation delivered but marker write failed; a fresh pending entry may repeat delivery",
+				slog.Any("error", err),
+				slog.String("repository", data.Owner+"/"+data.Repo),
+				slog.Int("pr_number", data.PRNumber),
+			)
+		}
+	}
+
+	switch params.MergeCompletionConfig.Escalation {
+	case "label":
+		label := params.MergeCompletionConfig.EscalationLabel
+		state.TrackerOpsWg.Go(func() {
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+
+			if err := tracker.AddLabel(dctx, issueID, label); err != nil {
+				escalLog.Error("merge_completion missing-SHA escalation label failed; polling remains stopped and a fresh pending entry can retry delivery",
+					slog.Any("error", err),
+					slog.String("repository", data.Owner+"/"+data.Repo),
+					slog.Int("pr_number", data.PRNumber),
+				)
+				return
+			}
+			markDelivered(dctx)
+		})
+
+	case "comment":
+		commentText := buildMergeCompletionMissingSHAEscalationComment(
+			data,
+			params.MergeCompletionConfig.TargetState,
+			waited,
+		)
+		state.TrackerOpsWg.Go(func() {
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+
+			if err := tracker.CommentIssue(dctx, issueID, commentText); err != nil {
+				escalLog.Error("merge_completion missing-SHA escalation comment failed; polling remains stopped and a fresh pending entry can retry delivery",
+					slog.Any("error", err),
+					slog.String("repository", data.Owner+"/"+data.Repo),
+					slog.Int("pr_number", data.PRNumber),
+				)
+				return
+			}
+			markDelivered(dctx)
+		})
+	}
+}
+
 // buildMergeCompletionEscalationComment returns the plain-text escalation
 // comment used when a merge-completion transition cannot be performed.
 // It names the pull request number, repository, configured target
@@ -386,5 +602,24 @@ func buildMergeCompletionEscalationComment(data *MergeCompletionReactionData, ta
 		data.PRNumber,
 		data.Owner,
 		data.Repo,
+	)
+}
+
+// buildMergeCompletionMissingSHAEscalationComment returns the operator-facing
+// explanation used after the missing-SHA grace period. It includes the
+// affected repository and pull request, elapsed wait, stop reason, and the
+// required manual follow-up.
+func buildMergeCompletionMissingSHAEscalationComment(
+	data *MergeCompletionReactionData,
+	targetState string,
+	waited time.Duration,
+) string {
+	return fmt.Sprintf(
+		"Sortie stopped monitoring %s/%s PR #%d after waiting %s because the pull request is reported merged but no merge commit identifier was provided. Verify the merge in the forge and transition this issue to %q manually if appropriate.",
+		data.Owner,
+		data.Repo,
+		data.PRNumber,
+		waited.Round(time.Second),
+		targetState,
 	)
 }

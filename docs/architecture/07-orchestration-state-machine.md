@@ -193,6 +193,11 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - `Merge Completion Observed`
   - Observed on the reconcile tick for an issue still parked in `tracker.handoff_state` and not
     currently claimed by the orchestrator.
+  - While the pull request remains unmerged, wait without aging the missing-identifier condition.
+    The first `Merged == true` response without a commit identifier starts a persisted thirty-minute
+    grace period; retry that condition with pending backoff, then stop polling and attempt the
+    configured escalation if it remains unresolved. Successful delivery is recorded once; a failed
+    delivery can be retried only by a later fresh pending entry, not by restoring the stopped loop.
   - Latch idempotency on the merge commit identifier; a commit already latched and dispatched is
     dropped without a transition.
   - Transition the issue to `reactions.merge_completion.target_state`, the last

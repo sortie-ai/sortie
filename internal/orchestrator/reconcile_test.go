@@ -21,9 +21,28 @@ import (
 
 // --- Test doubles ---
 
+// unsupportedReactionObservationStore lets unrelated store doubles satisfy
+// the compile-time interface while failing loudly if a merge-completion test
+// accidentally uses a double without real observation semantics.
+type unsupportedReactionObservationStore struct{}
+
+func (unsupportedReactionObservationStore) UpsertReactionObservation(
+	context.Context,
+	string, string, string,
+	time.Time,
+) (persistence.ReactionObservation, error) {
+	panic("reaction observation persistence is unsupported by this test double")
+}
+
+func (unsupportedReactionObservationStore) MarkReactionObservationDispatched(context.Context, string, string, string) error {
+	panic("reaction observation persistence is unsupported by this test double")
+}
+
 // mockReconcileStore records calls to ReconcileStore methods and returns
 // configurable errors.
 type mockReconcileStore struct {
+	unsupportedReactionObservationStore
+
 	savedEntries   []persistence.RetryEntry
 	deletedIssueID []string
 

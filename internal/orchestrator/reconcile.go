@@ -24,7 +24,15 @@ type ReconcileStore interface {
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
+	UpsertReactionObservation(
+		ctx context.Context,
+		issueID, kind, fingerprint string,
+		observedAt time.Time,
+	) (persistence.ReactionObservation, error)
+	MarkReactionObservationDispatched(ctx context.Context, issueID, kind, fingerprint string) error
 }
+
+var _ ReconcileStore = (*persistence.Store)(nil)
 
 // ReconcileParams holds the dependencies for [ReconcileRunningIssues] that
 // are not part of the core [State]. This separates pure state mutation from
@@ -173,7 +181,10 @@ type ReconcileParams struct {
 	// MergeCompletionConfig holds merge-completion reaction
 	// configuration. Only read when MergeCompletionReactionConfigured
 	// is true. Unlike every expiring sibling kind there is no
-	// accompanying MergeCompletionPendingTTL: this kind has no expiry.
+	// accompanying MergeCompletionPendingTTL: a pending entry carries no
+	// general expiry, so a merge can wait on human review for days. Only
+	// the post-merge missing-identifier condition is bounded, by a fixed
+	// thirty-minute grace period.
 	MergeCompletionConfig MergeCompletionReactionConfig
 
 	// MergeCompletionReactionConfigured marks whether the
@@ -497,7 +508,6 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 			slog.Any("error", err),
 		)
 	}
-
 	if _, exists := state.Claimed[issueID]; exists {
 		delete(state.Claimed, issueID)
 		counts.ClaimReleased = true

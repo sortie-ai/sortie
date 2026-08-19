@@ -128,6 +128,8 @@ func (p *labelReviewSCMPanicOnOthers) DeleteBranch(_ context.Context, _, _, _ st
 // value. Only the fingerprint methods carry behavior; the rest satisfy the
 // interface.
 type labelReviewFingerprintStore struct {
+	unsupportedReactionObservationStore
+
 	marks  map[string]string
 	getErr error
 

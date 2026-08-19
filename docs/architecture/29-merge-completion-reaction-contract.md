@@ -45,20 +45,25 @@ call per issue. A due entry that is not yet ready to defer, stop, or transition 
 `GetMergeability` read; a not-found result on that read drops the entry (the pull request is
 gone), while any other read failure re-enqueues with backoff. The poll interval defaults to sixty
 seconds and configuration rejects any value below thirty seconds. The exponential backoff applied
-on a tracker state-read failure, a fingerprint upsert or read failure, or a mergeability-read
-failure floors at that poll interval, not at a fixed constant.
+on a tracker state-read failure, a fingerprint upsert or read failure, a mergeability-read
+failure, or a merged response whose commit identifier is still missing floors at that poll
+interval, not at a fixed constant.
 
 Unlike five of its seven sibling reaction kinds, a `merge-completion` pending entry carries no
-expiry. CI, review, bot-review, auto-merge, and merge-conflict each observe something transient
-and bound their pending entries with a fixed TTL so a dropped observation does not poll forever.
-Merge-completion carries no such TTL, the same posture as the label-review and label-fix kinds: a
-merge instead waits on human review for an unbounded time, so this kind has no equivalent TTL
-constant. Carrying no expiry has a second consequence: a pending `merge-completion` entry does not
-pin its workspace against periodic-sweep candidacy (§9.6, Invariant 4a), which is safe here because
-the pass reads nothing from the workspace directory. The entry is bounded another way: it stops
-being re-enqueued once the issue leaves the configured handoff state. It is rebuilt through two paths: a fresh pending entry seeded on a
-qualifying normal worker exit (§11G.1), and a startup recovery re-seed for an issue still in the
-handoff state within the shared thirty-day recovery lookback (§14.3).
+general expiry. CI, review, bot-review, auto-merge, and merge-conflict each observe something
+transient and bound their pending entries with a fixed TTL so a dropped observation does not poll
+forever. Merge-completion carries no such review-stage TTL, the same posture as the label-review
+and label-fix kinds: a pull request may wait on human review for an unbounded time. That time does
+not count toward the missing-commit bound in §11G.4, and the pending entry's original `CreatedAt`
+MUST NOT be used as that bound's origin.
+
+Carrying no general expiry also means a pending `merge-completion` entry does not pin its workspace
+against periodic-sweep candidacy (§9.6, Invariant 4a), which is safe here because the pass reads
+nothing from the workspace directory. The entry is bounded by the issue leaving the configured
+handoff state and, after a merge is first reported without a commit identifier, by the fixed
+thirty-minute grace period in §11G.4. It is rebuilt through two paths: a fresh pending entry seeded
+on a qualifying normal worker exit (§11G.1), and a startup recovery re-seed for an issue still in
+the handoff state within the shared thirty-day recovery lookback (§14.3).
 
 Before any entry is examined, the pass checks once per tick whether the `target_state` captured
 at construction is still a member of the runtime `tracker.terminal_states` list, which is read
@@ -96,11 +101,50 @@ construction path, so its verdict cannot diverge from what a restart would build
 
 ### 11G.4 Idempotency latch
 
-The idempotency key is the `reaction_fingerprints` row identified by the issue and the kind
+The normal idempotency key is the `reaction_fingerprints` row identified by the issue and the kind
 `merge-completion`, whose fingerprint value is the merge commit identifier
 (`PRMergeStatus.MergeCommitSHA`, §11C.2) reported by `GetMergeability`, not the pull request
-number. A merge reported with `Merged == true` but no commit identifier is treated as no
-observation: the entry re-enqueues at the poll interval rather than latching on an empty value.
+number. No sentinel, pull request identity, branch, or other substitute is ever written to this
+row. A merge reported with `Merged == true` but no commit identifier therefore does not latch the
+normal fingerprint.
+
+The first such response for a pull request starts a fixed thirty-minute grace period. The pass
+persists a separate internal observation in `reaction_fingerprints` under kind
+`merge-completion-missing-sha`: its fingerprint is the normalized `owner/repo#number` identity,
+`updated_at` is the first time that identity was observed merged without a commit identifier, and
+`dispatched` records whether the one-shot escalation has been successfully delivered. Re-observing the
+same identity MUST preserve both fields; a different pull request identity replaces the
+fingerprint, records a new first-observed time, and resets `dispatched`. This row is observation
+state, not the merge idempotency key.
+
+During the grace period the pending entry re-enqueues with the existing exponential pending
+backoff, floored at `poll_interval_ms`. `reactions.merge_completion.max_retries` is not consulted:
+it continues to bound only failed `TransitionIssue` calls (§11G.5). Expiry is evaluated on the
+first reconcile tick at or after the deadline. If a real commit identifier appears, the pass
+proceeds through the unchanged normal fingerprint and transition path. The internal observation is
+cleared best-effort only after that normal fingerprint is already latched as dispatched, so an
+observation-delete failure cannot block the primary transition and a failed transition cannot
+restart the grace-period clock.
+
+At expiry, while the identifier is still absent, the pass drops the pending entry, logs the
+permanent polling stop at error level, and emits the configured escalation (§11G.6). It never calls
+`TransitionIssue` and never writes a successful merge fingerprint for this condition. The internal
+observation is marked `dispatched` only once both the tracker write and its follow-up marker write
+succeed; a failure in either leaves it undispatched, without reopening the current process's
+polling loop. When only the marker write failed, the notification was already delivered, so the
+retry described in §11G.6 redelivers it rather than delivering it for the first time. If a later
+fresh pending entry sees the same expired identity and the identifier is still absent, it retries
+the undelivered path once and drops again. Once delivery is marked, a fresh entry stops without
+repeating it.
+
+If a later fresh pending entry instead observes a real identifier, it may perform the normal
+transition and then clear the internal observation as described above. While a merge-completion
+entry is active, seeing an issue that is terminal, outside the handoff state, absent from the
+tracker response, or attached to a pull request that is no longer found also clears the internal
+observation; a different pull request identity starts a new observation if it later reaches the
+same missing-identifier state. After the bounded stop there is no active entry to observe a human
+state transition, and generic terminal release intentionally leaves all fingerprint rows intact,
+so that manual action alone may leave an inert observation row behind (§19.2).
 
 Before transitioning, the pass upserts the observed commit identifier into the fingerprint row. If
 the stored value already equals the observed one and is marked dispatched, the transition is
@@ -144,7 +188,7 @@ A transition failure is routed by the tracker error taxonomy defined in §11:
 | `ErrTrackerPayload` | Escalate immediately; consumes no retry budget. |
 | `ErrTrackerNotFound` | Stop: mark the fingerprint dispatched, drop the entry, log at warning level, no escalation. |
 
-`max_retries` defaults to `2` and bounds every disposition in the retryable group above: the
+`max_retries` defaults to `2` and bounds every `TransitionIssue` disposition in the retryable group above: the
 transport and API kinds, and any unclassified or unlisted kind routed with them. The comparison is
 strict over-limit (`attempts > max_retries`) against a per-issue counter scoped to this kind.
 The counter is incremented after every `TransitionIssue` call regardless of outcome, including on
@@ -173,11 +217,26 @@ reaction kinds already use:
 - `comment`: post a plain-text comment via `TrackerAdapter.CommentIssue` naming the pull request
   number, the repository, the configured target state, and the number of transition attempts made.
 
-Both actions run in a detached `TrackerOpsWg` goroutine with a thirty-second timeout, so a slow or
-failing tracker call does not block the reconcile tick. An escalation failure (the label or
-comment write itself errors) is logged at warning level and does not reopen the pending entry: the
-entry was already dropped from `state.PendingReactions` before the escalation ran, and it stays
-dropped regardless of whether the escalation call succeeds.
+For a missing-identifier expiry, the same configured label or comment posture is used. The comment
+names the repository, pull request number, elapsed wait, stop reason, configured target state, and
+manual follow-up. The label posture emits an operator-facing log carrying the same identifying
+and manual-action context.
+
+Both the tracker write and the follow-up marker write that records delivery run in one detached
+`TrackerOpsWg` goroutine under a single shared thirty-second deadline, so a slow or failing tracker
+call does not block the reconcile tick and the goroutine as a whole stays within the budget the
+shutdown drain assumes for it. An escalation failure (the label or comment write itself errors)
+does not reopen the pending entry: the entry was already dropped from `state.PendingReactions`
+before the escalation ran, and it stays dropped regardless of whether the escalation call succeeds.
+The missing-identifier stop and any failure to deliver its operator signal are logged at error
+level. Its observation is marked `dispatched` only after both the tracker write and the follow-up
+marker write succeed. If the tracker write succeeds but the marker write itself fails, the
+notification has already reached the operator even though the observation is left recorded as
+undelivered, so the one delivery retry a later worker exit or startup recovery performs redelivers
+rather than delivering for the first time: `label` repeats harmlessly, because re-applying a
+present label is a no-op, while `comment` posts a second comment. Neither failure mode restarts the
+grace period or creates an in-process polling loop. Once marked, the same identity never repeats
+the operator signal.
 
 ### 11G.7 State machine
 
@@ -188,14 +247,19 @@ Per-issue `merge-completion` reaction lifecycle (the `issue_id:merge-completion`
 | (none) | Worker exits normally, SCM adapter and merge-completion configured, PR metadata present | pending | Seed the entry if absent. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no API call. |
 | pending | Reconcile tick, batched tracker state read fails | pending | Back off every due entry; re-enqueue; no forge call. |
-| pending | Reconcile tick, issue missing from the state response | (none) | Drop the entry. |
-| pending | Reconcile tick, issue already terminal | (none) | Drop the entry. |
+| pending | Reconcile tick, issue missing from the state response | (none) | Drop the entry and clear the missing-SHA observation. |
+| pending | Reconcile tick, issue already terminal | (none) | Drop the entry and clear the missing-SHA observation. |
 | pending | Reconcile tick, issue currently claimed by the orchestrator | pending | Re-enqueue at the poll interval; no forge call. |
-| pending | Reconcile tick, issue has left the configured handoff state | (none) | Stop; drop the entry. |
-| pending | Reconcile tick, `GetMergeability` returns not-found | (none) | Drop the entry. |
+| pending | Reconcile tick, issue has left the configured handoff state | (none) | Stop; drop the entry and clear the missing-SHA observation. |
+| pending | Reconcile tick, `GetMergeability` returns not-found | (none) | Drop the entry and clear the missing-SHA observation. |
 | pending | Reconcile tick, `GetMergeability` fails (other error) | pending | Back off; re-enqueue. |
-| pending | Reconcile tick, PR not yet merged | pending | Re-enqueue at the poll interval. |
-| pending | Reconcile tick, PR merged with no reported commit identifier | pending | Re-enqueue at the poll interval; log a warning. |
+| pending | Reconcile tick, PR not yet merged | pending | Re-enqueue at the poll interval; do not create or age a missing-SHA observation. |
+| pending | First tick reporting this PR merged with no commit identifier | pending | Insert the internal observation with `updated_at = now`; back off from the poll interval; log a warning. |
+| pending | Tick during the missing-identifier grace period | pending | Preserve the first-observed time; re-enqueue with exponential pending backoff; ignore `max_retries`. |
+| pending | Missing-identifier grace expires, observation not dispatched | (none) | Drop the entry; log the permanent polling stop at error level; attempt the configured escalation; do not transition. Mark the observation dispatched only after delivery succeeds. |
+| pending | Expired missing identifier, observation still undispatched on a fresh entry | (none) | Retry the operator signal once and drop again; do not restart the grace period or polling loop. |
+| pending | Missing identifier, observation already dispatched | (none) | Drop the entry without repeating escalation. |
+| pending | Real commit identifier appears after a missing-identifier observation | pending | Continue through the normal merge fingerprint path; after its dispatched latch is established, clear the internal observation best-effort. |
 | pending | Reconcile tick, fingerprint upsert fails | pending | Back off; re-enqueue; log a warning. |
 | pending | Reconcile tick, fingerprint read fails (after a successful upsert) | pending | Back off; re-enqueue; log a warning. |
 | pending | Reconcile tick, merge commit already latched and dispatched | (none) | Drop the entry without transitioning. |
