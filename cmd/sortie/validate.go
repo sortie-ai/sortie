@@ -233,31 +233,18 @@ func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
 
 // activationChecks reports the offline-decidable SCM and CI activation
 // faults in the resolved config: an active SCM reaction naming an
-// unregistered provider, active SCM reactions disagreeing on the provider,
-// and a ci_feedback.kind naming no registered CI provider. It reuses
+// unregistered provider, active SCM reactions disagreeing on the
+// provider, and a reactions.ci_failure.provider (or its deprecated
+// ci_feedback.kind equivalent) naming no registered CI provider. The
+// resolved CI feedback kind joins the same active-SCM-reaction provider
+// set the runtime uses, so a disagreement between reactions.ci_failure
+// and another active SCM reaction is caught here too. It reuses
 // scmProviderConflict and the adapter registries the runtime consults at
 // construction, so it constructs no adapter and opens no socket.
 func activationChecks(cfg config.ServiceConfig) []validateDiag {
 	var diags []validateDiag
 
-	reviewRC := cfg.Reactions["review_comments"]
-	autoMergeRC := cfg.Reactions["auto_merge"]
-	botReviewRC := cfg.Reactions["bot_review"]
-	mergeConflictRC := cfg.Reactions["merge_conflicts"]
-	mergeCompletionRC := cfg.Reactions["merge_completion"]
-	labelReviewActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != ""
-	labelFixActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != ""
-
-	activeSCMKinds := []scmReactionKind{
-		{name: "review_comments", active: reviewRC.Provider != "", provider: reviewRC.Provider},
-		{name: "auto_merge", active: autoMergeRC.Provider != "", provider: autoMergeRC.Provider},
-		{name: "bot_review", active: botReviewRC.Provider != "", provider: botReviewRC.Provider},
-		{name: "merge_conflicts", active: mergeConflictRC.Provider != "", provider: mergeConflictRC.Provider},
-		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: cfg.LabelCommands.Provider},
-		{name: "merge_completion", active: mergeCompletionRC.Provider != "", provider: mergeCompletionRC.Provider},
-	}
-
-	activeKinds, providers := scmProviderConflict(activeSCMKinds)
+	activeKinds, providers := scmProviderConflict(activeSCMReactionKinds(cfg))
 	if len(providers) > 1 {
 		diags = append(diags, validateDiag{
 			Severity: "error",
@@ -268,7 +255,7 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 		diags = append(diags, validateDiag{
 			Severity: "error",
 			Check:    "scm_adapter",
-			Message:  fmt.Sprintf("no registered SCM adapter for kind %q named by active reactions", providers[0]),
+			Message:  fmt.Sprintf("no registered SCM adapter for kind %q named by active SCM reactions %v", providers[0], activeKinds),
 		})
 	}
 

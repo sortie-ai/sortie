@@ -2392,9 +2392,10 @@ func TestActivationChecks(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		cfg        config.ServiceConfig
-		wantChecks []string
+		name                string
+		cfg                 config.ServiceConfig
+		wantChecks          []string
+		wantMessageContains map[string]string
 	}{
 		{
 			name: "unregistered SCM provider",
@@ -2410,7 +2411,23 @@ func TestActivationChecks(t *testing.T) {
 			cfg: config.ServiceConfig{
 				CIFeedback: config.CIFeedbackConfig{Kind: "gitea-ci"},
 			},
-			wantChecks: []string{"ci_provider"},
+			wantChecks: []string{"scm_adapter", "ci_provider"},
+			wantMessageContains: map[string]string{
+				"scm_adapter": `"gitea-ci" named by active SCM reactions [ci_failure]`,
+			},
+		},
+		{
+			name: "ci_failure disagrees with an active review_comments provider",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea"},
+				},
+				CIFeedback: config.CIFeedbackConfig{Kind: "github"},
+			},
+			wantChecks: []string{"reactions.scm_provider_conflict"},
+			wantMessageContains: map[string]string{
+				"reactions.scm_provider_conflict": "ci_failure",
+			},
 		},
 		{
 			name: "two active reactions naming different providers",
@@ -2484,6 +2501,15 @@ func TestActivationChecks(t *testing.T) {
 				}
 				if got[i].Severity != "error" {
 					t.Errorf("activationChecks(cfg) diag[%d].Severity = %q, want %q", i, got[i].Severity, "error")
+				}
+			}
+			for check, substr := range tt.wantMessageContains {
+				d := diagWithCheck(got, check)
+				if d == nil {
+					t.Fatalf("activationChecks(cfg) = %v, want a diagnostic with check %q", got, check)
+				}
+				if !strings.Contains(d.Message, substr) {
+					t.Errorf("activationChecks(cfg) diag[%q].Message = %q, want substring %q", check, d.Message, substr)
 				}
 			}
 		})
@@ -2669,10 +2695,11 @@ func TestValidateGiteaForge(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		extraYAML string
-		wantCheck string
-		wantCode  int
+		name                string
+		extraYAML           string
+		wantChecks          []string
+		wantMessageContains map[string]string
+		wantCode            int
 	}{
 		{
 			name: "bot_review bare string bot_usernames",
@@ -2681,8 +2708,8 @@ func TestValidateGiteaForge(t *testing.T) {
     provider: gitea
     bot_usernames: alice
 `,
-			wantCheck: "reactions.bot_review",
-			wantCode:  1,
+			wantChecks: []string{"reactions.bot_review"},
+			wantCode:   1,
 		},
 		{
 			name: "auto_merge strategy rebase-merge",
@@ -2691,8 +2718,8 @@ func TestValidateGiteaForge(t *testing.T) {
     provider: gitea
     strategy: rebase-merge
 `,
-			wantCheck: "reactions.auto_merge",
-			wantCode:  1,
+			wantChecks: []string{"reactions.auto_merge"},
+			wantCode:   1,
 		},
 		{
 			name: "unregistered SCM provider",
@@ -2700,16 +2727,19 @@ func TestValidateGiteaForge(t *testing.T) {
   bot_review:
     provider: gitea-scm
 `,
-			wantCheck: "scm_adapter",
-			wantCode:  1,
+			wantChecks: []string{"scm_adapter"},
+			wantCode:   1,
 		},
 		{
 			name: "unregistered CI provider",
 			extraYAML: `ci_feedback:
   kind: gitea-ci
 `,
-			wantCheck: "ci_provider",
-			wantCode:  1,
+			wantChecks: []string{"scm_adapter", "ci_provider"},
+			wantMessageContains: map[string]string{
+				"scm_adapter": "ci_failure",
+			},
+			wantCode: 1,
 		},
 		{
 			name: "active reactions naming different providers",
@@ -2719,8 +2749,36 @@ func TestValidateGiteaForge(t *testing.T) {
   auto_merge:
     provider: github
 `,
-			wantCheck: "reactions.scm_provider_conflict",
-			wantCode:  1,
+			wantChecks: []string{"reactions.scm_provider_conflict"},
+			wantCode:   1,
+		},
+		{
+			name: "ci_failure provider conflict with review_comments",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitlab
+  ci_failure:
+    provider: github
+`,
+			wantChecks: []string{"reactions.scm_provider_conflict"},
+			wantMessageContains: map[string]string{
+				"reactions.scm_provider_conflict": "ci_failure",
+			},
+			wantCode: 1,
+		},
+		{
+			name: "modern ci_failure key joins the clean provider set",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea
+  auto_merge:
+    provider: gitea
+    strategy: squash
+  ci_failure:
+    provider: gitea
+`,
+			wantChecks: nil,
+			wantCode:   0,
 		},
 		{
 			name: "fully valid gitea forge configuration",
@@ -2735,8 +2793,8 @@ func TestValidateGiteaForge(t *testing.T) {
 ci_feedback:
   kind: gitea
 `,
-			wantCheck: "",
-			wantCode:  0,
+			wantChecks: nil,
+			wantCode:   0,
 		},
 	}
 
@@ -2758,7 +2816,7 @@ ci_feedback:
 				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
 			}
 
-			if tt.wantCheck == "" {
+			if len(tt.wantChecks) == 0 {
 				if !out.Valid {
 					t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 				}
@@ -2776,12 +2834,23 @@ ci_feedback:
 			if out.Valid {
 				t.Errorf("validateOutput.Valid = true, want false")
 			}
-			d := diagWithCheck(out.Errors, tt.wantCheck)
-			if d == nil {
-				t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			for _, wantCheck := range tt.wantChecks {
+				d := diagWithCheck(out.Errors, wantCheck)
+				if d == nil {
+					t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, wantCheck)
+				}
+				if d.Severity != "error" {
+					t.Errorf("validateOutput.Errors[%q].Severity = %q, want %q", wantCheck, d.Severity, "error")
+				}
 			}
-			if d.Severity != "error" {
-				t.Errorf("validateOutput.Errors[%q].Severity = %q, want %q", tt.wantCheck, d.Severity, "error")
+			for check, substr := range tt.wantMessageContains {
+				d := diagWithCheck(out.Errors, check)
+				if d == nil {
+					t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, check)
+				}
+				if !strings.Contains(d.Message, substr) {
+					t.Errorf("validateOutput.Errors[%q].Message = %q, want substring %q", check, d.Message, substr)
+				}
 			}
 		})
 	}

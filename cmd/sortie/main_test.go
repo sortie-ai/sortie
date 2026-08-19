@@ -1526,6 +1526,20 @@ func TestRunCIFailureOnly_ConstructsSCMAdapter(t *testing.T) {
 	}
 	wfPath := writeCustomWorkflowFile(t, dir, ciFailureOnlyWorkflow(issuesPath, wsRoot))
 
+	var offlineStdout, offlineStderr bytes.Buffer
+	if code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &offlineStdout, &offlineStderr); code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr:\n%s", code, offlineStderr.String())
+	}
+	var out validateOutput
+	if err := json.Unmarshal(offlineStdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", offlineStdout.String(), err)
+	}
+	for _, key := range forgeCheckKeys {
+		if d := diagWithCheck(out.Errors, key); d != nil {
+			t.Errorf("validateOutput.Errors contains forge diagnostic %q = %v, want none", key, d)
+		}
+	}
+
 	var stdout bytes.Buffer
 	var stderr lockedBuf
 	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
@@ -1560,6 +1574,18 @@ func TestRunCIFailure_MismatchedProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	wfPath := writeCustomWorkflowFile(t, dir, ciFailureWorkflowMismatchedProviders(issuesPath, wsRoot))
+
+	var offlineStdout, offlineStderr bytes.Buffer
+	if code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &offlineStdout, &offlineStderr); code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr:\n%s", code, offlineStderr.String())
+	}
+	var out validateOutput
+	if err := json.Unmarshal(offlineStdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", offlineStdout.String(), err)
+	}
+	if d := diagWithCheck(out.Errors, "reactions.scm_provider_conflict"); d == nil {
+		t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "reactions.scm_provider_conflict")
+	}
 
 	var stdout bytes.Buffer
 	var stderr lockedBuf
