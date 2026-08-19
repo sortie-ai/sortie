@@ -181,7 +181,10 @@ type ReconcileParams struct {
 	// MergeCompletionConfig holds merge-completion reaction
 	// configuration. Only read when MergeCompletionReactionConfigured
 	// is true. Unlike every expiring sibling kind there is no
-	// accompanying MergeCompletionPendingTTL: this kind has no expiry.
+	// accompanying MergeCompletionPendingTTL: a pending entry carries no
+	// general expiry, so a merge can wait on human review for days. Only
+	// the post-merge missing-identifier condition is bounded, by a fixed
+	// thirty-minute grace period.
 	MergeCompletionConfig MergeCompletionReactionConfig
 
 	// MergeCompletionReactionConfigured marks whether the

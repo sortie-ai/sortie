@@ -307,7 +307,7 @@ func handleMergeCompletionMissingSHA(
 	waited := max(now.Sub(observation.FirstObservedAt), time.Duration(0))
 	if observation.Dispatched {
 		delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeCompletion))
-		log.Warn("merge_completion missing-SHA escalation already delivered, stopping",
+		log.Error("merge_completion missing-SHA escalation already delivered, stopping",
 			slog.String("repository", data.Owner+"/"+data.Repo),
 			slog.Int("pr_number", data.PRNumber),
 			slog.Duration("waited", waited),
@@ -516,6 +516,11 @@ func escalateMergeCompletion(
 // successful write durably marks the observation dispatched; a failed write
 // leaves it undispatched so only delivery can be retried by a later fresh
 // pending entry, without reopening this process's polling loop.
+//
+// The tracker write and the marker write share one 30-second deadline
+// instead of each getting its own, so the goroutine as a whole stays
+// within the budget trackerOpsDrainTimeout assumes for a single
+// TrackerOpsWg goroutine.
 func escalateMergeCompletionMissingSHA(
 	state *State,
 	params ReconcileParams,
@@ -528,12 +533,9 @@ func escalateMergeCompletionMissingSHA(
 	issueID := pending.IssueID
 	tracker := params.TrackerAdapter
 	escalLog := log
-	markDelivered := func() {
-		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-
+	markDelivered := func(dctx context.Context) {
 		if err := params.Store.MarkReactionObservationDispatched(
-			markCtx,
+			dctx,
 			issueID,
 			mergeCompletionMissingSHAObservationKind,
 			mergeCompletionPRIdentity(data),
@@ -561,7 +563,7 @@ func escalateMergeCompletionMissingSHA(
 				)
 				return
 			}
-			markDelivered()
+			markDelivered(dctx)
 		})
 
 	case "comment":
@@ -582,7 +584,7 @@ func escalateMergeCompletionMissingSHA(
 				)
 				return
 			}
-			markDelivered()
+			markDelivered(dctx)
 		})
 	}
 }
