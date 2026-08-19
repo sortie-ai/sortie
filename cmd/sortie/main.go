@@ -406,6 +406,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// constructs the SCM adapter and joins the provider-conflict check.
 	labelFixActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.FixLabel != ""
 
+	ciFeedbackActive := br.cfg.CIFeedback.Kind != ""
+
 	activeSCMKinds := []scmReactionKind{
 		{name: "review_comments", active: reviewActive, provider: reviewRC.Provider},
 		{name: "auto_merge", active: autoMergeActive, provider: autoMergeRC.Provider},
@@ -413,17 +415,23 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		{name: "merge_conflicts", active: mergeConflictActive, provider: mergeConflictRC.Provider},
 		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: br.cfg.LabelCommands.Provider},
 		{name: "merge_completion", active: mergeCompletionActive, provider: mergeCompletionRC.Provider},
+		{name: "ci_failure", active: ciFeedbackActive, provider: br.cfg.CIFeedback.Kind},
 	}
 	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
-		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
+		conflictAttrs := []any{
 			slog.String("kinds", strings.Join(conflictKinds, ", ")),
 			slog.String("providers", strings.Join(conflictProviders, ", ")),
-		)
+		}
+		if slices.Contains(conflictKinds, "ci_failure") {
+			conflictAttrs = append(conflictAttrs, slog.String("reason",
+				"reactions.ci_failure now resolves the pull request's head through the SCM provider, so its provider must be the same forge as every other active SCM-backed reaction"))
+		}
+		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider", conflictAttrs...)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive || mergeCompletionActive {
-		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider, mergeCompletionRC.Provider)
+	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive || mergeCompletionActive || ciFeedbackActive {
+		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider, mergeCompletionRC.Provider, br.cfg.CIFeedback.Kind)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",

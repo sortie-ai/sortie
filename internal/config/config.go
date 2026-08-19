@@ -669,6 +669,12 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 	}, nil
 }
 
+// ciWatchWindowDefaultMS is the default value of
+// CIFeedbackConfig.WatchWindowMS: twenty-four hours, the smallest window
+// covering a reviewer who returns the next working day and pushes a
+// fixup.
+const ciWatchWindowDefaultMS = 86400000
+
 func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
 	kind := extractString(m, "kind")
 	if kind == "" {
@@ -719,12 +725,15 @@ func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
 		escalationLabel = "needs-human"
 	}
 
+	// The deprecated ci_feedback section exposes no watch_window_ms key,
+	// so it always resolves to the default.
 	return CIFeedbackConfig{
 		Kind:            kind,
 		MaxRetries:      maxRetries,
 		MaxLogLines:     maxLogLines,
 		Escalation:      escalation,
 		EscalationLabel: escalationLabel,
+		WatchWindowMS:   ciWatchWindowDefaultMS,
 	}, nil
 }
 
@@ -756,12 +765,31 @@ func populateCIFeedbackFromReactions(rc ReactionConfig) (CIFeedbackConfig, error
 		}
 	}
 
+	watchWindowMS := ciWatchWindowDefaultMS
+	if raw, ok := rc.Extra["watch_window_ms"]; ok && raw != nil {
+		parsed, err := coerceInt(raw)
+		if err != nil {
+			return CIFeedbackConfig{}, &ConfigError{
+				Field:   "reactions.ci_failure.watch_window_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", raw),
+			}
+		}
+		watchWindowMS = parsed
+	}
+	if watchWindowMS < 0 {
+		return CIFeedbackConfig{}, &ConfigError{
+			Field:   "reactions.ci_failure.watch_window_ms",
+			Message: "must be non-negative",
+		}
+	}
+
 	return CIFeedbackConfig{
 		Kind:            rc.Provider,
 		MaxRetries:      rc.MaxRetries,
 		MaxLogLines:     maxLogLines,
 		Escalation:      rc.Escalation,
 		EscalationLabel: rc.EscalationLabel,
+		WatchWindowMS:   watchWindowMS,
 	}, nil
 }
 
@@ -1226,6 +1254,14 @@ type CIFeedbackConfig struct {
 	// EscalationLabel is the label applied when escalation is "label".
 	// Default "needs-human".
 	EscalationLabel string
+
+	// WatchWindowMS bounds how long a pending CI reaction entry is kept
+	// once its subject has settled. The age is measured from the last
+	// recorded head rather than from the entry's creation, so an
+	// actively worked pull request stays watched and only silence ages
+	// it out. Default 86400000 (twenty-four hours). Zero removes the
+	// clock bound. Must be non-negative.
+	WatchWindowMS int
 }
 
 // ReactionConfig holds per-kind configuration for a single reaction type.

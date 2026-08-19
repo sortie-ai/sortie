@@ -173,6 +173,7 @@ func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 		BaseBranch:     mr.TargetBranch,
 		Merged:         merged,
 		MergeCommitSHA: mergeCommitSHA,
+		Closed:         mr.State == "closed",
 	}, nil
 }
 

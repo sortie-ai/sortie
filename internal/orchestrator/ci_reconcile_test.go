@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -20,14 +21,92 @@ type mockCIProvider struct {
 	result domain.CIResult
 	err    error
 	calls  int
+
+	lastRef []string
 }
 
 var _ domain.CIStatusProvider = (*mockCIProvider)(nil)
 
-func (m *mockCIProvider) FetchCIStatus(_ context.Context, _ string) (domain.CIResult, error) {
+func (m *mockCIProvider) FetchCIStatus(_ context.Context, ref string) (domain.CIResult, error) {
 	m.calls++
+	m.lastRef = append(m.lastRef, ref)
 	return m.result, m.err
 }
+
+// ciReconcileSCM is a controllable SCMAdapter whose GetMergeability
+// results are supplied per call by a function field, so a scenario can
+// advance the head SHA between reconcile passes. The call count and the
+// most recently observed argument triple let tests assert that the pass
+// reads mergeability exactly once per due tick with the pending entry's
+// own PR identity, never a value baked into the fake.
+type ciReconcileSCM struct {
+	fn     func() (domain.PRMergeStatus, error)
+	result domain.PRMergeStatus
+	err    error
+
+	calls        int
+	lastPRNumber int
+	lastOwner    string
+	lastRepo     string
+}
+
+var _ domain.SCMAdapter = (*ciReconcileSCM)(nil)
+
+func (s *ciReconcileSCM) GetMergeability(_ context.Context, prNumber int, owner, repo string) (domain.PRMergeStatus, error) {
+	s.calls++
+	s.lastPRNumber = prNumber
+	s.lastOwner = owner
+	s.lastRepo = repo
+	if s.fn != nil {
+		return s.fn()
+	}
+	return s.result, s.err
+}
+
+func (s *ciReconcileSCM) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
+	return nil, nil
+}
+func (s *ciReconcileSCM) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	return nil, nil
+}
+func (s *ciReconcileSCM) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+	return "", nil
+}
+func (s *ciReconcileSCM) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	return "", nil
+}
+func (s *ciReconcileSCM) MergePR(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+	return domain.MergeResult{}, nil
+}
+func (s *ciReconcileSCM) DeleteBranch(_ context.Context, _, _, _ string) error { return nil }
+func (s *ciReconcileSCM) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+func (s *ciReconcileSCM) RemoveLabel(_ context.Context, _ int, _, _, _ string) error { return nil }
+
+// ciDefaultHead is the head SHA a default ciReconcileSCM reports. Most
+// tests that are not specifically about head-change detection seed the
+// fingerprint store with this same value, so the pass treats the head as
+// already observed rather than incidentally exercising an epoch
+// transition on every single-pass test.
+const ciDefaultHead = "sha-current"
+
+// defaultCISCM returns a ciReconcileSCM reporting an open pull request at
+// ciDefaultHead.
+func defaultCISCM() *ciReconcileSCM {
+	return &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: ciDefaultHead}}
+}
+
+// ciReconcileStoreCall records one method invocation for the fingerprint
+// call-order assertion: a store that upserts before it reads
+// passes every other assertion in this file, so the order must be
+// checked explicitly.
+type ciReconcileStoreCall string
+
+const (
+	ciCallGetFingerprint    ciReconcileStoreCall = "get_fingerprint"
+	ciCallUpsertFingerprint ciReconcileStoreCall = "upsert_fingerprint"
+)
 
 // ciReconcileStore records calls to ReconcileStore methods and returns
 // configurable errors. Parallel to mockReconcileStore but distinct so
@@ -55,6 +134,17 @@ type ciReconcileStore struct {
 	getFingerprintErr        error
 	markDispatchedErr        error
 	deleteFingerprintErr     error
+
+	upsertedFingerprints []string
+	callOrder            []ciReconcileStoreCall
+
+	// count and countErr override the embedded
+	// unsupportedReactionObservationStore default for
+	// CountWorkerRunsCompletedSince when countConfigured is true, so a
+	// test can force a specific classifyHeadChange attribution.
+	countConfigured bool
+	count           int
+	countErr        error
 }
 
 var _ ReconcileStore = (*ciReconcileStore)(nil)
@@ -74,13 +164,24 @@ func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run persistence.R
 	return run, s.appendRunHistoryErr
 }
 
-func (s *ciReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+func (s *ciReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, fingerprint string) error {
 	s.upsertFingerprintCalls++
+	s.upsertedFingerprints = append(s.upsertedFingerprints, fingerprint)
+	s.callOrder = append(s.callOrder, ciCallUpsertFingerprint)
+	if s.upsertFingerprintErr == nil {
+		// Mirrors the persistence-layer upsert contract, so a
+		// multi-pass test observes the same head on its next
+		// GetReactionFingerprint call rather than a value frozen at
+		// construction time.
+		s.getFingerprintResult = fingerprint
+		s.getFingerprintDispatched = false
+	}
 	return s.upsertFingerprintErr
 }
 
 func (s *ciReconcileStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
 	s.getFingerprintCalls++
+	s.callOrder = append(s.callOrder, ciCallGetFingerprint)
 	return s.getFingerprintResult, s.getFingerprintDispatched, s.getFingerprintErr
 }
 
@@ -94,6 +195,13 @@ func (s *ciReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ str
 	return s.deleteFingerprintErr
 }
 
+func (s *ciReconcileStore) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
+	if !s.countConfigured {
+		return s.unsupportedReactionObservationStore.CountWorkerRunsCompletedSince(ctx, issueID, since)
+	}
+	return s.count, s.countErr
+}
+
 // ciTrackerStub is a no-panic TrackerAdapter for CI reconcile tests.
 // Escalation goroutines may call AddLabel or CommentIssue; all other
 // methods return zero values.
@@ -102,6 +210,7 @@ type ciTrackerStub struct {
 	commentIssueCalls int
 	addLabelErr       error
 	commentIssueErr   error
+	lastComment       string
 }
 
 var _ domain.TrackerAdapter = (*ciTrackerStub)(nil)
@@ -125,8 +234,9 @@ func (s *ciTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]domai
 	return nil, nil
 }
 func (s *ciTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
-func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
+func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, text string) error {
 	s.commentIssueCalls++
+	s.lastComment = text
 	return s.commentIssueErr
 }
 func (s *ciTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
@@ -160,7 +270,9 @@ func (s *ciMetricsSpy) IncRetries(trigger string)       { s.retriesByTrigger[tri
 // ciBaseTime is a fixed reference for CI reconcile tests.
 var ciBaseTime = time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
-// newPendingEntry builds a PendingReaction for a test CI issue.
+// newPendingEntry builds a PendingReaction for a test CI issue, with pull
+// request identity populated so a live GetMergeability call has a real
+// argument triple to receive.
 func newPendingEntry(issueID, identifier, branch string, attempt int) *PendingReaction {
 	return &PendingReaction{
 		IssueID:    issueID,
@@ -170,7 +282,11 @@ func newPendingEntry(issueID, identifier, branch string, attempt int) *PendingRe
 		Kind:       ReactionKindCI,
 		CreatedAt:  ciBaseTime,
 		KindData: &CIReactionData{
-			Branch: branch,
+			PRNumber: 99,
+			Owner:    "acme",
+			Repo:     "widgets",
+			Branch:   branch,
+			SHA:      "seed-sha",
 		},
 	}
 }
@@ -195,35 +311,53 @@ func stateWithPendingReaction(t *testing.T, issueID, branch string, attempt int)
 	return s
 }
 
-// ciParams returns ReconcileParams wired for CI reconcile unit tests.
-func ciParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusProvider, tracker domain.TrackerAdapter) ReconcileParams {
+// reseedCIPendingEntry installs a fresh CI PendingReaction for issueID,
+// mirroring what HandleWorkerExit does when a dispatched continuation's
+// worker exits: a brand-new entry with HeadRecordedAt zero, because a
+// head recorded before the continuation ran cannot bound the query for
+// the process observing the new one. Used to drive a multi-commit
+// scenario across several reconcile passes without dispatching a real
+// worker.
+func reseedCIPendingEntry(state *State, issueID, branch string, attempt int, now time.Time) {
+	entry := newPendingEntry(issueID, issueID+"-ident", branch, attempt)
+	entry.CreatedAt = now
+	state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
+	state.Claimed[issueID] = struct{}{}
+}
+
+// ciParams returns ReconcileParams wired for CI reconcile unit tests. scm
+// may be nil to exercise the SCMAdapter-nil guard; every other test
+// supplies a *ciReconcileSCM (commonly [defaultCISCM]).
+func ciParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusProvider, tracker domain.TrackerAdapter, scm domain.SCMAdapter) ReconcileParams {
 	t.Helper()
 	return ReconcileParams{
 		TrackerAdapter: tracker,
 		CIProvider:     ci,
 		CIFeedback:     defaultCIFeedback(),
+		CIWatchWindow:  24 * time.Hour,
+		SCMAdapter:     scm,
 		Store:          store,
 		OnRetryFire:    noopRetryFire,
 		Ctx:            context.Background(),
 		Logger:         discardLogger(),
 		ActiveStates:   []string{"In Progress"},
 		TerminalStates: []string{"Done"},
+		NowFunc:        func() time.Time { return ciBaseTime },
 	}
 }
 
-// --- Tests ---
+// --- Guard tests ---
 
-func TestReconcileCIStatus_NilProvider(t *testing.T) {
+func TestReconcileCIStatus_NilCIProvider(t *testing.T) {
 	t.Parallel()
 
 	state := stateWithPendingReaction(t, "ISS-CI-1", "feature/fix", 1)
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
-	params := ciParams(t, store, nil, nil)
+	params := ciParams(t, store, nil, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	// nil CIProvider: entire phase is a no-op.
 	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-1", ReactionKindCI)]; !ok {
 		t.Error("PendingReactions entry consumed when CIProvider is nil; want no-op")
 	}
@@ -235,14 +369,222 @@ func TestReconcileCIStatus_NilProvider(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_NilSCMAdapter verifies that a nil SCMAdapter is a
+// no-op for the whole phase, the same as a nil CIProvider, rather than a
+// panic on the head read.
+func TestReconcileCIStatus_NilSCMAdapter(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-CI-NOSCM", "feature/fix", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, nil, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-NOSCM", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry consumed when SCMAdapter is nil; want no-op")
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times with nil SCMAdapter; want 0", ci.calls)
+	}
+}
+
+// --- The live head, never the frozen ref ---
+
+// TestReconcileCIStatus_RefIsLiveHead_NeverFrozenBranchOrSHA verifies that
+// the ref passed to FetchCIStatus always equals the freshly-read
+// PRMergeStatus.HeadSHA, never CIReactionData.SHA or CIReactionData.Branch,
+// including when all three differ.
+func TestReconcileCIStatus_RefIsLiveHead_NeverFrozenBranchOrSHA(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-CI-REF", "frozen-branch", 1)
+	// CIReactionData.SHA is "seed-sha" (set by newPendingEntry); the live
+	// head reported by GetMergeability is deliberately a third value.
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "live-head-sha"}}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if len(ci.lastRef) != 1 {
+		t.Fatalf("FetchCIStatus calls = %d, want 1", len(ci.lastRef))
+	}
+	if got := ci.lastRef[0]; got != "live-head-sha" {
+		t.Errorf("FetchCIStatus ref = %q, want %q (the live head)", got, "live-head-sha")
+	}
+	if got := ci.lastRef[0]; got == "frozen-branch" || got == "seed-sha" {
+		t.Errorf("FetchCIStatus ref = %q, want neither CIReactionData.Branch nor CIReactionData.SHA", got)
+	}
+	if scm.lastPRNumber != 99 || scm.lastOwner != "acme" || scm.lastRepo != "widgets" {
+		t.Errorf("GetMergeability(prNumber=%d, owner=%q, repo=%q), want (99, acme, widgets)",
+			scm.lastPRNumber, scm.lastOwner, scm.lastRepo)
+	}
+}
+
+// --- Fingerprint read-before-write ordering ---
+
+// TestReconcileCIStatus_FingerprintReadPrecedesWrite_CallOrder verifies
+// that GetReactionFingerprint is called before UpsertReactionFingerprint
+// on a head-changed pass. An implementation that upserts first and then
+// reads would read back the value it just wrote and never detect a head
+// change, so this assertion is on call order rather than end state.
+func TestReconcileCIStatus_FingerprintReadPrecedesWrite_CallOrder(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-CI-ORDER", "main", 1)
+	store := &ciReconcileStore{getFingerprintResult: "sha-A"}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "sha-B"}}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if len(store.callOrder) < 2 {
+		t.Fatalf("store call order = %v, want at least [get, upsert]", store.callOrder)
+	}
+	if store.callOrder[0] != ciCallGetFingerprint {
+		t.Errorf("first fingerprint call = %q, want %q", store.callOrder[0], ciCallGetFingerprint)
+	}
+	getIdx, upsertIdx := -1, -1
+	for i, c := range store.callOrder {
+		if c == ciCallGetFingerprint && getIdx == -1 {
+			getIdx = i
+		}
+		if c == ciCallUpsertFingerprint && upsertIdx == -1 {
+			upsertIdx = i
+		}
+	}
+	if getIdx == -1 || upsertIdx == -1 || getIdx > upsertIdx {
+		t.Errorf("GetReactionFingerprint index=%d, UpsertReactionFingerprint index=%d; want get before upsert", getIdx, upsertIdx)
+	}
+	if len(store.upsertedFingerprints) != 1 || store.upsertedFingerprints[0] != "sha-B" {
+		t.Errorf("upserted fingerprints = %v, want [sha-B]", store.upsertedFingerprints)
+	}
+
+	// A same-head pass performs no upsert: with the row already holding
+	// the live head, storedHead == status.HeadSHA and the epoch branch
+	// never runs.
+	store2 := &ciReconcileStore{getFingerprintResult: "sha-B"}
+	state2 := stateWithPendingReaction(t, "ISS-CI-ORDER-2", "main", 1)
+	ci2 := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	scm2 := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "sha-B"}}
+	params2 := ciParams(t, store2, ci2, nil, scm2)
+
+	reconcileCIStatus(state2, params2, discardLogger(), context.Background(), metrics)
+
+	if store2.upsertFingerprintCalls != 0 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 0 when the stored head already matches the live head", store2.upsertFingerprintCalls)
+	}
+}
+
+// --- The core defect and the keeps-passing watch ---
+
+// TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation
+// covers the core defect this change fixes: a pull request whose earlier
+// head passed and whose later head fails dispatches one CI-fix
+// continuation within budget. Under the frozen-ref behavior this change
+// replaces, the passing pass would have retired the watch and the second
+// pass would never run.
+func TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-CORE"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-A"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+		t.Fatal("PendingReactions entry retired after a passing head; want the watch to continue")
+	}
+	if len(store.runHistories) != 0 {
+		t.Fatalf("AppendRunHistory called %d times after a passing head; want 0", len(store.runHistories))
+	}
+
+	// The head advances and now fails.
+	entry := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	entry.PendingRetryAt = time.Time{}
+	scm.result = domain.PRMergeStatus{HeadSHA: "head-B"}
+	ci.result = domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory call count = %d, want 1 (one continuation dispatched)", len(store.runHistories))
+	}
+	if store.runHistories[0].Status != "ci_failed" {
+		t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "ci_failed")
+	}
+	retryEntry, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("continuation not scheduled after the later head failed; want scheduled")
+	}
+	if retryEntry.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q", retryEntry.ReactionKind, ReactionKindCI)
+	}
+	if len(ci.lastRef) != 2 || ci.lastRef[1] != "head-B" {
+		t.Errorf("FetchCIStatus refs = %v, want the second call against head-B", ci.lastRef)
+	}
+}
+
+// TestReconcileCIStatus_KeepsPassing_NoDispatchNoAttemptNoRunHistory
+// covers the case where a pull request whose head keeps passing across several
+// passes dispatches nothing, spends no attempt, writes no run_history
+// row, and makes no tracker call.
+func TestReconcileCIStatus_KeepsPassing_NoDispatchNoAttemptNoRunHistory(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-KEEPPASS"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-steady"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	params := ciParams(t, store, ci, tracker, scm)
+
+	for range 3 {
+		entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+		if ok {
+			entry.PendingRetryAt = time.Time{}
+		}
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	}
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry retired across repeated passing passes; want the watch to continue")
+	}
+	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts set after repeated passing; want unset")
+	}
+	if len(store.runHistories) != 0 {
+		t.Errorf("AppendRunHistory called %d times across a keeps-passing watch; want 0", len(store.runHistories))
+	}
+	if tracker.commentIssueCalls != 0 || tracker.addLabelCalled != 0 {
+		t.Errorf("tracker called (comment=%d, label=%d) across a keeps-passing watch; want 0/0", tracker.commentIssueCalls, tracker.addLabelCalled)
+	}
+}
+
+// --- Steady-state status handling ---
+
 func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 	t.Parallel()
 
 	state := stateWithPendingReaction(t, "ISS-CI-2", "main", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{err: errors.New("network timeout")}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -257,40 +599,14 @@ func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 	}
 }
 
-func TestReconcileCIStatus_Passing_ClearsReactionAttempts(t *testing.T) {
-	t.Parallel()
-
-	state := stateWithPendingReaction(t, "ISS-CI-3", "feature/done", 1)
-	state.ReactionAttempts[ReactionKey("ISS-CI-3", ReactionKindCI)] = 1 // pre-seeded
-	store := &ciReconcileStore{}
-	metrics := newCIMetricsSpy()
-	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
-	params := ciParams(t, store, ci, nil)
-
-	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
-
-	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-3", ReactionKindCI)]; ok {
-		t.Error("PendingReactions entry still present after passing; want consumed")
-	}
-	if _, ok := state.ReactionAttempts[ReactionKey("ISS-CI-3", ReactionKindCI)]; ok {
-		t.Error("ReactionAttempts not cleared after CI passing; want cleared")
-	}
-	if _, ok := state.RetryAttempts["ISS-CI-3"]; ok {
-		t.Error("retry scheduled after CI passing; want none")
-	}
-	if metrics.ciStatusChecks["passing"] != 1 {
-		t.Errorf(`IncCIStatusChecks("passing") = %d, want 1`, metrics.ciStatusChecks["passing"])
-	}
-}
-
 func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 	t.Parallel()
 
 	state := stateWithPendingReaction(t, "ISS-CI-4", "feature/wip", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -310,7 +626,8 @@ func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 // one. The fixture's Status and FailingCount are derived from the declared
 // check-run set via scmcore.AggregateCIStatus and scmcore.FailingCount,
 // rather than written as literals, so a classifier regression reddens this
-// test rather than passing it vacuously.
+// test rather than passing it vacuously. Guards the shipped cancelled-check
+// behavior against this change.
 func TestReconcileCIStatus_CancelledOnly_NoRetrySpent(t *testing.T) {
 	t.Parallel()
 
@@ -320,14 +637,14 @@ func TestReconcileCIStatus_CancelledOnly_NoRetrySpent(t *testing.T) {
 	}
 
 	state := stateWithPendingReaction(t, "ISS-CI-CANCELLED", "feature/cancelled-only", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{
 		Status:       scmcore.AggregateCIStatus(runs),
 		FailingCount: scmcore.FailingCount(runs),
 		CheckRuns:    runs,
 	}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -354,10 +671,8 @@ func TestReconcileCIStatus_CancelledOnly_NoRetrySpent(t *testing.T) {
 
 // TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry covers the
 // shape in which a cancellation coexists with a genuine failure on the same
-// ref: the pass still takes the failing arm. The fixture is derived the
-// same way as TestReconcileCIStatus_CancelledOnly_NoRetrySpent, so this
-// test fails against any classifier in which a cancelled run masks a
-// failing sibling.
+// ref: the pass still takes the failing arm. Guards the shipped cancelled-check
+// behavior against this change.
 func TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry(t *testing.T) {
 	t.Parallel()
 
@@ -367,14 +682,14 @@ func TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry(t *testing.T) {
 	}
 
 	state := stateWithPendingReaction(t, "ISS-CI-CANCELLED-FAIL", "feature/cancelled-with-failure", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{
 		Status:       scmcore.AggregateCIStatus(runs),
 		FailingCount: scmcore.FailingCount(runs),
 		CheckRuns:    runs,
 	}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -397,7 +712,7 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 
 	// ReactionAttempts starts at 0; maxRetries=2 → no escalation after increment to 1.
 	state := stateWithPendingReaction(t, "ISS-CI-5", "feature/break", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{
 		Status:       domain.CIStatusFailing,
@@ -406,7 +721,7 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 			{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
 		},
 	}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -469,7 +784,7 @@ func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
 	t.Parallel()
 
 	state := stateWithPendingReaction(t, "ISS-CI-UTC", "feature/break", 1)
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{
 		Status:       domain.CIStatusFailing,
@@ -478,7 +793,7 @@ func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
 			{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
 		},
 	}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -494,20 +809,22 @@ func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
 	}
 }
 
+// --- Escalation as a per-epoch soft stop ---
+
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 	t.Parallel()
 
 	// ReactionAttempts at 2; after increment → 3 > maxRetries(2) → escalate.
 	state := stateWithPendingReaction(t, "ISS-CI-6", "feature/broken", 3)
 	state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
 	ci := &mockCIProvider{result: domain.CIResult{
 		Status:       domain.CIStatusFailing,
 		FailingCount: 1,
 	}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -521,9 +838,18 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 		t.Error("claim not released after CI escalation; want released")
 	}
 
-	// ReactionAttempts cleared.
-	if _, ok := state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)]; ok {
-		t.Error("ReactionAttempts not cleared after escalation; want cleared")
+	// The pending entry, its counter, and its fingerprint all survive
+	// the soft stop: the counter must stay over budget so no further
+	// continuation dispatches until a new epoch resets it, and the
+	// fingerprint row is the epoch record.
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-6", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry removed after escalation; want re-enqueued (soft stop)")
+	}
+	if state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)] != 3 {
+		t.Errorf("ReactionAttempts[ISS-CI-6] = %d after escalation, want 3 (kept over budget)", state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)])
+	}
+	if store.deleteFingerprintCalls != 0 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 0 (fingerprint is the epoch record)", store.deleteFingerprintCalls)
 	}
 
 	// Wait for the async escalation goroutine before reading metrics.
@@ -539,7 +865,7 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 		t.Fatalf("AppendRunHistory call count = %d, want 1", len(store.runHistories))
 	}
 
-	// No retry scheduled.
+	// No continuation scheduled.
 	if _, ok := state.RetryAttempts["ISS-CI-6"]; ok {
 		t.Error("retry scheduled after escalation; want none")
 	}
@@ -550,11 +876,11 @@ func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ISS-CI-7", "main", 1)
 	state.ReactionAttempts[ReactionKey("ISS-CI-7", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -565,12 +891,130 @@ func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 	if metrics.ciEscalations["comment"] != 1 {
 		t.Errorf(`IncCIEscalations("comment") = %d, want 1`, metrics.ciEscalations["comment"])
 	}
-	// Claim released and retry cleared in both escalation modes.
+	// Claim released in both escalation modes.
 	if _, ok := state.Claimed["ISS-CI-7"]; ok {
 		t.Error("claim not released after comment escalation")
 	}
+	// The entry survives the soft stop.
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-7", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry removed after comment escalation; want re-enqueued (soft stop)")
+	}
 }
 
+// TestReconcileCIStatus_EscalationSoftStop_SameHeadDoesNotReescalate
+// covers the case where, after escalation, a later pass on the same head neither
+// escalates again nor dispatches a continuation.
+func TestReconcileCIStatus_EscalationSoftStop_SameHeadDoesNotReescalate(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-SOFTSTOP"
+	state := stateWithPendingReaction(t, issueID, "main", 3)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if metrics.ciEscalations["label"] != 1 {
+		t.Fatalf(`IncCIEscalations("label") after first pass = %d, want 1`, metrics.ciEscalations["label"])
+	}
+
+	// A later pass on the very same head.
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry missing before the second pass; want present (soft stop)")
+	}
+	entry.PendingRetryAt = time.Time{}
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if metrics.ciEscalations["label"] != 1 {
+		t.Errorf(`IncCIEscalations("label") after second pass on the same head = %d, want 1 (no re-escalation)`, metrics.ciEscalations["label"])
+	}
+	if _, ok := state.RetryAttempts[issueID]; ok {
+		t.Error("a continuation was scheduled on the same head after escalation; want none")
+	}
+}
+
+// TestReconcileCIStatus_CommentEscalation_RecursOncePerHead_ThenAgainAfterNotOursHeadChange
+// covers the case where, under escalation: comment, an exhausted budget posts one
+// comment across several passes on one head, and one further comment
+// after a head change positively not attributed to the orchestrator's
+// own work.
+func TestReconcileCIStatus_CommentEscalation_RecursOncePerHead_ThenAgainAfterNotOursHeadChange(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-COMMENT-RECUR"
+	state := stateWithPendingReaction(t, issueID, "main", 3)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
+	// The fingerprint starts empty so the first pass triggers a genuine
+	// epoch transition and records HeadRecordedAt, which the later
+	// notOurs transition needs as its non-zero boundary.
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	scm := defaultCISCM()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, tracker, scm)
+	params.CIFeedback.Escalation = "comment"
+
+	for i := range 3 {
+		entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+		if i > 0 && !ok {
+			t.Fatalf("pass %d: PendingReactions entry missing; want present (soft stop)", i)
+		}
+		if ok {
+			entry.PendingRetryAt = time.Time{}
+		}
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+		state.TrackerOpsWg.Wait()
+	}
+	if metrics.ciEscalations["comment"] != 1 {
+		t.Fatalf(`IncCIEscalations("comment") across 3 passes on one head = %d, want 1`, metrics.ciEscalations["comment"])
+	}
+
+	// The head changes and the store reports zero worker sessions
+	// completed since the boundary: classifyHeadChange answers
+	// positively not the orchestrator's own work, resetting the counter
+	// and the escalation flag, so the budget re-exhausts across the
+	// next several passes and escalates again.
+	scm.result = domain.PRMergeStatus{HeadSHA: "head-after-push"}
+	store.countConfigured = true
+	store.count = 0
+
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry missing before the head-change pass; want present (soft stop)")
+	}
+	entry.PendingRetryAt = time.Time{}
+	now := ciBaseTime
+	for i := range 3 {
+		now = now.Add(time.Duration(i) * time.Minute)
+		if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+			// A non-escalating failure consumes the entry, converting
+			// it into a continuation dispatch; the next worker exit
+			// would normally reseed the watch, modeled here directly.
+			reseedCIPendingEntry(state, issueID, "main", 3, now)
+			delete(state.RetryAttempts, issueID)
+		}
+		e := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+		e.PendingRetryAt = time.Time{}
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+		state.TrackerOpsWg.Wait()
+	}
+
+	if metrics.ciEscalations["comment"] != 2 {
+		t.Errorf(`IncCIEscalations("comment") after a head change not attributed to the orchestrator = %d, want 2`, metrics.ciEscalations["comment"])
+	}
+}
+
+// TestBuildCIEscalationComment: the escalation comment
+// names exactly the checks the verdict counted as failing.
 func TestBuildCIEscalationComment(t *testing.T) {
 	t.Parallel()
 
@@ -674,6 +1118,57 @@ func TestBuildCIEscalationComment(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_NoPersonAttributingLanguage verifies that no log
+// line, comment, or label emitted on a head-change path contains a
+// person-attributing phrase. The assertion enumerates the emitted
+// strings rather than searching for a denylist.
+func TestReconcileCIStatus_NoPersonAttributingLanguage(t *testing.T) {
+	t.Parallel()
+
+	forbidden := []string{
+		"a person pushed", "person pushed", "human push", "manual commit", "someone pushed",
+	}
+
+	const issueID = "ISS-CI-NOATTR"
+	state := stateWithPendingReaction(t, issueID, "main", 3)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
+	store := &ciReconcileStore{getFingerprintResult: "head-old"}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-new"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, tracker, scm)
+	params.CIFeedback.Escalation = "comment"
+
+	handler := &sweepLogHandler{}
+	params.Logger = slog.New(handler)
+
+	reconcileCIStatus(state, params, slog.New(handler), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	emitted := make([]string, 0, len(handler.records)+1)
+	for _, rec := range handler.records {
+		emitted = append(emitted, rec.message)
+		for _, v := range rec.attrs {
+			if s, ok := v.(string); ok {
+				emitted = append(emitted, s)
+			}
+		}
+	}
+	if tracker.commentIssueCalls > 0 {
+		emitted = append(emitted, tracker.lastComment)
+	}
+
+	for _, text := range emitted {
+		lower := strings.ToLower(text)
+		for _, phrase := range forbidden {
+			if strings.Contains(lower, phrase) {
+				t.Errorf("emitted text %q contains forbidden person-attributing phrase %q", text, phrase)
+			}
+		}
+	}
+}
+
 // --- TrackerOpsWg lifecycle tests ---
 
 // blockingCITracker is a TrackerAdapter whose AddLabel and CommentIssue
@@ -740,10 +1235,10 @@ func TestEscalateCIFailure_LabelTracksTrackerOps(t *testing.T) {
 	// the limit and triggers escalation.
 	state := stateWithPendingReaction(t, "ESC-WG-1", "main/broken", 3)
 	state.ReactionAttempts[ReactionKey("ESC-WG-1", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	// defaultCIFeedback sets escalation: "label".
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -782,10 +1277,10 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ESC-WG-2", "feature/broken", 2)
 	state.ReactionAttempts[ReactionKey("ESC-WG-2", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -813,7 +1308,7 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 	}
 }
 
-// --- Backoff and TTL tests ---
+// --- Backoff tests ---
 
 func TestComputeCIPendingDelay(t *testing.T) {
 	t.Parallel()
@@ -922,10 +1417,10 @@ func TestReconcileCIStatus_BackoffUsesStatePollInterval(t *testing.T) {
 	state.PendingReactions[ReactionKey("ISS-PPI-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-PPI-1"] = struct{}{}
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 	params.NowFunc = func() time.Time { return now }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -968,10 +1463,11 @@ func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
 	state.PendingReactions[ReactionKey("ISS-SKIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-SKIP-1"] = struct{}{}
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{}
-	params := ciParams(t, store, ci, nil)
+	scm := defaultCISCM()
+	params := ciParams(t, store, ci, nil, scm)
 	params.NowFunc = func() time.Time { return now }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -979,6 +1475,11 @@ func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
 	// FetchCIStatus must not be called when PendingRetryAt is in the future.
 	if ci.calls != 0 {
 		t.Errorf("FetchCIStatus called %d times during backoff window; want 0", ci.calls)
+	}
+	// GetMergeability must not be called either: the backoff gate runs
+	// before the head read.
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability called %d times during backoff window; want 0", scm.calls)
 	}
 
 	// Entry must be re-enqueued with identical PendingAttempts and PendingRetryAt.
@@ -1006,10 +1507,10 @@ func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
 	state.PendingReactions[ReactionKey("ISS-BIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIP-1"] = struct{}{}
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 	params.NowFunc = func() time.Time { return now }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1046,10 +1547,10 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 	state.PendingReactions[ReactionKey("ISS-BIE-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIE-1"] = struct{}{}
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{err: errors.New("transient network error")}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 	params.NowFunc = func() time.Time { return now }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1074,57 +1575,104 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 	}
 }
 
-func TestReconcileCIStatus_TTLExpiry(t *testing.T) {
+// --- Watch window ---
+
+// TestReconcileCIStatus_WatchWindow_MeasuredFromHeadRecordedAt covers
+// an entry whose age past the last recorded head exceeds
+// watch_window_ms is dropped with its counter, and one whose head moved
+// inside the window is not.
+func TestReconcileCIStatus_WatchWindow_MeasuredFromHeadRecordedAt(t *testing.T) {
 	t.Parallel()
 
-	const ttl = 30 * time.Minute
+	t.Run("age past HeadRecordedAt beyond the window drops the entry and its counter", func(t *testing.T) {
+		t.Parallel()
 
-	tests := []struct {
-		name        string
-		age         time.Duration
-		wantDropped bool
-	}{
-		{"entry within TTL is kept", ttl - time.Second, false},
-		{"entry exactly at TTL boundary is kept", ttl, false},
-		{"entry just past TTL is dropped", ttl + time.Millisecond, true},
-		{"entry well past TTL is dropped", 2 * ttl, true},
-	}
+		const issueID = "ISS-CI-WW-DROP"
+		entry := newPendingEntry(issueID, issueID+"-ident", "main", 1)
+		entry.HeadRecordedAt = ciBaseTime
+		entry.CreatedAt = ciBaseTime.Add(-10 * 24 * time.Hour) // far older than HeadRecordedAt
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
+		state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+		state.Claimed[issueID] = struct{}{}
 
-			createdAt := ciBaseTime
-			now := createdAt.Add(tt.age)
+		store := &ciReconcileStore{}
+		metrics := newCIMetricsSpy()
+		scm := defaultCISCM()
+		ci := &mockCIProvider{}
+		params := ciParams(t, store, ci, nil, scm)
+		params.CIWatchWindow = 30 * time.Minute
+		params.NowFunc = func() time.Time { return ciBaseTime.Add(31 * time.Minute) }
 
-			entry := newPendingEntry("ISS-TTL-1", "ISS-TTL-1-ident", "main", 1)
-			entry.CreatedAt = createdAt
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-			state := NewState(5000, 4, nil, AgentTotals{})
-			state.PendingReactions[ReactionKey("ISS-TTL-1", ReactionKindCI)] = entry
-			state.Claimed["ISS-TTL-1"] = struct{}{}
+		if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; ok {
+			t.Error("PendingReactions entry present after watch window elapsed since HeadRecordedAt; want dropped")
+		}
+		if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; ok {
+			t.Error("ReactionAttempts present after watch window elapsed; want dropped")
+		}
+		if scm.calls != 0 {
+			t.Errorf("GetMergeability called %d times after watch window elapsed; want 0", scm.calls)
+		}
+	})
 
-			store := &ciReconcileStore{}
-			metrics := newCIMetricsSpy()
-			ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-			params := ciParams(t, store, ci, nil)
-			params.NowFunc = func() time.Time { return now }
-			params.CIPendingTTL = ttl
+	t.Run("head moved inside the window is not dropped", func(t *testing.T) {
+		t.Parallel()
 
-			reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+		const issueID = "ISS-CI-WW-KEEP"
+		entry := newPendingEntry(issueID, issueID+"-ident", "main", 1)
+		entry.HeadRecordedAt = ciBaseTime
+		entry.CreatedAt = ciBaseTime.Add(-10 * 24 * time.Hour)
 
-			_, stillPresent := state.PendingReactions[ReactionKey("ISS-TTL-1", ReactionKindCI)]
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
+		state.Claimed[issueID] = struct{}{}
 
-			if tt.wantDropped && stillPresent {
-				t.Error("PendingReactions entry not dropped after TTL expiry; want dropped")
-			}
-			if !tt.wantDropped && !stillPresent {
-				t.Error("PendingReactions entry dropped before TTL expiry; want kept")
-			}
-			if tt.wantDropped && ci.calls != 0 {
-				t.Errorf("FetchCIStatus called %d times after TTL expiry; want 0", ci.calls)
-			}
-		})
+		store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+		metrics := newCIMetricsSpy()
+		scm := defaultCISCM()
+		ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+		params := ciParams(t, store, ci, nil, scm)
+		params.CIWatchWindow = 30 * time.Minute
+		params.NowFunc = func() time.Time { return ciBaseTime.Add(29 * time.Minute) }
+
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+			t.Error("PendingReactions entry dropped inside the watch window; want kept")
+		}
+		if scm.calls != 1 {
+			t.Errorf("GetMergeability called %d times; want 1 (entry survived to the head read)", scm.calls)
+		}
+	})
+}
+
+// TestReconcileCIStatus_WatchWindow_ZeroNeverDrops verifies that
+// watch_window_ms: 0 never drops the entry on age.
+func TestReconcileCIStatus_WatchWindow_ZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-WW-ZERO"
+	entry := newPendingEntry(issueID, issueID+"-ident", "main", 1)
+	entry.CreatedAt = ciBaseTime.Add(-365 * 24 * time.Hour)
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
+	state.Claimed[issueID] = struct{}{}
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil, defaultCISCM())
+	params.CIWatchWindow = 0
+	params.NowFunc = func() time.Time { return ciBaseTime }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry dropped with CIWatchWindow=0; want never dropped on age")
 	}
 }
 
@@ -1145,9 +1693,9 @@ func TestReconcileCIStatus_DropOnAgeReleasesCounter(t *testing.T) {
 
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
-	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-	params := ciParams(t, store, ci, nil)
-	params.CIPendingTTL = 30 * time.Minute
+	scm := defaultCISCM()
+	params := ciParams(t, store, &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}, nil, scm)
+	params.CIWatchWindow = 30 * time.Minute
 	params.NowFunc = func() time.Time { return ciBaseTime.Add(31 * time.Minute) }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1171,39 +1719,211 @@ func TestReconcileCIStatus_DropOnAgeReleasesCounter(t *testing.T) {
 		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
 			store.upsertFingerprintCalls, store.getFingerprintCalls, store.deleteFingerprintCalls)
 	}
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability calls = %d, want 0 (watch window exceeded before read)", scm.calls)
+	}
+}
+
+// --- Watch-end conditions ---
+
+func TestReconcileCIStatus_Merged_EndsWatch(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-MERGED"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "merged-sha", Merged: true, MergeCommitSHA: "mc-sha"}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry present after merged pull request; want dropped")
+	}
+	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts present after merged pull request; want dropped")
+	}
 	if ci.calls != 0 {
-		t.Errorf("FetchCIStatus calls = %d, want 0 (TTL exceeded before fetch)", ci.calls)
+		t.Errorf("FetchCIStatus called %d times for a merged pull request; want 0", ci.calls)
+	}
+}
+
+func TestReconcileCIStatus_NotFound_EndsWatch(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-NOTFOUND"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{err: &domain.SCMError{Kind: domain.ErrSCMNotFound, Message: "pull request not found"}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry present after ErrSCMNotFound; want dropped")
+	}
+	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts present after ErrSCMNotFound; want dropped")
+	}
+}
+
+func TestReconcileCIStatus_OtherSCMError_BacksOff(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-SCMERR"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{err: &domain.SCMError{Kind: domain.ErrSCMTransport, Message: "connection reset"}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a transient SCM error; want re-enqueued")
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingAttempts = %d, want 1 (backoff, not a watch-end condition)", entry.PendingAttempts)
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times after a mergeability fetch error; want 0", ci.calls)
+	}
+}
+
+// TestReconcileCIStatus_EmptyHeadSHA_ReEnqueuesNoEpoch verifies that an
+// empty status.HeadSHA re-enqueues, records no head, opens no epoch, and
+// leaves both counters untouched.
+func TestReconcileCIStatus_EmptyHeadSHA_ReEnqueuesNoEpoch(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-EMPTYHEAD"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: ""}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on empty HeadSHA; want re-enqueued")
+	}
+	if !entry.HeadRecordedAt.IsZero() {
+		t.Errorf("HeadRecordedAt = %v, want zero (no epoch opened on empty head)", entry.HeadRecordedAt)
+	}
+	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1 (untouched)", issueID, state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)])
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingAttempts = %d, want 1", entry.PendingAttempts)
+	}
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 {
+		t.Errorf("fingerprint calls = get:%d upsert:%d, want both 0", store.getFingerprintCalls, store.upsertFingerprintCalls)
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times on empty head; want 0", ci.calls)
+	}
+}
+
+// TestReconcileCIStatus_Closed_EndsWatch verifies that a pull request
+// reported closed and not merged drops the entry and its counter on the
+// next pass, not at window expiry.
+func TestReconcileCIStatus_Closed_EndsWatch(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-CLOSED"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "closed-sha", Closed: true, Merged: false}}
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry present after a closed, unmerged pull request; want dropped")
+	}
+	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts present after a closed, unmerged pull request; want dropped")
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times for a closed pull request; want 0", ci.calls)
+	}
+}
+
+// TestReconcileCIStatus_ClosedAndMerged_EndsWatchThroughMergedBranch
+// verifies that a pull request reported both closed and
+// merged ends the watch through the merged branch, logging the merge
+// rather than a close.
+func TestReconcileCIStatus_ClosedAndMerged_EndsWatchThroughMergedBranch(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-CLOSEDMERGED"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "merged-sha", Closed: true, Merged: true}}
+	ci := &mockCIProvider{}
+	handler := &sweepLogHandler{}
+	params := ciParams(t, store, ci, nil, scm)
+	params.Logger = slog.New(handler)
+
+	reconcileCIStatus(state, params, slog.New(handler), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry present after a merged pull request; want dropped")
+	}
+	if _, ok := handler.findByMessage("ci watch ended: pull request merged"); !ok {
+		t.Error(`log missing "ci watch ended: pull request merged" message; want the merged branch, not the closed branch`)
+	}
+	if handler.countByMessage("ci watch ended: pull request closed without merging") != 0 {
+		t.Error(`log unexpectedly contains the closed-without-merging message for a merged pull request`)
 	}
 }
 
 // --- Fingerprint dedup tests ---
 
 // TestReconcileCIStatus_DedupSkip verifies that when GetReactionFingerprint
-// returns the current ref with dispatched=true, the entry is consumed without
-// calling FetchCIStatus.
+// returns the current head with dispatched=true, no FetchCIStatus call is
+// made and the entry is re-enqueued.
 func TestReconcileCIStatus_DedupSkip(t *testing.T) {
 	t.Parallel()
 
-	const ref = "sha-already-done"
-	state := stateWithPendingReaction(t, "ISS-FP-1", ref, 1)
+	const head = "sha-already-done"
+	state := stateWithPendingReaction(t, "ISS-FP-1", "main", 1)
 	store := &ciReconcileStore{
-		getFingerprintResult:     ref,
+		getFingerprintResult:     head,
 		getFingerprintDispatched: true,
 	}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{}
-	params := ciParams(t, store, ci, nil)
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: head}}
+	params := ciParams(t, store, ci, nil, scm)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
 	if ci.calls != 0 {
 		t.Errorf("FetchCIStatus called %d times when entry already dispatched; want 0", ci.calls)
 	}
-	if _, ok := state.PendingReactions[ReactionKey("ISS-FP-1", ReactionKindCI)]; ok {
-		t.Error("PendingReactions entry still present after dedup skip; want consumed")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-FP-1", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry consumed after dedup skip; want re-enqueued")
 	}
-	if store.upsertFingerprintCalls != 1 {
-		t.Errorf("UpsertReactionFingerprint calls = %d, want 1", store.upsertFingerprintCalls)
+	if store.upsertFingerprintCalls != 0 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 0 (head unchanged)", store.upsertFingerprintCalls)
 	}
 	if store.getFingerprintCalls != 1 {
 		t.Errorf("GetReactionFingerprint calls = %d, want 1", store.getFingerprintCalls)
@@ -1211,47 +1931,29 @@ func TestReconcileCIStatus_DedupSkip(t *testing.T) {
 }
 
 // TestReconcileCIStatus_FingerprintReset verifies that when the stored
-// fingerprint differs from the current ref (ref changed), UpsertReactionFingerprint
-// is called and reconciliation proceeds (FetchCIStatus is called).
+// fingerprint differs from the live head (head changed), the pass upserts
+// the new head and proceeds to FetchCIStatus.
 func TestReconcileCIStatus_FingerprintReset(t *testing.T) {
 	t.Parallel()
 
-	// Store returns old ref as dispatched; entry's branch is the new ref.
-	const newRef = "sha-new"
-	state := stateWithPendingReaction(t, "ISS-FP-2", newRef, 1)
+	const newHead = "sha-new"
+	state := stateWithPendingReaction(t, "ISS-FP-2", "main", 1)
 	store := &ciReconcileStore{
 		getFingerprintResult:     "sha-old",
 		getFingerprintDispatched: true,
 	}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
-	params := ciParams(t, store, ci, nil)
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: newHead}}
+	params := ciParams(t, store, ci, nil, scm)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
 	if ci.calls != 1 {
-		t.Errorf("FetchCIStatus calls = %d, want 1 (ref changed, dedup must not skip)", ci.calls)
+		t.Errorf("FetchCIStatus calls = %d, want 1 (head changed, dedup must not skip)", ci.calls)
 	}
-	if store.upsertFingerprintCalls != 1 {
-		t.Errorf("UpsertReactionFingerprint calls = %d, want 1", store.upsertFingerprintCalls)
-	}
-}
-
-// TestReconcileCIStatus_Passing_DeletesFingerprint verifies that on a
-// CI-passing result DeleteReactionFingerprint is called.
-func TestReconcileCIStatus_Passing_DeletesFingerprint(t *testing.T) {
-	t.Parallel()
-
-	state := stateWithPendingReaction(t, "ISS-FP-3", "sha-pass", 1)
-	store := &ciReconcileStore{}
-	metrics := newCIMetricsSpy()
-	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
-	params := ciParams(t, store, ci, nil)
-
-	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
-
-	if store.deleteFingerprintCalls != 1 {
-		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 on CI pass", store.deleteFingerprintCalls)
+	if len(store.upsertedFingerprints) != 1 || store.upsertedFingerprints[0] != newHead {
+		t.Errorf("upserted fingerprints = %v, want [%s]", store.upsertedFingerprints, newHead)
 	}
 }
 
@@ -1261,13 +1963,13 @@ func TestReconcileCIStatus_Passing_DeletesFingerprint(t *testing.T) {
 func TestReconcileCIStatus_FingerprintGetError_Continues(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingReaction(t, "ISS-FP-4", "sha-fperr", 1)
+	state := stateWithPendingReaction(t, "ISS-FP-4", "main", 1)
 	store := &ciReconcileStore{
 		getFingerprintErr: errors.New("db unavailable"),
 	}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
@@ -1276,34 +1978,104 @@ func TestReconcileCIStatus_FingerprintGetError_Continues(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_UpgradePath_PreExistingFingerprintNotLiveHead
+// verifies that a pre-existing fingerprint row holding a value that is not
+// the live head (the pre-change frozen-ref semantics) produces exactly
+// one unknown transition: the entry re-arms and no counter resets.
+func TestReconcileCIStatus_UpgradePath_PreExistingFingerprintNotLiveHead(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-UPGRADE"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
+	store := &ciReconcileStore{getFingerprintResult: "frozen-ref-from-prior-version"}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "current-live-head"}}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if store.upsertFingerprintCalls != 1 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 1 (one upgrade transition)", store.upsertFingerprintCalls)
+	}
+	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1 (unknown attribution must not reset)", issueID, state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)])
+	}
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry missing after upgrade transition; want re-enqueued")
+	}
+	if entry.HeadRecordedAt.IsZero() {
+		t.Error("HeadRecordedAt still zero after the upgrade transition; want set")
+	}
+}
+
+// --- One head read, one epoch transition, one status fetch per tick ---
+
+// TestReconcileCIStatus_OneHeadReadOneEpochTransitionOneStatusFetchPerTick
+// verifies that across one poll interval (one call to reconcileCIStatus),
+// exactly one head read, one epoch transition, and one FetchCIStatus call
+// occur for the pending entry, even though the underlying adapter is
+// primed to answer three different heads across successive calls.
+func TestReconcileCIStatus_OneHeadReadOneEpochTransitionOneStatusFetchPerTick(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-ONETICK"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	heads := []string{"head-1", "head-2", "head-3"}
+	call := 0
+	scm := &ciReconcileSCM{fn: func() (domain.PRMergeStatus, error) {
+		head := heads[min(call, len(heads)-1)]
+		call++
+		return domain.PRMergeStatus{HeadSHA: head}, nil
+	}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil, scm)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.calls != 1 {
+		t.Errorf("GetMergeability calls = %d, want 1 (one head read per due tick)", scm.calls)
+	}
+	if store.upsertFingerprintCalls != 1 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 1 (one epoch transition)", store.upsertFingerprintCalls)
+	}
+	if ci.calls != 1 {
+		t.Errorf("FetchCIStatus calls = %d, want 1", ci.calls)
+	}
+}
+
+// --- Dispatch marking ---
+
 // TestReconcileCIStatus_Failing_DoesNotMarkDispatched verifies that
-// handleCIFailure no longer calls MarkReactionDispatched at schedule time.
-// The mark is deferred to HandleRetryTimer after actual dispatch.
+// handleCIFailure never calls MarkReactionDispatched: CI dispatch tracking
+// is entirely fingerprint-based on the live head, with no separate
+// dispatched marker.
 func TestReconcileCIStatus_Failing_DoesNotMarkDispatched(t *testing.T) {
 	t.Parallel()
 
 	// ReactionAttempts=0 → under maxRetries=2, so handleCIFailure schedules retry.
-	state := stateWithPendingReaction(t, "ISS-FP-5", "sha-fail", 1)
-	store := &ciReconcileStore{}
+	state := stateWithPendingReaction(t, "ISS-FP-5", "main", 1)
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	// MarkReactionDispatched must NOT be called at schedule time.
 	if store.markDispatchedCalls != 0 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
+		t.Errorf("MarkReactionDispatched calls = %d, want 0", store.markDispatchedCalls)
 	}
-	// Retry must still be scheduled.
 	if _, ok := state.RetryAttempts["ISS-FP-5"]; !ok {
 		t.Error("retry not scheduled after CI failure; want scheduled")
 	}
 }
 
-// TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric verifies that when
-// AddLabel returns an error the escalation goroutine increments
-// IncCIEscalations("error") and does not increment IncCIEscalations("label").
+// --- Escalation error metrics ---
+
 func TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric(t *testing.T) {
 	t.Parallel()
 
@@ -1311,10 +2083,10 @@ func TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ESC-ERR-1", "main/broken", 3)
 	state.ReactionAttempts[ReactionKey("ESC-ERR-1", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	// defaultCIFeedback sets escalation: "label".
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1328,9 +2100,6 @@ func TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric(t *testing.T) {
 	}
 }
 
-// TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric verifies that
-// when CommentIssue returns an error the escalation goroutine increments
-// IncCIEscalations("error") and does not increment IncCIEscalations("comment").
 func TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric(t *testing.T) {
 	t.Parallel()
 
@@ -1338,10 +2107,10 @@ func TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ESC-ERR-2", "feature/broken", 2)
 	state.ReactionAttempts[ReactionKey("ESC-ERR-2", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 	params.CIFeedback.Escalation = "comment"
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1363,10 +2132,10 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ESC-NIL-1", "main/broken", 3)
 	state.ReactionAttempts[ReactionKey("ESC-NIL-1", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, nil) // nil TrackerAdapter
+	params := ciParams(t, store, ci, nil, defaultCISCM()) // nil TrackerAdapter
 	// defaultCIFeedback sets escalation: "label".
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1384,10 +2153,10 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
 
 	state := stateWithPendingReaction(t, "ESC-NIL-2", "feature/broken", 2)
 	state.ReactionAttempts[ReactionKey("ESC-NIL-2", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
-	params := ciParams(t, store, ci, nil) // nil TrackerAdapter
+	params := ciParams(t, store, ci, nil, defaultCISCM()) // nil TrackerAdapter
 	params.CIFeedback.Escalation = "comment"
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1398,27 +2167,28 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
 	}
 }
 
-// TestEscalateCIFailure_DeletesFingerprint verifies that escalateCIFailure
-// calls DeleteReactionFingerprint after clearing reactions.
-func TestEscalateCIFailure_DeletesFingerprint(t *testing.T) {
+// TestEscalateCIFailure_FingerprintSurvivesEscalation verifies that
+// escalateCIFailure no longer calls DeleteReactionFingerprint: the row is
+// the epoch record and must survive.
+func TestEscalateCIFailure_FingerprintSurvivesEscalation(t *testing.T) {
 	t.Parallel()
 
 	// ReactionAttempts=2, maxRetries=2 → next increment (→3) triggers escalation.
-	state := stateWithPendingReaction(t, "ISS-FP-6", "sha-escal", 3)
+	state := stateWithPendingReaction(t, "ISS-FP-6", "main", 3)
 	state.ReactionAttempts[ReactionKey("ISS-FP-6", ReactionKindCI)] = 2
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
 	// Wait for any escalation goroutine to finish.
 	state.TrackerOpsWg.Wait()
 
-	if store.deleteFingerprintCalls != 1 {
-		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 during CI escalation", store.deleteFingerprintCalls)
+	if store.deleteFingerprintCalls != 0 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 0 during CI escalation (fingerprint is the epoch record)", store.deleteFingerprintCalls)
 	}
 	// Claim must be released.
 	if _, ok := state.Claimed["ISS-FP-6"]; ok {
@@ -1427,15 +2197,15 @@ func TestEscalateCIFailure_DeletesFingerprint(t *testing.T) {
 }
 
 // TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation verifies
-// that CI escalation clears only the CI reaction's own pending entry,
-// counter, and fingerprint. A sibling merge-completion entry parked on the
-// same issue (seeded from the same worker exit as the CI reaction) must
-// survive: the escalation must not clear it.
+// that CI escalation touches only the CI reaction's own pending entry and
+// counter. A sibling merge-completion entry parked on the same issue
+// (seeded from the same worker exit as the CI reaction) must survive
+// untouched.
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ISS-CI-ISO"
-	state := stateWithPendingReaction(t, issueID, "feature/broken", 3)
+	state := stateWithPendingReaction(t, issueID, "main", 3)
 	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
 
 	mcKey := ReactionKey(issueID, ReactionKindMergeCompletion)
@@ -1448,11 +2218,11 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testi
 	}
 	state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] = 1
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
-	params := ciParams(t, store, ci, tracker)
+	params := ciParams(t, store, ci, tracker, defaultCISCM())
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
@@ -1463,8 +2233,8 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testi
 	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
 		t.Error("sibling merge-completion ReactionAttempts counter altered by CI escalation; want untouched")
 	}
-	if store.deleteFingerprintCalls != 1 {
-		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the CI kind's own fingerprint)", store.deleteFingerprintCalls)
+	if store.deleteFingerprintCalls != 0 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 0 (escalation no longer deletes the epoch record)", store.deleteFingerprintCalls)
 	}
 }
 
@@ -1495,7 +2265,7 @@ func TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow(t *testing.T) {
 		t.Fatalf("SaveRetryEntry: %v", err)
 	}
 
-	state := stateWithPendingReaction(t, issueID, "feature/orphan", 1)
+	state := stateWithPendingReaction(t, issueID, "main", 1)
 	state.RetryAttempts[issueID] = &RetryEntry{
 		IssueID:    issueID,
 		Identifier: issueID + "-ident",
@@ -1509,6 +2279,8 @@ func TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow(t *testing.T) {
 	params := ReconcileParams{
 		CIProvider:     ci,
 		CIFeedback:     defaultCIFeedback(),
+		CIWatchWindow:  24 * time.Hour,
+		SCMAdapter:     defaultCISCM(),
 		Store:          store,
 		OnRetryFire:    noopRetryFire,
 		Ctx:            ctx,
@@ -1561,10 +2333,10 @@ func TestReconcileCIStatus_Pending_LeavesCreatedAtUnchanged(t *testing.T) {
 	seededCreatedAt := ciBaseTime.Add(-5 * time.Minute)
 	state.PendingReactions[rkey].CreatedAt = seededCreatedAt
 
-	store := &ciReconcileStore{}
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
-	params := ciParams(t, store, ci, nil)
+	params := ciParams(t, store, ci, nil, defaultCISCM())
 	params.NowFunc = func() time.Time { return ciBaseTime }
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
@@ -1578,5 +2350,119 @@ func TestReconcileCIStatus_Pending_LeavesCreatedAtUnchanged(t *testing.T) {
 	}
 	if entry.PendingAttempts != 1 {
 		t.Errorf("PendingAttempts = %d, want 1 (the tick ran)", entry.PendingAttempts)
+	}
+}
+
+// --- End-to-end attribution tests against a real persistence store ---
+
+// TestReconcileCIStatus_CIFailedRunHistoryExcludedFromAttribution verifies
+// that a run_history row with status ci_failed and completed_at inside
+// the attribution interval does not make the next head change unknown.
+// The ci_failed row is dispatched through handleCIFailure itself, as
+// part of a real escalation soft stop (a real CI failure, not a
+// synthesized fixture), so this test fails against an implementation
+// that counts that row as a worker session.
+func TestReconcileCIStatus_CIFailedRunHistoryExcludedFromAttribution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openInMemoryStore(t)
+
+	const issueID = "ISS-CI-EXCLUDE"
+	state := stateWithPendingReaction(t, issueID, "main", 3)
+	// Pre-seeded at the budget: the pass below escalates immediately,
+	// writing exactly one ci_failed row through handleCIFailure and
+	// soft-stopping (the entry survives with its HeadRecordedAt set).
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-1"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	tracker := &ciTrackerStub{}
+	metrics := newCIMetricsSpy()
+
+	now := ciBaseTime
+	params := ReconcileParams{
+		CIProvider:     ci,
+		CIFeedback:     defaultCIFeedback(),
+		CIWatchWindow:  24 * time.Hour,
+		SCMAdapter:     scm,
+		TrackerAdapter: tracker,
+		Store:          store,
+		OnRetryFire:    noopRetryFire,
+		Ctx:            ctx,
+		Logger:         discardLogger(),
+		ActiveStates:   []string{"In Progress"},
+		TerminalStates: []string{"Done"},
+		NowFunc:        func() time.Time { return now },
+	}
+
+	reconcileCIStatus(state, params, discardLogger(), ctx, metrics)
+	state.TrackerOpsWg.Wait()
+
+	if metrics.ciEscalations["label"] != 1 {
+		t.Fatalf(`IncCIEscalations("label") = %d, want 1 (escalation soft stop wrote the ci_failed row)`, metrics.ciEscalations["label"])
+	}
+	entry, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+	if !ok {
+		t.Fatal("PendingReactions entry missing after the soft stop; want present")
+	}
+	if entry.HeadRecordedAt.IsZero() {
+		t.Fatal("HeadRecordedAt still zero after the soft stop; want set")
+	}
+
+	// The head changes; no worker session other than the ci_failed
+	// write occurred inside the interval.
+	now = ciBaseTime.Add(10 * time.Minute)
+	entry.PendingRetryAt = time.Time{}
+	scm.result = domain.PRMergeStatus{HeadSHA: "head-2"}
+
+	reconcileCIStatus(state, params, discardLogger(), ctx, metrics)
+
+	if got := state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)]; got != 1 {
+		t.Errorf("ReactionAttempts after a head change with only a ci_failed row in the interval = %d, want 1 (the counter reset to 0 and then incremented once; the ci_failed row must not count as a worker session)", got)
+	}
+}
+
+// TestReconcileCIStatus_ThreeSelfPushedFixCommits_EscalateAfterTotalBudget
+// verifies that three successive self-pushed fix commits, each failing,
+// escalate after max_retries continuations in total rather than
+// max_retries per commit. Each fix commit's own worker exit reseeds the
+// watch with HeadRecordedAt zero, so every post-reseed head observation
+// answers unknown on the zero-boundary path and the counter never
+// resets, exhausting the budget across, not within, a single commit.
+func TestReconcileCIStatus_ThreeSelfPushedFixCommits_EscalateAfterTotalBudget(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TOTALBUDGET"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	store := &ciReconcileStore{}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-0"}}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	tracker := &ciTrackerStub{}
+	metrics := newCIMetricsSpy()
+	params := ciParams(t, store, ci, tracker, scm)
+
+	heads := []string{"head-0", "head-1", "head-2"}
+	var now time.Time
+	for i, head := range heads {
+		now = ciBaseTime.Add(time.Duration(i) * 10 * time.Minute)
+		if _, ok := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]; !ok {
+			reseedCIPendingEntry(state, issueID, "main", 1, now)
+			delete(state.RetryAttempts, issueID)
+		}
+		scm.result = domain.PRMergeStatus{HeadSHA: head}
+		entry := state.PendingReactions[ReactionKey(issueID, ReactionKindCI)]
+		entry.PendingRetryAt = time.Time{}
+
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	}
+
+	state.TrackerOpsWg.Wait()
+
+	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] != 3 {
+		t.Errorf("ReactionAttempts after three self-pushed fix commits = %d, want 3 (accumulated, not reset per commit)",
+			state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)])
+	}
+	if metrics.ciEscalations["label"] != 1 {
+		t.Errorf(`IncCIEscalations("label") = %d, want 1 (escalated once the total budget was exceeded)`, metrics.ciEscalations["label"])
 	}
 }

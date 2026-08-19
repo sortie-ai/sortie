@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -717,6 +718,51 @@ func TestGetMergeability_Clean(t *testing.T) {
 	}
 	if status.HeadSHA != "sha1" {
 		t.Errorf("GetMergeability().HeadSHA = %q, want %q", status.HeadSHA, "sha1")
+	}
+}
+
+// TestGetMergeability_Closed verifies that the pull request's state field,
+// already decoded from the same object GetMergeability fetches, populates
+// Closed with no additional request. GitHub reports a merged pull request
+// as state "closed" too, so a merged PR's Closed is also true and Merged
+// remains the discriminator for the closed-without-merge condition.
+func TestGetMergeability_Closed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		state string
+		want  bool
+	}{
+		{"closed state maps to Closed true", "closed", true},
+		{"open state maps to Closed false", "open", false},
+		{"case-insensitive match", "CLOSED", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"head":{"sha":"sha-closed"},"draft":false,"mergeable_state":"clean","state":%q}`, tt.state)
+			}))
+			defer srv.Close()
+
+			a := newTestSCMAdapter(t, srv.URL)
+			status, err := a.GetMergeability(t.Context(), 1, "owner", "repo")
+			if err != nil {
+				t.Fatalf("GetMergeability: %v", err)
+			}
+			if status.Closed != tt.want {
+				t.Errorf("GetMergeability().Closed = %v, want %v for state %q", status.Closed, tt.want, tt.state)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Errorf("HTTP request count = %d, want 1 (Closed rides the existing PR fetch)", got)
+			}
+		})
 	}
 }
 

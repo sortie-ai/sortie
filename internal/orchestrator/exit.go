@@ -40,6 +40,7 @@ type WorkerExitStore interface {
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
+	CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error)
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -796,13 +797,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed
 
-		// Record a pending CI check when the CI provider is configured and
-		// the worker produced workspace SCM metadata. Handoff paths remain
-		// eligible even after the claim is released.
-		if params.CIProvider != nil && workerResult.WorkspacePath != "" {
+		// Record a pending CI check when the CI provider and the SCM
+		// adapter are both configured and the worker produced workspace
+		// SCM metadata carrying pull request identity: the reaction
+		// cannot resolve a head, and therefore cannot answer whether it
+		// is current, for a branch with no pull request. Handoff paths
+		// remain eligible even after the claim is released.
+		if params.CIProvider != nil && params.SCMAdapter != nil && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
-				if scm.Branch != "" {
+				if scm.PRNumber > 0 && scm.Owner != "" && scm.Repo != "" && scm.Branch != "" {
 					nowCI := time.Now().UTC()
 					if params.NowFunc != nil {
 						nowCI = params.NowFunc().UTC()
@@ -817,13 +821,22 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						LastSSHHost: workerResult.SSHHost,
 						CreatedAt:   nowCI,
 						KindData: &CIReactionData{
-							Branch: scm.Branch,
-							SHA:    scm.SHA,
+							PRNumber: scm.PRNumber,
+							Owner:    scm.Owner,
+							Repo:     scm.Repo,
+							Branch:   scm.Branch,
+							SHA:      scm.SHA,
 						},
 						AgentKind:  entry.AgentKind,
 						RuleName:   entry.RuleName,
 						TemplateID: entry.TemplateID,
 					}
+				} else if scm.Branch != "" {
+					log.Debug("ci watch not seeded: workspace metadata missing pull request identity",
+						slog.Int("pr_number", scm.PRNumber),
+						slog.String("owner", scm.Owner),
+						slog.String("repo", scm.Repo),
+					)
 				}
 			}
 		}

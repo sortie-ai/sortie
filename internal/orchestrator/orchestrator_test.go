@@ -2738,6 +2738,88 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Errorf("observer calls = %d, want 1", got)
 		}
 	})
+
+	// Test Case C: reactions.ci_failure.watch_window_ms takes effect on
+	// the next reconcile tick without a process restart, since
+	// cfg.CIFeedback is rebuilt from o.workflowManager.Config() every
+	// tick.
+	t.Run("ci_watch_window_change", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := lifecycleConfig(t.TempDir())
+		cfg.CIFeedback = config.CIFeedbackConfig{
+			Kind:          "mock",
+			MaxRetries:    2,
+			Escalation:    "label",
+			WatchWindowMS: 24 * 3600 * 1000, // 24h: comfortably survives the first tick
+		}
+
+		wm := &stubWorkflowManager{config: cfg}
+		regs := passingPreflightRegistries()
+		obs := &stubObserver{}
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		const issueID = "CI-RELOAD-1"
+		rkey := ReactionKey(issueID, ReactionKindCI)
+		state.PendingReactions[rkey] = &PendingReaction{
+			IssueID:    issueID,
+			Identifier: issueID + "-ident",
+			DisplayID:  issueID + "-ident",
+			Kind:       ReactionKindCI,
+			CreatedAt:  time.Now().UTC(),
+			KindData:   &CIReactionData{PRNumber: 1, Owner: "acme", Repo: "widgets", Branch: "main"},
+		}
+
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return nil, nil
+			},
+		}
+		ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+		scm := defaultCISCM()
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			CIProvider:      ci,
+			SCMAdapter:      scm,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+			Observers: []Observer{obs},
+		})
+
+		// The first tick observes the head for the first time (the
+		// fingerprint store has no prior row), which records
+		// HeadRecordedAt as the entry's age basis; a passing status
+		// keeps the watch open per the current-head contract.
+		o.handleTick(context.Background())
+
+		if _, ok := state.PendingReactions[rkey]; !ok {
+			t.Fatal("PendingReactions entry dropped on the first tick; want kept (well inside the 24h window)")
+		}
+
+		// Reload with a watch window smaller than the wall-clock gap to
+		// the next tick, and let that gap actually elapse; the reconcile
+		// pass must pick up the new bound on the very next tick.
+		time.Sleep(20 * time.Millisecond)
+		cfg.CIFeedback.WatchWindowMS = 5
+		wm.setConfig(cfg)
+
+		o.handleTick(context.Background())
+
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions entry kept after the watch window was reloaded to 5ms; want dropped without a restart")
+		}
+	})
 }
 
 // --- TestOrchestratorDynamicConfigReloadWithFileWatcher ---

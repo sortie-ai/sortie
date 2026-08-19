@@ -1265,3 +1265,141 @@ func TestReconcileMergeConflicts_FreeSlotControlDispatches(t *testing.T) {
 		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
 	}
 }
+
+// --- Attribution-gated per-episode reset ---
+
+// mcAttributionStore wraps a *statefulFingerprintStore and overrides
+// CountWorkerRunsCompletedSince with a configurable result, so a test can
+// force a specific classifyHeadChange verdict while still exercising the
+// real fingerprint upsert/get/dispatch semantics for the dedup path.
+type mcAttributionStore struct {
+	*statefulFingerprintStore
+
+	countConfigured bool
+	count           int
+	countErr        error
+	countCalls      int
+}
+
+var _ ReconcileStore = (*mcAttributionStore)(nil)
+
+func (s *mcAttributionStore) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
+	s.countCalls++
+	if !s.countConfigured {
+		return s.statefulFingerprintStore.CountWorkerRunsCompletedSince(ctx, issueID, since)
+	}
+	return s.count, s.countErr
+}
+
+// TestHandleMergeConflictDirty_AttributionGatedReset covers a new
+// conflicting head classified positively not the orchestrator's own work
+// resetting the per-episode counter before incrementing, so the reported
+// attempt count is 1, and a head classified unknown leaving the counter
+// to continue from its prior value. HeadRecordedAt is pre-seeded to
+// simulate a boundary this process already recorded, since a live
+// pending entry's own dirty-branch outcome always dispatches or
+// escalates and is never itself re-enqueued.
+func TestHandleMergeConflictDirty_AttributionGatedReset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a head change positively not the orchestrator's own work resets before incrementing", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "MC-ATTR-NOTOURS"
+		state := stateWithMergeConflict(t, issueID, 10)
+		rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+		state.ReactionAttempts[rkey] = 5 // a prior-episode counter value
+		entry := state.PendingReactions[rkey]
+		entry.HeadRecordedAt = mcBaseTime.Add(-time.Hour)
+		// No live session may be running for the predicate to reach the
+		// store query at all.
+		delete(state.Claimed, issueID)
+
+		inner := newStatefulFingerprintStore()
+		inner.fingerprints[issueID+":"+ReactionKindMergeConflict] = fingerprintRecord{
+			fingerprint: buildMergeConflictFingerprint("head-old"), dispatched: true,
+		}
+		store := &mcAttributionStore{statefulFingerprintStore: inner, countConfigured: true, count: 0}
+		metrics := newMergeConflictMetricsSpy()
+		scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+			return dirtyStatus("head-new", "main"), nil
+		}}
+		params := mergeConflictParams(store, scm, nil)
+		params.MergeConflictConfig.MaxRetries = 10 // isolates the reset from an incidental budget exhaustion
+
+		reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+		if got := state.ReactionAttempts[rkey]; got != 1 {
+			t.Errorf("ReactionAttempts[%s] = %d, want 1 (reset from 5 then incremented once)", rkey, got)
+		}
+	})
+
+	t.Run("a head change classified unknown continues from the prior value", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "MC-ATTR-UNKNOWN"
+		state := stateWithMergeConflict(t, issueID, 10)
+		rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+		state.ReactionAttempts[rkey] = 5
+		entry := state.PendingReactions[rkey]
+		entry.HeadRecordedAt = mcBaseTime.Add(-time.Hour)
+		delete(state.Claimed, issueID)
+
+		inner := newStatefulFingerprintStore()
+		inner.fingerprints[issueID+":"+ReactionKindMergeConflict] = fingerprintRecord{
+			fingerprint: buildMergeConflictFingerprint("head-old"), dispatched: true,
+		}
+		// countConfigured left false: the embedded default answers
+		// unknown via a non-nil error, matching every failure path.
+		store := &mcAttributionStore{statefulFingerprintStore: inner}
+		metrics := newMergeConflictMetricsSpy()
+		scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+			return dirtyStatus("head-new", "main"), nil
+		}}
+		params := mergeConflictParams(store, scm, nil)
+		params.MergeConflictConfig.MaxRetries = 10 // isolates the non-reset from an incidental budget exhaustion
+
+		reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+		if got := state.ReactionAttempts[rkey]; got != 6 {
+			t.Errorf("ReactionAttempts[%s] = %d, want 6 (continues from 5, incremented once)", rkey, got)
+		}
+	})
+}
+
+// TestHandleMergeConflictDirty_SameHeadDedupPrecedesAttributionQuery
+// covers a same-head re-observation still returning before the counter
+// increment, and now also before the attribution query, so no
+// head-unchanged pass reaches the worker-run-count store method.
+func TestHandleMergeConflictDirty_SameHeadDedupPrecedesAttributionQuery(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-ATTR-DEDUP"
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.ReactionAttempts[rkey] = 5
+	entry := state.PendingReactions[rkey]
+	entry.HeadRecordedAt = mcBaseTime.Add(-time.Hour)
+
+	inner := newStatefulFingerprintStore()
+	// The stored fingerprint already matches the head this tick
+	// observes, and it was already dispatched for.
+	inner.fingerprints[issueID+":"+ReactionKindMergeConflict] = fingerprintRecord{
+		fingerprint: buildMergeConflictFingerprint("head-same"), dispatched: true,
+	}
+	store := &mcAttributionStore{statefulFingerprintStore: inner}
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("head-same", "main"), nil
+	}}
+	params := mergeConflictParams(store, scm, nil)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if got := state.ReactionAttempts[rkey]; got != 5 {
+		t.Errorf("ReactionAttempts[%s] = %d, want unchanged 5 (dedup must not increment)", rkey, got)
+	}
+	if store.countCalls != 0 {
+		t.Errorf("CountWorkerRunsCompletedSince calls = %d, want 0 (dedup precedes the attribution query)", store.countCalls)
+	}
+}
