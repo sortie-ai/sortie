@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,37 @@ type nopWriteCloser struct{}
 
 func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (nopWriteCloser) Close() error                { return nil }
+
+// countingDoneContext records each evaluation of Done so a test can detect
+// whether a closed cancellation channel keeps a select loop running.
+type countingDoneContext struct {
+	context.Context
+	calls atomic.Int64
+}
+
+func (c *countingDoneContext) Done() <-chan struct{} {
+	c.calls.Add(1)
+	return c.Context.Done()
+}
+
+// interruptTrackingWriteCloser observes best-effort turn/interrupt requests.
+type interruptTrackingWriteCloser struct {
+	interrupts chan struct{}
+	count      atomic.Int64
+}
+
+func (w *interruptTrackingWriteCloser) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(`"method":"turn/interrupt"`)) {
+		w.count.Add(1)
+		select {
+		case w.interrupts <- struct{}{}:
+		default:
+		}
+	}
+	return len(p), nil
+}
+
+func (*interruptTrackingWriteCloser) Close() error { return nil }
 
 // loadFixture reads testdata/<name> and returns its bytes.
 func loadFixture(t *testing.T, name string) []byte {
@@ -490,6 +522,92 @@ func TestRunTurn_CancelledContextReturnsError(t *testing.T) {
 	// readResponse returns context.Canceled → wrapped in ErrPortExit.
 	if err == nil {
 		t.Fatal("expected error with cancelled context, got nil")
+	}
+}
+
+// TestRunTurn_CancelledMainLoopWaitsForCompletion sends cancellation only
+// after the turn/start response and a notification have entered the main
+// event loop. With no further messages pending, the closed Done channel must
+// be disabled after one interrupt; otherwise the loop keeps evaluating it.
+func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
+	t.Parallel()
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &countingDoneContext{Context: parentCtx}
+
+	state := newInterruptedStatusState()
+	close(state.readerDone)
+	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
+	state.stdin = stdin
+
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
+	finished := make(chan struct{})
+
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	go func() {
+		defer close(finished)
+		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+			Prompt:  "go",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		outcomeCh <- outcome{result: result, err: err}
+	}()
+
+	t.Cleanup(func() {
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		close(state.msgCh)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+		}
+	})
+
+	// The unbuffered sends return only after RunTurn has received each
+	// message. The second message therefore proves that its main event loop,
+	// rather than the turn/start response loop, is running before cancellation.
+	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+
+	cancel()
+	select {
+	case <-stdin.interrupts:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not send turn/interrupt after cancellation")
+	}
+
+	callsAfterInterrupt := ctx.calls.Load()
+	time.Sleep(50 * time.Millisecond)
+	if got := ctx.calls.Load(); got != callsAfterInterrupt {
+		t.Errorf("ctx.Done() call count changed with no pending message: got %d, want %d", got, callsAfterInterrupt)
+	}
+	if got := stdin.count.Load(); got != 1 {
+		t.Errorf("turn/interrupt request count = %d, want 1", got)
+	}
+
+	// A terminal event must still be received and mapped after cancellation.
+	select {
+	case state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"interrupted"}}}`)):
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not wait for turn/completed after cancellation")
+	}
+
+	select {
+	case got := <-outcomeCh:
+		if got.result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+		}
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not return after turn/completed")
 	}
 }
 

@@ -443,7 +443,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	inFlight := agentcore.NewToolTracker()
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
-	interrupted := false
+	ctxDone := ctx.Done()
 
 	// Replay buffered notifications (received during the response-waiting
 	// loop above) before entering the main event loop. These are
@@ -471,20 +471,20 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		case evt := <-toolEventCh:
 			params.OnEvent(evt)
 
-		case <-ctx.Done():
-			if !interrupted {
-				interrupted = true
-				// Send turn/interrupt using a detached context so the
-				// request is not dropped by the already-cancelled
-				// parent context.
-				interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
-					"threadId": state.threadID,
-					"turnId":   turnID,
-				})
-				cancel()
-				_ = interruptCtx
-			}
+		case <-ctxDone:
+			// A cancelled context's Done channel stays ready forever. Disable
+			// this arm before sending the one-shot interrupt so later selects
+			// wait for a terminal message or stdout to close.
+			ctxDone = nil
+			// Send turn/interrupt using a detached context so the request is
+			// not dropped by the already-cancelled parent context.
+			interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
+				"threadId": state.threadID,
+				"turnId":   turnID,
+			})
+			cancel()
+			_ = interruptCtx
 			// Continue reading until turn/completed or channel close.
 			continue
 
