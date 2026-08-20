@@ -82,16 +82,12 @@ jobs:
 
       # The main Lint job counts a reference from a test as a use, so
       # production code reachable only from its own test never turns up
-      # there. This rerun drops test files from scope, which is what
-      # exposes that class. The linter set is the configured one: --default
-      # only changes the default set and does not clear the enable list in
-      # .golangci.yml. Advisory only: issues-exit-code=0 keeps it from
-      # failing the build.
+      # there. Same configuration, test files out of scope, advisory only.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version-file: .tool-versions
           verify: false
-          args: --default=none --enable=unused --tests=false --issues-exit-code=0 ./...
+          args: --tests=false --issues-exit-code=0 ./...
           # Skip the action's analysis cache: this job runs a different
           # analyzer scope than the main Lint job, and a cache shared
           # between the two could carry a result over from the wrong scope.

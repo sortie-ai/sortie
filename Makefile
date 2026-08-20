@@ -55,7 +55,7 @@ lint: ## Run golangci-lint on all packages
 
 .PHONY: lint-no-tests
 lint-no-tests: ## Lint with test files out of scope (advisory, never fails)
-	$(LINTER) run --default=none --enable=unused --tests=false --issues-exit-code=0 ./...
+	$(LINTER) run --tests=false --issues-exit-code=0 ./...
 
 .PHONY: lint-shell
 lint-shell: ## Run shellcheck on every tracked shell script
