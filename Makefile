@@ -62,14 +62,14 @@ lint-shell: ## Run shellcheck on every tracked shell script
 	@files=$$(git ls-files '*.sh'); \
 	if [ -z "$$files" ]; then exit 0; fi; \
 	printf '%s\n' "$$files"; \
-	$(SHELLCHECK) -x -- $$files
+	git ls-files -z '*.sh' | xargs -0 $(SHELLCHECK) -x --
 
 .PHONY: fmt-check
 fmt-check: ## Show formatting drift without rewriting any file
 	$(LINTER) fmt --diff ./...
 
 .PHONY: check
-check: lint lint-unused lint-shell test ## Run every gate CI runs
+check: lint lint-unused lint-shell test ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod
