@@ -618,12 +618,12 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					ev.Terminal = agentcore.TerminalFailure
 					ev.TerminalErrorKind = domain.ErrTurnFailed
 				}
+				// A status word is only worth reporting when the payload
+				// carried one. A malformed payload, or one that omits the
+				// status member, leaves it empty and keeps this message
+				// unset so agentcore.DecideTurn's own fallback applies
+				// instead of one built from an empty string.
 				if ev.TerminalMessage == "" && tc.Turn.Status != "" {
-					// An empty status means the payload was malformed or
-					// carried no status member. Either way there is no
-					// status word to report, so agentcore.DecideTurn's own
-					// fallback message applies instead of one built from
-					// an empty string.
 					ev.TerminalMessage = "turn " + tc.Turn.Status
 				}
 
