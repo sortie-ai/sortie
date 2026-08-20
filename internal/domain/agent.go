@@ -168,7 +168,10 @@ type AgentConfig struct {
 	// Kind identifies the agent adapter (e.g. "claude-code", "mock").
 	Kind string
 
-	// Command is the shell command used to launch the agent process.
+	// Command is the command used to launch the agent process. Locally it
+	// is split on whitespace into an argument vector that the adapter execs
+	// directly, with no shell; in SSH mode it is passed through unsplit to
+	// the remote shell.
 	Command string
 
 	// TurnTimeoutMS is the maximum duration in milliseconds for a

@@ -28,11 +28,11 @@ permitted for path fields.
 
 Value coercion semantics:
 
-- Path/command fields support:
+- Path fields support:
   - `~` home expansion
   - `$VAR` expansion for env-backed path values
   - Apply expansion only to values intended to be local filesystem paths; do not rewrite URIs or
-    arbitrary shell command strings.
+    arbitrary command strings.
 
 ### 6.2 Dynamic Reload Semantics
 
@@ -232,7 +232,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
 - `agent.kind`: string, default `claude-code`
-- `agent.command`: shell command string, adapter-defined default
+- `agent.command`: whitespace-delimited argument-vector string, adapter-defined default
 - `agent.turn_timeout_ms`: positive integer, default `3600000`; the deadline the orchestrator
   places on the context of every agent turn it runs, self-review turns included; the expiry of
   that deadline cancels the turn's context, and the attempt then fails with the `turn_timeout`

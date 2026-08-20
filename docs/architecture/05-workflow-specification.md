@@ -191,8 +191,10 @@ Fields:
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see
     §5.3.10 for the override mechanism.
-- `command` (string shell command)
-  - The command the agent adapter uses to launch the agent process. Adapter-defined default.
+- `command` (string)
+  - The command the agent adapter uses to launch the agent process. A local subprocess adapter
+    splits it on whitespace into an argument vector; an SSH worker passes it to the remote shell
+    unsplit. Adapter-defined default.
   - When `agent.kind` requires a local command, this field must be present and non-empty.
   - HTTP-based agent adapters do not require a local command.
 - `turn_timeout_ms` (integer)

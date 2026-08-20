@@ -28,7 +28,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `tracker.api_key` works (including `$VAR` indirection)
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
-- `agent.command` is preserved as a shell command string
+- `agent.command` is preserved as a whitespace-delimited argument-vector string
 - A non-positive `agent.turn_timeout_ms` is rejected at config parse time; an absent key takes
   the default
 - Per-state concurrency override map normalizes state names and ignores invalid values
@@ -352,7 +352,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 
 ### 17.5 Coding-Agent Adapter Client
 
-- Launch command uses workspace cwd and invokes the configured shell
+- Launch command uses workspace cwd and execs the resolved binary directly with an argument
+  vector
 - Startup handshake sequence is adapter-defined and tested per adapter
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - Session identifiers are parsed and `session_started` event is emitted

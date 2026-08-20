@@ -20,7 +20,7 @@ import (
 // session runs locally: Command is the resolved agent binary and Args contains
 // any initial CLI arguments (e.g., ["app-server"]).
 type LaunchTarget struct {
-	// Command is the resolved absolute path to the local binary to exec.
+	// Command is the resolved path to the local binary to exec.
 	// In SSH mode this is the path to the ssh binary.
 	// In local mode this is the path to the agent binary.
 	Command string
