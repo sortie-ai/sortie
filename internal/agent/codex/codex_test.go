@@ -437,42 +437,57 @@ func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
 	}
 }
 
-// TestRunTurn_MalformedTurnCompletedParams pins that a turn/completed
-// notification whose params fail to unmarshal into an object leaves the
-// turn status empty, so the terminal message is never built from that
-// empty status and agentcore.DecideTurn's own fallback message applies.
-func TestRunTurn_MalformedTurnCompletedParams(t *testing.T) {
+// TestRunTurn_EmptyTurnStatus pins both ways a turn/completed
+// notification can arrive without a status word: params that fail to
+// unmarshal into an object, and a turn object that omits the status
+// member. Neither builds a terminal message from the empty status, so
+// agentcore.DecideTurn's own fallback message applies.
+func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 	t.Parallel()
 
-	fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" +
-		`{"method":"turn/completed","params":[1,2,3]}` + "\n"
-	state := makeTestState([]byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{})
-
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "go",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
-		t.Fatalf("error type = %T, want *domain.AgentError", err)
-	}
-	if agentErr.Kind != domain.ErrTurnFailed {
-		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnFailed)
-	}
-	if agentErr.Message != "turn failed" {
-		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, "turn failed")
+	tests := []struct {
+		name   string
+		params string
+	}{
+		{"params do not unmarshal into an object", `[1,2,3]`},
+		{"turn object omits the status member", `{"turn":{"id":"turn-001"}}`},
 	}
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		Work:              agentcore.WorkUnobservable,
-	}, result, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" +
+				`{"method":"turn/completed","params":` + tt.params + `}` + "\n"
+			state := makeTestState([]byte(fixture))
+			adapter, _ := NewCodexAdapter(map[string]any{})
+
+			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+				Prompt:  "go",
+				OnEvent: func(domain.AgentEvent) {},
+			})
+
+			if result.ExitReason != domain.EventTurnFailed {
+				t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) {
+				t.Fatalf("error type = %T, want *domain.AgentError", err)
+			}
+			if agentErr.Kind != domain.ErrTurnFailed {
+				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnFailed)
+			}
+			if agentErr.Message != "turn failed" {
+				t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, "turn failed")
+			}
+
+			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+				Terminal:          agentcore.TerminalFailure,
+				TerminalErrorKind: domain.ErrTurnFailed,
+				Work:              agentcore.WorkUnobservable,
+			}, result, err)
+		})
+	}
 }
 
 // TestRunTurn_StdoutParseFailure pins that a stdout line that fails to
