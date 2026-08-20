@@ -15,7 +15,6 @@ type passthroughConfig struct {
 	ThreadSandbox     string
 	TurnSandboxPolicy map[string]any
 	Personality       string
-	SkipGitRepoCheck  bool
 }
 
 // parsePassthroughConfig extracts Codex-specific settings from the
@@ -28,7 +27,6 @@ func parsePassthroughConfig(config map[string]any) passthroughConfig {
 		ThreadSandbox:     typeutil.StringFrom(config, "thread_sandbox"),
 		TurnSandboxPolicy: typeutil.MapFrom(config, "turn_sandbox_policy"),
 		Personality:       typeutil.StringFrom(config, "personality"),
-		SkipGitRepoCheck:  typeutil.BoolFrom(config, "skip_git_repo_check", false),
 	}
 }
 
