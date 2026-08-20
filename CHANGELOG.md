@@ -107,6 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be disabled.
   ([#834](https://github.com/sortie-ai/sortie/issues/834))
 
+- The `codex.skip_git_repo_check` pass-through key is removed. It never
+  had an effect: the value was parsed and read by no launch path, and
+  the `codex app-server` transport the adapter drives exposes no
+  equivalent protocol field and rejects the equivalent flag, which
+  exists only on `codex exec`. The key also promised something the
+  adapter never needed. A workspace that is not a Git repository is the
+  default and already works, because the refusal the key named lives in
+  the `codex exec` wrapper, above the layer the adapter talks to.
+  Nothing validates unknown keys inside the `codex` block, so a
+  WORKFLOW.md that still sets the key is ignored rather than rejected.
+  ([#840](https://github.com/sortie-ai/sortie/issues/840))
+
 ## [1.20.0] - 2026-08-18
 
 ### Added

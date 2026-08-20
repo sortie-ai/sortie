@@ -772,7 +772,6 @@ codex:
 | `codex.model`               | string  | Model override (e.g., `gpt-5.4`). Maps to `model` on `thread/start` and `turn/start`. |
 | `codex.effort`              | string  | Reasoning effort: `low`, `medium`, `high`. Maps to `effort` on `turn/start`.|
 | `codex.personality`         | string  | Personality preset. Maps to `personality` on `thread/start`.              |
-| `codex.skip_git_repo_check` | boolean | Parsed into `passthroughConfig.SkipGitRepoCheck` and read by no launch path, so the value never reaches the subprocess. |
 
 The turn timeouts are not part of this block. `agent.turn_timeout_ms`, `agent.read_timeout_ms`,
 and `agent.stall_timeout_ms` are core config fields, described under "Timeout enforcement".
