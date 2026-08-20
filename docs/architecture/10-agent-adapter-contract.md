@@ -575,11 +575,17 @@ When `agent.kind` requires a local subprocess:
 
 - Command: `agent.command`
 - Invocation:
-  - POSIX: `sh -c <agent.command>` (or `bash -lc` when a login shell is required by the agent).
-    The shell used for invocation is configurable to support minimal Docker images and CI
-    environments where bash may not be present.
-  - Windows: the adapter invokes the command directly (no shell wrapper). The subprocess receives
+  - `agent.command` is split on whitespace. The first token is resolved to an absolute path using
+    the same lookup rules as a shell's `PATH` search; the remaining tokens become a fixed
+    argument prefix inserted before any per-turn arguments (for example, `codex app-server`
+    resolves `codex` and yields `app-server` as a prefix argument).
+  - POSIX and Windows: the adapter execs the resolved binary directly with that argument vector.
+    No shell is involved in local invocation. On Windows the subprocess additionally receives
     `CREATE_NEW_PROCESS_GROUP` so it can be signaled independently of the orchestrator.
+  - When the worker runs remotely over SSH, `agent.command` is instead passed through unsplit and
+    unresolved as the command the remote shell executes; a shell is involved only on that path.
+    See [Appendix A. SSH Worker Extension (Optional)](27-appendix-a-ssh-worker-extension.md) for
+    the remote execution model.
 - Working directory: workspace path
 - Stdout/stderr: separate streams
 
