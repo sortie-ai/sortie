@@ -62,8 +62,8 @@ jobs:
           printf '%s\n' "$changed"
           printf '%s\n' "$changed" | xargs -d '\n' -r shellcheck -x --
 
-  lint-unused:
-    name: Lint (unused, advisory)
+  lint-no-tests:
+    name: Lint (no test files, advisory)
     runs-on: ubuntu-latest
 
     steps:
@@ -80,11 +80,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The main Lint job leaves test files out of scope for the 'unused'
-      # analyzer, so a helper reachable only from a test never turns up
-      # there. This scoped, module-wide rerun is advisory: issues-exit-code=0
-      # keeps it from failing the build, so it only surfaces findings for a
-      # human to act on.
+      # The main Lint job counts a reference from a test as a use, so
+      # production code reachable only from its own test never turns up
+      # there. This rerun drops test files from scope, which is what
+      # exposes that class. The linter set is the configured one: --default
+      # only changes the default set and does not clear the enable list in
+      # .golangci.yml. Advisory only: issues-exit-code=0 keeps it from
+      # failing the build.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version-file: .tool-versions

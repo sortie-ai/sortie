@@ -53,8 +53,8 @@ vet: ## Run go vet on all packages
 lint: ## Run golangci-lint on all packages
 	$(LINTER) run ./...
 
-.PHONY: lint-unused
-lint-unused: ## Report code unreachable outside tests (advisory, never fails)
+.PHONY: lint-no-tests
+lint-no-tests: ## Lint with test files out of scope (advisory, never fails)
 	$(LINTER) run --default=none --enable=unused --tests=false --issues-exit-code=0 ./...
 
 .PHONY: lint-shell
@@ -69,7 +69,7 @@ fmt-check: ## Show formatting drift without rewriting any file
 	$(LINTER) fmt --diff ./...
 
 .PHONY: check
-check: lint lint-unused lint-shell test ## Run the CI gates; shell lint covers all tracked scripts
+check: lint lint-no-tests lint-shell test ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod
