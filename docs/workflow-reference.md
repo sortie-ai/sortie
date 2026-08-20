@@ -2492,7 +2492,6 @@ codex:
   approval_policy: never          # "never" (default), "onRequest", "unlessTrusted", "always"
   thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
   personality: concise            # Personality preset
-  skip_git_repo_check: false      # Skip git repo validation for non-git workspaces
   turn_sandbox_policy:            # Per-turn sandbox policy override (optional)
     networkAccess: true
 ```
