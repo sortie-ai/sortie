@@ -476,15 +476,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			// this arm before sending the one-shot interrupt so later selects
 			// wait for a terminal message or stdout to close.
 			ctxDone = nil
-			// Send turn/interrupt using a detached context so the request is
-			// not dropped by the already-cancelled parent context.
-			interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			// Best-effort write of turn/interrupt on the already-cancelled turn.
 			sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
 				"threadId": state.threadID,
 				"turnId":   turnID,
 			})
-			cancel()
-			_ = interruptCtx
 			// Continue reading until turn/completed or channel close.
 			continue
 
