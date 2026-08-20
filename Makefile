@@ -54,7 +54,7 @@ lint: ## Run golangci-lint on all packages
 	$(LINTER) run ./...
 
 .PHONY: lint-no-tests
-lint-no-tests: ## Report shipped code reachable only from its own test
+lint-no-tests: ## Fail if shipped code is reachable only from its own test
 	$(LINTER) run --config .golangci-no-tests.yml --tests=false ./...
 
 .PHONY: lint-shell

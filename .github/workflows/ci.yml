@@ -45,8 +45,8 @@ jobs:
           version-file: .tool-versions
           verify: false
           # Skip the action's analysis cache: stale entries cause flaky
-          # staticcheck false positives (golangci-lint#5979) that would otherwise
-          # masquerade as new 'latest' findings. setup-go's caches are unaffected.
+          # false positives (golangci-lint#5979) that reproduce on no rerun.
+          # setup-go's caches are unaffected.
           skip-cache: true
 
       - name: Lint shell scripts
