@@ -85,6 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind that would park the issue again sooner than expected.
   ([#856](https://github.com/sortie-ai/sortie/issues/856))
 
+- A cancelled Codex turn no longer consumes CPU while it waits for the
+  agent to wind down. It previously spun a full core from the moment of
+  cancellation until the turn reached its terminal state, so a shutdown
+  that cancelled several concurrent Codex turns spun one core each.
+  Cancellation reaches this path on shutdown, on stall detection, and
+  when `agent.turn_timeout_ms` expires.
+  ([#845](https://github.com/sortie-ai/sortie/issues/845))
+
 ### Changed
 
 - `reactions.ci_failure` now resolves the pull request's current head
