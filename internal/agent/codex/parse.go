@@ -237,21 +237,6 @@ func maxUsage(a, b domain.TokenUsage) domain.TokenUsage {
 	return result
 }
 
-// mapTurnStatus maps a turn/completed status string to a domain event
-// type.
-func mapTurnStatus(status string) domain.AgentEventType {
-	switch status {
-	case "completed":
-		return domain.EventTurnCompleted
-	case "interrupted":
-		return domain.EventTurnCancelled
-	case "failed":
-		return domain.EventTurnFailed
-	default:
-		return domain.EventTurnFailed
-	}
-}
-
 // mapCodexErrorInfo maps a codexErrorInfo string to a domain error
 // kind. Retryable vs non-retryable classification is encoded in the
 // AgentErrorKind value.

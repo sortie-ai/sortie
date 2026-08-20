@@ -618,7 +618,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					ev.Terminal = agentcore.TerminalFailure
 					ev.TerminalErrorKind = domain.ErrTurnFailed
 				}
-				if ev.TerminalMessage == "" {
+				if ev.TerminalMessage == "" && tc.Turn.Status != "" {
+					// An empty status means the payload did not unmarshal
+					// into an object; there is no status word to report,
+					// so agentcore.DecideTurn's own fallback message
+					// applies instead of one built from an empty string.
 					ev.TerminalMessage = "turn " + tc.Turn.Status
 				}
 

@@ -326,32 +326,6 @@ func TestMaxUsage(t *testing.T) {
 	}
 }
 
-func TestMapTurnStatus(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		status string
-		want   domain.AgentEventType
-	}{
-		{"completed", domain.EventTurnCompleted},
-		{"interrupted", domain.EventTurnCancelled},
-		{"failed", domain.EventTurnFailed},
-		{"unknown", domain.EventTurnFailed},
-		{"", domain.EventTurnFailed},
-		{"COMPLETED", domain.EventTurnFailed},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.status, func(t *testing.T) {
-			t.Parallel()
-			got := mapTurnStatus(tt.status)
-			if got != tt.want {
-				t.Errorf("mapTurnStatus(%q) = %q, want %q", tt.status, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMapCodexErrorInfo(t *testing.T) {
 	t.Parallel()
 
