@@ -72,8 +72,7 @@ func TestToCIError_ContextCanceled(t *testing.T) {
 		if !errors.Is(got, context.Canceled) {
 			t.Errorf("ToCIError(context.Canceled) = %v, want context.Canceled passthrough", got)
 		}
-		var ce *domain.CIError
-		if errors.As(got, &ce) {
+		if ce, ok := errors.AsType[*domain.CIError](got); ok {
 			t.Errorf("ToCIError(context.Canceled) = %v, want no CIError conversion", ce)
 		}
 	})
@@ -86,8 +85,7 @@ func TestToCIError_ContextCanceled(t *testing.T) {
 		if got != context.Canceled {
 			t.Errorf("ToCIError(context.Canceled) = %v, want context.Canceled returned unchanged", got)
 		}
-		var ce *domain.CIError
-		if errors.As(got, &ce) {
+		if ce, ok := errors.AsType[*domain.CIError](got); ok {
 			t.Errorf("ToCIError(context.Canceled) = %v, want no CIError conversion", ce)
 		}
 	})
@@ -104,8 +102,7 @@ func TestToCIError_DeadlineExceeded(t *testing.T) {
 		if !errors.Is(got, context.DeadlineExceeded) {
 			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want context.DeadlineExceeded passthrough", got)
 		}
-		var ce *domain.CIError
-		if errors.As(got, &ce) {
+		if ce, ok := errors.AsType[*domain.CIError](got); ok {
 			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want no CIError conversion", ce)
 		}
 	})
@@ -118,8 +115,7 @@ func TestToCIError_DeadlineExceeded(t *testing.T) {
 		if got != context.DeadlineExceeded {
 			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want context.DeadlineExceeded returned unchanged", got)
 		}
-		var ce *domain.CIError
-		if errors.As(got, &ce) {
+		if ce, ok := errors.AsType[*domain.CIError](got); ok {
 			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want no CIError conversion", ce)
 		}
 	})

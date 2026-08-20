@@ -206,8 +206,7 @@ func validateQueryFilter(raw string) []registry.ValidationDiag {
 	}
 
 	message := err.Error()
-	var trackerErr *domain.TrackerError
-	if errors.As(err, &trackerErr) {
+	if trackerErr, ok := errors.AsType[*domain.TrackerError](err); ok {
 		message = trackerErr.Message
 	}
 

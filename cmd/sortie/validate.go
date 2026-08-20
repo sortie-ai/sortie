@@ -201,8 +201,7 @@ func writeJSON(w io.Writer, v any) error {
 // arrive as *prompt.TemplateError and route through "template_parse"
 // with the offending absolute path included verbatim.
 func mapManagerError(err error) []validateDiag {
-	var we *workflow.WorkflowError
-	if errors.As(err, &we) {
+	if we, ok := errors.AsType[*workflow.WorkflowError](err); ok {
 		check := "workflow_load"
 		if we.Kind == workflow.ErrFrontMatterNotMap {
 			check = "workflow_front_matter"
@@ -210,13 +209,11 @@ func mapManagerError(err error) []validateDiag {
 		return []validateDiag{{Severity: "error", Check: check, Message: err.Error()}}
 	}
 
-	var ce *config.ConfigError
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*config.ConfigError](err); ok {
 		return []validateDiag{{Severity: "error", Check: "config." + ce.Field, Message: ce.Message}}
 	}
 
-	var te *prompt.TemplateError
-	if errors.As(err, &te) {
+	if _, ok := errors.AsType[*prompt.TemplateError](err); ok {
 		return []validateDiag{{Severity: "error", Check: "template_parse", Message: err.Error()}}
 	}
 

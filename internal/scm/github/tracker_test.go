@@ -753,8 +753,7 @@ func TestFetchIssueByID_NotFound(t *testing.T) {
 	_, err := a.FetchIssueByID(context.Background(), "99")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok {
 		if !strings.Contains(te.Message, "99") {
 			t.Errorf("TrackerError.Message = %q, should contain issue ID 99", te.Message)
 		}

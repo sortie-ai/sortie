@@ -135,8 +135,7 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 
 	statuses, err := paginator.All(ctx)
 	if err != nil {
-		var ciErr *domain.CIError
-		if errors.As(err, &ciErr) {
+		if ciErr, ok := errors.AsType[*domain.CIError](err); ok {
 			return domain.CIResult{}, ciErr
 		}
 		return domain.CIResult{}, scmcore.ToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))

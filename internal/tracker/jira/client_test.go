@@ -186,8 +186,7 @@ func TestClientGet_ContextCancellation(t *testing.T) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
 	// Must NOT be wrapped in TrackerError
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok {
 		t.Errorf("context cancellation should not be wrapped in TrackerError, got Kind=%q", te.Kind)
 	}
 }
@@ -302,8 +301,7 @@ func TestClientSend_ContextCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("Send() error = %v, want context.Canceled", err)
 	}
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok {
 		t.Errorf("context cancellation should not be wrapped in TrackerError, got Kind=%q", te.Kind)
 	}
 }

@@ -253,8 +253,7 @@ func mapTrackerError(err error) (json.RawMessage, error) {
 		return toolresult.Failure("tracker_transport_error", "deadline exceeded")
 	}
 
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok {
 		return toolresult.Failure(string(te.Kind), te.Message)
 	}
 

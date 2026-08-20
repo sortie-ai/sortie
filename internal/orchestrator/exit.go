@@ -1320,13 +1320,11 @@ func classifyWorkerError(err error) domain.RetryClassification {
 		return domain.RetryClassification{Retryable: true, Backoff: domain.BackoffExponential}
 	}
 
-	var agentErr *domain.AgentError
-	if errors.As(err, &agentErr) {
+	if agentErr, ok := errors.AsType[*domain.AgentError](err); ok {
 		return agentErr.Kind.RetryClassification()
 	}
 
-	var trackerErr *domain.TrackerError
-	if errors.As(err, &trackerErr) {
+	if trackerErr, ok := errors.AsType[*domain.TrackerError](err); ok {
 		return trackerErr.Kind.RetryClassification()
 	}
 
