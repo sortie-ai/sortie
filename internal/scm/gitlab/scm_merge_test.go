@@ -384,6 +384,44 @@ func TestGetMergeability_OpenDispositionIgnoresMergeCommitSHA(t *testing.T) {
 	}
 }
 
+// TestGetMergeability_Closed verifies that Closed is sourced from the
+// already-decoded state field with no additional request, and that
+// "merged" and "closed" are disjoint on GitLab: a merged merge request
+// reports state "merged" rather than "closed", so Closed is false there
+// and true only for a genuine closed-without-merge state.
+func TestGetMergeability_Closed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		state      string
+		wantClosed bool
+	}{
+		{"opened state maps to Closed false", "opened", false},
+		{"closed state maps to Closed true", "closed", true},
+		{"merged state maps to Closed false (disjoint from closed)", "merged", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mergeRequestFixture(t, map[string]any{"state": tt.state})
+			srv := serveJSON(t, fixture)
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			got, err := adapter.GetMergeability(context.Background(), testPRNumber, scmOwner, scmRepo)
+			if err != nil {
+				t.Fatalf("GetMergeability: unexpected error: %v", err)
+			}
+			if got.Closed != tt.wantClosed {
+				t.Errorf("GetMergeability().Closed = %v, want %v for state %q", got.Closed, tt.wantClosed, tt.state)
+			}
+		})
+	}
+}
+
 // --- GetMergeability: field population ---
 
 func TestGetMergeability_FieldPopulation(t *testing.T) {

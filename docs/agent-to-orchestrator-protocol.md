@@ -179,8 +179,10 @@ agent's scope, or repeated failures on the same operation.
 
 **Orchestrator behavior:** The orchestrator treats this as a **soft stop**. It completes the
 current turn normally, then breaks the turn loop — no further continuation turns execute within
-the current worker run. This value never admits the run to the self-review phase (Section 2.3.2);
-it remains an immediate exit whether or not self-review is configured. On worker exit, the
+the current worker run. A value read after a coding turn never admits the run to the self-review
+phase (Section 2.3.2); it remains an immediate exit whether or not self-review is configured. A
+value written during a phase turn instead ends the phase and gives the run this same disposition
+(Section 2.3.5). On worker exit, the
 orchestrator MUST NOT schedule a continuation retry
 ([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). When the dispatch that produced this run drives issue state, the orchestrator
 releases the claim and parks the issue: it records a durable park, applies the configured parking
@@ -274,7 +276,8 @@ The self-review phase reads `.sortie/status` again after each review turn and ea
 (Section 3.1). Inside the phase the two values diverge from their meaning outside it.
 
 `blocked` aborts the phase. The iteration in progress is recorded as aborted, naming the signal,
-and the run proceeds to its exit as if the phase had produced this outcome directly.
+and the run proceeds to its exit as if the phase had produced this outcome directly: the run ends
+as a blocked soft stop whichever of the two admissions (Section 2.3.2) brought it into the phase.
 
 `needs-human-review` does not end the phase. It is consumed on the same terms as the value that
 admitted the run: the file is removed, and the iteration continues exactly as if the file had
@@ -539,7 +542,7 @@ releases the claim without scheduling a retry.
 Where the self-review phase runs (Section 2.3.2), it runs before this disposition is computed:
 the phase does not change which row a run takes, but for `needs-human-review` on an enabled
 deployment the phase's verification commands and review turn complete first, and an in-phase
-`blocked` reached from that admission replaces the row the run takes with the `blocked` row.
+`blocked` replaces the row the run takes with the `blocked` row.
 
 ## 4. Prompt integration
 

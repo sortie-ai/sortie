@@ -72,7 +72,8 @@ func TestKiroAdapter_Integration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 
-	// The turn timeout is the mandatory backstop against the login hang.
+	// Bounds this test call in case RunTurn hangs; the credential this
+	// test requires means the login hang cannot occur here.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer turnCancel()
 

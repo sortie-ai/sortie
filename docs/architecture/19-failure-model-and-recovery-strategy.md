@@ -68,6 +68,8 @@
   - Where self-review is enabled and its gate admits the exit, the completion signal now runs the
     self-review phase before that disposition is computed. The phase runs while the session is
     live and before session teardown; the disposition itself is unchanged.
+    A `blocked` value read during a phase turn instead gives the run the blocked disposition
+    above, on either admission path into the phase.
 
 - Withheld handoff evidence:
   - Leave the issue in its active tracker state, record the run as `failed` with the evidence verdict
@@ -123,9 +125,9 @@
     poll tick's candidate set, because it now sits in a state the deployment does not call
     active, is still read for its state through a separate, filter-free tracker call, so the
     state gesture reaches it exactly as it would if the issue were still a candidate. Release
-    resets the counter that produced the park, so a released absence-ceiling park does not
-    immediately re-derive the same exhausted count and park itself again; release is evaluated
-    ahead of the ceiling trigger on the same tick for exactly this reason.
+    resets the absence counter whatever reason produced the park, so a released absence-ceiling
+    park does not immediately re-derive the same exhausted count and park itself again; release
+    is evaluated ahead of the ceiling trigger on the same tick for exactly this reason.
   - A third release takes no gesture: a worker exit whose evidence verdict is `work observed` lifts
     the park of the issue it ran on, on the same verdict that resets the absence count, and it too
     applies to every trigger that parks an issue. This is the one release the evidence policy

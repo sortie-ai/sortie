@@ -303,6 +303,28 @@ func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int
 	return count, nil
 }
 
+// CountWorkerRunsCompletedSince returns the number of worker-session
+// run_history rows for the given issue whose completed_at is at or
+// after since. Rows whose status is "ci_failed" are excluded by name
+// rather than by an inclusion list of qualifying statuses, because that
+// status records a CI verdict the reconcile pass observed rather than a
+// worker session, and a status added later must count as a worker
+// session by default. Returns (0, nil) when no row qualifies.
+func (s *Store) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM run_history
+		WHERE issue_id = ?
+		  AND status <> 'ci_failed'
+		  AND completed_at >= ?`,
+		issueID, since.UTC().Format(time.RFC3339),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count worker runs completed since for issue %q: %w", issueID, err)
+	}
+	return count, nil
+}
+
 // QueryConsecutiveHandoffAbsenceCounts returns the number of handoff-absence
 // failures for each requested issue since the run at which
 // [Store.ResetHandoffAbsenceSequence] last ended that issue's sequence. Issues

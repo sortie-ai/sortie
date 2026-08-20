@@ -471,3 +471,68 @@ func TestLatestRunCompletionByIdentifier(t *testing.T) {
 		}
 	})
 }
+
+// countRun returns a run_history row for issueID carrying status and
+// completedAt, with the remaining fields from newTestRun.
+func countRun(i int, issueID, status, completedAt string) RunHistory {
+	run := newTestRun(i)
+	run.IssueID = issueID
+	run.Status = status
+	run.CompletedAt = completedAt
+	return run
+}
+
+// mustParseRFC3339 parses s as RFC3339 or fails the test.
+func mustParseRFC3339(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("time.Parse(RFC3339, %q): %v", s, err)
+	}
+	return parsed
+}
+
+// TestCountWorkerRunsCompletedSince covers the exclusion filter and the
+// inclusive lower bound: succeeded, failed, and cancelled rows count as
+// worker sessions, a ci_failed row does not even when its completed_at
+// falls inside the interval, a row before the bound does not count, and
+// an issue with no rows returns (0, nil).
+func TestCountWorkerRunsCompletedSince(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CWR-1"
+	since := mustParseRFC3339(t, "2026-04-01T09:00:00Z")
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	appendOrFatal(t, s, countRun(1, issueID, "succeeded", "2026-04-01T09:00:00Z")) // at bound, counts
+	appendOrFatal(t, s, countRun(2, issueID, "failed", "2026-04-01T10:00:00Z"))
+	appendOrFatal(t, s, countRun(3, issueID, "cancelled", "2026-04-01T11:00:00Z"))
+	appendOrFatal(t, s, countRun(4, issueID, "ci_failed", "2026-04-01T10:30:00Z")) // excluded by status
+	appendOrFatal(t, s, countRun(5, issueID, "succeeded", "2026-03-31T23:59:59Z")) // before bound, excluded
+	appendOrFatal(t, s, countRun(6, "ISS-CWR-OTHER", "succeeded", "2026-04-01T12:00:00Z"))
+
+	got, err := s.CountWorkerRunsCompletedSince(context.Background(), issueID, since)
+	if err != nil {
+		t.Fatalf("CountWorkerRunsCompletedSince: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("CountWorkerRunsCompletedSince(%q, %v) = %d, want 3", issueID, since, got)
+	}
+
+	t.Run("issue with no rows returns zero", func(t *testing.T) {
+		t.Parallel()
+
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		got, err := s.CountWorkerRunsCompletedSince(context.Background(), "ISS-CWR-NONE", since)
+		if err != nil {
+			t.Fatalf("CountWorkerRunsCompletedSince: %v", err)
+		}
+		if got != 0 {
+			t.Errorf("CountWorkerRunsCompletedSince(%q, %v) = %d, want 0", "ISS-CWR-NONE", since, got)
+		}
+	})
+}

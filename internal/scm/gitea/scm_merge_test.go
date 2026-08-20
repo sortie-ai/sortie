@@ -33,6 +33,7 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 		wantBaseBranch     string
 		wantMerged         bool
 		wantMergeCommitSHA string
+		wantClosed         bool
 	}{
 		{
 			name:           "mergeable true maps to clean",
@@ -42,6 +43,7 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 			wantHeadSHA:    "sha-clean-001",
 			wantBranchName: "feature/gitea-scm-reads",
 			wantBaseBranch: "main",
+			wantClosed:     false,
 		},
 		{
 			name:           "draft true maps to blocked even when mergeable is true",
@@ -71,6 +73,18 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 			wantBaseBranch:     "main",
 			wantMerged:         true,
 			wantMergeCommitSHA: "9f3c1a2e4b5d6c7a8e9f0b1c2d3e4f5a6b7c8d9e",
+			wantClosed:         true,
+		},
+		{
+			name:           "closed without merge populates Closed but not Merged",
+			fixture:        "pr_closed_unmerged.json",
+			wantMergeable:  domain.MergeabilityUnknown,
+			wantDraft:      false,
+			wantHeadSHA:    "sha-clean-001",
+			wantBranchName: "feature/gitea-scm-reads",
+			wantBaseBranch: "main",
+			wantMerged:     false,
+			wantClosed:     true,
 		},
 	}
 
@@ -117,6 +131,9 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 			}
 			if got.MergeCommitSHA != tt.wantMergeCommitSHA {
 				t.Errorf("GetMergeability().MergeCommitSHA = %q, want %q", got.MergeCommitSHA, tt.wantMergeCommitSHA)
+			}
+			if got.Closed != tt.wantClosed {
+				t.Errorf("GetMergeability().Closed = %v, want %v", got.Closed, tt.wantClosed)
 			}
 		})
 	}

@@ -137,10 +137,14 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 
 // handleMergeConflictDirty processes a PR that the provider reports as
 // conflicted. It applies the precondition guards (empty head SHA, empty
-// base branch), deduplicates on the head SHA, increments the per-episode
-// attempt counter, and either dispatches a rebase continuation or
-// escalates when the new conflicting head pushes the episode strictly over
-// the retry budget. The increment-then-strict-over-limit ordering mirrors
+// base branch), deduplicates on the head SHA, resets the per-episode
+// attempt counter when the new conflicting head is positively not the
+// orchestrator's own work, increments the counter, and either dispatches
+// a rebase continuation or escalates when the new conflicting head
+// pushes the episode strictly over the retry budget. The
+// dedup-before-attribution-before-increment ordering means a same-head
+// re-observation returns before either the attribution query or the
+// increment runs. The increment-then-strict-over-limit ordering mirrors
 // [handleCIFailure].
 func handleMergeConflictDirty(
 	state *State,
@@ -197,7 +201,9 @@ func handleMergeConflictDirty(
 	}
 
 	// Head-SHA dedup before the increment so a same-head re-observation
-	// never re-increments the per-episode counter.
+	// never re-increments the per-episode counter, and before the
+	// attribution query below so a same-head re-observation never
+	// reaches run_history either.
 	storedFP, dispatched, fpErr := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict)
 	if fpErr != nil {
 		log.Warn("failed to get merge conflict reaction fingerprint, proceeding without dedup",
@@ -211,6 +217,16 @@ func handleMergeConflictDirty(
 		)
 		return
 	}
+
+	// A new conflicting head this reaction has not dispatched for.
+	// Reset the per-episode counter first when the change is positively
+	// not the orchestrator's own work, so a person's push yields
+	// attempts == 1 rather than continuing to climb across successive
+	// conflicting heads regardless of who produced them.
+	if classifyHeadChange(state, params, pending, now, ctx) == headChangeNotOurs {
+		delete(state.ReactionAttempts, rkey)
+	}
+	pending.HeadRecordedAt = now
 
 	// Per-episode increment for this new conflicting head, then the strict
 	// over-limit cap. The increment happens before the cap so the new

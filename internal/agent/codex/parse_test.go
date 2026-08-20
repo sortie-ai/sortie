@@ -52,7 +52,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 				"approval_policy":     "never",
 				"thread_sandbox":      "workspaceWrite",
 				"personality":         "helpful",
-				"skip_git_repo_check": true,
 				"turn_sandbox_policy": map[string]any{"networkAccess": true},
 			},
 			want: passthroughConfig{
@@ -61,7 +60,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 				ApprovalPolicy:    "never",
 				ThreadSandbox:     "workspaceWrite",
 				Personality:       "helpful",
-				SkipGitRepoCheck:  true,
 				TurnSandboxPolicy: map[string]any{"networkAccess": true},
 			},
 		},
@@ -72,17 +70,9 @@ func TestParsePassthroughConfig(t *testing.T) {
 				"effort":              false,
 				"approval_policy":     123,
 				"thread_sandbox":      []string{"not-a-string"},
-				"skip_git_repo_check": "yes",
 				"turn_sandbox_policy": "not-a-map",
 			},
 			want: passthroughConfig{},
-		},
-		{
-			name: "explicit false skip_git_repo_check",
-			config: map[string]any{
-				"skip_git_repo_check": false,
-			},
-			want: passthroughConfig{SkipGitRepoCheck: false},
 		},
 	}
 
@@ -104,9 +94,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 			}
 			if got.Personality != tt.want.Personality {
 				t.Errorf("Personality = %q, want %q", got.Personality, tt.want.Personality)
-			}
-			if got.SkipGitRepoCheck != tt.want.SkipGitRepoCheck {
-				t.Errorf("SkipGitRepoCheck = %v, want %v", got.SkipGitRepoCheck, tt.want.SkipGitRepoCheck)
 			}
 			if len(got.TurnSandboxPolicy) != len(tt.want.TurnSandboxPolicy) {
 				t.Errorf("TurnSandboxPolicy len = %d, want %d", len(got.TurnSandboxPolicy), len(tt.want.TurnSandboxPolicy))

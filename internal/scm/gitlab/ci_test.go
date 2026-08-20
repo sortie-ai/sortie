@@ -1071,8 +1071,7 @@ func TestFetchCIStatus_ContextCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("FetchCIStatus(cancelled context) = %v, want context.Canceled in the chain", err)
 	}
-	var ciErr *domain.CIError
-	if errors.As(err, &ciErr) {
+	if ciErr, ok := errors.AsType[*domain.CIError](err); ok {
 		t.Errorf("FetchCIStatus(cancelled context) = %v, want the context error without CIError conversion", ciErr)
 	}
 }

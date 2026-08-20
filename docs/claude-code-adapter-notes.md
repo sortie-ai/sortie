@@ -526,7 +526,7 @@ orchestrator re-checks tracker state and decides whether to continue.
 
 | Timeout                  | Source      | Enforcement                                                                                                                                                                                |
 | ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter as `domain.AgentConfig.TurnTimeoutMS` and is stored in `sessionState`. Nothing on the Claude path reads it; no per-turn deadline is set on the subprocess.              |
+| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter as `domain.AgentConfig.TurnTimeoutMS` and is stored in `sessionState`. Nothing on the Claude path reads it; the orchestrator derives the per-turn deadline and the subprocess inherits it through the context the skeleton passes to `exec.CommandContext`.              |
 | `agent.read_timeout_ms`  | WORKFLOW.md | Bounds session teardown: `orchestrator.stopSessionBestEffort` gives `StopSession` this many milliseconds on a detached context, defaulting to 10 000 ms.                                    |
 | `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the orchestrator. `orchestrator.reconcileStalled` compares `LastAgentTimestamp` against the threshold and cancels the worker's context, which terminates the turn.              |
 
@@ -535,8 +535,9 @@ orchestrator re-checks tracker state and decides whether to continue.
 `RunTurn` receives a context; the skeleton passes it to `exec.CommandContext` and installs a
 `cmd.Cancel` that sends `SIGTERM` to the process group, with `cmd.WaitDelay` set to the same
 5-second grace period before the force kill. When the context is cancelled (for example because
-tracker reconciliation found the issue terminal, or the stall detector fired), the turn returns
-`turn_cancelled` with `domain.ErrTurnCancelled` and whatever usage accumulated before the kill.
+tracker reconciliation found the issue terminal, the stall detector fired, or the orchestrator's
+per-turn deadline expired), the turn returns `turn_cancelled` with `domain.ErrTurnCancelled` and
+whatever usage accumulated before the kill.
 
 ---
 
@@ -601,8 +602,10 @@ Workspace and binary resolution fail earlier, in `StartSession`: an unusable wor
 `invalid_workspace_cwd` and an unresolvable command yields `agent_not_found`
 (`agentcore.ResolveWorkspace`, `agentcore.ResolveBinary`).
 
-The Claude path never produces `response_timeout`, `turn_timeout`, or `turn_input_required`: it
-enforces no adapter-side deadline, and `-p` admits no interactive prompt.
+The Claude path never produces `response_timeout` or `turn_input_required`: it enforces no
+adapter-side deadline, and `-p` admits no interactive prompt. It can end with `turn_timeout`: the
+orchestrator produces that kind on the adapter's return once its derived turn deadline expires,
+not the adapter itself.
 
 ### API retry errors
 

@@ -456,14 +456,28 @@ type PendingReaction struct {
 	// CreatedAt is the UTC time the entry was created.
 	CreatedAt time.Time
 
-	// PendingAttempts is the number of times the entry has been
-	// re-enqueued without a definitive result (pending status or
-	// transient fetch error). Used to compute exponential backoff.
+	// PendingAttempts is the count of consecutive passes that reached no
+	// dispatch. Used to compute exponential backoff.
 	PendingAttempts int
 
 	// PendingRetryAt is the earliest UTC time at which the reconcile
 	// function should poll again. Zero means ready immediately.
 	PendingRetryAt time.Time
+
+	// HeadRecordedAt is the UTC time at which this process recorded the
+	// commit the entry is currently evaluated against. Zero until the
+	// first head is recorded, and zero again for an entry restored on
+	// startup, because a head recorded by a previous process cannot
+	// bound a query over this process's activity. Read only by kinds
+	// whose subject is the pull request head.
+	HeadRecordedAt time.Time
+
+	// EscalatedForCurrentHead reports whether the configured escalation
+	// has already been applied for the commit currently recorded.
+	// Cleared whenever a different head is recorded, so an exhausted
+	// budget escalates at most once per commit rather than once per
+	// pass. Read only by kinds whose subject is the pull request head.
+	EscalatedForCurrentHead bool
 
 	// KindData holds kind-specific typed data. CI reactions use
 	// [*CIReactionData]; future reaction types define their own structs.
@@ -491,13 +505,29 @@ type PendingReaction struct {
 
 // CIReactionData holds CI-specific fields for a pending CI reaction.
 // Stored in [PendingReaction.KindData] for reactions with Kind ==
-// [ReactionKindCI].
+// [ReactionKindCI]. PRNumber, Owner, and Repo are sourced from
+// [domain.SCMMetadata] (written by the agent to scm.json), never from
+// the tracker project configuration.
+//
+// SHA is the head recorded at worker exit. It is not the ref the
+// reaction polls: the polled ref is the head read live from
+// [domain.PRMergeStatus.HeadSHA] on each due tick, so a commit pushed
+// after the agent handed off is the commit the verdict describes.
 type CIReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
 	// Branch is the git branch name from SCM metadata.
 	Branch string
 
-	// SHA is the git commit SHA from SCM metadata. When non-empty, used
-	// as the ref for CIStatusProvider.FetchCIStatus.
+	// SHA is the git commit SHA from SCM metadata, carried for logging
+	// and parity with the sibling reaction data.
 	SHA string
 }
 

@@ -197,6 +197,9 @@ Fields:
   - HTTP-based agent adapters do not require a local command.
 - `turn_timeout_ms` (integer)
   - Default: `3600000` (1 hour)
+  - Must be positive. A non-positive value is rejected when the configuration is parsed.
+  - Unlike `stall_timeout_ms` below, this bound cannot be disabled: it is the last wall-clock
+    stop on an unattended turn, so no non-positive value switches it off.
 - `read_timeout_ms` (integer)
   - Default: `5000`
 - `stall_timeout_ms` (integer)
@@ -365,6 +368,9 @@ Equivalent to the deprecated `ci_feedback` section. See Section 11A for the CI f
 Extra fields:
 
 - `max_log_lines` (integer, via Extra): maximum CI log tail lines. Default: `50`.
+- `watch_window_ms` (integer, via Extra): bounds a pending CI entry's age, measured from the last
+  recorded head. Default: `86400000` (twenty-four hours). Must be non-negative. `0` removes the
+  clock bound.
 
 **Reaction kind: `review_comments`**
 

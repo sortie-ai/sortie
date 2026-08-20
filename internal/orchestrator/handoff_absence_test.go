@@ -637,11 +637,11 @@ func TestParkExhaustedAbsencesLeavesBudgetExhaustedEmpty(t *testing.T) {
 	}
 }
 
-// TestUnparkIssueAgentBlockedDoesNotResetAbsenceSequence verifies that
-// releasing a park whose reason is agent_blocked does not call
-// ResetHandoffAbsenceSequence: that reset belongs only to the
-// handoff_absence reason, which owns a sequence to reset.
-func TestUnparkIssueAgentBlockedDoesNotResetAbsenceSequence(t *testing.T) {
+// TestUnparkIssueAgentBlockedResetsAbsenceSequence verifies that releasing
+// a park whose reason is agent_blocked calls ResetHandoffAbsenceSequence
+// the same as releasing any other park reason: the reset runs on every
+// release, not only on the handoff_absence reason.
+func TestUnparkIssueAgentBlockedResetsAbsenceSequence(t *testing.T) {
 	t.Parallel()
 
 	const issueID = "BLK-UNPARK"
@@ -654,8 +654,8 @@ func TestUnparkIssueAgentBlockedDoesNotResetAbsenceSequence(t *testing.T) {
 	if _, ok := state.Parked[issueID]; ok {
 		t.Error("issue remains parked after unparkIssue")
 	}
-	if len(store.absenceResetOf) != 0 {
-		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want none for an agent_blocked park", store.absenceResetOf)
+	if len(store.absenceResetOf) != 1 || store.absenceResetOf[0] != issueID {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want [%s] for an agent_blocked park", store.absenceResetOf, issueID)
 	}
 	if len(store.deletedParkedIDs) != 1 || store.deletedParkedIDs[0] != issueID {
 		t.Errorf("DeleteParkedIssue calls = %v, want [%s]", store.deletedParkedIDs, issueID)

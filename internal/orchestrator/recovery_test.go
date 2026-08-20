@@ -689,6 +689,9 @@ func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
 		Branch:   "feature/ci-fix",
 		SHA:      "deadbeef",
 		PushedAt: freshSCMTime(1),
+		PRNumber: 55,
+		Owner:    "acme",
+		Repo:     "widgets",
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-2": "In Review"}}
@@ -713,15 +716,84 @@ func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
 	if !ok {
 		t.Fatalf("KindData type = %T, want *CIReactionData", pr.KindData)
 	}
+	if ci.PRNumber != 55 {
+		t.Errorf("CIReactionData.PRNumber = %d, want 55", ci.PRNumber)
+	}
+	if ci.Owner != "acme" {
+		t.Errorf("CIReactionData.Owner = %q, want %q", ci.Owner, "acme")
+	}
+	if ci.Repo != "widgets" {
+		t.Errorf("CIReactionData.Repo = %q, want %q", ci.Repo, "widgets")
+	}
 	if ci.Branch != "feature/ci-fix" {
 		t.Errorf("CIReactionData.Branch = %q, want %q", ci.Branch, "feature/ci-fix")
 	}
 	if ci.SHA != "deadbeef" {
 		t.Errorf("CIReactionData.SHA = %q, want %q", ci.SHA, "deadbeef")
 	}
+	// A head recorded by a previous process cannot bound this
+	// process's attribution query, so a recovered entry always starts
+	// with a zero boundary.
+	if !pr.HeadRecordedAt.IsZero() {
+		t.Errorf("PendingReaction.HeadRecordedAt = %v, want zero on a recovered entry", pr.HeadRecordedAt)
+	}
 	// Issue must not be claimed.
 	if _, claimed := state.Claimed["ISS-2"]; claimed {
 		t.Error("ISS-2 found in state.Claimed after CI recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_CIMissingPRIdentity_NoPendingReaction
+// verifies that startup recovery of the CI kind requires the full pull
+// request identity quadruple, mirroring the predicate every sibling
+// PR-backed reaction kind already enforces, one subtest per missing
+// field.
+func TestRecoverPendingReactions_CIMissingPRIdentity_NoPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		prNumber int
+		owner    string
+		repo     string
+		branch   string
+	}{
+		{"zero PRNumber", 0, "acme", "widgets", "feature/ci-fix"},
+		{"empty Owner", 55, "", "widgets", "feature/ci-fix"},
+		{"empty Repo", 55, "acme", "", "feature/ci-fix"},
+		{"empty Branch", 55, "acme", "widgets", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsRoot := t.TempDir()
+			writeRecoverySCM(t, wsRoot, "PROJ-CINOPR", domain.SCMMetadata{
+				Branch:   tt.branch,
+				SHA:      "deadbeef",
+				PushedAt: freshSCMTime(1),
+				PRNumber: tt.prNumber,
+				Owner:    tt.owner,
+				Repo:     tt.repo,
+			})
+
+			tracker := &recoveryTrackerStub{states: map[string]string{"ISS-CINOPR": "In Review"}}
+			state := NewState(5000, 4, nil, AgentTotals{})
+			run := freshRun("ISS-CINOPR", "PROJ-CINOPR", "", 1)
+			params := defaultRecoveryParams(wsRoot, tracker)
+
+			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			if err != nil {
+				t.Fatalf("RecoverPendingReactions: %v", err)
+			}
+			if result.CIRecovered != 0 {
+				t.Errorf("CIRecovered = %d, want 0 for %s", result.CIRecovered, tt.name)
+			}
+			if _, ok := state.PendingReactions[ReactionKey("ISS-CINOPR", ReactionKindCI)]; ok {
+				t.Errorf("PendingReactions populated with %s; want absent (full PR identity required)", tt.name)
+			}
+		})
 	}
 }
 

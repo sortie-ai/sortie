@@ -410,8 +410,7 @@ func TestStopSession_WrongInternalType(t *testing.T) {
 	if err == nil {
 		t.Fatal("StopSession() error = nil, want error for wrong internal type")
 	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
+	if _, ok := errors.AsType[*domain.AgentError](err); !ok {
 		t.Fatalf("error type = %T, want *domain.AgentError", err)
 	}
 }

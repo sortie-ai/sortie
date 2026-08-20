@@ -235,16 +235,23 @@ per-issue conversation set.
 
 ### Process lifetime and cancellation
 
-Kiro CLI exposes no native per-turn timeout flag on `chat` (local `chat --help`), so an
-external bound is the only upper limit on a turn, and the login-hang hazard above makes it
-mandatory rather than optional. Cancelling the context passed to `RunTurn` is what stops a
-Kiro subprocess: `agentcore.ForkPerTurnSession` puts the process in its own group, sends
+Kiro CLI exposes no native per-turn timeout flag on `chat` (local `chat --help`), so
+`agent.turn_timeout_ms` supplies the external wall-clock bound on a turn. The login-hang
+hazard above is caught by stall detection, described below, not by that bound. Cancelling
+the context passed to `RunTurn` is what stops a Kiro subprocess:
+`agentcore.ForkPerTurnSession` puts the process in its own group, sends
 SIGTERM to that group through `procutil.SignalGraceful`, waits the five-second
 `stopGracePeriod`, and then sends SIGKILL. `KiroAdapter.StopSession` reaches the same path
 through `ForkPerTurnSession.Stop`. On SIGTERM the process terminates and the shell reports
 exit status 143 (128 + 15); on SIGKILL, 137 (128 + 9). The skeleton detects the signal with
 `procutil.WasSignaled` and returns `domain.EventTurnCancelled` with `domain.ErrTurnCancelled`
 before the adapter's own finalizer runs.
+
+The orchestrator now derives a per-turn deadline from `agent.turn_timeout_ms` and passes it on
+the context given to `RunTurn`, the same inheritance mechanism every other adapter relies on: a
+Go context deadline propagates to `agentcore.ForkPerTurnSession`'s own `context.WithCancel`
+re-derivation, so an expiry cancels the Kiro subprocess through the same signal-then-force-kill
+path described above.
 
 Stall detection still reaches Kiro turns despite the absent event stream: every non-empty
 stdout line becomes a `domain.EventNotification` carrying a fresh
@@ -539,7 +546,7 @@ Resulting `domain.TurnResult.ExitReason`, as `kiro.KiroAdapter` and the
 | Any other non-zero exit that is not a signal or 127 | `turn_failed` with `domain.ErrPortExit` and the message `exit code N` |
 | Exit 127 | `turn_failed` with `domain.ErrAgentNotFound`; the skeleton handles this arm before the adapter's finalizer, so it is not `startup_failed` |
 | SIGTERM or SIGKILL, or a cancelled context | `turn_cancelled` with `domain.ErrTurnCancelled` |
-| No-credential launch that hangs | Prevented by the credential preflight; a hang that reaches a cancelled context yields `turn_cancelled` |
+| No-credential launch that hangs | Prevented by the credential preflight in local mode; a hang that reaches a cancelled context yields `turn_cancelled` |
 
 The shared disposition rule in `agentcore.DecideTurn` treats a zero exit code with no positive
 work signal as a failed turn, and that signal is ordinarily a per-turn token count. Headless
@@ -653,12 +660,6 @@ projection, while Kiro emits only a human transcript.
   Builder ID working while IAM Identity Center fails. Settled by repeating the workspace
   `mcp.json` probe (`mcp list` plus `chat --no-interactive --require-mcp-startup`) under a
   Builder ID login.
-- What enforces `agent.turn_timeout_ms` for a Kiro turn. The value reaches adapters through
-  `orchestrator.toDomainAgentConfig` as `domain.AgentConfig.TurnTimeoutMS`, and
-  `kiro.sessionState` stores it without reading it, but no deadline derived from it appears on
-  the path that calls `RunTurn`; `orchestrator.reconcileStalled` cancels on
-  `stall_timeout_ms` only. Settled by tracing the worker's turn context in
-  `internal/orchestrator`.
 
 ## Sources
 

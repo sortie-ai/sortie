@@ -100,10 +100,16 @@ The orchestrator classifies a head change as its own work or as unknown. There i
 and in particular there is no answer that names a person.
 
 The recorded head is a validity token. When the current head matches it, nothing changed. When it
-does not, the record is spent and yields no attribution on its own. A head change is positively
-**not** the orchestrator's own work when no worker session for that issue ran between the recording
-and the read, which run history answers without depending on the record staying synchronized. Every
-other head change is unknown.
+does not, the record is spent and yields no attribution on its own.
+
+A head change is positively **not** the orchestrator's own work when no worker session for that
+issue ran between the recording and the read. Two sources answer that together, and neither answers
+it alone. The orchestrator holds its live sessions in memory, so it knows what is running now.
+History records an attempt once that attempt completes, so it knows what ran and finished, and the
+rows the CI reaction writes for its own observations describe a verdict rather than a session and
+are excluded from that count. A live session has no completed row yet, so the answer while a session
+is running is unknown, and the first answer after a restart is unknown for the same reason: the
+process has no boundary of its own to measure from. Every other head change is unknown.
 
 Unknown takes the conservative branch on each axis, and the two axes differ. It re-arms, because a
 changed head genuinely voids prior conclusions and a needless re-arm costs one poll. It does not
@@ -179,9 +185,9 @@ completion watch asks a question whose answer a new commit cannot change.
 **Attribute each head change to a person.** It is the obvious reading of "someone else pushed this",
 and it fails in a way that is worse than being unavailable, because the failure is a confident false
 statement to an operator. The stored head desynchronizes whenever two updates run concurrently, and
-the divergence is then indistinguishable from a person's edit. Deriving the answer from the commits
-and from run history on every pass, and answering unknown rather than guessing, costs one comparison
-and cannot produce that failure.
+the divergence is then indistinguishable from a person's edit. Deriving the answer on every pass from
+what the orchestrator knows about its own sessions, and answering unknown rather than guessing,
+costs one comparison and cannot produce that failure.
 
 **Move the tracker issue back to its pre-handoff state.** It re-derives everything with no new
 mechanism, since the ordinary dispatch path would then run. It is rejected because it is the most

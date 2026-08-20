@@ -747,7 +747,7 @@ agent:
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
 | `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`, `opencode`, or `kiro`). Adapters that do not start a local process ignore this field. |
-| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
+| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Wall-clock bound on a single agent turn, enforced by the orchestrator. Must be positive.                                                                                         |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
 | `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
 | `max_concurrent_agents`          | integer or string integer         | No                                  | `10`            | **Yes** — affects subsequent dispatch      | Global concurrency limit across all issues.                                                                                                                                      |
@@ -817,6 +817,9 @@ ci_feedback:
 | `max_log_lines`    | integer | No                    | `50`           | Requires restart  | Maximum lines to fetch from the first failing CI check log. `0` disables log fetching. Must be non-negative.          |
 | `escalation`       | string  | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
 | `escalation_label` | string  | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
+
+The deprecated `ci_feedback` section exposes no `watch_window_ms` key. A deployment that still uses
+this section receives the default value described in Section 2.10.
 
 **Activation pattern:** CI feedback has no `enabled` flag. The feature is active when
 `ci_feedback.kind` is present and non-empty. Omit the entire `ci_feedback` section to
@@ -921,9 +924,10 @@ under `reactions` identifies a reaction kind.
 **Reload behavior:** every field of every reaction kind is read once when the orchestrator
 is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only
 on the next restart. `reactions.ci_failure` is the single exception: the orchestrator folds
-it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`, and
-`escalation_label` from the reloaded config on each tick. Its `max_log_lines` still requires
-a restart, because the CI provider is constructed once at process start.
+it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`,
+`escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its
+`max_log_lines` still requires a restart, because the CI provider is constructed once at
+process start.
 
 **Escalation recurrence:** `escalation: label` is idempotent (re-applying a
 present label is a no-op); `escalation: comment` posts a new comment each time
@@ -964,14 +968,17 @@ SCM reaction in one workflow MUST name the same provider.
 #### Reaction kind: `ci_failure`
 
 Equivalent to the deprecated `ci_feedback` section. Configures the CI failure feedback
-loop. The orchestrator polls CI status for Sortie-created branches and dispatches
-continuation turns when CI fails.
+loop. The orchestrator resolves the pull request's current head on each pass and polls CI
+status for that head, dispatching continuation turns when CI fails on it.
+
+Its `provider` must match the provider of every other active SCM reaction.
 
 Additional fields (via Extra):
 
-| Field           | Type    | Default | Dynamic Reload   | Description                                                           |
-| --------------- | ------- | ------- | ---------------- | --------------------------------------------------------------------- |
-| `max_log_lines` | integer | `50`    | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative. |
+| Field             | Type    | Default      | Dynamic Reload | Description                                                                                                             |
+| ----------------- | ------- | ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `max_log_lines`   | integer | `50`         | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative.                                   |
+| `watch_window_ms` | integer | `86400000`   | Every tick        | Bounds a pending entry's age, measured from the last recorded head. `0` removes the clock bound. Must be non-negative. |
 
 Example:
 
@@ -2485,7 +2492,6 @@ codex:
   approval_policy: never          # "never" (default), "onRequest", "unlessTrusted", "always"
   thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
   personality: concise            # Personality preset
-  skip_git_repo_check: false      # Skip git repo validation for non-git workspaces
   turn_sandbox_policy:            # Per-turn sandbox policy override (optional)
     networkAccess: true
 ```
@@ -2583,14 +2589,14 @@ is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`.
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command. |
+| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the canary is skipped and the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command instead. |
 
 **Token usage and budgets:** The Kiro adapter emits no token-usage events.
 `kiro-cli` does not report token counts on the headless path (only an abstract
 credits figure on stderr), so `TurnResult.Usage` is the zero value and
 `token_rates.kiro` produces no cost estimate. Token-based budget enforcement
-does not apply to Kiro; the `agent.turn_timeout_ms` is the only effective
-backstop and is mandatory because `kiro-cli` has no native per-turn timeout.
+does not apply to Kiro; `agent.turn_timeout_ms` is the wall-clock budget
+bound. A turn that goes silent is caught first by `agent.stall_timeout_ms`.
 
 **MCP:** Under `KIRO_API_KEY` authentication the backend `GetProfile` gate
 disables MCP. A workspace `mcp.json` is not loaded and `--require-mcp-startup`
@@ -3422,7 +3428,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `hooks.timeout_ms`                      | integer          | `60000`                      | —                                        | All hooks                                                                              |
 | `agent.kind`                            | string           | `claude-code`                | `SORTIE_AGENT_KIND`                      |                                                                                        |
 | `agent.command`                         | shell command    | adapter-defined              | `SORTIE_AGENT_COMMAND`                   | Required for local adapters                                                            |
-| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | `SORTIE_AGENT_TURN_TIMEOUT_MS`           | 1 hour                                                                                 |
+| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | `SORTIE_AGENT_TURN_TIMEOUT_MS`           | 1 hour; wall-clock bound per turn; `≤ 0` rejected                                      |
 | `agent.read_timeout_ms`                 | integer          | `5000`                       | `SORTIE_AGENT_READ_TIMEOUT_MS`           | 5 seconds                                                                              |
 | `agent.stall_timeout_ms`               | integer          | `300000`                     | `SORTIE_AGENT_STALL_TIMEOUT_MS`          | 5 min; `≤ 0` disables                                                                  |
 | `agent.max_concurrent_agents`           | integer          | `10`                         | `SORTIE_AGENT_MAX_CONCURRENT_AGENTS`     | Dynamic reload                                                                         |

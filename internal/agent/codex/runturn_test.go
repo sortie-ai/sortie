@@ -396,8 +396,7 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunTurn() expected error, got nil")
 	}
-	var ae *domain.AgentError
-	if !errors.As(err, &ae) {
+	if _, ok := errors.AsType[*domain.AgentError](err); !ok {
 		t.Fatalf("error type = %T, want *domain.AgentError", err)
 	}
 	if result.ExitReason != domain.EventTurnFailed {

@@ -908,7 +908,7 @@ func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "looks good"}},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -970,7 +970,7 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 		},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1021,7 +1021,7 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 		},
 	}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1062,7 +1062,7 @@ func TestSelfReviewLoop_MissingVerdict(t *testing.T) {
 	// Adapter writes no verdict file.
 	adapter := &verdictWriter{wsPath: wsPath, verdicts: nil}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1090,7 +1090,7 @@ func TestSelfReviewLoop_TurnError(t *testing.T) {
 
 	adapter := &failOnFirstAdapter{wsPath: wsPath}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1120,7 +1120,7 @@ func TestSelfReviewLoop_StatusBlocked(t *testing.T) {
 	// Adapter writes "blocked" status signal during the first review turn.
 	adapter := &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
 
-	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1159,7 +1159,7 @@ func TestSelfReviewLoop_ContextCancelled(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "done"}},
 	}
 
-	meta, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
+	meta, _, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1192,7 +1192,7 @@ func TestSelfReviewLoop_ProgressEvents(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "good"}},
 	}
 
-	runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1235,7 +1235,7 @@ func TestSelfReviewLoop_ReviewSummaryWritten(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "ok"}},
 	}
 
-	runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1349,7 +1349,7 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 				cancel()
 			}
 
-			_, signal := runSelfReviewLoop(ctx, RunSelfReviewParams{
+			_, signal, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 				Session:        domain.Session{ID: "sess"},
 				Issue:          selfReviewIssue(),
 				WorkspacePath:  wsPath,
@@ -1390,7 +1390,7 @@ func TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues(t *testing.T) {
 		},
 	}
 
-	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1433,7 +1433,7 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 
 	adapter := &repeatingNeedsReviewAdapter{t: t, wsPath: wsPath}
 
-	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1453,5 +1453,137 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 	}
 	if !meta.CapReached {
 		t.Error("CapReached = false, want true")
+	}
+}
+
+// --- Fix-turn deadline expiry ---
+
+// expiringFixTurnAdapter writes an optional verdict on its first RunTurn
+// call and then blocks until the context is done on every later call,
+// modeling an agent whose fix turn keeps running until the turn deadline
+// cancels it. Returning ctx.Err() mirrors what the subprocess-backed
+// adapters report once their context is cancelled.
+type expiringFixTurnAdapter struct {
+	t          *testing.T
+	wsPath     string
+	verdict    *domain.ReviewVerdict
+	rawVerdict string
+	callIdx    int
+}
+
+var _ domain.AgentAdapter = (*expiringFixTurnAdapter)(nil)
+
+func (e *expiringFixTurnAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+	return domain.Session{ID: "expiring-sess"}, nil
+}
+func (e *expiringFixTurnAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
+func (e *expiringFixTurnAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
+func (e *expiringFixTurnAdapter) RunTurn(ctx context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	idx := e.callIdx
+	e.callIdx++
+
+	if idx > 0 {
+		<-ctx.Done()
+		return domain.TurnResult{}, ctx.Err()
+	}
+
+	if e.verdict != nil {
+		writeVerdictFile(e.t, e.wsPath, *e.verdict)
+	}
+	if e.rawVerdict != "" {
+		dir := filepath.Join(e.wsPath, ".sortie")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			e.t.Fatalf("MkdirAll(.sortie): %v", err)
+		}
+		path := filepath.Join(dir, "review_verdict.json")
+		if err := os.WriteFile(path, []byte(e.rawVerdict), 0o600); err != nil {
+			e.t.Fatalf("WriteFile(review_verdict.json): %v", err)
+		}
+	}
+	if params.OnEvent != nil {
+		params.OnEvent(domain.AgentEvent{Type: domain.EventNotification})
+	}
+	return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+}
+
+// TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration verifies that a fix
+// turn exceeding the turn bound fails the phase and records the expiry on
+// the iteration already appended for that round, adding to any verdict
+// diagnostic already there instead of replacing it.
+func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// verdict is written by the review turn when set.
+		verdict *domain.ReviewVerdict
+		// rawVerdict, when set, is written as the verdict file before the
+		// phase starts so the iteration carries a parse diagnostic.
+		rawVerdict string
+		// wantPrior is the diagnostic the expiry note must be appended to,
+		// empty when the iteration carries none.
+		wantPrior string
+	}{
+		{
+			name:    "sets the note on an iteration with no prior diagnostic",
+			verdict: &domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"},
+		},
+		{
+			name:       "appends to a prior diagnostic instead of replacing it",
+			rawVerdict: "{not json",
+			wantPrior:  "verdict parse error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			turns := 0
+			cfg := selfReviewCfg()
+			cfg.MaxIterations = 2
+
+			meta, _, phaseErr := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+				Session:        domain.Session{ID: "sess"},
+				Issue:          selfReviewIssue(),
+				WorkspacePath:  wsPath,
+				Config:         cfg,
+				AgentAdapter:   &expiringFixTurnAdapter{t: t, wsPath: wsPath, verdict: tt.verdict, rawVerdict: tt.rawVerdict},
+				OnEvent:        func(_ string, _ domain.AgentEvent) {},
+				Logger:         discardLogger(),
+				Metrics:        &domain.NoopMetrics{},
+				TurnsCompleted: &turns,
+				TurnTimeoutMS:  100,
+			})
+
+			var agentErr *domain.AgentError
+			if !errors.As(phaseErr, &agentErr) {
+				t.Fatalf("phase error = %v (%T), want *domain.AgentError", phaseErr, phaseErr)
+			}
+			if agentErr.Kind != domain.ErrTurnTimeout {
+				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+			}
+			if meta == nil {
+				t.Fatal("ReviewMetadata = nil, want the iteration record to survive the failure exit")
+			}
+			if len(meta.Iterations) != 1 {
+				t.Fatalf("len(Iterations) = %d, want 1", len(meta.Iterations))
+			}
+
+			got := meta.Iterations[0].VerdictParseError
+			if tt.wantPrior == "" {
+				if !strings.HasPrefix(got, "turn timeout: ") {
+					t.Errorf("VerdictParseError = %q, want prefix %q", got, "turn timeout: ")
+				}
+				return
+			}
+			if !strings.HasPrefix(got, tt.wantPrior) {
+				t.Errorf("VerdictParseError = %q, want the prior diagnostic %q preserved at the start", got, tt.wantPrior)
+			}
+			if !strings.Contains(got, "; turn timeout: ") {
+				t.Errorf("VerdictParseError = %q, want the expiry note appended after the prior diagnostic", got)
+			}
+		})
 	}
 }

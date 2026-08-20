@@ -50,7 +50,6 @@ codex:
   effort: medium
   approval_policy: never
   thread_sandbox: workspaceWrite
-  skip_git_repo_check: false
 
 server:
   port: 8642

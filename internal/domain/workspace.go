@@ -10,13 +10,12 @@ type SCMMetadata struct {
 	// Branch is the branch name (e.g. "feature/PROJ-42").
 	Branch string `json:"branch"`
 
-	// SHA is the commit SHA at push time. When present, the
-	// orchestrator passes this to [CIStatusProvider.FetchCIStatus]
-	// instead of the branch name for deterministic results.
+	// SHA is the commit SHA at push time, carried for reaction seeding
+	// and observability rather than as a polled ref.
 	SHA string `json:"sha,omitempty"`
 
-	// PushedAt is an ISO-8601 timestamp of the push. Used by the
-	// orchestrator to skip CI checks for stale pushes.
+	// PushedAt is an ISO-8601 timestamp of the push. Startup recovery
+	// uses it as the activity timestamp for the freshness cutoff.
 	PushedAt string `json:"pushed_at,omitempty"`
 
 	// PRNumber is the pull request number associated with this branch.

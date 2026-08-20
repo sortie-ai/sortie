@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -443,6 +444,68 @@ func exitKindForErr(ctx context.Context) WorkerExitKind {
 		return WorkerExitCancelled
 	}
 	return WorkerExitError
+}
+
+// defaultTurnTimeoutMS is the fallback bound runBoundedTurn applies
+// when it receives a non-positive turnTimeoutMS. It repeats the config
+// layer's default for agent.turn_timeout_ms. Because that layer rejects
+// a non-positive value outright, the fallback is unreachable from a
+// parsed configuration; it exists so an AgentConfig assembled in code
+// cannot leave a turn unbounded.
+const defaultTurnTimeoutMS = 3_600_000
+
+// runBoundedTurn calls adapter.RunTurn under a deadline derived from
+// turnTimeoutMS and classifies the outcome once the call returns. A
+// parent ctx that is already done takes priority over the deadline, so
+// stall detection, tracker-state reconciliation, and shutdown keep
+// reporting their own cancellation rather than a turn timeout; only a
+// turn context that expired while ctx stayed live is reported as
+// [domain.ErrTurnTimeout]. Every other outcome, including a
+// non-timeout adapter error, is returned unchanged.
+//
+// ctx is never replaced or shadowed for the caller: runBoundedTurn
+// derives its own child context for the call and releases it before
+// returning. identity carries the caller's typed attributes naming
+// the turn in the log record an expiry or a non-positive substitution
+// produces; the caller's logger is used unmodified.
+func runBoundedTurn(
+	ctx context.Context,
+	adapter domain.AgentAdapter,
+	session domain.Session,
+	params domain.RunTurnParams,
+	turnTimeoutMS int,
+	logger *slog.Logger,
+	identity ...slog.Attr,
+) (domain.TurnResult, error) {
+	effectiveMS := turnTimeoutMS
+	if effectiveMS <= 0 {
+		attrs := append([]slog.Attr{slog.Int("configured_turn_timeout_ms", turnTimeoutMS)}, identity...)
+		logger.LogAttrs(ctx, slog.LevelWarn, "non-positive turn timeout, applying default", attrs...)
+		effectiveMS = defaultTurnTimeoutMS
+	}
+
+	turnCtx, cancel := context.WithTimeout(ctx, time.Duration(effectiveMS)*time.Millisecond)
+	defer cancel()
+
+	result, err := adapter.RunTurn(turnCtx, session, params)
+
+	if ctx.Err() != nil {
+		return result, err
+	}
+	if errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
+		attrs := append([]slog.Attr{slog.Int("turn_timeout_ms", effectiveMS)}, identity...)
+		logger.LogAttrs(ctx, slog.LevelWarn, "turn timeout exceeded", attrs...)
+		cause := err
+		if cause == nil {
+			cause = context.DeadlineExceeded
+		}
+		return result, &domain.AgentError{
+			Kind:    domain.ErrTurnTimeout,
+			Message: fmt.Sprintf("turn exceeded the configured %d ms bound; the adapter's own report follows", effectiveMS),
+			Err:     cause,
+		}
+	}
+	return result, err
 }
 
 // foldLocalUsage applies the clamped-delta accounting rule to the
@@ -967,7 +1030,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			localMeasured = false
 		}
 
-		turnResult, err := deps.AgentAdapter.RunTurn(ctx, session, domain.RunTurnParams{
+		turnResult, err := runBoundedTurn(ctx, deps.AgentAdapter, session, domain.RunTurnParams{
 			Prompt: rendered,
 			Issue:  issue,
 			OnEvent: func(event domain.AgentEvent) {
@@ -1001,7 +1064,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				}
 				deps.OnEvent(issue.ID, event)
 			},
-		})
+		}, cfg.Agent.TurnTimeoutMS, logger, slog.Int("turn_number", turnNumber))
 
 		// Fold TurnResult.Usage into the local mirror on both the success
 		// and the error path, so a run-cumulative figure the adapter
@@ -1131,6 +1194,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// the completion signal; a pending blocked reason skips the phase.
 	reviewCfg := deps.ConfigFunc()
 	var reviewMeta *domain.ReviewMetadata
+	var phaseErr error
 
 	signalAdmits := pendingSoftStopReason == "" || pendingSoftStopReason == string(workspace.StatusNeedsHumanReview)
 	selfReviewGate := reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() && signalAdmits
@@ -1144,7 +1208,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			workspace.CleanupStatusFile(wsResult.Path, logger)
 		}
 		var phaseSignal workspace.StatusSignal
-		reviewMeta, phaseSignal = runSelfReviewLoop(ctx, RunSelfReviewParams{
+		reviewMeta, phaseSignal, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:        session,
 			Issue:          issue,
 			WorkspacePath:  wsResult.Path,
@@ -1155,12 +1219,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Logger:         logger,
 			Metrics:        deps.Metrics,
 			TurnsCompleted: &turnsCompleted,
+			TurnTimeoutMS:  cfg.Agent.TurnTimeoutMS,
 		})
-		// A blocked signal read inside the phase only replaces the
-		// pending reason when one is already pending: a run admitted
-		// by turn-budget exhaustion carries no reason into the phase
-		// and must carry none out of it, so its exit is unchanged.
-		if pendingSoftStopReason != "" && phaseSignal == workspace.StatusBlocked {
+		// A blocked signal read inside the phase becomes the run's soft-stop
+		// reason unconditionally, on whichever admission path the run took.
+		if phaseSignal == workspace.StatusBlocked {
 			pendingSoftStopReason = string(workspace.StatusBlocked)
 		}
 	} else if pendingSoftStopReason != "" {
@@ -1189,6 +1252,47 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				selfReviewSummaryPath = reviewSummaryPath
 			}
 		}
+	}
+
+	// A self-review turn's deadline expiry fails the attempt: the phase
+	// already ran its tail work above, so teardown here mirrors the
+	// normal exit's teardown, carrying the phase's own status and
+	// summary path rather than the empty values finishWorkspace() would
+	// pass to a hook that reads them.
+	if phaseErr != nil {
+		stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
+		if deps.Posture.RunsSetupHooks() {
+			workspace.Finish(ctx, workspace.FinishParams{
+				Path:                  wsResult.Path,
+				Identifier:            issue.Identifier,
+				IssueID:               issue.ID,
+				Attempt:               attemptInt,
+				AfterRun:              cfg.Hooks.AfterRun,
+				HookTimeoutMS:         cfg.Hooks.TimeoutMS,
+				Logger:                logger,
+				SSHHost:               deps.SSHHost,
+				SelfReviewStatus:      selfReviewStatus,
+				SelfReviewSummaryPath: selfReviewSummaryPath,
+			})
+		}
+		reported = true
+		deps.OnExit(issue.ID, WorkerResult{
+			IssueID:            issue.ID,
+			Identifier:         issue.Identifier,
+			ExitKind:           exitKindForErr(ctx),
+			Error:              phaseErr,
+			ReviewMetadata:     reviewMeta,
+			TurnsCompleted:     turnsCompleted,
+			SessionID:          session.ID,
+			WorkspacePath:      wsResult.Path,
+			AgentAdapter:       agentKind,
+			Attempt:            attempt,
+			SSHHost:            deps.SSHHost,
+			ObservedIssueState: observedIssueState,
+			Usage:              localUsage,
+			UsageMeasured:      localMeasured,
+		})
+		return
 	}
 
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)

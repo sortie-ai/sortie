@@ -29,6 +29,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `agent.command` is preserved as a shell command string
+- A non-positive `agent.turn_timeout_ms` is rejected at config parse time; an absent key takes
+  the default
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - Prompt template renders `issue`, `attempt`, and `run`
 - Prompt rendering fails on unknown variables (strict mode)
@@ -138,9 +140,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   fetch did not return
 - Parking on the consecutive handoff-absence ceiling and parking on a blocked soft stop produce
   the same durable record shape, differing only in the reason attributed to the park
-- Releasing an absence-ceiling park resets its consecutive-absence count, and the same poll tick
-  does not immediately re-derive the exhausted count and park the issue again
-- Releasing a `blocked` park does not touch the consecutive-absence count
+- Releasing a park resets its consecutive-absence count whatever reason the park carries; for a
+  released absence-ceiling park, the same poll tick does not immediately re-derive the exhausted
+  count and park the issue again
 - A park held under `tracker.handoff_evidence: off` is not released by the policy, and no new
   absence park is taken while the policy is set
 - A retry-lane absence park records no observed tracker state; the next poll tick backfills it
@@ -158,6 +160,13 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error
 - Stall detection kills stalled sessions and schedules retry
+- A turn exceeding the configured turn timeout ends the attempt with the `turn_timeout` failure
+  and schedules a retry, while a worker whose context was already cancelled keeps its
+  cancellation disposition; this is the enforcing side of the property Section 17.5 lists as
+  "Turn timeout is enforced"
+- A self-review turn expiry ends the attempt the same way, while every other self-review failure
+  (diff generation, a verification command, a verdict parse, a `blocked` status) still exits
+  normally
 - Slot exhaustion requeues retries with explicit error reason
 - Dispatch-time in-progress transition calls `TransitionIssue` when `tracker.in_progress_state`
   is configured
@@ -329,7 +338,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   admitted it
 - A `needs-human-review` signal read inside self-review is consumed and does not abort the loop
 - A `blocked` signal read inside self-review aborts the phase, and becomes the run's exit reason
-  on a run the completion signal admitted
+  on either admission path into the phase
 - A deployment with self-review disabled treats the completion signal exactly as before, ending
   the run without entering the phase
 - On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author

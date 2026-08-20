@@ -178,8 +178,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected render error on continuation turn, got nil")
 		}
-		var te *TemplateError
-		if !errors.As(err, &te) {
+		if _, ok := errors.AsType[*TemplateError](err); !ok {
 			t.Fatalf("expected *TemplateError, got %T: %v", err, err)
 		}
 	})
@@ -197,8 +196,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatal("expected error for turnNumber=0, got nil")
 		}
 		// Must NOT be a *TemplateError — this is a caller bug, not a template issue.
-		var te *TemplateError
-		if errors.As(err, &te) {
+		if _, ok := errors.AsType[*TemplateError](err); ok {
 			t.Errorf("BuildTurnPrompt(turnNumber=0) error type = %T, want plain error", err)
 		}
 	})

@@ -274,6 +274,7 @@ selection without re-evaluating rules.
 ```text
 function run_agent_attempt(issue, attempt, orchestrator_channel):
   cfg = current_config()
+  turn_timeout_ms = cfg.agent.turn_timeout_ms  // snapshot at attempt start; bounds every turn below, including the self-review phase's turns (not re-read per turn)
 
   // Dispatch-time in-progress transition (non-fatal).
   if cfg.tracker.in_progress_state is configured:
@@ -312,17 +313,25 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("prompt error")
 
-    turn_result = agent_adapter.run_turn(
+    // The derived turn context bounds only this call; worker_ctx itself is
+    // never replaced and keeps flowing to every consumer below.
+    turn_result, turn_err = agent_adapter.run_turn(
+      ctx=with_timeout(worker_ctx, turn_timeout_ms),
       session=session,
       prompt=prompt,
       issue=issue,
       on_message=(msg) -> send(orchestrator_channel, {agent_update, issue.id, msg})
     )
+    // An expiry of the derived context, observed once run_turn returns and
+    // with worker_ctx still live, is reclassified as a turn_timeout error.
+    // A worker_ctx that is already done (stall detection, terminal-state
+    // reconciliation, shutdown) keeps its own cancellation disposition
+    // instead, whatever the derived context is doing.
 
     if turn_result failed:
-      agent_adapter.stop_session(session)
+      agent_adapter.stop_session(session)  // on worker_ctx, never the derived turn context
       run_hook_best_effort("after_run", workspace.path)
-      fail_worker("agent turn error")
+      fail_worker(exit_kind_for_err(worker_ctx), turn_err)
 
     status = read_sortie_status(workspace.path)
     if status in ["blocked", "needs-human-review"]:
@@ -349,18 +358,21 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   // Self-review phase (between turn loop exit and session teardown). The gate
   // that already admits an exhausted turn budget also admits pending_reason
   // when it is empty or names the completion signal; a pending "blocked"
-  // reason skips the phase.
+  // reason skips the phase. A "blocked" signal the phase itself reports
+  // becomes the run's soft-stop reason whichever admission the gate granted.
   review_metadata = null
-  cfg = current_config()  // re-read for dynamic reload
+  phase_err = null
+  cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms (R-9)
   signal_admits = pending_reason == "" OR pending_reason == "needs-human-review"
-  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND signal_admits:
+  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND deps.Posture.DrivesIssueState() AND signal_admits:
     if pending_reason != "":
       log_info("agent signaled completion, entering self-review", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
-    review_metadata, phase_signal = run_self_review_loop(
-      session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel
+    review_metadata, phase_signal, phase_err = run_self_review_loop(
+      session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
+      turn_timeout_ms=turn_timeout_ms  // the attempt-start snapshot, bounding both phase turns
     )
-    if pending_reason != "" AND phase_signal == "blocked":
+    if phase_signal == "blocked":
       pending_reason = "blocked"
   else if pending_reason != "":
     log_info("agent signaled status, exiting worker", issue.id, pending_reason)
@@ -373,6 +385,22 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       self_review_status = "cap_reached"
     else:
       self_review_status = "error"
+
+  // A phase turn's deadline expiry is the only self-review failure that
+  // ends the attempt: a diff-generation failure, a verification-command
+  // failure, a verdict parse failure, and a "blocked" status all keep the
+  // degrade-not-fail disposition above and fall through to the normal exit
+  // below. The derivation of self_review_status above runs unconditionally,
+  // on both the failure exit and the normal exit, so either teardown call
+  // carries the phase's real status rather than the "disabled" value a
+  // phase that never ran would leave behind.
+  if phase_err != null:
+    agent_adapter.stop_session(session)  // on worker_ctx, never the derived turn context
+    run_hook_best_effort("after_run", workspace.path, {
+      SORTIE_SELF_REVIEW_STATUS: self_review_status,
+      SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
+    })
+    fail_worker(exit_kind_for_err(worker_ctx), phase_err, review_metadata=review_metadata)
 
   agent_adapter.stop_session(session)
   run_hook_best_effort("after_run", workspace.path, {
