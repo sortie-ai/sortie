@@ -38,8 +38,7 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 // [checkHostVersion] for a version it rejects.
 func validateAPIVersion(versionErr error, version, host string) []registry.ValidationDiag {
 	if versionErr != nil {
-		var trackerErr *domain.TrackerError
-		if errors.As(versionErr, &trackerErr) {
+		if trackerErr, ok := errors.AsType[*domain.TrackerError](versionErr); ok {
 			return []registry.ValidationDiag{{
 				Severity: "error",
 				Check:    "tracker.api_version.invalid",

@@ -201,8 +201,7 @@ func TestRunHook(t *testing.T) {
 		// or non-zero (SIGPIPE). Either way, check the captured output.
 		output := result.Output
 		if err != nil {
-			var he *HookError
-			if errors.As(err, &he) {
+			if he, ok := errors.AsType[*HookError](err); ok {
 				output = he.Output
 			}
 		}

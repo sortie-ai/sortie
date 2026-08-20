@@ -724,8 +724,7 @@ func TestCleanup(t *testing.T) {
 		if err == nil {
 			t.Fatal("Cleanup() with empty identifier should return error")
 		}
-		var pe *PathError
-		if !errors.As(err, &pe) {
+		if _, ok := errors.AsType[*PathError](err); !ok {
 			t.Fatalf("error type = %T, want *PathError", err)
 		}
 	})
@@ -1217,8 +1216,7 @@ func TestCleanupTerminal(t *testing.T) {
 		if _, ok := result.Errors[""]; !ok {
 			t.Error("CleanupTerminal() expected error for empty identifier")
 		}
-		var pe *PathError
-		if !errors.As(result.Errors[""], &pe) {
+		if _, ok := errors.AsType[*PathError](result.Errors[""]); !ok {
 			t.Errorf("error type = %T, want *PathError", result.Errors[""])
 		}
 	})

@@ -417,9 +417,8 @@ func routeTransitionFailure(
 ) {
 	rkey := ReactionKey(pending.IssueID, ReactionKindMergeCompletion)
 
-	var trackerErr *domain.TrackerError
 	kind := domain.ErrTrackerTransport
-	if errors.As(err, &trackerErr) {
+	if trackerErr, ok := errors.AsType[*domain.TrackerError](err); ok {
 		kind = trackerErr.Kind
 	}
 

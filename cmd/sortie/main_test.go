@@ -521,8 +521,7 @@ func TestRunSIGINTCleanShutdown(t *testing.T) {
 	select {
 	case waitErr := <-done:
 		if waitErr != nil {
-			var exitErr *exec.ExitError
-			if errors.As(waitErr, &exitErr) {
+			if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 				t.Errorf("subprocess exited with code %d after SIGINT, want 0; stderr:\n%s",
 					exitErr.ExitCode(), subStderr.String())
 			} else {

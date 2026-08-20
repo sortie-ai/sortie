@@ -40,13 +40,11 @@ func ToCIError(err error) error {
 		return err
 	}
 
-	var ciErr *domain.CIError
-	if errors.As(err, &ciErr) {
+	if _, ok := errors.AsType[*domain.CIError](err); ok {
 		return err
 	}
 
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
+	if te, ok := errors.AsType[*domain.TrackerError](err); ok {
 		kind, ok := trackerToCIKind[te.Kind]
 		if !ok {
 			kind = domain.ErrCIAPI

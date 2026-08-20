@@ -67,8 +67,7 @@ func ToSCMError(err error) *domain.SCMError {
 // it, so it is the safe choice whenever an error may already carry one; an
 // error that cannot may use [ToSCMError] directly.
 func AsSCMError(err error) *domain.SCMError {
-	var scmErr *domain.SCMError
-	if errors.As(err, &scmErr) {
+	if scmErr, ok := errors.AsType[*domain.SCMError](err); ok {
 		return scmErr
 	}
 	return ToSCMError(err)

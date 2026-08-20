@@ -229,8 +229,7 @@ func TestIntegration_VerifyAutoMergeScopes(t *testing.T) {
 
 	scopes, missing, verifyErr := scmAdapter.VerifyAutoMergeScopes(context.Background(), true)
 	if verifyErr != nil {
-		var se *domain.SCMError
-		if errors.As(verifyErr, &se) {
+		if se, ok := errors.AsType[*domain.SCMError](verifyErr); ok {
 			t.Logf("VerifyAutoMergeScopes transport error (kind=%s): %v", se.Kind, verifyErr)
 		}
 		t.Skipf("VerifyAutoMergeScopes returned transport error; skipping scope assertion: %v", verifyErr)

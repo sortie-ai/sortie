@@ -312,8 +312,7 @@ func TestNotificationsConfig_ErrorIsPtrConfigError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	var ce *ConfigError
-	if !errors.As(err, &ce) {
+	if _, ok := errors.AsType[*ConfigError](err); !ok {
 		t.Fatalf("error type = %T, want *ConfigError", err)
 	}
 }

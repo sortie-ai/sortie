@@ -292,8 +292,7 @@ func validateDefaultedTrackerStates(tc config.TrackerConfig, meta registry.Track
 // a preflight message.
 func defaultedStateError(check string, err error, emptyKey, kind string) PreflightError {
 	message := err.Error()
-	var cfgErr *config.ConfigError
-	if errors.As(err, &cfgErr) {
+	if cfgErr, ok := errors.AsType[*config.ConfigError](err); ok {
 		message = cfgErr.Message
 	}
 
