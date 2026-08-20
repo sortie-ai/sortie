@@ -169,8 +169,9 @@ type AgentConfig struct {
 	Kind string
 
 	// Command is the command used to launch the agent process. Locally it
-	// is split on whitespace into an argument vector and execed without a
-	// shell; in SSH mode it is passed through unsplit to the remote shell.
+	// is split on whitespace into an argument vector that the adapter execs
+	// directly, with no shell; in SSH mode it is passed through unsplit to
+	// the remote shell.
 	Command string
 
 	// TurnTimeoutMS is the maximum duration in milliseconds for a

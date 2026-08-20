@@ -28,7 +28,7 @@ permitted for path fields.
 
 Value coercion semantics:
 
-- Path/command fields support:
+- Path fields support:
   - `~` home expansion
   - `$VAR` expansion for env-backed path values
   - Apply expansion only to values intended to be local filesystem paths; do not rewrite URIs or

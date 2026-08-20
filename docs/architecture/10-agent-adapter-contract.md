@@ -575,10 +575,11 @@ When `agent.kind` requires a local subprocess:
 
 - Command: `agent.command`
 - Invocation:
-  - `agent.command` is split on whitespace. The first token is resolved to an absolute path using
-    the same lookup rules as a shell's `PATH` search; the remaining tokens become a fixed
-    argument prefix inserted before any per-turn arguments (for example, `codex app-server`
-    resolves `codex` and yields `app-server` as a prefix argument).
+  - `agent.command` is split on whitespace. The first token is resolved to an executable path
+    using the host's `PATH` lookup rules: a token containing a path separator is used as given,
+    and any other token is searched for on `PATH`, which yields an absolute path. The remaining
+    tokens become a fixed argument prefix inserted before any per-turn arguments (for example,
+    `codex app-server` resolves `codex` and yields `app-server` as a prefix argument).
   - POSIX and Windows: the adapter execs the resolved binary directly with that argument vector.
     No shell is involved in local invocation. On Windows the subprocess additionally receives
     `CREATE_NEW_PROCESS_GROUP` so it can be signaled independently of the orchestrator.
