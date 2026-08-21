@@ -31,6 +31,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quoting the whole endpoint, credential included.
   ([#908](https://github.com/sortie-ai/sortie/issues/908))
 
+- A run no longer stalls when an agent stops to ask for something only
+  a person could give, such as permission to run a command, to change
+  a file, or an answer to a direct question. Where the runtime can be
+  answered, Sortie declines the request and the agent carries on by
+  another route; where it cannot be answered, or where the agent is
+  putting a question to a person, the attempt ends at once and releases
+  its claim on the issue. Previously the turn stayed open until a
+  timeout expired, the attempt was reported as a timeout rather than as
+  a run that needed a person, and the retry that followed could only
+  re-enter the same wait. A run that ended this way is now recorded
+  under its own `needs_person` status instead of being counted among
+  ordinary failures in run reports.
+  ([#837](https://github.com/sortie-ai/sortie/issues/837))
+
+- A runtime configuration that would let an agent stop and ask for
+  approval mid-turn (`codex.approval_policy`,
+  `claude-code.permission_mode`) is now refused by `sortie validate`,
+  at startup and on reload, instead of being accepted and surfacing
+  later as a stalled run. Not every such request is governed by an
+  approval setting, so this check reduces how often the situation
+  arises rather than removing it.
+  ([#837](https://github.com/sortie-ai/sortie/issues/837))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed
