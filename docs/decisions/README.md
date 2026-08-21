@@ -31,3 +31,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0022](0022-release-a-parked-issue-on-a-human-gesture.md) | Release a Parked Issue on a Human Gesture in the Tracker | Accepted |
 | [0023](0023-scope-the-ci-verdict-to-the-current-head.md) | Scope the CI Verdict to the Pull Request's Current Head | Accepted |
 | [0024](0024-start-a-new-feedback-epoch-when-the-head-moves.md) | Start a New Feedback Epoch When the Pull Request Head Moves | Accepted |
+| [0025](0025-refuse-agent-requests-only-a-human-could-answer.md) | Refuse Agent Requests That Only a Human Could Answer | Accepted |
