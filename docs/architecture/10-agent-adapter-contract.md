@@ -77,8 +77,7 @@ native protocol events to this normalized set:
 - `turn_failed`: turn finished with failure
 - `turn_cancelled`: turn was cancelled
 - `turn_ended_with_error`: turn ended due to an error condition
-- `turn_input_required`: agent requested user input (hard failure per policy)
-- `approval_auto_approved`: approval request was auto-resolved
+- `turn_input_required`: agent asked for a decision only a person could give, ending the attempt under the shared refusal posture
 - `unsupported_tool_call`: agent requested an unsupported tool
 - `token_usage`: normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
 
@@ -143,20 +142,19 @@ sessions.
 
 #### 10.4.1 Approval policy
 
-Approval, sandbox, and user-input behavior is implementation-defined.
+Every agent run is unattended: no person is present to grant a permission or answer a question
+while a run is in progress. A request for consent to act is refused in the continuable form the
+runtime's own protocol offers, where the runtime offers one, so the turn can proceed by another
+route; a request addressed to a person ends the attempt with the `turn_input_required` outcome.
+The posture is uniform across every agent adapter and is not an operator-configurable setting.
 
 Policy requirements:
 
-- Each deployment MUST document its chosen approval, sandbox, and operator-confirmation posture.
-- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely.
-  Sortie MUST either satisfy them, surface them to an operator, auto-resolve them, or fail the
-  run according to its documented policy.
-
-Example high-trust behavior:
-
-- Auto-approve command execution approvals for the session.
-- Auto-approve file-change approvals for the session.
-- Treat user-input-required turns as hard failure.
+- Each deployment enforces the same refusal posture: a permission request is refused rather than
+  granted, and a request for human input ends the attempt rather than stalling.
+- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely. A
+  configuration value that would let the agent stop and wait for a person is refused before the
+  run, rather than satisfied when it arrives mid-turn.
 
 Unsupported dynamic tool calls:
 
@@ -164,9 +162,10 @@ Unsupported dynamic tool calls:
   adapter returns a tool failure response and continues the session.
 - This is adapter-level behavior; the orchestrator does not intercept tool call routing.
 
-Hard failure on user input requirement:
+Ending on a request only a person could answer:
 
-- If the agent requests user input, fail the run attempt immediately.
+- If the agent asks for something only a person could give, end the run attempt immediately with
+  the `turn_input_required` outcome, distinct from a generic turn failure.
 
 #### 10.4.2 Tool interface contract
 
@@ -316,7 +315,7 @@ Availability: registered when the database path and issue ID are present in the 
 On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
 Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
 recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
-`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, or `ci_failed`), and
+`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, `ci_failed`, or `needs_person`), and
 `error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
 from the envelope's `error` object.
 
