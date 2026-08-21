@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -106,6 +107,14 @@ func makeTestState(fixtureData []byte) *sessionState {
 		}
 	}()
 
+	return state
+}
+
+// makeTestStateWithStdin behaves like makeTestState but installs stdin so a
+// test can capture the exact bytes RunTurn writes back to the app-server.
+func makeTestStateWithStdin(fixtureData []byte, stdin io.WriteCloser) *sessionState {
+	state := makeTestState(fixtureData)
+	state.stdin = stdin
 	return state
 }
 
@@ -798,6 +807,397 @@ func TestRunTurn_ToolCallToolNotInRegistry(t *testing.T) {
 
 	if _, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
 		t.Fatal("expected EventUnsupportedToolCall for unregistered tool, not found")
+	}
+}
+
+// --- Human-only-request recognition and refusal ---
+
+// runTurnFixtureWithServerRequest builds a turn/start response, a
+// turn/started notification, and one server request (a method carrying
+// both "id" and "method") for the given method and request id, followed
+// by the given trailing lines (e.g. a turn/completed notification, or
+// none when the request is expected to end the attempt before any more
+// input is read).
+func runTurnFixtureWithServerRequest(requestID int64, method string, trailing ...string) []byte {
+	fixture := fmt.Sprintf(
+		"{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n"+
+			"{\"method\":\"turn/started\",\"params\":{}}\n"+
+			"{\"id\":%d,\"method\":%q,\"params\":{}}\n",
+		requestID, method,
+	)
+	for _, line := range trailing {
+		fixture += line + "\n"
+	}
+	return []byte(fixture)
+}
+
+const turnCompletedLine = `{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`
+
+// TestRunTurn_PermissionRequestDeniedContinues drives the two current-form
+// permission requests through the turn loop and asserts the exact bytes
+// written back to the app-server for that request id, and that the turn
+// continues to turn/completed rather than ending.
+func TestRunTurn_PermissionRequestDeniedContinues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		method    string
+		requestID int64
+	}{
+		{name: "item/commandExecution/requestApproval", method: "item/commandExecution/requestApproval", requestID: 20},
+		{name: "item/fileChange/requestApproval", method: "item/fileChange/requestApproval", requestID: 21},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := &capturingWriteCloser{}
+			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
+			adapter, _ := NewCodexAdapter(map[string]any{})
+
+			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+				Prompt:  "go",
+				OnEvent: func(domain.AgentEvent) {},
+			})
+			if err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+			if result.ExitReason != domain.EventTurnCompleted {
+				t.Errorf("ExitReason = %q, want %q (turn must continue past the refusal)", result.ExitReason, domain.EventTurnCompleted)
+			}
+
+			write, ok := stdin.find(fmt.Sprintf(`{"id":%d,`, tt.requestID))
+			if !ok {
+				t.Fatalf("no response written for request id %d", tt.requestID)
+			}
+			want := fmt.Sprintf(`{"id":%d,"result":{"decision":"decline"}}`, tt.requestID) + "\n"
+			if write != want {
+				t.Errorf("response for %s = %q, want %q", tt.method, write, want)
+			}
+		})
+	}
+}
+
+// TestRunTurn_LegacyPermissionRequestDeniedContinues drives the two legacy
+// ReviewDecision-form permission requests through the turn loop and asserts
+// the exact denial payload the schema declares, and that the turn
+// continues rather than ending.
+func TestRunTurn_LegacyPermissionRequestDeniedContinues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		method    string
+		requestID int64
+	}{
+		{name: "applyPatchApproval", method: "applyPatchApproval", requestID: 22},
+		{name: "execCommandApproval", method: "execCommandApproval", requestID: 23},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := &capturingWriteCloser{}
+			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
+			adapter, _ := NewCodexAdapter(map[string]any{})
+
+			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+				Prompt:  "go",
+				OnEvent: func(domain.AgentEvent) {},
+			})
+			if err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+			if result.ExitReason != domain.EventTurnCompleted {
+				t.Errorf("ExitReason = %q, want %q (turn must continue past the refusal)", result.ExitReason, domain.EventTurnCompleted)
+			}
+
+			write, ok := stdin.find(fmt.Sprintf(`{"id":%d,`, tt.requestID))
+			if !ok {
+				t.Fatalf("no response written for request id %d", tt.requestID)
+			}
+			want := fmt.Sprintf(`{"id":%d,"result":{"decision":{"denied":{"rejection":%q}}}}`, tt.requestID, codexRefusalMessage) + "\n"
+			if write != want {
+				t.Errorf("response for %s = %q, want %q", tt.method, write, want)
+			}
+		})
+	}
+}
+
+// TestRunTurn_PermissionRequestEmitsNotification asserts that a continued
+// permission refusal emits RefusalPosture.Notice as an EventNotification,
+// so the operator learns why the turn kept going even though nothing was
+// granted.
+func TestRunTurn_PermissionRequestEmitsNotification(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(runTurnFixtureWithServerRequest(24, "item/commandExecution/requestApproval", turnCompletedLine))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: collectEvents(&events),
+	}); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	wantNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending).NoticeWithDetail("")
+
+	var found bool
+	for _, e := range filterEventsOfType(events, domain.EventNotification) {
+		if e.Message == wantNotice {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no EventNotification with Message = %q found", wantNotice)
+	}
+}
+
+// TestRunTurn_HumanInputRequestEndsAttempt drives each ClassHumanInput
+// method through the turn loop and asserts the exact bytes written back
+// for that request id, and that the attempt ends with the
+// human-input-required outcome rather than continuing or reading further
+// input.
+func TestRunTurn_HumanInputRequestEndsAttempt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		method    string
+		requestID int64
+		detail    string
+		wantWrite string
+	}{
+		{
+			name:      "mcpServer/elicitation/request",
+			method:    "mcpServer/elicitation/request",
+			requestID: 30,
+			detail:    detailAnswerToQuestion,
+			wantWrite: `{"id":30,"result":{"action":"decline"}}` + "\n",
+		},
+		{
+			name:      "item/permissions/requestApproval",
+			method:    "item/permissions/requestApproval",
+			requestID: 31,
+			detail:    detailWiderAccess,
+			wantWrite: `{"id":31,"error":{"code":-32001,"message":"sortie refuses requests that only a person could answer"}}` + "\n",
+		},
+		{
+			name:      "item/tool/requestUserInput",
+			method:    "item/tool/requestUserInput",
+			requestID: 32,
+			detail:    detailAnswerToQuestion,
+			wantWrite: `{"id":32,"error":{"code":-32001,"message":"sortie refuses requests that only a person could answer"}}` + "\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdin := &capturingWriteCloser{}
+			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method), stdin)
+			adapter, _ := NewCodexAdapter(map[string]any{})
+
+			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+				Prompt:  "go",
+				OnEvent: func(domain.AgentEvent) {},
+			})
+
+			dispositiontest.AssertDispositionContract(t, agentcore.HumanInputEvidence(tt.detail), result, err)
+
+			write, ok := stdin.find(fmt.Sprintf(`{"id":%d,`, tt.requestID))
+			if !ok {
+				t.Fatalf("no response written for request id %d", tt.requestID)
+			}
+			if write != tt.wantWrite {
+				t.Errorf("response for %s = %q, want %q", tt.method, write, tt.wantWrite)
+			}
+		})
+	}
+}
+
+// TestRunTurn_HumanInputRequestDrainsInFlightToolCall pins the
+// refusal path: with a tool call in flight when a ClassHumanInput
+// request arrives, the terminal return must close and drain toolEventCh
+// so the tool goroutine's send completes rather than leaking. If the
+// drain were skipped, RunTurn would return before the delayed tool
+// finishes and its EventToolResult would never be observed by this test,
+// because OnEvent is only ever called while RunTurn itself is still
+// running.
+func TestRunTurn_HumanInputRequestDrainsInFlightToolCall(t *testing.T) {
+	t.Parallel()
+
+	reg := domain.NewToolRegistry()
+	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: 50 * time.Millisecond})
+
+	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
+		"{\"method\":\"turn/started\",\"params\":{}}\n" +
+		"{\"id\":41,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"slow_tool\",\"arguments\":{}}}\n" +
+		"{\"id\":42,\"method\":\"mcpServer/elicitation/request\",\"params\":{}}\n"
+
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "use tool",
+		OnEvent: collectEvents(&events),
+	})
+
+	dispositiontest.AssertDispositionContract(t, agentcore.HumanInputEvidence(detailAnswerToQuestion), result, err)
+
+	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
+		t.Fatal("in-flight tool call's EventToolResult was not drained before the terminal return")
+	}
+}
+
+// TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives
+// pins the post-cancellation bound: after the best-effort turn/interrupt,
+// the loop must return once read_timeout_ms elapses rather than reading
+// until stdout closes. The runtime's own turn/completed never arrives in
+// this test.
+func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	state := newInterruptedStatusState()
+	state.agentConfig = domain.AgentConfig{ReadTimeoutMS: 50}
+	close(state.readerDone)
+	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
+	state.stdin = stdin
+
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
+	finished := make(chan struct{})
+
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	go func() {
+		defer close(finished)
+		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+			Prompt:  "go",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		outcomeCh <- outcome{result: result, err: err}
+	}()
+
+	t.Cleanup(func() {
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		close(state.msgCh)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+		}
+	})
+
+	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+
+	start := time.Now()
+	cancel()
+
+	select {
+	case <-stdin.interrupts:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not send turn/interrupt after cancellation")
+	}
+
+	// turn/completed is never sent. RunTurn must return once the
+	// configured read_timeout_ms bound elapses, not merely eventually.
+	select {
+	case got := <-outcomeCh:
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("RunTurn returned after %v, want well within the 50ms read_timeout_ms bound", elapsed)
+		}
+		if got.result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+		}
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTurn did not return within the bound; it kept reading after cancellation with no turn/completed")
+	}
+}
+
+// TestRunTurn_CancelledDrainsInFlightToolCall asserts that when the
+// post-cancellation bound elapses with a tool call in flight, the timeout
+// return still closes and drains toolEventCh before calling FinalizeTurn.
+func TestRunTurn_CancelledDrainsInFlightToolCall(t *testing.T) {
+	t.Parallel()
+
+	reg := domain.NewToolRegistry()
+	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: 20 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	state := newInterruptedStatusState()
+	state.agentConfig = domain.AgentConfig{ReadTimeoutMS: 200}
+	close(state.readerDone)
+
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
+	finished := make(chan struct{})
+	var events []domain.AgentEvent
+
+	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
+	go func() {
+		defer close(finished)
+		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+			Prompt:  "use tool",
+			OnEvent: collectEvents(&events),
+		})
+		outcomeCh <- outcome{result: result, err: err}
+	}()
+
+	t.Cleanup(func() {
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		close(state.msgCh)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+		}
+	})
+
+	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+	state.msgCh <- parseMessage([]byte(`{"id":60,"method":"item/tool/call","params":{"tool":"slow_tool","arguments":{}}}`))
+
+	cancel()
+
+	select {
+	case got := <-outcomeCh:
+		if got.result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+		}
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTurn did not return within the bound with a tool call in flight")
+	}
+
+	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
+		t.Fatal("in-flight tool call's EventToolResult was not drained before the cancellation-timeout return")
 	}
 }
 

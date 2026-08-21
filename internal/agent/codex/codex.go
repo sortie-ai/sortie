@@ -31,7 +31,8 @@ import (
 
 func init() {
 	registry.Agents.RegisterWithMeta("codex", NewCodexAdapter, registry.AgentMeta{
-		RequiresCommand: true,
+		RequiresCommand:     true,
+		ValidateAgentConfig: validateConfig,
 	})
 }
 
@@ -330,6 +331,29 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}, nil
 }
 
+// codexRefusalErrorCode and codexRefusalMessage are pinned rather than
+// derived: the app-server protocol schema declares no enumerated value
+// for either the error code an implementation-defined JSON-RPC refusal
+// may use or the free-text field the legacy ReviewDecision denial
+// requires, and the app-server acknowledges no client response, so
+// neither can be confirmed accepted at runtime. codexRefusalErrorCode
+// is written as the JSON-RPC error code on a server request whose
+// response schema offers no result shape that could express a
+// decline. codexRefusalMessage is written both as that error's message
+// and as the legacy ReviewDecision denial's rejection text.
+const (
+	codexRefusalErrorCode = -32001
+	codexRefusalMessage   = "sortie refuses requests that only a person could answer"
+)
+
+// detailAnswerToQuestion and detailWiderAccess name, for the operator,
+// the specific ask behind a recognized request for human input,
+// appended to agentcore.RefusalPosture's notice stem.
+const (
+	detailAnswerToQuestion = "an answer to a question"
+	detailWiderAccess      = "wider filesystem or network access"
+)
+
 // RunTurn sends a turn/start request on the existing thread and reads
 // events until turn/completed. Events are delivered synchronously via
 // params.OnEvent.
@@ -444,6 +468,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
 	ctxDone := ctx.Done()
+	// cancelDeadline stays nil, and so never selectable, until the
+	// ctxDone arm below arms it with a one-shot timer bounding how long
+	// the loop waits for the runtime's own turn/completed after the
+	// best-effort interrupt.
+	var cancelDeadline <-chan time.Time
 
 	// Replay buffered notifications (received during the response-waiting
 	// loop above) before entering the main event loop. These are
@@ -474,15 +503,30 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		case <-ctxDone:
 			// A cancelled context's Done channel stays ready forever. Disable
 			// this arm before sending the one-shot interrupt so later selects
-			// wait for a terminal message or stdout to close.
+			// wait for a terminal message, stdout to close, or the deadline
+			// armed below.
 			ctxDone = nil
 			// Best-effort write of turn/interrupt on the already-cancelled turn.
 			sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
 				"threadId": state.threadID,
 				"turnId":   turnID,
 			})
-			// Continue reading until turn/completed or channel close.
+			// Bound how long the loop keeps reading for the runtime's own
+			// turn/completed: past this deadline the interrupt is presumed
+			// lost, and the loop returns rather than reading until stdout
+			// closes.
+			cancelDeadline = time.After(readTimeout(state))
 			continue
+
+		case <-cancelDeadline:
+			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, Work: agentcore.WorkUnobservable}
+			meta := agentcore.TurnMeta{
+				SessionID:     state.threadID,
+				Usage:         state.acc.Snapshot(),
+				UsageMeasured: state.usageMeasured,
+			}
+			result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, ev, meta)
+			return result, agentErr
 
 		case msg, ok := <-state.msgCh:
 			if !ok {
@@ -687,6 +731,102 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					params.OnEvent(*evt)
 				}
 
+			case "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
+				"applyPatchApproval", "execCommandApproval",
+				"mcpServer/elicitation/request", "item/permissions/requestApproval",
+				"item/tool/requestUserInput":
+				requestID := msg.Response.ID
+				if requestID == 0 {
+					params.OnEvent(domain.AgentEvent{
+						Type:      domain.EventOtherMessage,
+						Timestamp: now,
+						Message:   method,
+					})
+					break
+				}
+
+				// An orchestrator-initiated cancellation outranks any
+				// classification of a request this turn recognizes, matching
+				// the adapter's existing treatment of an interrupted turn.
+				if ctx.Err() != nil {
+					ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, Work: agentcore.WorkUnobservable}
+					meta := agentcore.TurnMeta{
+						SessionID:     state.threadID,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
+					}
+					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, ev, meta)
+					return result, agentErr
+				}
+
+				switch method {
+				case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+					posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending)
+					state.mu.Lock()
+					sendResponse(state, requestID, map[string]any{"decision": "decline"}) //nolint:errcheck,gosec // best-effort refusal
+					state.mu.Unlock()
+					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(""))
+
+				case "applyPatchApproval", "execCommandApproval":
+					posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending)
+					state.mu.Lock()
+					sendResponse(state, requestID, map[string]any{ //nolint:errcheck,gosec // best-effort refusal
+						"decision": map[string]any{
+							"denied": map[string]any{"rejection": codexRefusalMessage},
+						},
+					})
+					state.mu.Unlock()
+					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(""))
+
+				case "mcpServer/elicitation/request":
+					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
+					state.mu.Lock()
+					sendResponse(state, requestID, map[string]any{"action": "decline"}) //nolint:errcheck,gosec // best-effort refusal
+					state.mu.Unlock()
+					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailAnswerToQuestion))
+
+					meta := agentcore.TurnMeta{
+						SessionID:     state.threadID,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
+					}
+					evidence := agentcore.HumanInputEvidence(detailAnswerToQuestion)
+					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					return result, agentErr
+
+				case "item/permissions/requestApproval":
+					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
+					state.mu.Lock()
+					sendErrorResponse(state, requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
+					state.mu.Unlock()
+					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailWiderAccess))
+
+					meta := agentcore.TurnMeta{
+						SessionID:     state.threadID,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
+					}
+					evidence := agentcore.HumanInputEvidence(detailWiderAccess)
+					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					return result, agentErr
+
+				case "item/tool/requestUserInput":
+					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
+					state.mu.Lock()
+					sendErrorResponse(state, requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
+					state.mu.Unlock()
+					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailAnswerToQuestion))
+
+					meta := agentcore.TurnMeta{
+						SessionID:     state.threadID,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
+					}
+					evidence := agentcore.HumanInputEvidence(detailAnswerToQuestion)
+					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					return result, agentErr
+				}
+
 			case "turn/plan/updated":
 				agentcore.EmitNotification(params.OnEvent, "plan updated")
 
@@ -702,6 +842,28 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			}
 		}
 	}
+}
+
+// drainToolEventsAndFinalize closes toolEventCh once every tool
+// goroutine toolWg tracks has sent its result, delivers the buffered
+// events through emit, and returns through agentcore.FinalizeTurn.
+// Every terminal return RunTurn takes for a recognized human-only
+// request calls this first: toolEventCh is buffered, and skipping the
+// drain leaves an in-flight tool goroutine blocked on a full channel
+// for the life of the process.
+func drainToolEventsAndFinalize(
+	toolWg *sync.WaitGroup,
+	toolEventCh chan domain.AgentEvent,
+	emit func(domain.AgentEvent),
+	logger *slog.Logger,
+	ev agentcore.TurnEvidence,
+	meta agentcore.TurnMeta,
+) (domain.TurnResult, *domain.AgentError) {
+	go func() { toolWg.Wait(); close(toolEventCh) }()
+	for evt := range toolEventCh {
+		emit(evt)
+	}
+	return agentcore.FinalizeTurn(emit, logger, ev, meta)
 }
 
 // handleToolCall dispatches a dynamic tool call from the app-server to

@@ -508,27 +508,39 @@ container-level isolation.
 
 ### Approval requests
 
-When `approvalPolicy` is not `"never"`, the app-server sends approval requests as JSON-RPC
-requests to the client:
+The protocol schema `codex-cli 0.147.0` generates for itself declares ten server-to-client
+JSON-RPC requests, each with `id`, `method`, and `params` required. `RunTurn` recognizes seven of
+them as a request only a person could answer and refuses every one: an unattended run has no one
+to grant the permission or supply the answer any of the seven asks for.
 
-- `item/commandExecution/requestApproval`: shell command approval.
-- `item/fileChange/requestApproval`: file edit approval.
-- `item/tool/requestUserInput`: user input request, which can carry approval questions.
+| Method | What it asks | `RunTurn`'s reply |
+| --- | --- | --- |
+| `item/commandExecution/requestApproval` | Run a shell command. | Result `{"decision": "decline"}`, documented as "User denied the command. The agent will continue the turn." |
+| `item/fileChange/requestApproval` | Change a file. | Result `{"decision": "decline"}`, documented as "User denied the file changes. The agent will continue the turn." |
+| `applyPatchApproval` | Change a file; the legacy form of `item/fileChange/requestApproval`. | Result `{"decision": {"denied": {"rejection": "sortie refuses requests that only a person could answer"}}}`, the `ReviewDecision` variant documented as "the agent should not execute it, but it should continue the session and try something else." |
+| `execCommandApproval` | Run a shell command; the legacy form of `item/commandExecution/requestApproval`. | Same reply as `applyPatchApproval`. |
+| `mcpServer/elicitation/request` | Answer a question an MCP server addressed to a person. | Result `{"action": "decline"}`, which the response schema declares; the `content` member is left absent, which the schema documents as null on a decline. |
+| `item/permissions/requestApproval` | Widen the agent's filesystem or network access. | The response schema declares no denial value and requires a `permissions` grant object, so no result can express a refusal. `RunTurn` writes the JSON-RPC error `{"code": -32001, "message": "sortie refuses requests that only a person could answer"}` instead. |
+| `item/tool/requestUserInput` | Answer a question. | The response schema requires an `answers` member, so any result would be an answer rather than a refusal. `RunTurn` writes the same JSON-RPC error as `item/permissions/requestApproval`. |
+| `item/tool/call` | Invoke a registered dynamic tool. | Out of this class; answered by `handleToolCall`, described under "Dynamic tool calls". |
+| `account/chatgptAuthTokens/refresh` | Refresh a stored credential. | Out of this class; falls to the default arm of the notification switch, which emits a `domain.EventOtherMessage` carrying the method name and sends no response. |
+| `attestation/generate` | Produce an attestation. | Out of this class; same default-arm handling as `account/chatgptAuthTokens/refresh`. |
 
-A client answers with one of `accept`, `acceptForSession`, `decline`, or `cancel`:
+The `-32001` code and its message are both pinned rather than derived: the schema declares `code`
+as a required `int64` and `message` as a required string on the error object, enumerating no
+values for either, and the app-server acknowledges no client response, so an unaccepted code
+produces silence rather than an error. The bounded cancellation wait described below is the
+backstop for that silence.
 
-```json
-{"id": 42, "result": {"decision": "acceptForSession"}}
-```
+A permission request that `RunTurn` refuses in the continuable form lets the agent proceed by
+another route within the same turn. A refused `mcpServer/elicitation/request`,
+`item/permissions/requestApproval`, or `item/tool/requestUserInput` ends the turn immediately with
+the human-input-required outcome, because none of those three response schemas offers a result
+that both refuses and lets the turn continue.
 
-`RunTurn` has no case for any of these three methods. They fall to the default arm of its
-notification switch, which emits a `domain.EventOtherMessage` carrying the method name and
-sends no response. The default `approvalPolicy: "never"` is what keeps that gap harmless,
-because it stops the app-server from asking. Setting `codex.approval_policy` to any other value
-leaves the app-server waiting for a decision the adapter does not send.
-
-`item/tool/call` is a separate request that the adapter does answer, described under "Dynamic
-tool calls".
+The default `approvalPolicy: "never"` keeps the app-server from asking most of these questions in
+the first place. Setting `codex.approval_policy` to any other value only changes how often the
+app-server asks; every method above is refused the same way regardless of `approvalPolicy`.
 
 ---
 
@@ -536,8 +548,8 @@ tool calls".
 
 | Timeout           | Source                          | Enforcement                                        |
 | ----------------- | ------------------------------- | -------------------------------------------------- |
-| Read timeout      | `agent.read_timeout_ms`, default 30s | `readTimeout(state)` bounds the waits for the `account/login/completed` and `thread/started` notifications. |
-| Turn deadline     | The context passed to `RunTurn` | Cancellation triggers `turn/interrupt`.            |
+| Read timeout      | `agent.read_timeout_ms`, default 30s | `readTimeout(state)` bounds the waits for the `account/login/completed` and `thread/started` notifications, and, once a turn's context is cancelled, how long `RunTurn` waits for `turn/completed` before returning. |
+| Turn deadline     | The context passed to `RunTurn` | Cancellation triggers `turn/interrupt`, then the read timeout above bounds the wait for the runtime's own response to it. |
 | Stall timeout     | `agent.stall_timeout_ms`        | `reconcileStalled` in `internal/orchestrator` cancels the worker context; each emitted event postpones it. |
 
 The adapter reads only `ReadTimeoutMS` from `domain.AgentConfig`. It derives no deadline of its
@@ -554,9 +566,11 @@ never passes it in:
 {"method": "turn/interrupt", "id": 99, "params": {"threadId": "thr_abc123", "turnId": "turn_456"}}
 ```
 
-It then keeps reading until `turn/completed` arrives or stdout closes. The escalation to
-SIGTERM, a five-second grace period, and SIGKILL belongs to `StopSession`, not to the interrupt
-path.
+It then keeps reading until `turn/completed` arrives, stdout closes, or `readTimeout(state)`
+elapses, whichever comes first; past that bound `RunTurn` returns with `TerminalCancelled` rather
+than waiting indefinitely for a `turn/interrupt` the app-server may never acknowledge. The
+escalation to SIGTERM, a five-second grace period, and SIGKILL belongs to `StopSession`, not to
+the interrupt path.
 
 ---
 

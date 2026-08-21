@@ -87,6 +87,27 @@ func sendResponse(state *sessionState, id int64, result any) error {
 	return nil
 }
 
+// sendErrorResponse writes a JSON-RPC error response to the app-server
+// stdin. The caller must hold state.mu.
+func sendErrorResponse(state *sessionState, id int64, code int, message string) error {
+	type errorResponse struct {
+		ID    int64    `json:"id"`
+		Error rpcError `json:"error"`
+	}
+	resp := errorResponse{ID: id, Error: rpcError{Code: code, Message: message}}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("marshal error response id=%d: %w", id, err)
+	}
+	data = append(data, '\n')
+
+	_, writeErr := state.stdin.Write(data)
+	if writeErr != nil {
+		return fmt.Errorf("write error response id=%d: %w", id, writeErr)
+	}
+	return nil
+}
+
 // scanResult carries one line from the background scanner goroutine,
 // or a terminal condition (EOF / error).
 type scanResult struct {

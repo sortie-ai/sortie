@@ -5,6 +5,7 @@ package codex
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -208,6 +209,43 @@ func TestStartThread_Success(t *testing.T) {
 	}
 	if threadID != "thread-abc" {
 		t.Errorf("startThread() threadID = %q, want %q", threadID, "thread-abc")
+	}
+}
+
+// TestStartThread_DefaultApprovalPolicyIsNever asserts the non-interactive
+// launch posture: under default configuration, thread/start carries
+// approvalPolicy "never" so the app-server does not ask interactively.
+func TestStartThread_DefaultApprovalPolicyIsNever(t *testing.T) {
+	t.Parallel()
+
+	stdin := &capturingWriteCloser{}
+	state := handshakeState()
+	state.stdin = stdin
+	scanCh := scanChanFromLines(
+		`{"id":1,"result":{"thread":{"id":"thread-abc"}}}`,
+		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
+	)
+
+	if _, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, nil); err != nil {
+		t.Fatalf("startThread() error = %v", err)
+	}
+
+	write, ok := stdin.find(`{"method":"thread/start"`)
+	if !ok {
+		t.Fatal("startThread() wrote no thread/start request")
+	}
+
+	var req struct {
+		Method string `json:"method"`
+		Params struct {
+			ApprovalPolicy string `json:"approvalPolicy"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal([]byte(write), &req); err != nil {
+		t.Fatalf("unmarshal written thread/start request: %v", err)
+	}
+	if req.Params.ApprovalPolicy != "never" {
+		t.Errorf("thread/start approvalPolicy = %q, want %q", req.Params.ApprovalPolicy, "never")
 	}
 }
 

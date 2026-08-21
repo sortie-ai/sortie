@@ -8,11 +8,64 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// capturingWriteCloser records each Write call as one entry, in the order
+// received, so a test can assert on the exact bytes a handshake function
+// or the RunTurn event loop wrote back to the app-server. Safe for
+// concurrent use, matching every production caller of sendResponse and
+// sendErrorResponse, which write under state.mu.
+type capturingWriteCloser struct {
+	mu     sync.Mutex
+	writes []string
+}
+
+func (w *capturingWriteCloser) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writes = append(w.writes, string(p))
+	return len(p), nil
+}
+
+func (w *capturingWriteCloser) Close() error { return nil }
+
+// find returns the first captured write with the given prefix.
+func (w *capturingWriteCloser) find(prefix string) (string, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, write := range w.writes {
+		if strings.HasPrefix(write, prefix) {
+			return write, true
+		}
+	}
+	return "", false
+}
+
+func TestSendErrorResponse_WritesExactBytes(t *testing.T) {
+	t.Parallel()
+
+	stdin := &capturingWriteCloser{}
+	state := &sessionState{stdin: stdin}
+
+	err := sendErrorResponse(state, 7, -32001, "sortie refuses requests that only a person could answer")
+	if err != nil {
+		t.Fatalf("sendErrorResponse() error = %v", err)
+	}
+
+	write, ok := stdin.find(`{"id":7,`)
+	if !ok {
+		t.Fatal("sendErrorResponse() wrote nothing to stdin")
+	}
+	const want = `{"id":7,"error":{"code":-32001,"message":"sortie refuses requests that only a person could answer"}}` + "\n"
+	if write != want {
+		t.Errorf("sendErrorResponse(id=7, code=-32001) wrote %q, want %q", write, want)
+	}
+}
 
 func TestSendNotification_WritesToStdin(t *testing.T) {
 	t.Parallel()
