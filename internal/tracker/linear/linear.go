@@ -74,15 +74,21 @@ type LinearAdapter struct {
 // NewLinearAdapter creates a [LinearAdapter] from adapter configuration.
 //
 // Required config keys: "api_key" and "project" (the Linear team key).
-// Optional: "endpoint" (defaults to the Linear GraphQL URL), "active_states",
+// Optional: "endpoint" (defaults to the Linear GraphQL URL; a present value
+// that does not parse to an absolute http(s) URL with a host returns a
+// [*domain.TrackerError] of kind [domain.ErrTrackerPayload]), "active_states",
 // "terminal_states", and "handoff_state". The constructor runs a credential
 // check and a team-states preflight; a missing key or project, an invalid key,
 // an unknown team, or a configured state name absent from the team returns a
 // [*domain.TrackerError] and blocks construction.
 func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	endpoint, _ := config["endpoint"].(string)
-	if endpoint == "" {
-		endpoint = defaultEndpoint
+	endpointRaw, _ := config["endpoint"].(string)
+	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
+	if !endpointOK {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("linear: endpoint %q is not a valid absolute http(s) url", redactedEndpoint),
+		}
 	}
 
 	apiKey, _ := config["api_key"].(string)
