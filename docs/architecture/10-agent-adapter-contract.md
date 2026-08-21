@@ -622,19 +622,23 @@ so that a new adapter inherits it rather than re-deriving it.
 The rule is evaluated as an ordered table. The first matching row decides the turn:
 
 1. The runtime reported the turn cancelled (an orchestrator-initiated cancellation): `turn_cancelled`.
-2. The runtime reported the turn failed, or the adapter itself ended the turn on its own
+2. The adapter recognized a request only a person could answer that the turn cannot continue
+   past: `turn_input_required`. It outranks every failure row below, so such a request is
+   never reported as a generic turn failure, and it ranks under cancellation, so a shutdown
+   already in progress still reports itself.
+3. The runtime reported the turn failed, or the adapter itself ended the turn on its own
    determination (a protocol violation, a timeout waiting for the first response, or a transport
    failure): `turn_failed`, with the error kind the runtime or the adapter supplied.
-3. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
+4. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
    authoritative and is never second-guessed by counting output.
-4. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
+5. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
    persistent session with no per-turn exit): `turn_failed`.
-5. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
+6. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
    `turn_failed`.
-6. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
+7. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
    model produced anything this turn: `turn_failed`. Exit code zero is never by itself a success
    signal; an adapter with nothing positive to offer reports a failed turn.
-7. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
+8. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
    model produced something this turn: `turn_completed`.
 
 Extracting the runtime's own report and the per-turn work evidence from a vendor's wire format is
@@ -650,7 +654,7 @@ and diverge from the rule's letter while obeying its intent:
   currency: the credits trailer on stderr is the positive success signal, and its absence with a
   zero exit code is the adapter's only evidence of nothing produced.
 - Codex's persistent per-session subprocess has no per-turn process exit to observe, so the rule's
-  zero-work row (row 6 above) is structurally unreachable for it: an absent turn-completion report
+  zero-work row (row 7 above) is structurally unreachable for it: an absent turn-completion report
   is already a failure on its own terms.
 
 `turn_ended_with_error` remains a documented normalized event type (Section 10.3), reserved for a

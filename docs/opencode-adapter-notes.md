@@ -483,9 +483,9 @@ rows; `finalizeExitedTurn` fills an `agentcore.TurnEvidence` and hands the termi
 | ------------ | ----------------- |
 | `session_started` | The first envelope carrying a `sessionID`, applied by `applySessionEvent`. A later envelope carrying a different ID is a session id mismatch, which fails the turn |
 | `tool_result` | Each `tool_use` event, using `part.tool` for the name, `part.state.time` for the duration, and `part.state.status == "error"` for the error flag |
-| `notification` | `step_start`, the text of a `text` part truncated to 500 runes, `step_finish` with its reason, and permission-warning lines from stdout |
+| `notification` | `step_start`, the text of a `text` part truncated to 500 runes, `step_finish` with its reason, and permission-warning lines from stderr |
 | `other_message` | Each `reasoning` part |
-| `malformed` | An unparseable payload for a known `type`, an unrecognized `type`, and any non-JSON stdout line that is not a permission warning |
+| `malformed` | An unparseable payload for a known `type`, an unrecognized `type`, and any non-JSON stdout line; the permission warning never reaches this stream |
 | `token_usage` | The `opencode export` figures, never `step_finish.part.tokens`. See "Token usage" |
 | `turn_completed` | The process exits `0`, no `error` event arrived, and at least one `text`, `reasoning`, or `tool_use` part was parsed during the turn |
 | `turn_failed` | Any `error` event (`ErrTurnFailed`); a non-zero exit with no `error` event (`ErrPortExit`); an exit-`0` turn with no assistant part parsed (`ErrTurnFailed`); a stdout read error or session id mismatch (`ErrResponseError`); or a timeout waiting for the first JSON event (`ErrResponseTimeout`) |
@@ -579,7 +579,7 @@ sets no `OPENCODE_DISABLE_DEFAULT_PLUGINS` and no `OPENCODE_DISABLE_CLAUDE_CODE*
 
 `opencode run --format json` carries what a launch-per-turn adapter needs, but it is not a
 lossless wire protocol. It hides server status events, omits a final result envelope, mixes
-human-readable text into stdout during permission rejection, and can repeat an `error` event for
+human-readable text into stderr during permission rejection, and can repeat an `error` event for
 one failure. `opencode serve` exposes explicit session, message, permission, and event APIs with
 documented schemas and an OpenAPI spec (server and SDK docs), which is the surface those gaps
 would be closed on.
@@ -591,7 +591,7 @@ would be closed on.
 | Auth command name | `opencode auth ...` | Root help promotes `opencode providers ...`; `auth` is an alias whose own help renders `auth` subcommands under an `opencode providers` header | Low; no parser should depend on human help text |
 | Network port default wording | Server docs describe `4096` | Shared CLI options expose `0` in help and config, while the Bun and Node adapters treat `0` as "try `4096` first, then fall back to an ephemeral port" | High for `--attach`; set `--port` explicitly |
 | `run --format json` | "raw JSON events" | CLI-emitted projection from `run.ts`, not raw SSE | High for adapters |
-| Permissions in JSON mode | Not called out | Permission rejection prints a plain-text warning to stdout before JSON | High for parsers |
+| Permissions in JSON mode | Not called out | Permission rejection prints a plain-text warning to stderr; stdout carries the JSON envelope alone | Low for parsers, the streams are separate |
 | Exit codes | Not documented | The code is unstable across releases: `0` on a logical failure in v1.14.25, `1` in v1.14.50 | High for failure handling; the adapter keys failure on the stdout `error` event instead |
 | `--pure` flag | Not on docs page | Present in shipped help output | Medium for deterministic runs |
 | Permission keys | `permissions.mdx` lists 14 keys | `config/permission.ts` accepts 16 explicitly (adding `list` and `todowrite`) and any other string key via a `StructWithRest` catchall | Medium; a strict whitelist against the documented set would break on configurations OpenCode itself accepts |

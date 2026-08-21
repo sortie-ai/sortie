@@ -11,9 +11,11 @@ import (
 
 // validateConfig checks opencode-specific configuration constraints and
 // returns diagnostics for the sortie validate pipeline. It does not
-// construct an adapter instance or launch a subprocess. [NewOpenCodeAdapter]
-// calls this same function so the constructor's refusal and the offline
-// verdict can never disagree.
+// construct an adapter instance or launch a subprocess. It shares the
+// overlap check with [NewOpenCodeAdapter], which reaches it through
+// parsePassthroughConfig, so the constructor's refusal and the offline
+// verdict report that fault identically. The warning below has no
+// constructor counterpart.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
@@ -24,8 +26,8 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 }
 
 // validateSkipPermissions warns when opencode.dangerously_skip_permissions
-// is explicitly false, which silently auto-rejects every permissioned tool
-// call. Absent or true draws no diagnostic: the value does not defeat the
+// is explicitly false, which makes the runtime auto-reject every
+// permissioned tool call. Absent or true draws no diagnostic: the value does not defeat the
 // non-interactive launch posture, so no verdict is required.
 func validateSkipPermissions(passthrough map[string]any) []registry.ValidationDiag {
 	v, ok := passthrough["dangerously_skip_permissions"].(bool)
@@ -36,8 +38,9 @@ func validateSkipPermissions(passthrough map[string]any) []registry.ValidationDi
 	return []registry.ValidationDiag{{
 		Severity: "warning",
 		Check:    "opencode.dangerously_skip_permissions.auto_reject",
-		Message: "opencode.dangerously_skip_permissions is set to false, which silently " +
-			"auto-rejects every permissioned tool call",
+		Message: "opencode.dangerously_skip_permissions is set to false, so the " +
+			"runtime auto-rejects every permissioned tool call and reports each " +
+			"rejection as a warning rather than performing the call",
 	}}
 }
 

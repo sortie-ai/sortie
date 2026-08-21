@@ -540,7 +540,10 @@ that both refuses and lets the turn continue.
 
 The default `approvalPolicy: "never"` keeps the app-server from asking most of these questions in
 the first place. Setting `codex.approval_policy` to any other value only changes how often the
-app-server asks; every method above is refused the same way regardless of `approvalPolicy`.
+app-server sends these requests. It does not change how any of them is answered: the seven
+recognized methods keep the replies listed in the table above, which differ from one another,
+and `item/tool/call`, `account/chatgptAuthTokens/refresh` and `attestation/generate` are not
+in this class at all.
 
 ---
 
