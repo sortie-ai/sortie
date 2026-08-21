@@ -1,9 +1,6 @@
 package github
 
 import (
-	"net/url"
-	"strings"
-
 	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
@@ -16,26 +13,17 @@ const defaultEndpoint = "https://api.github.com"
 // usable at all.
 //
 // An empty or whitespace-only value resolves to [defaultEndpoint]. A
-// present value must parse as an absolute http(s) URL carrying a host;
-// anything else yields ok false, which every constructor turns into a
-// configuration error rather than letting the value reach the transport.
-// The [url.Parse] error is discarded rather than wrapped: its text quotes
-// the whole raw URL, so wrapping it would republish any userinfo
-// credentials the value carried. redacted is the configured value with
-// its userinfo removed, and is the only form safe to place in an
-// operator-facing message. It is empty when the value was empty.
+// present value is parsed by [httpkit.ParseEndpoint], which requires an
+// absolute http(s) URL carrying a host; anything else yields ok false,
+// which every constructor turns into a configuration error rather than
+// letting the value reach the transport. redacted is the configured
+// value with its userinfo removed, and is the only form safe to place in
+// an operator-facing message. It is empty when the value was empty.
 func resolveEndpoint(raw string) (endpoint, redacted string, ok bool) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return defaultEndpoint, "", true
+	parsed, ok := httpkit.ResolveEndpoint(raw, defaultEndpoint)
+	if !ok {
+		return "", parsed.Redacted, false
 	}
 
-	redacted = httpkit.RedactURLUserinfo(trimmed)
-
-	parsed, err := url.Parse(trimmed)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", redacted, false
-	}
-
-	return strings.TrimRight(trimmed, "/"), redacted, true
+	return parsed.Base, parsed.Redacted, true
 }
