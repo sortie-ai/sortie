@@ -382,9 +382,11 @@ mutually exclusive. When neither key is set, `trust_all_tools` now resolves to `
 "Untrusted-tool behavior" below); when `trust_all_tools` resolves to `false`, `kiro.buildArgs`
 emits `--trust-tools=<joined>`, so an explicit but empty `trust_tools` list produces
 `--trust-tools=` and trusts nothing. A read-only profile such as
-`trust_tools: [read, grep, glob]` is the least-privilege starting point; `write` and `shell`
-belong there only when the workflow requires file edits or command execution, and only inside
-a sandbox.
+`trust_tools: [read, grep, glob]` is the least-privilege posture the CLI itself supports, but
+Sortie refuses it: `validateConfig` reports `kiro.trust_tools.untrusted` for any configuration
+that does not resolve to full trust, for the reason given under "Untrusted-tool behavior"
+below. Treat that profile as raw CLI behavior rather than a usable Sortie configuration until
+the untrusted-tool path is observed.
 
 ### Untrusted-tool behavior under `--no-interactive`
 

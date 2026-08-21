@@ -50,13 +50,12 @@ kiro:
   # unavailable in headless mode; the adapter passes --model on every turn.
   # Run "kiro-cli chat --list-models --format json" to see the live list.
   model: claude-sonnet-4.6
-  # Least-privilege tool allowlist. The read-only profile (read, grep, glob)
-  # is the safe starting point; add "write" and "shell" only when the
-  # workflow requires file edits or command execution.
-  trust_tools:
-    - read
-    - grep
-    - glob
+  # Neither trust_all_tools nor trust_tools is set, so the adapter resolves
+  # to full trust and passes --trust-all-tools. A narrower allowlist is
+  # refused today: what kiro-cli does when it meets an untrusted tool under
+  # --no-interactive is unestablished, and the conservative assumption is
+  # that it waits for an approval an unattended run cannot give. Run this
+  # agent inside a hardened sandbox.
 
 server:
   port: 8642
