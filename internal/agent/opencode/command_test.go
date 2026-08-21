@@ -296,6 +296,26 @@ func TestBuildRunArgs(t *testing.T) {
 	}
 }
 
+// TestBuildRunArgs_DefaultConfigurationSkipsPermissions asserts that the
+// full configuration path, from an empty WORKFLOW.md opencode sub-object
+// through buildRunArgs, passes --dangerously-skip-permissions. This is the
+// launch posture the finalizeExitedTurn refusal path assumes: no reply
+// channel, so a recognized permission warning always reads
+// AnswerRuntimeRefused.
+func TestBuildRunArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
+	t.Parallel()
+
+	pt, err := parsePassthroughConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("parsePassthroughConfig(map[string]any{}) error = %v", err)
+	}
+
+	state := newTestSessionState("/tmp/workspace", "")
+	args := buildRunArgs(state, "work", pt)
+
+	assertHasFlag(t, args, "--dangerously-skip-permissions")
+}
+
 func TestBuildRunEnv(t *testing.T) {
 	t.Parallel()
 

@@ -3,10 +3,14 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +19,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // writeOpenCodeScript writes an executable shell script named fake-opencode
@@ -59,6 +65,40 @@ cat '` + runPath + `'`
 	return writeOpenCodeScript(t, dir, body)
 }
 
+// splitPermissionWarningFixture returns the two lines of
+// testdata/permission_warning_then_error.txt: the plain-text permission
+// warning the opencode runtime writes to stderr, and the tool_use JSON
+// envelope it writes to stdout.
+func splitPermissionWarningFixture(t *testing.T) (warningLine, stdoutLine string) {
+	t.Helper()
+	lines := bytes.Split(bytes.TrimRight(loadFixture(t, "permission_warning_then_error.txt"), "\n"), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("permission_warning_then_error.txt has %d lines, want 2", len(lines))
+	}
+	return string(lines[0]), string(lines[1])
+}
+
+// writeFixtureFile writes content to name inside dir, fataling on error.
+func writeFixtureFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	return path
+}
+
+// hasNotification reports whether events contains an EventNotification
+// with exactly message.
+func hasNotification(events []domain.AgentEvent, message string) bool {
+	for _, e := range events {
+		if e.Type == domain.EventNotification && e.Message == message {
+			return true
+		}
+	}
+	return false
+}
+
 // collectEvents runs a turn and collects all emitted events.
 func collectEvents(t *testing.T, a domain.AgentAdapter, session domain.Session, prompt string) ([]domain.AgentEvent, domain.TurnResult, error) {
 	t.Helper()
@@ -84,6 +124,34 @@ func TestNewOpenCodeAdapter(t *testing.T) {
 	}
 	if _, ok := a.(*OpenCodeAdapter); !ok {
 		t.Errorf("adapter type = %T, want *OpenCodeAdapter", a)
+	}
+}
+
+// TestNewOpenCodeAdapter_OverlapErrorMatchesValidateConfig asserts that
+// NewOpenCodeAdapter's constructor refusal and validateConfig's offline
+// diagnostic report byte-identical text for the same overlapping
+// configuration, so the two surfaces can never disagree.
+func TestNewOpenCodeAdapter_OverlapErrorMatchesValidateConfig(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{
+		"allowed_tools": []any{"bash"},
+		"denied_tools":  []any{"bash"},
+	}
+
+	_, err := NewOpenCodeAdapter(config)
+	if err == nil {
+		t.Fatal("NewOpenCodeAdapter() error = nil, want overlap error")
+	}
+
+	diags := validateConfig(registry.AgentConfigFields{Kind: "opencode", Passthrough: config})
+	diag := hasCheck(diags, "opencode.allowed_tools.overlap")
+	if diag == nil {
+		t.Fatalf("validateConfig() missing check %q; got %+v", "opencode.allowed_tools.overlap", diags)
+	}
+
+	if err.Error() != diag.Message {
+		t.Errorf("NewOpenCodeAdapter() error = %q, validateConfig() diagnostic message = %q, want identical", err.Error(), diag.Message)
 	}
 }
 
@@ -1017,7 +1085,7 @@ func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
   export) echo '{"messages":[]}'; exit 0;;
 esac
-printf '! permission requested: external_directory (/etc/*); auto-rejecting\n'
+printf '! permission requested: external_directory (/etc/*); auto-rejecting\n' >&2
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_visibility123","part":{"id":"p1","messageID":"m1","sessionID":"ses_visibility123","snapshot":"","type":"step-start"}}\n'
 printf '{"type":"text","timestamp":1001,"sessionID":"ses_visibility123","part":{"id":"p3","messageID":"m1","sessionID":"ses_visibility123","type":"text","text":"working on it","time":{"start":1001,"end":1001}}}\n'
 printf '{"type":"unknown_future_type","timestamp":1001,"sessionID":"ses_visibility123","data":"something"}\n'
@@ -1045,7 +1113,7 @@ printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","
 		switch event.Type {
 		case domain.EventNotification:
 			switch {
-			case strings.HasPrefix(event.Message, "! permission requested:"):
+			case strings.HasPrefix(event.Message, "the agent runtime refused a permission request"):
 				sawPermissionWarning = true
 			case event.Message == "step started":
 				sawStepStarted = true
@@ -1087,6 +1155,98 @@ printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","
 		ExitCode:     0,
 		Work:         agentcore.WorkPresent,
 	}, result, err)
+}
+
+// TestRunTurn_PermissionWarningRecognizedOnStderr drives the
+// permission_warning_then_error.txt fixture split across the two real
+// streams the opencode runtime uses: the denial warning on stderr, the
+// tool_use envelope alone on stdout. Previously both lines
+// arrived on stdout and the recognition branch that would have read the
+// warning there was dead code, so a fixture that did not distinguish the
+// streams let a test pass without exercising the refusal path at all. See
+// TestRunTurn_PermissionWarningOnStdoutIsNotRecognized for the negative
+// control this test alone cannot provide.
+func TestRunTurn_PermissionWarningRecognizedOnStderr(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	warningLine, stdoutLine := splitPermissionWarningFixture(t)
+
+	stdoutPath := writeFixtureFile(t, tmpDir, "stdout.jsonl", stdoutLine+"\n")
+	stderrPath := writeFixtureFile(t, tmpDir, "stderr.txt", warningLine+"\n")
+	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"messages":[]}`)
+
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) cat '`+exportPath+`'; exit 0;;
+esac
+cat '`+stderrPath+`' >&2
+cat '`+stdoutPath+`'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	wantNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).Notice
+	if !hasNotification(events, wantNotice) {
+		t.Errorf("events = %v, want an EventNotification with Message %q for the stderr-delivered permission warning", events, wantNotice)
+	}
+}
+
+// TestRunTurn_PermissionWarningOnStdoutIsNotRecognized is the negative
+// control for TestRunTurn_PermissionWarningRecognizedOnStderr: it delivers
+// the same fixture's warning line on stdout instead of stderr, the shape
+// the fixture previously modeled, and asserts the permission
+// refusal notification is absent; the line is malformed input on stdout
+// instead, since the dead stdout-side filter was removed. Together
+// the two tests carry the guarantee that recognition fires on the stream
+// the runtime actually uses and nowhere else: this one fails if
+// recognition leaked back onto stdout or the fixture regressed to its old
+// single-stream shape, and its counterpart fails if isPermissionWarning
+// stopped firing on stderr at all.
+func TestRunTurn_PermissionWarningOnStdoutIsNotRecognized(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	warningLine, stdoutLine := splitPermissionWarningFixture(t)
+
+	stdoutPath := writeFixtureFile(t, tmpDir, "stdout.jsonl", warningLine+"\n"+stdoutLine+"\n")
+	exportPath := writeFixtureFile(t, tmpDir, "export.json", `{"messages":[]}`)
+
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) cat '`+exportPath+`'; exit 0;;
+esac
+cat '`+stdoutPath+`'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, _, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	wantNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).Notice
+	if hasNotification(events, wantNotice) {
+		t.Errorf("events = %v, unexpectedly contains the permission-refusal notification %q for a warning delivered on stdout", events, wantNotice)
+	}
+
+	var sawMalformed bool
+	for _, e := range events {
+		if e.Type == domain.EventMalformed && strings.Contains(e.Message, "permission requested") {
+			sawMalformed = true
+			break
+		}
+	}
+	if !sawMalformed {
+		t.Error("no EventMalformed for the stdout-delivered permission warning line")
+	}
 }
 
 func TestRunTurn_TurnCancelledOnContextCancel(t *testing.T) {
@@ -1463,5 +1623,62 @@ fi`, counterFile, counterFile))
 	var agentErr *domain.AgentError
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
+}
+
+// TestStartWait_BlocksOnStderrDrainBeforeCmdWait drives startWait directly
+// with a stderrCollector built over an [io.Pipe] whose write end the test
+// holds open, decoupling the collector's drain from the race-prone real
+// stderr pipe entirely: instead of racing cmd.Wait's pipe close against a
+// concurrent read (the shape of the original bug, and why the fix's own
+// regression test flaked roughly one run in three), the drain is blocked
+// on a synchronization primitive the test controls outright, so the guard
+// under test either blocks forever or doesn't - no timing luck involved.
+//
+// With the guard in place, startWait's goroutine cannot reach cmd.Wait
+// while the pipe is held open, so runtime.waitCh must still be open after
+// a generous bounded wait. Removing the
+// "<-runtime.stderrCollector.Done()" line in startWait lets the goroutine
+// call cmd.Wait immediately after readerDone closes; since the underlying
+// process ("true") has already exited, waitCh closes within a few
+// milliseconds, deterministically failing the first select below.
+func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	collector := procutil.NewStderrCollector(pr, slog.Default())
+
+	cmd := exec.Command("true")
+	procutil.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+
+	readerDone := make(chan struct{})
+	close(readerDone)
+
+	runtime := &turnRuntime{
+		readerDone:      readerDone,
+		stderrCollector: collector,
+		waitCh:          make(chan waitResult, 1),
+	}
+
+	startWait(runtime, cmd)
+
+	select {
+	case <-runtime.waitCh:
+		t.Fatal("startWait closed waitCh before the stderr drain finished; " +
+			"the <-runtime.stderrCollector.Done() guard is missing or bypassed")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if err := pw.Close(); err != nil {
+		t.Fatalf("pw.Close() = %v", err)
+	}
+
+	select {
+	case <-runtime.waitCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startWait did not close waitCh after the stderr drain finished")
 	}
 }

@@ -9,7 +9,7 @@
 >
 > - v1.15.12, 2026-05-29: the `run` flag surface, session storage layout, and dir-scoped resume.
 > - v1.14.50, 2026-05-14: the logical-failure exit code, stderr content, and duplicated `error` events. Not re-observed on v1.15.12.
-> - v1.14.25, 2026-04-26: every other locally observed claim, including the credential commands, `serve` port binding, `session list` ordering, `export` payloads, permission warnings on stdout, and parallel-session isolation. Not re-observed since.
+> - v1.14.25, 2026-04-26: every other locally observed claim, including the credential commands, `serve` port binding, `session list` ordering, `export` payloads, permission warnings on stderr, and parallel-session isolation. Not re-observed since.
 > - Source-code and raw-docs links point at the immutable `v1.14.25` tag, so quoted code and line numbers stay valid. The rendered docs track the latest release and can lead the tagged source; "Documented conflicts and drift" records where the two disagree.
 
 ## Overview
@@ -352,13 +352,16 @@ A rejection prints this pair:
 {"type":"tool_use", ... "state":{"status":"error","error":"The user rejected permission to use this specific tool call."}}
 ```
 
-The warning goes to stdout before the JSON envelope, from the `run.ts` branch that calls
-`UI.println(...)` before replying `reject`. So `opencode run --format json` is not JSON-clean
-unless the prompt avoids permission prompts or the run passes
-`--dangerously-skip-permissions`. The adapter parses each stdout line as JSON and, on failure,
-treats the line as plain text: `isPermissionWarning`
-(`internal/agent/opencode/opencode.go`) matches the `! permission requested:` prefix and emits a
-notification, and any other unparseable line becomes a `domain.EventMalformed` event.
+The warning goes to stderr, and the JSON envelope goes to stdout: `run.ts` calls
+`UI.println(...)` before replying `reject`, and `println` writes through `print`, which calls
+`process.stderr.write` (`cli/ui.ts`, v1.14.25 tag; not re-observed on the pinned v1.15.12
+binary, since reproducing it needs an authenticated run). `opencode run --format json`'s stdout
+stream stays JSON-clean whether or not a permission prompt occurs. The adapter recognizes the
+warning from the turn's collected stderr lines once the subprocess has exited:
+`isPermissionWarning` (`internal/agent/opencode/opencode.go`) matches the
+`! permission requested:` prefix against each stderr line and emits a notification. Any stdout
+line that fails to parse as an event is a `domain.EventMalformed` event; the permission warning
+is not one of those, because it never arrives on stdout.
 
 ## Output format: `opencode run --format json`
 

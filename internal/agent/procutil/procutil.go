@@ -199,6 +199,20 @@ func (c *StderrCollector) drain(r io.Reader) {
 	}
 }
 
+// Done returns a channel that closes once the drain goroutine has
+// finished reading its source to EOF (or a read error), after which all
+// collected lines are available.
+//
+// A caller that owns the underlying [*exec.Cmd] and created the reader
+// via [exec.Cmd.StderrPipe] must wait on Done before calling
+// [exec.Cmd.Wait]: Wait reaps the process and then closes the pipe's
+// read end, which races with a concurrent read in the drain goroutine
+// and can make it return early, silently discarding stderr lines that
+// were still buffered in the pipe.
+func (c *StderrCollector) Done() <-chan struct{} {
+	return c.done
+}
+
 // Lines blocks until the drain goroutine finishes and returns all
 // collected stderr lines in chronological order. When lines were
 // discarded, a synthetic marker line is inserted between the head and
