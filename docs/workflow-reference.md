@@ -2489,7 +2489,7 @@ ignored and the default applies.
 codex:
   model: o3                       # Model override (e.g., "gpt-5.4", "o3")
   effort: medium                  # Reasoning effort: "low", "medium", "high"
-  approval_policy: never          # "never" (default), "onRequest", "unlessTrusted", "always"
+  approval_policy: never          # "never" (default), "untrusted", "on-request"
   thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
   personality: concise            # Personality preset
   turn_sandbox_policy:            # Per-turn sandbox policy override (optional)
@@ -2502,6 +2502,16 @@ when initializing the `codex app-server` subprocess and starting threads.
 The Codex adapter uses a persistent subprocess model: the app-server is launched
 once in `StartSession` and kept alive across turns, unlike the per-turn subprocess
 model used by `claude-code`, `copilot-cli`, and `opencode`.
+
+> **Approval policy:** the accepted values are `never`, `untrusted`, and
+> `on-request`. A value outside that set is not ignored: the app-server rejects
+> `thread/start`, so the session never starts. Keep the default. `never` is what
+> stops the app-server from asking for a decision that an unattended run has
+> nobody to give; under `untrusted` or `on-request` the app-server sends approval
+> requests that the adapter does not answer, and the turn waits until a timeout
+> ends it. Codex also accepts an object form of this policy, a `granular` member
+> whose booleans decide each approval category, but this key is read as a string
+> only, so a map value is dropped and the thread falls back to `never`.
 
 > **Sandbox defaults:** When `thread_sandbox` is omitted, the adapter defaults to
 > `workspaceWrite` with `writableRoots` set to the workspace path and
