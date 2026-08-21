@@ -1225,8 +1225,12 @@ replace-style field. Subscriber lists follow the same pattern.
   missing key, on surrounding whitespace, and on a key without the `lin_api_`
   prefix, and never puts the key value in a diagnostic.
 - **`tracker.endpoint`:** defaults to `linear.defaultEndpoint`
-  (`https://api.linear.app/graphql`); there is no self-hosted Linear, so
-  overriding only serves tests and mocks.
+  (`https://api.linear.app/graphql`) when empty or whitespace-only; there is no
+  self-hosted Linear, so overriding only serves tests and mocks. A present
+  value is parsed by `linear.resolveEndpoint` and rejected at construction
+  (`domain.ErrTrackerPayload`) unless it is an absolute http(s) URL carrying a
+  host; see [Endpoint parsing and offline validate
+  parity](#endpoint-parsing-and-offline-validate-parity).
 - **`tracker.project`:** the team key (`ENG`). Required:
   `NewLinearAdapter` returns `domain.ErrMissingTrackerProject` when it is empty.
   Validated at construction by the team-states preflight; an unknown key returns
@@ -1255,6 +1259,43 @@ replace-style field. Subscriber lists follow the same pattern.
   webhook automations the operator has configured in the workspace. Sortie polls
   rather than consuming webhooks, so this is an operator-awareness note, not an
   adapter dependency.
+
+### Endpoint parsing and offline validate parity
+
+`NewLinearAdapter` resolves `endpoint` through `linear.resolveEndpoint`, a
+thin wrapper over `httpkit.ResolveEndpoint`. An empty or whitespace-only
+value substitutes `linear.defaultEndpoint`; either way the result is parsed
+by `httpkit.ParseEndpoint`, so the default host and an operator-supplied host
+are validated identically before either reaches the GraphQL client. A
+supplied value that does not parse as an absolute http(s) URL carrying a
+host, or that carries a query or a fragment, fails construction with
+`domain.ErrTrackerPayload`. `url.Parse`'s own
+error text quotes the whole raw URL, so an endpoint written as
+`scheme://user:secret@host` would otherwise name both the username and the
+password in the failure message; the constructor's message instead carries
+only `httpkit.Endpoint.Redacted`, the userinfo-stripped form. This closes the
+same exposure Gitea's endpoint guard closes, though Linear's single hosted
+host makes the case a test or mock endpoint rather than a self-hosted
+deployment.
+
+Linear registers no `SCMAdapter` and no `CIStatusProvider`, so `tracker.endpoint`
+is the only endpoint any Linear-backed surface reads. Unlike Gitea, there is no
+`extensions.linear` block that could hand a different endpoint to a second
+constructor, so the offline validate verdict always matches the construction
+verdict for every surface Linear serves.
+
+`validateConfig`'s `validateEndpoint` decides its verdict from the same
+`resolveEndpoint` call the constructor makes:
+
+| Check | Severity | Condition |
+| --- | --- | --- |
+| `tracker.endpoint.invalid` | `error` | a `tracker.endpoint` that is not empty or whitespace only does not parse as an absolute http(s) URL with a host |
+
+An empty or whitespace-only endpoint produces no diagnostic, since it resolves
+to the default host. There is deliberately no plain-http warning here, unlike
+Gitea's `tracker.endpoint.insecure`, because Linear is a single hosted host
+with no self-hosted deployment mode. The diagnostic message never echoes the
+configured value.
 
 ---
 

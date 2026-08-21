@@ -13,6 +13,7 @@ import (
 func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
+	diags = append(diags, validateEndpoint(fields.Endpoint)...)
 	diags = append(diags, registry.DiagOwnerRepoProject(fields.Project)...)
 	diags = append(diags, validateAPIKeyHint(fields.APIKey)...)
 	// The untrimmed-element diagnostic is warning-severity because
@@ -24,6 +25,28 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 	diags = append(diags, registry.DiagStateOverlap(fields)...)
 
 	return diags
+}
+
+// validateEndpoint checks the shape of tracker.endpoint when present.
+//
+// GitHub defaults to the public API host, so an empty or whitespace-only
+// endpoint yields no diagnostic; [NewGitHubAdapter] substitutes
+// https://api.github.com for that case. A present value that does not
+// parse to an absolute http(s) URL with a host is a blocking error. The
+// verdict comes from [resolveEndpoint], the same helper the constructors
+// use, so the offline verdict cannot drift from the construction
+// verdict. The message never echoes the raw value, which can embed
+// userinfo credentials.
+func validateEndpoint(endpoint string) []registry.ValidationDiag {
+	if _, _, ok := resolveEndpoint(endpoint); ok {
+		return nil
+	}
+
+	return []registry.ValidationDiag{{
+		Severity: "error",
+		Check:    "tracker.endpoint.invalid",
+		Message:  `tracker.endpoint must be an absolute http(s) URL with a host (e.g. "https://github.example.com/api/v3")`,
+	}}
 }
 
 // validateAPIKeyHint produces advisory diagnostics when api_key is

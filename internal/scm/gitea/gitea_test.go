@@ -439,6 +439,91 @@ func TestNewGiteaAdapter(t *testing.T) {
 	})
 }
 
+// endpointRejectionCases names endpoint values that must be rejected as not
+// a valid absolute http(s) URL by every Gitea constructor, per
+// httpkit.ParseEndpoint. The userinfo-credential-leak case is covered
+// separately by TestNewGiteaAdapter_RedactsUserinfoInEndpointError, since it
+// needs its own message assertions.
+var endpointRejectionCases = []struct {
+	name     string
+	endpoint string
+}{
+	{"bare host with no scheme", "gitea.example.com"},
+	{"non-http scheme", "ftp://gitea.example.com"},
+	{"scheme with no host", "https://"},
+	{"unbracketed ipv6 with port", "http://fd00::1:3000"},
+	{"doubled port", "http://host:80:80/"},
+}
+
+// TestNewGiteaAdapter_RejectsInvalidEndpoint proves the endpoint values in
+// endpointRejectionCases fail construction before any network call, since
+// none of the config maps here register preflight routes.
+func TestNewGiteaAdapter_RejectsInvalidEndpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range endpointRejectionCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := validConfig(tt.endpoint)
+
+			a, err := NewGiteaAdapter(cfg)
+
+			assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			if a != nil {
+				t.Errorf("NewGiteaAdapter(endpoint=%q) adapter = %v, want nil", tt.endpoint, a)
+			}
+		})
+	}
+}
+
+// TestNewGiteaAdapter_RedactsUserinfoInEndpointError proves the credential
+// disclosure this fix closes stays closed: an endpoint carrying userinfo is
+// rejected, and the error names only the redacted host, never the
+// credential.
+func TestNewGiteaAdapter_RedactsUserinfoInEndpointError(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = "https://operator:s3cr3t@fd00::1:3000"
+
+	_, err := NewGiteaAdapter(validConfig(endpoint))
+
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		t.Fatalf("NewGiteaAdapter(endpoint=%q) error type = %T, want *domain.TrackerError", endpoint, err)
+	}
+	if te.Kind != domain.ErrTrackerPayload {
+		t.Errorf("NewGiteaAdapter(endpoint=%q) TrackerError.Kind = %q, want %q", endpoint, te.Kind, domain.ErrTrackerPayload)
+	}
+	if !strings.Contains(te.Message, "fd00::1:3000") {
+		t.Errorf("NewGiteaAdapter(endpoint=%q) message = %q, want it to contain the redacted host %q", endpoint, te.Message, "fd00::1:3000")
+	}
+	if strings.Contains(te.Message, "operator") || strings.Contains(te.Message, "s3cr3t") {
+		t.Errorf("NewGiteaAdapter(endpoint=%q) message = %q, must not leak userinfo credentials", endpoint, te.Message)
+	}
+}
+
+// TestNewGiteaAdapter_EmptyEndpointMessageIsPinned pins the pre-existing
+// empty-endpoint message: the shared httpkit.ParseEndpoint guard must not
+// have changed this operator-facing text.
+func TestNewGiteaAdapter_EmptyEndpointMessageIsPinned(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGiteaAdapter(validConfig(""))
+
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		t.Fatalf("NewGiteaAdapter(empty endpoint) error type = %T, want *domain.TrackerError", err)
+	}
+	if te.Kind != domain.ErrTrackerPayload {
+		t.Errorf("NewGiteaAdapter(empty endpoint) TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+	}
+	const want = "tracker.endpoint is required for gitea"
+	if te.Message != want {
+		t.Errorf("NewGiteaAdapter(empty endpoint) message = %q, want %q", te.Message, want)
+	}
+}
+
 // --- Registration ---
 
 func TestGiteaAdapterRegistration(t *testing.T) {

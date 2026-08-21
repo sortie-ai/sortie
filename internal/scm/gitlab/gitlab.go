@@ -340,18 +340,14 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	endpointRaw, _ := config["endpoint"].(string)
-	endpoint := strings.TrimSpace(endpointRaw)
-	if endpoint == "" {
-		endpoint = "https://gitlab.com"
-	}
-	parsedEndpoint, err := url.Parse(endpoint)
-	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
+	parsedEndpoint, ok := httpkit.ResolveEndpoint(endpointRaw, defaultEndpoint)
+	if !ok {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("gitlab: tracker.endpoint %q is not a valid absolute http(s) url", httpkit.RedactURLUserinfo(endpoint)),
+			Message: fmt.Sprintf("gitlab: tracker.endpoint %q is not a valid absolute http(s) url", parsedEndpoint.Redacted),
 		}
 	}
-	baseURL := strings.TrimRight(endpoint, "/")
+	baseURL := parsedEndpoint.Base
 	if !strings.HasSuffix(baseURL, "/api/v4") {
 		baseURL += "/api/v4"
 	}

@@ -14,6 +14,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
+// defaultEndpoint is the GitLab.com API base URL, applied when the
+// adapter config omits "endpoint".
+const defaultEndpoint = "https://gitlab.com"
+
 // newGitLabClient builds an [httpkit.Client] for the GitLab REST API v4.
 // baseURL is the instance base URL already suffixed with /api/v4; the
 // token travels only in the PRIVATE-TOKEN header, never as a query

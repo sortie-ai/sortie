@@ -55,18 +55,14 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 	}
 
 	endpointRaw, _ := adapterConfig["endpoint"].(string)
-	endpoint := strings.TrimSpace(endpointRaw)
-	if endpoint == "" {
-		endpoint = "https://gitlab.com"
-	}
-	parsedEndpoint, err := url.Parse(endpoint)
-	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
+	parsedEndpoint, ok := httpkit.ResolveEndpoint(endpointRaw, defaultEndpoint)
+	if !ok {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMPayload,
-			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", httpkit.RedactURLUserinfo(endpoint)),
+			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", parsedEndpoint.Redacted),
 		}
 	}
-	baseURL := strings.TrimRight(endpoint, "/")
+	baseURL := parsedEndpoint.Base
 	if !strings.HasSuffix(baseURL, "/api/v4") {
 		baseURL += "/api/v4"
 	}

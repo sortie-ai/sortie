@@ -62,7 +62,9 @@ type GitHubCIProvider struct {
 // maximum number of log tail lines returned for failing checks (0
 // disables log fetching). Required adapter config keys: "api_key",
 // "project" (owner/repo format). Optional: "endpoint" (defaults to
-// https://api.github.com), "user_agent".
+// https://api.github.com; a value that does not parse as an absolute
+// http or https URL with a host returns a [*domain.CIError] of kind
+// [domain.ErrCIPayload]), "user_agent".
 func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error) {
 	apiKey, _ := adapterConfig["api_key"].(string)
 	if apiKey == "" {
@@ -88,11 +90,14 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 		}
 	}
 
-	endpoint, _ := adapterConfig["endpoint"].(string)
-	if endpoint == "" {
-		endpoint = "https://api.github.com"
+	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
+	if !endpointOK {
+		return nil, &domain.CIError{
+			Kind:    domain.ErrCIPayload,
+			Message: fmt.Sprintf("github: endpoint %q is not a valid absolute http(s) url", redactedEndpoint),
+		}
 	}
-	endpoint = strings.TrimRight(endpoint, "/")
 
 	userAgent, _ := adapterConfig["user_agent"].(string)
 	if userAgent == "" {

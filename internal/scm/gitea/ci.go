@@ -49,13 +49,14 @@ type GiteaCIProvider struct {
 //
 // Required config keys: "api_key" (access token) and "project" (owner/repo).
 // "endpoint" (instance base URL) is required because Gitea has no default host;
-// it is right-trimmed of slashes and suffixed with "/api/v1" unless it already
-// ends in it. "user_agent" defaults to "sortie/dev". A missing "api_key" returns
-// a [*domain.CIError] of kind [domain.ErrCIAuth]; a missing or malformed
-// "project" or a missing "endpoint" returns one of kind [domain.ErrCIPayload].
-// Construction performs no network I/O: splitting the project is a string parse.
-// The token travels only in the Authorization header set by the shared client
-// and is never logged.
+// it must parse as an absolute http(s) URL with a host, and is right-trimmed of
+// slashes and suffixed with "/api/v1" unless it already ends in it. "user_agent"
+// defaults to "sortie/dev". A missing "api_key" returns a [*domain.CIError] of
+// kind [domain.ErrCIAuth]; a missing or malformed "project", a missing
+// "endpoint", or an "endpoint" that does not parse returns one of kind
+// [domain.ErrCIPayload]. Construction performs no network I/O: splitting the
+// project is a string parse. The token travels only in the Authorization header
+// set by the shared client and is never logged.
 func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error) {
 	apiKey, _ := adapterConfig["api_key"].(string)
 	if apiKey == "" {
@@ -81,14 +82,21 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 		}
 	}
 
-	endpoint, _ := adapterConfig["endpoint"].(string)
-	if endpoint == "" {
+	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	if endpointRaw == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIPayload,
 			Message: "missing required config key: endpoint",
 		}
 	}
-	endpoint = strings.TrimRight(endpoint, "/")
+	parsedEndpoint, ok := httpkit.ParseEndpoint(endpointRaw)
+	if !ok {
+		return nil, &domain.CIError{
+			Kind:    domain.ErrCIPayload,
+			Message: fmt.Sprintf("gitea: endpoint %q is not a valid absolute http(s) url", parsedEndpoint.Redacted),
+		}
+	}
+	endpoint := parsedEndpoint.Base
 	if !strings.HasSuffix(endpoint, "/api/v1") {
 		endpoint += "/api/v1"
 	}

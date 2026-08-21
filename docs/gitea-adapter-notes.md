@@ -527,7 +527,7 @@ Webhooks are the one PR-reaction surface with no adapter implementation: nothing
 
 ## Config mapping
 
-- **`tracker.endpoint`:** required, no default host. Instance base URL, for example `https://gitea.example.com`; every constructor right-trims trailing slashes and appends `/api/v1` unless the value already ends in it. TLS strongly recommended; the token travels in a header.
+- **`tracker.endpoint`:** required, no default host. Instance base URL, for example `https://gitea.example.com`; every constructor parses it with `httpkit.ParseEndpoint`, then right-trims trailing slashes and appends `/api/v1` unless the value already ends in it. A value that is not an absolute http(s) URL carrying a host is rejected at construction; see [Endpoint parsing and offline validate parity](#endpoint-parsing-and-offline-validate-parity). TLS strongly recommended; the token travels in a header.
 - **`tracker.api_key`:** access token string (single value, no `email:token` composition), sent as `Authorization: token <key>`. No prefix to validate, so the GitHub adapter's key-shape hints do not transfer. `validateAPIKeyHint` points an operator with an empty value at `SORTIE_GITEA_TOKEN`.
 - **`tracker.project`:** `owner/repo`; parsed at construction into owner and repo and rejected unless it holds exactly one `/` with non-empty halves.
 - **`tracker.active_states` / `tracker.terminal_states` / `tracker.handoff_state`:** repository label names, lowercased at construction, same contract as the GitHub adapter. Omitted lists fall back to `issuekit.DefaultActiveLabelStates` and `issuekit.DefaultTerminalLabelStates`. Missing labels are created on demand (see State model).
@@ -536,6 +536,25 @@ Webhooks are the one PR-reaction surface with no adapter implementation: nothing
 - **Network timeout:** 30 s, set on the shared client by `newGiteaClient`, matching the same section.
 - **Headers:** `Authorization`, `Accept: application/json`, and `User-Agent`, which `cmd/sortie` sets to `sortie/<version>` and the constructors default to `sortie/dev`. `Content-Type: application/json` is set on requests carrying a body. No API version header exists.
 - **Construction preflight:** `GET /user` (credential and identity check), `GET /repos/{owner}/{repo}` (project check). Both failures are configuration errors surfaced at startup, not at the first poll.
+
+### Endpoint parsing and offline validate parity
+
+`NewGiteaAdapter` (`gitea.go`), `NewGiteaCIProvider` (`ci.go`), and `NewGiteaSCMAdapter` (`scm.go`) each parse `endpoint` through `httpkit.ParseEndpoint` before building a client, and each rejects a value that is not an absolute http(s) URL carrying a host, or that carries a query or a fragment, with its own payload-kind error: `domain.ErrTrackerPayload` on the tracker, `domain.ErrCIPayload` on the CI provider, `domain.ErrSCMPayload` on the SCM adapter. `url.Parse`'s own error text quotes the whole raw URL, so an endpoint written as `scheme://user:secret@host` would otherwise name both the username and the password in the failure message; every constructor's message instead carries only `httpkit.Endpoint.Redacted`, the userinfo-stripped form. An unbracketed IPv6 host with more than one colon, for example `http://fd00::1:3000`, exactly the form a self-hosted address takes in `ip addr` output, fails to parse for the same reason and surfaces as this same configuration error rather than as a transport failure on the first request.
+
+An empty endpoint is unaffected by the parser: Gitea has no default host, so an empty value is still rejected before `httpkit.ParseEndpoint` runs, with the same message each constructor always carried (`tracker.endpoint is required for gitea` on the tracker, `missing required config key: endpoint` on the CI provider and the SCM adapter).
+
+The three constructors do not always see the same value. `mergeExtensions` (`cmd/sortie/resolve.go`) copies the `extensions.gitea` block into the CI provider's and the SCM adapter's config map before `mergeTrackerCredentials` falls back to `tracker.endpoint`, so an operator-configured `extensions.gitea.endpoint` takes precedence over `tracker.endpoint` for those two surfaces. The offline `sortie validate` pipeline's `validateEndpoint` inspects `tracker.endpoint` alone and never sees `extensions.gitea`. That is why this guard lives in each constructor rather than in the validate hook alone: a `tracker.endpoint` that validates offline says nothing about the endpoint the CI provider or the SCM adapter actually construct against once an `extensions.gitea.endpoint` override is present.
+
+`validateEndpoint` decides its verdict from the same `httpkit.ParseEndpoint` call the constructors make, so the offline verdict cannot drift from the construction verdict:
+
+| Check | Severity | Condition |
+| --- | --- | --- |
+| `tracker.endpoint.missing` | `error` | `tracker.endpoint` is empty |
+| `tracker.endpoint.invalid` | `error` | the value does not parse as an absolute http(s) URL with a host |
+| `tracker.endpoint.insecure` | `warning` | the parsed scheme is `http` |
+| `tracker.endpoint.api_suffix` | `warning` | the parsed path already ends in `/api/v1` |
+
+Each diagnostic message is fixed text; none of the four echoes the configured value.
 
 ---
 

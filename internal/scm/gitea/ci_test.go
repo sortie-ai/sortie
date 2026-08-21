@@ -839,3 +839,81 @@ func TestNewGiteaCIProvider(t *testing.T) {
 		}
 	})
 }
+
+// TestNewGiteaCIProvider_RejectsInvalidEndpoint proves the endpoint values
+// in endpointRejectionCases fail construction with ErrCIPayload; none of
+// the config maps here register a server, since construction performs no
+// network I/O.
+func TestNewGiteaCIProvider_RejectsInvalidEndpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range endpointRejectionCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p, err := NewGiteaCIProvider(0, map[string]any{
+				"api_key":  "test-token",
+				"project":  testOwner + "/" + testRepo,
+				"endpoint": tt.endpoint,
+			})
+
+			assertCIErrorKind(t, err, domain.ErrCIPayload)
+			if p != nil {
+				t.Errorf("NewGiteaCIProvider(endpoint=%q) provider = %v, want nil", tt.endpoint, p)
+			}
+		})
+	}
+}
+
+// TestNewGiteaCIProvider_RedactsUserinfoInEndpointError proves the
+// credential disclosure this fix closes stays closed for the CI provider,
+// which previously accepted a userinfo-bearing endpoint silently.
+func TestNewGiteaCIProvider_RedactsUserinfoInEndpointError(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = "https://operator:s3cr3t@fd00::1:3000"
+
+	_, err := NewGiteaCIProvider(0, map[string]any{
+		"api_key":  "test-token",
+		"project":  testOwner + "/" + testRepo,
+		"endpoint": endpoint,
+	})
+
+	var ce *domain.CIError
+	if !errors.As(err, &ce) {
+		t.Fatalf("NewGiteaCIProvider(endpoint=%q) error type = %T, want *domain.CIError", endpoint, err)
+	}
+	if ce.Kind != domain.ErrCIPayload {
+		t.Errorf("NewGiteaCIProvider(endpoint=%q) CIError.Kind = %q, want %q", endpoint, ce.Kind, domain.ErrCIPayload)
+	}
+	if !strings.Contains(ce.Message, "fd00::1:3000") {
+		t.Errorf("NewGiteaCIProvider(endpoint=%q) message = %q, want it to contain the redacted host %q", endpoint, ce.Message, "fd00::1:3000")
+	}
+	if strings.Contains(ce.Message, "operator") || strings.Contains(ce.Message, "s3cr3t") {
+		t.Errorf("NewGiteaCIProvider(endpoint=%q) message = %q, must not leak userinfo credentials", endpoint, ce.Message)
+	}
+}
+
+// TestNewGiteaCIProvider_EmptyEndpointMessageIsPinned pins the pre-existing
+// empty-endpoint message: the shared httpkit.ParseEndpoint guard must not
+// have changed this operator-facing text.
+func TestNewGiteaCIProvider_EmptyEndpointMessageIsPinned(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGiteaCIProvider(0, map[string]any{
+		"api_key": "test-token",
+		"project": testOwner + "/" + testRepo,
+	})
+
+	var ce *domain.CIError
+	if !errors.As(err, &ce) {
+		t.Fatalf("NewGiteaCIProvider(missing endpoint) error type = %T, want *domain.CIError", err)
+	}
+	if ce.Kind != domain.ErrCIPayload {
+		t.Errorf("NewGiteaCIProvider(missing endpoint) CIError.Kind = %q, want %q", ce.Kind, domain.ErrCIPayload)
+	}
+	const want = "missing required config key: endpoint"
+	if ce.Message != want {
+		t.Errorf("NewGiteaCIProvider(missing endpoint) message = %q, want %q", ce.Message, want)
+	}
+}

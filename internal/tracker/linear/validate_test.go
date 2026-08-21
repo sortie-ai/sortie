@@ -114,6 +114,108 @@ func TestValidateProject(t *testing.T) {
 	}
 }
 
+func TestValidateEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		endpoint  string
+		wantCount int
+	}{
+		{"empty endpoint produces no diagnostic", "", 0},
+		{"whitespace-only endpoint produces no diagnostic", "   ", 0},
+		{"valid endpoint produces no diagnostic", "https://api.linear.app/graphql", 0},
+		{"valid custom endpoint produces no diagnostic", "https://self-hosted.example.com/graphql", 0},
+		{"unsupported scheme is one error diagnostic", "ftp://example.com/graphql", 1},
+		{"non-url string is one error diagnostic", "not a url at all", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateEndpoint(tt.endpoint)
+
+			if len(got) != tt.wantCount {
+				t.Fatalf("validateEndpoint(%q) = %d diags, want %d; diags: %v", tt.endpoint, len(got), tt.wantCount, got)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+			if got[0].Severity != "error" {
+				t.Errorf("validateEndpoint(%q) diag[0].Severity = %q, want %q", tt.endpoint, got[0].Severity, "error")
+			}
+			if got[0].Check != "tracker.endpoint.invalid" {
+				t.Errorf("validateEndpoint(%q) diag[0].Check = %q, want %q", tt.endpoint, got[0].Check, "tracker.endpoint.invalid")
+			}
+		})
+	}
+}
+
+// TestValidateEndpoint_MessageNamesFieldOnly locks a stricter guarantee than
+// TestValidateEndpoint: the diagnostic message for a malformed endpoint must
+// not echo any fragment of the configured value, not even the redacted host.
+// This differs from the constructor's error message, which does carry the
+// redacted form.
+func TestValidateEndpoint_MessageNamesFieldOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{"unsupported scheme", "ftp://example.com/graphql"},
+		{"non-url string", "not a url at all"},
+		{"credential-bearing malformed url", "https://operator:s3cr3t@fd00::1:3000/graphql"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateEndpoint(tt.endpoint)
+
+			if len(got) != 1 {
+				t.Fatalf("validateEndpoint(%q) = %d diags, want 1; diags: %v", tt.endpoint, len(got), got)
+			}
+			if strings.Contains(got[0].Message, tt.endpoint) {
+				t.Errorf("validateEndpoint(%q) message %q echoes the configured value", tt.endpoint, got[0].Message)
+			}
+			if strings.Contains(got[0].Message, "example.com") || strings.Contains(got[0].Message, "fd00::1:3000") {
+				t.Errorf("validateEndpoint(%q) message %q echoes a host fragment of the configured value", tt.endpoint, got[0].Message)
+			}
+			if strings.Contains(got[0].Message, "operator") || strings.Contains(got[0].Message, "s3cr3t") {
+				t.Errorf("validateEndpoint(%q) message %q leaks credentials", tt.endpoint, got[0].Message)
+			}
+		})
+	}
+}
+
+// TestValidateConfig_ValidEndpointOmittedKeepsOtherDiagnostics proves that a
+// fully valid config whose endpoint is absent produces exactly the
+// diagnostics its other fields warrant: no endpoint diagnostic is added, and
+// no existing diagnostic is suppressed by the endpoint check running first.
+func TestValidateConfig_ValidEndpointOmittedKeepsOtherDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	fields := registry.TrackerConfigFields{
+		Kind:           "linear",
+		Project:        "E NG",
+		APIKey:         "lin_api_testtoken123",
+		ActiveStates:   []string{"Backlog"},
+		TerminalStates: []string{"Done"},
+	}
+
+	got := validateConfig(fields)
+
+	if hasDiagCheck(got, "tracker.endpoint.invalid") {
+		t.Errorf("validateConfig(endpoint omitted) = %v, must not include tracker.endpoint.invalid", got)
+	}
+	if !hasDiagCheck(got, "tracker.project.format") {
+		t.Errorf("validateConfig(endpoint omitted) = %v, want check %q unaffected by the endpoint check", got, "tracker.project.format")
+	}
+}
+
 func TestValidateAPIKeyHint(t *testing.T) {
 	// No t.Parallel(): subtests use t.Setenv to control SORTIE_LINEAR_API_KEY.
 
