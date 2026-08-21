@@ -9,10 +9,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-func ptrFloat(v float64) *float64 { return &v }
-func ptrStr(v string) *string     { return &v }
-func ptrInt(v int) *int           { return &v }
-
 func TestNormalizeIssue(t *testing.T) {
 	t.Parallel()
 
@@ -20,8 +16,8 @@ func TestNormalizeIssue(t *testing.T) {
 		ID:          "uuid-1",
 		Identifier:  "SOR-5",
 		Title:       "Title",
-		Description: ptrStr("body"),
-		Priority:    ptrFloat(2),
+		Description: new("body"),
+		Priority:    new(float64(2)),
 		BranchName:  "tasks/sor-5-anything/with/slashes",
 		URL:         "https://linear.app/org/issue/SOR-5/title",
 		CreatedAt:   "2026-06-10T09:00:00.000Z",
@@ -46,7 +42,7 @@ func TestNormalizeIssue(t *testing.T) {
 		Identifier:  "SOR-5",
 		Title:       "Title",
 		Description: "body",
-		Priority:    ptrInt(2),
+		Priority:    new(2),
 		State:       "In Progress",
 		BranchName:  "tasks/sor-5-anything/with/slashes",
 		URL:         "https://linear.app/org/issue/SOR-5/title",
@@ -128,11 +124,11 @@ func TestNormalizePriority(t *testing.T) {
 		want *int
 	}{
 		{"nil pointer", nil, nil},
-		{"zero maps to nil", ptrFloat(0), nil},
-		{"one", ptrFloat(1), ptrInt(1)},
-		{"two", ptrFloat(2), ptrInt(2)},
-		{"three", ptrFloat(3), ptrInt(3)},
-		{"four", ptrFloat(4), ptrInt(4)},
+		{"zero maps to nil", new(float64(0)), nil},
+		{"one", new(float64(1)), new(1)},
+		{"two", new(float64(2)), new(2)},
+		{"three", new(float64(3)), new(3)},
+		{"four", new(float64(4)), new(4)},
 	}
 
 	for _, tt := range tests {
@@ -300,9 +296,9 @@ func TestSortByPriorityThenCreated(t *testing.T) {
 
 	issues := []domain.Issue{
 		{Identifier: "no-prio-older", Priority: nil, CreatedAt: "2026-06-01"},
-		{Identifier: "prio2", Priority: ptrInt(2), CreatedAt: "2026-06-05"},
-		{Identifier: "prio1-newer", Priority: ptrInt(1), CreatedAt: "2026-06-10"},
-		{Identifier: "prio1-older", Priority: ptrInt(1), CreatedAt: "2026-06-02"},
+		{Identifier: "prio2", Priority: new(2), CreatedAt: "2026-06-05"},
+		{Identifier: "prio1-newer", Priority: new(1), CreatedAt: "2026-06-10"},
+		{Identifier: "prio1-older", Priority: new(1), CreatedAt: "2026-06-02"},
 		{Identifier: "no-prio-newer", Priority: nil, CreatedAt: "2026-06-09"},
 	}
 

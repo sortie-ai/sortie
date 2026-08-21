@@ -7,7 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-func strPtr(s string) *string              { return &s }
 func typePtr(name string) *githubIssueType { return &githubIssueType{Name: name} }
 func prMarker() *githubPR                  { return &githubPR{} }
 
@@ -20,7 +19,7 @@ func TestNormalizeIssue_AllFields(t *testing.T) {
 		ID:        987654,
 		Number:    42,
 		Title:     "Add dark mode",
-		Body:      strPtr("Users want dark mode."),
+		Body:      new("Users want dark mode."),
 		State:     "open",
 		HTMLURL:   "https://github.com/owner/repo/issues/42",
 		Labels:    []githubLabel{{Name: "In-Progress"}, {Name: "UI"}},

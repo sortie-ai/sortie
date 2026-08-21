@@ -2,8 +2,6 @@ package domain
 
 import "testing"
 
-func intPtr(v int) *int { return &v }
-
 func TestToTemplateMap_FullyPopulated(t *testing.T) {
 	t.Parallel()
 
@@ -12,7 +10,7 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		Identifier:  "PROJ-42",
 		Title:       "Fix login bug",
 		Description: "Users cannot log in with SSO.",
-		Priority:    intPtr(2),
+		Priority:    new(2),
 		State:       "In Progress",
 		BranchName:  "feature/PROJ-42",
 		URL:         "https://tracker.example.com/PROJ-42",
@@ -208,8 +206,8 @@ func TestToTemplateMap_Priority(t *testing.T) {
 		want     any
 	}{
 		{"nil", nil, nil},
-		{"zero", intPtr(0), 0},
-		{"positive", intPtr(3), 3},
+		{"zero", new(0), 0},
+		{"positive", new(3), 3},
 	}
 
 	for _, tt := range tests {

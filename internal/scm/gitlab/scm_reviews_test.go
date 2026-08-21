@@ -471,11 +471,10 @@ func TestNormalizeNotes_OutdatedDerivationAndConditionalRead(t *testing.T) {
 		defer srv.Close()
 
 		adapter := mustSCMAdapter(t, srv.URL)
-		newLine := 5
 		notes := []gitlabNote{
 			{
 				ID: 2, Author: gitlabUser{Username: "alice"}, Body: "inline note", CreatedAt: "2026-08-10T08:00:00Z",
-				Position: &gitlabNotePosition{HeadSHA: normalizeNotesHeadSHA, NewPath: "a.go", NewLine: &newLine},
+				Position: &gitlabNotePosition{HeadSHA: normalizeNotesHeadSHA, NewPath: "a.go", NewLine: new(5)},
 			},
 		}
 		got, err := adapter.normalizeNotes(context.Background(), testPRNumber, scmOwner, scmRepo, notes)
@@ -503,11 +502,10 @@ func TestNormalizeNotes_OutdatedDerivationAndConditionalRead(t *testing.T) {
 		defer srv.Close()
 
 		adapter := mustSCMAdapter(t, srv.URL)
-		oldLine := 9
 		notes := []gitlabNote{
 			{
 				ID: 3, Author: gitlabUser{Username: "alice"}, Body: "stale inline note", CreatedAt: "2026-08-10T08:00:00Z",
-				Position: &gitlabNotePosition{HeadSHA: "stale-sha-0000000000000000000000000", OldPath: "b.go", OldLine: &oldLine},
+				Position: &gitlabNotePosition{HeadSHA: "stale-sha-0000000000000000000000000", OldPath: "b.go", OldLine: new(9)},
 			},
 		}
 		got, err := adapter.normalizeNotes(context.Background(), testPRNumber, scmOwner, scmRepo, notes)

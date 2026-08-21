@@ -12,10 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-func intPtr(v int) *int {
-	return &v
-}
-
 func issueWithPriority(id string, p *int, createdAt string) domain.Issue {
 	return domain.Issue{
 		ID:         id,
@@ -62,24 +58,24 @@ func TestSortForDispatch(t *testing.T) {
 		},
 		{
 			name:   "single issue",
-			input:  []domain.Issue{issueWithPriority("A-1", intPtr(1), "2025-01-01T00:00:00Z")},
+			input:  []domain.Issue{issueWithPriority("A-1", new(1), "2025-01-01T00:00:00Z")},
 			wantID: []string{"A-1"},
 		},
 		{
 			name: "priority ordering ascending",
 			input: []domain.Issue{
-				issueWithPriority("P3", intPtr(3), "2025-01-01T00:00:00Z"),
-				issueWithPriority("P1", intPtr(1), "2025-01-01T00:00:00Z"),
-				issueWithPriority("P2", intPtr(2), "2025-01-01T00:00:00Z"),
+				issueWithPriority("P3", new(3), "2025-01-01T00:00:00Z"),
+				issueWithPriority("P1", new(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("P2", new(2), "2025-01-01T00:00:00Z"),
 			},
 			wantID: []string{"P1", "P2", "P3"},
 		},
 		{
 			name: "nil priority sorts last",
 			input: []domain.Issue{
-				issueWithPriority("P2", intPtr(2), "2025-01-01T00:00:00Z"),
+				issueWithPriority("P2", new(2), "2025-01-01T00:00:00Z"),
 				issueWithPriority("NIL", nil, "2025-01-01T00:00:00Z"),
-				issueWithPriority("P1", intPtr(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("P1", new(1), "2025-01-01T00:00:00Z"),
 			},
 			wantID: []string{"P1", "P2", "NIL"},
 		},
@@ -95,44 +91,44 @@ func TestSortForDispatch(t *testing.T) {
 		{
 			name: "same priority created_at tiebreaker oldest first",
 			input: []domain.Issue{
-				issueWithPriority("NEW", intPtr(2), "2025-12-01T00:00:00Z"),
-				issueWithPriority("OLD", intPtr(2), "2025-01-01T00:00:00Z"),
-				issueWithPriority("MID", intPtr(2), "2025-06-01T00:00:00Z"),
+				issueWithPriority("NEW", new(2), "2025-12-01T00:00:00Z"),
+				issueWithPriority("OLD", new(2), "2025-01-01T00:00:00Z"),
+				issueWithPriority("MID", new(2), "2025-06-01T00:00:00Z"),
 			},
 			wantID: []string{"OLD", "MID", "NEW"},
 		},
 		{
 			name: "empty created_at sorts last",
 			input: []domain.Issue{
-				issueWithPriority("EMPTY", intPtr(1), ""),
-				issueWithPriority("HAS", intPtr(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("EMPTY", new(1), ""),
+				issueWithPriority("HAS", new(1), "2025-01-01T00:00:00Z"),
 			},
 			wantID: []string{"HAS", "EMPTY"},
 		},
 		{
 			name: "both empty created_at falls through to identifier",
 			input: []domain.Issue{
-				issueWithPriority("B-1", intPtr(1), ""),
-				issueWithPriority("A-1", intPtr(1), ""),
+				issueWithPriority("B-1", new(1), ""),
+				issueWithPriority("A-1", new(1), ""),
 			},
 			wantID: []string{"A-1", "B-1"},
 		},
 		{
 			name: "identifier tiebreaker lexicographic",
 			input: []domain.Issue{
-				issueWithPriority("C-1", intPtr(1), "2025-01-01T00:00:00Z"),
-				issueWithPriority("A-1", intPtr(1), "2025-01-01T00:00:00Z"),
-				issueWithPriority("B-1", intPtr(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("C-1", new(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("A-1", new(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("B-1", new(1), "2025-01-01T00:00:00Z"),
 			},
 			wantID: []string{"A-1", "B-1", "C-1"},
 		},
 		{
 			name: "full three-key composite",
 			input: []domain.Issue{
-				issueWithPriority("Z-1", intPtr(2), "2025-01-01T00:00:00Z"),
+				issueWithPriority("Z-1", new(2), "2025-01-01T00:00:00Z"),
 				issueWithPriority("A-1", nil, "2025-01-01T00:00:00Z"),
-				issueWithPriority("B-1", intPtr(1), "2025-06-01T00:00:00Z"),
-				issueWithPriority("C-1", intPtr(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("B-1", new(1), "2025-06-01T00:00:00Z"),
+				issueWithPriority("C-1", new(1), "2025-01-01T00:00:00Z"),
 				issueWithPriority("D-1", nil, ""),
 			},
 			// P1 created oldest: C-1, then B-1; P2: Z-1; nil+dated: A-1; nil+empty: D-1
@@ -141,8 +137,8 @@ func TestSortForDispatch(t *testing.T) {
 		{
 			name: "input slice not modified",
 			input: []domain.Issue{
-				issueWithPriority("B", intPtr(2), "2025-01-01T00:00:00Z"),
-				issueWithPriority("A", intPtr(1), "2025-01-01T00:00:00Z"),
+				issueWithPriority("B", new(2), "2025-01-01T00:00:00Z"),
+				issueWithPriority("A", new(1), "2025-01-01T00:00:00Z"),
 			},
 			wantID: []string{"A", "B"},
 		},
@@ -600,9 +596,9 @@ func TestNextAttempt(t *testing.T) {
 		want    int
 	}{
 		{name: "nil returns 1", current: nil, want: 1},
-		{name: "pointer to 0 returns 1", current: intPtr(0), want: 1},
-		{name: "pointer to 1 returns 2", current: intPtr(1), want: 2},
-		{name: "pointer to 5 returns 6", current: intPtr(5), want: 6},
+		{name: "pointer to 0 returns 1", current: new(0), want: 1},
+		{name: "pointer to 1 returns 2", current: new(1), want: 2},
+		{name: "pointer to 5 returns 6", current: new(5), want: 6},
 	}
 
 	for _, tt := range tests {
@@ -1066,10 +1062,9 @@ func TestDispatchIssue(t *testing.T) {
 		t.Parallel()
 
 		s := newTestState()
-		attempt := 3
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-R"), &attempt, "", func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-R"), new(3), "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone
@@ -1105,7 +1100,6 @@ func TestDispatchIssue(t *testing.T) {
 
 		s := newTestState()
 		issue := testIssue("ISS-W")
-		attempt := 2
 
 		type workerArgs struct {
 			ctx     context.Context
@@ -1114,7 +1108,7 @@ func TestDispatchIssue(t *testing.T) {
 		}
 		ch := make(chan workerArgs, 1)
 
-		DispatchIssue(context.Background(), s, issue, &attempt, "", func(ctx context.Context, iss domain.Issue, att *int) {
+		DispatchIssue(context.Background(), s, issue, new(2), "", func(ctx context.Context, iss domain.Issue, att *int) {
 			ch <- workerArgs{ctx: ctx, issue: iss, attempt: att}
 		})
 
@@ -1177,7 +1171,7 @@ func TestDispatchIssue(t *testing.T) {
 		s.Claimed["ISS-X"] = struct{}{}
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-X"), intPtr(2), "", func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-X"), new(2), "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone

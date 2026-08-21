@@ -753,7 +753,7 @@ func TestHandleWorkerExit_RetryableReactionErrorPreservesContext(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-R", intPtr(2))
+	state := exitState(t, "ISSUE-R", new(2))
 	contContext := map[string]any{
 		"review_comments": map[string]any{"count": 1},
 	}
@@ -1055,8 +1055,7 @@ func TestHandleWorkerExit_RetryAttemptIncrements(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	attempt := 3
-	state := exitState(t, "ISSUE-8", &attempt) // RetryAttempt = 3
+	state := exitState(t, "ISSUE-8", new(3)) // RetryAttempt = 3
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{
@@ -1169,8 +1168,7 @@ func TestHandleWorkerExit_RunHistoryFields(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	attempt := 2
-	state := exitState(t, "HIST-1", &attempt)
+	state := exitState(t, "HIST-1", new(2))
 	state.Running["HIST-1"].Identifier = "PROJ-42"
 	params := defaultExitParams(t, store)
 

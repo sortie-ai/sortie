@@ -736,8 +736,7 @@ func TestValidateFrontMatter_UnresolvedExtensionVar(t *testing.T) {
 		var found []*FrontMatterWarning
 		for i := range got {
 			if got[i].Check == "unresolved_extension_var" {
-				w := got[i]
-				found = append(found, &w)
+				found = append(found, new(got[i]))
 			}
 		}
 		if len(found) != 1 {
@@ -833,8 +832,7 @@ func TestValidateFrontMatter_UnresolvedExtensionVar(t *testing.T) {
 func findUnresolvedExtVarWarning(warnings []FrontMatterWarning) *FrontMatterWarning {
 	for i := range warnings {
 		if warnings[i].Check == "unresolved_extension_var" {
-			w := warnings[i]
-			return &w
+			return new(warnings[i])
 		}
 	}
 	return nil
