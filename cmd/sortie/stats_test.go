@@ -749,6 +749,52 @@ func TestStatsStatusOrdering(t *testing.T) {
 	}
 }
 
+// --- range bound reporting ---
+
+// TestStatsAggregatorReport_UntilBound verifies that a non-nil until bound
+// populates statsReport.Until, mirroring the existing Since coverage.
+func TestStatsAggregatorReport_UntilBound(t *testing.T) {
+	t.Parallel()
+
+	agg := newStatsAggregator(fullCaps, nil)
+	until := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, &until, nil)
+
+	want := "2026-08-01T00:00:00Z"
+	if report.Until == nil || *report.Until != want {
+		t.Errorf("statsAggregator.report(until=%v).Until = %v, want %q", until, report.Until, want)
+	}
+}
+
+// TestParseRangeBound covers the date-only and duration success branches,
+// which the RFC3339 branch's CLI-level coverage does not reach.
+func TestParseRangeBound(t *testing.T) {
+	// No t.Parallel: the duration case pins the package-level statsNow.
+	pinStatsNow(t, time.Date(2026, 8, 7, 9, 15, 0, 0, time.UTC))
+
+	tests := []struct {
+		name string
+		raw  string
+		want time.Time
+	}{
+		{name: "date-only", raw: "2026-07-01", want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "positive duration", raw: "24h", want: time.Date(2026, 8, 6, 9, 15, 0, 0, time.UTC)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRangeBound(tt.raw)
+			if err != nil {
+				t.Fatalf("parseRangeBound(%q) unexpected error: %v", tt.raw, err)
+			}
+			if got == nil || !got.Equal(tt.want) {
+				t.Errorf("parseRangeBound(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- JSON report contract and byte-stability ---
 
 func TestRunStatsJSON(t *testing.T) {

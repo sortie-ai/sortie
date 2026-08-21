@@ -150,6 +150,25 @@ func TestForkPerTurnSession(t *testing.T) {
 		}
 	})
 
+	t.Run("Arm1_CtxAlreadyCancelledBeforeStart", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		script := agenttest.WriteScript(t, tmpDir, "agent", `sleep 60`)
+		target := newTestTarget(tmpDir, script)
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		emit, events := sinkEvents()
+
+		_, err := sess.RunTurn(ctx, "p", emit)
+
+		requireAgentError(t, err, domain.ErrTurnCancelled)
+		if !hasEventType(*events, domain.EventTurnCancelled) {
+			t.Errorf("EventTurnCancelled not emitted; got %v", *events)
+		}
+	})
+
 	t.Run("Arm2_ScannerOverflow", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()

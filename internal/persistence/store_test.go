@@ -1360,6 +1360,41 @@ func TestLoadAllSessionMetadata_Empty(t *testing.T) {
 	}
 }
 
+// TestLoadAllSessionMetadata_NonNilAgentPID verifies that a non-null
+// agent_pid column round-trips through LoadAllSessionMetadata, not just
+// through the single-row LoadSessionMetadata reader.
+func TestLoadAllSessionMetadata_NonNilAgentPID(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	meta := SessionMetadata{
+		IssueID:   "ISS-1",
+		SessionID: "sess-abc",
+		AgentPID:  new("54321"),
+		UpdatedAt: "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	got, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	if got[0].AgentPID == nil {
+		t.Fatal("AgentPID = nil, want non-nil")
+	}
+	if *got[0].AgentPID != "54321" {
+		t.Errorf("AgentPID = %q, want %q", *got[0].AgentPID, "54321")
+	}
+}
+
 func TestDeleteSessionMetadata(t *testing.T) {
 	t.Parallel()
 

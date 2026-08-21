@@ -316,6 +316,41 @@ func TestScanRunHistoryRange(t *testing.T) {
 		}
 	})
 
+	t.Run("full projection populates ReviewMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+		ctx := context.Background()
+
+		meta := `{"enabled":true,"iterations":[],"total_iterations":1,"final_verdict":"pass","cap_reached":false}`
+		row := runAt("with-meta", "2026-01-01T00:00:00Z")
+		row.ReviewMetadata = &meta
+		appendOrFatal(t, s, row)
+
+		caps, err := s.RunHistoryCapabilities(ctx)
+		if err != nil {
+			t.Fatalf("RunHistoryCapabilities: %v", err)
+		}
+		if !caps.Full() {
+			t.Fatalf("caps.Full() = false, want true for a fully migrated store")
+		}
+
+		var rows []RunStatsRow
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+			rows = append(rows, row)
+			return nil
+		}); err != nil {
+			t.Fatalf("ScanRunHistoryRange: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("ScanRunHistoryRange visited %d rows, want 1", len(rows))
+		}
+		if rows[0].ReviewMetadata == nil || *rows[0].ReviewMetadata != meta {
+			t.Errorf("RunStatsRow.ReviewMetadata = %v, want %q", rows[0].ReviewMetadata, meta)
+		}
+	})
+
 	t.Run("base projection against the legacy table leaves optional fields zero", func(t *testing.T) {
 		t.Parallel()
 
