@@ -378,11 +378,46 @@ accepted by `--trust-tools` alongside the primary name.
 
 `kiro.parsePassthroughConfig` reads `trust_all_tools` and `trust_tools` from the `kiro`
 sub-object in WORKFLOW.md and rejects a config that sets both, because the two trust modes are
-mutually exclusive. When `trust_all_tools` is off, `kiro.buildArgs` always emits
-`--trust-tools=<joined>`, so an unset `trust_tools` list produces `--trust-tools=` and trusts
-nothing. A read-only profile such as `trust_tools: [read, grep, glob]` is the least-privilege
-starting point; `write` and `shell` belong there only when the workflow requires file edits or
-command execution, and only inside a sandbox.
+mutually exclusive. When neither key is set, `trust_all_tools` now resolves to `true` (see
+"Untrusted-tool behavior" below); when `trust_all_tools` resolves to `false`, `kiro.buildArgs`
+emits `--trust-tools=<joined>`, so an explicit but empty `trust_tools` list produces
+`--trust-tools=` and trusts nothing. A read-only profile such as
+`trust_tools: [read, grep, glob]` is the least-privilege starting point; `write` and `shell`
+belong there only when the workflow requires file edits or command execution, and only inside
+a sandbox.
+
+### Untrusted-tool behavior under `--no-interactive`
+
+What `kiro-cli chat --no-interactive` does when it meets a tool `--trust-tools=` does not
+trust is unestablished. Driving an authenticated turn to observe it requires a Kiro Pro,
+Pro+, or Power credential; this host has none: `kiro-cli whoami` reports "Not logged in", no
+`KIRO_API_KEY` is present in the environment, and `kiro-cli login` offers only interactive
+flows, a browser redirect or an OAuth device-code exchange, both of which need a person to
+complete them. No authenticated headless turn could be run against `kiro-cli 2.4.2` to settle
+the question, so this entry records that the observation was not performed rather than a
+result.
+
+The adapter follows the conservative fail-safe instead: the untrusted case is assumed to wait
+for an approval that never arrives, the same shape already documented above for the
+credential-hang case. Two changes follow from that assumption. `kiro.parsePassthroughConfig`
+defaults `trust_all_tools` to `true` when the `kiro` sub-object sets neither `trust_all_tools`
+nor `trust_tools`, so a default configuration no longer emits `--trust-tools=` and cannot
+reach the untrusted case at all. And `kiro.validateConfig` refuses, at check
+`kiro.trust_tools.untrusted`, any configuration whose resolved trust posture falls short of
+full trust, because such a configuration can still reach an untrusted tool call.
+
+No mid-turn recognition path was added for a request the CLI prints while it waits. There is
+no observed wire text to recognize, and the credential-hang shape documented above prints
+nothing distinguishing on stdout while it waits, which is some evidence that the untrusted-tool
+wait looks the same: a hang with no line for the adapter's per-line `ParseLine` hook to
+classify. `agentcore.ForkPerTurnSession.RunTurn` also returns through its own cancellation
+handling before `OnFinalize` runs whenever the run context is already done once the subprocess
+exits, so a hang that only ends because the orchestrator's turn or stall timeout kills the
+subprocess resolves as a cancelled turn regardless of anything `ParseLine` recorded; a
+recognition path could only ever fire for a request the CLI answers by printing something and
+then exiting on its own, a shape this entry does not establish either. Revisit this section,
+and the recognition path, once an authenticated credential is available to drive a real turn
+against `--trust-tools=` excluding a tool the prompt will attempt.
 
 ## Model selection
 
