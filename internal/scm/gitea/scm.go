@@ -43,15 +43,17 @@ type GiteaSCMAdapter struct {
 // (defaults to "sortie/dev") and "project" (the tracker "owner/repo", used only
 // as an auto-merge preflight hint).
 //
-// The endpoint is right-trimmed of trailing slashes and suffixed with "/api/v1"
-// unless it already ends in it. An "owner/repo" project is parsed into the
-// preflight hints that [GiteaSCMAdapter.VerifyAutoMergeScopes] reads; an absent
-// or malformed value leaves both hints empty, so the preflight fails open and
-// the write methods stay per-call. Construction performs no network I/O:
-// splitting the project is a string parse, not a probe. A missing "api_key"
-// returns a [*domain.SCMError] of kind [domain.ErrSCMAuth]; a missing "endpoint"
-// returns one of kind [domain.ErrSCMPayload]. The token travels only in the
-// Authorization header set by the shared client and is never logged.
+// The endpoint must parse as an absolute http(s) URL with a host; it is
+// right-trimmed of trailing slashes and suffixed with "/api/v1" unless it
+// already ends in it. An "owner/repo" project is parsed into the preflight
+// hints that [GiteaSCMAdapter.VerifyAutoMergeScopes] reads; an absent or
+// malformed value leaves both hints empty, so the preflight fails open and the
+// write methods stay per-call. Construction performs no network I/O: splitting
+// the project is a string parse, not a probe. A missing "api_key" returns a
+// [*domain.SCMError] of kind [domain.ErrSCMAuth]; a missing "endpoint" or one
+// that does not parse returns one of kind [domain.ErrSCMPayload]. The token
+// travels only in the Authorization header set by the shared client and is
+// never logged.
 func NewGiteaSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error) {
 	apiKey, _ := adapterConfig["api_key"].(string)
 	if apiKey == "" {
@@ -61,14 +63,21 @@ func NewGiteaSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error)
 		}
 	}
 
-	endpoint, _ := adapterConfig["endpoint"].(string)
-	if endpoint == "" {
+	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	if endpointRaw == "" {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMPayload,
 			Message: "missing required config key: endpoint",
 		}
 	}
-	endpoint = strings.TrimRight(endpoint, "/")
+	parsedEndpoint, ok := httpkit.ParseEndpoint(endpointRaw)
+	if !ok {
+		return nil, &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: fmt.Sprintf("gitea: endpoint %q is not a valid absolute http(s) url", parsedEndpoint.Redacted),
+		}
+	}
+	endpoint := parsedEndpoint.Base
 	if !strings.HasSuffix(endpoint, "/api/v1") {
 		endpoint += "/api/v1"
 	}

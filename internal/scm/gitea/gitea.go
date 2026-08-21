@@ -74,9 +74,10 @@ type GiteaAdapter struct {
 // construction-time preflight against the instance.
 //
 // Required config keys: "api_key" (access token), "project" (owner/repo), and
-// "endpoint" (instance base URL; there is no default host). Optional:
-// "active_states", "terminal_states", "handoff_state" (label names, lowercased),
-// and "user_agent". A missing or malformed key, or a preflight failure (invalid
+// "endpoint" (instance base URL, which must parse as an absolute http(s) URL
+// with a host; there is no default host). Optional: "active_states",
+// "terminal_states", "handoff_state" (label names, lowercased), and
+// "user_agent". A missing or malformed key, or a preflight failure (invalid
 // token or unknown repository), returns a [*domain.TrackerError] and blocks
 // construction.
 func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
@@ -111,7 +112,14 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 			Message: "tracker.endpoint is required for gitea",
 		}
 	}
-	baseURL := strings.TrimRight(endpoint, "/")
+	parsedEndpoint, ok := httpkit.ParseEndpoint(endpoint)
+	if !ok {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("gitea: endpoint %q is not a valid absolute http(s) url", parsedEndpoint.Redacted),
+		}
+	}
+	baseURL := parsedEndpoint.Base
 	if !strings.HasSuffix(baseURL, "/api/v1") {
 		baseURL += "/api/v1"
 	}

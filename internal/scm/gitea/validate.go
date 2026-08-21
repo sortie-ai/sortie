@@ -2,11 +2,11 @@ package gitea
 
 import (
 	"errors"
-	"net/url"
 	"os"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -60,7 +60,10 @@ func validateQueryFilter(raw string) []registry.ValidationDiag {
 // is a blocking error and a value that does not parse to an absolute
 // http(s) URL with a host is a blocking error. A plain-http endpoint and
 // an endpoint already ending in /api/v1 each yield an advisory warning.
-// Messages never echo the raw value, which can embed userinfo credentials.
+// The verdict comes from [httpkit.ParseEndpoint], the same helper the
+// constructors use, so the offline verdict cannot drift from the
+// construction verdict. Messages never echo the raw value, which can
+// embed userinfo credentials.
 func validateEndpoint(endpoint string) []registry.ValidationDiag {
 	if endpoint == "" {
 		return []registry.ValidationDiag{{
@@ -70,10 +73,8 @@ func validateEndpoint(endpoint string) []registry.ValidationDiag {
 		}}
 	}
 
-	parsed, err := url.Parse(endpoint)
-	if err != nil ||
-		(strings.ToLower(parsed.Scheme) != "http" && strings.ToLower(parsed.Scheme) != "https") ||
-		parsed.Host == "" {
+	parsed, ok := httpkit.ParseEndpoint(endpoint)
+	if !ok {
 		return []registry.ValidationDiag{{
 			Severity: "error",
 			Check:    "tracker.endpoint.invalid",
@@ -82,7 +83,7 @@ func validateEndpoint(endpoint string) []registry.ValidationDiag {
 	}
 
 	var diags []registry.ValidationDiag
-	if strings.ToLower(parsed.Scheme) == "http" {
+	if parsed.Scheme == "http" {
 		diags = append(diags, registry.ValidationDiag{
 			Severity: "warning",
 			Check:    "tracker.endpoint.insecure",
