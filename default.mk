@@ -32,6 +32,7 @@ DATE    ?= $(shell date -u +%Y-%m-%d)
 
 GO      ?= go
 LINTER  ?= golangci-lint
+SHELLCHECK ?= shellcheck
 
 # ── Build flags ───────────────────────────────────────────────────────────────
 #

@@ -1,0 +1,13 @@
+# Answers one question the main configuration cannot: is any shipped code
+# reachable only from its own test? The main run analyses test files too,
+# so a reference from a test counts as a use and hides that class.
+#
+# Only the unused analyser runs here. Formatters are deliberately absent:
+# the main run already reports formatting, and running them twice under
+# different configurations produced findings that did not reproduce.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - unused

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A malformed end-of-turn notification from the `codex app-server` no
+  longer leaves the turn outcome reported as the bare word `turn`
+  followed by a trailing space. A payload that fails to parse carries
+  no status word, so the turn now reports the shared failure message
+  instead: the status API's `last_message` field and the recorded run
+  history both read `turn failed`.
+  ([#842](https://github.com/sortie-ai/sortie/issues/842))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed

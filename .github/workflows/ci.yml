@@ -42,11 +42,11 @@ jobs:
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version-file: .tool-versions
           verify: false
           # Skip the action's analysis cache: stale entries cause flaky
-          # staticcheck false positives (golangci-lint#5979) that would otherwise
-          # masquerade as new 'latest' findings. setup-go's caches are unaffected.
+          # false positives (golangci-lint#5979) that reproduce on no rerun.
+          # setup-go's caches are unaffected.
           skip-cache: true
 
       - name: Lint shell scripts
@@ -61,6 +61,37 @@ jobs:
           [ -n "$changed" ] || exit 0
           printf '%s\n' "$changed"
           printf '%s\n' "$changed" | xargs -d '\n' -r shellcheck -x --
+
+  lint-no-tests:
+    name: Lint (shipped code only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # No step in this job runs an authenticated git command, so the
+          # token does not need to stay in the local git config.
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The main Lint job counts a reference from a test as a use, so
+      # production code reachable only from its own test never turns up
+      # there. This job is the only one that can fail on that class.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version-file: .tool-versions
+          verify: false
+          args: --config .golangci-no-tests.yml --tests=false ./...
+          # Skip the action's analysis cache: this job runs a different
+          # analyzer scope than the main Lint job, and a cache shared
+          # between the two could carry a result over from the wrong scope.
+          skip-cache: true
 
   test:
     name: Test

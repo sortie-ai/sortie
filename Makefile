@@ -53,6 +53,24 @@ vet: ## Run go vet on all packages
 lint: ## Run golangci-lint on all packages
 	$(LINTER) run ./...
 
+.PHONY: lint-no-tests
+lint-no-tests: ## Fail if shipped code is reachable only from its own test
+	$(LINTER) run --config .golangci-no-tests.yml --tests=false ./...
+
+.PHONY: lint-shell
+lint-shell: ## Run shellcheck on every tracked shell script
+	@files=$$(git ls-files '*.sh'); \
+	if [ -z "$$files" ]; then exit 0; fi; \
+	printf '%s\n' "$$files"; \
+	git ls-files -z '*.sh' | xargs -0 $(SHELLCHECK) -x --
+
+.PHONY: fmt-check
+fmt-check: ## Show formatting drift without rewriting any file
+	$(LINTER) fmt --diff ./...
+
+.PHONY: check
+check: lint lint-no-tests lint-shell test ## Run the CI gates; shell lint covers all tracked scripts
+
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod
 	$(GO) mod tidy
