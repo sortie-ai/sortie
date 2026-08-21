@@ -36,7 +36,13 @@ type Endpoint struct {
 //
 // A non-empty value is usable only when it parses with [url.Parse], the
 // scheme is exactly "http" or "https" (url.Parse already lowercases the
-// scheme), and the host is non-empty. On failure, ParseEndpoint still
+// scheme), it carries a hostname, and it carries neither a query nor a
+// fragment. The hostname rather than the authority is what must be
+// present: [url.URL.Host] is non-empty for a port-only value such as
+// "http://:80", whose [url.URL.Hostname] is empty and which no client
+// can dial. Query and fragment are rejected because Base is the raw
+// value and callers suffix an API path onto it, so a "?" or "#" anywhere
+// in it would swallow that path. On failure, ParseEndpoint still
 // returns false with Redacted populated so the caller can build a safe
 // diagnostic; the [url.Parse] error itself is discarded because its text
 // quotes the whole raw URL, and republishing it would leak any userinfo
@@ -51,8 +57,12 @@ func ParseEndpoint(raw string) (Endpoint, bool) {
 
 	redacted := RedactURLUserinfo(trimmed)
 
+	if strings.ContainsAny(trimmed, "?#") {
+		return Endpoint{Redacted: redacted}, false
+	}
+
 	parsed, err := url.Parse(trimmed)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
 		return Endpoint{Redacted: redacted}, false
 	}
 

@@ -44,6 +44,17 @@ func TestParseEndpoint_Rejected(t *testing.T) {
 		{"unbracketed IPv6 with port", "http://fd00::1:3000"},
 		{"unbracketed IPv6 loopback", "http://::1/"},
 		{"doubled port", "http://host:80:80/"},
+		// Host is non-empty for a port-only authority, so the hostname is
+		// what has to be checked: nothing can dial "http://:80".
+		{"port with no hostname", "http://:80"},
+		{"port with no hostname and a path", "https://:8443/api"},
+		{"empty authority", "http://:"},
+		// Base is the raw value and callers suffix an API path onto it, so a
+		// query or fragment anywhere in it would swallow that path.
+		{"query string", "https://host/api?x=y"},
+		{"bare question mark", "https://host/api?"},
+		{"fragment", "https://host/api#frag"},
+		{"bare hash", "https://host/api#"},
 	}
 
 	for _, tt := range tests {
