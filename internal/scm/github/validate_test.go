@@ -1,6 +1,7 @@
 package github
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -63,6 +64,96 @@ func TestValidateAPIKeyHint(t *testing.T) {
 			t.Errorf("validateAPIKeyHint(\"\") diag[0].Severity = %q, want %q", got[0].Severity, "warning")
 		}
 	})
+}
+
+// TestValidateEndpoint pins the offline verdict on tracker.endpoint. The
+// unbracketed IPv6 rows are the shapes url.Parse rejects for carrying more
+// than one colon in an unbracketed host, and are the reason this check
+// exists: without it they pass sortie validate clean and fail later as a
+// transport error.
+func TestValidateEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		endpoint  string
+		wantCount int
+	}{
+		{name: "empty endpoint is clean", endpoint: "", wantCount: 0},
+		{name: "whitespace-only endpoint is clean", endpoint: "   ", wantCount: 0},
+		{name: "public API host is valid", endpoint: "https://api.github.com", wantCount: 0},
+		{name: "trailing slash is valid", endpoint: "https://api.github.com/", wantCount: 0},
+		{name: "ghes api subpath is valid", endpoint: "https://github.example.com/api/v3", wantCount: 0},
+		{name: "custom port is valid", endpoint: "https://github.example.com:8443", wantCount: 0},
+		{name: "bracketed IPv6 literal is valid", endpoint: "https://[fd00::1]:3000", wantCount: 0},
+		{name: "plain http is valid", endpoint: "http://github.example.com", wantCount: 0},
+		{name: "unbracketed IPv6 literal with port is rejected", endpoint: "http://fd00::1:3000", wantCount: 1},
+		{name: "unbracketed IPv6 loopback is rejected", endpoint: "http://::1/", wantCount: 1},
+		{name: "doubled port is rejected", endpoint: "http://github.example.com:80:80/", wantCount: 1},
+		{name: "host without scheme is rejected", endpoint: "github.example.com", wantCount: 1},
+		{name: "unsupported scheme is rejected", endpoint: "ftp://github.example.com", wantCount: 1},
+		{name: "scheme without host is rejected", endpoint: "https://", wantCount: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateEndpoint(tt.endpoint)
+
+			if len(got) != tt.wantCount {
+				t.Fatalf("validateEndpoint(%q) = %d diags, want %d; diags: %v", tt.endpoint, len(got), tt.wantCount, got)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+			if got[0].Check != "tracker.endpoint.invalid" {
+				t.Errorf("validateEndpoint(%q) diag[0].Check = %q, want %q", tt.endpoint, got[0].Check, "tracker.endpoint.invalid")
+			}
+			if got[0].Severity != "error" {
+				t.Errorf("validateEndpoint(%q) diag[0].Severity = %q, want %q", tt.endpoint, got[0].Severity, "error")
+			}
+		})
+	}
+
+	t.Run("userinfo in endpoint never leaks into a message", func(t *testing.T) {
+		t.Parallel()
+
+		got := validateEndpoint("https://operator:s3cr3t@fd00::1:3000")
+
+		if len(got) != 1 {
+			t.Fatalf("validateEndpoint(userinfo) = %d diags, want 1; diags: %v", len(got), got)
+		}
+		for _, forbidden := range []string{"operator", "s3cr3t", "fd00::1:3000"} {
+			if strings.Contains(got[0].Message, forbidden) {
+				t.Errorf("validateEndpoint(userinfo) message = %q, must not contain %q", got[0].Message, forbidden)
+			}
+		}
+	})
+}
+
+// TestValidateConfig_MalformedEndpoint pins the severity a malformed
+// tracker.endpoint carries: error, because every GitHub constructor rejects
+// the value outright rather than proceeding.
+func TestValidateConfig_MalformedEndpoint(t *testing.T) {
+	t.Parallel()
+
+	fields := registry.TrackerConfigFields{
+		Kind:     "github",
+		Project:  "owner/repo",
+		APIKey:   "tok",
+		Endpoint: "http://fd00::1:3000",
+	}
+
+	got := validateConfig(fields)
+
+	errs := diagsWithSeverity(got, "error")
+	if len(errs) != 1 {
+		t.Fatalf("validateConfig(malformed endpoint) errors = %v, want exactly one", errs)
+	}
+	if errs[0].Check != "tracker.endpoint.invalid" {
+		t.Errorf("validateConfig(malformed endpoint) errors[0].Check = %q, want %q", errs[0].Check, "tracker.endpoint.invalid")
+	}
 }
 
 func TestValidateConfig(t *testing.T) {
