@@ -9,8 +9,6 @@ import (
 
 // --- helpers ---
 
-func prio(v int) *int { return &v }
-
 func issueWithLabels(labels ...string) domain.Issue {
 	return domain.Issue{
 		ID:         "ISS-1",
@@ -358,7 +356,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority eq match",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(1),
+				Priority: new(1),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{
@@ -380,7 +378,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority in match",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(2),
+				Priority: new(2),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{
@@ -402,7 +400,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority lt match",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(1),
+				Priority: new(1),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{
@@ -424,7 +422,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority lte match at boundary",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(2),
+				Priority: new(2),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{
@@ -446,7 +444,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority gt match",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(5),
+				Priority: new(5),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{
@@ -468,7 +466,7 @@ func TestResolveRule(t *testing.T) {
 			name: "priority gte match at boundary",
 			issue: domain.Issue{
 				ID: "1", Identifier: "T-1", Title: "t", State: "To Do",
-				Priority: prio(3),
+				Priority: new(3),
 			},
 			dispatch: config.DispatchConfig{
 				Rules: []config.DispatchRule{

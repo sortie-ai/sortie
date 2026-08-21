@@ -28,8 +28,6 @@ func TestNotifierInterface(t *testing.T) {
 func TestNotification_FieldRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	attempt := 3
-
 	n := Notification{
 		Envelope: NotificationEnvelope{
 			NotificationID: "uuid-1234",
@@ -38,7 +36,7 @@ func TestNotification_FieldRoundTrip(t *testing.T) {
 			IssueID:        "issue-99",
 			Identifier:     "PROJ-99",
 			SessionID:      "sess-abc",
-			Attempt:        &attempt,
+			Attempt:        new(3),
 			Agent:          "claude-code",
 		},
 		Message: NotificationMessage{

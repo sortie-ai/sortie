@@ -81,8 +81,7 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 		return SessionMetadata{}, false, fmt.Errorf("load session metadata %q: %w", issueID, err)
 	}
 	if nullPID.Valid {
-		v := nullPID.String
-		m.AgentPID = &v
+		m.AgentPID = new(nullPID.String)
 	}
 	return m, true, nil
 }
@@ -111,8 +110,7 @@ func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, 
 			return nil, fmt.Errorf("scan session metadata: %w", err)
 		}
 		if nullPID.Valid {
-			v := nullPID.String
-			m.AgentPID = &v
+			m.AgentPID = new(nullPID.String)
 		}
 		entries = append(entries, m)
 	}

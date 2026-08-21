@@ -87,12 +87,10 @@ func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 			return nil, fmt.Errorf("scan retry entry: %w", err)
 		}
 		if errVal.Valid {
-			s := errVal.String
-			e.Error = &s
+			e.Error = new(errVal.String)
 		}
 		if ssnVal.Valid {
-			s := ssnVal.String
-			e.SessionID = &s
+			e.SessionID = new(ssnVal.String)
 		}
 		entries = append(entries, e)
 	}

@@ -165,13 +165,12 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 		t.Fatalf("SaveRetryEntry (first): %v", err)
 	}
 
-	errMsg := "retry failed"
 	entry2 := RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    2,
 		DueAtMs:    2000,
-		Error:      &errMsg,
+		Error:      new("retry failed"),
 	}
 	if err := s.SaveRetryEntry(ctx, entry2); err != nil {
 		t.Fatalf("SaveRetryEntry (upsert): %v", err)
@@ -206,13 +205,12 @@ func TestSaveRetryEntry_UpsertClearsError(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	errMsg := "something went wrong"
 	entry1 := RetryEntry{
 		IssueID:    "ISS-1",
 		Identifier: "PROJ-1",
 		Attempt:    1,
 		DueAtMs:    1000,
-		Error:      &errMsg,
+		Error:      new("something went wrong"),
 	}
 	if err := s.SaveRetryEntry(ctx, entry1); err != nil {
 		t.Fatalf("SaveRetryEntry (with error): %v", err)
@@ -641,10 +639,9 @@ func TestAppendRunHistory_WithError(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	errMsg := "agent crashed"
 	run := newTestRun(1)
 	run.Status = "failed"
-	run.Error = &errMsg
+	run.Error = new("agent crashed")
 	appendOrFatal(t, s, run)
 
 	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
@@ -1152,11 +1149,10 @@ func TestUpsertSessionMetadata(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	pid := "12345"
 	meta := SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-abc",
-		AgentPID:     &pid,
+		AgentPID:     new("12345"),
 		InputTokens:  100,
 		OutputTokens: 50,
 		TotalTokens:  150,
@@ -1206,11 +1202,10 @@ func TestUpsertSessionMetadata_Update(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	pid1 := "111"
 	meta1 := SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-1",
-		AgentPID:     &pid1,
+		AgentPID:     new("111"),
 		InputTokens:  10,
 		OutputTokens: 5,
 		TotalTokens:  15,
@@ -1220,11 +1215,10 @@ func TestUpsertSessionMetadata_Update(t *testing.T) {
 		t.Fatalf("UpsertSessionMetadata (first): %v", err)
 	}
 
-	pid2 := "222"
 	meta2 := SessionMetadata{
 		IssueID:      "ISS-1",
 		SessionID:    "sess-2",
-		AgentPID:     &pid2,
+		AgentPID:     new("222"),
 		InputTokens:  200,
 		OutputTokens: 100,
 		TotalTokens:  300,
@@ -1363,6 +1357,41 @@ func TestLoadAllSessionMetadata_Empty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("got %d entries, want 0", len(got))
+	}
+}
+
+// TestLoadAllSessionMetadata_NonNilAgentPID verifies that a non-null
+// agent_pid column round-trips through LoadAllSessionMetadata, not just
+// through the single-row LoadSessionMetadata reader.
+func TestLoadAllSessionMetadata_NonNilAgentPID(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	meta := SessionMetadata{
+		IssueID:   "ISS-1",
+		SessionID: "sess-abc",
+		AgentPID:  new("54321"),
+		UpdatedAt: "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	got, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	if got[0].AgentPID == nil {
+		t.Fatal("AgentPID = nil, want non-nil")
+	}
+	if *got[0].AgentPID != "54321" {
+		t.Errorf("AgentPID = %q, want %q", *got[0].AgentPID, "54321")
 	}
 }
 
@@ -1697,13 +1726,12 @@ func TestLoadRetryEntriesForRecovery_PreservesEntryFields(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	errMsg := "agent timeout"
 	entry := RetryEntry{
 		IssueID:    "ISS-42",
 		Identifier: "PROJ-42",
 		Attempt:    3,
 		DueAtMs:    7500,
-		Error:      &errMsg,
+		Error:      new("agent timeout"),
 	}
 	if err := s.SaveRetryEntry(ctx, entry); err != nil {
 		t.Fatalf("SaveRetryEntry: %v", err)
@@ -2052,11 +2080,10 @@ func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	pid := "9876"
 	meta := SessionMetadata{
 		IssueID:         "EXT-1",
 		SessionID:       "sess-ext",
-		AgentPID:        &pid,
+		AgentPID:        new("9876"),
 		InputTokens:     500,
 		OutputTokens:    200,
 		TotalTokens:     700,
@@ -2579,7 +2606,6 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_PrefersProducingRunOverLate
 	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
 
 	producing := appendRecoveryRun(t, s, "ISS-EVIDENCE", "PROJ-E", 1, recentCompletedAt(2))
-	errorText := "handoff withheld: absence of work observed under observed policy"
 	appendOrFatal(t, s, RunHistory{
 		IssueID:      "ISS-EVIDENCE",
 		Identifier:   "PROJ-E",
@@ -2589,7 +2615,7 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_PrefersProducingRunOverLate
 		StartedAt:    recentCompletedAt(1),
 		CompletedAt:  recentCompletedAt(1),
 		Status:       "failed",
-		Error:        &errorText,
+		Error:        new("handoff withheld: absence of work observed under observed policy"),
 	})
 
 	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)

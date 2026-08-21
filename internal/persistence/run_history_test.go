@@ -142,6 +142,52 @@ func TestRunHistoryTokenColumns_UnmeasuredRoundTrip(t *testing.T) {
 	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 0, 0, 0, 0, false)
 }
 
+// TestRunHistoryErrorAndReviewMetadata_RoundTrip verifies that a non-null
+// error and review_metadata column round-trip through QueryRecentRunHistory
+// and LoadLatestSuccessfulRunsForReactionRecovery, not just through
+// QueryRunHistoryByIssue.
+func TestRunHistoryErrorAndReviewMetadata_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	meta := `{"enabled":true,"iterations":[],"total_iterations":1,"final_verdict":"pass","cap_reached":false}`
+	run := newTestRun(1)
+	run.Error = new("transient network error")
+	run.ReviewMetadata = &meta
+	appendOrFatal(t, s, run)
+
+	recent, err := s.QueryRecentRunHistory(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("QueryRecentRunHistory: %v", err)
+	}
+	if len(recent) != 1 {
+		t.Fatalf("QueryRecentRunHistory returned %d entries, want 1", len(recent))
+	}
+	if recent[0].Error == nil || *recent[0].Error != "transient network error" {
+		t.Errorf("QueryRecentRunHistory Error = %v, want %q", recent[0].Error, "transient network error")
+	}
+	if recent[0].ReviewMetadata == nil || *recent[0].ReviewMetadata != meta {
+		t.Errorf("QueryRecentRunHistory ReviewMetadata = %v, want %q", recent[0].ReviewMetadata, meta)
+	}
+
+	recovery, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(recovery) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery returned %d entries, want 1", len(recovery))
+	}
+	if recovery[0].Error == nil || *recovery[0].Error != "transient network error" {
+		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery Error = %v, want %q", recovery[0].Error, "transient network error")
+	}
+	if recovery[0].ReviewMetadata == nil || *recovery[0].ReviewMetadata != meta {
+		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery ReviewMetadata = %v, want %q", recovery[0].ReviewMetadata, meta)
+	}
+}
+
 // TestRunHistoryTokenColumns_LegacyRowsReadZero verifies that rows written
 // without token values (matching pre-migration rows, which rely on the
 // NOT NULL DEFAULT 0 column definition) scan as zero.

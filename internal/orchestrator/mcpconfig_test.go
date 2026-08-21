@@ -454,7 +454,7 @@ func TestGenerateMCPConfig_Attempt(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		p := mcpParams(dir)
-		p.Attempt = intPtr(2)
+		p.Attempt = new(2)
 
 		_, err := GenerateMCPConfig(p)
 		if err != nil {

@@ -127,8 +127,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
 		if errVal.Valid {
-			s := errVal.String
-			r.Error = &s
+			r.Error = new(errVal.String)
 		}
 		if wfVal.Valid {
 			r.WorkflowFile = wfVal.String
@@ -137,8 +136,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 			r.DisplayID = dispIDVal.String
 		}
 		if reviewMetaVal.Valid {
-			metaJSON := reviewMetaVal.String
-			r.ReviewMetadata = &metaJSON
+			r.ReviewMetadata = new(reviewMetaVal.String)
 		}
 		entries = append(entries, r)
 	}
@@ -200,8 +198,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}
 		if errVal.Valid {
-			errorText := errVal.String
-			run.Error = &errorText
+			run.Error = new(errVal.String)
 		}
 		if wfVal.Valid {
 			run.WorkflowFile = wfVal.String
@@ -210,8 +207,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			run.DisplayID = dispIDVal.String
 		}
 		if reviewMetaVal.Valid {
-			metaJSON := reviewMetaVal.String
-			run.ReviewMetadata = &metaJSON
+			run.ReviewMetadata = new(reviewMetaVal.String)
 		}
 		entries = append(entries, run)
 	}
@@ -269,8 +265,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
 		if errVal.Valid {
-			s := errVal.String
-			r.Error = &s
+			r.Error = new(errVal.String)
 		}
 		if wfVal.Valid {
 			r.WorkflowFile = wfVal.String
@@ -279,8 +274,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			r.DisplayID = dispIDVal.String
 		}
 		if reviewMetaVal.Valid {
-			metaJSON := reviewMetaVal.String
-			r.ReviewMetadata = &metaJSON
+			r.ReviewMetadata = new(reviewMetaVal.String)
 		}
 		entries = append(entries, r)
 	}

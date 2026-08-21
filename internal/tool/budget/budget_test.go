@@ -37,8 +37,6 @@ func executeOK(t *testing.T, tool *BudgetTool) costBudgetResponse {
 	return envelope.Data
 }
 
-func int64Ptr(v int64) *int64 { return &v }
-
 // --- Tests ---
 
 func TestBudgetTool_Name(t *testing.T) {
@@ -127,7 +125,7 @@ func TestBudgetTool_Execute(t *testing.T) {
 			budgetSessions:     5,
 			wantUsedTokens:     750,
 			wantBudgetTokens:   1000,
-			wantRemaining:      int64Ptr(250),
+			wantRemaining:      new(int64(250)),
 			wantUsedSessions:   3,
 			wantBudgetSessions: 5,
 		},
@@ -138,7 +136,7 @@ func TestBudgetTool_Execute(t *testing.T) {
 			budgetSessions:     0,
 			wantUsedTokens:     1100,
 			wantBudgetTokens:   1000,
-			wantRemaining:      int64Ptr(0),
+			wantRemaining:      new(int64(0)),
 			wantUsedSessions:   2,
 			wantBudgetSessions: 0,
 		},
@@ -149,7 +147,7 @@ func TestBudgetTool_Execute(t *testing.T) {
 			budgetSessions:     4,
 			wantUsedTokens:     1000,
 			wantBudgetTokens:   1000,
-			wantRemaining:      int64Ptr(0),
+			wantRemaining:      new(int64(0)),
 			wantUsedSessions:   4,
 			wantBudgetSessions: 4,
 		},

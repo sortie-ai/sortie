@@ -305,9 +305,9 @@ func TestNormalizeAttempt(t *testing.T) {
 		want    int
 	}{
 		{name: "nil returns 0", attempt: nil, want: 0},
-		{name: "ptr(0) returns 0", attempt: intPtr(0), want: 0},
-		{name: "ptr(1) returns 1", attempt: intPtr(1), want: 1},
-		{name: "ptr(5) returns 5", attempt: intPtr(5), want: 5},
+		{name: "ptr(0) returns 0", attempt: new(0), want: 0},
+		{name: "ptr(1) returns 1", attempt: new(1), want: 1},
+		{name: "ptr(5) returns 5", attempt: new(5), want: 5},
 	}
 
 	for _, tt := range tests {
@@ -1281,7 +1281,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 			Logger:                 discardLogger(),
 		}
 
-		attempt := intPtr(3)
+		attempt := new(3)
 		RunWorkerAttempt(context.Background(), workerTestIssue(), attempt, deps)
 
 		result := ec.waitResult(t)
@@ -2451,7 +2451,6 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		issue := workerTestIssue()
 		issue.State = "In Progress" // already transitioned on prior attempt
 
-		attempt := 2
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
 			AgentAdapter:           &mockAgentAdapter{},
@@ -2463,7 +2462,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 			Metrics:                spy,
 		}
 
-		RunWorkerAttempt(context.Background(), issue, &attempt, deps)
+		RunWorkerAttempt(context.Background(), issue, new(2), deps)
 		ec.waitResult(t)
 
 		if len(tracker.transitionCalls) != 0 {
@@ -3332,7 +3331,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		tracker := &mockTrackerAdapter{}
 		ec := newExitCapture()
 
-		attempt := intPtr(2)
+		attempt := new(2)
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,

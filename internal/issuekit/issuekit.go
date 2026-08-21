@@ -102,6 +102,5 @@ func parseInt(s string) *int {
 	if err != nil {
 		return nil
 	}
-	parsed := int(value)
-	return &parsed
+	return new(int(value))
 }

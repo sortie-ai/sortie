@@ -157,10 +157,9 @@ func TestHistoryTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 func TestHistoryTool_Execute_EntriesReturned(t *testing.T) {
 	t.Parallel()
 
-	errMsg := "agent crashed"
 	canned := []Entry{
 		{Attempt: 1, AgentAdapter: "claude-code", StartedAt: "2026-03-01T10:00:00Z", CompletedAt: "2026-03-01T10:30:00Z", Status: "succeeded", Error: nil},
-		{Attempt: 2, AgentAdapter: "claude-code", StartedAt: "2026-03-02T10:00:00Z", CompletedAt: "2026-03-02T10:05:00Z", Status: "failed", Error: &errMsg},
+		{Attempt: 2, AgentAdapter: "claude-code", StartedAt: "2026-03-02T10:00:00Z", CompletedAt: "2026-03-02T10:05:00Z", Status: "failed", Error: new("agent crashed")},
 		{Attempt: 3, AgentAdapter: "mock", StartedAt: "2026-03-03T10:00:00Z", CompletedAt: "2026-03-03T10:15:00Z", Status: "succeeded", Error: nil},
 	}
 	query := func(_ context.Context, _ string, _ int) ([]Entry, error) {

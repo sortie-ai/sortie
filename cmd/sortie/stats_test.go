@@ -33,9 +33,6 @@ var fullCaps = persistence.RunHistoryCapabilities{
 // tests that call statsAggregator.report directly.
 var fixedNow = time.Date(2026, 8, 7, 9, 15, 0, 0, time.UTC)
 
-func floatPtr(v float64) *float64 { return &v }
-func strPtr(v string) *string     { return &v }
-
 // rangeFloats returns the ascending integers from lo to hi inclusive, as
 // float64, for the worked nearest-rank percentile examples.
 func rangeFloats(lo, hi int) []float64 {
@@ -79,8 +76,7 @@ func reviewMetaPtr(t *testing.T, m domain.ReviewMetadata) *string {
 	if err != nil {
 		t.Fatalf("json.Marshal(%+v): %v", m, err)
 	}
-	s := string(b)
-	return &s
+	return new(string(b))
 }
 
 // statsWorkflow returns a minimal WORKFLOW.md whose front matter is
@@ -235,7 +231,7 @@ func TestStatsSummaryFormulas(t *testing.T) {
 	t.Run("duration and turns normalize on succeeded rows; cost per succeeded run divides all spend", func(t *testing.T) {
 		t.Parallel()
 
-		rates := server.TokenRates{"mock": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+		rates := server.TokenRates{"mock": server.TokenRateConfig{InputPerMtok: new(float64(10))}}
 		agg := newStatsAggregator(fullCaps, rates)
 
 		addRows(t, agg,
@@ -277,7 +273,7 @@ func TestStatsSummaryFormulas(t *testing.T) {
 func TestStatsGroupDisclosure(t *testing.T) {
 	t.Parallel()
 
-	rates := server.TokenRates{"mock": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+	rates := server.TokenRates{"mock": server.TokenRateConfig{InputPerMtok: new(float64(10))}}
 	agg := newStatsAggregator(fullCaps, rates)
 
 	addRows(t, agg, persistence.RunStatsRow{
@@ -337,8 +333,8 @@ func TestStatsCostDerivation(t *testing.T) {
 		t.Parallel()
 
 		rates := server.TokenRates{
-			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
-			"codex":       server.TokenRateConfig{InputPerMtok: floatPtr(20)},
+			"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10))},
+			"codex":       server.TokenRateConfig{InputPerMtok: new(float64(20))},
 		}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, makeRow("claude-code", 1_000_000), makeRow("codex", 1_000_000))
@@ -360,7 +356,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		t.Parallel()
 
 		rates := server.TokenRates{
-			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+			"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10))},
 		}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, makeRow("claude-code", 1_000_000), makeRow("codex", 1_000_000))
@@ -417,7 +413,7 @@ func TestStatsCostDerivation(t *testing.T) {
 	t.Run("all runs unmeasured with token_rates configured renders a dash for both figures", func(t *testing.T) {
 		t.Parallel()
 
-		rates := server.TokenRates{"kiro": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+		rates := server.TokenRates{"kiro": server.TokenRateConfig{InputPerMtok: new(float64(10))}}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, persistence.RunStatsRow{
 			Status: "succeeded", AgentAdapter: "kiro",
@@ -467,7 +463,7 @@ func TestStatsCostDerivation(t *testing.T) {
 	t.Run("a range with a measured priced run renders numbers", func(t *testing.T) {
 		t.Parallel()
 
-		rates := server.TokenRates{"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+		rates := server.TokenRates{"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10))}}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, makeRow("claude-code", 1_000_000))
 
@@ -536,8 +532,8 @@ func TestStatsTokenReporting(t *testing.T) {
 		t.Parallel()
 
 		rates := server.TokenRates{
-			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
-			"kiro":        server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+			"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10))},
+			"kiro":        server.TokenRateConfig{InputPerMtok: new(float64(10))},
 		}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, measuredUnmeasuredRows()...)
@@ -573,8 +569,8 @@ func TestStatsTokenReporting(t *testing.T) {
 		t.Parallel()
 
 		rates := server.TokenRates{
-			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
-			"kiro":        server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+			"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10))},
+			"kiro":        server.TokenRateConfig{InputPerMtok: new(float64(10))},
 		}
 		agg := newStatsAggregator(fullCaps, rates)
 		addRows(t, agg, measuredUnmeasuredRows()...)
@@ -684,7 +680,7 @@ func TestStatsSelfReview(t *testing.T) {
 		},
 		persistence.RunStatsRow{
 			Status: "failed", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:01:00Z",
-			ReviewMetadata: strPtr("{not-json"),
+			ReviewMetadata: new("{not-json"),
 		},
 	)
 
@@ -750,6 +746,52 @@ func TestStatsStatusOrdering(t *testing.T) {
 	weird := findGroup(t, report.ByStatus, "weird_status")
 	if weird.Runs != 1 {
 		t.Errorf("weird_status group Runs = %d, want 1 (status set must not be hard-coded)", weird.Runs)
+	}
+}
+
+// --- range bound reporting ---
+
+// TestStatsAggregatorReport_UntilBound verifies that a non-nil until bound
+// populates statsReport.Until, mirroring the existing Since coverage.
+func TestStatsAggregatorReport_UntilBound(t *testing.T) {
+	t.Parallel()
+
+	agg := newStatsAggregator(fullCaps, nil)
+	until := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, &until, nil)
+
+	want := "2026-08-01T00:00:00Z"
+	if report.Until == nil || *report.Until != want {
+		t.Errorf("statsAggregator.report(until=%v).Until = %v, want %q", until, report.Until, want)
+	}
+}
+
+// TestParseRangeBound covers the date-only and duration success branches,
+// which the RFC3339 branch's CLI-level coverage does not reach.
+func TestParseRangeBound(t *testing.T) {
+	// No t.Parallel: the duration case pins the package-level statsNow.
+	pinStatsNow(t, time.Date(2026, 8, 7, 9, 15, 0, 0, time.UTC))
+
+	tests := []struct {
+		name string
+		raw  string
+		want time.Time
+	}{
+		{name: "date-only", raw: "2026-07-01", want: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "positive duration", raw: "24h", want: time.Date(2026, 8, 6, 9, 15, 0, 0, time.UTC)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseRangeBound(tt.raw)
+			if err != nil {
+				t.Fatalf("parseRangeBound(%q) unexpected error: %v", tt.raw, err)
+			}
+			if got == nil || !got.Equal(tt.want) {
+				t.Errorf("parseRangeBound(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 

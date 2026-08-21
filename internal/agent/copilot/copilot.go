@@ -368,8 +368,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
 			case "result":
-				captured := event
-				return &captured, nil
+				return new(event), nil
 
 			default:
 				emit(domain.AgentEvent{

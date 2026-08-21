@@ -43,7 +43,6 @@ func slogCapture() (*slog.Logger, func() string) {
 // makeNotification builds a test Notification with recognizable field
 // values that can be checked in the posted body.
 func makeNotification() domain.Notification {
-	attempt := 2
 	return domain.Notification{
 		Envelope: domain.NotificationEnvelope{
 			NotificationID: "notif-uuid-001",
@@ -52,7 +51,7 @@ func makeNotification() domain.Notification {
 			IssueID:        "issue-7",
 			Identifier:     "PROJ-7",
 			SessionID:      "sess-xyz",
-			Attempt:        &attempt,
+			Attempt:        new(2),
 			Agent:          "claude-code",
 		},
 		Message: domain.NotificationMessage{

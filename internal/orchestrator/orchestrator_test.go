@@ -1939,10 +1939,10 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	// After dispatching the 2 "In Progress" issues, the "To Do" issue must
 	// still be dispatched.
 	issues := []domain.Issue{
-		{ID: "ip-1", Identifier: "IP-1", Title: "A", State: "In Progress", Priority: intPtr(1)},
-		{ID: "ip-2", Identifier: "IP-2", Title: "B", State: "In Progress", Priority: intPtr(1)},
-		{ID: "ip-3", Identifier: "IP-3", Title: "C", State: "In Progress", Priority: intPtr(1)},
-		{ID: "td-1", Identifier: "TD-1", Title: "D", State: "To Do", Priority: intPtr(2)},
+		{ID: "ip-1", Identifier: "IP-1", Title: "A", State: "In Progress", Priority: new(1)},
+		{ID: "ip-2", Identifier: "IP-2", Title: "B", State: "In Progress", Priority: new(1)},
+		{ID: "ip-3", Identifier: "IP-3", Title: "C", State: "In Progress", Priority: new(1)},
+		{ID: "td-1", Identifier: "TD-1", Title: "D", State: "To Do", Priority: new(2)},
 	}
 
 	tracker := &candidateTrackerAdapter{

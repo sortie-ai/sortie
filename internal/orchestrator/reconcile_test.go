@@ -3100,7 +3100,6 @@ func TestReconcileOverdueRetries_StartupReconstructedEntrySkipped(t *testing.T) 
 
 	state := NewState(5000, 4, nil, AgentTotals{})
 	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
-	errStr := "prior error"
 	PopulateRetries(state, []persistence.PendingRetry{
 		{
 			Entry: persistence.RetryEntry{
@@ -3108,7 +3107,7 @@ func TestReconcileOverdueRetries_StartupReconstructedEntrySkipped(t *testing.T) 
 				Identifier: "STARTUP-1-ident",
 				Attempt:    2,
 				DueAtMs:    overdueDueMs,
-				Error:      &errStr,
+				Error:      new("prior error"),
 			},
 			RemainingMs: 0,
 		},

@@ -47,11 +47,10 @@ func (t *recordingHandoffTracker) labels() []handoffLabelCall {
 
 func seedMockHandoffAbsences(store *mockExitStore, issueID string, count int) {
 	for range count {
-		errText := persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"
 		store.runHistories = append(store.runHistories, persistence.RunHistory{
 			IssueID: issueID,
 			Status:  "failed",
-			Error:   &errText,
+			Error:   new(persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
 		})
 	}
 }
@@ -687,7 +686,6 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 		t.Fatalf("store.Migrate: %v", err)
 	}
 
-	absenceErr := persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"
 	for range 3 {
 		if _, err := store.AppendRunHistory(ctx, persistence.RunHistory{
 			IssueID:      issueID,
@@ -698,7 +696,7 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 			StartedAt:    "2026-08-17T00:00:00Z",
 			CompletedAt:  "2026-08-17T00:01:00Z",
 			Status:       "failed",
-			Error:        &absenceErr,
+			Error:        new(persistence.HandoffAbsenceErrorPrefix + "absence of work observed under observed policy"),
 		}); err != nil {
 			t.Fatalf("AppendRunHistory: %v", err)
 		}

@@ -28,12 +28,11 @@ func (m *mockNotifier) Send(_ context.Context, n domain.Notification) error {
 // testEnv returns a NotificationEnvelopeContext with recognizable test
 // values.
 func testEnv() NotificationEnvelopeContext {
-	attempt := 2
 	return NotificationEnvelopeContext{
 		IssueID:    "issue-42",
 		Identifier: "PROJ-42",
 		SessionID:  "sess-001",
-		Attempt:    &attempt,
+		Attempt:    new(2),
 		Agent:      "claude-code",
 		Source:     "test-host",
 	}

@@ -162,8 +162,7 @@ func (s *Store) ScanRunHistoryRange(
 				return fmt.Errorf("scan run history range: %w", err)
 			}
 			if reviewMeta.Valid {
-				metadata := reviewMeta.String
-				row.ReviewMetadata = &metadata
+				row.ReviewMetadata = new(reviewMeta.String)
 			}
 		} else {
 			if err := rows.Scan(&row.Status, &row.AgentAdapter, &row.StartedAt, &row.CompletedAt); err != nil {

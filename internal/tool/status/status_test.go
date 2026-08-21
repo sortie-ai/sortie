@@ -182,11 +182,10 @@ func TestStatusTool_AttemptNullAndInteger(t *testing.T) {
 	t.Run("integer_attempt_is_preserved", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		n := 2
 		writeStateFile(t, dir, stateFile{
 			TurnNumber: 1,
 			MaxTurns:   10,
-			Attempt:    &n,
+			Attempt:    new(2),
 			StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		m := executeOK(t, New(dir))

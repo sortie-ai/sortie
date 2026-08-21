@@ -2152,8 +2152,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		var found *validateDiag
 		for i := range out.Warnings {
 			if out.Warnings[i].Check == "unresolved_extension_var" {
-				w := out.Warnings[i]
-				found = &w
+				found = new(out.Warnings[i])
 				break
 			}
 		}
