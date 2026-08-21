@@ -127,6 +127,26 @@ func TestEmitTurnCancelled(t *testing.T) {
 	}
 }
 
+func TestEmitTurnInputRequired(t *testing.T) {
+	t.Parallel()
+
+	wantUsage := domain.TokenUsage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}
+	got := captureOne(t, func(emit func(domain.AgentEvent)) {
+		EmitTurnInputRequired(emit, "agent asked for a decision only a person can make", wantUsage)
+	})
+
+	if got.Type != domain.EventTurnInputRequired {
+		t.Errorf("Type = %q, want EventTurnInputRequired", got.Type)
+	}
+	assertTimestamp(t, got.Timestamp)
+	if got.Message != "agent asked for a decision only a person can make" {
+		t.Errorf("Message = %q, want 'agent asked for a decision only a person can make'", got.Message)
+	}
+	if got.Usage != wantUsage {
+		t.Errorf("Usage = %+v, want %+v", got.Usage, wantUsage)
+	}
+}
+
 func TestEmitMalformed_ShortLine(t *testing.T) {
 	t.Parallel()
 

@@ -282,6 +282,59 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 	})
 }
 
+// dummyAgentConstructor returns an AgentConstructor whose construction
+// result is never inspected by these tests; only its registration and
+// retrieval matter.
+func dummyAgentConstructor() AgentConstructor {
+	return func(map[string]any) (domain.AgentAdapter, error) { return nil, nil }
+}
+
+// TestRegisterWithMeta_AndMeta_AgentValidateAgentConfig pins that
+// AgentMeta.ValidateAgentConfig round-trips through RegisterWithMeta and
+// Meta, mirroring TestRegisterWithMeta_AndMeta for the real AgentMeta
+// type rather than the generic testMeta fixture.
+func TestRegisterWithMeta_AndMeta_AgentValidateAgentConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RegisterWithMeta with a non-nil ValidateAgentConfig round-trips through Meta", func(t *testing.T) {
+		t.Parallel()
+
+		r := NewRegistry[AgentConstructor, AgentMeta]("agent")
+		validate := func(fields AgentConfigFields) []ValidationDiag {
+			return []ValidationDiag{{Severity: "error", Check: "marker.check", Message: "marker " + fields.Kind}}
+		}
+		r.RegisterWithMeta("alpha", dummyAgentConstructor(), AgentMeta{ValidateAgentConfig: validate})
+
+		got, ok := r.Meta("alpha")
+		if !ok {
+			t.Fatalf("Meta(%q) ok = false, want true", "alpha")
+		}
+		if got.ValidateAgentConfig == nil {
+			t.Fatalf("Meta(%q).ValidateAgentConfig = nil, want non-nil", "alpha")
+		}
+
+		diags := got.ValidateAgentConfig(AgentConfigFields{Kind: "alpha"})
+		if len(diags) != 1 || diags[0].Check != "marker.check" || diags[0].Message != "marker alpha" {
+			t.Errorf("Meta(%q).ValidateAgentConfig(...) = %+v, want the registered function's own output", "alpha", diags)
+		}
+	})
+
+	t.Run("plain Register reports nil ValidateAgentConfig", func(t *testing.T) {
+		t.Parallel()
+
+		r := NewRegistry[AgentConstructor, AgentMeta]("agent")
+		r.Register("mock", dummyAgentConstructor())
+
+		got, ok := r.Meta("mock")
+		if !ok {
+			t.Fatalf("Meta(%q) ok = false, want true for plain Register", "mock")
+		}
+		if got.ValidateAgentConfig != nil {
+			t.Errorf("Meta(%q).ValidateAgentConfig = non-nil, want nil for plain Register", "mock")
+		}
+	})
+}
+
 func TestRegisterWithMeta_Panics(t *testing.T) {
 	t.Parallel()
 

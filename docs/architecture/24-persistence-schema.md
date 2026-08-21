@@ -37,7 +37,7 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `workspace`     | TEXT    | Workspace path                            |
 | `started_at`    | TEXT    | ISO-8601 timestamp                        |
 | `completed_at`  | TEXT    | ISO-8601 timestamp                        |
-| `status`          | TEXT    | Run disposition (`succeeded`, `failed`, `cancelled`, or `ci_failed`) |
+| `status`          | TEXT    | Run disposition (`succeeded`, `failed`, `cancelled`, `ci_failed`, or `needs_person`) |
 | `error`           | TEXT    | Error message if failed, may be null      |
 | `workflow_file`   | TEXT    | Workflow file name the run was driven by, may be null (migration 003) |
 | `turns_completed`   | INTEGER | Agent turns the attempt completed (migration 005) |

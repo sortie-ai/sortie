@@ -182,6 +182,49 @@ type AgentConfig struct {
 	MaxTokens int
 }
 
+// AgentAdapterConfig returns the effective pass-through config map for
+// the agent adapter kind, the single producer both the offline
+// preflight validator and the adapter constructor read, so the two can
+// never disagree about what an adapter of that kind would see.
+//
+// The map carries exactly five keys derived from cfg.Agent's typed
+// fields: kind (set to the kind parameter rather than cfg.Agent.Kind,
+// so a dispatch-rule-routed kind resolves correctly), command,
+// turn_timeout_ms, read_timeout_ms, and stall_timeout_ms. Every other
+// [AgentConfig] field is intentionally excluded: those fields are
+// orchestrator-only, consumed through the typed [AgentConfig] before
+// this map reaches a constructor, and including them would shadow an
+// adapter extension key of the same name during the merge below.
+//
+// The kind-named sub-object under cfg.Extensions, if present, is
+// merged in without overwriting any of the five keys above. The
+// returned map is freshly allocated on every call.
+func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
+	m := map[string]any{
+		"kind":             kind,
+		"command":          cfg.Agent.Command,
+		"turn_timeout_ms":  cfg.Agent.TurnTimeoutMS,
+		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
+		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
+	}
+	mergeAgentExtensions(m, cfg.Extensions, kind)
+	return m
+}
+
+// mergeAgentExtensions copies the kind-named sub-object from
+// extensions into dst without overwriting an existing key.
+func mergeAgentExtensions(dst map[string]any, extensions map[string]any, kind string) {
+	sub, ok := extensions[kind].(map[string]any)
+	if !ok {
+		return
+	}
+	for k, v := range sub {
+		if _, exists := dst[k]; !exists {
+			dst[k] = v
+		}
+	}
+}
+
 // knownTopLevelKeys enumerates the front matter keys consumed by the
 // core schema. Anything else is collected into Extensions.
 var knownTopLevelKeys = map[string]bool{

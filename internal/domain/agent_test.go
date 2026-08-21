@@ -43,7 +43,6 @@ func TestAgentEventType_Values(t *testing.T) {
 		{EventTurnCancelled, "turn_cancelled"},
 		{EventTurnEndedWithError, "turn_ended_with_error"},
 		{EventTurnInputRequired, "turn_input_required"},
-		{EventApprovalAutoApproved, "approval_auto_approved"},
 		{EventUnsupportedToolCall, "unsupported_tool_call"},
 		{EventTokenUsage, "token_usage"},
 		{EventNotification, "notification"},
@@ -58,8 +57,8 @@ func TestAgentEventType_Values(t *testing.T) {
 			}
 		})
 	}
-	if len(tests) != 13 {
-		t.Errorf("expected 13 event types, got %d", len(tests))
+	if len(tests) != 12 {
+		t.Errorf("expected 12 event types, got %d", len(tests))
 	}
 }
 

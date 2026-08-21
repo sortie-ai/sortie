@@ -856,6 +856,167 @@ func TestHandleWorkerExit_NonRetryableError(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_InputRequiredStatus asserts that a worker error
+// exit whose Error carries a wrapped *domain.AgentError of kind
+// ErrTurnInputRequired records run_history.status as "needs_person". The
+// error is seeded wrapped, exactly as the worker delivers it
+// (fmt.Errorf("agent turn %d: %w", n, err)): a direct type assertion on
+// WorkerResult.Error compiles but never matches this shape, so this
+// fixture is the one that would catch a regression from
+// errors.AsType to a raw assertion.
+func TestHandleWorkerExit_InputRequiredStatus(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-IR-1", nil)
+	params := defaultExitParams(t, store)
+
+	wrappedErr := fmt.Errorf("agent turn 1: %w", &domain.AgentError{
+		Kind:    domain.ErrTurnInputRequired,
+		Message: "agent asked for a decision only a person can make",
+	})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-IR-1",
+		Identifier:    "ISSUE-IR-1-ident",
+		ExitKind:      WorkerExitError,
+		Error:         wrappedErr,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "needs_person" {
+		t.Errorf("RunHistory.Status = %q, want %q", got, "needs_person")
+	}
+}
+
+// TestHandleWorkerExit_CancelledWithInputRequiredErrorStaysCancelled
+// asserts that a WorkerExitCancelled result whose wrapped error also
+// carries ErrTurnInputRequired still records status "cancelled": a
+// shutdown racing the adapter's own recognition of the same situation
+// must not be relabelled as needing a person.
+func TestHandleWorkerExit_CancelledWithInputRequiredErrorStaysCancelled(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-IR-2", nil)
+	params := defaultExitParams(t, store)
+
+	wrappedErr := fmt.Errorf("agent turn 1: %w", &domain.AgentError{
+		Kind:    domain.ErrTurnInputRequired,
+		Message: "agent asked for a decision only a person can make",
+	})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-IR-2",
+		Identifier:    "ISSUE-IR-2-ident",
+		ExitKind:      WorkerExitCancelled,
+		Error:         wrappedErr,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "cancelled" {
+		t.Errorf("RunHistory.Status = %q, want %q", got, "cancelled")
+	}
+}
+
+// TestHandleWorkerExit_InputRequiredMessageDistinctFromFailedAndZeroWork
+// asserts that the recorded run_history.error for a human-input-required
+// exit carries the pinned message stem, carries no timeout vocabulary,
+// and differs from the text a generic turn_failed exit and a zero-work
+// exit produce.
+func TestHandleWorkerExit_InputRequiredMessageDistinctFromFailedAndZeroWork(t *testing.T) {
+	t.Parallel()
+
+	const stem = "agent asked for a decision only a person can make"
+
+	runExit := func(t *testing.T, issueID string, agentErr *domain.AgentError) string {
+		t.Helper()
+
+		store := &mockExitStore{}
+		state := exitState(t, issueID, nil)
+		params := defaultExitParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       issueID,
+			Identifier:    issueID + "-ident",
+			ExitKind:      WorkerExitError,
+			Error:         fmt.Errorf("agent turn 1: %w", agentErr),
+			AgentAdapter:  "mock",
+			WorkspacePath: "/tmp/ws",
+		}, params)
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		if store.runHistories[0].Error == nil {
+			t.Fatalf("RunHistory.Error = nil, want non-nil")
+		}
+		return *store.runHistories[0].Error
+	}
+
+	needsPersonMessage := runExit(t, "ISSUE-IR-3", &domain.AgentError{Kind: domain.ErrTurnInputRequired, Message: stem})
+	turnFailedMessage := runExit(t, "ISSUE-IR-4", &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "turn failed"})
+	zeroWorkMessage := runExit(t, "ISSUE-IR-5", &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "agent exited without producing output"})
+
+	if !strings.Contains(needsPersonMessage, stem) {
+		t.Errorf("needs_person RunHistory.Error = %q, want to contain %q", needsPersonMessage, stem)
+	}
+	if strings.Contains(strings.ToLower(needsPersonMessage), "timeout") {
+		t.Errorf("needs_person RunHistory.Error = %q, want no timeout vocabulary", needsPersonMessage)
+	}
+	if needsPersonMessage == turnFailedMessage {
+		t.Errorf("needs_person and turn_failed RunHistory.Error are identical: %q", needsPersonMessage)
+	}
+	if needsPersonMessage == zeroWorkMessage {
+		t.Errorf("needs_person and zero-work RunHistory.Error are identical: %q", needsPersonMessage)
+	}
+}
+
+// TestHandleWorkerExit_InputRequiredReleasesClaimNoRetry asserts the
+// end-to-end claim-release path: a worker error exit whose wrapped error
+// carries ErrTurnInputRequired deletes the issue from state.Claimed and
+// schedules no retry entry, exercising HandleWorkerExit rather than the
+// retry-classification unit alone.
+func TestHandleWorkerExit_InputRequiredReleasesClaimNoRetry(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-IR-6", nil)
+	params := defaultExitParams(t, store)
+
+	wrappedErr := fmt.Errorf("agent turn 1: %w", &domain.AgentError{
+		Kind:    domain.ErrTurnInputRequired,
+		Message: "agent asked for a decision only a person can make",
+	})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-IR-6",
+		Identifier:    "ISSUE-IR-6-ident",
+		ExitKind:      WorkerExitError,
+		Error:         wrappedErr,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	if _, ok := state.Claimed["ISSUE-IR-6"]; ok {
+		t.Error("claim preserved after human-input-required exit, should be released")
+	}
+	if _, ok := state.RetryAttempts["ISSUE-IR-6"]; ok {
+		t.Error("retry scheduled after human-input-required exit, should not be")
+	}
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+	}
+}
+
 func TestHandleWorkerExit_CancelledExit(t *testing.T) {
 	t.Parallel()
 

@@ -225,6 +225,83 @@ func TestDecideTurn_ZeroWorkRowWorkDetailSuffix(t *testing.T) {
 	})
 }
 
+// TestDecideTurn_HumanInputRequiredRow pins the human-input-required row:
+// the bare stem when TerminalMessage is empty, the stem joined to a
+// non-empty TerminalMessage with ": ", the row's fixed ExitReason and
+// ErrorKind, and that TerminalCancelled still wins when both Terminal
+// values could apply (case ordering, not an added precedence flag,
+// decides it).
+func TestDecideTurn_HumanInputRequiredRow(t *testing.T) {
+	t.Parallel()
+
+	const stem = "agent asked for a decision only a person can make"
+
+	t.Run("empty detail produces the bare stem", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{Terminal: TerminalHumanInputRequired})
+
+		if got.Row != RowHumanInputRequired {
+			t.Errorf("DecideTurn().Row = %v, want %v", got.Row, RowHumanInputRequired)
+		}
+		if got.ExitReason != domain.EventTurnInputRequired {
+			t.Errorf("DecideTurn().ExitReason = %q, want %q", got.ExitReason, domain.EventTurnInputRequired)
+		}
+		if got.ErrorKind != domain.ErrTurnInputRequired {
+			t.Errorf("DecideTurn().ErrorKind = %q, want %q", got.ErrorKind, domain.ErrTurnInputRequired)
+		}
+		if got.EventMessage != stem {
+			t.Errorf("DecideTurn().EventMessage = %q, want %q", got.EventMessage, stem)
+		}
+		if got.ErrorMessage != stem {
+			t.Errorf("DecideTurn().ErrorMessage = %q, want %q", got.ErrorMessage, stem)
+		}
+	})
+
+	t.Run("non-empty detail is appended with a colon-space separator", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{Terminal: TerminalHumanInputRequired, TerminalMessage: "an answer to a question"})
+
+		const want = stem + ": an answer to a question"
+		if got.EventMessage != want {
+			t.Errorf("DecideTurn().EventMessage = %q, want %q", got.EventMessage, want)
+		}
+		if got.ErrorMessage != want {
+			t.Errorf("DecideTurn().ErrorMessage = %q, want %q", got.ErrorMessage, want)
+		}
+	})
+
+	t.Run("ErrorKind is non-empty, preserving the empty-iff-completed invariant", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{Terminal: TerminalHumanInputRequired})
+
+		if got.ErrorKind == "" {
+			t.Error("DecideTurn().ErrorKind is empty, want non-empty since ExitReason is not EventTurnCompleted")
+		}
+	})
+
+	t.Run("cancelled still wins when both terminal reports could apply", func(t *testing.T) {
+		t.Parallel()
+
+		// TerminalReport is a single field, so no TurnEvidence value can
+		// literally set both at once; this asserts the case ordering
+		// itself, cancelled evaluated before human-input-required, by
+		// confirming cancelled's row is selected whenever Terminal is
+		// TerminalCancelled regardless of TerminalMessage shape used by
+		// the human-input-required row.
+		got := DecideTurn(TurnEvidence{Terminal: TerminalCancelled, TerminalMessage: "an answer to a question"})
+
+		if got.Row != RowTerminalCancelled {
+			t.Errorf("DecideTurn().Row = %v, want %v", got.Row, RowTerminalCancelled)
+		}
+		if got.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("DecideTurn().ExitReason = %q, want %q", got.ExitReason, domain.EventTurnCancelled)
+		}
+	})
+}
+
 // TestDecideTurn_Total pins that DecideTurn is total over TurnEvidence:
 // every distinct combination of the fields the table consults maps to
 // exactly one non-zero Row.

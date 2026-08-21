@@ -64,6 +64,19 @@ func EmitTurnCancelled(emit func(domain.AgentEvent), message string, usage domai
 	})
 }
 
+// EmitTurnInputRequired emits an EventTurnInputRequired event with the
+// given human-readable message. usage is the session's run-cumulative
+// token usage snapshot; the zero value means the caller reports no usage
+// for this event.
+func EmitTurnInputRequired(emit func(domain.AgentEvent), message string, usage domain.TokenUsage) {
+	emit(domain.AgentEvent{
+		Type:      domain.EventTurnInputRequired,
+		Timestamp: time.Now().UTC(),
+		Message:   message,
+		Usage:     usage,
+	})
+}
+
 // EmitMalformed emits an EventMalformed event. line is the raw unparseable
 // bytes from the agent output stream; it is truncated to 500 Unicode code
 // points before inclusion in the event message.

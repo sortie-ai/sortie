@@ -210,6 +210,29 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
+	// Adapter-specific agent config validation, for every distinct kind
+	// this configuration can reach. A registered kind the configuration
+	// never references is skipped, because that would report a fault in
+	// a block no run reads.
+	for _, kind := range orderedUniqueAgentKinds(cfg) {
+		agentMeta, registered := params.AgentRegistry.Meta(kind)
+		if !registered || agentMeta.ValidateAgentConfig == nil {
+			continue
+		}
+		fields := registry.AgentConfigFields{
+			Kind:        kind,
+			Passthrough: config.AgentAdapterConfig(cfg, kind),
+		}
+		for _, d := range agentMeta.ValidateAgentConfig(fields) {
+			switch d.Severity {
+			case "warning":
+				warns = append(warns, PreflightWarning{Check: d.Check, Message: d.Message})
+			default:
+				errs = append(errs, PreflightError{Check: d.Check, Message: d.Message})
+			}
+		}
+	}
+
 	// Workspace root must exist and be writable.
 	if cfg.Workspace.Root != "" {
 		if err := checkWorkspaceRootWritable(cfg.Workspace.Root); err != nil {
@@ -221,6 +244,33 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	}
 
 	return PreflightResult{Errors: errs, Warnings: warns}
+}
+
+// orderedUniqueAgentKinds returns the agent kinds cfg can reach, in
+// deterministic order: the default cfg.Agent.Kind first, then
+// cfg.Dispatch.Default.AgentKind, then each
+// cfg.Dispatch.Rules[i].Selection.AgentKind in rule order. Empty
+// strings are skipped and duplicates are removed, keeping each kind's
+// first occurrence.
+func orderedUniqueAgentKinds(cfg config.ServiceConfig) []string {
+	seen := make(map[string]bool)
+	var kinds []string
+
+	add := func(kind string) {
+		if kind == "" || seen[kind] {
+			return
+		}
+		seen[kind] = true
+		kinds = append(kinds, kind)
+	}
+
+	add(cfg.Agent.Kind)
+	add(cfg.Dispatch.Default.AgentKind)
+	for _, rule := range cfg.Dispatch.Rules {
+		add(rule.Selection.AgentKind)
+	}
+
+	return kinds
 }
 
 // validateDefaultedTrackerStates reports the state collisions that
