@@ -29,8 +29,6 @@ linters:
       disable:
         # omitempty -> omitzero changes JSON marshaling on struct-typed fields.
         - omitzero
-        # new(expr) rewrites leave //go:fix inline wrappers and mixed call sites.
-        - newexpr
   exclusions:
     rules:
       - path: _test\.go
