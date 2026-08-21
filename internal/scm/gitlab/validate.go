@@ -2,12 +2,12 @@ package gitlab
 
 import (
 	"errors"
-	"net/url"
 	"os"
 	"slices"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -71,8 +71,8 @@ func validateEndpoint(endpoint string) []registry.ValidationDiag {
 		return nil
 	}
 
-	parsed, err := url.Parse(trimmed)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+	parsed, ok := httpkit.ParseEndpoint(trimmed)
+	if !ok {
 		return []registry.ValidationDiag{{
 			Severity: "error",
 			Check:    "tracker.endpoint.invalid",
