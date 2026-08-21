@@ -17,16 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history both read `turn failed`.
   ([#842](https://github.com/sortie-ai/sortie/issues/842))
 
-- GitHub: a malformed `tracker.endpoint` is now reported by
-  `sortie validate` and rejected at startup, instead of passing
-  validation and failing later as a network error. The endpoint must
-  be an absolute http or https URL with a host, so an IPv6 address
-  written without brackets - `http://fd00::1:3000` instead of
-  `http://[fd00::1]:3000` - is named as a fault in the endpoint field
-  before any request is made. A username or password embedded in the
-  endpoint is masked in that diagnostic; previously the failure
-  arrived as a transport error quoting the whole endpoint, credential
-  included.
+- A malformed `tracker.endpoint` is now reported by `sortie validate`
+  and rejected at startup by every adapter that accepts one, instead
+  of passing validation and failing later as a network error. The
+  GitHub, Gitea and Linear adapters handed the configured value to
+  the HTTP client without parsing it, and the Gitea CI status
+  provider and SCM adapter accepted an unusable one with no error at
+  all. An IPv6 address written without brackets,
+  `http://fd00::1:3000` instead of `http://[fd00::1]:3000`, is now
+  named as a fault in the endpoint field before any request is made.
+  A username or password embedded in the endpoint is masked in that
+  diagnostic; previously the failure arrived as a transport error
+  quoting the whole endpoint, credential included.
   ([#908](https://github.com/sortie-ai/sortie/issues/908))
 
 ## [1.21.0] - 2026-08-20
