@@ -776,6 +776,47 @@ func TestRunTurn_ToolUseEvents(t *testing.T) {
 	}
 }
 
+// TestRunTurn_ToolDeniedContinuesTurn drives a tool.execution_complete
+// event whose error.code is "denied", the CLI's own non-interactive
+// permission policy refusing a tool call and continuing the session. With
+// --no-ask-user closing the human-question path unconditionally, every
+// recognized request here is a permission request with no reply channel,
+// so the turn must continue rather than end.
+func TestRunTurn_ToolDeniedContinuesTurn(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const deniedJSONL = `{"type":"tool.execution_complete","data":{"toolCallId":"tc-1","toolName":"bash","success":false,"error":{"code":"denied","message":"denied by policy"}}}
+{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"dd112233-4455-6677-8899-aabbccddeeff","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, deniedJSONL, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q (turn must continue past the runtime's own refusal)", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	wantNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).Notice
+	var found bool
+	for _, ev := range events {
+		if ev.Type == domain.EventNotification && ev.Message == wantNotice {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no EventNotification with Message = %q found among events %v", wantNotice, events)
+	}
+}
+
 func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")

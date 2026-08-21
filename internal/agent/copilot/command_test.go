@@ -393,3 +393,38 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 	assertHasArgPair(t, got, "-p", "test prompt")
 	assertHasArgPair(t, got, "--output-format", "json")
 }
+
+// TestBuildArgs_LaunchPosture asserts the launch posture the refusal path
+// assumes: --no-ask-user closes the human-question path on every
+// invocation, and --allow-all is present only when no tool-scoping key is
+// configured, since any of the four tool-scoping keys displaces it.
+func TestBuildArgs_LaunchPosture(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		pt           passthroughConfig
+		wantAllowAll bool
+	}{
+		{name: "no tool scoping configured", pt: passthroughConfig{}, wantAllowAll: true},
+		{name: "allowed_tools configured", pt: passthroughConfig{AllowedTools: "bash"}, wantAllowAll: false},
+		{name: "denied_tools configured", pt: passthroughConfig{DeniedTools: "bash"}, wantAllowAll: false},
+		{name: "available_tools configured", pt: passthroughConfig{AvailableTools: "bash"}, wantAllowAll: false},
+		{name: "excluded_tools configured", pt: passthroughConfig{ExcludedTools: "bash"}, wantAllowAll: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := buildArgs(&sessionState{}, 1, "p", tt.pt)
+
+			assertHasFlag(t, got, "--no-ask-user")
+			if tt.wantAllowAll {
+				assertHasFlag(t, got, "--allow-all")
+			} else {
+				assertNoFlag(t, got, "--allow-all")
+			}
+		})
+	}
+}

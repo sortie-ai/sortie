@@ -32,9 +32,15 @@ import (
 // session-state path.
 var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// copilotToolDeniedCode is the tool.execution_complete error code the CLI
+// reports when its own non-interactive permission policy refuses a tool
+// call and the session continues.
+const copilotToolDeniedCode = "denied"
+
 func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
-		RequiresCommand: true,
+		RequiresCommand:     true,
+		ValidateAgentConfig: validateConfig,
 	})
 }
 
@@ -329,6 +335,16 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 							ToolDurationMS: durationMS,
 							ToolError:      !toolData.Success,
 						})
+
+						// The CLI's own non-interactive permission policy
+						// denied this tool call and the session continues;
+						// --no-ask-user closes the human-question path, so
+						// every recognized request here is a permission
+						// request with no reply channel.
+						if !toolData.Success && toolData.Error != nil && toolData.Error.Code == copilotToolDeniedCode {
+							posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused)
+							agentcore.EmitNotification(emit, posture.Notice)
+						}
 					}
 				}
 

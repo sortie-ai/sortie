@@ -57,14 +57,24 @@ type rawToolRequest struct {
 }
 
 type toolExecutionData struct {
-	ToolCallID    string          `json:"toolCallId"`
-	ToolName      string          `json:"toolName"`
-	Arguments     json.RawMessage `json:"arguments,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	InteractionID string          `json:"interactionId,omitempty"`
-	Success       bool            `json:"success"`
-	Result        json.RawMessage `json:"result,omitempty"`
-	ToolTelemetry json.RawMessage `json:"toolTelemetry,omitempty"`
+	ToolCallID    string              `json:"toolCallId"`
+	ToolName      string              `json:"toolName"`
+	Arguments     json.RawMessage     `json:"arguments,omitempty"`
+	Model         string              `json:"model,omitempty"`
+	InteractionID string              `json:"interactionId,omitempty"`
+	Success       bool                `json:"success"`
+	Result        json.RawMessage     `json:"result,omitempty"`
+	Error         *toolExecutionError `json:"error,omitempty"`
+	ToolTelemetry json.RawMessage     `json:"toolTelemetry,omitempty"`
+}
+
+// toolExecutionError is the error payload a tool.execution_complete event
+// carries when Success is false. Code "denied" is the CLI's own
+// non-interactive permission policy refusing the tool call and continuing
+// the session; every other value is an unrelated execution failure.
+type toolExecutionError struct {
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
 }
 
 type sessionInfoData struct {
