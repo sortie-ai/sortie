@@ -274,11 +274,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		if ctx.Err() != nil {
 			usage := s.hooks.GetUsage()
 			EmitTurnCancelled(emit, "context cancelled", usage)
-			return domain.TurnResult{
+			result := domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnCancelled,
 				Usage:      usage,
-			}, &domain.AgentError{
+			}
+			return result, &domain.AgentError{
 				Kind:    domain.ErrTurnCancelled,
 				Message: "turn cancelled",
 				Err:     ctx.Err(),
@@ -340,11 +341,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		if ctx.Err() != nil {
 			usage := s.hooks.GetUsage()
 			EmitTurnCancelled(emit, "context cancelled", usage)
-			return domain.TurnResult{
+			result := domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnCancelled,
 				Usage:      usage,
-			}, &domain.AgentError{
+			}
+			return result, &domain.AgentError{
 				Kind:    domain.ErrTurnCancelled,
 				Message: "turn cancelled",
 				Err:     ctx.Err(),
@@ -354,11 +356,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		usage := s.hooks.GetUsage()
 		EmitTurnFailed(emit, "stdout read error: "+scanErr.Error(), 0, usage)
-		return domain.TurnResult{
+		result := domain.TurnResult{
 			SessionID:  s.hooks.GetSessionID(),
 			ExitReason: domain.EventTurnFailed,
 			Usage:      usage,
-		}, &domain.AgentError{
+		}
+		return result, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
 			Message: "stdout scanner error",
 			Err:     scanErr,
@@ -381,11 +384,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	if ctx.Err() != nil {
 		usage := s.hooks.GetUsage()
 		EmitTurnCancelled(emit, "context cancelled", usage)
-		return domain.TurnResult{
+		result := domain.TurnResult{
 			SessionID:  s.hooks.GetSessionID(),
 			ExitReason: domain.EventTurnCancelled,
 			Usage:      usage,
-		}, &domain.AgentError{
+		}
+		return result, &domain.AgentError{
 			Kind:    domain.ErrTurnCancelled,
 			Message: "turn cancelled",
 			Err:     ctx.Err(),
@@ -398,11 +402,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		usage := s.hooks.GetUsage()
 		EmitTurnFailed(emit, "agent binary not found", 0, usage)
-		return domain.TurnResult{
+		result := domain.TurnResult{
 			SessionID:  s.hooks.GetSessionID(),
 			ExitReason: domain.EventTurnFailed,
 			Usage:      usage,
-		}, &domain.AgentError{
+		}
+		return result, &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
 			Message: "exit code 127",
 		}
@@ -411,11 +416,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	if procutil.WasSignaled(waitErr) {
 		usage := s.hooks.GetUsage()
 		EmitTurnCancelled(emit, "killed by signal", usage)
-		return domain.TurnResult{
+		result := domain.TurnResult{
 			SessionID:  s.hooks.GetSessionID(),
 			ExitReason: domain.EventTurnCancelled,
 			Usage:      usage,
-		}, &domain.AgentError{
+		}
+		return result, &domain.AgentError{
 			Kind:    domain.ErrTurnCancelled,
 			Message: "killed by signal",
 		}
