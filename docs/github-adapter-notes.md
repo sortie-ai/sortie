@@ -141,7 +141,8 @@ reports the same shape through `registry.DiagOwnerRepoProject`.
 
 `resolveEndpoint` parses `tracker.endpoint` before any client is built. An empty or
 whitespace-only value falls back to `https://api.github.com`; anything else must parse as an
-absolute http or https URL carrying a host, or the constructor returns a payload error
+absolute http or https URL carrying a host and carrying neither a query nor a
+fragment, or the constructor returns a payload error
 (`tracker_payload_error` for the tracker, `ci_payload_error` for the CI provider,
 `scm_payload_error` for the SCM adapter). All three constructors share the one helper, so an
 IPv6 literal written without brackets — `http://fd00::1:3000`, which `url.Parse` rejects for

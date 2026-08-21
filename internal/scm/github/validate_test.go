@@ -69,7 +69,7 @@ func TestValidateAPIKeyHint(t *testing.T) {
 // TestValidateEndpoint pins the offline verdict on tracker.endpoint. The
 // unbracketed IPv6 rows are the shapes url.Parse rejects for carrying more
 // than one colon in an unbracketed host, and are the reason this check
-// exists: without it they pass sortie validate clean and fail later as a
+// exists: without it they pass sortie validate cleanly and fail later as a
 // transport error.
 func TestValidateEndpoint(t *testing.T) {
 	t.Parallel()

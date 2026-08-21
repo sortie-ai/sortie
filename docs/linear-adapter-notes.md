@@ -1268,7 +1268,8 @@ value substitutes `linear.defaultEndpoint`; either way the result is parsed
 by `httpkit.ParseEndpoint`, so the default host and an operator-supplied host
 are validated identically before either reaches the GraphQL client. A
 supplied value that does not parse as an absolute http(s) URL carrying a
-host fails construction with `domain.ErrTrackerPayload`. `url.Parse`'s own
+host, or that carries a query or a fragment, fails construction with
+`domain.ErrTrackerPayload`. `url.Parse`'s own
 error text quotes the whole raw URL, so an endpoint written as
 `scheme://user:secret@host` would otherwise name both the username and the
 password in the failure message; the constructor's message instead carries
@@ -1288,7 +1289,7 @@ verdict for every surface Linear serves.
 
 | Check | Severity | Condition |
 | --- | --- | --- |
-| `tracker.endpoint.invalid` | `error` | a present, non-empty `tracker.endpoint` does not parse as an absolute http(s) URL with a host |
+| `tracker.endpoint.invalid` | `error` | a `tracker.endpoint` that is not empty or whitespace only does not parse as an absolute http(s) URL with a host |
 
 An empty or whitespace-only endpoint produces no diagnostic, since it resolves
 to the default host. There is deliberately no plain-http warning here, unlike
