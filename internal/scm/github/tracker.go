@@ -76,7 +76,9 @@ type GitHubAdapter struct {
 // NewGitHubAdapter creates a [GitHubAdapter] from adapter configuration.
 // Required config keys: "api_key" (personal access token or fine-grained
 // token), "project" (owner/repo format). Optional: "endpoint" (defaults
-// to https://api.github.com), "active_states", "terminal_states",
+// to https://api.github.com; a value that does not parse as an absolute
+// http or https URL with a host returns a [*domain.TrackerError] of kind
+// [domain.ErrTrackerPayload]), "active_states", "terminal_states",
 // "handoff_state" (single state name recognized as a valid transition
 // target and state label; normalized to lowercase),
 // "query_filter", "user_agent", "etag_cache_size" (int, default 1000;
@@ -106,11 +108,14 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	endpoint, _ := config["endpoint"].(string)
-	if endpoint == "" {
-		endpoint = "https://api.github.com"
+	endpointRaw, _ := config["endpoint"].(string)
+	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
+	if !endpointOK {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("github: endpoint %q is not a valid absolute http(s) url", redactedEndpoint),
+		}
 	}
-	endpoint = strings.TrimRight(endpoint, "/")
 
 	activeRaw := typeutil.ExtractStringSlice(config["active_states"])
 	if len(activeRaw) == 0 {

@@ -63,7 +63,9 @@ type GitHubSCMAdapter struct {
 
 // NewGitHubSCMAdapter creates a [GitHubSCMAdapter] from adapter-specific
 // configuration. Required config key: "api_key". Optional: "endpoint"
-// (defaults to https://api.github.com), "user_agent".
+// (defaults to https://api.github.com; a value that does not parse as an
+// absolute http or https URL with a host returns a [*domain.SCMError] of
+// kind [domain.ErrSCMPayload]), "user_agent".
 func NewGitHubSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error) {
 	apiKey, _ := adapterConfig["api_key"].(string)
 	if apiKey == "" {
@@ -73,11 +75,14 @@ func NewGitHubSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 		}
 	}
 
-	endpoint, _ := adapterConfig["endpoint"].(string)
-	if endpoint == "" {
-		endpoint = "https://api.github.com"
+	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
+	if !endpointOK {
+		return nil, &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: fmt.Sprintf("github: endpoint %q is not a valid absolute http(s) url", redactedEndpoint),
+		}
 	}
-	endpoint = strings.TrimRight(endpoint, "/")
 
 	userAgent, _ := adapterConfig["user_agent"].(string)
 	if userAgent == "" {
