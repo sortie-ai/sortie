@@ -74,6 +74,127 @@ func TestNewLinearAdapter(t *testing.T) {
 	}
 }
 
+// endpointGuardConfig builds a config map for [TestNewLinearAdapterEndpointGuard].
+// api_key is deliberately never set: every case in that test isolates the
+// endpoint gate by relying on the next required-field check to fire only
+// once the endpoint has been accepted.
+func endpointGuardConfig(endpointKeyPresent bool, endpoint string) map[string]any {
+	cfg := map[string]any{"project": "SOR"}
+	if endpointKeyPresent {
+		cfg["endpoint"] = endpoint
+	}
+	return cfg
+}
+
+func TestNewLinearAdapterEndpointGuard(t *testing.T) {
+	t.Parallel()
+
+	t.Run("endpoint accepted", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			config map[string]any
+		}{
+			{"absent endpoint key defaults to the hosted host", endpointGuardConfig(false, "")},
+			{"empty endpoint value defaults to the hosted host", endpointGuardConfig(true, "")},
+			{"whitespace-only endpoint value defaults to the hosted host", endpointGuardConfig(true, "   ")},
+			{"valid custom endpoint is accepted", endpointGuardConfig(true, "  https://self-hosted.example.com/graphql  ")},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, err := NewLinearAdapter(tt.config)
+
+				assertTrackerErrorKind(t, err, domain.ErrMissingTrackerAPIKey)
+			})
+		}
+	})
+
+	t.Run("endpoint rejected", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name     string
+			endpoint string
+		}{
+			{"unsupported scheme", "ftp://example.com/graphql"},
+			{"not a url at all", "not a url at all"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, err := NewLinearAdapter(endpointGuardConfig(true, tt.endpoint))
+
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			})
+		}
+	})
+
+	t.Run("credential-bearing malformed endpoint redacts the message", func(t *testing.T) {
+		t.Parallel()
+
+		const raw = "https://operator:s3cr3t@fd00::1:3000/graphql"
+
+		_, err := NewLinearAdapter(endpointGuardConfig(true, raw))
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("NewLinearAdapter(%q) error type = %T, want *domain.TrackerError", raw, err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("NewLinearAdapter(%q) TrackerError.Kind = %q, want %q", raw, te.Kind, domain.ErrTrackerPayload)
+		}
+		msg := te.Error()
+		if strings.Contains(msg, "operator") {
+			t.Errorf("NewLinearAdapter(%q) error message %q leaks the username", raw, msg)
+		}
+		if strings.Contains(msg, "s3cr3t") {
+			t.Errorf("NewLinearAdapter(%q) error message %q leaks the password", raw, msg)
+		}
+	})
+}
+
+// TestEndpointVerdictAgreesWithConstructor is a drift guard: both
+// validateEndpoint and NewLinearAdapter defer their pass/fail verdict to
+// [resolveEndpoint], so the two must never disagree for the same value.
+func TestEndpointVerdictAgreesWithConstructor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{"empty", ""},
+		{"whitespace-only", "   "},
+		{"default hosted url", "https://api.linear.app/graphql"},
+		{"valid self-hosted url with whitespace", "  https://self-hosted.example.com/graphql  "},
+		{"unsupported scheme", "ftp://example.com/graphql"},
+		{"not a url at all", "not a url at all"},
+		{"credential-bearing malformed url", "https://operator:s3cr3t@fd00::1:3000/graphql"},
+		{"scheme with no host", "https://"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			validatePass := len(validateEndpoint(tt.endpoint)) == 0
+
+			_, err := NewLinearAdapter(endpointGuardConfig(true, tt.endpoint))
+			constructorPass := !isPayloadError(err)
+
+			if validatePass != constructorPass {
+				t.Errorf("endpoint %q: validateEndpoint pass = %v, NewLinearAdapter pass = %v, want agreement", tt.endpoint, validatePass, constructorPass)
+			}
+		})
+	}
+}
+
 func TestNewAdapterSuccess(t *testing.T) {
 	t.Parallel()
 

@@ -72,6 +72,27 @@ func TestValidateEndpoint(t *testing.T) {
 			wantSeverity: "error",
 		},
 		{
+			name:         "unbracketed ipv6 with port is invalid",
+			endpoint:     "http://fd00::1:3000",
+			wantCount:    1,
+			wantCheck:    "tracker.endpoint.invalid",
+			wantSeverity: "error",
+		},
+		{
+			name:         "unbracketed loopback is invalid",
+			endpoint:     "http://::1/",
+			wantCount:    1,
+			wantCheck:    "tracker.endpoint.invalid",
+			wantSeverity: "error",
+		},
+		{
+			name:         "doubled port is invalid",
+			endpoint:     "http://host:80:80/",
+			wantCount:    1,
+			wantCheck:    "tracker.endpoint.invalid",
+			wantSeverity: "error",
+		},
+		{
 			name:      "https with subpath is valid",
 			endpoint:  "https://host/gitea",
 			wantCount: 0,
@@ -144,6 +165,21 @@ func TestValidateEndpoint(t *testing.T) {
 			t.Fatalf("validateEndpoint(userinfo) = %d diags, want 0; diags: %v", len(got), got)
 		}
 		assertNoMessageContains(t, got, "secret")
+	})
+
+	t.Run("userinfo in a rejected endpoint never leaks into a message", func(t *testing.T) {
+		t.Parallel()
+
+		got := validateEndpoint("https://operator:s3cr3t@fd00::1:3000")
+
+		if len(got) != 1 {
+			t.Fatalf("validateEndpoint(userinfo, invalid host) = %d diags, want 1; diags: %v", len(got), got)
+		}
+		if got[0].Check != "tracker.endpoint.invalid" {
+			t.Errorf("validateEndpoint(userinfo, invalid host) diag[0].Check = %q, want %q", got[0].Check, "tracker.endpoint.invalid")
+		}
+		assertNoMessageContains(t, got, "operator")
+		assertNoMessageContains(t, got, "s3cr3t")
 	})
 }
 
@@ -344,4 +380,52 @@ func TestValidateConfig(t *testing.T) {
 			t.Errorf("validateConfig(untrimmed active state) errors = %v, want empty (construction proceeds)", errs)
 		}
 	})
+}
+
+// TestValidateEndpointAgreesWithConstructor is a drift guard: validateEndpoint
+// and NewGiteaAdapter both route through httpkit.ParseEndpoint, so the two
+// verdicts can never disagree on whether an endpoint value is usable. srv
+// carries the two construction-preflight routes so a case this table expects
+// to be valid can also succeed all the way through NewGiteaAdapter; a case
+// expected to be invalid never reaches the network, so sharing one server
+// instance across every case is safe. t.Cleanup, not defer, closes srv so a
+// parallel subtest cannot outlive it.
+func TestValidateEndpointAgreesWithConstructor(t *testing.T) {
+	srv := httptest.NewServer(newPreflightMux(t))
+	t.Cleanup(srv.Close)
+
+	tests := []struct {
+		name     string
+		endpoint func(base string) string
+	}{
+		{"empty", func(base string) string { return "" }},
+		{"bare host with no scheme", func(base string) string { return "gitea.example.com" }},
+		{"non-http scheme", func(base string) string { return "ftp://gitea.example.com" }},
+		{"scheme with no host", func(base string) string { return "https://" }},
+		{"unbracketed ipv6 with port", func(base string) string { return "http://fd00::1:3000" }},
+		{"unbracketed loopback", func(base string) string { return "http://::1/" }},
+		{"doubled port", func(base string) string { return "http://host:80:80/" }},
+		{"userinfo credential leak", func(base string) string { return "https://operator:s3cr3t@fd00::1:3000" }},
+		{"clean valid endpoint", func(base string) string { return base }},
+		{"valid with trailing slash", func(base string) string { return base + "/" }},
+		{"valid already suffixed with /api/v1", func(base string) string { return base + "/api/v1" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			endpoint := tt.endpoint(srv.URL)
+
+			offlineRejected := len(diagsWithSeverity(validateEndpoint(endpoint), "error")) != 0
+
+			_, constructErr := NewGiteaAdapter(validConfig(endpoint))
+			constructRejected := constructErr != nil
+
+			if offlineRejected != constructRejected {
+				t.Errorf("validateEndpoint(%q) rejected = %v, NewGiteaAdapter(%q) rejected = %v; want agreement",
+					endpoint, offlineRejected, endpoint, constructRejected)
+			}
+		})
+	}
 }

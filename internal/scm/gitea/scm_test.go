@@ -183,6 +183,79 @@ func TestNewGiteaSCMAdapter(t *testing.T) {
 	})
 }
 
+// TestNewGiteaSCMAdapter_RejectsInvalidEndpoint proves the endpoint values
+// in endpointRejectionCases fail construction with ErrSCMPayload; none of
+// the config maps here register a server, since construction performs no
+// network I/O.
+func TestNewGiteaSCMAdapter_RejectsInvalidEndpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range endpointRejectionCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a, err := NewGiteaSCMAdapter(map[string]any{
+				"api_key":  "test-token",
+				"endpoint": tt.endpoint,
+			})
+
+			assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+			if a != nil {
+				t.Errorf("NewGiteaSCMAdapter(endpoint=%q) adapter = %v, want nil", tt.endpoint, a)
+			}
+		})
+	}
+}
+
+// TestNewGiteaSCMAdapter_RedactsUserinfoInEndpointError proves the
+// credential disclosure this fix closes stays closed for the SCM adapter,
+// which previously accepted a userinfo-bearing endpoint silently.
+func TestNewGiteaSCMAdapter_RedactsUserinfoInEndpointError(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = "https://operator:s3cr3t@fd00::1:3000"
+
+	_, err := NewGiteaSCMAdapter(map[string]any{
+		"api_key":  "test-token",
+		"endpoint": endpoint,
+	})
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("NewGiteaSCMAdapter(endpoint=%q) error type = %T, want *domain.SCMError", endpoint, err)
+	}
+	if se.Kind != domain.ErrSCMPayload {
+		t.Errorf("NewGiteaSCMAdapter(endpoint=%q) SCMError.Kind = %q, want %q", endpoint, se.Kind, domain.ErrSCMPayload)
+	}
+	if !strings.Contains(se.Message, "fd00::1:3000") {
+		t.Errorf("NewGiteaSCMAdapter(endpoint=%q) message = %q, want it to contain the redacted host %q", endpoint, se.Message, "fd00::1:3000")
+	}
+	if strings.Contains(se.Message, "operator") || strings.Contains(se.Message, "s3cr3t") {
+		t.Errorf("NewGiteaSCMAdapter(endpoint=%q) message = %q, must not leak userinfo credentials", endpoint, se.Message)
+	}
+}
+
+// TestNewGiteaSCMAdapter_EmptyEndpointMessageIsPinned pins the pre-existing
+// empty-endpoint message: the shared httpkit.ParseEndpoint guard must not
+// have changed this operator-facing text.
+func TestNewGiteaSCMAdapter_EmptyEndpointMessageIsPinned(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGiteaSCMAdapter(map[string]any{"api_key": "test-token"})
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("NewGiteaSCMAdapter(missing endpoint) error type = %T, want *domain.SCMError", err)
+	}
+	if se.Kind != domain.ErrSCMPayload {
+		t.Errorf("NewGiteaSCMAdapter(missing endpoint) SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMPayload)
+	}
+	const want = "missing required config key: endpoint"
+	if se.Message != want {
+		t.Errorf("NewGiteaSCMAdapter(missing endpoint) message = %q, want %q", se.Message, want)
+	}
+}
+
 // --- SCM registration ---
 
 func TestGiteaSCMRegistration(t *testing.T) {
