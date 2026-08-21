@@ -121,7 +121,7 @@ empty, and names `GITHUB_TOKEN` in that warning when the environment variable is
 
 | Config field       | Value                                              |
 | ------------------ | -------------------------------------------------- |
-| `tracker.endpoint` | `https://api.github.com` by default; set to the instance URL for GHES, for example `https://github.example.com/api/v3`. Trailing slashes are trimmed |
+| `tracker.endpoint` | `https://api.github.com` by default; set to the instance URL for GHES, for example `https://github.example.com/api/v3`. Surrounding whitespace and trailing slashes are trimmed. A value that is not an absolute http(s) URL with a host is rejected at construction |
 | `tracker.api_key`  | A single PAT string, not `email:token` as Jira uses. Passed straight through as a Bearer token |
 | `tracker.project`  | `owner/repo`, for example `sortie-ai/sortie` |
 | `tracker.active_states` | Label names for active states, for example `["backlog", "in-progress", "review"]`. Lowercased at construction. Defaults to `issuekit.DefaultActiveLabelStates()` |
@@ -138,6 +138,31 @@ absent.
 halves are empty or whose second half contains another slash, returning `tracker_payload_error`
 with the message `project must be in owner/repo format`. The offline `sortie validate` pipeline
 reports the same shape through `registry.DiagOwnerRepoProject`.
+
+`resolveEndpoint` parses `tracker.endpoint` before any client is built. An empty or
+whitespace-only value falls back to `https://api.github.com`; anything else must parse as an
+absolute http or https URL carrying a host, or the constructor returns a payload error
+(`tracker_payload_error` for the tracker, `ci_payload_error` for the CI provider,
+`scm_payload_error` for the SCM adapter). All three constructors share the one helper, so an
+IPv6 literal written without brackets — `http://fd00::1:3000`, which `url.Parse` rejects for
+carrying more than one colon in an unbracketed host — is a configuration fault at startup
+rather than a transport error on the first request. The message carries the endpoint only
+after `httpkit.RedactURLUserinfo`, because `url.Parse` quotes the whole raw URL in its own
+error text and that text would otherwise republish any embedded credential.
+
+The offline `sortie validate` pipeline decides the same fault through `validateEndpoint`,
+which calls the same `resolveEndpoint`, so the offline verdict cannot drift from the startup
+verdict. It emits one GitHub-specific endpoint diagnostic:
+
+| Check | Severity | Condition |
+| --- | --- | --- |
+| `tracker.endpoint.invalid` | `error` | a non-empty `tracker.endpoint` is not an absolute http(s) URL with a host |
+
+The diagnostic message never echoes the configured value. Note that the CI provider and the
+SCM adapter read `endpoint` from `extensions.github` first and fall back to `tracker.endpoint`
+only when the reaction provider matches the tracker kind, so their endpoint is not always the
+one the tracker validate hook inspects — which is why the guard lives in each constructor and
+not in the validate hook alone.
 
 The constructor runs no credential or repository preflight. A bad token or an inaccessible
 repository surfaces on the first read, not at startup.
