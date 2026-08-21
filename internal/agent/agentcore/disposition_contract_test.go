@@ -17,11 +17,11 @@ import (
 const dispositionDomainImportPath = "github.com/sortie-ai/sortie/internal/domain"
 
 // dispositionAgentcoreImportPath is the import path the check resolves
-// the "agentcore" package qualifier from, so a call to one of the three
+// the "agentcore" package qualifier from, so a call to one of the four
 // Emit* helpers is caught regardless of the local import alias.
 const dispositionAgentcoreImportPath = "github.com/sortie-ai/sortie/internal/agent/agentcore"
 
-// dispositionForbiddenEventConstants are the four terminal-event
+// dispositionForbiddenEventConstants are the five terminal-event
 // constants a package other than agentcore or mock must not assign to
 // domain.TurnResult.ExitReason or domain.AgentEvent.Type directly; a
 // package that assigns any other domain.AgentEventType constant (a
@@ -31,14 +31,16 @@ var dispositionForbiddenEventConstants = map[string]bool{
 	"EventTurnFailed":         true,
 	"EventTurnCancelled":      true,
 	"EventTurnEndedWithError": true,
+	"EventTurnInputRequired":  true,
 }
 
-// dispositionForbiddenEmitFuncs are the three agentcore helpers reserved
+// dispositionForbiddenEmitFuncs are the four agentcore helpers reserved
 // for [FinalizeTurn] alone; no other package may call them directly.
 var dispositionForbiddenEmitFuncs = map[string]bool{
-	"EmitTurnCompleted": true,
-	"EmitTurnFailed":    true,
-	"EmitTurnCancelled": true,
+	"EmitTurnCompleted":     true,
+	"EmitTurnFailed":        true,
+	"EmitTurnCancelled":     true,
+	"EmitTurnInputRequired": true,
 }
 
 // dispositionContractAllowlist names the packages under internal/agent/
@@ -46,7 +48,11 @@ var dispositionForbiddenEmitFuncs = map[string]bool{
 // shared decision itself: FinalizeTurn is the one legal constructor of
 // these values. mock is exempt because it maps an operator-chosen
 // outcome string to a disposition, not parsed runtime evidence, so it
-// has nothing to decide.
+// has nothing to decide; for the human-input-required outcome
+// specifically, the exemption is unenforced rather than justified, since
+// the walk's filepath.SkipDir on this directory means no per-constant
+// check ever inspects mock's own source, and a private construction of
+// that outcome inside it would pass unnoticed.
 var dispositionContractAllowlist = map[string]string{
 	"agentcore": "the shared decision package itself; FinalizeTurn is the sole permitted constructor and emitter",
 	"mock":      "maps an operator-chosen outcome string, not parsed evidence, so it has nothing to decide",
@@ -277,10 +283,28 @@ func f() domain.AgentEvent {
 			wantCount: 1,
 		},
 		{
+			name: "forbidden human-input-required constant on TurnResult ExitReason is rejected",
+			src: preamble + `
+func f() domain.TurnResult {
+	return domain.TurnResult{ExitReason: domain.EventTurnInputRequired}
+}
+`,
+			wantCount: 1,
+		},
+		{
 			name: "direct EmitTurnFailed call is rejected",
 			src: preamble + `
 func f(emit func(domain.AgentEvent)) {
 	agentcore.EmitTurnFailed(emit, "boom", 0, domain.TokenUsage{})
+}
+`,
+			wantCount: 1,
+		},
+		{
+			name: "direct EmitTurnInputRequired call is rejected",
+			src: preamble + `
+func f(emit func(domain.AgentEvent)) {
+	agentcore.EmitTurnInputRequired(emit, "boom", domain.TokenUsage{})
 }
 `,
 			wantCount: 1,

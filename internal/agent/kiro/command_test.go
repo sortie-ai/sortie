@@ -126,14 +126,14 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 		want   passthroughConfig
 	}{
 		{
-			name:   "empty config yields zero-value defaults",
+			name:   "empty config defaults trust_all_tools to true",
 			config: map[string]any{},
-			want:   passthroughConfig{},
+			want:   passthroughConfig{TrustAllTools: true},
 		},
 		{
-			name:   "nil config yields zero-value defaults",
+			name:   "nil config defaults trust_all_tools to true",
 			config: nil,
-			want:   passthroughConfig{},
+			want:   passthroughConfig{TrustAllTools: true},
 		},
 		{
 			name: "allowlist fields extracted",
@@ -156,12 +156,12 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 		{
 			name:   "only model set",
 			config: map[string]any{"model": "claude-opus-4.7"},
-			want:   passthroughConfig{Model: "claude-opus-4.7"},
+			want:   passthroughConfig{Model: "claude-opus-4.7", TrustAllTools: true},
 		},
 		{
 			name:   "wrong-typed model takes zero-value default",
 			config: map[string]any{"model": 42},
-			want:   passthroughConfig{},
+			want:   passthroughConfig{TrustAllTools: true},
 		},
 		{
 			name:   "wrong-typed trust_all_tools takes false default",
@@ -181,7 +181,7 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 		{
 			name:   "wrong-typed agent takes zero-value default",
 			config: map[string]any{"agent": true},
-			want:   passthroughConfig{},
+			want:   passthroughConfig{TrustAllTools: true},
 		},
 	}
 
@@ -345,6 +345,39 @@ func TestBuildArgs_ResumeFollowsState(t *testing.T) {
 		args := buildArgs(&sessionState{resumeRequested: false}, 5, "p", passthroughConfig{})
 		assertNoToken(t, args, "--resume")
 	})
+}
+
+// TestBuildArgs_EmptyConfigDefaultsToTrustAllTools pins the trust posture
+// default: an empty or nil passthrough config, carried through
+// parsePassthroughConfig into buildArgs, must emit --trust-all-tools
+// rather than the empty-allowlist --trust-tools= a prior default would
+// have produced.
+func TestBuildArgs_EmptyConfigDefaultsToTrustAllTools(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		config map[string]any
+	}{
+		{name: "empty config", config: map[string]any{}},
+		{name: "nil config", config: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pt, err := parsePassthroughConfig(tt.config)
+			if err != nil {
+				t.Fatalf("parsePassthroughConfig(%v) error = %v, want nil", tt.config, err)
+			}
+
+			args := buildArgs(&sessionState{}, 1, "p", pt)
+
+			assertHasToken(t, args, "--trust-all-tools")
+			assertNoToken(t, args, "--trust-tools=")
+		})
+	}
 }
 
 func TestKiroRegistered(t *testing.T) {

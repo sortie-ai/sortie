@@ -8,7 +8,9 @@
 > Coverage: the flag surface, the JSONL event schema, session-id capture, autopilot behavior,
 > and session-state token accounting are anchored to v1.0.13. The `--additional-mcp-config`
 > file syntax and the exit-0 outcome of a config parse failure are anchored to v1.0.21 (April
-> 2026). No other surface has been re-observed on v1.0.21.
+> 2026). No other surface has been re-observed on v1.0.21. The behavior of tool scoping without
+> `--allow-all` (denies and continues, does not stall) is anchored to v1.0.80 (August 2026); see
+> "Permission and approval policy".
 >
 > Primary sources: [CLI command reference][cli-ref], [CLI programmatic reference][cli-prog],
 > [hooks configuration reference][hooks-ref], [about hooks][hooks-about],
@@ -164,7 +166,7 @@ Both cases are described in "Session continuation".
 
 | Flag                       | Description                                                                                                    | Adapter usage                                                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `--allow-all` / `--yolo`   | Grant all permissions: tools, paths, and URLs. Agent operates without any approval prompts.                    | Passed when no tool-scoping key is configured. Without it, and without scoped grants, the process hangs waiting for interactive approval. |
+| `--allow-all` / `--yolo`   | Grant all permissions: tools, paths, and URLs. Agent operates without any approval prompts.                    | Passed when no tool-scoping key is configured. Without it, a tool call the scoped grants do not cover is denied by the CLI's own policy and the run continues; observed on GitHub Copilot CLI 1.0.80, see "Permission and approval policy". |
 | `--allow-all-tools`        | Allow all tools without confirmation, but still require path/URL approval.                                      | Not passed by the adapter.                                                                                                              |
 | `--allow-all-paths`        | Disable path verification for file operations.                                                                  | Not passed by the adapter.                                                                                                              |
 | `--allow-all-urls`         | Disable URL verification for fetch operations.                                                                  | Not passed by the adapter.                                                                                                              |
@@ -530,8 +532,10 @@ Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-ap
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auto-approve all actions  | `--allow-all` / `--yolo` bypasses all permission prompts for tools, paths, and URLs. Passed under the condition described in "Permission flags".                                                         |
 | User input suppression    | `--no-ask-user` disables the `ask_user` tool ([`copilot --help`][cli-help-ref]). The agent makes decisions autonomously. Passed on every invocation, so a turn never ends in `turn_input_required`.       |
-| Autopilot permissions     | When entering autopilot mode without `--allow-all`, the CLI prompts for permissions. In headless mode (`-p`) that prompt stalls, so an operator who configures tool scoping must scope it wide enough to cover the run. |
+| Autopilot permissions     | When tool scoping displaces `--allow-all` and a tool call falls outside the scoped grants, the CLI denies it on its own and the session continues; it does not stall waiting for interactive approval. Observed on GitHub Copilot CLI 1.0.80, see below. |
 | Unsupported tool calls    | Copilot CLI handles tool routing internally. Unknown tools return failure and the session continues.                                                                                                      |
+
+Local probe (GitHub Copilot CLI 1.0.80, 2026-08-21): running `copilot -p ... --output-format json -s --autopilot --no-ask-user --deny-tool "shell"` (no `--allow-all`, no `--allow-all-tools`) against a prompt that requires a shell command produces a `tool.execution_complete` event with `success: false` and `error: {"message":"Permission to run this tool was denied due to the following rules: \`shell\`","code":"denied"}`, then the run continues to a normal `session.task_complete` and exits 0. The same result, with message `"Permission denied and could not request permission from user"`, occurs with only `--allow-tool "write"` configured (no `--deny-tool`) against a tool the allowlist excludes. Neither run stalled or timed out. `error.code` is `"denied"` only for this refusal; an unrelated tool failure (a missing file, a non-zero shell exit) reports `success: true` for a non-zero shell exit or a different `error.code` (e.g. `"failure"`), never `"denied"`.
 
 ### Permission system details
 

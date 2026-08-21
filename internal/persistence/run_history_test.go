@@ -581,4 +581,53 @@ func TestCountWorkerRunsCompletedSince(t *testing.T) {
 			t.Errorf("CountWorkerRunsCompletedSince(%q, %v) = %d, want 0", "ISS-CWR-NONE", since, got)
 		}
 	})
+
+	t.Run("needs_person row counts as a worker session", func(t *testing.T) {
+		t.Parallel()
+
+		const npIssueID = "ISS-CWR-NP"
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		appendOrFatal(t, s, countRun(1, npIssueID, "needs_person", "2026-04-01T09:30:00Z"))
+
+		got, err := s.CountWorkerRunsCompletedSince(context.Background(), npIssueID, since)
+		if err != nil {
+			t.Fatalf("CountWorkerRunsCompletedSince: %v", err)
+		}
+		if got != 1 {
+			t.Errorf("CountWorkerRunsCompletedSince(%q, %v) = %d, want 1 (a needs_person row is a worker session, not a CI verdict)", npIssueID, since, got)
+		}
+	})
+}
+
+// TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson pins
+// that a needs_person row, like a failed or cancelled row, is not a
+// success and is therefore excluded from reaction recovery.
+func TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	appendOrFatal(t, s, RunHistory{
+		IssueID: "ISS-NEEDS-PERSON", Identifier: "PROJ-NP", Attempt: 1,
+		AgentAdapter: "mock", Workspace: "/ws/PROJ-NP",
+		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
+		Status: "needs_person",
+	})
+	eligible := appendRecoveryRun(t, s, "ISS-OK-NP", "PROJ-OK-NP", 1, recentCompletedAt(2))
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 1", len(got))
+	}
+	if got[0].IssueID != eligible.IssueID {
+		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery().IssueID = %q, want %q", got[0].IssueID, eligible.IssueID)
+	}
 }

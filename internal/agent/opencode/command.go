@@ -65,20 +65,8 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, error) {
 		DeniedTools:              slices.Clone(typeutil.ExtractStringSlice(config["denied_tools"])),
 	}
 
-	allowed := make(map[string]struct{}, len(pt.AllowedTools))
-	for _, key := range pt.AllowedTools {
-		allowed[key] = struct{}{}
-	}
-
-	var conflicts []string
-	for _, key := range pt.DeniedTools {
-		if _, ok := allowed[key]; ok {
-			conflicts = append(conflicts, key)
-		}
-	}
-	if len(conflicts) > 0 {
-		slices.Sort(conflicts)
-		return passthroughConfig{}, fmt.Errorf("allowed_tools and denied_tools overlap: %s", strings.Join(conflicts, ", "))
+	if message := overlapMessage(pt.AllowedTools, pt.DeniedTools); message != "" {
+		return passthroughConfig{}, fmt.Errorf("%s", message)
 	}
 
 	return pt, nil

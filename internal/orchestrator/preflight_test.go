@@ -724,6 +724,139 @@ func TestValidateDispatchConfig_APIVersionPropagation(t *testing.T) {
 	})
 }
 
+// TestValidateDispatchConfig_AgentConfigValidation covers the agent-side
+// validation channel: a kind reached only through a dispatch rule, the
+// documented deterministic emission order across the default and
+// rule-referenced kinds, a registered-but-unreferenced kind drawing no
+// diagnostic, and the severity-to-diagnostic-kind mapping.
+func TestValidateDispatchConfig_AgentConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a kind reached only through a dispatch rule draws the same verdict the default kind would", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "rule-agent"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "rule-agent" {
+					return registry.AgentMeta{ValidateAgentConfig: func(fields registry.AgentConfigFields) []registry.ValidationDiag {
+						return []registry.ValidationDiag{{Severity: "error", Check: "rule.check", Message: "bad rule kind " + fields.Kind}}
+					}}, true
+				}
+				return registry.AgentMeta{}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireCheck(t, result, "rule.check")
+	})
+
+	t.Run("diagnostics are emitted in the documented deterministic order", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "kind-a", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Default: config.DispatchSelection{AgentKind: "kind-b"},
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "kind-c"}},
+						{Selection: config.DispatchSelection{AgentKind: "kind-a"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{ValidateAgentConfig: func(fields registry.AgentConfigFields) []registry.ValidationDiag {
+					return []registry.ValidationDiag{{Severity: "error", Check: fields.Kind + ".check", Message: fields.Kind}}
+				}}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var gotChecks []string
+		for _, e := range result.Errors {
+			if strings.HasSuffix(e.Check, ".check") {
+				gotChecks = append(gotChecks, e.Check)
+			}
+		}
+		want := []string{"kind-a.check", "kind-b.check", "kind-c.check"}
+		if len(gotChecks) != len(want) {
+			t.Fatalf("ValidateDispatchConfig() agent checks = %v, want exactly %v (default kind first, then rule kinds in rule order, deduplicated)", gotChecks, want)
+		}
+		for i, wantCheck := range want {
+			if gotChecks[i] != wantCheck {
+				t.Errorf("ValidateDispatchConfig() checks[%d] = %q, want %q", i, gotChecks[i], wantCheck)
+			}
+		}
+	})
+
+	t.Run("a registered kind the configuration never references draws no diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "unused-kind" {
+					return registry.AgentMeta{ValidateAgentConfig: func(_ registry.AgentConfigFields) []registry.ValidationDiag {
+						return []registry.ValidationDiag{{Severity: "error", Check: "unused.check", Message: "should never fire"}}
+					}}, true
+				}
+				return registry.AgentMeta{}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoCheck(t, result, "unused.check")
+	})
+
+	t.Run("warning severity maps to PreflightWarning, anything else maps to PreflightError", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{ValidateAgentConfig: func(_ registry.AgentConfigFields) []registry.ValidationDiag {
+					return []registry.ValidationDiag{
+						{Severity: "warning", Check: "agent.warn", Message: "advisory"},
+						{Severity: "error", Check: "agent.err", Message: "fatal"},
+						{Severity: "", Check: "agent.other", Message: "anything else maps to an error"},
+					}
+				}}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.warn")
+		requireCheck(t, result, "agent.err")
+		requireCheck(t, result, "agent.other")
+		requireNoWarnCheck(t, result, "agent.err")
+		requireNoWarnCheck(t, result, "agent.other")
+	})
+}
+
 // TestValidateDispatchConfig_DefaultedTrackerStates covers the collision
 // rules re-run against the effective state lists, the ones a tracker
 // adapter fills from its own fallback when the workflow list is empty.

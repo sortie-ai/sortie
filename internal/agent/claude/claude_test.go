@@ -396,6 +396,22 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 	}
 }
 
+// TestBuildArgs_DefaultConfigurationSkipsPermissions asserts that the full
+// configuration path, from an empty WORKFLOW.md claude-code sub-object
+// through buildArgs, passes --dangerously-skip-permissions. This is the
+// launch posture the refusal path in ParseLine assumes: no reply channel,
+// so every recognized request reads replyChannel = false.
+func TestBuildArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
+	t.Parallel()
+
+	pt := parsePassthroughConfig(map[string]any{})
+	got := buildArgs(&sessionState{claudeSessionID: "sess-default"}, 1, "p", pt)
+
+	if !slices.Contains(got, "--dangerously-skip-permissions") {
+		t.Errorf("buildArgs(default config) = %v, want --dangerously-skip-permissions present", got)
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	t.Parallel()
 
@@ -1481,6 +1497,99 @@ exit 0
 	if events[0].Type != domain.EventOtherMessage {
 		t.Errorf("unknown type mapped to %q, want %q", events[0].Type, domain.EventOtherMessage)
 	}
+}
+
+// TestRunTurn_PermissionDeniedContinuesTurn drives the wire shape observed
+// against a live claude CLI (v2.1.239): an undocumented system event with
+// subtype permission_denied and a tool_name field, produced when the
+// runtime denies a tool call on its own before the tool's own tool_result.
+// Because the tool named is not AskUserQuestion, this is a permission
+// request the runtime already refused, so the turn must continue rather
+// than end.
+func TestRunTurn_PermissionDeniedContinuesTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"perm-session","cwd":"/tmp"}
+{"type":"system","subtype":"permission_denied","tool_name":"Read"}
+{"type":"result","subtype":"success","result":"done","is_error":false,"usage":{"input_tokens":5,"output_tokens":5},"session_id":"perm-session"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q (turn must continue past the runtime's own refusal)", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	wantNotice := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused).NoticeWithDetail("")
+	var found bool
+	for _, e := range events {
+		if e.Type == domain.EventNotification && e.Message == wantNotice {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no EventNotification with Message = %q found among events %v", wantNotice, events)
+	}
+}
+
+// TestRunTurn_PermissionDeniedAskUserQuestionEndsAttempt drives the
+// adapter's own classification logic, not an observed runtime ending: given
+// a system/permission_denied event naming the built-in AskUserQuestion
+// tool, the adapter infers a genuine question rather than a request for
+// consent to act (AskUserQuestion resolving through this same event shape
+// was never itself captured on a live transcript) and ends the attempt with
+// the human-input-required outcome and the "an answer to a question"
+// detail.
+func TestRunTurn_PermissionDeniedAskUserQuestionEndsAttempt(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"ask-session","cwd":"/tmp"}
+{"type":"system","subtype":"permission_denied","tool_name":"AskUserQuestion"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+
+	dispositiontest.AssertDispositionContract(t, agentcore.HumanInputEvidence(detailAnswerToQuestion), result, err)
 }
 
 func TestRunTurn_NoOutputExitZero(t *testing.T) {

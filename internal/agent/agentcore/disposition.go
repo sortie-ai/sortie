@@ -12,6 +12,11 @@ import (
 // agent family.
 const zeroWorkMessageStem = "agent exited without producing output"
 
+// turnInputRequiredMessageStem is the shared diagnostic stem every
+// adapter's human-input-required row uses, so an operator can grep one
+// string across the whole agent family.
+const turnInputRequiredMessageStem = "agent asked for a decision only a person can make"
+
 // TerminalReport is the adapter-normalized end-of-turn report for one turn:
 // what the runtime said about the outcome, or what the adapter determined
 // when it aborted the turn itself.
@@ -34,6 +39,12 @@ const (
 	// TerminalCancelled means the orchestrator initiated the turn's
 	// cancellation, through context cancellation or StopSession.
 	TerminalCancelled
+
+	// TerminalHumanInputRequired means the runtime asked for a decision
+	// only a person could give and the shared posture ends the attempt.
+	// An adapter reports it after classifying the request; it never
+	// decides the consequence itself.
+	TerminalHumanInputRequired
 )
 
 // WorkReport is the adapter-normalized evidence that the model produced
@@ -73,8 +84,14 @@ type TurnEvidence struct {
 
 	// TerminalMessage describes the outcome in the runtime's own words, or
 	// in the adapter's when the adapter ended the turn. Carried onto both
-	// the emitted event and the returned error for a cancelled, failed, or
-	// successful terminal report. May be empty.
+	// the emitted event and the returned error for a cancelled, failed,
+	// successful, or human-input-required terminal report. May be empty.
+	//
+	// On the human-input-required report alone, the field is appended
+	// after the shared message stem rather than used as the whole
+	// message, and it MUST be a compile-time constant string that never
+	// interpolates stderr, stdout, a file path, or any other runtime
+	// value, for the same reason WorkDetail must be.
 	TerminalMessage string
 
 	// Cause is the underlying Go error the adapter recovered, copied onto
@@ -136,6 +153,10 @@ const (
 	// RowWorkPresent is the row selected when Terminal is TerminalAbsent,
 	// the process exited 0, and Work is WorkPresent.
 	RowWorkPresent
+
+	// RowHumanInputRequired is the row selected when Terminal is
+	// TerminalHumanInputRequired.
+	RowHumanInputRequired
 )
 
 // TurnDisposition is the normalized outcome of one turn.
@@ -179,7 +200,7 @@ type TurnMeta struct {
 
 // DecideTurn returns the normalized disposition for one agent turn. It is
 // pure: no I/O, no logging, no emission, no state. Every TurnEvidence value
-// maps to exactly one of seven rows, evaluated in order and returned on the
+// maps to exactly one of eight rows, evaluated in order and returned on the
 // first match.
 //
 // A positive terminal report is authoritative: when Terminal is
@@ -197,6 +218,18 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 			Row:          RowTerminalCancelled,
 			ExitReason:   domain.EventTurnCancelled,
 			ErrorKind:    domain.ErrTurnCancelled,
+			EventMessage: message,
+			ErrorMessage: message,
+		}
+	case TerminalHumanInputRequired:
+		message := turnInputRequiredMessageStem
+		if ev.TerminalMessage != "" {
+			message += ": " + ev.TerminalMessage
+		}
+		return TurnDisposition{
+			Row:          RowHumanInputRequired,
+			ExitReason:   domain.EventTurnInputRequired,
+			ErrorKind:    domain.ErrTurnInputRequired,
 			EventMessage: message,
 			ErrorMessage: message,
 		}
@@ -265,9 +298,9 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 }
 
 // FinalizeTurn applies DecideTurn to ev, emits the matching terminal event
-// through emit, logs the zero-work warning when the decision selects
-// RowZeroWork, and returns the paired TurnResult and error. The returned
-// *domain.AgentError is nil if and only if the disposition is
+// through emit, logs a warn message when the decision selects RowZeroWork
+// or RowHumanInputRequired, and returns the paired TurnResult and error.
+// The returned *domain.AgentError is nil if and only if the disposition is
 // domain.EventTurnCompleted.
 //
 // FinalizeTurn panics when emit is nil. It substitutes slog.Default() when
@@ -295,10 +328,15 @@ func FinalizeTurn(
 		EmitTurnFailed(emit, disposition.EventMessage, meta.APIDurationMS, meta.Usage)
 	case domain.EventTurnCancelled:
 		EmitTurnCancelled(emit, disposition.EventMessage, meta.Usage)
+	case domain.EventTurnInputRequired:
+		EmitTurnInputRequired(emit, disposition.EventMessage, meta.Usage)
 	}
 
 	if disposition.Row == RowZeroWork {
 		logger.Warn("agent exited without producing output, treating as failure")
+	}
+	if disposition.Row == RowHumanInputRequired {
+		logger.Warn("agent asked for a decision only a person can make, ending the attempt")
 	}
 
 	result := domain.TurnResult{

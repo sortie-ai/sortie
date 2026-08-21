@@ -25,7 +25,8 @@ import (
 
 func init() {
 	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
-		RequiresCommand: true,
+		RequiresCommand:     true,
+		ValidateAgentConfig: validateConfig,
 	})
 }
 
@@ -78,6 +79,16 @@ type sessionState struct {
 	apiCallStart     time.Time
 	emittedAPITiming bool
 	inFlight         *agentcore.ToolTracker
+
+	// humanInputEnds and humanInputDetail record a recognized request that
+	// only a person could answer, observed in ParseLine on a
+	// system/permission_denied event whose [agentcore.RefusalPosture] read
+	// EndAttempt true. OnFinalize applies the consequence, ahead of its
+	// normal disposition logic, because ParseLine runs while the
+	// subprocess is still active and cannot itself call
+	// [agentcore.FinalizeTurn].
+	humanInputEnds   bool
+	humanInputDetail string
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -101,6 +112,18 @@ func NewClaudeCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	pt := parsePassthroughConfig(config)
 	return &ClaudeCodeAdapter{passthrough: pt}, nil
 }
+
+// askUserQuestionTool is the built-in Claude Code tool name that carries a
+// genuine question to a person. A system/permission_denied event naming it
+// is a request for human input rather than a request for consent to act,
+// even though the runtime resolves both through the same denial mechanism.
+const askUserQuestionTool = "AskUserQuestion"
+
+// detailAnswerToQuestion names, for the operator, the specific ask behind
+// a recognized request for human input, appended to
+// [agentcore.RefusalPosture]'s notice stem and to the turn's terminal
+// message.
+const detailAnswerToQuestion = "an answer to a question"
 
 // StartSession validates the workspace path, resolves the claude binary, and
 // initializes per-session state. No subprocess is spawned; that happens in
@@ -155,6 +178,26 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					state.apiCallStart = time.Now()
 				case "api_retry":
 					agentcore.EmitNotification(emit, formatAPIRetry(event))
+				case "permission_denied":
+					// The runtime resolved this request on its own: --dangerously-
+					// skip-permissions (or a validated bypassPermissions mode)
+					// exposes no reply channel, so replyChannel is false on every
+					// row this event reads. AskUserQuestion is the one built-in
+					// tool that carries a genuine question rather than a request
+					// for consent to act; every other tool name is a permission
+					// request.
+					class := agentcore.ClassPermission
+					detail := ""
+					if event.ToolName == askUserQuestionTool {
+						class = agentcore.ClassHumanInput
+						detail = detailAnswerToQuestion
+					}
+					posture := agentcore.DecideHumanRequest(class, false, agentcore.AnswerRuntimeRefused)
+					if posture.EndAttempt {
+						state.humanInputEnds = true
+						state.humanInputDetail = detail
+					}
+					agentcore.EmitNotification(emit, posture.NoticeWithDetail(detail))
 				default:
 					agentcore.EmitNotification(emit, event.summary())
 				}
@@ -241,8 +284,22 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		GetUsage:     func() domain.TokenUsage { return state.acc.Snapshot() },
 		GetSessionID: func() string { return state.claudeSessionID },
 		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			lastResult, _ := lastParsed.(*rawEvent)
 			usage := state.acc.Snapshot()
+
+			// A recognized request that only a person could answer, observed
+			// in ParseLine, overrides the turn's normal success/failure
+			// disposition regardless of how the subprocess exited.
+			if state.humanInputEnds {
+				evidence := agentcore.HumanInputEvidence(state.humanInputDetail)
+				meta := agentcore.TurnMeta{
+					SessionID:     state.claudeSessionID,
+					Usage:         usage,
+					UsageMeasured: state.usageMeasured,
+				}
+				return agentcore.FinalizeTurn(emit, state.logger(), evidence, meta)
+			}
+
+			lastResult, _ := lastParsed.(*rawEvent)
 
 			// Work tests this turn's own output, not the run cumulative,
 			// which is non-zero on any second turn.
@@ -317,6 +374,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	state.apiCallStart = time.Time{}
 	state.emittedAPITiming = false
 	state.inFlight = agentcore.NewToolTracker()
+	state.humanInputEnds = false
+	state.humanInputDetail = ""
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }

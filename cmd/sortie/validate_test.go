@@ -1519,6 +1519,354 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 	}
 }
 
+// codexInteractiveApprovalPolicyWorkflow returns a workflow selecting the
+// codex agent with an approval_policy value that lets the agent stop and
+// ask for approval, used to trigger the agent-side offline verdict
+// without constructing any adapter.
+func codexInteractiveApprovalPolicyWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: codex
+  command: /usr/bin/true
+codex:
+  approval_policy: untrusted
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateAgentConfigOfflineVerdict drives the offline sortie validate
+// path against a workflow whose codex.approval_policy is set to an
+// interactive value, asserting valid: false, exit code 1, and the check
+// name codex.approval_policy.interactive, without constructing any
+// adapter (the offline path never calls a constructor). This exercises
+// one leg of the shared verdict channel; the startup and reload legs are
+// exercised elsewhere.
+func TestValidateAgentConfigOfflineVerdict(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, codexInteractiveApprovalPolicyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	foundErr := false
+	for _, e := range out.Errors {
+		if e.Check == "codex.approval_policy.interactive" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "codex.approval_policy.interactive")
+	}
+}
+
+// copilotToolScopingWorkflow returns a workflow selecting the copilot-cli
+// agent with allowed_tools configured, used to trigger the agent-side
+// offline verdict without constructing any adapter.
+func copilotToolScopingWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: copilot-cli
+  command: /usr/bin/true
+copilot-cli:
+  allowed_tools: bash
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateAgentConfigOfflineVerdict_CopilotToolScoping drives the
+// offline sortie validate path against a workflow whose copilot-cli
+// configuration displaces --allow-all, asserting valid: true (a warning
+// does not fail validation), exit code 0, and the check name
+// copilot-cli.tool_scoping.interactive, without constructing any adapter
+// (the offline path never calls a constructor). This exercises the same
+// verdict channel already established for codex, following the pattern
+// this project's validators report through: a warning-severity check
+// reports identically whether observed via sortie validate, at startup, or
+// on reload.
+func TestValidateAgentConfigOfflineVerdict_CopilotToolScoping(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, copilotToolScopingWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true (a warning must not fail validation)")
+	}
+
+	foundWarn := false
+	for _, w := range out.Warnings {
+		if w.Check == "copilot-cli.tool_scoping.interactive" {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "copilot-cli.tool_scoping.interactive")
+	}
+}
+
+// kiroUntrustedToolsWorkflow returns a workflow selecting the kiro agent
+// with a trust_tools allowlist and no trust_all_tools, which resolves to a
+// trust posture short of full trust, used to trigger the agent-side
+// offline verdict without constructing any adapter.
+func kiroUntrustedToolsWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: kiro
+  command: /usr/bin/true
+kiro:
+  trust_tools:
+    - read
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools drives the
+// offline sortie validate path against a workflow whose kiro configuration
+// resolves to a trust posture short of full trust, asserting valid: false,
+// exit code 1, and the check name kiro.trust_tools.untrusted, without
+// constructing any adapter (the offline path never calls a constructor).
+// This exercises the same verdict channel established for codex,
+// confirming kiro's validator is wired into agent registration and its
+// diagnostic actually reaches sortie validate, not only validateConfig
+// called directly.
+func TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, kiroUntrustedToolsWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	foundErr := false
+	for _, e := range out.Errors {
+		if e.Check == "kiro.trust_tools.untrusted" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "kiro.trust_tools.untrusted")
+	}
+}
+
+// opencodeToolOverlapWorkflow returns a workflow selecting the opencode
+// agent with allowed_tools and denied_tools naming the same tool, used to
+// trigger the agent-side offline verdict without constructing any
+// adapter.
+func opencodeToolOverlapWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: opencode
+  command: /usr/bin/true
+opencode:
+  allowed_tools:
+    - bash
+  denied_tools:
+    - bash
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateAgentConfigOfflineVerdict_OpenCodeToolOverlap drives the
+// offline sortie validate path against a workflow whose opencode
+// configuration names the same tool in both allowed_tools and
+// denied_tools, asserting valid: false, exit code 1, and the check name
+// opencode.allowed_tools.overlap, without constructing any adapter (the
+// offline path never calls a constructor). This is the regression guard
+// for a defect where opencode's agent registration omitted its
+// ValidateAgentConfig hook entirely: validateConfig was unit-tested and
+// passed because a direct call bypasses registration, but sortie validate
+// reached no diagnostic at all until the hook was wired in.
+func TestValidateAgentConfigOfflineVerdict_OpenCodeToolOverlap(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, opencodeToolOverlapWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	foundErr := false
+	for _, e := range out.Errors {
+		if e.Check == "opencode.allowed_tools.overlap" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "opencode.allowed_tools.overlap")
+	}
+}
+
+// claudeCodeInteractivePermissionModeWorkflow returns a workflow selecting
+// the claude-code agent with a permission_mode value outside the
+// non-asking allowlist, used to trigger the agent-side offline verdict
+// without constructing any adapter.
+func claudeCodeInteractivePermissionModeWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: claude-code
+  command: /usr/bin/true
+claude-code:
+  permission_mode: acceptEdits
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode drives
+// the offline sortie validate path against a workflow whose claude-code
+// permission_mode lets the agent stop and ask for approval, asserting
+// valid: false, exit code 1, and the check name
+// claude-code.permission_mode.interactive, without constructing any
+// adapter (the offline path never calls a constructor). This confirms
+// claude-code's validator is wired into agent registration and its
+// diagnostic actually reaches sortie validate, not only validateConfig
+// called directly.
+func TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, claudeCodeInteractivePermissionModeWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	foundErr := false
+	for _, e := range out.Errors {
+		if e.Check == "claude-code.permission_mode.interactive" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "claude-code.permission_mode.interactive")
+	}
+}
+
 // --- HTTP Server Always-On integration tests ---
 
 func TestValidateShortHelp(t *testing.T) {

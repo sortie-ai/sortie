@@ -150,6 +150,26 @@ type AgentMeta struct {
 	// RequiresCommand indicates the agent adapter requires a
 	// non-empty agent.command config value.
 	RequiresCommand bool
+
+	// ValidateAgentConfig is an optional function the preflight
+	// pipeline calls to run agent-specific config validation. Nil
+	// means no adapter-specific validation.
+	ValidateAgentConfig func(fields AgentConfigFields) []ValidationDiag
+}
+
+// AgentConfigFields holds the config values passed to agent adapter
+// validation functions. This is a plain data struct that avoids
+// coupling the registry package to the config package.
+type AgentConfigFields struct {
+	// Kind is the agent adapter kind whose configuration is under
+	// validation. It is the default agent.kind or a kind a dispatch
+	// rule routes to.
+	Kind string
+
+	// Passthrough is the effective config map an adapter of this kind
+	// receives at construction. Read-only: a validator MUST NOT
+	// mutate it.
+	Passthrough map[string]any
 }
 
 // Registry is a typed adapter registry mapping kind strings to

@@ -16,7 +16,36 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// TestNewKiroAdapter_TrustToolsConflictMatchesValidateConfig asserts that
+// NewKiroAdapter's constructor refusal and validateConfig's offline
+// diagnostic report byte-identical text for the same conflicting
+// configuration, so the two surfaces can never disagree.
+func TestNewKiroAdapter_TrustToolsConflictMatchesValidateConfig(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{
+		"trust_all_tools": true,
+		"trust_tools":     []any{"read", "grep"},
+	}
+
+	_, err := NewKiroAdapter(config)
+	if err == nil {
+		t.Fatal("NewKiroAdapter() error = nil, want trust_tools conflict error")
+	}
+
+	diags := validateConfig(registry.AgentConfigFields{Kind: "kiro", Passthrough: config})
+	diag := hasCheck(diags, "kiro.trust_tools.conflict")
+	if diag == nil {
+		t.Fatalf("validateConfig() missing check %q; got %+v", "kiro.trust_tools.conflict", diags)
+	}
+
+	if err.Error() != diag.Message {
+		t.Errorf("NewKiroAdapter() error = %q, validateConfig() diagnostic message = %q, want identical", err.Error(), diag.Message)
+	}
+}
 
 // fakeChatScript is the body of a fake kiro-cli that answers the StartSession
 // "whoami" canary and, for any other invocation (the "chat" turn), replays a

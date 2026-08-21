@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -255,6 +256,19 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
+	if outcome == "input_required" {
+		ev := agentcore.TurnEvidence{
+			Terminal:        agentcore.TerminalHumanInputRequired,
+			TerminalMessage: fmt.Sprintf("mock turn %s", outcome),
+		}
+		meta := agentcore.TurnMeta{
+			SessionID:     session.ID,
+			Usage:         usage,
+			UsageMeasured: m.reportTokenUsage,
+		}
+		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta)
+	}
+
 	exitReason, errKind, isError := outcomeToEvent(outcome)
 	params.OnEvent(domain.AgentEvent{
 		Type:      exitReason,
@@ -314,8 +328,6 @@ func outcomeToEvent(outcome string) (domain.AgentEventType, domain.AgentErrorKin
 		return domain.EventTurnCancelled, domain.ErrTurnCancelled, true
 	case "error":
 		return domain.EventTurnEndedWithError, domain.ErrPortExit, true
-	case "input_required":
-		return domain.EventTurnInputRequired, domain.ErrTurnInputRequired, true
 	default:
 		return domain.EventTurnCompleted, "", false
 	}

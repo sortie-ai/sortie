@@ -2586,14 +2586,18 @@ is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kiro.model` | string | _(absent)_ | Forwarded to `kiro-cli chat --model`. The `/model` slash command is unavailable headless, so the model MUST be pinned per turn (here or via `kiro-cli settings chat.defaultModel`). Use `kiro-cli chat --list-models --format json` to enumerate the account-specific model set. |
-| `kiro.trust_all_tools` | boolean | `false` | Adds `--trust-all-tools`, auto-approving every tool call. Use only inside a hardened sandbox. Mutually exclusive with `kiro.trust_tools`. |
-| `kiro.trust_tools` | list of strings | `[]` | Adds `--trust-tools=<names>` with the comma-joined list. An empty list trusts nothing (the adapter still passes `--trust-tools=`, which is the explicit no-trust mode). Mutually exclusive with `kiro.trust_all_tools`. Tool names include `read`, `write`, `glob`, `grep`, `shell`, `aws`, `web_search`, `web_fetch`, `code`, and `report`. |
+| `kiro.trust_all_tools` | boolean | `true` when neither trust key is set | Adds `--trust-all-tools`, auto-approving every tool call. Use only inside a hardened sandbox. Mutually exclusive with `kiro.trust_tools`. |
+| `kiro.trust_tools` | list of strings | _(absent)_ | Adds `--trust-tools=<names>` with the comma-joined list. Setting it is currently refused: any configuration that does not resolve to full trust draws an error, because what the CLI does when it meets an untrusted tool without a person present is unestablished. Mutually exclusive with `kiro.trust_all_tools`. Tool names include `read`, `write`, `glob`, `grep`, `shell`, `aws`, `web_search`, `web_fetch`, `code`, and `report`. |
 | `kiro.agent` | string | _(absent)_ | Forwarded to `kiro-cli chat --agent` to select a named Kiro context profile (custom agent). |
 
 **Validation rules:**
 
 - `kiro.trust_all_tools: true` and a non-empty `kiro.trust_tools` list MUST NOT
-  be set together. The adapter rejects this combination at construction time.
+  be set together. The adapter rejects this combination at construction time and
+  reports it identically from offline validation.
+- A configuration that does not resolve to full trust is refused. Leave both keys
+  unset, or set `kiro.trust_all_tools: true`, and run the agent inside a hardened
+  sandbox.
 
 **Environment variables consumed by the adapter:**
 

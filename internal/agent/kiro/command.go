@@ -30,24 +30,54 @@ type passthroughConfig struct {
 }
 
 // parsePassthroughConfig extracts Kiro-specific settings from the raw
-// config map. Missing or wrong-typed keys use zero-value defaults.
+// config map. Missing or wrong-typed keys use zero-value defaults, except
+// TrustAllTools, which [resolveTrustPosture] defaults to true rather than
+// false when the config sets neither trust key.
 //
 // It returns a non-nil error when both trust_all_tools is true and
 // trust_tools is non-empty, because the two trust modes are mutually
 // exclusive.
 func parsePassthroughConfig(config map[string]any) (passthroughConfig, error) {
+	trustAllTools, trustTools := resolveTrustPosture(config)
+
 	pt := passthroughConfig{
 		Model:         typeutil.StringFrom(config, "model"),
-		TrustAllTools: typeutil.BoolFrom(config, "trust_all_tools", false),
-		TrustTools:    slices.Clone(typeutil.ExtractStringSlice(config["trust_tools"])),
+		TrustAllTools: trustAllTools,
+		TrustTools:    trustTools,
 		Agent:         typeutil.StringFrom(config, "agent"),
 	}
 
 	if pt.TrustAllTools && len(pt.TrustTools) > 0 {
-		return passthroughConfig{}, fmt.Errorf("trust_all_tools and trust_tools are mutually exclusive")
+		return passthroughConfig{}, fmt.Errorf("%s", trustToolsConflictMessage)
 	}
 
 	return pt, nil
+}
+
+// resolveTrustPosture computes the effective trust_all_tools value and the
+// trust_tools allowlist from the raw config map. [validateConfig] calls it
+// too, so the offline verdict and the constructor read the same effective
+// posture.
+//
+// trust_all_tools resolves to true when the config sets neither
+// trust_all_tools nor trust_tools: kiro-cli's behavior on an untrusted tool
+// under --no-interactive is unestablished (see "Untrusted-tool behavior"
+// in docs/kiro-adapter-notes.md), and the conservative default trusts
+// every tool rather than risk a wait for an approval that never arrives.
+// Once either key is set explicitly, including an explicit false or an
+// empty trust_tools list, the configured value is used unmodified.
+func resolveTrustPosture(config map[string]any) (trustAllTools bool, trustTools []string) {
+	_, trustAllToolsSet := config["trust_all_tools"]
+	_, trustToolsSet := config["trust_tools"]
+
+	trustAllTools = typeutil.BoolFrom(config, "trust_all_tools", false)
+	trustTools = slices.Clone(typeutil.ExtractStringSlice(config["trust_tools"]))
+
+	if !trustAllToolsSet && !trustToolsSet {
+		trustAllTools = true
+	}
+
+	return trustAllTools, trustTools
 }
 
 // buildArgs constructs the CLI argument slice for one headless Kiro turn.

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractExitCode(t *testing.T) {
@@ -500,4 +502,52 @@ func TestEmitWarnLines_NilLogger(t *testing.T) {
 
 	// Must not panic when logger is nil — falls back to slog.Default().
 	EmitWarnLines([]string{"test line"}, nil)
+}
+
+// TestStderrCollector_DoneClosesOnlyAfterDrainComplete pins the contract
+// documented on [StderrCollector.Done]: the channel it returns closes only
+// once the drain goroutine has fully consumed the reader, so a caller that
+// waits on Done before reading the underlying pipe further (as
+// [exec.Cmd.Wait] does when it closes the pipe after reaping the child) is
+// guaranteed every line the reader ever produced is already in Lines().
+//
+// The reader is an [io.Pipe] whose writer withholds its final line and the
+// EOF-producing Close until the test releases them, so the assertion that
+// Done has not yet fired is a genuine channel block rather than a timing
+// guess.
+func TestStderrCollector_DoneClosesOnlyAfterDrainComplete(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	c := NewStderrCollector(pr, slog.Default())
+
+	if _, err := io.WriteString(pw, "first line\n"); err != nil {
+		t.Fatalf("pw.Write(first line) = %v", err)
+	}
+
+	select {
+	case <-c.Done():
+		t.Fatal("Done() closed before the writer sent the final line and closed the pipe")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	const finalLine = "final line released after the block"
+	if _, err := io.WriteString(pw, finalLine+"\n"); err != nil {
+		t.Fatalf("pw.Write(final line) = %v", err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatalf("pw.Close() = %v", err)
+	}
+
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done() did not close after the reader reached EOF")
+	}
+
+	got := c.Lines()
+	want := []string{"first line", finalLine}
+	if !slices.Equal(got, want) {
+		t.Fatalf("Lines() after Done() closed = %v, want %v", got, want)
+	}
 }

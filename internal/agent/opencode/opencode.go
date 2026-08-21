@@ -32,7 +32,8 @@ import (
 
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
-		RequiresCommand: true,
+		RequiresCommand:     true,
+		ValidateAgentConfig: validateConfig,
 	})
 }
 
@@ -308,15 +309,11 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				}
 
 				plainText := typeutil.TruncateRunes(parsed.PlainText, 500)
-				if isPermissionWarning(parsed.PlainText) {
-					agentcore.EmitNotification(emit, plainText)
-				} else {
-					emit(domain.AgentEvent{
-						Type:      domain.EventMalformed,
-						Timestamp: time.Now().UTC(),
-						Message:   plainText,
-					})
-				}
+				emit(domain.AgentEvent{
+					Type:      domain.EventMalformed,
+					Timestamp: time.Now().UTC(),
+					Message:   plainText,
+				})
 				continue
 			}
 
@@ -496,6 +493,13 @@ func (a *OpenCodeAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
 }
 
+// finalizeExitedTurn builds and emits the turn's terminal disposition once
+// the subprocess has exited. It also scans the turn's stderr lines for a
+// denied-permission warning, which the runtime writes to stderr rather than
+// stdout; recognizing it here rather than mid-turn means the corresponding
+// notification arrives at turn end rather than as it happens, and it does
+// not reset the read timer the way a stdout line does, neither of which is
+// a regression because the warning has never actually reached stdout.
 func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *sessionState, runtime *turnRuntime, emit func(domain.AgentEvent), exit waitResult) (domain.TurnResult, error) {
 	window := int64(0)
 	if !state.createdSession {
@@ -524,6 +528,13 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 
 	clearActive(state, runtime)
 	stderrLines := runtime.stderrCollector.Lines()
+	for _, line := range stderrLines {
+		if !isPermissionWarning(line) {
+			continue
+		}
+		posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerRuntimeRefused)
+		agentcore.EmitNotification(emit, posture.Notice)
+	}
 	sessionID := state.currentSessionID()
 
 	// Work reflects this turn's own parsed parts, not the run-cumulative
@@ -664,11 +675,14 @@ func startOpenCodeReader(stdout io.Reader, runtime *turnRuntime) {
 
 func startWait(runtime *turnRuntime, cmd *exec.Cmd) {
 	go func() {
-		// Wait for the reader goroutine to finish before calling
-		// cmd.Wait(). cmd.Wait() closes the stdout pipe read end, which
-		// races with the scanner in startOpenCodeReader if called before
-		// the reader has drained all buffered output.
+		// Wait for both reader goroutines to finish before calling
+		// cmd.Wait(). cmd.Wait() closes the stdout and stderr pipe read
+		// ends after reaping the process, which races with a scanner
+		// still reading buffered output on either stream if called
+		// first; for stderr this can silently drop a permission-refusal
+		// warning that finalizeExitedTurn depends on.
 		<-runtime.readerDone
+		<-runtime.stderrCollector.Done()
 
 		waitErr := cmd.Wait()
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members

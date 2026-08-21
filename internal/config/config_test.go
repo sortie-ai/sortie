@@ -2714,6 +2714,143 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 	})
 }
 
+// --- AgentAdapterConfig tests ---
+
+// TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions asserts that
+// AgentAdapterConfig returns exactly the five documented keys when
+// cfg.Extensions carries no sub-object for kind.
+func TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{
+		Agent: AgentConfig{
+			Kind:           "claude-code",
+			Command:        "claude",
+			TurnTimeoutMS:  3600000,
+			ReadTimeoutMS:  5000,
+			StallTimeoutMS: 300000,
+		},
+	}
+
+	got := AgentAdapterConfig(cfg, "claude-code")
+
+	want := map[string]any{
+		"kind":             "claude-code",
+		"command":          "claude",
+		"turn_timeout_ms":  3600000,
+		"read_timeout_ms":  5000,
+		"stall_timeout_ms": 300000,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("AgentAdapterConfig() = %v (len %d), want exactly %d keys: %v", got, len(got), len(want), want)
+	}
+	for key, wantVal := range want {
+		if gotVal, ok := got[key]; !ok || gotVal != wantVal {
+			t.Errorf("AgentAdapterConfig()[%q] = %v, want %v", key, gotVal, wantVal)
+		}
+	}
+}
+
+// TestAgentAdapterConfig_KindParameterOverridesAgentKind asserts that the
+// "kind" key carries the kind parameter rather than cfg.Agent.Kind, so a
+// dispatch-rule-routed kind resolves correctly.
+func TestAgentAdapterConfig_KindParameterOverridesAgentKind(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{Agent: AgentConfig{Kind: "claude-code"}}
+
+	got := AgentAdapterConfig(cfg, "codex")
+
+	if got["kind"] != "codex" {
+		t.Errorf(`AgentAdapterConfig(cfg, "codex")["kind"] = %v, want "codex"`, got["kind"])
+	}
+}
+
+// TestAgentAdapterConfig_ExtensionCollisionWithOrchestratorOnlyFieldSurvives
+// asserts that an extension key whose name collides with an
+// orchestrator-only field (max_turns is consumed through the typed
+// AgentConfig, never placed in this map) survives the merge untouched,
+// proving the exclusion the godoc documents actually holds rather than
+// being shadowed by a pre-set key of the same name.
+func TestAgentAdapterConfig_ExtensionCollisionWithOrchestratorOnlyFieldSurvives(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{
+		Agent: AgentConfig{
+			Kind:     "codex",
+			Command:  "codex",
+			MaxTurns: 20,
+		},
+		Extensions: map[string]any{
+			"codex": map[string]any{
+				"max_turns":       float64(5),
+				"approval_policy": "never",
+			},
+		},
+	}
+
+	got := AgentAdapterConfig(cfg, "codex")
+
+	if got["max_turns"] != float64(5) {
+		t.Errorf(`AgentAdapterConfig()["max_turns"] = %v, want the extension value 5 (not shadowed by cfg.Agent.MaxTurns)`, got["max_turns"])
+	}
+	if got["approval_policy"] != "never" {
+		t.Errorf(`AgentAdapterConfig()["approval_policy"] = %v, want "never"`, got["approval_policy"])
+	}
+
+	// The exact key set: the five documented keys plus the two merged
+	// extension keys, nothing else.
+	wantKeys := []string{"kind", "command", "turn_timeout_ms", "read_timeout_ms", "stall_timeout_ms", "max_turns", "approval_policy"}
+	if len(got) != len(wantKeys) {
+		t.Fatalf("AgentAdapterConfig() = %v (len %d), want exactly the keys %v", got, len(got), wantKeys)
+	}
+	for _, key := range wantKeys {
+		if _, ok := got[key]; !ok {
+			t.Errorf("AgentAdapterConfig() missing key %q; got %v", key, got)
+		}
+	}
+}
+
+// TestAgentAdapterConfig_DoesNotOverwriteDocumentedKeys asserts that an
+// extension sub-object cannot shadow any of the five documented keys:
+// the merge only fills keys absent from the map built from cfg.Agent's
+// typed fields.
+func TestAgentAdapterConfig_DoesNotOverwriteDocumentedKeys(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{
+		Agent: AgentConfig{Kind: "codex", Command: "codex"},
+		Extensions: map[string]any{
+			"codex": map[string]any{
+				"command": "should-not-win",
+			},
+		},
+	}
+
+	got := AgentAdapterConfig(cfg, "codex")
+
+	if got["command"] != "codex" {
+		t.Errorf(`AgentAdapterConfig()["command"] = %v, want "codex" (the typed field, not the extension override)`, got["command"])
+	}
+}
+
+// TestAgentAdapterConfig_FreshMapPerCall asserts the returned map is
+// freshly allocated on every call: mutating one call's result must not
+// affect another.
+func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{Agent: AgentConfig{Kind: "codex", Command: "codex"}}
+
+	first := AgentAdapterConfig(cfg, "codex")
+	first["command"] = "mutated"
+
+	second := AgentAdapterConfig(cfg, "codex")
+	if second["command"] != "codex" {
+		t.Errorf(`AgentAdapterConfig() second call ["command"] = %v, want "codex" (unaffected by mutating the first call's map)`, second["command"])
+	}
+}
+
 // --- buildWorkspaceConfig / workspace.retention_days tests ---
 
 func TestBuildWorkspaceConfig(t *testing.T) {

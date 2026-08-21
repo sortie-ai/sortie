@@ -77,8 +77,7 @@ native protocol events to this normalized set:
 - `turn_failed`: turn finished with failure
 - `turn_cancelled`: turn was cancelled
 - `turn_ended_with_error`: turn ended due to an error condition
-- `turn_input_required`: agent requested user input (hard failure per policy)
-- `approval_auto_approved`: approval request was auto-resolved
+- `turn_input_required`: agent asked for a decision only a person could give, ending the attempt under the shared refusal posture
 - `unsupported_tool_call`: agent requested an unsupported tool
 - `token_usage`: normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
 
@@ -143,20 +142,19 @@ sessions.
 
 #### 10.4.1 Approval policy
 
-Approval, sandbox, and user-input behavior is implementation-defined.
+Every agent run is unattended: no person is present to grant a permission or answer a question
+while a run is in progress. A request for consent to act is refused in the continuable form the
+runtime's own protocol offers, where the runtime offers one, so the turn can proceed by another
+route; a request addressed to a person ends the attempt with the `turn_input_required` outcome.
+The posture is uniform across every agent adapter and is not an operator-configurable setting.
 
 Policy requirements:
 
-- Each deployment MUST document its chosen approval, sandbox, and operator-confirmation posture.
-- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely.
-  Sortie MUST either satisfy them, surface them to an operator, auto-resolve them, or fail the
-  run according to its documented policy.
-
-Example high-trust behavior:
-
-- Auto-approve command execution approvals for the session.
-- Auto-approve file-change approvals for the session.
-- Treat user-input-required turns as hard failure.
+- Each deployment enforces the same refusal posture: a permission request is refused rather than
+  granted, and a request for human input ends the attempt rather than stalling.
+- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely. A
+  configuration value that would let the agent stop and wait for a person is refused before the
+  run, rather than satisfied when it arrives mid-turn.
 
 Unsupported dynamic tool calls:
 
@@ -164,9 +162,10 @@ Unsupported dynamic tool calls:
   adapter returns a tool failure response and continues the session.
 - This is adapter-level behavior; the orchestrator does not intercept tool call routing.
 
-Hard failure on user input requirement:
+Ending on a request only a person could answer:
 
-- If the agent requests user input, fail the run attempt immediately.
+- If the agent asks for something only a person could give, end the run attempt immediately with
+  the `turn_input_required` outcome, distinct from a generic turn failure.
 
 #### 10.4.2 Tool interface contract
 
@@ -316,7 +315,7 @@ Availability: registered when the database path and issue ID are present in the 
 On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
 Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
 recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
-`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, or `ci_failed`), and
+`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, `ci_failed`, or `needs_person`), and
 `error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
 from the envelope's `error` object.
 
@@ -623,19 +622,23 @@ so that a new adapter inherits it rather than re-deriving it.
 The rule is evaluated as an ordered table. The first matching row decides the turn:
 
 1. The runtime reported the turn cancelled (an orchestrator-initiated cancellation): `turn_cancelled`.
-2. The runtime reported the turn failed, or the adapter itself ended the turn on its own
+2. The adapter recognized a request only a person could answer that the turn cannot continue
+   past: `turn_input_required`. It outranks every failure row below, so such a request is
+   never reported as a generic turn failure, and it ranks under cancellation, so a shutdown
+   already in progress still reports itself.
+3. The runtime reported the turn failed, or the adapter itself ended the turn on its own
    determination (a protocol violation, a timeout waiting for the first response, or a transport
    failure): `turn_failed`, with the error kind the runtime or the adapter supplied.
-3. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
+4. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
    authoritative and is never second-guessed by counting output.
-4. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
+5. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
    persistent session with no per-turn exit): `turn_failed`.
-5. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
+6. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
    `turn_failed`.
-6. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
+7. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
    model produced anything this turn: `turn_failed`. Exit code zero is never by itself a success
    signal; an adapter with nothing positive to offer reports a failed turn.
-7. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
+8. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
    model produced something this turn: `turn_completed`.
 
 Extracting the runtime's own report and the per-turn work evidence from a vendor's wire format is
@@ -651,7 +654,7 @@ and diverge from the rule's letter while obeying its intent:
   currency: the credits trailer on stderr is the positive success signal, and its absence with a
   zero exit code is the adapter's only evidence of nothing produced.
 - Codex's persistent per-session subprocess has no per-turn process exit to observe, so the rule's
-  zero-work row (row 6 above) is structurally unreachable for it: an absent turn-completion report
+  zero-work row (row 7 above) is structurally unreachable for it: an absent turn-completion report
   is already a failure on its own terms.
 
 `turn_ended_with_error` remains a documented normalized event type (Section 10.3), reserved for a

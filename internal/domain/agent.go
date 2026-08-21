@@ -32,13 +32,10 @@ const (
 	// error condition.
 	EventTurnEndedWithError AgentEventType = "turn_ended_with_error"
 
-	// EventTurnInputRequired indicates the agent requested user
-	// input. This is a hard failure per policy.
+	// EventTurnInputRequired indicates the agent asked for a decision
+	// only a person could give. It is a declared, non-retryable ending
+	// the shared agentcore layer produces, not a policy footnote.
 	EventTurnInputRequired AgentEventType = "turn_input_required"
-
-	// EventApprovalAutoApproved indicates an approval request was
-	// auto-resolved by the adapter.
-	EventApprovalAutoApproved AgentEventType = "approval_auto_approved"
 
 	// EventUnsupportedToolCall indicates the agent requested an
 	// unsupported tool.

@@ -40,7 +40,8 @@ import (
 
 func init() {
 	registry.Agents.RegisterWithMeta("kiro", NewKiroAdapter, registry.AgentMeta{
-		RequiresCommand: true,
+		RequiresCommand:     true,
+		ValidateAgentConfig: validateConfig,
 	})
 }
 

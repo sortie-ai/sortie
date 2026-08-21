@@ -340,6 +340,20 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	status := mapExitKindToStatus(workerResult.ExitKind)
 	runError := workerResult.Error
+
+	// A needs-a-person ending is reported as its own status only when the
+	// worker's own error, not a shutdown racing it, is what stopped the
+	// run. mapExitKindToStatus already reports a live-context cancel as
+	// "cancelled" rather than "failed", so this guard alone keeps a
+	// shutdown from being relabelled. The error is always wrapped by the
+	// worker, never held directly, so it MUST be unwrapped rather than
+	// asserted or switched on.
+	if status == "failed" {
+		if agentErr, ok := errors.AsType[*domain.AgentError](runError); ok && agentErr.Kind == domain.ErrTurnInputRequired {
+			status = "needs_person"
+		}
+	}
+
 	if evidenceWithheld {
 		status = "failed"
 		runError = evidenceErr
