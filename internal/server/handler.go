@@ -132,12 +132,10 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 		now := nowArgs[0]
 		elapsedMs := now.Sub(e.StartedAt).Milliseconds()
 		if elapsedMs > 0 && e.ToolTimeMs > 0 {
-			pct := float64(e.ToolTimeMs) / float64(elapsedMs) * 100.0
-			resp.ToolTimePercent = &pct
+			resp.ToolTimePercent = new(float64(e.ToolTimeMs) / float64(elapsedMs) * 100.0)
 		}
 		if elapsedMs > 0 && e.APITimeMs > 0 {
-			pct := float64(e.APITimeMs) / float64(elapsedMs) * 100.0
-			resp.APITimePercent = &pct
+			resp.APITimePercent = new(float64(e.APITimeMs) / float64(elapsedMs) * 100.0)
 		}
 	}
 
@@ -379,16 +377,14 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 
 	for _, e := range snap.Running {
 		if e.Identifier == identifier {
-			re := toRunningEntryResponse(e, snap.GeneratedAt)
-			runEntry = &re
+			runEntry = new(toRunningEntryResponse(e, snap.GeneratedAt))
 			break
 		}
 	}
 
 	for _, e := range snap.Retrying {
 		if e.Identifier == identifier {
-			re := toRetryEntryResponse(e)
-			retryEntry = &re
+			retryEntry = new(toRetryEntryResponse(e))
 			break
 		}
 	}

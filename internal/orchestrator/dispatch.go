@@ -401,8 +401,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 
 	var attemptCopy *int
 	if attempt != nil {
-		v := *attempt
-		attemptCopy = &v
+		attemptCopy = new(*attempt)
 	}
 
 	state.Claimed[issue.ID] = struct{}{}

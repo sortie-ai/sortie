@@ -384,8 +384,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		if marshalErr != nil {
 			log.Warn("failed to marshal review metadata", slog.Any("error", marshalErr))
 		} else {
-			s := string(data)
-			runHistory.ReviewMetadata = &s
+			runHistory.ReviewMetadata = new(string(data))
 		}
 	}
 	runHistoryPersisted := true
@@ -1335,8 +1334,7 @@ func errorStringPtr(err error) *string {
 	if err == nil {
 		return nil
 	}
-	s := err.Error()
-	return &s
+	return new(err.Error())
 }
 
 func stringPtr(s string) *string {

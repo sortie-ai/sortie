@@ -292,8 +292,7 @@ func buildDashboardData(
 		data.EstimatedCostLabel = "Active Est. Cost (USD)"
 	}
 	if aggregateCostSet {
-		s := FormatCost(aggregateCost)
-		data.EstimatedCostUSD = &s
+		data.EstimatedCostUSD = new(FormatCost(aggregateCost))
 	}
 
 	// Copy and sort retry entries by DueAtMS ascending before mapping.

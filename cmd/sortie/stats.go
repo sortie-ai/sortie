@@ -217,16 +217,13 @@ func parseRangeBound(raw string) (*time.Time, error) {
 		return nil, nil
 	}
 	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		bound := t.UTC()
-		return &bound, nil
+		return new(t.UTC()), nil
 	}
 	if t, err := time.Parse("2006-01-02", raw); err == nil {
-		bound := t.UTC()
-		return &bound, nil
+		return new(t.UTC()), nil
 	}
 	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
-		bound := statsNow().UTC().Add(-d)
-		return &bound, nil
+		return new(statsNow().UTC().Add(-d)), nil
 	}
 	return nil, fmt.Errorf(
 		"invalid range bound %q: accepts an RFC3339 timestamp (2026-07-01T00:00:00Z), "+
@@ -435,12 +432,9 @@ func durationStats(samples []float64) statsDuration {
 		sum += s
 	}
 
-	p50 := percentile(sorted, 50)
-	p95 := percentile(sorted, 95)
-	mean := round1(sum / float64(len(sorted)))
-	d.P50 = &p50
-	d.P95 = &p95
-	d.Mean = &mean
+	d.P50 = new(percentile(sorted, 50))
+	d.P95 = new(percentile(sorted, 95))
+	d.Mean = new(round1(sum / float64(len(sorted))))
 	return d
 }
 
@@ -468,12 +462,10 @@ func (a *statsAggregator) report(
 		ByTemplate:   []statsGroup{},
 	}
 	if since != nil {
-		s := since.UTC().Format(time.RFC3339)
-		rpt.Since = &s
+		rpt.Since = new(since.UTC().Format(time.RFC3339))
 	}
 	if until != nil {
-		u := until.UTC().Format(time.RFC3339)
-		rpt.Until = &u
+		rpt.Until = new(until.UTC().Format(time.RFC3339))
 	}
 	if full {
 		rpt.ByRule = a.groupSlice(a.byRule, full)
@@ -498,22 +490,19 @@ func (a *statsAggregator) summary(full bool) statsSummary {
 		s.SuccessRate = round4(float64(s.Succeeded) / float64(s.Runs))
 	}
 	if full && s.Succeeded > 0 {
-		mean := round2(float64(a.total.succeededTurns) / float64(s.Succeeded))
-		s.MeanTurnsSucceeded = &mean
+		s.MeanTurnsSucceeded = new(round2(float64(a.total.succeededTurns) / float64(s.Succeeded)))
 	}
 	if full {
 		s.TokensUnmeasuredRuns = a.total.unmeasuredRuns
 	}
 	if full && a.total.measuredRuns > 0 {
-		tokens := a.total.tokens
-		s.Tokens = &tokens
+		s.Tokens = new(a.total.tokens)
 	}
 	if full && a.total.pricedRuns > 0 {
 		cost := round2(a.total.costUSD)
 		s.CostUSD = &cost
 		if a.total.succeededMeasured > 0 {
-			perRun := round2(cost / float64(a.total.succeededMeasured))
-			s.CostPerSucceededRunUSD = &perRun
+			s.CostPerSucceededRunUSD = new(round2(cost / float64(a.total.succeededMeasured)))
 		}
 	}
 	return s
@@ -552,19 +541,16 @@ func (a *statsAggregator) groupStat(g *statsGroupAccum, full bool) statsGroup {
 		stat.Share = round4(float64(g.runs) / float64(a.total.runs))
 	}
 	if full {
-		mean := round2(float64(g.turnSum) / float64(g.runs))
-		stat.MeanTurns = &mean
+		stat.MeanTurns = new(round2(float64(g.turnSum) / float64(g.runs)))
 		stat.TokensUnmeasuredRuns = g.unmeasuredRuns
 		if g.measuredRuns > 0 {
-			tokens := g.tokens
-			stat.Tokens = &tokens
+			stat.Tokens = new(g.tokens)
 		}
 		if g.pricedRuns > 0 {
 			cost := round2(g.costUSD)
 			stat.CostUSD = &cost
 			if g.succeededMeasured > 0 {
-				perRun := round2(cost / float64(g.succeededMeasured))
-				stat.CostPerSucceededRunUSD = &perRun
+				stat.CostPerSucceededRunUSD = new(round2(cost / float64(g.succeededMeasured)))
 			}
 		}
 	}
@@ -581,8 +567,7 @@ func (a *statsAggregator) selfReviewReport() *statsSelfReview {
 		UnparsedRuns:     a.selfReview.unparsedRuns,
 	}
 	if a.selfReview.runsWithMetadata > 0 {
-		mean := round2(float64(a.selfReview.iterationSum) / float64(a.selfReview.runsWithMetadata))
-		sr.MeanIterations = &mean
+		sr.MeanIterations = new(round2(float64(a.selfReview.iterationSum) / float64(a.selfReview.runsWithMetadata)))
 	}
 	for verdict, count := range a.selfReview.byVerdict {
 		sr.ByFinalVerdict = append(sr.ByFinalVerdict, statsVerdictCount{Verdict: verdict, Runs: count})
