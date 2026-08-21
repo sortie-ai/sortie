@@ -20,6 +20,9 @@ type rawEvent struct {
 	SessionID string `json:"session_id,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
 
+	// System/permission_denied fields.
+	ToolName string `json:"tool_name,omitempty"`
+
 	// Result fields.
 	Result      string  `json:"result,omitempty"`
 	IsError     bool    `json:"is_error,omitempty"`

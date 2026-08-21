@@ -6,9 +6,11 @@
 > Coverage: the flag surface is anchored to `claude --help` on CLI v2.1.76. The `stream-json`
 > message shapes, result fields, permission modes, session storage layout, hook behavior,
 > OpenTelemetry names, and SDK surface come from Anthropic's Claude Code documentation read in
-> March 2026 and have not been re-observed against a later binary. Statements about Sortie's own
-> code name the Go symbol that implements them and were verified against the tree. Unsettled
-> items are collected under "Open questions"; sources are listed under "Sources".
+> March 2026 and have not been re-observed against a later binary. The `system/permission_denied`
+> event and its refusal recognition path are anchored to CLI v2.1.239 (August 2026); see
+> "Refusing requests only a person could answer". Statements about Sortie's own code name the Go
+> symbol that implements them and were verified against the tree. Unsettled items are collected
+> under "Open questions"; sources are listed under "Sources".
 
 ---
 
@@ -216,6 +218,7 @@ originating tool name and the execution duration; an uncorrelated result is repo
 | `init`             | First message. Contains `session_id` and `cwd`.        | Adopt `session_id`, emit `session_started`, start the API-timing clock          |
 | `api_retry`        | API retry in progress.                                 | `notification` formatted by `formatAPIRetry`                                    |
 | `compact_boundary` | Context was compacted (conversation truncated to fit). | `notification` carrying `system/compact_boundary`                               |
+| `permission_denied` | Undocumented by Anthropic; observed when the runtime has denied a tool call on its own, before the tool's `tool_result`. Carries `tool_name` and, sometimes, `decision_reason_type`/`decision_reason`. | See "Refusing requests only a person could answer" |
 
 **Init/system event:**
 
@@ -549,7 +552,7 @@ Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-ap
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auto-approve commands     | `--dangerously-skip-permissions` bypasses all prompts.                                                                                                             |
 | Auto-approve file changes | Same flag covers file edits.                                                                                                                                       |
-| User input required       | The `-p` flag runs non-interactively, so no prompt is expected. A process that blocks anyway produces no output and is cut off by orchestrator-side cancellation.   |
+| User input required       | The `-p` flag runs non-interactively, so no prompt is expected. A call the runtime would otherwise have to prompt for is denied instead; see "Refusing requests only a person could answer". |
 | Unsupported tool calls    | Claude Code handles tool routing internally. Unknown MCP tools return failure and the session continues.                                                            |
 
 `--dangerously-skip-permissions` allows arbitrary command execution. Per Anthropic's guidance it
@@ -572,6 +575,51 @@ instead of blanket bypass sets `claude-code.permission_mode`, which replaces the
 | `bypassPermissions` | All tools run without asking. Cannot run as root on Unix.                    |
 | `auto`              | Automatic permission handling.                                               |
 
+### Refusing requests only a person could answer
+
+The adapter passes `--dangerously-skip-permissions` by default and exposes no reply channel, so
+every request it recognizes here reads as unanswerable by this run. Two request classes are
+distinguished on the wire.
+
+**A permission request the runtime already resolved on its own.** A tool call the runtime would
+otherwise have to ask about, most commonly a write or read outside the workspace's allowed
+directories, produces an undocumented `system` event with `subtype: "permission_denied"` before the
+tool's own `tool_result`, observed on CLI v2.1.239:
+
+```json
+{"type":"system","subtype":"permission_denied","tool_name":"Read","tool_use_id":"toolu_...","decision_reason_type":"workingDir","decision_reason":"Path is outside allowed working directories","message":"Claude requested permissions to read from ..., but you haven't granted it yet.","session_id":"..."}
+```
+
+The turn continues after this event; a later `assistant` message picks another route. This is
+observed even under `--dangerously-skip-permissions`, because workspace-directory containment is
+enforced independently of the permission mode. `decision_reason_type` and `decision_reason` are
+present on some denials and absent on others; neither is required to recognize the event, and
+neither is documented by Anthropic. The paired `user` event's `tool_result` block carries
+`is_error: true` and, on this denial path only, a `tool_result_meta` entry with
+`"non_execution_kind":"user-rejected"`; the terminal `result` event's `permission_denials` array
+also lists the denial. None of the three appears for an unrelated tool failure such as a missing
+file.
+
+**A request for human input.** The built-in `AskUserQuestion` tool carries a genuine question
+rather than a request for consent to act. Anthropic's own documentation states that this tool "is
+denied even when an allow rule matches" under `dontAsk` mode, and that under `-p
+--dangerously-skip-permissions` specifically, "the few calls that would still prompt are denied
+instead" of stalling; `AskUserQuestion` is named among those calls. The adapter therefore treats a
+`system/permission_denied` event naming `tool_name: "AskUserQuestion"` as a request for human
+input rather than a permission request, ending the attempt with `turn_input_required`. This
+specific combination (`AskUserQuestion` resolving through the same `permission_denied` event
+shape observed above) was not itself driven end to end on the installed CLI: getting the model to
+call that tool under a non-interactive session that excludes it from the discoverable tool set
+proved impractical, so this path is inferred from the uniform shape every other observed denial
+uses plus the documented statement above, not from a captured transcript naming
+`AskUserQuestion`.
+
+Claude Code's headless mode resolves every recognized request synchronously; there is no
+observed wire signal for a permission request the runtime has left open pending a reply, and
+none is expected under any configuration this adapter is permitted to construct, because the
+adapter never passes `--permission-prompt-tool`, the flag that gates the one reply channel the
+CLI documents for this state.
+
 ---
 
 ## Error detection and mapping
@@ -588,6 +636,7 @@ returned, the `domain.AgentError` kind.
 | Stdout line exceeds 10 MB, or the pipe read fails                  | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_failed` / `port_exit`                |
 | Exit code 127                                                      | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_failed` / `agent_not_found`          |
 | Killed by signal                                                   | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_cancelled` / `turn_cancelled`        |
+| A `system/permission_denied` event named `AskUserQuestion`         | `OnFinalize` reports `TerminalHumanInputRequired` ahead of the result-event rows below | `turn_input_required` |
 | Result event with `subtype: "success"` and `is_error: false`       | `OnFinalize` reports `TerminalSuccess`            | `turn_completed`                            |
 | Result event with any other subtype, or `is_error: true`           | `OnFinalize` reports `TerminalFailure`            | `turn_failed` / `turn_failed`              |
 | No result event, non-zero exit                                     | `agentcore.DecideTurn` row `RowNonZeroExit`       | `turn_failed` / `port_exit`                |
@@ -602,10 +651,11 @@ Workspace and binary resolution fail earlier, in `StartSession`: an unusable wor
 `invalid_workspace_cwd` and an unresolvable command yields `agent_not_found`
 (`agentcore.ResolveWorkspace`, `agentcore.ResolveBinary`).
 
-The Claude path never produces `response_timeout` or `turn_input_required`: it enforces no
-adapter-side deadline, and `-p` admits no interactive prompt. It can end with `turn_timeout`: the
-orchestrator produces that kind on the adapter's return once its derived turn deadline expires,
-not the adapter itself.
+The Claude path never produces `response_timeout`: it enforces no adapter-side deadline of its
+own. It can end with `turn_timeout`: the orchestrator produces that kind on the adapter's return
+once its derived turn deadline expires, not the adapter itself. It can also end with
+`turn_input_required`, when a `system/permission_denied` event names the built-in
+`AskUserQuestion` tool; see "Refusing requests only a person could answer".
 
 ### API retry errors
 
@@ -879,6 +929,16 @@ async with ClaudeSDKClient(options=options) as client:
   `other_message`. Probe: run a headless turn whose prompt forces a subagent or a
   background bash task and record the `type` field of each resulting stdout line.
 
+- **Does a denied `AskUserQuestion` call use the same `system/permission_denied` shape as a
+  denied tool call?** "Refusing requests only a person could answer" treats it that way, by
+  inference from the uniform shape every other observed denial uses plus Anthropic's documented
+  statement that the tool is denied rather than left pending under `-p
+  --dangerously-skip-permissions`. No transcript naming `AskUserQuestion` in a
+  `system/permission_denied` event was captured. Probe: find a prompt that reaches
+  `AskUserQuestion` under a plain headless `-p --dangerously-skip-permissions` invocation (it is
+  absent from the discoverable tool set under `manual` mode, which is the mode this note's other
+  permission probes used to observe a denial) and record the exact event.
+
 ---
 
 ## Sources
@@ -889,12 +949,27 @@ Local probes:
 - `claude --help` and headless `-p` runs on CLI 2.1.234: accepted `--permission-mode` values,
   `--effort` levels and its warn-and-ignore handling, `--allowedTools` separators, `--max-turns`
   acceptance, and the resume behaviour of `--no-session-persistence`.
+- Headless `-p --output-format stream-json --verbose` runs on CLI v2.1.239 (August 2026), with
+  `--setting-sources ""` and `--permission-mode manual` to strip an account-level
+  `bypassPermissions` default: the `system/permission_denied` event shape (including the
+  `decision_reason_type`/`decision_reason` pair on a workspace-containment denial), the paired
+  `tool_result_meta`/`non_execution_kind` marker, the `result` event's `permission_denials`
+  array, and the absence of `AskUserQuestion` from the `system/init` tool list under `manual`
+  mode with and without `--brief`.
 
-Anthropic first-party documentation, read March 2026 and the CLI reference re-read August 2026:
+Anthropic first-party documentation, read March 2026 and the CLI reference and the headless and
+permission-modes pages re-read August 2026:
 
 - Claude Code CLI reference: flags, headless (`-p`) mode, permission modes, session storage.
 - Claude Code `stream-json` output reference: message union, system subtypes, content blocks,
   result fields and subtypes, task messages.
+- Claude Code headless-mode reference: the SIGTERM-and-unanswered-prompt behaviour, the
+  `-p --dangerously-skip-permissions` container example stating that "the few calls that would
+  still prompt are denied instead," and the documented `system` subtypes (`init`, `api_retry`,
+  `plugin_install`), which do not include `permission_denied`.
+- Claude Code permission-modes reference: the `AskUserQuestion` tool's exemption from every
+  mode's auto-approval, including `bypassPermissions`, and the `dontAsk` mode's explicit denial
+  of it.
 - Claude Code monitoring reference: OpenTelemetry environment variables, metrics, and events.
 - Claude Code hooks reference: hook exit codes and per-hook timeout.
 - Claude Code GitHub Actions reference: `claude_args`, source of the `--max-turns` claim.
