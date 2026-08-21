@@ -42,7 +42,9 @@ type Endpoint struct {
 // "http://:80", whose [url.URL.Hostname] is empty and which no client
 // can dial. Query and fragment are rejected because Base is the raw
 // value and callers suffix an API path onto it, so a "?" or "#" anywhere
-// in it would swallow that path. On failure, ParseEndpoint still
+// in it would swallow that path; Redacted drops everything from that
+// delimiter onward, since a query is as capable of carrying a token as
+// userinfo is. On failure, ParseEndpoint still
 // returns false with Redacted populated so the caller can build a safe
 // diagnostic; the [url.Parse] error itself is discarded because its text
 // quotes the whole raw URL, and republishing it would leak any userinfo
@@ -55,9 +57,20 @@ func ParseEndpoint(raw string) (Endpoint, bool) {
 		return Endpoint{}, false
 	}
 
-	redacted := RedactURLUserinfo(trimmed)
+	// RedactURLUserinfo strips userinfo and nothing else, but a query or a
+	// fragment carries operator-supplied text of its own and a token is a
+	// common thing to find there. Cut at the delimiter before redacting,
+	// keeping the delimiter itself: the reported value stays visibly
+	// invalid, so the diagnostic reads true, and it still names the
+	// endpoint that failed.
+	display := trimmed
+	queryOrFragment := strings.IndexAny(trimmed, "?#")
+	if queryOrFragment >= 0 {
+		display = trimmed[:queryOrFragment+1]
+	}
+	redacted := RedactURLUserinfo(display)
 
-	if strings.ContainsAny(trimmed, "?#") {
+	if queryOrFragment >= 0 {
 		return Endpoint{Redacted: redacted}, false
 	}
 

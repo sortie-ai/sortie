@@ -203,6 +203,58 @@ func TestParseEndpoint_RedactsCredentialsOnFailure(t *testing.T) {
 	}
 }
 
+// TestParseEndpoint_RedactsQueryAndFragment pins that a rejected endpoint
+// never reports its query or fragment. RedactURLUserinfo strips userinfo
+// only, so a token parked in a query would otherwise reach the operator
+// through the constructor messages that print Redacted.
+func TestParseEndpoint_RedactsQueryAndFragment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		raw    string
+		want   string
+		secret string
+	}{
+		{
+			name:   "query dropped",
+			raw:    "https://host/api?access_token=s3cr3t",
+			want:   "https://host/api?",
+			secret: "s3cr3t",
+		},
+		{
+			name:   "fragment dropped",
+			raw:    "https://host/api#s3cr3t",
+			want:   "https://host/api#",
+			secret: "s3cr3t",
+		},
+		{
+			name:   "userinfo and query both dropped",
+			raw:    "https://operator:pw@host/api?access_token=s3cr3t",
+			want:   "https://host/api?",
+			secret: "s3cr3t",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := ParseEndpoint(tt.raw)
+
+			if ok {
+				t.Fatalf("ParseEndpoint(%q) ok = true, want false", tt.raw)
+			}
+			if got.Redacted != tt.want {
+				t.Errorf("ParseEndpoint(%q) Redacted = %q, want %q", tt.raw, got.Redacted, tt.want)
+			}
+			if strings.Contains(got.Redacted, tt.secret) {
+				t.Errorf("ParseEndpoint(%q) Redacted = %q, must not contain %q", tt.raw, got.Redacted, tt.secret)
+			}
+		})
+	}
+}
+
 func TestResolveEndpoint(t *testing.T) {
 	t.Parallel()
 
