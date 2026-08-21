@@ -132,9 +132,12 @@ run that failed and from a run that produced nothing.
 
 Where a runtime offers no way to answer, the posture is still uniform in its outcome: prevention at
 launch, and, where such a request is nonetheless observed, the same human-input-required ending.
-What differs between adapters is only whether a refusal can be transmitted, and that is a property
-of the runtime's protocol rather than a policy an adapter chooses. Uniformity is required of the
-outcome and of the decision, not of the wire mechanics.
+That ending covers both classes. A permission request can be refused in a continuable form only if
+the refusal reaches the agent, so where it cannot reach the agent there is no route left to
+continue, and the attempt ends rather than proceeding blind. What differs between adapters is only
+whether a refusal can be transmitted, and that is a property of the runtime's protocol rather than
+a policy an adapter chooses. Uniformity is required of the outcome and of the decision, not of the
+wire mechanics.
 
 ### Configuration that re-opens the interactive path
 
@@ -156,6 +159,12 @@ without a producer only where the contract states the reservation explicitly, as
 transport-class kind.
 
 ### What this decision does not settle
+
+A request a program can satisfy without a person is not of this class. A credential refresh the
+orchestrator can answer from its own configuration asks for a value rather than for consent, and it
+belongs to the path that owns the credential; where such a request carries a deadline of its own,
+the stall this decision addresses cannot arise from it. The refusal rule does not reach requests of
+that kind.
 
 This decision governs the class of requests that only a human could answer. It does not govern, and
 must not foreclose, the wider question of which positive terminal outcomes an agent may declare
@@ -243,8 +252,8 @@ The decision is validated when all of the following hold:
    record distinguishes it from a run that failed and from a run that produced nothing.
 5. Every agent adapter reaches that ending through the shared layer, and none constructs the
    normalized outcome itself.
-6. A runtime with no reply channel, observed making such a request, produces the same ending as one
-   that can be answered.
+6. A runtime with no reply channel, observed making a request of either class, ends the attempt with
+   the human-input-required outcome.
 7. A configuration value that would re-open the interactive path is refused at startup, on reload,
    and by offline validation, with the same verdict in all three.
 8. No auto-approval outcome is produced anywhere, and the vocabulary declares none.
