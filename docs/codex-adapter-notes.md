@@ -728,14 +728,19 @@ without adapter involvement.
 
 ## MCP server configuration
 
-Codex declares MCP servers in the `mcp_servers` table of `config.toml` under `CODEX_HOME`,
-which defaults to the `.codex` directory in the invoking user's home. Entries are written
-there directly or through `codex mcp add`, injected per invocation with
-`-c mcp_servers.<name>.command=...` overrides, or reached by pointing `CODEX_HOME` at another
-directory. Codex reads no project-level MCP configuration from the workspace. The only
-`.mcp.json` the binary recognizes is plugin-scoped: a package carrying a
-`.codex-plugin/plugin.json` manifest may ship one holding an `mcpServers` object, which the
-plugin manager loads. That is a packaging artifact, not a file an operator points Codex at.
+Codex declares MCP servers in the `mcp_servers` table of `config.toml`. The user-level file
+lives at `CODEX_HOME/config.toml`, which defaults to the `.codex` directory in the invoking
+user's home; entries are written there directly or through `codex mcp add`, injected per
+invocation with `-c mcp_servers.<name>.command=...` overrides, or reached by pointing
+`CODEX_HOME` at another directory. A project marked trusted, meaning it carries
+`trust_level = "trusted"` under `[projects."<path>"]` in the user-level config, also gets an
+`mcp_servers` table read from a `config.toml` file inside that project's own `.codex`
+directory: confirmed empirically on a running v0.149.0 binary, where an untrusted project's
+`.codex/config.toml` contributes nothing to `codex mcp list` and a trusted one's does. Codex
+reads no project-level `.codex/mcp.json` in either case. The only `.mcp.json` the binary
+recognizes is plugin-scoped: a package carrying a `.codex-plugin/plugin.json` manifest may
+ship one holding an `mcpServers` object, which the plugin manager loads. That is a packaging
+artifact, not a file an operator points Codex at.
 
 When an enabled MCP server is configured with `required = true` and fails to initialize,
 `thread/start` fails instead of continuing without it.
@@ -952,7 +957,7 @@ workspace.
 | Result event              | Final `result` message with `subtype`, `is_error`, `usage`   | `turn/completed` notification with `turn.status`; usage arrives separately on `thread/tokenUsage/updated` |
 | Hooks location            | `.claude/hooks.json`                                          | `.codex/hooks.json`                                            |
 | OTel configuration        | `CLAUDE_CODE_ENABLE_TELEMETRY=1`                             | `[otel]` block in `config.toml`                                |
-| MCP config                | `--mcp-config <path>`, `--strict-mcp-config`                 | `mcp_servers` in `config.toml` under `CODEX_HOME`, `-c` overrides |
+| MCP config                | `--mcp-config <path>`, `--strict-mcp-config`                 | `mcp_servers` in `config.toml` (`CODEX_HOME`, or a trusted project's own `.codex/`), `-c` overrides |
 | Models                    | Claude family (Sonnet, Opus, Haiku)                           | OpenAI family (GPT-5.4 default), configurable providers        |
 
 ## Differences from Copilot adapter

@@ -673,7 +673,7 @@ while turns within one session are serialized by the orchestrator.
 | Permission bypass | `--dangerously-skip-permissions` | `approvalPolicy: "never"` | `--dangerously-skip-permissions` | `--trust-all-tools` or `--trust-tools` |
 | Session resume | `--resume <id>` | `thread/resume` | `--session <id>` | `--resume` (directory-scoped, no ID) |
 | Models | Claude family | OpenAI family | provider/model | Backend-served set (Claude, DeepSeek observed) |
-| MCP config | `--mcp-config <path>` | `mcp_servers` in `config.toml` under `CODEX_HOME` | `opencode.json` | `~/.kiro/settings/mcp.json`, workspace `mcp.json` |
+| MCP config | `--mcp-config <path>` | `mcp_servers` in `config.toml` (`CODEX_HOME` or a trusted project's own `.codex/`) | `opencode.json` | `~/.kiro/settings/mcp.json`, workspace `mcp.json` |
 | Cancellation | Signal | `turn/interrupt` then signal | Signal | Signal (no native interrupt) |
 
 The fifth adapter, `internal/agent/copilot`, is also launch-per-turn and parses a structured
