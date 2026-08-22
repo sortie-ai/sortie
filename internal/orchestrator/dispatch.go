@@ -208,19 +208,6 @@ func IsBlockedByNonTerminal(issue domain.Issue, terminalStates []string) bool {
 // because BlockedBy is not authoritative for it. This is the one
 // authority for the blocker-hold decision; every caller, including
 // [EvaluateCandidate] and the retry lane, inherits it.
-// nextBlockerReadOffset returns the offset the next pass starts from:
-// advanced by the reads this pass spent when it exhausted its budget,
-// reset to zero on every other ending, which covers a pass that walked
-// the whole candidate list, one that broke on capacity, and one that
-// halted. Resetting is what keeps the window from creeping against a
-// needy sequence that shifts as the fleet fills and drains.
-func nextBlockerReadOffset(pass *TickResolution) int {
-	if pass.budgetExhausted {
-		return pass.offset + pass.reads
-	}
-	return 0
-}
-
 func isBlockedByNonTerminalSet(issue domain.Issue, terminalSet map[string]struct{}) bool {
 	if issue.BlockersUnresolved {
 		return true
@@ -234,6 +221,21 @@ func isBlockedByNonTerminalSet(issue domain.Issue, terminalSet map[string]struct
 		}
 	}
 	return false
+}
+
+// nextBlockerReadOffset returns the offset the next pass starts from:
+// advanced by the reads this pass spent when the budget denied a needy
+// candidate its read, and reset to zero otherwise. Only a denial leaves
+// a backlog for the window to step to, so a pass that spends its whole
+// budget with nobody left to deny resets, as does one that walked the
+// whole candidate list, broke on capacity, or halted. Resetting is what
+// keeps the window from creeping against a needy sequence that shifts
+// as the fleet fills and drains.
+func nextBlockerReadOffset(pass *TickResolution) int {
+	if pass.budgetExhausted {
+		return pass.offset + pass.reads
+	}
+	return 0
 }
 
 // stateSet builds a set of lowercase state names for O(1) membership testing.
