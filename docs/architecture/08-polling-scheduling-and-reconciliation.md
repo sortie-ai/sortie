@@ -65,7 +65,10 @@ bounded at a fixed per-pass budget, so a fleet with more needy candidates than t
 more than that many blocker reads per tick. The excluded candidates are held this tick rather than
 evaluated, and a rotating window walks the needy candidates across ticks so every one is read within
 a bounded number of ticks rather than being starved behind a permanently-held head of the list. The
-window's position resets whenever a tick's budget goes unspent, so it never drifts ahead of a
+window advances only when the budget actually denied a needy candidate its read, which is what
+leaves a backlog for the next tick to step to, and resets otherwise. A tick that spends its whole
+budget on the last needy candidates denies nobody, so it resets too: advancing there would make the
+next tick skip exactly the candidates it just served. That keeps the window from drifting ahead of a
 shrinking backlog.
 
 Sorting order (stable intent):

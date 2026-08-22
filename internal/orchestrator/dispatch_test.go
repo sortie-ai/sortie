@@ -1849,3 +1849,59 @@ func isOrderPreservingSubsequence(sub, full []string) bool {
 	}
 	return i == len(sub)
 }
+
+// TestEvaluateCandidate_BudgetSpentWithoutBinding pins the case where a
+// pass spends its whole read budget on the last needy candidates and
+// denies none: the budget did not bind, so no candidate is waiting for
+// a later pass and the window must not step over anything. Advancing
+// here would make the next pass skip exactly those candidates, so the
+// two passes would alternate between reading everything and reading
+// nothing.
+func TestEvaluateCandidate_BudgetSpentWithoutBinding(t *testing.T) {
+	t.Parallel()
+
+	activeSet := stateSet([]string{"To Do"})
+	terminalSet := stateSet([]string{"Done"})
+
+	issues := make([]domain.Issue, maxBlockerReadsPerPass)
+	for i := range issues {
+		id := fmt.Sprintf("E-%d", i+1)
+		issues[i] = domain.Issue{ID: id, Identifier: id, Title: "T", State: "To Do", BlockersUnresolved: true}
+	}
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = false
+			issue.BlockedBy = nil
+			return issue, nil
+		},
+	}
+
+	s := NewState(1000, 10, nil, AgentTotals{})
+	offset := 0
+
+	for passNum := range 2 {
+		pass := &TickResolution{offset: offset}
+		before := len(resolver.callOrder)
+		dispatched := 0
+
+		for _, issue := range issues {
+			if EvaluateCandidate(context.Background(), issue, s, activeSet, terminalSet, resolver, pass).Dispatch {
+				dispatched++
+			}
+		}
+
+		if got := len(resolver.callOrder) - before; got != maxBlockerReadsPerPass {
+			t.Errorf("pass %d: read %d candidates, want %d", passNum+1, got, maxBlockerReadsPerPass)
+		}
+		if dispatched != len(issues) {
+			t.Errorf("pass %d: dispatched %d, want %d", passNum+1, dispatched, len(issues))
+		}
+
+		offset = advanceBlockerReadOffset(pass)
+		if offset != 0 {
+			t.Errorf("pass %d: next offset = %d, want 0 because no candidate was denied a read", passNum+1, offset)
+		}
+	}
+}

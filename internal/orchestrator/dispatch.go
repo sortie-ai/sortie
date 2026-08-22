@@ -215,7 +215,7 @@ func IsBlockedByNonTerminal(issue domain.Issue, terminalStates []string) bool {
 // halted. Resetting is what keeps the window from creeping against a
 // needy sequence that shifts as the fleet fills and drains.
 func nextBlockerReadOffset(pass *TickResolution) int {
-	if pass.reads == maxBlockerReadsPerPass {
+	if pass.budgetExhausted {
 		return pass.offset + pass.reads
 	}
 	return 0
@@ -290,6 +290,13 @@ type TickResolution struct {
 	reads      int
 	offset     int
 	heldUnread int
+
+	// budgetExhausted records that a needy candidate went unread
+	// because the budget was already spent, which is what makes a
+	// backlog exist for the next pass to step to. Spending the whole
+	// budget on the last needy candidates denies nobody, so it does
+	// not set this.
+	budgetExhausted bool
 }
 
 // passesEligibilityGates applies the seven non-blocker checks
@@ -423,6 +430,9 @@ func EvaluateCandidate(ctx context.Context, issue domain.Issue, state *State,
 			haltSkipped = true
 			pass.heldUnread++
 		case pass.reads >= maxBlockerReadsPerPass || pass.needy <= pass.offset:
+			if pass.reads >= maxBlockerReadsPerPass {
+				pass.budgetExhausted = true
+			}
 			budgetSkipped = true
 			pass.heldUnread++
 		default:
