@@ -59,6 +59,35 @@ attributes:
 Each workspace removed by the age bound also emits its own `Info` record, message `"sweep:
 removed expired workspace"`, carrying `workspace_key`, `last_activity` (RFC3339), and `age_days`.
 
+The `"tick completed"` `Info` record carries four integer attributes for the blocker gate in
+addition to its existing ones: `held_by_blockers`, `blockers_unresolved`, `blockers_not_read`, and
+`blockers_incomplete`, each counting the candidates the tick held for that reason.
+
+A candidate the dispatch gate holds for a blocker reason produces exactly one of five per-issue
+records, and a pass whose reads were refused by the forge produces exactly one pass-level record in
+addition:
+
+- Held by a non-terminal blocker: one `Debug` record, message `"candidate held by blocker"`,
+  carrying the issue context fields plus `blocker_identifier` and `blocker_state` for the first
+  non-terminal blocker.
+- Held because its own blocker read was attempted and failed: one `Warn` record, message
+  `"candidate blockers unresolved, holding issue"`, carrying the issue context fields and `error`.
+- Held because the pass had already halted on another candidate's failure: one `Debug` record,
+  message `"candidate blockers not read this tick, pass halted"`, carrying `error_kind` and no
+  `error`, because nothing failed on this candidate.
+- Held because its producer declared the list incomplete, with no read attempted: one `Debug`
+  record, message `"candidate blocker list incomplete, holding issue"`, carrying the issue context
+  fields and no `error`.
+- Held because the pass had already spent its read budget: one `Debug` record, message `"candidate
+  blockers not read this tick, holding issue"`, carrying `reads_spent` and no `error`.
+
+A pass whose reads halted emits exactly one `Error` record, message `"blocker reads halted for this
+tick"`, carrying `error_kind`, `http_status` (`0` when the failure carried none), `operation`
+(`"fetch_blockers"`), and `held_unread`. A tick that dispatches nothing because every blocker read
+it attempted failed transiently, and that did not already emit the pass-level `Error` above, emits
+one additional `Warn` record, message `"tick dispatched nothing: every attempted candidate blocker
+read failed"`, carrying `reads_failed`, the count of reads the pass attempted and lost.
+
 ### 13.2 Logging Outputs and Sinks
 
 Sortie does not prescribe where logs must go (stderr, file, remote sink, etc.).
@@ -410,12 +439,13 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`, `ci_fix`). |
 | `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
-| `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`, `comment`, `add_label`) and result (`success`, `error`). |
+| `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `fetch_blockers`, `transition`, `comment`, `add_label`) and result (`success`, `error`). |
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state dispositions, partitioned by result (`success`, `error`, `skipped`, `withheld`). `withheld` means the handoff-evidence policy selected the absence failure path before any transition attempt, distinguishing it from an ordinary worker failure. `skipped` retains its two earlier causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). All four values are counted only when `tracker.handoff_state` is configured. |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
 | `sortie_issue_parks_total{reason}` | Counter | Issue park events, partitioned by reason (`agent_blocked`, `handoff_absence`). Incremented once per park, whichever trigger produced it. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
+| `sortie_candidate_holds_total{reason}` | Counter | `IncCandidateHolds`. Candidates the dispatch loop held, partitioned by reason (`blocked_by`, `blockers_unresolved`, `blockers_not_read`, `blockers_incomplete`). Incremented once per held candidate; never incremented for a candidate rejected by an eligibility or capacity gate, and never incremented a second time for the pass-level `blocker reads halted for this tick` ERROR that accompanies a run of `blockers_unresolved` holds. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |

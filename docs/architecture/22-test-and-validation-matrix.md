@@ -87,12 +87,16 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Each tracker adapter's suite exercises the shared tracker conformance assertions: normalized
   issue shape, ascending comment order, an empty-but-non-nil result on an empty list operation, a
   state map that omits an unknown id, no request issued on empty input, tracker error kind mapping
-  for every class the adapter can produce, and an additive label write
+  for every class the adapter can produce, an additive label write, a candidate's blocker fields
+  agreeing with the adapter's declared blocker source (`AssertCandidateBlockerSource`), a resolved
+  blocker list's normalization (`AssertBlockerRefsNormalized`), and a blocker ref's identifier shape
+  matching the issue's own (`AssertBlockerIdentifiersMatchIssue`)
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
 - Issue with non-terminal blockers in a non-running active state is not eligible
+- An issue whose blockers could not be resolved is not eligible either
 - Issue with terminal blockers is eligible
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup

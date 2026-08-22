@@ -109,7 +109,8 @@ A state label must exist in the repository before it can be attached, and the ad
 
 ## Operations
 
-Route map for the nine `TrackerAdapter` methods (`internal/domain/tracker.go`):
+Route map for the nine `TrackerAdapter` methods (`internal/domain/tracker.go`) plus the optional
+`FetchIssueBlockers` (`domain.BlockerReader`) this adapter also implements:
 
 | # | Method | Gitea route(s) |
 | --- | --- | --- |
@@ -122,6 +123,7 @@ Route map for the nine `TrackerAdapter` methods (`internal/domain/tracker.go`):
 | 7 | `TransitionIssue` | `GET .../issues/{index}` + `GET .../labels` + `DELETE .../issues/{index}/labels/{id}` + `POST .../issues/{index}/labels` + `PATCH .../issues/{index}` |
 | 8 | `CommentIssue` | `POST .../issues/{index}/comments` |
 | 9 | `AddLabel` | `GET .../labels` + optional `POST .../labels` + `POST .../issues/{index}/labels` |
+| 10 | `FetchIssueBlockers` | `GET .../issues/{index}/dependencies` |
 
 ### 1. `FetchCandidateIssues`
 
@@ -145,6 +147,31 @@ GET /repos/{owner}/{repo}/issues/{index}
 - A PR index resolves on this route and returns the PR in issue shape with `pull_request` set (verified: `GET .../issues/6` returned the PR). The adapter returns `tracker_not_found` for it, like the GitHub adapter.
 - Comments come from operation 6's route; blockers from `GET .../issues/{index}/dependencies`, which returns full issue objects for every issue **blocking** the queried one (verified: after `POST .../issues/2/dependencies {"index": 1, "owner": ..., "repo": ...}` created "1 blocks 2", the dependencies list of #2 contains #1, and `.../issues/1/blocks` contains #2; re-established live on 2026-08-11 by creating and deleting one dependency). The create route takes the blocker from the body and the blocked issue from the path, and it requires the full issue-meta body: a body carrying only `{"index": 1}` returns 404 `IsErrRepoNotExist` (verified live, 2026-08-11). Only the integration harness writes dependencies; the adapter reads them. Each blocker entry carries `number`, `state`, and `labels`, which is everything `normalizeBlockers` needs to produce a `domain.BlockerRef` with `ID` and `Identifier` set to the blocker's index and `State` derived from its labels and native state, satisfying the `blocked_by` rule in [architecture Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules).
 - Parent is always nil and no parent request is issued: Gitea has no parent or sub-issue concept. GitHub's `.../issues/{index}/dependencies/blocked_by` and `.../issues/{index}/parent` are both absent (404, verified; re-confirmed live on 1.26.4 against a 200 on `.../issues/{index}/dependencies` as the control).
+
+### `FetchIssueBlockers` and the candidate path's blocker cost
+
+`giteaIssue` carries no dependency field, so `FetchCandidateIssues` cannot answer the blocker
+question from the candidate payload the way the GitHub adapter's `issue_dependencies_summary`
+pre-filter does: every Gitea candidate is marked `BlockersUnresolved` unconditionally, with no
+cheap zero-dependency exception. `FetchIssueBlockers`, exported on `GiteaAdapter` for the shared
+resolver between the registry and the orchestrator, wraps the same `fetchBlockers` helper
+operation 2 already calls and issues `GET .../issues/{index}/dependencies` directly, counted as
+its own `fetch_blockers` operation through `trackermetrics.Track`. A 404, or any
+other non-2xx response, is a failure on both the by-ID path and this exported path: the tolerance
+that once mapped a 404 to an empty blocker list is gone, because this route addresses a list
+resource and the forge is expected to answer a genuinely empty list with `200 []`, not `404`.
+
+Additional requests per tick are `min(N, K)`, where `N` is the candidates that reach blocker
+resolution past the cheaper eligibility and capacity gates and `K` is the per-pass read budget (4);
+there is no pre-filter to shrink `N` further here, which is the asymmetry against the GitHub
+adapter's wire format rather than a difference in mechanism.
+
+**Pending live observation.** What `GET .../issues/{index}/dependencies` returns for an existing
+issue with zero dependencies, specifically the `200 []` shape this reading assumes rather than the
+already-verified 404-on-the-wrong-path evidence above, has not been confirmed against a live Gitea
+instance as of this note. The reasoning that a list route answers an empty list with `200` rather
+than `404` is stated above as the general rule this adapter family follows; it has not yet been
+checked against this specific route on this specific forge.
 
 ### 3. `FetchIssuesByStates`
 
@@ -265,7 +292,7 @@ tracker:
 | `IssueType` | none | No native issue-type concept; always empty, like Linear |
 | `Parent` | none | No parent concept; always nil |
 | `Comments` | separate route | Markdown, no flattening |
-| `BlockedBy` | `GET .../issues/{index}/dependencies` | Full issue objects; see operation 2 |
+| `BlockedBy` | `GET .../issues/{index}/dependencies` | Full issue objects; read by `FetchIssueByID` directly and by `FetchIssueBlockers` for the shared resolver; see operation 2 |
 | `CreatedAt` | `created_at` | RFC 3339 with zone offset, parses as ISO-8601 |
 | `UpdatedAt` | `updated_at` | Same |
 

@@ -513,6 +513,8 @@ On an Enterprise Edition instance licensed at Premium or above, `GET .../links` 
 `link_type: "blocks"` or `"is_blocked_by"` **[source]**. The Community Edition floor requires
 the empty-slice behavior regardless.
 
+**Declared, not inferred.** The adapter's registration declares `BlockerSource: registry.BlockersUnsupported`, so the dispatch gate's shared resolution layer reads this as a positive statement that the tracker has no blocking relation to carry, rather than as a property a reader has to infer from the always-empty list `normalizeIssue` produces. `domain.Issue.BlockersUnresolved` stays false on every candidate this adapter normalizes: the empty list is complete, not unread.
+
 ---
 
 ## Operations

@@ -24,7 +24,10 @@ Tick sequence:
    in step 5; it is skipped when every parked issue is already a candidate.
 9. Park each candidate whose consecutive handoff-absence count has just reached the ceiling
    (§14.2), skipped entirely under `tracker.handoff_evidence: off`.
-10. Dispatch eligible issues while slots remain.
+10. Dispatch eligible issues while slots remain. For a candidate whose tracker adapter declares the
+    per-issue blocker source, this step may read that one candidate's blocker list, bounded by the
+    per-pass read budget and its rotating window (§8.2); a candidate the budget or window excludes
+    this tick is held rather than dispatched.
 11. Notify observability/status consumers of state changes.
 
 Preflight runs first so the reload it forces is visible to reconciliation and to the sweep, not
@@ -47,6 +50,23 @@ An issue is dispatch-eligible only if all are true:
 - Blocker rule passes: for issues in any non-running active state, do not dispatch when any blocker
   is non-terminal. The blocker-gating states are the configured active states, not a hardcoded
   state name.
+- Its blockers could be resolved this tick: an issue whose blocker list could not be resolved,
+  whether because its own read failed, the read budget or rotating window excluded it, or its
+  producer declared the list incomplete, is not dispatched. The next tick retries.
+
+An adapter derives a blocker's state from the active and terminal state lists it captured at
+construction, while the orchestrator rebuilds its own terminal set from the tick's reloaded
+configuration (step 2 above), so the two vocabularies can disagree until the adapter restarts after
+a `WORKFLOW.md` edit that changes those lists. This divergence already exists on the retry lane
+(§8.4) and extends here to the poll lane's blocker resolution.
+
+For a tracker adapter whose candidate fetch cannot carry blockers, one read per needy candidate is
+bounded at a fixed per-pass budget, so a fleet with more needy candidates than the budget spends no
+more than that many blocker reads per tick. The excluded candidates are held this tick rather than
+evaluated, and a rotating window walks the needy candidates across ticks so every one is read within
+a bounded number of ticks rather than being starved behind a permanently-held head of the list. The
+window's position resets whenever a tick's budget goes unspent, so it never drifts ahead of a
+shrinking backlog.
 
 Sorting order (stable intent):
 

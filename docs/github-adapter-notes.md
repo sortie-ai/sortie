@@ -185,6 +185,7 @@ Every `TrackerAdapter` method is implemented in `internal/scm/github/tracker.go`
 | `FetchIssueStatesByIDs` | `GET /repos/{owner}/{repo}/issues/{number}`, one per issue | `fetchStatesByNumbers` |
 | `FetchIssueStatesByIdentifiers` | Same route and same helper | `fetchStatesByNumbers` |
 | `FetchIssueComments` | `GET /repos/{owner}/{repo}/issues/{number}/comments` | `fetchAllComments` |
+| `FetchIssueBlockers` | `GET /repos/{owner}/{repo}/issues/{number}/dependencies/blocked_by` | `FetchIssueBlockers` |
 | `TransitionIssue` | Label delete, label add, and issue patch | `TransitionIssue` |
 | `CommentIssue` | `POST /repos/{owner}/{repo}/issues/{number}/comments` | `CommentIssue` |
 | `AddLabel` | `POST /repos/{owner}/{repo}/issues/{number}/labels` | `AddLabel` |
@@ -404,12 +405,76 @@ The route returns a JSON array of full issue objects that block the queried issu
 against `sortie-ai/sortie` issue #218 returns issue #299 as a blocker.
 
 `normalizeBlockers` sets both `domain.BlockerRef.ID` and `domain.BlockerRef.Identifier` to the
-blocking issue's `number` as a string, and derives `domain.BlockerRef.State` from the blocker's
-own labels with the same rule the issue read uses. A 404 on this route normalizes to an empty
-blocker list, not an error.
+blocking issue's `number` as a string, sets `domain.BlockerRef.DisplayID` to the same
+`owner/repo#N` qualified form `qualifyDisplayID` gives the issue itself, and derives
+`domain.BlockerRef.State` from the blocker's own labels with the same rule the issue read uses.
+
+The candidate routes (`FetchCandidateIssues`) do not call this route at all: a candidate is marked
+`BlockersUnresolved` and a shared resolution layer between the registry and the orchestrator calls
+`FetchIssueBlockers` per candidate, after the cheaper dispatch gates pass, bounded by a per-pass
+read budget. `FetchIssueByID` still calls this route directly and clears the flag on success. A
+404, or any other non-2xx response, is a failure rather than an empty list on both paths: this
+route addresses a list resource, so a 200 with an empty array is how the forge spells "no
+blockers," and a 404 means either the issue is gone or the route is absent, neither of which
+this adapter is entitled to read as "no blockers."
 
 This is simpler than Jira's `issuelinks` parsing: no link-type matching and no directional
 filtering.
+
+### `issue_dependencies_summary` pre-filter
+
+Both candidate routes, `GET /repos/{owner}/{repo}/issues` and `GET /search/issues`, carry a
+per-issue summary object:
+
+```json
+{
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "blocking": 0,
+    "total_blocked_by": 2,
+    "total_blocking": 0
+  }
+}
+```
+
+It is `null` on a pull request, which the issues route co-mingles with issues; `isPullRequest`
+already filters those before normalization reaches this field, and a null summary is read the
+same as an absent one regardless. `normalizeIssue` clears `BlockersUnresolved` on a candidate,
+leaving `BlockedBy` the non-nil empty slice, only when the summary is non-nil and
+`total_blocked_by` is exactly `0`; every other shape, including a null or absent summary, leaves
+the flag set so the resolver reads the dependencies route for that issue.
+
+`total_blocked_by` counts every dependency the issue has; `blocked_by` counts only the ones
+GitHub itself still considers open. The two diverge: `sortie-ai/sortie#877` returned
+`{"blocked_by": 0, "total_blocked_by": 2}` while both of its dependencies were closed. The
+pre-filter reads `total_blocked_by` alone, because the dispatch gate's question is "does this
+issue have any dependency at all", not "does it have an open one"; a closed dependency still
+needs a read to confirm its state maps to a configured terminal label rather than being assumed
+terminal from its native `closed` status.
+
+**Cost.** Let `D` be the candidates, past the cheaper eligibility and capacity gates, whose summary
+does not prove zero dependencies. Additional requests per tick are `min(D, K)`, where `K` is the
+per-pass read budget (4). At the default 30-second polling interval that ceiling is 480
+requests/hour, 9.6 percent of a fine-grained or classic PAT's 5,000/hour primary budget and 48
+percent of a `GITHUB_TOKEN`'s 1,000/hour budget, whatever the candidate volume. An operator who has
+created no dependencies at all pays zero additional requests: the pre-filter answers every
+candidate from the summary already on the candidate payload.
+
+### The zero-dependency response
+
+`GET .../issues/{issue_number}/dependencies/blocked_by` answers `200` with an empty JSON array for
+an existing issue that has no dependencies. It does not spell "no dependencies" as `404`. Verified
+live against `github.com` on 2026-08-22: three issues whose `issue_dependencies_summary.total_blocked_by`
+reported `0` each returned `HTTP/2 200` with `[]`, taken against a `200` control on an issue whose
+summary reported two dependencies and whose response carried both.
+
+This is what makes a `404` from this route mean the route, or a segment of its path, is absent
+rather than the list being empty, which is why `fetchBlockers` treats a not-found response as a
+failure instead of converting it to an empty list. Note the contrast with the sub-issues parent
+route below, a single-resource route where `404` legitimately means there is no parent.
+
+The same observation has not been taken against a GitHub Enterprise Server instance, whose route
+surface is not confirmed to match; it stays in [Open questions](#open-questions) below.
 
 ### `Parent` via the sub-issues route
 
@@ -932,6 +997,7 @@ the next tick's re-read rather than by the merge call.
 | Does the check-runs route default to `filter=latest`, keeping only the most recent run per check name? Neither `GetCIStatus` nor `GitHubCIProvider.FetchCIStatus` sends `filter`, so the default decides whether a superseded run still contributes to the verdict | On a commit whose checks were re-run, compare `GET .../commits/{sha}/check-runs` with `GET .../commits/{sha}/check-runs?filter=all` and diff the returned run sets |
 | Does version `2026-03-10` remove properties from routes other than `/pulls/{n}`? Only the pull request object was diffed against `2022-11-28` | Fetch `/pulls/{n}/reviews`, `/pulls/{n}/comments`, `/issues/{n}/comments`, `/issues/{n}/events`, `/commits/{sha}/status`, and `/commits/{sha}/check-runs` under both versions and diff the key sets |
 | Does GitHub Enterprise Server serve the same route surface and the same version header behavior? Nothing in this document was observed against a GHES instance | Repeat the tracker and SCM read probes against a GHES deployment with `tracker.endpoint` set to `https://<host>/api/v3` |
+| What does `GET .../issues/{n}/dependencies/blocked_by` return for an existing issue with zero dependencies against a **GHES** instance? Answered for `github.com`: `200` with an empty array, verified 2026-08-22 with a positive control, recorded above. A 404 on GHES would mean that deployment spells "none" as not-found on a list route, which has to be escalated rather than absorbed, because the adapter fixes its blocker source at registration and could not vary it per endpoint | Create an issue with zero dependencies on a scratch repository on a GHES instance and call the route directly |
 
 ---
 
