@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A `sortie_candidate_holds_total` counter reports how many issues
+  the scheduler held back and why, separating an unfinished blocker
+  from a blocker list that could not be read, one the tracker
+  reported as incomplete, and one left unread because the poll had
+  already spent its budget of dependency lookups. `sortie --dry-run`
+  names the same reason for each issue it would not start, so an
+  issue held by a dependency is no longer indistinguishable from one
+  held by a full slot.
+  ([#920](https://github.com/sortie-ai/sortie/issues/920))
+
 ### Fixed
 
 - A malformed end-of-turn notification from the `codex app-server` no
@@ -62,6 +74,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second `opencode` call; every other cause reached the operator as the
   placeholder.
   ([#839](https://github.com/sortie-ai/sortie/issues/839))
+
+- On GitHub and Gitea, an issue whose blockers are still open is no
+  longer started. Both trackers reported every candidate issue as
+  having no blockers at all, so a dependency recorded in the tracker
+  had no effect on what ran: work began on issues whose prerequisites
+  were unfinished, holding a slot until the agent discovered for
+  itself that it could not proceed. Jira and Linear were unaffected.
+  An issue is now held until every blocker reaches a terminal state,
+  and where its blocker list cannot be read the issue is held and
+  retried on the next poll rather than started on an unread list. A
+  forge that does not serve issue dependencies at all is now reported
+  as an error instead of read as an empty list, and no issue on it is
+  started while that lasts. Reading dependencies costs GitHub and
+  Gitea up to four extra tracker requests per poll; an issue whose
+  own tracker data already proves it has no dependencies costs none.
+  Workflow templates on those two trackers now receive the real
+  blocker list, which was previously always empty.
+  ([#920](https://github.com/sortie-ai/sortie/issues/920))
 
 ## [1.21.0] - 2026-08-20
 
