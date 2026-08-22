@@ -69,6 +69,13 @@ func TestIntegration_FetchCandidateIssues(t *testing.T) {
 		if iss.BlockedBy == nil {
 			t.Errorf("issue %s: BlockedBy should be non-nil", iss.ID)
 		}
+		if !iss.BlockersUnresolved && len(iss.BlockedBy) != 0 {
+			t.Errorf("issue %s: BlockersUnresolved is false with a non-empty BlockedBy, want the dependency summary to have proved this specific issue dependency-free", iss.ID)
+		}
+		// This integration environment seeds no blocker relation on any
+		// candidate, so a resolved candidate here always means the
+		// dependency summary proved it has none, not that a real
+		// blocker was read and found terminal.
 		if iss.Priority != nil {
 			t.Errorf("issue %s: Priority should always be nil (GitHub has no native priority)", iss.ID)
 		}
@@ -108,6 +115,9 @@ func TestIntegration_FetchIssueByID(t *testing.T) {
 	}
 	if issue.BlockedBy == nil {
 		t.Error("BlockedBy is nil, want non-nil (may be empty)")
+	}
+	if issue.BlockersUnresolved {
+		t.Error("BlockersUnresolved = true after a successful FetchIssueByID, want false: the by-ID read always resolves blockers")
 	}
 	if issue.Priority != nil {
 		t.Error("Priority should always be nil for GitHub issues")

@@ -1,9 +1,11 @@
 package github
 
 import (
+	"encoding/json"
 	"strconv"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -165,6 +167,12 @@ func TestNormalizeIssue_MultipleAssignees(t *testing.T) {
 	}
 }
 
+// TestNormalizeIssue_NonNilEmptyBlockedBy pins that a candidate with no
+// dependency summary carries a non-nil empty BlockedBy AND is marked
+// unresolved: the empty slice alone is not authoritative here, because
+// nothing on the candidate route read the dependencies route. A green
+// assertion on the shape alone, without the flag, is the defect this
+// design replaces.
 func TestNormalizeIssue_NonNilEmptyBlockedBy(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +184,9 @@ func TestNormalizeIssue_NonNilEmptyBlockedBy(t *testing.T) {
 	}
 	if len(got.BlockedBy) != 0 {
 		t.Errorf("BlockedBy len = %d, want 0", len(got.BlockedBy))
+	}
+	if !got.BlockersUnresolved {
+		t.Error("BlockersUnresolved = false, want true: no DependenciesSummary was present to prove the issue has no dependencies")
 	}
 }
 
@@ -278,7 +289,7 @@ func TestNormalizeBlockers_NonEmpty(t *testing.T) {
 	active := []string{"backlog", "in-progress", "review"}
 	terminal := []string{"done", "wontfix"}
 
-	got := normalizeBlockers(blockers, active, terminal, "", nil)
+	got := normalizeBlockers(blockers, active, terminal, "", "owner", "repo", nil)
 
 	if len(got) != 2 {
 		t.Fatalf("normalizeBlockers len = %d, want 2", len(got))
@@ -295,12 +306,19 @@ func TestNormalizeBlockers_NonEmpty(t *testing.T) {
 	if got[1].State != "done" {
 		t.Errorf("got[1].State = %q, want %q", got[1].State, "done")
 	}
+	if got[0].DisplayID != "owner/repo#5" {
+		t.Errorf("got[0].DisplayID = %q, want %q", got[0].DisplayID, "owner/repo#5")
+	}
+
+	adaptertest.AssertBlockerRefsNormalized(t, got)
+	qualifiedIssue := domain.Issue{Identifier: "1", DisplayID: "owner/repo#1"}
+	adaptertest.AssertBlockerIdentifiersMatchIssue(t, qualifiedIssue, got)
 }
 
 func TestNormalizeBlockers_EmptyReturnsNonNilSlice(t *testing.T) {
 	t.Parallel()
 
-	got := normalizeBlockers(nil, nil, nil, "", nil)
+	got := normalizeBlockers(nil, nil, nil, "", "owner", "repo", nil)
 
 	if got == nil {
 		t.Error("normalizeBlockers(nil) returned nil, want non-nil empty slice")
@@ -387,6 +405,118 @@ func TestIsPullRequest(t *testing.T) {
 				t.Errorf("isPullRequest() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// --- dependency-summary cheap-answer pre-filter ---
+
+func TestNormalizeIssue_DependenciesSummaryPreFilter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		summary            *githubDependenciesSummary
+		wantBlockersUnres  bool
+		wantBlockedByEmpty bool
+	}{
+		{
+			name:               "absent summary leaves the flag set",
+			summary:            nil,
+			wantBlockersUnres:  true,
+			wantBlockedByEmpty: true,
+		},
+		{
+			name:               "zero total_blocked_by clears the flag",
+			summary:            &githubDependenciesSummary{BlockedBy: 0, TotalBlockedBy: 0},
+			wantBlockersUnres:  false,
+			wantBlockedByEmpty: true,
+		},
+		{
+			name:               "positive total_blocked_by leaves the flag set",
+			summary:            &githubDependenciesSummary{BlockedBy: 1, TotalBlockedBy: 1},
+			wantBlockersUnres:  true,
+			wantBlockedByEmpty: true,
+		},
+		{
+			name: "the reporter's exact divergence: blocked_by 0, total_blocked_by 2, both closed but configured non-terminal",
+			// GitHub's own blocked_by count answers "how many of my
+			// dependencies does GitHub itself consider still open",
+			// which is not the question the dispatch gate asks: a
+			// blocker GitHub calls closed can still be a configured
+			// non-terminal state. Reading BlockedBy here would wrongly
+			// clear the flag on an issue that in fact has two blockers.
+			summary:            &githubDependenciesSummary{BlockedBy: 0, TotalBlockedBy: 2},
+			wantBlockersUnres:  true,
+			wantBlockedByEmpty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gi := githubIssue{Number: 1, State: "open", DependenciesSummary: tt.summary}
+			got := normalizeIssue(gi, nil, nil, "", nil)
+
+			if got.BlockersUnresolved != tt.wantBlockersUnres {
+				t.Errorf("BlockersUnresolved = %t, want %t", got.BlockersUnresolved, tt.wantBlockersUnres)
+			}
+			if tt.wantBlockedByEmpty && len(got.BlockedBy) != 0 {
+				t.Errorf("len(BlockedBy) = %d, want 0", len(got.BlockedBy))
+			}
+			if got.BlockedBy == nil {
+				t.Error("BlockedBy is nil, want non-nil empty slice on every candidate path")
+			}
+		})
+	}
+}
+
+// TestNormalizeIssue_DependenciesSummaryNullDecodesToNil pins that a
+// JSON null for issue_dependencies_summary decodes to a nil pointer,
+// read the same nil-safe way an absent field is.
+func TestNormalizeIssue_DependenciesSummaryNullDecodesToNil(t *testing.T) {
+	t.Parallel()
+
+	var gi githubIssue
+	raw := []byte(`{"number":1,"state":"open","issue_dependencies_summary":null}`)
+	if err := json.Unmarshal(raw, &gi); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if gi.DependenciesSummary != nil {
+		t.Fatalf("DependenciesSummary = %v, want nil after decoding a JSON null", gi.DependenciesSummary)
+	}
+
+	got := normalizeIssue(gi, nil, nil, "", nil)
+	if !got.BlockersUnresolved {
+		t.Error("BlockersUnresolved = false, want true: a JSON null summary proves nothing about dependencies")
+	}
+}
+
+// TestNormalizeIssue_PreFilterDecisionEquality pins that for an
+// issue whose summary proves zero dependencies, the pre-filter's
+// cheap answer and an actual per-issue blocker read of the same
+// zero-dependency issue produce the identical dispatch-relevant
+// fields, so turning the pre-filter off would not change the
+// decision, only its cost.
+func TestNormalizeIssue_PreFilterDecisionEquality(t *testing.T) {
+	t.Parallel()
+
+	gi := githubIssue{
+		Number:              1,
+		State:               "open",
+		DependenciesSummary: &githubDependenciesSummary{BlockedBy: 0, TotalBlockedBy: 0},
+	}
+	preFiltered := normalizeIssue(gi, nil, nil, "", nil)
+
+	// The per-issue read path: a dependencies route responding with no
+	// entries, normalized the same way fetchBlockers would.
+	readBlockedBy := normalizeBlockers(nil, nil, nil, "", "owner", "repo", nil)
+
+	if preFiltered.BlockersUnresolved {
+		t.Fatal("pre-filtered issue has BlockersUnresolved = true, want false")
+	}
+	if len(preFiltered.BlockedBy) != len(readBlockedBy) {
+		t.Errorf("pre-filtered BlockedBy len = %d, per-issue-read BlockedBy len = %d, want equal", len(preFiltered.BlockedBy), len(readBlockedBy))
 	}
 }
 

@@ -41,6 +41,7 @@ func init() {
 		ValidateTrackerConfig: validateConfig,
 		DefaultActiveStates:   defaultActiveStates,
 		DefaultTerminalStates: defaultTerminalStates,
+		BlockerSource:         registry.BlockersPerIssue,
 	})
 }
 
@@ -336,6 +337,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 		if err != nil {
 			return err
 		}
+		fetchedIssue.BlockersUnresolved = false
 
 		fetchedIssue.Parent, err = a.fetchParent(ctx, issueID)
 		if err != nil {
@@ -351,6 +353,18 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 		return nil
 	})
 	return issue, err
+}
+
+// FetchIssueBlockers returns the blockers of one issue, read from the
+// forge's dependencies route.
+func (a *GitHubAdapter) FetchIssueBlockers(ctx context.Context, issueID string) ([]domain.BlockerRef, error) {
+	blockers := make([]domain.BlockerRef, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_blockers", func() error {
+		var fetchErr error
+		blockers, fetchErr = a.fetchBlockers(ctx, issueID)
+		return fetchErr
+	})
+	return blockers, err
 }
 
 func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]domain.BlockerRef, error) {
@@ -378,13 +392,10 @@ func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]do
 
 	blockers, err := paginator.All(ctx)
 	if err != nil {
-		if domain.IsNotFound(err) {
-			return []domain.BlockerRef{}, nil
-		}
 		return nil, err
 	}
 
-	return normalizeBlockers(blockers, a.activeStates, a.terminalStates, a.handoffState, a.log), nil
+	return normalizeBlockers(blockers, a.activeStates, a.terminalStates, a.handoffState, a.owner, a.repo, a.log), nil
 }
 
 func (a *GitHubAdapter) fetchParent(ctx context.Context, issueID string) (*domain.ParentRef, error) {

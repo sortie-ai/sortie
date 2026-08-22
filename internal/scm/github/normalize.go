@@ -10,19 +10,31 @@ import (
 
 // githubIssue represents a single issue from the GitHub REST API.
 type githubIssue struct {
-	ID          int64            `json:"id"`
-	Number      int              `json:"number"`
-	Title       string           `json:"title"`
-	Body        *string          `json:"body"`
-	State       string           `json:"state"`
-	StateReason *string          `json:"state_reason"`
-	HTMLURL     string           `json:"html_url"`
-	Labels      []githubLabel    `json:"labels"`
-	Assignees   []githubUser     `json:"assignees"`
-	Type        *githubIssueType `json:"type"`
-	PullRequest *githubPR        `json:"pull_request"`
-	CreatedAt   string           `json:"created_at"`
-	UpdatedAt   string           `json:"updated_at"`
+	ID                  int64                      `json:"id"`
+	Number              int                        `json:"number"`
+	Title               string                     `json:"title"`
+	Body                *string                    `json:"body"`
+	State               string                     `json:"state"`
+	StateReason         *string                    `json:"state_reason"`
+	HTMLURL             string                     `json:"html_url"`
+	Labels              []githubLabel              `json:"labels"`
+	Assignees           []githubUser               `json:"assignees"`
+	Type                *githubIssueType           `json:"type"`
+	PullRequest         *githubPR                  `json:"pull_request"`
+	DependenciesSummary *githubDependenciesSummary `json:"issue_dependencies_summary"`
+	CreatedAt           string                     `json:"created_at"`
+	UpdatedAt           string                     `json:"updated_at"`
+}
+
+// githubDependenciesSummary is GitHub's per-issue dependency count.
+// TotalBlockedBy counts every dependency; BlockedBy counts only those
+// GitHub considers open, which is not the question the dispatch gate
+// asks. A nil pointer means the field is absent or null, both of
+// which mean "unknown" (a pull request co-mingled into the issues
+// route, or a payload that omits the field).
+type githubDependenciesSummary struct {
+	BlockedBy      int `json:"blocked_by"`
+	TotalBlockedBy int `json:"total_blocked_by"`
 }
 
 type githubLabel struct {
@@ -69,8 +81,13 @@ func githubLabelNames(labels []githubLabel) []string {
 // The ID and Identifier are both set to the issue number since the
 // GitHub REST API indexes issues by number, not by global integer ID.
 // Parent and Comments remain at their zero values; BlockedBy is
-// initialized to a non-nil empty slice. Callers requiring full
-// population must use [GitHubAdapter.FetchIssueByID].
+// initialized to a non-nil empty slice.
+//
+// BlockersUnresolved is set true by default, because the candidate
+// routes do not carry blockers; it is cleared, leaving BlockedBy
+// empty, only when DependenciesSummary proves the issue has no
+// dependencies at all. Otherwise a caller resolves blockers through
+// the shared resolver or [GitHubAdapter.FetchIssueByID].
 //
 // DisplayID is left empty; callers that know the repository
 // owner and name should set it to "owner/repo#N" after normalization.
@@ -95,20 +112,34 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, hando
 
 	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
 
+	// Only a summary proving the issue has no dependencies at all lets a
+	// candidate claim an authoritative blocker list. TotalBlockedBy counts
+	// every dependency; BlockedBy counts only the ones the forge considers
+	// open, which is a different question from whether a blocker sits
+	// outside the configured terminal states, so it cannot stand in here.
+	blockersUnresolved := gi.DependenciesSummary == nil || gi.DependenciesSummary.TotalBlockedBy != 0
+
 	return domain.Issue{
-		ID:          num,
-		Identifier:  num,
-		Title:       gi.Title,
-		Description: desc,
-		State:       issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
-		URL:         gi.HTMLURL,
-		Labels:      issuekit.NormalizeLabels(labelNames),
-		Assignee:    assignee,
-		IssueType:   issueType,
-		BlockedBy:   []domain.BlockerRef{},
-		CreatedAt:   gi.CreatedAt,
-		UpdatedAt:   gi.UpdatedAt,
+		ID:                 num,
+		Identifier:         num,
+		Title:              gi.Title,
+		Description:        desc,
+		State:              issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
+		URL:                gi.HTMLURL,
+		Labels:             issuekit.NormalizeLabels(labelNames),
+		Assignee:           assignee,
+		IssueType:          issueType,
+		BlockedBy:          []domain.BlockerRef{},
+		BlockersUnresolved: blockersUnresolved,
+		CreatedAt:          gi.CreatedAt,
+		UpdatedAt:          gi.UpdatedAt,
 	}
+}
+
+// qualifyIdentifier renders owner/repo#identifier, the qualified form
+// GitHub issue and blocker references share.
+func qualifyIdentifier(owner, repo, identifier string) string {
+	return owner + "/" + repo + "#" + identifier
 }
 
 // qualifyDisplayID sets DisplayID to "owner/repo#N" so
@@ -118,23 +149,28 @@ func (a *GitHubAdapter) qualifyDisplayID(issue *domain.Issue) {
 	if issue.DisplayID != "" {
 		return
 	}
-	issue.DisplayID = a.owner + "/" + a.repo + "#" + issue.Identifier
+	issue.DisplayID = qualifyIdentifier(a.owner, a.repo, issue.Identifier)
 }
 
 // normalizeBlockers converts blocker issue responses to
 // [domain.BlockerRef] values. Returns a non-nil empty slice when
-// input is empty.
-func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) []domain.BlockerRef {
+// input is empty. owner and repo qualify each ref's DisplayID the
+// same way an issue's own DisplayID is qualified.
+func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []string, handoffState, owner, repo string, log *slog.Logger) []domain.BlockerRef {
 	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
 
 	refs := make([]domain.BlockerRef, 0, len(blockers))
 	for _, b := range blockers {
 		num := strconv.Itoa(b.Number)
-		refs = append(refs, domain.BlockerRef{
+		ref := domain.BlockerRef{
 			ID:         num,
 			Identifier: num,
 			State:      issuekit.DeriveLabelState(githubLabelNames(b.Labels), b.State, "open", "closed", states, num, log),
-		})
+		}
+		if ref.DisplayID == "" {
+			ref.DisplayID = qualifyIdentifier(owner, repo, num)
+		}
+		refs = append(refs, ref)
 	}
 	return refs
 }
