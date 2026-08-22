@@ -317,6 +317,7 @@ func TestFetchCandidateIssues(t *testing.T) {
 		f.queueBody("query CandidateIssues", loadFixture(t, "candidates_page2.json"))
 
 		adapter := newTestAdapter(t, f)
+		callsBeforeFetch := len(f.calls)
 
 		issues, err := adapter.FetchCandidateIssues(context.Background())
 		if err != nil {
@@ -339,6 +340,13 @@ func TestFetchCandidateIssues(t *testing.T) {
 		calls := f.callsFor("query CandidateIssues")
 		if len(calls) != 2 {
 			t.Fatalf("CandidateIssues call count = %d, want 2 (one per page)", len(calls))
+		}
+
+		// Every GraphQL call this fetch made, of any query name, is
+		// exactly the two candidate pages: no per-issue blocker
+		// fan-out, excluding the construction-time preflight call.
+		if got := len(f.calls) - callsBeforeFetch; got != 2 {
+			t.Errorf("total GraphQL requests during FetchCandidateIssues = %d, want 2 (zero per-issue fan-out)", got)
 		}
 		if calls[0].variables["after"] != nil {
 			t.Errorf("first page after = %v, want nil", calls[0].variables["after"])

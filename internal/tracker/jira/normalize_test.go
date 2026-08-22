@@ -3,6 +3,9 @@ package jira
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/adaptertest"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func TestNormalizeSearchIssue_AllFields(t *testing.T) {
@@ -86,6 +89,13 @@ func TestNormalizeSearchIssue_AllFields(t *testing.T) {
 	if issue.BlockedBy[0].State != "In Progress" {
 		t.Errorf("BlockedBy[0].State = %q, want In Progress", issue.BlockedBy[0].State)
 	}
+
+	// searchFields carries issuelinks into every candidate search, so
+	// Jira declares BlockersFromCandidates and this candidate already
+	// carries its one real blocker with no further read owed.
+	adaptertest.AssertCandidateBlockerSource(t, registry.BlockersFromCandidates, issue, 1)
+	adaptertest.AssertBlockerRefsNormalized(t, issue.BlockedBy)
+	adaptertest.AssertBlockerIdentifiersMatchIssue(t, issue, issue.BlockedBy)
 }
 
 func TestNormalizeSearchIssue_NilFields(t *testing.T) {

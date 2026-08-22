@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func TestNormalizeIssue(t *testing.T) {
@@ -57,6 +59,13 @@ func TestNormalizeIssue(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("normalizeIssue() = %+v, want %+v", got, want)
 	}
+
+	// inverseRelations(first: 25) carries the real blocker inline, so
+	// Linear declares BlockersFromCandidates and this candidate already
+	// has its one blocker with no further read owed.
+	adaptertest.AssertCandidateBlockerSource(t, registry.BlockersFromCandidates, got, 1)
+	adaptertest.AssertBlockerRefsNormalized(t, got.BlockedBy)
+	adaptertest.AssertBlockerIdentifiersMatchIssue(t, got, got.BlockedBy)
 }
 
 func TestNormalizeIssueDisplayIDAndTypeEmpty(t *testing.T) {
@@ -345,6 +354,14 @@ func TestNormalizeNestedOverflowWarn(t *testing.T) {
 			}
 			if len(got.BlockedBy) != 1 {
 				t.Errorf("BlockedBy len = %d, want 1 (truncated set returned)", len(got.BlockedBy))
+			}
+			// A truncated inverseRelations connection marks the issue
+			// unresolved, so the dispatch gate holds it rather than
+			// trusting a blocker list that might be missing an entry
+			// past the first page; every other overflow combination
+			// leaves the flag clear.
+			if got.BlockersUnresolved != tt.relationsNext {
+				t.Errorf("BlockersUnresolved = %t, want %t", got.BlockersUnresolved, tt.relationsNext)
 			}
 
 			output := buf.String()

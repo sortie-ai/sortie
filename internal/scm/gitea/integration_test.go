@@ -169,9 +169,62 @@ func TestIntegration_FetchCandidateIssues(t *testing.T) {
 		if iss.BlockedBy == nil {
 			t.Errorf("issue %s: BlockedBy is nil, want non-nil slice", iss.Identifier)
 		}
+		if !iss.BlockersUnresolved {
+			t.Errorf("issue %s: BlockersUnresolved is false, want true: giteaIssue carries no dependency field to prove any candidate dependency-free", iss.Identifier)
+		}
 		if iss.Comments != nil {
 			t.Errorf("issue %s: Comments should be nil for candidate fetch", iss.Identifier)
 		}
+	}
+}
+
+// TestIntegration_SeededBlockerLinkResolves pins that the per-issue
+// blocker read resolves a real, live dependency: the provisioning
+// script seeds one blocker link, so among every issue in an active or
+// terminal state, at least one FetchIssueBlockers call must return a
+// non-empty list.
+func TestIntegration_SeededBlockerLinkResolves(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter := newIntegrationAdapter(t)
+	reader, ok := adapter.(domain.BlockerReader)
+	if !ok {
+		t.Fatal("GiteaAdapter does not implement domain.BlockerReader")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	candidates, err := adapter.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	terminal, err := adapter.FetchIssuesByStates(ctx, []string{"done"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates(done): %v", err)
+	}
+
+	seen := map[string]bool{}
+	foundBlocker := false
+	for _, iss := range append(candidates, terminal...) {
+		if seen[iss.ID] {
+			continue
+		}
+		seen[iss.ID] = true
+
+		blockers, err := reader.FetchIssueBlockers(ctx, iss.ID)
+		if err != nil {
+			t.Fatalf("FetchIssueBlockers(%s): %v", iss.ID, err)
+		}
+		if len(blockers) > 0 {
+			foundBlocker = true
+			t.Logf("issue %s carries %d blocker(s), first identifier %q", iss.ID, len(blockers), blockers[0].Identifier)
+			break
+		}
+	}
+
+	if !foundBlocker {
+		t.Error("no issue among the fetched candidates and terminal issues carries a blocker; want the seeded blocker link to resolve")
 	}
 }
 
@@ -197,6 +250,9 @@ func TestIntegration_FetchIssueByID(t *testing.T) {
 	}
 	if fetched.BlockedBy == nil {
 		t.Error("BlockedBy is nil, want non-nil slice for fully populated issue")
+	}
+	if fetched.BlockersUnresolved {
+		t.Error("BlockersUnresolved = true after a successful FetchIssueByID, want false: the by-ID read always resolves blockers")
 	}
 }
 

@@ -3,6 +3,9 @@ package gitlab
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/adaptertest"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func TestNormalizeIssue_AllFields(t *testing.T) {
@@ -128,6 +131,12 @@ func TestNormalizeIssue_MultipleAssignees(t *testing.T) {
 	}
 }
 
+// TestNormalizeIssue_BlockedByAlwaysNonNilEmpty pins that the always-
+// empty blocker list is a declared capability limit, not an unread
+// value: GitLab Community Edition's issue-links route carries no
+// "blocks" relation to invert, so [registry.BlockersUnsupported] reads
+// the empty list as complete rather than as something a resolver
+// still owes a read.
 func TestNormalizeIssue_BlockedByAlwaysNonNilEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -140,6 +149,9 @@ func TestNormalizeIssue_BlockedByAlwaysNonNilEmpty(t *testing.T) {
 	if len(got.BlockedBy) != 0 {
 		t.Errorf("BlockedBy len = %d, want 0 (gitlab community edition has no blocks relation type)", len(got.BlockedBy))
 	}
+
+	adaptertest.AssertCandidateBlockerSource(t, registry.BlockersUnsupported, got, 0)
+	adaptertest.AssertBlockerIdentifiersMatchIssue(t, got, got.BlockedBy)
 }
 
 func TestNormalizeIssue_NullDescriptionDecodesToEmptyString(t *testing.T) {

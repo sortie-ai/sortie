@@ -68,6 +68,10 @@ func giteaLabelNames(labels []giteaLabel) []string {
 // Identifier are both set to the repo-scoped index; the global id is never used.
 // Parent and Comments remain nil; BlockedBy is a non-nil empty slice.
 //
+// BlockersUnresolved is always set true: the candidate route carries no
+// dependency field, so every candidate this function produces needs a
+// blocker read through the shared resolver or [GiteaAdapter.FetchIssueByID].
+//
 // DisplayID is left empty; callers apply [setDisplayID] after normalization.
 // The state lists and log are threaded to [issuekit.DeriveLabelState].
 func normalizeIssue(gi giteaIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) domain.Issue {
@@ -82,18 +86,19 @@ func normalizeIssue(gi giteaIssue, activeStates, terminalStates []string, handof
 	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
 
 	return domain.Issue{
-		ID:          num,
-		Identifier:  num,
-		Title:       gi.Title,
-		Description: gi.Body,
-		State:       issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
-		BranchName:  gi.Ref,
-		URL:         gi.HTMLURL,
-		Labels:      issuekit.NormalizeLabels(labelNames),
-		Assignee:    assignee,
-		BlockedBy:   []domain.BlockerRef{},
-		CreatedAt:   gi.CreatedAt,
-		UpdatedAt:   gi.UpdatedAt,
+		ID:                 num,
+		Identifier:         num,
+		Title:              gi.Title,
+		Description:        gi.Body,
+		State:              issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
+		BranchName:         gi.Ref,
+		URL:                gi.HTMLURL,
+		Labels:             issuekit.NormalizeLabels(labelNames),
+		Assignee:           assignee,
+		BlockedBy:          []domain.BlockerRef{},
+		BlockersUnresolved: true,
+		CreatedAt:          gi.CreatedAt,
+		UpdatedAt:          gi.UpdatedAt,
 	}
 }
 
@@ -124,18 +129,23 @@ func normalizeComments(raw []giteaComment) []domain.Comment {
 
 // normalizeBlockers converts blocker issue responses to [domain.BlockerRef]
 // values. Returns a non-nil empty slice when input is empty. Each blocker's
-// state is derived from its labels and native state.
-func normalizeBlockers(blockers []giteaIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) []domain.BlockerRef {
+// state is derived from its labels and native state, and its DisplayID is
+// qualified the same way [setDisplayID] qualifies an issue's own DisplayID.
+func normalizeBlockers(blockers []giteaIssue, activeStates, terminalStates []string, handoffState, owner, repo string, log *slog.Logger) []domain.BlockerRef {
 	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
 
 	refs := make([]domain.BlockerRef, 0, len(blockers))
 	for _, b := range blockers {
 		num := strconv.Itoa(b.Number)
-		refs = append(refs, domain.BlockerRef{
+		ref := domain.BlockerRef{
 			ID:         num,
 			Identifier: num,
 			State:      issuekit.DeriveLabelState(giteaLabelNames(b.Labels), b.State, "open", "closed", states, num, log),
-		})
+		}
+		if ref.DisplayID == "" {
+			ref.DisplayID = owner + "/" + repo + "#" + num
+		}
+		refs = append(refs, ref)
 	}
 	return refs
 }

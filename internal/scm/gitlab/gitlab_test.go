@@ -1042,6 +1042,11 @@ func TestFetchCandidateIssues(t *testing.T) {
 			if iss.Comments != nil {
 				t.Errorf("issue %s: Comments = %v, want nil", iss.Identifier, iss.Comments)
 			}
+			// GitLab Community Edition's issue-links route carries no
+			// "blocks" relation, so every candidate's empty list is
+			// declared complete rather than something a resolver owes
+			// a read for.
+			adaptertest.AssertCandidateBlockerSource(t, registry.BlockersUnsupported, iss, 0)
 		}
 		if got := calls.Load(); got != 2 {
 			t.Errorf("call count = %d, want 2 (two pages)", got)

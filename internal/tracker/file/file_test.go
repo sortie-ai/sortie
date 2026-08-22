@@ -139,12 +139,23 @@ func TestFetchCandidateIssues(t *testing.T) {
 			t.Fatalf("got %d issues, want 2", len(issues))
 		}
 		ids := map[string]bool{}
+		byIdentifier := map[string]domain.Issue{}
 		for _, iss := range issues {
 			ids[iss.Identifier] = true
+			byIdentifier[iss.Identifier] = iss
 		}
 		if !ids["PROJ-1"] || !ids["PROJ-2"] {
 			t.Errorf("unexpected issues: %v", ids)
 		}
+
+		// The file adapter declares BlockersFromCandidates: a fixture
+		// entry carrying a real blocker must produce it on the
+		// candidate path too, not only through FetchIssueByID.
+		proj1 := byIdentifier["PROJ-1"]
+		if len(proj1.BlockedBy) != 1 || proj1.BlockedBy[0].ID != "10002" {
+			t.Errorf("PROJ-1.BlockedBy = %v, want one blocker with ID 10002", proj1.BlockedBy)
+		}
+		adaptertest.AssertCandidateBlockerSource(t, registry.BlockersFromCandidates, proj1, 1)
 	})
 
 	t.Run("no active states returns all", func(t *testing.T) {
@@ -304,6 +315,8 @@ func TestFetchIssueByID(t *testing.T) {
 		}
 
 		adaptertest.AssertIssueNormalized(t, iss)
+		adaptertest.AssertBlockerRefsNormalized(t, iss.BlockedBy)
+		adaptertest.AssertBlockerIdentifiersMatchIssue(t, iss, iss.BlockedBy)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -671,9 +684,15 @@ func TestNormalization(t *testing.T) {
 		}
 	})
 
-	t.Run("absent blocked_by is non-nil empty", func(t *testing.T) {
+	t.Run("absent blocked_by is authoritatively empty, not unread", func(t *testing.T) {
 		t.Parallel()
 
+		// n7's own fixture entry carries no blocked_by key, so the
+		// empty list here means the input has none; it is not the
+		// unresolved-by-default shape GitHub and Gitea produce when
+		// their candidate route cannot answer the question at all.
+		// The file adapter declares BlockersFromCandidates, so
+		// AssertCandidateBlockerSource requires the flag stay clear.
 		iss := issueByID["n7"]
 		if iss.BlockedBy == nil {
 			t.Fatal("BlockedBy is nil, want non-nil empty slice")
@@ -681,6 +700,7 @@ func TestNormalization(t *testing.T) {
 		if len(iss.BlockedBy) != 0 {
 			t.Errorf("len(BlockedBy) = %d, want 0", len(iss.BlockedBy))
 		}
+		adaptertest.AssertCandidateBlockerSource(t, registry.BlockersFromCandidates, iss, 0)
 	})
 
 	t.Run("absent parent is nil", func(t *testing.T) {

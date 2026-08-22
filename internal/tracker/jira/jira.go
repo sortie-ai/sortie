@@ -33,6 +33,7 @@ func init() {
 		RequiresAPIKey:        true,
 		DefaultActiveStates:   defaultActiveStates,
 		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersFromCandidates,
 	})
 }
 
