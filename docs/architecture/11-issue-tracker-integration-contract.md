@@ -6,6 +6,8 @@ A tracker adapter must support these operations:
 
 1. `fetch_candidate_issues()`
    - Return issues in configured active states for the configured project.
+   - Each returned issue either carries an authoritative `blocked_by` or is marked
+     `blockers_unresolved`, per the adapter's declared blocker source (Section 11.3).
 
 2. `fetch_issue_by_id(issue_id)`
    - Return a single fully-populated issue including comments and attachments. Used for
@@ -61,6 +63,20 @@ Additional normalization details:
 - `blocked_by` -> derived from inverse relations where relation type is `blocks`
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
+
+Every issue returned by `fetch_candidate_issues` either carries an authoritative `blocked_by` or is
+marked `blockers_unresolved`, so the dispatch gate never treats an unread blocker list as an empty
+one. Each adapter declares which of three blocker sources it implements at registration: candidates
+carry every blocker already, the tracker has no blocking relation to carry, or a shared layer
+between the registry and the orchestrator completes the list per candidate, after the cheaper
+dispatch gates pass, for a candidate that reaches that gate. The declaration decides whether a
+per-issue read happens; nothing about it is inferred from a normalized field.
+
+For GitHub and Gitea, whose candidate routes cannot carry blockers, the candidate path itself does
+not read the dependencies route: it marks the candidate's blocker list unresolved and lets the
+shared resolution layer read it per candidate, after the cheaper eligibility gates pass. For GitLab,
+the always-empty `blocked_by` list is a declared capability of that adapter's registration rather
+than an inferred property of its normalization code.
 
 ### 11.4 Error Handling Contract
 
@@ -296,8 +312,11 @@ above. Its native open and closed status values are `open` and `closed`.
 - `priority` is always null, because Gitea issues carry no priority field.
 - `parent` is always null, because Gitea has no sub-issue relationship, and no parent request is
   issued.
-- `blocked_by` is read from the issue dependencies route (`/issues/{index}/dependencies`), the Gitea
-  form of the inverse `blocks` relation described in Section 11.3.
+- `blocked_by` is not read on the candidate path: `giteaIssue` carries no dependency field, so every
+  candidate is marked `blockers_unresolved` and the shared resolution layer reads the issue
+  dependencies route (`/issues/{index}/dependencies`), the Gitea form of the inverse `blocks`
+  relation described in Section 11.3, per candidate after the cheaper eligibility gates pass. The
+  by-ID read (`fetch_issue_by_id`) still reads the same route directly and clears the flag.
 - `branch_name` comes from the issue `ref` field and is stored as an opaque string.
 - `assignee` is the first entry of the issue's assignee list. Pull requests are skipped on every
   list route, so they never enter the candidate set.
@@ -398,7 +417,8 @@ intended new label rather than an error.
   request is issued.
 - `blocked_by` is always a non-nil empty slice. The issue-links route exists on Community Edition
   but accepts only the `relates_to` link type, so no `blocks` relation exists to invert as
-  Section 11.3 describes, and no links request is issued.
+  Section 11.3 describes, and no links request is issued. The adapter declares this capability
+  limit at registration rather than leaving it to be inferred from the normalization code.
 - `branch_name` is always empty, because GitLab derives branch names in the UI rather than storing
   one on the issue.
 - `assignee` is the username of the first entry of the issue's assignee list.
@@ -498,9 +518,13 @@ closed status values are `open` and `closed`, the same spelling Gitea uses.
 - `id` and `identifier` are both the repository-scoped issue number as a string; GitHub's global
   issue id is never read.
 - `priority` is always null, because GitHub issues carry no priority field.
-- `blocked_by` is read from the issue dependencies route
+- `blocked_by` is not read on the candidate path: every candidate is marked `blockers_unresolved`
+  by default, and the shared resolution layer reads the issue dependencies route
   (`/issues/{number}/dependencies/blocked_by`), the GitHub form of the inverse `blocks` relation
-  described in Section 11.3.
+  described in Section 11.3, per candidate after the cheaper eligibility gates pass. A candidate
+  whose payload carries a dependency summary proving it has no dependencies at all clears the flag
+  without a read. The by-ID read (`fetch_issue_by_id`) still reads the same route directly and
+  clears the flag.
 - `parent` comes from the issue's parent route; a missing parent (HTTP 404) normalizes to nil
   rather than an error.
 - `assignee` is the first entry of the issue's assignee list.

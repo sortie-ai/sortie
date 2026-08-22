@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"cmp"
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// maxBlockerReadsPerPass bounds how many per-issue blocker reads one
+// dispatch pass may issue.
+const maxBlockerReadsPerPass = 4
 
 // SortForDispatch returns a new slice of issues sorted in dispatch priority
 // order: priority ascending (nil sorts last), created_at oldest first (empty
@@ -77,6 +82,15 @@ func compareCreatedAt(a, b string) int {
 // not running, not claimed, and blocker rule. Capacity checks (global and
 // per-state slot limits) are not included; the dispatch loop checks slot
 // availability incrementally between dispatches via [HasAvailableSlots].
+//
+// ShouldDispatch does not resolve blockers: it reads BlockedBy and
+// BlockersUnresolved as the caller's issue value already carries them
+// and issues no tracker request of its own. It MUST NOT be used to
+// make a dispatch decision on an adapter whose candidates do not
+// already carry a resolved blocker list; [EvaluateCandidate] is the
+// dispatch decision. ShouldDispatch has no production caller and
+// survives as an independent oracle other tests compare
+// [EvaluateCandidate] against.
 func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStates []string) bool {
 	// Issues missing required fields are not eligible for dispatch.
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
@@ -128,6 +142,10 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 // The dispatch loop calls this to avoid rebuilding state sets on each
 // candidate. activeSet and terminalSet must contain lowercase state names
 // built via [stateSet].
+//
+// ShouldDispatchWithSets does not resolve blockers, for the same
+// reason and with the same restriction as [ShouldDispatch].
+// [EvaluateCandidate] is the dispatch decision.
 func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, terminalSet map[string]struct{}) bool {
 	// Issues missing required fields are not eligible for dispatch.
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
@@ -185,7 +203,15 @@ func IsBlockedByNonTerminal(issue domain.Issue, terminalStates []string) bool {
 // isBlockedByNonTerminalSet is the pre-built-set variant of
 // [IsBlockedByNonTerminal]. [ShouldDispatch] calls this directly to
 // avoid rebuilding the terminal set that it already constructed.
+//
+// An issue whose BlockersUnresolved is true is treated as blocked,
+// because BlockedBy is not authoritative for it. This is the one
+// authority for the blocker-hold decision; every caller, including
+// [EvaluateCandidate] and the retry lane, inherits it.
 func isBlockedByNonTerminalSet(issue domain.Issue, terminalSet map[string]struct{}) bool {
+	if issue.BlockersUnresolved {
+		return true
+	}
 	for _, blocker := range issue.BlockedBy {
 		if blocker.State == "" {
 			return true
@@ -197,6 +223,21 @@ func isBlockedByNonTerminalSet(issue domain.Issue, terminalSet map[string]struct
 	return false
 }
 
+// nextBlockerReadOffset returns the offset the next pass starts from:
+// advanced by the reads this pass spent when the budget denied a needy
+// candidate its read, and reset to zero otherwise. Only a denial leaves
+// a backlog for the window to step to, so a pass that spends its whole
+// budget with nobody left to deny resets, as does one that walked the
+// whole candidate list, broke on capacity, or halted. Resetting is what
+// keeps the window from creeping against a needy sequence that shifts
+// as the fleet fills and drains.
+func nextBlockerReadOffset(pass *TickResolution) int {
+	if pass.budgetExhausted {
+		return pass.offset + pass.reads
+	}
+	return 0
+}
+
 // stateSet builds a set of lowercase state names for O(1) membership testing.
 func stateSet(states []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(states))
@@ -204,6 +245,225 @@ func stateSet(states []string) map[string]struct{} {
 		set[strings.ToLower(s)] = struct{}{}
 	}
 	return set
+}
+
+// BlockerResolver is the orchestrator's view of the blocker resolver.
+// NeedsRead lets the caller price a candidate before spending its
+// read budget on one, without the caller learning which blocker
+// source the adapter declared.
+type BlockerResolver interface {
+	NeedsRead(issue domain.Issue) bool
+	Resolve(ctx context.Context, issue domain.Issue) (domain.Issue, error)
+}
+
+// SkipReason names why a candidate was not dispatched.
+type SkipReason string
+
+const (
+	SkipNone               SkipReason = ""
+	SkipIneligible         SkipReason = "ineligible"
+	SkipBlockedBy          SkipReason = "blocked_by"
+	SkipBlockersUnresolved SkipReason = "blockers_unresolved"
+	SkipBlockersNotRead    SkipReason = "blockers_not_read"
+	SkipBlockersIncomplete SkipReason = "blockers_incomplete"
+)
+
+// CandidateDecision is the outcome of evaluating one candidate.
+type CandidateDecision struct {
+	Dispatch bool
+	Reason   SkipReason
+	Issue    domain.Issue // the issue as resolved; dispatch uses this value
+	Err      error        // resolution failure, for the caller's log record only
+}
+
+// TickResolution carries the blocker-resolution state one dispatch
+// pass owns: whether a failure has already halted reads for this
+// pass, the failure that halted them, how many candidates needing a
+// read this pass has visited so far, how many reads it has spent,
+// where in that needy order it began reading, and how many
+// candidates it held without one. Its zero value is ready to use. It
+// is not safe for concurrent use and MUST NOT be shared between
+// passes; one dispatch loop constructs one and discards it when the
+// loop ends.
+type TickResolution struct {
+	halted     bool
+	haltErr    error
+	needy      int
+	reads      int
+	offset     int
+	heldUnread int
+
+	// budgetExhausted records that a needy candidate went unread
+	// because the budget was already spent, which is what makes a
+	// backlog exist for the next pass to step to. Spending the whole
+	// budget on the last needy candidates denies nobody, so it does
+	// not set this.
+	budgetExhausted bool
+}
+
+// passesEligibilityGates applies the seven non-blocker checks
+// [ShouldDispatchWithSets] applies before its blocker arm, in the
+// same order: required fields, active state, not terminal, not
+// running, not claimed, not budget-exhausted, not parked. This is a
+// fresh, independent re-implementation rather than a call into
+// [ShouldDispatchWithSets], so the latter survives as an independent
+// oracle a parity test compares [EvaluateCandidate] against.
+func passesEligibilityGates(issue domain.Issue, state *State, activeSet, terminalSet map[string]struct{}) bool {
+	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
+		return false
+	}
+
+	normalizedState := strings.ToLower(issue.State)
+
+	if _, active := activeSet[normalizedState]; !active {
+		return false
+	}
+	if _, terminal := terminalSet[normalizedState]; terminal {
+		return false
+	}
+	if _, running := state.Running[issue.ID]; running {
+		return false
+	}
+	if _, claimed := state.Claimed[issue.ID]; claimed {
+		return false
+	}
+	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
+		return false
+	}
+	if _, parked := state.Parked[issue.ID]; parked {
+		return false
+	}
+
+	return true
+}
+
+// classifyBlockerFailureClass reports whether a blocker-read failure
+// is deployment class, meaning the next tick's read of the same
+// candidate will not fix it, or transient class otherwise. The
+// classification reads the error alone: an adapter kind or a
+// forge-specific value is never inspected.
+func classifyBlockerFailureClass(err error) bool {
+	if errors.Is(err, domain.ErrNoBlockerReader) {
+		return true
+	}
+
+	trackerErr, ok := errors.AsType[*domain.TrackerError](err)
+	if !ok {
+		return false
+	}
+
+	if !trackerErr.Kind.RetryClassification().Retryable {
+		return true
+	}
+
+	switch trackerErr.Status {
+	case 403, 405, 410, 423, 429:
+		return true
+	default:
+		return false
+	}
+}
+
+// blockerErrorKind reports the domain error kind of a blocker-read
+// failure for observability records: the [domain.TrackerErrorKind]
+// when err wraps a [*domain.TrackerError], a fixed string for
+// [domain.ErrNoBlockerReader], and "unknown" otherwise.
+func blockerErrorKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, domain.ErrNoBlockerReader) {
+		return "no_blocker_reader"
+	}
+
+	if trackerErr, ok := errors.AsType[*domain.TrackerError](err); ok {
+		return string(trackerErr.Kind)
+	}
+
+	return "unknown"
+}
+
+// blockerErrorStatus reports the HTTP status a blocker-read failure
+// carried, or 0 when it carried none.
+func blockerErrorStatus(err error) int {
+	if trackerErr, ok := errors.AsType[*domain.TrackerError](err); ok {
+		return trackerErr.Status
+	}
+	return 0
+}
+
+// firstNonTerminalBlocker returns the first blocker whose state is
+// empty or not in terminalSet, matching the criterion
+// [isBlockedByNonTerminalSet] uses to decide the hold. Returns the
+// zero [domain.BlockerRef] when blockers has no such entry.
+func firstNonTerminalBlocker(blockers []domain.BlockerRef, terminalSet map[string]struct{}) domain.BlockerRef {
+	for _, b := range blockers {
+		if b.State == "" {
+			return b
+		}
+		if _, terminal := terminalSet[strings.ToLower(b.State)]; !terminal {
+			return b
+		}
+	}
+	return domain.BlockerRef{}
+}
+
+// EvaluateCandidate applies the issue-level dispatch gates to one
+// candidate, resolving its blockers first when, and only when, every
+// cheaper gate has already passed and this pass still has both a
+// read budget and no halting failure. Capacity is the caller's
+// business, as it is today.
+func EvaluateCandidate(ctx context.Context, issue domain.Issue, state *State,
+	activeSet, terminalSet map[string]struct{}, resolver BlockerResolver,
+	pass *TickResolution,
+) CandidateDecision {
+	if !passesEligibilityGates(issue, state, activeSet, terminalSet) {
+		return CandidateDecision{Reason: SkipIneligible, Issue: issue}
+	}
+
+	var readErr error
+	haltSkipped := false
+	budgetSkipped := false
+
+	if resolver != nil && resolver.NeedsRead(issue) {
+		pass.needy++
+		switch {
+		case pass.halted:
+			haltSkipped = true
+			pass.heldUnread++
+		case pass.reads >= maxBlockerReadsPerPass || pass.needy <= pass.offset:
+			if pass.reads >= maxBlockerReadsPerPass {
+				pass.budgetExhausted = true
+			}
+			budgetSkipped = true
+			pass.heldUnread++
+		default:
+			issue, readErr = resolver.Resolve(ctx, issue)
+			pass.reads++
+			if readErr != nil && classifyBlockerFailureClass(readErr) {
+				pass.halted = true
+				pass.haltErr = readErr
+			}
+		}
+	}
+
+	if readErr == nil && !isBlockedByNonTerminalSet(issue, terminalSet) {
+		return CandidateDecision{Dispatch: true, Issue: issue}
+	}
+
+	var reason SkipReason
+	switch {
+	case budgetSkipped:
+		reason = SkipBlockersNotRead
+	case readErr != nil || haltSkipped:
+		reason = SkipBlockersUnresolved
+	case issue.BlockersUnresolved:
+		reason = SkipBlockersIncomplete
+	default:
+		reason = SkipBlockedBy
+	}
+
+	return CandidateDecision{Reason: reason, Issue: issue, Err: readErr}
 }
 
 // NextAttempt returns the next retry attempt number. A nil input (first

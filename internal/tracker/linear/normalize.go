@@ -300,20 +300,21 @@ func normalizeIssue(li linearIssue, log *slog.Logger) domain.Issue {
 	}
 
 	return domain.Issue{
-		ID:          li.ID,
-		Identifier:  li.Identifier,
-		Title:       li.Title,
-		Description: description,
-		Priority:    normalizePriority(li.Priority),
-		State:       li.State.Name,
-		BranchName:  li.BranchName,
-		URL:         li.URL,
-		Labels:      issuekit.NormalizeLabels(labelNames),
-		Assignee:    resolveAssignee(li.Assignee),
-		Parent:      parent,
-		BlockedBy:   extractBlockers(li.InverseRelations),
-		CreatedAt:   li.CreatedAt,
-		UpdatedAt:   li.UpdatedAt,
+		ID:                 li.ID,
+		Identifier:         li.Identifier,
+		Title:              li.Title,
+		Description:        description,
+		Priority:           normalizePriority(li.Priority),
+		State:              li.State.Name,
+		BranchName:         li.BranchName,
+		URL:                li.URL,
+		Labels:             issuekit.NormalizeLabels(labelNames),
+		Assignee:           resolveAssignee(li.Assignee),
+		Parent:             parent,
+		BlockedBy:          extractBlockers(li.InverseRelations),
+		BlockersUnresolved: li.InverseRelations.PageInfo.HasNextPage,
+		CreatedAt:          li.CreatedAt,
+		UpdatedAt:          li.UpdatedAt,
 	}
 }
 

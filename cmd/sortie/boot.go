@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sortie-ai/sortie/internal/blockers"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -36,6 +37,7 @@ type bootResult struct {
 	path            string
 	preflightParams orchestrator.PreflightParams
 	trackerAdapter  domain.TrackerAdapter
+	blockerResolver orchestrator.BlockerResolver
 	serverPort      int
 	serverHost      string
 	serverEnabled   bool
@@ -230,6 +232,18 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		return bootResult{}, 1
 	}
 
+	trackerMeta, _ := registry.Trackers.Meta(cfg.Tracker.Kind)
+	resolver := blockers.NewResolver(trackerAdapter, trackerMeta.BlockerSource, logger)
+
+	// resolver is a *blockers.Resolver; assign it into the interface
+	// field only through this typed variable so a nil resolver stays a
+	// nil BlockerResolver interface value rather than a non-nil
+	// interface wrapping a nil pointer.
+	var blockerResolver orchestrator.BlockerResolver
+	if resolver != nil {
+		blockerResolver = resolver
+	}
+
 	// Transfer ownership of mgr to the caller — suppress the deferred Stop.
 	mgrStarted = false
 
@@ -240,6 +254,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		path:            path,
 		preflightParams: preflightParams,
 		trackerAdapter:  trackerAdapter,
+		blockerResolver: blockerResolver,
 		serverPort:      serverPort,
 		serverHost:      serverHost,
 		serverEnabled:   serverEnabled,

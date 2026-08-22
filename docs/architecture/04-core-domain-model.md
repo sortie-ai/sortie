@@ -34,11 +34,22 @@ Fields:
 - `comments` (list or null)
   - Comment records containing human feedback, review notes, and prior agent workpad entries.
     Needed for continuation runs where the agent must understand prior communication.
-- `blocked_by` (list of blocker refs)
-  - Each blocker ref contains:
-    - `id` (string or null)
-    - `identifier` (string or null)
-    - `state` (string or null)
+- `blocked_by` (list of blocker refs, or null)
+  - Authoritative unless the issue is marked `blockers_unresolved`, in which case the list is
+    whatever its producer last held and is not to be trusted; the dispatch gate treats an
+    unresolved list as blocking, the same conservative rule an unknown blocker state already
+    carries one level down.
+  - Each blocker ref contains four string fields, and an unavailable value is the empty
+    string rather than null. Null is reserved for the `blocked_by` list itself, which is how
+    an unresolved list is distinguished from one that is known to be empty:
+    - `id` (string)
+    - `identifier` (string)
+    - `state` (string)
+    - `display_id` (string)
+      - Qualified form of `identifier`, by the same rule the issue's own `display_id` follows.
+        Empty means `identifier` is already display-ready. A blocker ref's identifier
+        fields follow the same rule the issue's own do on every adapter: an adapter that qualifies
+        its issues qualifies its blockers the same way.
   - If `blocker.state` is null or unknown, treat it as non-terminal (conservative).
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)

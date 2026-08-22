@@ -2678,7 +2678,7 @@ underlying tracker system.
 | `.issue.issue_type`  | string          | Tracker-defined type (Bug, Story, Task, Epic). Empty string when absent.                                                                         |
 | `.issue.parent`      | object or nil   | Parent issue reference (sub-task relationship). `nil` when no parent.                                                                            |
 | `.issue.comments`    | list or nil     | Comment records (feedback, review notes, workpad entries). `nil` means comments were not fetched; an empty non-nil list means no comments exist. |
-| `.issue.blocked_by`  | list of objects | Blocker references, each with `.id`, `.identifier`, `.state`. Non-nil empty list when no blockers.                                               |
+| `.issue.blocked_by`  | list or nil     | Blocker references, each with `.id`, `.identifier`, `.state`, `.display_id`. `nil` means the blockers were not resolved; an empty non-nil list means no blockers exist. `.display_id` is the qualified form when the tracker's identifier alone is ambiguous (for example GitHub's `owner/repo#5` against an `identifier` of `5`) and empty otherwise. |
 | `.issue.created_at`  | string          | ISO-8601 creation timestamp. Empty string when absent.                                                                                           |
 | `.issue.updated_at`  | string          | ISO-8601 last-update timestamp. Empty string when absent.                                                                                        |
 

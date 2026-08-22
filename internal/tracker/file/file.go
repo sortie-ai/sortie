@@ -25,7 +25,9 @@ import (
 )
 
 func init() {
-	registry.Trackers.Register("file", NewFileAdapter)
+	registry.Trackers.RegisterWithMeta("file", NewFileAdapter, registry.TrackerMeta{
+		BlockerSource: registry.BlockersFromCandidates,
+	})
 }
 
 // Compile-time interface satisfaction check.

@@ -39,6 +39,7 @@ func init() {
 		ValidateTrackerConfig: validateConfig,
 		DefaultActiveStates:   defaultActiveStates,
 		DefaultTerminalStates: defaultTerminalStates,
+		BlockerSource:         registry.BlockersPerIssue,
 	})
 }
 
@@ -572,6 +573,7 @@ func (a *GiteaAdapter) FetchIssueByID(ctx context.Context, issueID string) (doma
 			return err
 		}
 		fetched.BlockedBy = blockers
+		fetched.BlockersUnresolved = false
 
 		comments, err := a.fetchComments(ctx, issueID)
 		if err != nil {
@@ -585,22 +587,30 @@ func (a *GiteaAdapter) FetchIssueByID(ctx context.Context, issueID string) (doma
 	return issue, err
 }
 
+// FetchIssueBlockers returns the blockers of one issue, read from the
+// forge's dependencies route.
+func (a *GiteaAdapter) FetchIssueBlockers(ctx context.Context, index string) ([]domain.BlockerRef, error) {
+	blockers := make([]domain.BlockerRef, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_blockers", func() error {
+		var fetchErr error
+		blockers, fetchErr = a.fetchBlockers(ctx, index)
+		return fetchErr
+	})
+	return blockers, err
+}
+
 // fetchBlockers returns the issues blocking the given issue, read from the
-// dependencies route through the Link paginator. A 404 is tolerated and yields
-// a non-nil empty slice.
+// dependencies route through the Link paginator.
 func (a *GiteaAdapter) fetchBlockers(ctx context.Context, index string) ([]domain.BlockerRef, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(index) + "/dependencies"
 	params := url.Values{"limit": {"50"}}
 
 	raw, err := a.paginateIssues(ctx, path, params)
 	if err != nil {
-		if domain.IsNotFound(err) {
-			return []domain.BlockerRef{}, nil
-		}
 		return nil, err
 	}
 
-	return normalizeBlockers(raw, a.activeStates, a.terminalStates, a.handoffState, a.log), nil
+	return normalizeBlockers(raw, a.activeStates, a.terminalStates, a.handoffState, a.owner, a.repo, a.log), nil
 }
 
 // FetchIssueComments returns all comments for the issue. It returns a non-nil

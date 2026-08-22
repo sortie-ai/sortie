@@ -64,8 +64,8 @@ type Metrics interface {
 	// IncTrackerRequests increments the tracker adapter API call
 	// counter. operation is one of "fetch_candidates", "fetch_issue",
 	// "fetch_comments", "fetch_by_states", "fetch_states_by_ids",
-	// "fetch_states_by_identifiers", "transition", "comment",
-	// or "add_label".
+	// "fetch_states_by_identifiers", "fetch_blockers", "transition",
+	// "comment", or "add_label".
 	// result is "success" or "error"
 	// (sortie_tracker_requests_total{operation,result} counter).
 	IncTrackerRequests(operation string, result string)
@@ -183,6 +183,13 @@ type Metrics interface {
 	// the label cardinality bounded.
 	// (sortie_dispatch_rule_match_total{layer,rule} counter).
 	IncDispatchRuleMatch(layer string, rule string)
+
+	// IncCandidateHolds increments the counter of candidates the
+	// dispatch loop held. reason is "blocked_by",
+	// "blockers_unresolved", "blockers_not_read", or
+	// "blockers_incomplete"
+	// (sortie_candidate_holds_total{reason} counter).
+	IncCandidateHolds(reason string)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -227,6 +234,7 @@ func (*NoopMetrics) IncAutoMergeReactions(string)                          {}
 func (*NoopMetrics) IncMergeConflictChecks(string)                         {}
 func (*NoopMetrics) IncMergeConflictEscalations(string)                    {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
+func (*NoopMetrics) IncCandidateHolds(string)                              {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.

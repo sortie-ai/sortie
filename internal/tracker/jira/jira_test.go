@@ -239,7 +239,9 @@ func TestFetchCandidateIssues_SinglePage(t *testing.T) {
 
 	fixture := loadFixture(t, "search_single_page.json")
 	var receivedJQL string
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
 		receivedJQL = r.URL.Query().Get("jql")
 		w.WriteHeader(http.StatusOK)
 		w.Write(fixture) //nolint:errcheck // test helper
@@ -253,6 +255,13 @@ func TestFetchCandidateIssues_SinglePage(t *testing.T) {
 	}
 	if len(issues) != 2 {
 		t.Fatalf("len = %d, want 2", len(issues))
+	}
+
+	// searchFields already names issuelinks, so a single-page candidate
+	// fetch costs exactly one HTTP request with no per-issue blocker
+	// fan-out.
+	if got := requestCount.Load(); got != 1 {
+		t.Errorf("HTTP request count = %d, want 1 (no per-issue blocker fan-out)", got)
 	}
 
 	// Verify normalization on first issue

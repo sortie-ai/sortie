@@ -453,6 +453,10 @@ func TestFetchCandidateIssues_CommentsNil(t *testing.T) {
 		if iss.Labels == nil {
 			t.Errorf("issue %s: Labels should be non-nil", iss.Identifier)
 		}
+		// issues.json carries no issue_dependencies_summary field, so
+		// every candidate must be marked unresolved rather than read as
+		// having no blockers.
+		adaptertest.AssertCandidateBlockerSource(t, registry.BlockersPerIssue, iss, 0)
 	}
 }
 
@@ -775,16 +779,48 @@ func TestFetchIssueByID_PRReturnsNotFound(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
 
-func TestFetchIssueByID_BlockerNotFound_Degrades(t *testing.T) {
+// TestFetchIssueByID_BlockerNotFound_Propagates pins that a 404 on
+// the dependencies route is not a signal that the issue has no
+// blockers. It
+// must surface as a *domain.TrackerError of kind ErrTrackerNotFound
+// rather than degrade to a non-nil empty BlockedBy, because a caller
+// that cannot tell "no blockers" from "could not read blockers" would
+// dispatch an issue whose blocker state is actually unknown.
+func TestFetchIssueByID_BlockerNotFound_Propagates(t *testing.T) {
 	t.Parallel()
 
-	// blockers endpoint returns 404 → BlockedBy should be empty non-nil slice.
+	issueFix := loadFixture(t, "issue.json")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/issues/42/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(issueFix) //nolint:errcheck // test helper
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueByID(context.Background(), "42")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+}
+
+// TestFetchIssueByID_ParentNotFound_Degrades pins that a 404 on the
+// parent route is unaffected by the blocker-completeness change: it
+// still degrades to a nil Parent rather than an error.
+func TestFetchIssueByID_ParentNotFound_Degrades(t *testing.T) {
+	t.Parallel()
+
 	issueFix := loadFixture(t, "issue.json")
 	commentsFix := loadFixture(t, "comments.json")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/issues/42/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]")) //nolint:errcheck // test helper
 	})
 	mux.HandleFunc("/repos/owner/repo/issues/42/parent", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -807,9 +843,11 @@ func TestFetchIssueByID_BlockerNotFound_Degrades(t *testing.T) {
 		t.Fatalf("FetchIssueByID: %v", err)
 	}
 
-	// 404 on blockers → empty non-nil slice.
+	if issue.BlockersUnresolved {
+		t.Error("BlockersUnresolved = true, want false: the blocker read succeeded")
+	}
 	if issue.BlockedBy == nil {
-		t.Error("BlockedBy is nil, want non-nil empty slice on 404")
+		t.Error("BlockedBy is nil, want non-nil empty slice")
 	}
 	if len(issue.BlockedBy) != 0 {
 		t.Errorf("BlockedBy len = %d, want 0", len(issue.BlockedBy))
@@ -2476,7 +2514,8 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 
 	// Issue 1: active, exists.
 	mux.HandleFunc("/repos/owner/repo/issues/1/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(emptyList)) //nolint:errcheck // test helper
 	})
 	mux.HandleFunc("/repos/owner/repo/issues/1/parent", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -2498,7 +2537,8 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 
 	// Issue 3: non-active, exists.
 	mux.HandleFunc("/repos/owner/repo/issues/3/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(emptyList)) //nolint:errcheck // test helper
 	})
 	mux.HandleFunc("/repos/owner/repo/issues/3/parent", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -2575,6 +2615,4 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 			t.Errorf("issue 3 appeared in candidates, want excluded (non-active state)")
 		}
 	}
-
-	_ = emptyList // suppress unused warning
 }

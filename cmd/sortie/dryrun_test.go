@@ -5,10 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // --- --dry-run flag tests ---
@@ -316,3 +321,234 @@ func TestRunDryRunNoServer(t *testing.T) {
 }
 
 // --- resolveLogFormat tests ---
+
+// --- runDryRun blocker-gate tests ---
+
+// dryRunFakeTracker is a configurable domain.TrackerAdapter double that
+// returns a fixed candidate list, so runDryRun tests can drive specific
+// blocker scenarios without a real tracker adapter.
+type dryRunFakeTracker struct {
+	issues []domain.Issue
+}
+
+var _ domain.TrackerAdapter = (*dryRunFakeTracker)(nil)
+
+func (f *dryRunFakeTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+	return f.issues, nil
+}
+func (f *dryRunFakeTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+func (f *dryRunFakeTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (f *dryRunFakeTracker) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+	return nil, nil
+}
+func (f *dryRunFakeTracker) FetchIssueStatesByIdentifiers(context.Context, []string) (map[string]string, error) {
+	return nil, nil
+}
+func (f *dryRunFakeTracker) FetchIssueComments(context.Context, string) ([]domain.Comment, error) {
+	return nil, nil
+}
+func (f *dryRunFakeTracker) TransitionIssue(context.Context, string, string) error { return nil }
+func (f *dryRunFakeTracker) CommentIssue(context.Context, string, string) error    { return nil }
+func (f *dryRunFakeTracker) AddLabel(context.Context, string, string) error        { return nil }
+
+// dryRunFakeResolver is a configurable orchestrator.BlockerResolver
+// double, recording every Resolve call in the order runDryRun makes
+// them.
+type dryRunFakeResolver struct {
+	needsReadFn func(domain.Issue) bool
+	resolveFn   func(context.Context, domain.Issue) (domain.Issue, error)
+	calls       []string
+}
+
+func (f *dryRunFakeResolver) NeedsRead(issue domain.Issue) bool {
+	if f.needsReadFn == nil {
+		return false
+	}
+	return f.needsReadFn(issue)
+}
+
+func (f *dryRunFakeResolver) Resolve(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
+	f.calls = append(f.calls, issue.ID)
+	if f.resolveFn == nil {
+		return issue, nil
+	}
+	return f.resolveFn(ctx, issue)
+}
+
+// discardStdoutLogger returns a text logger writing to w at Info
+// level, matching the level runDryRun's own records need to be
+// captured at.
+func discardStdoutLogger(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, nil))
+}
+
+// dryRunTestConfig returns a minimal config.ServiceConfig suitable for
+// direct runDryRun calls, with active/terminal states and a
+// caller-supplied concurrency cap.
+func dryRunTestConfig(maxConcurrentAgents int) config.ServiceConfig {
+	return config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling: config.PollingConfig{IntervalMS: 30000},
+		Agent:   config.AgentConfig{MaxConcurrentAgents: maxConcurrentAgents},
+	}
+}
+
+func TestRunDryRun_SkipReasonBlockedBy(t *testing.T) {
+	t.Parallel()
+
+	tracker := &dryRunFakeTracker{issues: []domain.Issue{
+		{
+			ID: "1", Identifier: "X-1", Title: "T", State: "To Do",
+			BlockedBy: []domain.BlockerRef{{ID: "b", State: "To Do"}},
+		},
+	}}
+
+	var stderr bytes.Buffer
+	logger := discardStdoutLogger(&stderr)
+
+	code := runDryRun(context.Background(), dryRunTestConfig(10), logger, tracker, nil)
+	if code != 0 {
+		t.Fatalf("runDryRun = %d, want 0", code)
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "skip_reason=blocked_by") {
+		t.Errorf("stderr missing skip_reason=blocked_by: %s", got)
+	}
+	if !strings.Contains(got, "would_dispatch=false") {
+		t.Errorf("stderr missing would_dispatch=false: %s", got)
+	}
+}
+
+func TestRunDryRun_SkipReasonBlockersUnresolved(t *testing.T) {
+	t.Parallel()
+
+	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
+	tracker := &dryRunFakeTracker{issues: []domain.Issue{
+		{ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true},
+	}}
+	resolver := &dryRunFakeResolver{
+		needsReadFn: func(domain.Issue) bool { return true },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = true
+			return issue, transientErr
+		},
+	}
+
+	var stderr bytes.Buffer
+	logger := discardStdoutLogger(&stderr)
+
+	code := runDryRun(context.Background(), dryRunTestConfig(10), logger, tracker, resolver)
+	if code != 0 {
+		t.Fatalf("runDryRun = %d, want 0", code)
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "skip_reason=blockers_unresolved") {
+		t.Errorf("stderr missing skip_reason=blockers_unresolved: %s", got)
+	}
+	if len(resolver.calls) != 1 {
+		t.Errorf("resolver calls = %d, want 1", len(resolver.calls))
+	}
+}
+
+func TestRunDryRun_SkipReasonBlockersIncomplete(t *testing.T) {
+	t.Parallel()
+
+	tracker := &dryRunFakeTracker{issues: []domain.Issue{
+		{ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true},
+	}}
+	resolver := &dryRunFakeResolver{
+		needsReadFn: func(domain.Issue) bool { return false },
+	}
+
+	var stderr bytes.Buffer
+	logger := discardStdoutLogger(&stderr)
+
+	code := runDryRun(context.Background(), dryRunTestConfig(10), logger, tracker, resolver)
+	if code != 0 {
+		t.Fatalf("runDryRun = %d, want 0", code)
+	}
+
+	got := stderr.String()
+	if !strings.Contains(got, "skip_reason=blockers_incomplete") {
+		t.Errorf("stderr missing skip_reason=blockers_incomplete: %s", got)
+	}
+	if len(resolver.calls) != 0 {
+		t.Errorf("resolver calls = %d, want 0 (NeedsRead reported false)", len(resolver.calls))
+	}
+}
+
+// TestRunDryRun_CapacityFullMakesNoBlockerRead pins that capacity is
+// evaluated before EvaluateCandidate, so a candidate with no free slot
+// spends no blocker read.
+func TestRunDryRun_CapacityFullMakesNoBlockerRead(t *testing.T) {
+	t.Parallel()
+
+	tracker := &dryRunFakeTracker{issues: []domain.Issue{
+		{ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true},
+	}}
+	resolver := &dryRunFakeResolver{
+		needsReadFn: func(domain.Issue) bool { return true },
+	}
+
+	var stderr bytes.Buffer
+	logger := discardStdoutLogger(&stderr)
+
+	// Zero concurrency budget: no candidate ever has a free slot.
+	code := runDryRun(context.Background(), dryRunTestConfig(0), logger, tracker, resolver)
+	if code != 0 {
+		t.Fatalf("runDryRun = %d, want 0", code)
+	}
+
+	if len(resolver.calls) != 0 {
+		t.Errorf("resolver calls = %d, want 0: a capacity-full candidate must not spend a blocker read", len(resolver.calls))
+	}
+	if !strings.Contains(stderr.String(), "would_dispatch=false") {
+		t.Errorf("stderr missing would_dispatch=false: %s", stderr.String())
+	}
+}
+
+// TestRunDryRun_ReadBudgetPerCycle pins that a single dry-run cycle
+// issues at most the per-pass blocker-read budget, holding the
+// remainder as blockers_not_read.
+func TestRunDryRun_ReadBudgetPerCycle(t *testing.T) {
+	t.Parallel()
+
+	const needyCount = 6
+	issues := make([]domain.Issue, needyCount)
+	for i := range issues {
+		id := fmt.Sprintf("N-%d", i+1)
+		issues[i] = domain.Issue{ID: id, Identifier: id, Title: "T", State: "To Do", BlockersUnresolved: true}
+	}
+	tracker := &dryRunFakeTracker{issues: issues}
+	resolver := &dryRunFakeResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = false
+			return issue, nil
+		},
+	}
+
+	var stderr bytes.Buffer
+	logger := discardStdoutLogger(&stderr)
+
+	code := runDryRun(context.Background(), dryRunTestConfig(10), logger, tracker, resolver)
+	if code != 0 {
+		t.Fatalf("runDryRun = %d, want 0", code)
+	}
+
+	if len(resolver.calls) == 0 || len(resolver.calls) >= needyCount {
+		t.Fatalf("resolver calls = %d, want a positive count below %d (the budget must bind for this fixture)", len(resolver.calls), needyCount)
+	}
+	if got := strings.Count(stderr.String(), "skip_reason=blockers_not_read"); got != needyCount-len(resolver.calls) {
+		t.Errorf("blockers_not_read count = %d, want %d", got, needyCount-len(resolver.calls))
+	}
+}

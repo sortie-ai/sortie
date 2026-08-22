@@ -41,6 +41,7 @@ var knownSortieMetrics = []string{
 	"sortie_review_escalations_total",
 	"sortie_reactions_auto_merge_total",
 	"sortie_dispatch_rule_match_total",
+	"sortie_candidate_holds_total",
 	"sortie_self_review_iterations_total",
 	"sortie_self_review_sessions_total",
 	"sortie_self_review_verification_duration_seconds",

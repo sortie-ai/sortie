@@ -738,6 +738,10 @@ func TestFetchCandidateIssues(t *testing.T) {
 			if iss.DisplayID != want {
 				t.Errorf("issue %s: DisplayID = %q, want %q", iss.Identifier, iss.DisplayID, want)
 			}
+			// giteaIssue carries no dependency field, so every candidate
+			// this adapter produces must be marked unresolved rather
+			// than read as having no blockers.
+			adaptertest.AssertCandidateBlockerSource(t, registry.BlockersPerIssue, iss, 0)
 		}
 	})
 
@@ -1371,6 +1375,9 @@ func TestFetchIssueByID(t *testing.T) {
 		if len(issue.BlockedBy) != 1 || issue.BlockedBy[0].Identifier != "1" {
 			t.Errorf("BlockedBy = %v, want one blocker with Identifier 1", issue.BlockedBy)
 		}
+		if issue.BlockersUnresolved {
+			t.Error("BlockersUnresolved = true, want false: the blocker read succeeded")
+		}
 		if len(issue.Comments) != 2 {
 			t.Fatalf("Comments len = %d, want 2", len(issue.Comments))
 		}
@@ -1651,11 +1658,22 @@ func TestFetchBlockers(t *testing.T) {
 		if blockers[0].State != "in-progress" {
 			t.Errorf("blockers[0].State = %q, want %q", blockers[0].State, "in-progress")
 		}
+		if want := testOwner + "/" + testRepo + "#1"; blockers[0].DisplayID != want {
+			t.Errorf("blockers[0].DisplayID = %q, want %q", blockers[0].DisplayID, want)
+		}
+
+		adaptertest.AssertBlockerRefsNormalized(t, blockers)
+		qualifiedIssue := domain.Issue{Identifier: "42", DisplayID: testOwner + "/" + testRepo + "#42"}
+		adaptertest.AssertBlockerIdentifiersMatchIssue(t, qualifiedIssue, blockers)
 	})
 
-	t.Run("404 is tolerated and returns a non-nil empty slice", func(t *testing.T) {
+	t.Run("404 propagates as a not-found error rather than degrading to no blockers", func(t *testing.T) {
 		t.Parallel()
 
+		// A 404 on the dependencies route is not a signal that the issue
+		// has no blockers: it is a condition the resolver must surface,
+		// so the candidate stays held rather than dispatched on an
+		// unknown blocker list.
 		mux := newPreflightMux(t)
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/dependencies", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
@@ -1663,16 +1681,8 @@ func TestFetchBlockers(t *testing.T) {
 		})
 		a := mustAdapter(t, mux)
 
-		blockers, err := a.fetchBlockers(context.Background(), "42")
-		if err != nil {
-			t.Fatalf("fetchBlockers should tolerate 404: %v", err)
-		}
-		if blockers == nil {
-			t.Fatal("blockers is nil, want non-nil empty slice")
-		}
-		if len(blockers) != 0 {
-			t.Errorf("len = %d, want 0", len(blockers))
-		}
+		_, err := a.fetchBlockers(context.Background(), "42")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 }
 

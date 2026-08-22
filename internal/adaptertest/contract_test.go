@@ -53,9 +53,11 @@ var contractBanTable = map[string]string{
 	"parseUTC":               "scmcore.ParseTimestamp or scmcore.ParseTimestampOrZero",
 }
 
-// contractTrackerAdapterMethods are the domain.TrackerAdapter method
-// names rule METRICS requires a trackermetrics.Track call inside, when
-// the enclosing package registers a tracker kind.
+// contractTrackerAdapterMethods are the tracker operation method names
+// rule METRICS requires a trackermetrics.Track call inside, when the
+// enclosing package registers a tracker kind. Most are
+// domain.TrackerAdapter methods; FetchIssueBlockers is a
+// domain.BlockerReader method instead.
 var contractTrackerAdapterMethods = map[string]bool{
 	"FetchCandidateIssues":          true,
 	"FetchIssueByID":                true,
@@ -63,13 +65,13 @@ var contractTrackerAdapterMethods = map[string]bool{
 	"FetchIssueStatesByIDs":         true,
 	"FetchIssueStatesByIdentifiers": true,
 	"FetchIssueComments":            true,
+	"FetchIssueBlockers":            true,
 	"TransitionIssue":               true,
 	"CommentIssue":                  true,
 	"AddLabel":                      true,
 }
 
-// contractRule names one of the three syntactic rules the checker
-// enforces.
+// contractRule names one of the syntactic rules the checker enforces.
 type contractRule string
 
 const (
@@ -77,6 +79,7 @@ const (
 	ruleMETRICS contractRule = "METRICS"
 	ruleHOOK    contractRule = "HOOK"
 	ruleIMPORT  contractRule = "IMPORT"
+	ruleBLOCKER contractRule = "BLOCKER"
 )
 
 // Family roots and the orchestrator path rule IMPORT matches an import
@@ -168,12 +171,13 @@ func unwrapCompositeLit(expr ast.Expr) (*ast.CompositeLit, bool) {
 	return nil, false
 }
 
-// compositeLitHasKey reports whether expr is a composite literal
-// carrying a field keyed by the given identifier name.
-func compositeLitHasKey(expr ast.Expr, key string) bool {
+// compositeLitKeyValue returns the value expression of the field keyed
+// by the given identifier name in the composite literal expr denotes,
+// or nil when expr is not such a literal or carries no such key.
+func compositeLitKeyValue(expr ast.Expr, key string) ast.Expr {
 	lit, ok := unwrapCompositeLit(expr)
 	if !ok {
-		return false
+		return nil
 	}
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
@@ -181,6 +185,36 @@ func compositeLitHasKey(expr ast.Expr, key string) bool {
 			continue
 		}
 		if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == key {
+			return kv.Value
+		}
+	}
+	return nil
+}
+
+// compositeLitHasKey reports whether expr is a composite literal
+// carrying a field keyed by the given identifier name.
+func compositeLitHasKey(expr ast.Expr, key string) bool {
+	return compositeLitKeyValue(expr, key) != nil
+}
+
+// packageReferencesIdentifier reports whether any file in files
+// contains the bare identifier name anywhere in its syntax tree,
+// which catches both a plain reference and a selector's trailing
+// field name (e.g. issue.BlockersUnresolved).
+func packageReferencesIdentifier(files []*ast.File, name string) bool {
+	for _, file := range files {
+		found := false
+		ast.Inspect(file, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
 			return true
 		}
 	}
@@ -192,8 +226,9 @@ func compositeLitHasKey(expr ast.Expr, key string) bool {
 // resolving the "registry" qualifier from each file's own imports. It
 // reports whether the package registers a tracker kind at all, which
 // constructor form it used, and, for RegisterWithMeta, whether the meta
-// literal supplies ValidateTrackerConfig.
-func contractRegistrationFacts(fset *token.FileSet, files []*ast.File) (registers bool, usedMeta bool, hasHook bool, pos token.Position) {
+// literal supplies ValidateTrackerConfig and BlockerSource, and whether
+// BlockerSource is set to registry.BlockersPerIssue.
+func contractRegistrationFacts(fset *token.FileSet, files []*ast.File) (registers bool, usedMeta bool, hasHook bool, hasBlockerSource bool, blockerSourceIsPerIssue bool, pos token.Position) {
 	for _, file := range files {
 		registryIdent := resolveContractImportName(file, contractRegistryImportPath)
 		if registryIdent == "" {
@@ -229,12 +264,20 @@ func contractRegistrationFacts(fset *token.FileSet, files []*ast.File) (register
 				pos = fset.Position(call.Pos())
 				if len(call.Args) >= 3 {
 					hasHook = compositeLitHasKey(call.Args[2], "ValidateTrackerConfig")
+					if val := compositeLitKeyValue(call.Args[2], "BlockerSource"); val != nil {
+						hasBlockerSource = true
+						if sel, ok := val.(*ast.SelectorExpr); ok {
+							if valIdent, ok := sel.X.(*ast.Ident); ok && valIdent.Name == registryIdent && sel.Sel.Name == "BlockersPerIssue" {
+								blockerSourceIsPerIssue = true
+							}
+						}
+					}
 				}
 			}
 			return true
 		})
 	}
-	return registers, usedMeta, hasHook, pos
+	return registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, pos
 }
 
 // checkContractBan reports a violation for every top-level function
@@ -433,7 +476,7 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 		}
 	}
 
-	registers, usedMeta, hasHook, hookPos := contractRegistrationFacts(fset, pkg.files)
+	registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, factsPos := contractRegistrationFacts(fset, pkg.files)
 
 	if !contractExempt(pkg.dirName, ruleMETRICS) {
 		for _, file := range pkg.files {
@@ -444,8 +487,23 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	if registers && !contractExempt(pkg.dirName, ruleHOOK) {
 		if !usedMeta || !hasHook {
 			violations = append(violations, contractViolation{
-				pos:  hookPos,
+				pos:  factsPos,
 				text: "tracker kind registers no config validation hook",
+			})
+		}
+	}
+
+	if registers && !contractExempt(pkg.dirName, ruleBLOCKER) {
+		if !usedMeta || !hasBlockerSource {
+			violations = append(violations, contractViolation{
+				pos:  factsPos,
+				text: "tracker kind registers no declared blocker source",
+			})
+		}
+		if blockerSourceIsPerIssue && !packageReferencesIdentifier(pkg.files, "BlockersUnresolved") {
+			violations = append(violations, contractViolation{
+				pos:  factsPos,
+				text: "tracker kind declares BlockersPerIssue but never references BlockersUnresolved",
 			})
 		}
 	}
@@ -590,6 +648,7 @@ import "github.com/sortie-ai/sortie/internal/registry"
 func init() {
 	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
 		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersFromCandidates,
 	})
 }
 
@@ -614,6 +673,8 @@ func record(metrics Metrics) {
 			wantCount: 1,
 		},
 		{
+			// No meta literal at all means no declared blocker source
+			// either, so this fixture is caught by both HOOK and BLOCKER.
 			name:       "a tracker kind registered through plain Register is rejected",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
@@ -625,7 +686,7 @@ func init() {
 	registry.Trackers.Register("fixture", newFixtureAdapter)
 }
 `,
-			wantCount: 1,
+			wantCount: 2,
 		},
 		{
 			name:       "a RegisterWithMeta literal omitting ValidateTrackerConfig is rejected",
@@ -638,6 +699,7 @@ import "github.com/sortie-ai/sortie/internal/registry"
 func init() {
 	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
 		RequiresProject: true,
+		BlockerSource:   registry.BlockersFromCandidates,
 	})
 }
 `,
@@ -657,6 +719,7 @@ import (
 func init() {
 	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
 		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersFromCandidates,
 	})
 }
 
@@ -669,6 +732,11 @@ func (a *fixtureAdapter) FetchIssueByID(ctx int, id string) (int, error) {
 			wantCount: 0,
 		},
 		{
+			// The fixture registers through the plain Register form, which
+			// carries no meta literal at all, so it is also caught by rule
+			// BLOCKER (no package can declare a blocker source without a
+			// meta literal to carry it); dirName "file" is allowlisted for
+			// HOOK only, so both BAN and BLOCKER fire here.
 			name:       "a package allowlisted for HOOK stays subject to BAN",
 			dirName:    "file",
 			importPath: "github.com/sortie-ai/sortie/internal/tracker/file",
@@ -682,7 +750,7 @@ func init() {
 
 func withRetry() error { return nil }
 `,
-			wantCount: 1,
+			wantCount: 2,
 		},
 		{
 			name:       "the github SCM package importing a sibling SCM adapter package is rejected",
@@ -806,6 +874,44 @@ import "github.com/sortie-ai/sortie/internal/tracker/jira"
 `,
 			wantCount: 1,
 		},
+		{
+			name:       "a per_issue package that never references BlockersUnresolved is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
+		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersPerIssue,
+	})
+}
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "a per_issue package that references BlockersUnresolved is accepted",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Trackers.RegisterWithMeta("fixture", newFixtureAdapter, registry.TrackerMeta{
+		ValidateTrackerConfig: validateConfig,
+		BlockerSource:         registry.BlockersPerIssue,
+	})
+}
+
+func markUnresolved(issue *domain.Issue) {
+	issue.BlockersUnresolved = true
+}
+`,
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -829,6 +935,19 @@ import "github.com/sortie-ai/sortie/internal/tracker/jira"
 				t.Errorf("checkAdapterContractPackage() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
 			}
 		})
+	}
+}
+
+// TestContractAllowlist_BlockerRuleHasNoExemptions pins that no package
+// carries a contractAllowlist entry for ruleBLOCKER, so every
+// tracker-registering package, including file, is subject to it.
+func TestContractAllowlist_BlockerRuleHasNoExemptions(t *testing.T) {
+	t.Parallel()
+
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleBLOCKER]; exempt {
+			t.Errorf("contractAllowlist[%q] exempts %q, want no exemption from that rule", dirName, ruleBLOCKER)
+		}
 	}
 }
 

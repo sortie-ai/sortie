@@ -34,6 +34,7 @@ func init() {
 		ValidateTrackerConfig: validateConfig,
 		DefaultActiveStates:   defaultActiveStates,
 		DefaultTerminalStates: defaultTerminalStates,
+		BlockerSource:         registry.BlockersFromCandidates,
 	})
 }
 

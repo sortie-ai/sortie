@@ -232,7 +232,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if br.dryRun {
 		br.logger.Info("sortie dry-run starting", logAttrs...)
-		return runDryRun(ctx, br.cfg, br.logger, br.trackerAdapter)
+		return runDryRun(ctx, br.cfg, br.logger, br.trackerAdapter, br.blockerResolver)
 	}
 	br.logger.Info("sortie starting", logAttrs...)
 
@@ -766,6 +766,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		LabelFixReactionConfigured:        labelFixConfigured,
 		MergeCompletionConfig:             mergeCompletionConfig,
 		MergeCompletionReactionConfigured: mergeCompletionConfigured,
+		BlockerResolver:                   br.blockerResolver,
 	})
 
 	var srv *server.Server

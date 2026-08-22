@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -67,6 +68,9 @@ func TestNormalizeIssue_AllFields(t *testing.T) {
 	}
 	if len(got.BlockedBy) != 0 {
 		t.Errorf("BlockedBy len = %d, want 0", len(got.BlockedBy))
+	}
+	if !got.BlockersUnresolved {
+		t.Error("BlockersUnresolved = false, want true: giteaIssue carries no dependency field to prove the issue has none")
 	}
 	if got.CreatedAt != "2026-01-01T00:00:00Z" {
 		t.Errorf("CreatedAt = %q, want %q", got.CreatedAt, "2026-01-01T00:00:00Z")
@@ -255,7 +259,7 @@ func TestNormalizeBlockers_NonEmpty(t *testing.T) {
 	active := []string{"backlog", "in-progress", "review"}
 	terminal := []string{"done", "wontfix"}
 
-	got := normalizeBlockers(blockers, active, terminal, "", nil)
+	got := normalizeBlockers(blockers, active, terminal, "", "acme", "widgets", nil)
 
 	if len(got) != 2 {
 		t.Fatalf("normalizeBlockers len = %d, want 2", len(got))
@@ -272,12 +276,19 @@ func TestNormalizeBlockers_NonEmpty(t *testing.T) {
 	if got[1].State != "done" {
 		t.Errorf("got[1].State = %q, want %q", got[1].State, "done")
 	}
+	if got[0].DisplayID != "acme/widgets#5" {
+		t.Errorf("got[0].DisplayID = %q, want %q", got[0].DisplayID, "acme/widgets#5")
+	}
+
+	adaptertest.AssertBlockerRefsNormalized(t, got)
+	qualifiedIssue := domain.Issue{Identifier: "1", DisplayID: "acme/widgets#1"}
+	adaptertest.AssertBlockerIdentifiersMatchIssue(t, qualifiedIssue, got)
 }
 
 func TestNormalizeBlockers_EmptyReturnsNonNilSlice(t *testing.T) {
 	t.Parallel()
 
-	got := normalizeBlockers(nil, nil, nil, "", nil)
+	got := normalizeBlockers(nil, nil, nil, "", "acme", "widgets", nil)
 
 	if got == nil {
 		t.Error("normalizeBlockers(nil) returned nil, want non-nil empty slice")
