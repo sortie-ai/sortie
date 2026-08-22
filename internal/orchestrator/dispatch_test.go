@@ -1643,15 +1643,10 @@ func budgetWindowIssues() []domain.Issue {
 	return issues
 }
 
-// advanceBlockerReadOffset applies the same rule the orchestrator's
-// tick loop applies after a pass ends: advance by the reads spent when
-// the budget was exhausted, reset to zero on every other ending
-// (walked the whole list, broke on capacity, or halted).
+// advanceBlockerReadOffset delegates to the production rule so these
+// tests cannot pass against a stale copy of it.
 func advanceBlockerReadOffset(pass *TickResolution) int {
-	if pass.reads == maxBlockerReadsPerPass {
-		return pass.offset + pass.reads
-	}
-	return 0
+	return nextBlockerReadOffset(pass)
 }
 
 // TestEvaluateCandidate_ReadBudgetWindow pins the read-budget window

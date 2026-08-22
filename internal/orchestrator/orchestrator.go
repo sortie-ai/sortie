@@ -198,9 +198,14 @@ type OrchestratorParams struct {
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 
 	// BlockerResolver completes a candidate's blocker list according
-	// to its tracker adapter's declared blocker source. Optional: a
-	// nil value means "resolve nothing", which reproduces the
-	// orchestrator's behavior before this collaborator existed.
+	// to its tracker adapter's declared blocker source. Optional, and
+	// nil means no blocker read happens. That is equivalent to the
+	// behavior before this collaborator existed only for an adapter
+	// whose candidates already carry every blocker; for an adapter
+	// that resolves blockers per issue, candidates stay marked
+	// unresolved and the gate holds every one of them, because an
+	// unread list is never read as an empty one. The production
+	// binary always populates this field.
 	BlockerResolver BlockerResolver
 }
 
@@ -729,11 +734,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		dispatched++
 	}
 
-	if pass.reads == maxBlockerReadsPerPass {
-		o.state.BlockerReadOffset = pass.offset + pass.reads
-	} else {
-		o.state.BlockerReadOffset = 0
-	}
+	o.state.BlockerReadOffset = nextBlockerReadOffset(pass)
 
 	switch {
 	case pass.halted:
