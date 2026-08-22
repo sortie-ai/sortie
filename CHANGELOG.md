@@ -54,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arises rather than removing it.
   ([#837](https://github.com/sortie-ai/sortie/issues/837))
 
+- A failed OpenCode turn now reports the failure detail OpenCode put on
+  the run stream, instead of its generic `Unexpected server error.
+  Check server logs for details.` placeholder. One failure can produce
+  both reports in either order, and the adapter kept whichever arrived
+  last. Only the unknown-model case was recovered afterwards, by a
+  second `opencode` call; every other cause reached the operator as the
+  placeholder.
+  ([#839](https://github.com/sortie-ai/sortie/issues/839))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed

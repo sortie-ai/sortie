@@ -219,11 +219,13 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 }
 
 // queryModelNotFound reports whether the model configured for this session is
-// absent from the catalog served by `opencode models`. OpenCode 1.16.0 and
-// later replace the unknown-model failure on the run stream with a generic
-// masked server error, so the adapter restores the actionable diagnostic by
-// checking the catalog itself. ok is false when no model is configured, the
-// listing fails or is empty, or the model is present.
+// absent from the catalog served by `opencode models`. An unknown model raises
+// two independent errors, the actionable diagnostic opencode publishes on the
+// session and the generic masked placeholder its run command reports, and the
+// run command can exit before the diagnostic reaches the stream. This
+// reconstructs the diagnostic for the turns that see the placeholder alone.
+// ok is false when no model is configured, the listing fails or is empty, or
+// the model is present.
 func queryModelNotFound(ctx context.Context, state *sessionState) (message string, ok bool) {
 	model := state.passthrough.Model
 	if model == "" {

@@ -1,0 +1,2 @@
+{"type":"error","timestamp":1778777973456,"sessionID":"ses_fail789","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details."}}}
+{"type":"error","timestamp":1778777973456,"sessionID":"ses_fail789","error":{"name":"UnknownError","data":{"message":"Model not found: nonexistent/nonexistent."}}}

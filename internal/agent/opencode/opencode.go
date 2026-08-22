@@ -1,10 +1,10 @@
 // Package opencode implements [domain.AgentAdapter] for the OpenCode CLI.
 // It launches one `opencode run --format json` subprocess per turn,
 // normalizes stdout envelopes into domain events, and recovers final token
-// usage with `opencode export --sanitize`. When a turn fails with only
-// opencode's masked generic server error, the adapter consults
-// `opencode models` to restore the unknown-model diagnostic that OpenCode
-// 1.16.0 and later no longer emit on the run stream.
+// usage with `opencode export --sanitize`. When a turn fails and the run
+// stream carried nothing but opencode's masked generic server error, the
+// adapter consults `opencode models` to reconstruct the unknown-model
+// diagnostic.
 package opencode
 
 import (
@@ -414,7 +414,15 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 
 			case "error":
 				runtime.terminalOutcome = domain.EventTurnFailed
-				runtime.terminalError = event.Error
+				// One failure can surface as two error events: the
+				// actionable diagnostic the session publishes, and the
+				// generic placeholder the run command reports when the
+				// failure is not in its API error schema. Their order on
+				// the stream is not guaranteed, so keep whichever event
+				// carries detail rather than whichever arrives last.
+				if runtime.terminalError == nil || !isMaskedServerError(rawRunErrorMessage(event.Error)) {
+					runtime.terminalError = event.Error
+				}
 
 			default:
 				emit(domain.AgentEvent{

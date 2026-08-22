@@ -651,53 +651,95 @@ func TestRunTurn_LogicalFailureExitZero(t *testing.T) {
 	}, result, err)
 }
 
+// writeUnreachableModelsScript writes a fake opencode whose run stream is
+// fixtureName and whose models subcommand always fails, so a reported detail
+// that names the unknown model can only have come from the run stream.
+func writeUnreachableModelsScript(t *testing.T, dir, fixtureName string) string {
+	t.Helper()
+
+	runPath := filepath.Join(dir, fixtureName)
+	if err := os.WriteFile(runPath, loadFixture(t, fixtureName), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", fixtureName, err)
+	}
+
+	exportPath := filepath.Join(dir, "export.json")
+	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(export.json): %v", err)
+	}
+
+	body := `case "$1" in
+  export) cat '` + exportPath + `'; exit 0;;
+  models) exit 1;;
+esac
+cat '` + runPath + `'`
+
+	return writeOpenCodeScript(t, dir, body)
+}
+
+// TestRunTurn_LogicalFailureDualError covers a failure that emits both the
+// actionable diagnostic and opencode's masked placeholder on the run stream.
+// Either order is possible, and the operator must see the diagnostic in both.
 func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
-	script := writeRunFixtureScript(t, tmpDir, "logical_failure_dual_error.jsonl")
-
-	a, _ := NewOpenCodeAdapter(map[string]any{})
-	session := mustStartSession(t, a, tmpDir, script)
-
-	events, result, err := collectEvents(t, a, session, "work")
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	tests := []struct {
+		name    string
+		fixture string
+	}{
+		{name: "diagnostic first", fixture: "logical_failure_dual_error.jsonl"},
+		{name: "placeholder first", fixture: "logical_failure_dual_error_reversed.jsonl"},
 	}
 
-	// Exactly one terminal event fires per turn: the second "error"
-	// event on the run stream overwrites the first in per-turn state, so
-	// only the last error's detail survives to the single emitted
-	// turn_failed event.
-	var turnFailedMessages []string
-	for _, event := range events {
-		if event.Type == domain.EventTurnEndedWithError {
-			t.Fatalf("unexpected turn_ended_with_error event: %+v", event)
-		}
-		if event.Type == domain.EventTurnFailed {
-			turnFailedMessages = append(turnFailedMessages, event.Message)
-		}
-	}
-	if len(turnFailedMessages) != 1 {
-		t.Fatalf("turn_failed count = %d, want 1; messages = %q", len(turnFailedMessages), turnFailedMessages)
-	}
-	if !strings.Contains(turnFailedMessages[0], "Unexpected server error") {
-		t.Errorf("turn_failed message = %q, want substring %q (the last error event on the stream)", turnFailedMessages[0], "Unexpected server error")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrTurnFailed,
-		TerminalMessage:   turnFailedMessages[0],
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkAbsent,
-		WorkDetail:        "no assistant output on the run stream",
-	}, result, err)
+			tmpDir := t.TempDir()
+			script := writeUnreachableModelsScript(t, tmpDir, tt.fixture)
+
+			a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
+			session := mustStartSession(t, a, tmpDir, script)
+
+			events, result, err := collectEvents(t, a, session, "work")
+			if result.ExitReason != domain.EventTurnFailed {
+				t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+				t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+			}
+
+			// Exactly one terminal event fires per turn: the two error
+			// events collapse into a single turn_failed carrying the
+			// detail, not the placeholder that shares the stream with it.
+			var turnFailedMessages []string
+			for _, event := range events {
+				if event.Type == domain.EventTurnEndedWithError {
+					t.Fatalf("unexpected turn_ended_with_error event: %+v", event)
+				}
+				if event.Type == domain.EventTurnFailed {
+					turnFailedMessages = append(turnFailedMessages, event.Message)
+				}
+			}
+			if len(turnFailedMessages) != 1 {
+				t.Fatalf("turn_failed count = %d, want 1; messages = %q", len(turnFailedMessages), turnFailedMessages)
+			}
+			const wantMessage = "Model not found: nonexistent/nonexistent."
+			if turnFailedMessages[0] != wantMessage {
+				t.Errorf("turn_failed message = %q, want %q (the diagnostic from the run stream)", turnFailedMessages[0], wantMessage)
+			}
+
+			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+				Terminal:          agentcore.TerminalFailure,
+				TerminalErrorKind: domain.ErrTurnFailed,
+				TerminalMessage:   turnFailedMessages[0],
+				ExitObserved:      true,
+				ExitCode:          0,
+				Work:              agentcore.WorkAbsent,
+				WorkDetail:        "no assistant output on the run stream",
+			}, result, err)
+		})
+	}
 }
 
 // writeMaskedRunScript writes a fake opencode whose run stream emits only the
