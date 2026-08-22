@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -507,6 +509,26 @@ func TestIsBlockedByNonTerminal(t *testing.T) {
 			},
 			terminalStates: nil,
 			want:           true,
+		},
+		{
+			name: "unresolved blockers block dispatch even with no listed blockers",
+			issue: domain.Issue{
+				ID:                 "1",
+				BlockedBy:          []domain.BlockerRef{},
+				BlockersUnresolved: true,
+			},
+			terminalStates: terminal,
+			want:           true,
+		},
+		{
+			name: "resolved empty blocker list does not block dispatch",
+			issue: domain.Issue{
+				ID:                 "1",
+				BlockedBy:          []domain.BlockerRef{},
+				BlockersUnresolved: false,
+			},
+			terminalStates: terminal,
+			want:           false,
 		},
 	}
 
@@ -1205,4 +1227,630 @@ func TestDispatchIssue(t *testing.T) {
 
 		DispatchIssue(context.Background(), s, testIssue("ISS-P"), nil, "", nil)
 	})
+}
+
+// --- EvaluateCandidate ---
+
+// fakeBlockerResolver is a test double for BlockerResolver. Both
+// functions default to a no-op when nil: NeedsRead reports false and
+// Resolve returns the issue unchanged. Every Resolve call is recorded
+// in callOrder, in the order EvaluateCandidate makes them.
+type fakeBlockerResolver struct {
+	needsReadFn func(domain.Issue) bool
+	resolveFn   func(context.Context, domain.Issue) (domain.Issue, error)
+	callOrder   []string
+}
+
+func (f *fakeBlockerResolver) NeedsRead(issue domain.Issue) bool {
+	if f.needsReadFn == nil {
+		return false
+	}
+	return f.needsReadFn(issue)
+}
+
+func (f *fakeBlockerResolver) Resolve(ctx context.Context, issue domain.Issue) (domain.Issue, error) {
+	f.callOrder = append(f.callOrder, issue.ID)
+	if f.resolveFn == nil {
+		return issue, nil
+	}
+	return f.resolveFn(ctx, issue)
+}
+
+func TestEvaluateCandidate(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	readErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "boom"}
+
+	tests := []struct {
+		name            string
+		issue           domain.Issue
+		resolver        *fakeBlockerResolver
+		wantDispatch    bool
+		wantReason      SkipReason
+		wantErr         error
+		wantResolverLen int
+	}{
+		{
+			name:            "ineligible candidate makes zero resolver calls",
+			issue:           domain.Issue{ID: "", Identifier: "X-1", Title: "T", State: "To Do"},
+			resolver:        &fakeBlockerResolver{needsReadFn: func(domain.Issue) bool { return true }},
+			wantDispatch:    false,
+			wantReason:      SkipIneligible,
+			wantResolverLen: 0,
+		},
+		{
+			name:         "eligible with no blockers dispatches",
+			issue:        domain.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "To Do"},
+			wantDispatch: true,
+			wantReason:   SkipNone,
+		},
+		{
+			name: "eligible with only a terminal blocker dispatches",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do",
+				BlockedBy: []domain.BlockerRef{{ID: "b", State: "Done"}},
+			},
+			wantDispatch: true,
+			wantReason:   SkipNone,
+		},
+		{
+			name: "eligible with a non-terminal blocker holds as blocked_by",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do",
+				BlockedBy: []domain.BlockerRef{{ID: "b", State: "To Do"}},
+			},
+			wantDispatch: false,
+			wantReason:   SkipBlockedBy,
+		},
+		{
+			name: "resolver read failure holds as blockers_unresolved and carries the error",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true,
+			},
+			resolver: &fakeBlockerResolver{
+				needsReadFn: func(domain.Issue) bool { return true },
+				resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+					issue.BlockersUnresolved = true
+					return issue, readErr
+				},
+			},
+			wantDispatch:    false,
+			wantReason:      SkipBlockersUnresolved,
+			wantErr:         readErr,
+			wantResolverLen: 1,
+		},
+		{
+			name: "producer-declared incomplete list with no read attempted",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true,
+			},
+			resolver:        &fakeBlockerResolver{needsReadFn: func(domain.Issue) bool { return false }},
+			wantDispatch:    false,
+			wantReason:      SkipBlockersIncomplete,
+			wantResolverLen: 0,
+		},
+		{
+			name: "a resolver error holds the candidate even when it leaves the flag false",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true,
+			},
+			resolver: &fakeBlockerResolver{
+				needsReadFn: func(domain.Issue) bool { return true },
+				resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+					issue.BlockersUnresolved = false
+					return issue, readErr
+				},
+			},
+			wantDispatch:    false,
+			wantReason:      SkipBlockersUnresolved,
+			wantErr:         readErr,
+			wantResolverLen: 1,
+		},
+		{
+			name: "nil resolver reproduces today's ShouldDispatchWithSets behavior when blocked",
+			issue: domain.Issue{
+				ID: "1", Identifier: "X-1", Title: "T", State: "To Do",
+				BlockedBy: []domain.BlockerRef{{ID: "b", State: "To Do"}},
+			},
+			resolver:     nil,
+			wantDispatch: false,
+			wantReason:   SkipBlockedBy,
+		},
+		{
+			name:         "nil resolver reproduces today's ShouldDispatchWithSets behavior when eligible",
+			issue:        domain.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "To Do"},
+			resolver:     nil,
+			wantDispatch: true,
+			wantReason:   SkipNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := NewState(1000, 10, nil, AgentTotals{})
+			pass := &TickResolution{}
+
+			var resolver BlockerResolver
+			if tt.resolver != nil {
+				resolver = tt.resolver
+			}
+
+			got := EvaluateCandidate(context.Background(), tt.issue, s, activeSet, terminalSet, resolver, pass)
+
+			if got.Dispatch != tt.wantDispatch {
+				t.Errorf("EvaluateCandidate(%q).Dispatch = %t, want %t", tt.issue.Identifier, got.Dispatch, tt.wantDispatch)
+			}
+			if got.Reason != tt.wantReason {
+				t.Errorf("EvaluateCandidate(%q).Reason = %q, want %q", tt.issue.Identifier, got.Reason, tt.wantReason)
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(got.Err, tt.wantErr) {
+					t.Errorf("EvaluateCandidate(%q).Err = %v, want %v", tt.issue.Identifier, got.Err, tt.wantErr)
+				}
+			} else if got.Err != nil {
+				t.Errorf("EvaluateCandidate(%q).Err = %v, want nil", tt.issue.Identifier, got.Err)
+			}
+			if tt.resolver != nil && len(tt.resolver.callOrder) != tt.wantResolverLen {
+				t.Errorf("resolver calls = %d, want %d", len(tt.resolver.callOrder), tt.wantResolverLen)
+			}
+		})
+	}
+}
+
+// TestEvaluateCandidate_ParityWithShouldDispatchWithSets pins that for
+// an issue whose blockers are already resolved, EvaluateCandidate's
+// dispatch decision agrees with the independent ShouldDispatchWithSets
+// oracle. Both predicates are exercised over the same table so a
+// divergence in either fails the test.
+func TestEvaluateCandidate_ParityWithShouldDispatchWithSets(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	issues := []domain.Issue{
+		{ID: "1", Identifier: "X-1", Title: "T", State: "To Do"},
+		{ID: "2", Identifier: "X-2", Title: "T", State: "Backlog"},
+		{
+			ID: "3", Identifier: "X-3", Title: "T", State: "To Do",
+			BlockedBy: []domain.BlockerRef{{ID: "b", State: "To Do"}},
+		},
+		{
+			ID: "4", Identifier: "X-4", Title: "T", State: "To Do",
+			BlockedBy: []domain.BlockerRef{{ID: "b", State: "Done"}},
+		},
+		{ID: "", Identifier: "X-5", Title: "T", State: "To Do"},
+	}
+
+	for _, issue := range issues {
+		t.Run(issue.Identifier, func(t *testing.T) {
+			t.Parallel()
+
+			s := NewState(1000, 10, nil, AgentTotals{})
+			pass := &TickResolution{}
+
+			decision := EvaluateCandidate(context.Background(), issue, s, activeSet, terminalSet, nil, pass)
+			want := ShouldDispatchWithSets(issue, s, activeSet, terminalSet)
+
+			if decision.Dispatch != want {
+				t.Errorf("EvaluateCandidate(%q).Dispatch = %t, ShouldDispatchWithSets(%q) = %t, want equal",
+					issue.Identifier, decision.Dispatch, issue.Identifier, want)
+			}
+		})
+	}
+}
+
+func TestClassifyBlockerFailureClass(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		err            error
+		wantDeployment bool
+	}{
+		{
+			name:           "ErrNoBlockerReader is deployment class",
+			err:            domain.ErrNoBlockerReader,
+			wantDeployment: true,
+		},
+		{
+			name:           "auth error is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAuth},
+			wantDeployment: true,
+		},
+		{
+			name:           "not found error is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerNotFound, Status: 404},
+			wantDeployment: true,
+		},
+		{
+			name:           "payload error is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerPayload},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 403 is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 403},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 429 is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 429},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 423 is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 423},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 405 is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 405},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 410 is deployment class",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 410},
+			wantDeployment: true,
+		},
+		{
+			name:           "api error with status 500 stays transient",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerAPI, Status: 500},
+			wantDeployment: false,
+		},
+		{
+			name:           "transport error stays transient",
+			err:            &domain.TrackerError{Kind: domain.ErrTrackerTransport},
+			wantDeployment: false,
+		},
+		{
+			name:           "cancelled context stays transient",
+			err:            context.Canceled,
+			wantDeployment: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := classifyBlockerFailureClass(tt.err)
+			if got != tt.wantDeployment {
+				t.Errorf("classifyBlockerFailureClass(%v) = %t, want %t", tt.err, got, tt.wantDeployment)
+			}
+		})
+	}
+}
+
+// TestEvaluateCandidate_HaltLatch pins that once a deployment-class
+// failure halts a pass, every later candidate needing a read is held
+// with zero further resolver calls, and the halting error is recorded
+// only against the candidate whose own read produced it.
+func TestEvaluateCandidate_HaltLatch(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	deploymentErr := &domain.TrackerError{Kind: domain.ErrTrackerAuth}
+
+	s := NewState(1000, 10, nil, AgentTotals{})
+	pass := &TickResolution{}
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(domain.Issue) bool { return true },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = true
+			return issue, deploymentErr
+		},
+	}
+
+	first := domain.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true}
+	second := domain.Issue{ID: "2", Identifier: "X-2", Title: "T", State: "To Do", BlockersUnresolved: true}
+	third := domain.Issue{ID: "3", Identifier: "X-3", Title: "T", State: "To Do", BlockersUnresolved: true}
+
+	got1 := EvaluateCandidate(context.Background(), first, s, activeSet, terminalSet, resolver, pass)
+	if got1.Reason != SkipBlockersUnresolved || !errors.Is(got1.Err, deploymentErr) {
+		t.Fatalf("first candidate decision = %+v, want reason %q carrying the halting error", got1, SkipBlockersUnresolved)
+	}
+	if !pass.halted {
+		t.Fatal("pass.halted = false after a deployment-class failure, want true")
+	}
+
+	got2 := EvaluateCandidate(context.Background(), second, s, activeSet, terminalSet, resolver, pass)
+	got3 := EvaluateCandidate(context.Background(), third, s, activeSet, terminalSet, resolver, pass)
+
+	if len(resolver.callOrder) != 1 {
+		t.Errorf("resolver calls after halt = %d, want 1 (only the candidate that halted the pass)", len(resolver.callOrder))
+	}
+	if got2.Reason != SkipBlockersUnresolved || got2.Err != nil {
+		t.Errorf("halt-skipped candidate decision = %+v, want reason %q with no per-issue error", got2, SkipBlockersUnresolved)
+	}
+	if got3.Reason != SkipBlockersUnresolved || got3.Err != nil {
+		t.Errorf("halt-skipped candidate decision = %+v, want reason %q with no per-issue error", got3, SkipBlockersUnresolved)
+	}
+	if pass.heldUnread != 2 {
+		t.Errorf("pass.heldUnread = %d, want 2", pass.heldUnread)
+	}
+}
+
+// TestEvaluateCandidate_TransientFailureDoesNotHalt pins that a
+// transient-class failure holds only the candidate it happened to,
+// and the pass keeps reading later candidates.
+func TestEvaluateCandidate_TransientFailureDoesNotHalt(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
+
+	s := NewState(1000, 10, nil, AgentTotals{})
+	pass := &TickResolution{}
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(domain.Issue) bool { return true },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = true
+			return issue, transientErr
+		},
+	}
+
+	first := domain.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "To Do", BlockersUnresolved: true}
+	second := domain.Issue{ID: "2", Identifier: "X-2", Title: "T", State: "To Do", BlockersUnresolved: true}
+
+	EvaluateCandidate(context.Background(), first, s, activeSet, terminalSet, resolver, pass)
+	if pass.halted {
+		t.Fatal("pass.halted = true after a transient-class failure, want false")
+	}
+
+	EvaluateCandidate(context.Background(), second, s, activeSet, terminalSet, resolver, pass)
+	if len(resolver.callOrder) != 2 {
+		t.Errorf("resolver calls = %d, want 2 (transient failure does not halt the pass)", len(resolver.callOrder))
+	}
+}
+
+// --- Read budget window ---
+
+// budgetWindowIssueCount is the fixed number of needy candidates
+// budgetWindowIssues returns: more than maxBlockerReadsPerPass, so the
+// read budget binds in every test that uses this fixture.
+const budgetWindowIssueCount = 6
+
+// budgetWindowIssues returns budgetWindowIssueCount needy candidates
+// that stay eligible and needy across as many passes as the caller
+// drives: nothing in the table claims, runs, or exhausts them, so only
+// a read outcome changes their state.
+func budgetWindowIssues() []domain.Issue {
+	issues := make([]domain.Issue, budgetWindowIssueCount)
+	for i := range issues {
+		id := fmt.Sprintf("N-%d", i+1)
+		issues[i] = domain.Issue{ID: id, Identifier: id, Title: "T", State: "To Do", BlockersUnresolved: true}
+	}
+	return issues
+}
+
+// advanceBlockerReadOffset applies the same rule the orchestrator's
+// tick loop applies after a pass ends: advance by the reads spent when
+// the budget was exhausted, reset to zero on every other ending
+// (walked the whole list, broke on capacity, or halted).
+func advanceBlockerReadOffset(pass *TickResolution) int {
+	if pass.reads == maxBlockerReadsPerPass {
+		return pass.offset + pass.reads
+	}
+	return 0
+}
+
+// TestEvaluateCandidate_ReadBudgetWindow pins the read-budget window
+// over a fixture with more needy candidates than maxBlockerReadsPerPass:
+// each pass reads exactly the budget, holds the remainder as
+// blockers_not_read, and the offset rotation reaches every needy
+// candidate within the starvation bound.
+func TestEvaluateCandidate_ReadBudgetWindow(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
+
+	const needyCount = 6
+	issues := budgetWindowIssues()
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = true
+			return issue, transientErr
+		},
+	}
+
+	s := NewState(1000, 10, nil, AgentTotals{})
+	offset := 0
+
+	wantPasses := (needyCount + maxBlockerReadsPerPass - 1) / maxBlockerReadsPerPass
+	var perPassReads [][]string
+	var perPassNotRead []int
+
+	for passNum := range wantPasses {
+		pass := &TickResolution{offset: offset}
+		before := len(resolver.callOrder)
+		notRead := 0
+
+		for _, issue := range issues {
+			decision := EvaluateCandidate(context.Background(), issue, s, activeSet, terminalSet, resolver, pass)
+			if decision.Reason == SkipBlockersNotRead {
+				notRead++
+			}
+		}
+
+		perPassReads = append(perPassReads, resolver.callOrder[before:])
+		perPassNotRead = append(perPassNotRead, notRead)
+		offset = advanceBlockerReadOffset(pass)
+
+		if passNum < wantPasses-1 {
+			if pass.reads != maxBlockerReadsPerPass {
+				t.Fatalf("pass %d: reads = %d, want the full budget %d (not yet the last pass)", passNum, pass.reads, maxBlockerReadsPerPass)
+			}
+		}
+	}
+
+	if len(perPassReads[0]) != maxBlockerReadsPerPass {
+		t.Errorf("pass 0 reads = %d, want %d", len(perPassReads[0]), maxBlockerReadsPerPass)
+	}
+	if perPassNotRead[0] != needyCount-maxBlockerReadsPerPass {
+		t.Errorf("pass 0 blockers_not_read count = %d, want %d", perPassNotRead[0], needyCount-maxBlockerReadsPerPass)
+	}
+
+	totalReads := 0
+	for _, reads := range perPassReads {
+		totalReads += len(reads)
+	}
+	if totalReads != needyCount {
+		t.Errorf("total reads across %d passes = %d, want %d (every needy candidate read within the starvation bound)", wantPasses, totalReads, needyCount)
+	}
+
+	// The candidates a read was attempted on, across every pass in
+	// order, are pass 1's four followed by pass 2's two: the rotation
+	// covers the whole population without repeating anyone early.
+	var gotOrder []string
+	for _, reads := range perPassReads {
+		gotOrder = append(gotOrder, reads...)
+	}
+	wantOrder := []string{"N-1", "N-2", "N-3", "N-4", "N-5", "N-6"}
+	if !equalStringSlice(gotOrder, wantOrder) {
+		t.Errorf("read order across passes = %v, want %v", gotOrder, wantOrder)
+	}
+}
+
+// TestEvaluateCandidate_OffsetResetsOnCapacityBreak pins that the
+// offset-advance rule resets to zero on a pass that ends by walking
+// only part of the list (a capacity break), not only on a pass that
+// completes its walk without exhausting the budget.
+func TestEvaluateCandidate_OffsetResetsOnCapacityBreak(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	issues := budgetWindowIssues()
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn: func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+			issue.BlockersUnresolved = false
+			return issue, nil
+		},
+	}
+
+	s := NewState(1000, 10, nil, AgentTotals{})
+	pass := &TickResolution{offset: 0}
+
+	// A capacity break stops the walk after two candidates, well under
+	// the read budget.
+	for _, issue := range issues[:2] {
+		EvaluateCandidate(context.Background(), issue, s, activeSet, terminalSet, resolver, pass)
+	}
+
+	if pass.reads != 2 {
+		t.Fatalf("pass.reads = %d, want 2 before checking the reset rule", pass.reads)
+	}
+	if got := advanceBlockerReadOffset(pass); got != 0 {
+		t.Errorf("offset after a capacity break with %d reads (below budget) = %d, want 0", pass.reads, got)
+	}
+}
+
+// TestEvaluateCandidate_DispatchedOrderPreservingSubsequence pins that
+// a budget-bounded pass's dispatched issues form an order-preserving
+// subsequence of what an equivalent budget-lifted resolution (the same
+// candidates fully read across enough passes) would have dispatched.
+// Whole-sequence equality is not asserted: it is not satisfiable once
+// the budget binds.
+func TestEvaluateCandidate_DispatchedOrderPreservingSubsequence(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	activeSet := stateSet(active)
+	terminalSet := stateSet(terminal)
+
+	issues := budgetWindowIssues()
+	resolveOK := func(_ context.Context, issue domain.Issue) (domain.Issue, error) {
+		issue.BlockersUnresolved = false
+		return issue, nil
+	}
+
+	// Budget-bounded run: one pass, offset 0.
+	boundedResolver := &fakeBlockerResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn:   resolveOK,
+	}
+	boundedState := NewState(1000, 10, nil, AgentTotals{})
+	boundedPass := &TickResolution{offset: 0}
+	var boundedDispatched []string
+	for _, issue := range issues {
+		decision := EvaluateCandidate(context.Background(), issue, boundedState, activeSet, terminalSet, boundedResolver, boundedPass)
+		if decision.Dispatch {
+			boundedDispatched = append(boundedDispatched, issue.ID)
+		}
+	}
+
+	// Budget-lifted run: enough passes over an independent state to
+	// read every needy candidate at least once.
+	liftedResolver := &fakeBlockerResolver{
+		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
+		resolveFn:   resolveOK,
+	}
+	liftedState := NewState(1000, 10, nil, AgentTotals{})
+	var liftedDispatched []string
+	offset := 0
+	wantPasses := (len(issues) + maxBlockerReadsPerPass - 1) / maxBlockerReadsPerPass
+	for range wantPasses {
+		pass := &TickResolution{offset: offset}
+		for _, issue := range issues {
+			decision := EvaluateCandidate(context.Background(), issue, liftedState, activeSet, terminalSet, liftedResolver, pass)
+			if decision.Dispatch {
+				liftedDispatched = append(liftedDispatched, issue.ID)
+			}
+		}
+		offset = advanceBlockerReadOffset(pass)
+	}
+
+	if len(boundedDispatched) == 0 {
+		t.Fatal("bounded run dispatched nothing; the test fixture does not exercise the budget")
+	}
+	if len(boundedDispatched) >= len(liftedDispatched) {
+		t.Fatalf("bounded dispatched %v, lifted dispatched %v: the budget must strictly reduce what one pass dispatches for this assertion to have teeth",
+			boundedDispatched, liftedDispatched)
+	}
+	if !isOrderPreservingSubsequence(boundedDispatched, liftedDispatched) {
+		t.Errorf("bounded dispatched %v is not an order-preserving subsequence of lifted dispatched %v", boundedDispatched, liftedDispatched)
+	}
+}
+
+// isOrderPreservingSubsequence reports whether sub appears in full,
+// in order, within full (not necessarily contiguous).
+func isOrderPreservingSubsequence(sub, full []string) bool {
+	i := 0
+	for _, v := range full {
+		if i < len(sub) && sub[i] == v {
+			i++
+		}
+	}
+	return i == len(sub)
 }

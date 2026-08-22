@@ -196,6 +196,12 @@ type OrchestratorParams struct {
 	// during the migration window; the production binary always
 	// populates this field.
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
+
+	// BlockerResolver completes a candidate's blocker list according
+	// to its tracker adapter's declared blocker source. Optional: a
+	// nil value means "resolve nothing", which reproduces the
+	// orchestrator's behavior before this collaborator existed.
+	BlockerResolver BlockerResolver
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -212,6 +218,7 @@ type Orchestrator struct {
 	workflowManager    WorkflowManager
 	store              OrchestratorStore
 	metrics            domain.Metrics
+	blockerResolver    BlockerResolver
 
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
@@ -366,6 +373,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		mergeCompletionConfig:             params.MergeCompletionConfig,
 		mergeCompletionReactionConfigured: params.MergeCompletionReactionConfigured,
 		handoffParkingLabel:               handoffParkingLabel,
+		blockerResolver:                   params.BlockerResolver,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -638,7 +646,11 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Break only when global capacity is exhausted; skip individual
 	// issues whose per-state limit is full so issues in other states
 	// can still be dispatched.
+	pass := &TickResolution{offset: o.state.BlockerReadOffset}
+
 	var dispatched, dispatchedByRule, dispatchedByDefault, dispatchedByFallback int
+	var heldByBlockers, blockersUnresolvedHeld, blockersNotReadHeld, blockersIncompleteHeld int
+	var readFailures int
 	for _, issue := range sorted {
 		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
 			break
@@ -649,9 +661,26 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !HasAvailableSlots(o.state, issue.State) {
 			continue
 		}
-		if !ShouldDispatchWithSets(issue, o.state, activeSet, terminalSet) {
+
+		decision := EvaluateCandidate(ctx, issue, o.state, activeSet, terminalSet, o.blockerResolver, pass)
+		if !decision.Dispatch {
+			if decision.Err != nil {
+				readFailures++
+			}
+			o.recordCandidateHold(decision, pass, terminalSet)
+			switch decision.Reason {
+			case SkipBlockedBy:
+				heldByBlockers++
+			case SkipBlockersUnresolved:
+				blockersUnresolvedHeld++
+			case SkipBlockersNotRead:
+				blockersNotReadHeld++
+			case SkipBlockersIncomplete:
+				blockersIncompleteHeld++
+			}
 			continue
 		}
+		issue = decision.Issue
 
 		resolution := ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
 		adapter, adapterErr := o.agentAdapterByKind(resolution.AgentKind)
@@ -700,6 +729,26 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		dispatched++
 	}
 
+	if pass.reads == maxBlockerReadsPerPass {
+		o.state.BlockerReadOffset = pass.offset + pass.reads
+	} else {
+		o.state.BlockerReadOffset = 0
+	}
+
+	switch {
+	case pass.halted:
+		o.logger.Error("blocker reads halted for this tick",
+			slog.String("error_kind", blockerErrorKind(pass.haltErr)),
+			slog.Int("http_status", blockerErrorStatus(pass.haltErr)),
+			slog.String("operation", "fetch_blockers"),
+			slog.Int("held_unread", pass.heldUnread),
+		)
+	case dispatched == 0 && pass.reads > 0 && readFailures == pass.reads:
+		o.logger.Warn("tick dispatched nothing: every attempted candidate blocker read failed",
+			slog.Int("reads_failed", readFailures),
+		)
+	}
+
 	o.logger.Info("tick completed",
 		slog.Int("candidates", len(sorted)),
 		slog.Int("dispatched", dispatched),
@@ -708,9 +757,54 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		slog.Int("dispatched_by_fallback", dispatchedByFallback),
 		slog.Int("running", len(o.state.Running)),
 		slog.Int("retrying", len(o.state.RetryAttempts)),
+		slog.Int("held_by_blockers", heldByBlockers),
+		slog.Int("blockers_unresolved", blockersUnresolvedHeld),
+		slog.Int("blockers_not_read", blockersNotReadHeld),
+		slog.Int("blockers_incomplete", blockersIncompleteHeld),
 	)
 
 	o.notifyObservers()
+}
+
+// recordCandidateHold logs the per-issue observability record for one
+// candidate the dispatch gate held, and increments [IncCandidateHolds]
+// for every reason except [SkipIneligible], which produces no record
+// and no counter increment (it predates the blocker gate and carries
+// its own silence forward).
+func (o *Orchestrator) recordCandidateHold(decision CandidateDecision, pass *TickResolution, terminalSet map[string]struct{}) {
+	if decision.Reason == SkipIneligible {
+		return
+	}
+
+	issue := decision.Issue
+	log := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
+
+	switch decision.Reason {
+	case SkipBlockedBy:
+		blocker := firstNonTerminalBlocker(issue.BlockedBy, terminalSet)
+		log.Debug("candidate held by blocker",
+			slog.String("blocker_identifier", blocker.Identifier),
+			slog.String("blocker_state", blocker.State),
+		)
+	case SkipBlockersUnresolved:
+		if decision.Err != nil {
+			log.Warn("candidate blockers unresolved, holding issue",
+				slog.Any("error", decision.Err),
+			)
+		} else {
+			log.Debug("candidate blockers not read this tick, pass halted",
+				slog.String("error_kind", blockerErrorKind(pass.haltErr)),
+			)
+		}
+	case SkipBlockersNotRead:
+		log.Debug("candidate blockers not read this tick, holding issue",
+			slog.Int("reads_spent", pass.reads),
+		)
+	case SkipBlockersIncomplete:
+		log.Debug("candidate blocker list incomplete, holding issue")
+	}
+
+	o.metrics.IncCandidateHolds(string(decision.Reason))
 }
 
 // makeWorkerFn returns a [WorkerFunc] closure that runs

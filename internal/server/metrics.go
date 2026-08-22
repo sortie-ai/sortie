@@ -43,6 +43,7 @@ type PromMetrics struct {
 	mergeConflictChecksTotal      *prometheus.CounterVec
 	mergeConflictEscalationsTotal *prometheus.CounterVec
 	dispatchRuleMatchTotal        *prometheus.CounterVec
+	candidateHoldsTotal           *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -258,6 +259,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Dispatch rule match outcomes by resolution layer and rule name.",
 	}, []string{"layer", "rule"})
 
+	candidateHoldsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "candidate_holds_total",
+		Help:      "Candidates the dispatch loop held, by reason.",
+	}, []string{"reason"})
+
 	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "self_review_iterations_total",
@@ -315,6 +322,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		mergeConflictChecksTotal,
 		mergeConflictEscalationsTotal,
 		dispatchRuleMatchTotal,
+		candidateHoldsTotal,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
 		selfReviewVerificationDuration,
@@ -353,6 +361,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		mergeConflictChecksTotal:       mergeConflictChecksTotal,
 		mergeConflictEscalationsTotal:  mergeConflictEscalationsTotal,
 		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
+		candidateHoldsTotal:            candidateHoldsTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
 		selfReviewVerificationDuration: selfReviewVerificationDuration,
@@ -534,6 +543,13 @@ func (p *PromMetrics) IncDispatchRuleMatch(layer, rule string) {
 		rule = "<none>"
 	}
 	p.dispatchRuleMatchTotal.WithLabelValues(layer, rule).Inc()
+}
+
+// IncCandidateHolds increments the counter of candidates the dispatch
+// loop held. reason is "blocked_by", "blockers_unresolved",
+// "blockers_not_read", or "blockers_incomplete".
+func (p *PromMetrics) IncCandidateHolds(reason string) {
+	p.candidateHoldsTotal.WithLabelValues(reason).Inc()
 }
 
 // IncSelfReviewIterations increments the review iteration counter.

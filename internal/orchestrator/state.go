@@ -900,6 +900,14 @@ type State struct {
 	// Runtime-only (not persisted).
 	SweepTickCounter int
 
+	// BlockerReadOffset is the position, among a tick's needy
+	// candidates, at which the per-pass blocker-read budget resumes.
+	// Mutated once per tick by the event loop that owns this struct:
+	// advanced by the reads spent when a pass exhausts its budget, and
+	// reset to zero on every other pass ending. Runtime-only (not
+	// persisted).
+	BlockerReadOffset int
+
 	// TokenBudgetIncomplete is the set of issue IDs whose per-issue token
 	// spend, as evaluated on the most recent poll tick, is below the
 	// configured max_tokens budget but includes at least one unmeasured

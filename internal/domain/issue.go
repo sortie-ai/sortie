@@ -73,6 +73,12 @@ type Issue struct {
 	// Non-nil empty slice when no blockers exist.
 	BlockedBy []BlockerRef
 
+	// BlockersUnresolved reports that the producer of this Issue did
+	// not resolve BlockedBy, so the list is not authoritative and the
+	// dispatch gate holds the issue. False, the zero value, means
+	// BlockedBy is authoritative.
+	BlockersUnresolved bool
+
 	// CreatedAt is an ISO-8601 timestamp. Empty string when absent.
 	CreatedAt string
 
@@ -93,6 +99,11 @@ type BlockerRef struct {
 	// State is the current state of the blocking issue. Empty string
 	// when unknown, which is treated as non-terminal (conservative).
 	State string
+
+	// DisplayID is the qualified form of Identifier, set by the same
+	// rule the adapter applies to an issue's own DisplayID. Empty
+	// means Identifier is already display-ready.
+	DisplayID string
 }
 
 // ParentRef identifies the parent issue for a sub-task.
@@ -150,13 +161,18 @@ func (iss *Issue) ToTemplateMap() map[string]any {
 		comments = cm
 	}
 
-	blockedBy := make([]map[string]any, len(iss.BlockedBy))
-	for i, b := range iss.BlockedBy {
-		blockedBy[i] = map[string]any{
-			"id":         b.ID,
-			"identifier": b.Identifier,
-			"state":      b.State,
+	var blockedBy any
+	if !iss.BlockersUnresolved {
+		bb := make([]map[string]any, len(iss.BlockedBy))
+		for i, b := range iss.BlockedBy {
+			bb[i] = map[string]any{
+				"id":         b.ID,
+				"identifier": b.Identifier,
+				"state":      b.State,
+				"display_id": b.DisplayID,
+			}
 		}
+		blockedBy = bb
 	}
 
 	labels := iss.Labels

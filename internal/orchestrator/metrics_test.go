@@ -36,6 +36,7 @@ type spyMetrics struct {
 	workerDurations      []workerDurCall
 	sshHostUsage         []sshHostUsageCall
 	trackerComments      []trackerCommentCall
+	candidateHolds       []string
 }
 
 type tokenCall struct {
@@ -217,6 +218,12 @@ func (s *spyMetrics) IncMergeConflictChecks(_ string) {}
 func (s *spyMetrics) IncMergeConflictEscalations(_ string) {}
 
 func (s *spyMetrics) IncDispatchRuleMatch(_ string, _ string) {}
+
+func (s *spyMetrics) IncCandidateHolds(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.candidateHolds = append(s.candidateHolds, reason)
+}
 
 // --- Tests ---
 

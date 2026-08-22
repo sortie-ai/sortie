@@ -1,6 +1,9 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // TrackerAdapter defines the contract that all issue tracker
 // integrations must satisfy.
@@ -17,6 +20,10 @@ type TrackerAdapter interface {
 	// use [TrackerAdapter.FetchIssueByID] or
 	// [TrackerAdapter.FetchIssueComments]. Pagination is handled
 	// internally by the adapter.
+	//
+	// A returned issue either carries an authoritative BlockedBy or
+	// has BlockersUnresolved set, according to the adapter's declared
+	// blocker source.
 	FetchCandidateIssues(ctx context.Context) ([]Issue, error)
 
 	// FetchIssueByID returns a single fully-populated issue including
@@ -106,3 +113,17 @@ type TrackerAdapter interface {
 	// than an error. The orchestrator treats all errors as non-fatal.
 	AddLabel(ctx context.Context, issueID string, label string) error
 }
+
+// BlockerReader is the optional capability a tracker adapter
+// implements when its candidate fetch cannot carry blockers.
+type BlockerReader interface {
+	// FetchIssueBlockers returns the blockers of one issue. It returns
+	// a non-nil empty slice when the issue has none, and a
+	// [*TrackerError] on failure.
+	FetchIssueBlockers(ctx context.Context, issueID string) ([]BlockerRef, error)
+}
+
+// ErrNoBlockerReader reports that an adapter declared the per-issue
+// blocker source and does not implement [BlockerReader]. Callers
+// treat it as a condition the next attempt will not fix.
+var ErrNoBlockerReader = errors.New("tracker adapter declares per-issue blockers and implements no reader")

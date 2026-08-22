@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // AssertIssueNormalized pins the normalization clause every tracker
@@ -124,5 +125,82 @@ func AssertLabelAddIsAdditive(t *testing.T, before, after []string, added string
 	}
 	if !slices.ContainsFunc(after, func(label string) bool { return strings.EqualFold(label, added) }) {
 		t.Errorf("AssertLabelAddIsAdditive: added label %q is missing after AddLabel", added)
+	}
+}
+
+// AssertCandidateBlockerSource pins the clause that a candidate issue's
+// blocker fields agree with the blocker source its adapter declared.
+// wantBlockers is the number of blockers the caller's fixture defines
+// for that issue.
+//
+// For a per-issue source the caller must pass a candidate whose own
+// payload does not prove the issue has no dependencies, because that is
+// the only candidate whose unresolved marking the assertion can check;
+// the assertion fails when such a candidate is not marked. A caller
+// whose fixture carries no such candidate is asserting nothing, so the
+// assertion says that in its failure message rather than passing.
+func AssertCandidateBlockerSource(t *testing.T, source registry.BlockerSource, issue domain.Issue, wantBlockers int) {
+	t.Helper()
+
+	switch source {
+	case registry.BlockersFromCandidates, registry.BlockersUnsupported:
+		if issue.BlockersUnresolved {
+			t.Errorf("AssertCandidateBlockerSource: issue.BlockersUnresolved is true for blocker source %q, want false", source)
+		}
+		if len(issue.BlockedBy) != wantBlockers {
+			t.Errorf("AssertCandidateBlockerSource: len(issue.BlockedBy) = %d, want %d", len(issue.BlockedBy), wantBlockers)
+		}
+	case registry.BlockersPerIssue:
+		if wantBlockers == 0 && !issue.BlockersUnresolved {
+			if len(issue.BlockedBy) != 0 {
+				t.Errorf("AssertCandidateBlockerSource: len(issue.BlockedBy) = %d, want 0 for a cheaply-answered no-dependency candidate", len(issue.BlockedBy))
+			}
+			return
+		}
+		if !issue.BlockersUnresolved {
+			t.Error("AssertCandidateBlockerSource: issue.BlockersUnresolved is false for a per_issue candidate the caller's fixture did not prove dependency-free; the fixture asserts nothing about the unresolved-marking clause")
+		}
+	default:
+		t.Errorf("AssertCandidateBlockerSource: unrecognized blocker source %q", source)
+	}
+}
+
+// AssertBlockerRefsNormalized pins the clause that a resolved blocker
+// list is a non-nil slice whose entries carry a stable ID and a
+// human-readable Identifier. A blocker State may be empty, which the
+// dispatch gate reads as non-terminal.
+func AssertBlockerRefsNormalized(t *testing.T, blockers []domain.BlockerRef) {
+	t.Helper()
+
+	if blockers == nil {
+		t.Error("AssertBlockerRefsNormalized: blockers is nil, want a non-nil slice even when the issue carries no blockers")
+	}
+	for i, b := range blockers {
+		if b.ID == "" {
+			t.Errorf("AssertBlockerRefsNormalized: blockers[%d].ID is empty, want a stable tracker-internal identifier", i)
+		}
+		if b.Identifier == "" {
+			t.Errorf("AssertBlockerRefsNormalized: blockers[%d].Identifier is empty, want a human-readable key", i)
+		}
+	}
+}
+
+// AssertBlockerIdentifiersMatchIssue pins the clause that a blocker ref
+// carries the same identifier shape the adapter gives an issue: an
+// unqualified Identifier, and a DisplayID that is either empty on every
+// ref or qualified on every ref, matching whether issue.DisplayID is
+// itself non-empty. issue is any issue the same adapter normalized.
+func AssertBlockerIdentifiersMatchIssue(t *testing.T, issue domain.Issue, blockers []domain.BlockerRef) {
+	t.Helper()
+
+	issueQualifies := issue.DisplayID != ""
+	for i, b := range blockers {
+		if b.Identifier != "" && strings.ContainsAny(b.Identifier, "/#") {
+			t.Errorf("AssertBlockerIdentifiersMatchIssue: blockers[%d].Identifier %q looks qualified, want the bare tracker key", i, b.Identifier)
+		}
+		refQualifies := b.DisplayID != ""
+		if refQualifies != issueQualifies {
+			t.Errorf("AssertBlockerIdentifiersMatchIssue: blockers[%d].DisplayID qualified = %v, want %v to match issue.DisplayID", i, refQualifies, issueQualifies)
+		}
 	}
 }

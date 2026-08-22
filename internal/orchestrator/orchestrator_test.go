@@ -5748,3 +5748,368 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		t.Errorf("RunHistory(%q).RuleName = %q, want %q", docsIssue.Identifier, docsRow.RuleName, "")
 	}
 }
+
+// --- Blocker gate observability (handleTick) ---
+
+// newBlockerGateOrchestrator builds an Orchestrator wired with a "mock"
+// tracker returning issues as its candidates and resolver as the
+// blocker resolver, logging at Debug so per-issue records are
+// captured. metrics may be nil, in which case NewOrchestrator's own
+// default applies.
+func newBlockerGateOrchestrator(t *testing.T, issues []domain.Issue, resolver BlockerResolver, metrics domain.Metrics) (*Orchestrator, *lockedBuf) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 1000},
+		Workspace: config.WorkspaceConfig{Root: tmpDir},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			Command:             "/usr/bin/agent",
+			MaxConcurrentAgents: 10,
+			MaxTurns:            1,
+			ReadTimeoutMS:       1000,
+		},
+	}
+
+	lb := &lockedBuf{}
+	logger := slog.New(slog.NewTextHandler(lb, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	pf := passingPreflightRegistries()
+	pf.ReloadWorkflow = func() error { return nil }
+	pf.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+	tmpl := mustParseTemplate(t, "do {{.issue.identifier}}")
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:  NewState(1000, 10, nil, AgentTotals{}),
+		Logger: logger,
+		TrackerAdapter: &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg, template: tmpl},
+		Store:           &stubStore{},
+		PreflightParams: pf,
+		BlockerResolver: resolver,
+		Metrics:         metrics,
+	})
+
+	return o, lb
+}
+
+// TestHandleTick_DispatchUsesResolvedIssue pins that a dispatched
+// candidate's running entry carries the resolver's returned issue, not
+// the raw candidate the tracker produced.
+func TestHandleTick_DispatchUsesResolvedIssue(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "R-1", Identifier: "R-1", Title: "T", State: "To Do", BlockersUnresolved: true}
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+		resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+			i.BlockersUnresolved = false
+			i.Description = "resolved-by-test"
+			return i, nil
+		},
+	}
+
+	o, _ := newBlockerGateOrchestrator(t, []domain.Issue{issue}, resolver, nil)
+
+	o.handleTick(context.Background())
+	o.state.WorkerWg.Wait()
+
+	entry, ok := o.state.Running[issue.ID]
+	if !ok {
+		t.Fatal("issue was not dispatched")
+	}
+	if entry.Issue.BlockersUnresolved {
+		t.Error("dispatched entry carries BlockersUnresolved = true, want the resolved issue")
+	}
+	if entry.Issue.Description != "resolved-by-test" {
+		t.Errorf("dispatched entry.Issue.Description = %q, want %q (the resolver's return value, not the raw candidate)",
+			entry.Issue.Description, "resolved-by-test")
+	}
+}
+
+// TestHandleTick_CandidateHoldReasons pins that IncCandidateHolds
+// increments once per hold with the matching reason, across all four
+// blocker-related reasons, never for an ineligible candidate, and
+// never for the pass-level halt record.
+func TestHandleTick_CandidateHoldReasons(t *testing.T) {
+	t.Parallel()
+
+	blockedByIssue := domain.Issue{
+		ID: "H-1", Identifier: "H-1", Title: "T", State: "To Do",
+		BlockedBy: []domain.BlockerRef{{ID: "b", State: "To Do"}},
+	}
+	incompleteIssue := domain.Issue{
+		ID: "H-2", Identifier: "H-2", Title: "T", State: "To Do", BlockersUnresolved: true,
+	}
+	unresolvedFailIssue := domain.Issue{
+		ID: "H-3", Identifier: "H-3", Title: "T", State: "To Do", BlockersUnresolved: true,
+	}
+	ineligibleIssue := domain.Issue{ID: "", Identifier: "H-4", Title: "T", State: "To Do"}
+
+	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
+
+	resolver := &fakeBlockerResolver{
+		needsReadFn: func(i domain.Issue) bool { return i.ID == unresolvedFailIssue.ID },
+		resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+			i.BlockersUnresolved = true
+			return i, transientErr
+		},
+	}
+
+	spy := &spyMetrics{}
+	o, _ := newBlockerGateOrchestrator(t, []domain.Issue{
+		blockedByIssue, incompleteIssue, unresolvedFailIssue, ineligibleIssue,
+	}, resolver, spy)
+
+	o.handleTick(context.Background())
+	o.state.WorkerWg.Wait()
+
+	spy.mu.Lock()
+	holds := append([]string(nil), spy.candidateHolds...)
+	spy.mu.Unlock()
+
+	wantCounts := map[string]int{
+		string(SkipBlockedBy):          1,
+		string(SkipBlockersIncomplete): 1,
+		string(SkipBlockersUnresolved): 1,
+	}
+	gotCounts := map[string]int{}
+	for _, reason := range holds {
+		gotCounts[reason]++
+	}
+	for reason, want := range wantCounts {
+		if gotCounts[reason] != want {
+			t.Errorf("IncCandidateHolds(%q) called %d times, want %d (holds=%v)", reason, gotCounts[reason], want, holds)
+		}
+	}
+	if gotCounts[string(SkipIneligible)] != 0 {
+		t.Errorf("IncCandidateHolds(%q) called %d times, want 0: an ineligible candidate must never be counted", SkipIneligible, gotCounts[string(SkipIneligible)])
+	}
+	if len(holds) != 3 {
+		t.Errorf("total IncCandidateHolds calls = %d, want 3 (holds=%v)", len(holds), holds)
+	}
+}
+
+// TestHandleTick_EveryAttemptedReadFailedWarning pins the four
+// distinguishing cases the "every attempted read failed" WARN
+// depends on: it fires only when every read the pass attempted
+// failed transiently and the tick dispatched nothing, and it carries
+// reads_failed as the count of reads attempted, not the count of
+// candidates held.
+func TestHandleTick_EveryAttemptedReadFailedWarning(t *testing.T) {
+	t.Parallel()
+
+	const warnMsg = "tick dispatched nothing: every attempted candidate blocker read failed"
+	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
+
+	t.Run("fires when every attempted read fails and nothing dispatches", func(t *testing.T) {
+		t.Parallel()
+
+		issues := []domain.Issue{
+			{ID: "W-1", Identifier: "W-1", Title: "T", State: "To Do", BlockersUnresolved: true},
+			{ID: "W-2", Identifier: "W-2", Title: "T", State: "To Do", BlockersUnresolved: true},
+		}
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				i.BlockersUnresolved = true
+				return i, transientErr
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if strings.Count(got, warnMsg) != 1 {
+			t.Fatalf("WARN count = %d, want 1: %s", strings.Count(got, warnMsg), got)
+		}
+		if !strings.Contains(got, "reads_failed=2") {
+			t.Errorf("log missing reads_failed=2: %s", got)
+		}
+	})
+
+	t.Run("does not fire when only one of several attempted reads failed", func(t *testing.T) {
+		t.Parallel()
+
+		issues := []domain.Issue{
+			{ID: "W-3", Identifier: "W-3", Title: "T", State: "To Do", BlockersUnresolved: true},
+			{ID: "W-4", Identifier: "W-4", Title: "T", State: "To Do", BlockersUnresolved: true},
+		}
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				if i.ID == "W-3" {
+					i.BlockersUnresolved = true
+					return i, transientErr
+				}
+				// W-4 resolves successfully but stays held by a live
+				// non-terminal blocker, so the tick still dispatches
+				// nothing even though this read did not fail.
+				i.BlockersUnresolved = false
+				i.BlockedBy = []domain.BlockerRef{{ID: "b", State: "To Do"}}
+				return i, nil
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if strings.Contains(got, warnMsg) {
+			t.Errorf("WARN fired with only one of two attempted reads failing: %s", got)
+		}
+	})
+
+	t.Run("does not fire on a pass that attempted no read", func(t *testing.T) {
+		t.Parallel()
+
+		issues := []domain.Issue{
+			{ID: "W-5", Identifier: "W-5", Title: "T", State: "To Do", BlockersUnresolved: true},
+		}
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(domain.Issue) bool { return false },
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if strings.Contains(got, warnMsg) {
+			t.Errorf("WARN fired on a pass with zero attempted reads: %s", got)
+		}
+	})
+
+	t.Run("carries the attempted-and-failed count, not the held count, when the budget binds", func(t *testing.T) {
+		t.Parallel()
+
+		issues := budgetWindowIssues()
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				i.BlockersUnresolved = true
+				return i, transientErr
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if strings.Count(got, warnMsg) != 1 {
+			t.Fatalf("WARN count = %d, want 1: %s", strings.Count(got, warnMsg), got)
+		}
+		if !strings.Contains(got, fmt.Sprintf("reads_failed=%d", maxBlockerReadsPerPass)) {
+			t.Errorf("log missing reads_failed=%d (the budget, not the 6 candidates held): %s", maxBlockerReadsPerPass, got)
+		}
+	})
+
+	t.Run("suppressed when the pass already halted", func(t *testing.T) {
+		t.Parallel()
+
+		deploymentErr := &domain.TrackerError{Kind: domain.ErrTrackerAuth}
+		issues := []domain.Issue{
+			{ID: "W-6", Identifier: "W-6", Title: "T", State: "To Do", BlockersUnresolved: true},
+		}
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				i.BlockersUnresolved = true
+				return i, deploymentErr
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if strings.Contains(got, warnMsg) {
+			t.Errorf("WARN fired on a halted pass, want it suppressed in favor of the pass-level ERROR: %s", got)
+		}
+		if !strings.Contains(got, "blocker reads halted for this tick") {
+			t.Errorf("log missing the pass-level halt ERROR: %s", got)
+		}
+	})
+}
+
+// TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer pins that a
+// budget-skipped candidate and a halt-skipped candidate emit distinct
+// DEBUG messages, even though both share the blockers_unresolved and
+// blockers_not_read reason vocabulary respectively.
+func TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("budget-skipped candidate logs the not-read-this-tick record", func(t *testing.T) {
+		t.Parallel()
+
+		issues := budgetWindowIssues()
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				i.BlockersUnresolved = false
+				return i, nil
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if !strings.Contains(got, "candidate blockers not read this tick, holding issue") {
+			t.Errorf("log missing the budget-skip DEBUG record: %s", got)
+		}
+		if strings.Contains(got, "candidate blockers not read this tick, pass halted") {
+			t.Errorf("log carries the halt-skip DEBUG record on a pass that never halted: %s", got)
+		}
+	})
+
+	t.Run("halt-skipped candidate logs the pass-halted record", func(t *testing.T) {
+		t.Parallel()
+
+		deploymentErr := &domain.TrackerError{Kind: domain.ErrTrackerAuth}
+		issues := []domain.Issue{
+			{ID: "HS-1", Identifier: "HS-1", Title: "T", State: "To Do", BlockersUnresolved: true},
+			{ID: "HS-2", Identifier: "HS-2", Title: "T", State: "To Do", BlockersUnresolved: true},
+		}
+		resolver := &fakeBlockerResolver{
+			needsReadFn: func(i domain.Issue) bool { return i.BlockersUnresolved },
+			resolveFn: func(_ context.Context, i domain.Issue) (domain.Issue, error) {
+				i.BlockersUnresolved = true
+				return i, deploymentErr
+			},
+		}
+
+		o, lb := newBlockerGateOrchestrator(t, issues, resolver, nil)
+		o.handleTick(context.Background())
+		o.state.WorkerWg.Wait()
+
+		got := lb.String()
+		if !strings.Contains(got, "candidate blockers not read this tick, pass halted") {
+			t.Errorf("log missing the halt-skip DEBUG record: %s", got)
+		}
+		if strings.Contains(got, "candidate blockers not read this tick, holding issue") {
+			t.Errorf("log carries the budget-skip DEBUG record on a pass that halted before the budget bound: %s", got)
+		}
+	})
+}

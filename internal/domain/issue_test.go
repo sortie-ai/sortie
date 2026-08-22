@@ -282,3 +282,75 @@ func TestToTemplateMap_NilLabelsNormalized(t *testing.T) {
 		t.Errorf("len(labels) = %d, want 0", len(labels))
 	}
 }
+
+// TestToTemplateMap_BlockedByNilWhenUnresolved pins that blocked_by
+// renders as nil when BlockersUnresolved is true, the same nil-means-
+// not-fetched rule comments already uses, rather than as an empty
+// list that would read as "no blockers" to a template.
+func TestToTemplateMap_BlockedByNilWhenUnresolved(t *testing.T) {
+	t.Parallel()
+
+	// Unresolved: renders nil even though the producer left a stale
+	// BlockedBy value in place.
+	issUnresolved := &Issue{
+		ID:                 "1",
+		Identifier:         "X-1",
+		Title:              "Unresolved",
+		State:              "Open",
+		Labels:             []string{},
+		BlockedBy:          []BlockerRef{{ID: "2", Identifier: "X-2", State: "Open"}},
+		BlockersUnresolved: true,
+	}
+	mUnresolved := issUnresolved.ToTemplateMap()
+	if mUnresolved["blocked_by"] != nil {
+		t.Errorf("blocked_by = %v, want nil when BlockersUnresolved is true", mUnresolved["blocked_by"])
+	}
+
+	// Resolved with no blockers: renders a non-nil empty list, not nil.
+	issResolved := &Issue{
+		ID:                 "2",
+		Identifier:         "X-3",
+		Title:              "Resolved",
+		State:              "Open",
+		Labels:             []string{},
+		BlockedBy:          []BlockerRef{},
+		BlockersUnresolved: false,
+	}
+	mResolved := issResolved.ToTemplateMap()
+	blockers, ok := mResolved["blocked_by"].([]map[string]any)
+	if !ok {
+		t.Fatalf("blocked_by type = %T, want []map[string]any when resolved", mResolved["blocked_by"])
+	}
+	if len(blockers) != 0 {
+		t.Errorf("len(blocked_by) = %d, want 0", len(blockers))
+	}
+}
+
+// TestToTemplateMap_BlockerDisplayID pins that each blocker entry
+// publishes display_id alongside id, identifier, and state.
+func TestToTemplateMap_BlockerDisplayID(t *testing.T) {
+	t.Parallel()
+
+	iss := &Issue{
+		ID:         "1",
+		Identifier: "X-1",
+		Title:      "Qualified blocker",
+		State:      "Open",
+		Labels:     []string{},
+		BlockedBy: []BlockerRef{
+			{ID: "5", Identifier: "5", State: "Open", DisplayID: "owner/repo#5"},
+		},
+	}
+	m := iss.ToTemplateMap()
+
+	blockers, ok := m["blocked_by"].([]map[string]any)
+	if !ok {
+		t.Fatalf("blocked_by type = %T, want []map[string]any", m["blocked_by"])
+	}
+	if len(blockers) != 1 {
+		t.Fatalf("len(blocked_by) = %d, want 1", len(blockers))
+	}
+	if blockers[0]["display_id"] != "owner/repo#5" {
+		t.Errorf("blocked_by[0].display_id = %v, want %q", blockers[0]["display_id"], "owner/repo#5")
+	}
+}

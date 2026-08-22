@@ -141,7 +141,31 @@ type TrackerMeta struct {
 	// callers must treat it as read-only and copy before sorting or
 	// filtering.
 	DefaultTerminalStates []string
+
+	// BlockerSource declares where this adapter's blocker data comes
+	// from. The empty value is read as BlockersFromCandidates.
+	BlockerSource BlockerSource
 }
+
+// BlockerSource declares where a tracker adapter's blocker data comes
+// from, so the layer between the registry and the orchestrator knows
+// whether a candidate issue is gate-ready as fetched.
+type BlockerSource string
+
+const (
+	// BlockersFromCandidates declares that the adapter's candidate
+	// fetch already carries every blocker the tracker reports.
+	BlockersFromCandidates BlockerSource = "candidates"
+
+	// BlockersPerIssue declares that the adapter's candidate fetch
+	// carries no blockers, and that one issue's blockers are read
+	// through domain.BlockerReader.
+	BlockersPerIssue BlockerSource = "per_issue"
+
+	// BlockersUnsupported declares that the tracker has no blocking
+	// relation, so an empty blocker list on a candidate is complete.
+	BlockersUnsupported BlockerSource = "unsupported"
+)
 
 // AgentMeta holds optional agent-adapter-declared properties queried
 // by the orchestrator at preflight time. Zero value means no special
