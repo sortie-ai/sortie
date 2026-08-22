@@ -64,7 +64,7 @@ Additional normalization details:
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
 
-Every candidate `fetch_candidate_issues` returns either carries an authoritative `blocked_by` or is
+Every issue returned by `fetch_candidate_issues` either carries an authoritative `blocked_by` or is
 marked `blockers_unresolved`, so the dispatch gate never treats an unread blocker list as an empty
 one. Each adapter declares which of three blocker sources it implements at registration: candidates
 carry every blocker already, the tracker has no blocking relation to carry, or a shared layer
