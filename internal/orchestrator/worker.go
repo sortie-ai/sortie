@@ -400,10 +400,12 @@ func isTurnSuccess(reason domain.AgentEventType) bool {
 }
 
 // toDomainAgentConfig converts a config-layer AgentConfig to the
-// domain-layer AgentConfig expected by agent adapters.
-func toDomainAgentConfig(c config.AgentConfig) domain.AgentConfig {
+// domain-layer AgentConfig expected by agent adapters. kind comes from
+// the caller rather than c.Kind because the session's dispatch-frozen
+// kind and the configuration's workflow default can differ.
+func toDomainAgentConfig(c config.AgentConfig, kind string) domain.AgentConfig {
 	return domain.AgentConfig{
-		Kind:           c.Kind,
+		Kind:           kind,
 		Command:        c.Command,
 		TurnTimeoutMS:  c.TurnTimeoutMS,
 		ReadTimeoutMS:  c.ReadTimeoutMS,
@@ -828,16 +830,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		// Resolve operator MCP config path from extensions.
-		var operatorPath string
-		if extMap, ok := cfg.Extensions[cfg.Agent.Kind].(map[string]any); ok {
-			if v, ok := extMap["mcp_config"].(string); ok {
-				operatorPath = v
-			}
-		}
-		if operatorPath != "" && !filepath.IsAbs(operatorPath) {
-			operatorPath = filepath.Join(filepath.Dir(deps.WorkflowPath), operatorPath)
-		}
+		settings := config.ResolveAgentSettings(cfg, agentKind, filepath.Dir(deps.WorkflowPath))
 
 		generatedPath, genErr := GenerateMCPConfig(MCPConfigParams{
 			BinaryPath:            execPath,
@@ -849,7 +842,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			SessionID:             "",
 			Attempt:               attempt,
 			AgentKind:             agentKind,
-			OperatorMCPConfigPath: operatorPath,
+			OperatorMCPConfigPath: settings.MCPConfigPath,
 			ProcessEnv:            CollectSortieEnv(),
 		})
 		if genErr != nil {
@@ -870,7 +863,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		mcpConfigPath = generatedPath
-		logger.Info("mcp config written", slog.String("mcp_config_path", generatedPath))
+		logger.Info("mcp config written",
+			slog.String("mcp_config_path", generatedPath),
+			slog.String("agent_kind", agentKind),
+			slog.String("operator_mcp_config_path", settings.MCPConfigPath))
 	}
 
 	// Check context between workspace preparation and session start.
@@ -901,7 +897,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:            wsResult.Path,
-		AgentConfig:              toDomainAgentConfig(cfg.Agent),
+		AgentConfig:              toDomainAgentConfig(cfg.Agent, agentKind),
 		ResumeSessionID:          deps.ResumeSessionID,
 		SSHHost:                  deps.SSHHost,
 		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,

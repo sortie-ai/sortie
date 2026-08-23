@@ -45,22 +45,6 @@ func trackerConfigMap(tc config.TrackerConfig) map[string]any {
 	}
 }
 
-// mergeExtensions copies adapter-specific config from the Extensions
-// map into dst. Adapters may define their own configuration fields
-// in a sub-object named after their kind value. Existing keys in dst
-// are not overwritten.
-func mergeExtensions(dst map[string]any, extensions map[string]any, kind string) {
-	sub, ok := extensions[kind].(map[string]any)
-	if !ok {
-		return
-	}
-	for k, v := range sub {
-		if _, exists := dst[k]; !exists {
-			dst[k] = v
-		}
-	}
-}
-
 // mergeTrackerCredentials copies api_key, project, and endpoint from
 // the tracker config into dst when the corresponding key is absent.
 // Called only when the CI provider kind matches the tracker kind so

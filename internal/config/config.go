@@ -207,13 +207,70 @@ func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
 		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
 		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
 	}
-	mergeAgentExtensions(m, cfg.Extensions, kind)
+	mergeExtensionSection(m, cfg.Extensions, kind)
 	return m
 }
 
-// mergeAgentExtensions copies the kind-named sub-object from
+// AgentSettings is the resolved answer to what one agent kind
+// resolves to for one session, returned by [ResolveAgentSettings].
+type AgentSettings struct {
+	Kind string
+
+	// Passthrough is the same map [AgentAdapterConfig] returns for
+	// Kind: freshly allocated on every call, and safe for the caller
+	// to keep.
+	Passthrough map[string]any
+
+	// MCPConfigPath is the operator-declared MCP config path resolved
+	// from Passthrough["mcp_config"]. Empty when the kind has no
+	// block, the block carries no mcp_config, or its value is not a
+	// non-empty string.
+	MCPConfigPath string
+}
+
+// ResolveAgentSettings resolves kind to the settings a session running
+// on that kind uses for one attempt. kind is the session's
+// dispatch-frozen agent kind, never the workflow default: a session
+// routed to a different kind than cfg.Agent.Kind resolves against the
+// routed kind's own block. Callers MUST call ResolveAgentSettings once
+// per attempt, never once per session, so a workflow reloaded between
+// attempts takes effect on the next one.
+//
+// A relative mcp_config value is resolved against workflowDir when
+// workflowDir is non-empty; an absolute value and an empty workflowDir
+// are both returned unchanged. ResolveAgentSettings is pure: it reads
+// no environment variable and touches no file, and is safe for
+// concurrent use.
+func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) AgentSettings {
+	passthrough := AgentAdapterConfig(cfg, kind)
+
+	var mcpConfigPath string
+	if v, ok := passthrough["mcp_config"].(string); ok {
+		mcpConfigPath = v
+	}
+	if mcpConfigPath != "" && !filepath.IsAbs(mcpConfigPath) && workflowDir != "" {
+		mcpConfigPath = filepath.Join(workflowDir, mcpConfigPath)
+	}
+
+	return AgentSettings{
+		Kind:          kind,
+		Passthrough:   passthrough,
+		MCPConfigPath: mcpConfigPath,
+	}
+}
+
+// MergeAdapterExtensions copies the kind-named sub-object from
+// cfg's extensions into dst without overwriting an existing key. It
+// serves the tracker, CI-provider, and SCM adapter families; the
+// agent family goes through [AgentAdapterConfig] and
+// [ResolveAgentSettings] instead.
+func MergeAdapterExtensions(dst map[string]any, cfg ServiceConfig, kind string) {
+	mergeExtensionSection(dst, cfg.Extensions, kind)
+}
+
+// mergeExtensionSection copies the kind-named sub-object from
 // extensions into dst without overwriting an existing key.
-func mergeAgentExtensions(dst map[string]any, extensions map[string]any, kind string) {
+func mergeExtensionSection(dst map[string]any, extensions map[string]any, kind string) {
 	sub, ok := extensions[kind].(map[string]any)
 	if !ok {
 		return

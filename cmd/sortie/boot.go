@@ -225,7 +225,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 	}
 	trackerCfgMap := trackerConfigMap(cfg.Tracker)
 	trackerCfgMap["user_agent"] = "sortie/" + Version
-	mergeExtensions(trackerCfgMap, cfg.Extensions, cfg.Tracker.Kind)
+	config.MergeAdapterExtensions(trackerCfgMap, cfg, cfg.Tracker.Kind)
 	trackerAdapter, err := trackerCtor(trackerCfgMap)
 	if err != nil {
 		logger.Error("failed to construct tracker adapter", slog.Any("error", err))

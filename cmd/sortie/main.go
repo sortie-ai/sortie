@@ -381,7 +381,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		adapterCfgMap := make(map[string]any)
-		mergeExtensions(adapterCfgMap, br.cfg.Extensions, br.cfg.CIFeedback.Kind)
+		config.MergeAdapterExtensions(adapterCfgMap, br.cfg, br.cfg.CIFeedback.Kind)
 		if br.cfg.CIFeedback.Kind == br.cfg.Tracker.Kind {
 			mergeTrackerCredentials(adapterCfgMap, br.cfg.Tracker)
 		}
@@ -460,7 +460,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		adapterCfgMap := make(map[string]any)
-		mergeExtensions(adapterCfgMap, br.cfg.Extensions, provider)
+		config.MergeAdapterExtensions(adapterCfgMap, br.cfg, provider)
 		if provider == br.cfg.Tracker.Kind {
 			mergeTrackerCredentials(adapterCfgMap, br.cfg.Tracker)
 		}

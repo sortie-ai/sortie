@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -5615,6 +5616,24 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		},
 	}
 
+	// A non-empty WorkflowAbsPath is the only thing standing between this
+	// test and MCP config generation; the file it names need not exist.
+	// Both agent blocks name an operator MCP config carrying a marker
+	// server unique to that block, so the routed session's generated
+	// file can be told apart from a session that read the wrong block.
+	absWorkflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+	claudeMCPConfigPath := filepath.Join(tmpDir, "claude-mcp.json")
+	writeMarkerMCPConfig(t, claudeMCPConfigPath, "claude-marker")
+
+	codexMCPConfigPath := filepath.Join(tmpDir, "codex-mcp.json")
+	writeMarkerMCPConfig(t, codexMCPConfigPath, "codex-marker")
+
+	cfg.Extensions = map[string]any{
+		"claude-code": map[string]any{"mcp_config": claudeMCPConfigPath},
+		"codex":       map[string]any{"mcp_config": codexMCPConfigPath},
+	}
+
 	bugIssue := domain.Issue{
 		ID:         "id-bug",
 		Identifier: "DISP-1",
@@ -5632,8 +5651,23 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 
 	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
 
-	codexAdapter := &mockAgentAdapter{}
-	claudeAdapter := &mockAgentAdapter{}
+	// Captured per adapter: the two issues dispatch concurrently through
+	// one run loop, so a shared capture would race between them.
+	var codexGeneratedMCPConfigPath atomic.Value
+	var claudeGeneratedMCPConfigPath atomic.Value
+
+	codexAdapter := &mockAgentAdapter{
+		startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+			codexGeneratedMCPConfigPath.Store(params.MCPConfigPath)
+			return domain.Session{ID: "sess-codex"}, nil
+		},
+	}
+	claudeAdapter := &mockAgentAdapter{
+		startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+			claudeGeneratedMCPConfigPath.Store(params.MCPConfigPath)
+			return domain.Session{ID: "sess-claude"}, nil
+		},
+	}
 
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{
@@ -5650,7 +5684,7 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		},
 	}
 
-	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+	wm := &stubWorkflowManager{config: cfg, template: tmpl, absPath: absWorkflowPath}
 	store := &stubStore{}
 	regs := passingPreflightRegistries()
 
@@ -5747,6 +5781,61 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	if docsRow.RuleName != "" {
 		t.Errorf("RunHistory(%q).RuleName = %q, want %q", docsIssue.Identifier, docsRow.RuleName, "")
 	}
+
+	// The routed session's generated MCP config must carry the codex
+	// block's marker server and must not carry the claude-code block's,
+	// proving the routed kind selected its own operator block rather
+	// than the workflow default's.
+	gotPath, _ := codexGeneratedMCPConfigPath.Load().(string)
+	if gotPath == "" {
+		t.Fatal("codex adapter's StartSessionParams.MCPConfigPath is empty, want a generated file")
+	}
+	servers := readMCPServers(t, gotPath)
+	if _, ok := servers["codex-marker"]; !ok {
+		t.Errorf("mcpServers in %q missing %q, want present (routed kind's own block)", gotPath, "codex-marker")
+	}
+	if _, ok := servers["claude-marker"]; ok {
+		t.Errorf("mcpServers in %q contains %q, want absent (default kind's block must not leak into a routed session)", gotPath, "claude-marker")
+	}
+}
+
+// writeMarkerMCPConfig writes an operator MCP config file at path
+// declaring a single stdio server named marker, so a test can tell
+// apart the generated config produced from that block versus another.
+func writeMarkerMCPConfig(t *testing.T, path, marker string) {
+	t.Helper()
+
+	data, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			marker: map[string]any{"type": "stdio", "command": "/bin/" + marker},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal operator MCP config: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+// readMCPServers reads and parses the mcpServers object out of the
+// generated MCP config file at path.
+func readMCPServers(t *testing.T, path string) map[string]any {
+	t.Helper()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q): %v", path, err)
+	}
+	servers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q: mcpServers is not an object: %v", path, parsed["mcpServers"])
+	}
+	return servers
 }
 
 // --- Blocker gate observability (handleTick) ---

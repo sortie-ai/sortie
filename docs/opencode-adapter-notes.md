@@ -14,7 +14,7 @@ Nothing here pins a flag list, an event vocabulary, a permission key set, or an 
 
 If a future change needs anything the projection hides, retry and backoff state above all, the answer is the server surface with its documented schemas, not a richer parse of `run` output.
 
-One trap to carry into that work if it ever happens. A port of zero on this CLI is not "pick any free port". It is a sentinel meaning try the conventional default first and fall back to an ephemeral port only if that one is taken. The shared option default is zero, so a caller who reads it as ephemeral can attach to a server it did not start, and one who reads it as the fixed default can miss the server entirely. Set the port explicitly on both sides rather than relying on the default.
+One trap to carry into that work if it ever happens: nothing in this adapter wires a port today, but the underlying server mode treats a port value of zero as a sentinel rather than as "pick any free port", and reading that wrong in either direction either attaches to a server this process did not start or misses the server the CLI actually opened. Confirm the current sentinel semantics against `opencode run --help` and the server-mode docs at `opencode.ai` before trusting a zero default, and set the port explicitly on both sides regardless of what you find there.
 
 ## Why this adapter owns its own loop
 

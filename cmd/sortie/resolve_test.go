@@ -357,105 +357,6 @@ func TestTrackerConfigMapCompleteness(t *testing.T) {
 	}
 }
 
-// --- mergeExtensions tests ---
-
-func TestMergeExtensions(t *testing.T) {
-	t.Parallel()
-
-	t.Run("copies extension keys", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "file"}
-		extensions := map[string]any{
-			"file": map[string]any{"path": "issues.json", "extra": 42},
-		}
-
-		mergeExtensions(dst, extensions, "file")
-
-		if dst["path"] != "issues.json" {
-			t.Errorf("path = %v, want %q", dst["path"], "issues.json")
-		}
-		if dst["extra"] != 42 {
-			t.Errorf("extra = %v, want 42", dst["extra"])
-		}
-	})
-
-	t.Run("does not overwrite existing keys", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "file", "path": "original.json"}
-		extensions := map[string]any{
-			"file": map[string]any{"path": "overridden.json"},
-		}
-
-		mergeExtensions(dst, extensions, "file")
-
-		if dst["path"] != "original.json" {
-			t.Errorf("path = %v, want %q (should not overwrite)", dst["path"], "original.json")
-		}
-	})
-
-	t.Run("missing kind is no-op", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "jira"}
-		extensions := map[string]any{
-			"file": map[string]any{"path": "issues.json"},
-		}
-
-		mergeExtensions(dst, extensions, "jira")
-
-		if _, ok := dst["path"]; ok {
-			t.Error("path should not be set when kind has no extensions")
-		}
-	})
-
-	t.Run("nil extensions is no-op", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "file"}
-		mergeExtensions(dst, nil, "file")
-
-		if len(dst) != 1 {
-			t.Errorf("dst has %d keys, want 1", len(dst))
-		}
-	})
-
-	t.Run("non-map extension value is no-op", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "file"}
-		extensions := map[string]any{
-			"file": "not a map",
-		}
-
-		mergeExtensions(dst, extensions, "file")
-
-		if len(dst) != 1 {
-			t.Errorf("dst has %d keys, want 1", len(dst))
-		}
-	})
-
-	t.Run("adapter max_turns passthrough", func(t *testing.T) {
-		t.Parallel()
-
-		dst := map[string]any{"kind": "claude-code"}
-		extensions := map[string]any{
-			"claude-code": map[string]any{"max_turns": float64(50)},
-		}
-
-		mergeExtensions(dst, extensions, "claude-code")
-
-		got, ok := dst["max_turns"]
-		if !ok {
-			t.Fatal("max_turns not present after mergeExtensions")
-		}
-		if got != float64(50) {
-			t.Errorf("max_turns = %v, want 50 (adapter value, not orchestrator value)", got)
-		}
-	})
-}
-
 // --- mergeTrackerCredentials tests ---
 
 // --- mergeTrackerCredentials tests ---
@@ -547,7 +448,8 @@ func TestMergeTrackerCredentialsExtensionsWin(t *testing.T) {
 
 	// Extensions key wins over tracker key.
 	dst := map[string]any{}
-	mergeExtensions(dst, map[string]any{"github": map[string]any{"api_key": "ext-tok"}}, "github")
+	cfg := config.ServiceConfig{Extensions: map[string]any{"github": map[string]any{"api_key": "ext-tok"}}}
+	config.MergeAdapterExtensions(dst, cfg, "github")
 	mergeTrackerCredentials(dst, config.TrackerConfig{APIKey: "tracker-tok", Project: "PROJ"})
 
 	if got := dst["api_key"]; got != "ext-tok" {
@@ -610,7 +512,7 @@ func TestKindMatchGuardWiring(t *testing.T) {
 			t.Parallel()
 
 			adapterCfgMap := make(map[string]any)
-			mergeExtensions(adapterCfgMap, tt.extensions, tt.ciKind)
+			config.MergeAdapterExtensions(adapterCfgMap, config.ServiceConfig{Extensions: tt.extensions}, tt.ciKind)
 			if tt.ciKind == tt.trackerKind {
 				mergeTrackerCredentials(adapterCfgMap, tt.tc)
 			}
