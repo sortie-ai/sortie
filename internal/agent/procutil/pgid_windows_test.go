@@ -215,8 +215,7 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 	if waitErr == nil {
 		t.Fatal("cmd.Wait() = nil, want exit error after Job Object termination")
 	}
-	var exitErr *exec.ExitError
-	if errors.As(waitErr, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 		t.Logf("ExitCode() = %d (0x%X), ExitError = %v", exitErr.ExitCode(), uint32(exitErr.ExitCode()), exitErr)
 	} else {
 		t.Logf("waitErr type = %T, value = %v", waitErr, waitErr)

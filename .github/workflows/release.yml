@@ -69,9 +69,17 @@ jobs:
           echo "✓ CHANGELOG.md contains [${VERSION}]"
 
   lint:
-    name: Lint
+    name: Lint (${{ matrix.goos }})
     needs: [validate]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One run per released platform: golangci-lint applies build
+        # constraints exactly as the compiler does, so a single run never
+        # sees the files of the other targets. Keep in step with the goos:
+        # list under builds: below and with LINT_GOOS in default.mk.
+        goos: [linux, darwin, windows]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,11 +91,15 @@ jobs:
 
       - name: Run linter
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        env:
+          GOOS: ${{ matrix.goos }}
         with:
           version: latest
           # Skip the action's analysis cache: stale entries cause flaky
           # staticcheck false positives (golangci-lint#5979) that would otherwise
-          # masquerade as new 'latest' findings. setup-go's caches are unaffected.
+          # masquerade as new 'latest' findings, and a cache shared across the
+          # matrix would carry a result over from the wrong GOOS. setup-go's
+          # caches are unaffected.
           skip-cache: true
 
   test-unit:

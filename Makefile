@@ -50,12 +50,18 @@ vet: ## Run go vet on all packages
 	$(GO) vet ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint on all packages
-	$(LINTER) run ./...
+lint: ## Run golangci-lint for every target platform (LINT_GOOS=windows ...)
+	@for goos in $(LINT_GOOS); do \
+		printf '$(BOLD)golangci-lint: GOOS=%s$(RESET)\n' "$$goos"; \
+		GOOS=$$goos $(LINTER) run ./... || exit 1; \
+	done
 
 .PHONY: lint-no-tests
 lint-no-tests: ## Fail if shipped code is reachable only from its own test
-	$(LINTER) run --config .golangci-no-tests.yml --tests=false ./...
+	@for goos in $(LINT_GOOS); do \
+		printf '$(BOLD)golangci-lint (shipped code only): GOOS=%s$(RESET)\n' "$$goos"; \
+		GOOS=$$goos $(LINTER) run --config .golangci-no-tests.yml --tests=false ./... || exit 1; \
+	done
 
 .PHONY: lint-shell
 lint-shell: ## Run shellcheck on every tracked shell script
@@ -109,6 +115,7 @@ endif
 	@printf '  $(CYAN)%-24s$(RESET) %s\n' \
 		'PKG'      ' Package filter for test targets (default: ./...)' \
 		'RUN'      ' Test name filter, passed to -run' \
+		'LINT_GOOS' ' GOOS values the lint targets iterate' \
 		'VERSION'  ' Override version string (default: git describe)' \
 		'NO_COLOR' ' Disable color output (https://no-color.org/)'
 	@printf '\n'

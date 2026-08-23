@@ -4,6 +4,7 @@ package procutil
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"sync"
@@ -40,6 +41,19 @@ func SetProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 }
 
+// dwordPID narrows a Go process identifier to the DWORD that the
+// Win32 process APIs take. [os.Process] reports a pid as an int,
+// while Windows identifies a process by a 32-bit unsigned value, so
+// a pid outside that range names no live process. Converting one
+// unchecked would wrap it onto an unrelated identifier and signal or
+// terminate the wrong process tree.
+func dwordPID(pid int) (uint32, error) {
+	if pid < 0 || pid > math.MaxUint32 {
+		return 0, fmt.Errorf("process id %d is outside the windows process identifier range", pid)
+	}
+	return uint32(pid), nil
+}
+
 // SignalProcessGroup sends a signal to the process group led by pid.
 //
 // For SIGTERM and SIGINT, sends CTRL_BREAK_EVENT via
@@ -50,7 +64,11 @@ func SetProcessGroup(cmd *exec.Cmd) {
 func SignalProcessGroup(pid int, sig syscall.Signal) error {
 	switch sig {
 	case syscall.SIGTERM, syscall.SIGINT:
-		return windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(pid))
+		group, err := dwordPID(pid)
+		if err != nil {
+			return err
+		}
+		return windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, group)
 	case syscall.SIGKILL:
 		return KillProcessGroup(pid)
 	default:
@@ -86,7 +104,10 @@ func KillProcessGroup(pid int) error {
 		entry := v.(*jobEntry)
 		if entry.job != 0 {
 			err := windows.TerminateJobObject(entry.job, jobTerminateExitCode)
-			windows.CloseHandle(entry.job)
+			// A failing CloseHandle means the handle was already
+			// invalid, which leaves the caller nothing to act on; the
+			// termination result is the one worth reporting.
+			_ = windows.CloseHandle(entry.job)
 			return err
 		}
 		if entry.proc != nil {
@@ -106,6 +127,12 @@ func KillProcessGroup(pid int) error {
 // operation. On failure, returns an error; callers should log at WARN
 // and continue without Job Object protection.
 func AssignProcess(pid int, proc *os.Process) error {
+	processID, err := dwordPID(pid)
+	if err != nil {
+		jobs.Store(pid, &jobEntry{proc: proc})
+		return err
+	}
+
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		jobs.Store(pid, &jobEntry{proc: proc})
@@ -117,11 +144,11 @@ func AssignProcess(pid int, proc *os.Process) error {
 	_, err = windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
+		uintptr(unsafe.Pointer(&info)), //nolint:gosec // G103: SetInformationJobObject takes the limit struct as a uintptr; x/sys/windows exposes no typed alternative
 		uint32(unsafe.Sizeof(info)),
 	)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("SetInformationJobObject: %w", err)
 	}
@@ -129,18 +156,18 @@ func AssignProcess(pid int, proc *os.Process) error {
 	processHandle, err := windows.OpenProcess(
 		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
 		false,
-		uint32(pid),
+		processID,
 	)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("OpenProcess: %w", err)
 	}
 
 	err = windows.AssignProcessToJobObject(job, processHandle)
-	windows.CloseHandle(processHandle)
+	_ = windows.CloseHandle(processHandle)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}
@@ -156,7 +183,7 @@ func CleanupProcess(pid int) {
 	if ok {
 		entry := v.(*jobEntry)
 		if entry.job != 0 {
-			windows.CloseHandle(entry.job)
+			_ = windows.CloseHandle(entry.job)
 		}
 	}
 }

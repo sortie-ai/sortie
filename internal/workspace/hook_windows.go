@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os/exec"
 	"syscall"
 	"time"
@@ -81,7 +82,9 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 			// the job; the deferred close releases it on every path.
 			return windows.TerminateJobObject(job, statusControlCExit)
 		}
-		defer windows.CloseHandle(job)
+		// A failing CloseHandle means the handle was already invalid;
+		// there is nothing the hook caller could do about it.
+		defer func() { _ = windows.CloseHandle(job) }()
 	}
 
 	cmd.WaitDelay = 3 * time.Second
@@ -130,8 +133,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		}
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return HookResult{}, &HookError{
 			Op:       "run",
 			Script:   truncateScript(params.Script),
@@ -155,6 +157,15 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 // Returns the Job Object handle on success; callers are responsible
 // for closing it. Returns 0 on failure.
 func createHookJobObject(pid int) (windows.Handle, error) {
+	// Windows identifies a process by a 32-bit unsigned value while Go
+	// reports a pid as an int, so a pid outside that range names no
+	// live process. Narrowing one unchecked would wrap it onto an
+	// unrelated identifier and put the wrong process in the job.
+	if pid < 0 || pid > math.MaxUint32 {
+		return 0, fmt.Errorf("process id %d is outside the windows process identifier range", pid)
+	}
+	processID := uint32(pid)
+
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return 0, fmt.Errorf("CreateJobObject: %w", err)
@@ -165,28 +176,28 @@ func createHookJobObject(pid int) (windows.Handle, error) {
 	_, err = windows.SetInformationJobObject(
 		job,
 		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&info)),
+		uintptr(unsafe.Pointer(&info)), //nolint:gosec // G103: SetInformationJobObject takes the limit struct as a uintptr; x/sys/windows exposes no typed alternative
 		uint32(unsafe.Sizeof(info)),
 	)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return 0, fmt.Errorf("SetInformationJobObject: %w", err)
 	}
 
 	procHandle, err := windows.OpenProcess(
 		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
 		false,
-		uint32(pid),
+		processID,
 	)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return 0, fmt.Errorf("OpenProcess: %w", err)
 	}
 
 	err = windows.AssignProcessToJobObject(job, procHandle)
-	windows.CloseHandle(procHandle)
+	_ = windows.CloseHandle(procHandle)
 	if err != nil {
-		windows.CloseHandle(job)
+		_ = windows.CloseHandle(job)
 		return 0, fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}
 
@@ -224,7 +235,7 @@ func waitJobDrained(job windows.Handle) {
 		err := windows.QueryInformationJobObject(
 			job,
 			windows.JobObjectBasicAccountingInformation,
-			uintptr(unsafe.Pointer(&info)),
+			uintptr(unsafe.Pointer(&info)), //nolint:gosec // G103: QueryInformationJobObject takes the accounting struct as a uintptr; x/sys/windows exposes no typed alternative
 			uint32(unsafe.Sizeof(info)),
 			nil,
 		)

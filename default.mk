@@ -34,6 +34,26 @@ GO      ?= go
 LINTER  ?= golangci-lint
 SHELLCHECK ?= shellcheck
 
+# ── Lint target platforms ─────────────────────────────────────────────────────
+#
+# golangci-lint resolves build constraints the same way the compiler does, so a
+# run only ever analyses the files that survive for the current GOOS: every
+# _windows.go file is invisible to a run on Linux, and vice versa.  The lint
+# targets therefore iterate the operating systems the release builds for.
+#
+# Cross-GOOS analysis is exact for this module because it is pure Go - the
+# release builds set CGO_ENABLED=0 and no package imports "C" - so the type
+# checker resolves every target completely.  A cgo dependency would break that
+# guarantee and the findings could no longer be trusted.
+#
+# GOARCH stays at the host value: every released target is 64-bit, so the width
+# of int does not vary across them.
+#
+# Keep this list in step with the goos: list in .goreleaser.yaml and with the
+# lint matrices in .github/workflows/ci.yml and .github/workflows/release.yml.
+
+LINT_GOOS ?= linux darwin windows
+
 # ── Build flags ───────────────────────────────────────────────────────────────
 #
 # -trimpath   strips local file-system paths for reproducible builds.

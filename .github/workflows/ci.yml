@@ -26,8 +26,20 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint
+    name: Lint (${{ matrix.goos }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # golangci-lint applies build constraints exactly as the compiler
+        # does, so one run only ever analyses the files that survive for
+        # its GOOS - every _windows.go file is invisible to a Linux run.
+        # Each released platform therefore needs its own run. Cross-GOOS
+        # analysis is exact here because the module is pure Go; a cgo
+        # dependency would invalidate it. Keep in step with LINT_GOOS in
+        # default.mk, which is what "make lint" iterates locally.
+        goos: [linux, darwin, windows]
 
     steps:
       - name: Checkout code
@@ -41,13 +53,26 @@ jobs:
           go-version-file: go.mod
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        env:
+          GOOS: ${{ matrix.goos }}
         with:
           version-file: .tool-versions
           verify: false
           # Skip the action's analysis cache: stale entries cause flaky
           # false positives (golangci-lint#5979) that reproduce on no rerun.
-          # setup-go's caches are unaffected.
+          # A cache shared across the matrix would also carry a result over
+          # from the wrong GOOS. setup-go's caches are unaffected.
           skip-cache: true
+
+  lint-shell:
+    name: Lint (shell)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Lint shell scripts
         env:
@@ -63,8 +88,15 @@ jobs:
           printf '%s\n' "$changed" | xargs -d '\n' -r shellcheck -x --
 
   lint-no-tests:
-    name: Lint (shipped code only)
+    name: Lint (shipped code only, ${{ matrix.goos }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same per-GOOS reasoning as the Lint job above: production code
+        # reachable only from its own test is a per-platform property.
+        goos: [linux, darwin, windows]
 
     steps:
       - name: Checkout code
@@ -84,6 +116,8 @@ jobs:
       # production code reachable only from its own test never turns up
       # there. This job is the only one that can fail on that class.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        env:
+          GOOS: ${{ matrix.goos }}
         with:
           version-file: .tool-versions
           verify: false
