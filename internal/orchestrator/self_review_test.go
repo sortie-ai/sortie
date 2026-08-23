@@ -1554,7 +1554,13 @@ func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
 				Logger:         discardLogger(),
 				Metrics:        &domain.NoopMetrics{},
 				TurnsCompleted: &turns,
-				TurnTimeoutMS:  100,
+				// The bound has to clear the review turn's own work,
+				// which writes the verdict file to disk, or that turn
+				// expires instead of the fix turn and the arm under test
+				// never runs. The fix turn's expiry stays deterministic
+				// at any bound because it waits for the deadline rather
+				// than racing it, so the headroom costs only wall time.
+				TurnTimeoutMS: 2000,
 			})
 
 			var agentErr *domain.AgentError
