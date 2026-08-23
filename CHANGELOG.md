@@ -93,6 +93,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocker list, which was previously always empty.
   ([#920](https://github.com/sortie-ai/sortie/issues/920))
 
+- An issue routed by a dispatch rule to an agent kind other than the
+  workflow default now runs with the MCP servers configured in its own
+  agent settings block. It was given the default kind's `mcp_config`
+  instead: servers and credentials meant for another agent were
+  loaded, its own were silently dropped, and a stale or malformed path
+  in the default block failed the session at startup and sent it into
+  retry backoff, naming a file the operator had never associated with
+  that agent. `claude-code` and `copilot-cli` consume the generated
+  file; a session running on the workflow default was unaffected.
+  ([#924](https://github.com/sortie-ai/sortie/issues/924))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed

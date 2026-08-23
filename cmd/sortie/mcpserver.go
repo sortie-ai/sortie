@@ -85,7 +85,7 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 
 		trackerCfgMap := trackerConfigMap(cfg.Tracker)
 		trackerCfgMap["user_agent"] = "sortie-mcp/" + Version
-		mergeExtensions(trackerCfgMap, cfg.Extensions, cfg.Tracker.Kind)
+		config.MergeAdapterExtensions(trackerCfgMap, cfg, cfg.Tracker.Kind)
 
 		adapter, adapterErr := trackerCtor(trackerCfgMap)
 		if adapterErr != nil {

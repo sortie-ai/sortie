@@ -2851,6 +2851,260 @@ func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
 	}
 }
 
+// --- ResolveAgentSettings tests ---
+
+// TestResolveAgentSettings_MCPConfigPath covers every row of the
+// mcp_config resolution table: the kind's block may be absent or not
+// an object, the block may carry no mcp_config or a non-string one,
+// the value may be empty, absolute, or relative with the workflow
+// directory present or empty.
+func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cfg         ServiceConfig
+		kind        string
+		workflowDir string
+		wantPath    string
+	}{
+		{
+			name:        "kind has no block",
+			cfg:         ServiceConfig{Agent: AgentConfig{Kind: "claude-code"}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    "",
+		},
+		{
+			name: "block is not an object",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": "not-a-map",
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    "",
+		},
+		{
+			name: "block has no mcp_config key",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"approval_policy": "never"},
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    "",
+		},
+		{
+			name: "mcp_config is not a string",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"mcp_config": 42},
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    "",
+		},
+		{
+			name: "mcp_config is the empty string",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"mcp_config": ""},
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    "",
+		},
+		{
+			name: "mcp_config is an absolute path",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"mcp_config": filepath.FromSlash("/abs/op.json")},
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    filepath.FromSlash("/abs/op.json"),
+		},
+		{
+			name: "mcp_config is relative and workflowDir is non-empty",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"mcp_config": "op.json"},
+			}},
+			kind:        "codex",
+			workflowDir: "/wf",
+			wantPath:    filepath.Join("/wf", "op.json"),
+		},
+		{
+			name: "mcp_config is relative and workflowDir is empty",
+			cfg: ServiceConfig{Extensions: map[string]any{
+				"codex": map[string]any{"mcp_config": "op.json"},
+			}},
+			kind:        "codex",
+			workflowDir: "",
+			wantPath:    "op.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ResolveAgentSettings(tt.cfg, tt.kind, tt.workflowDir)
+
+			if got.MCPConfigPath != tt.wantPath {
+				t.Errorf("ResolveAgentSettings(cfg, %q, %q).MCPConfigPath = %q, want %q", tt.kind, tt.workflowDir, got.MCPConfigPath, tt.wantPath)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("ResolveAgentSettings(cfg, %q, %q).Kind = %q, want %q", tt.kind, tt.workflowDir, got.Kind, tt.kind)
+			}
+		})
+	}
+}
+
+// TestResolveAgentSettings_PassthroughMatchesAgentAdapterConfig asserts
+// that AgentSettings.Passthrough carries exactly what AgentAdapterConfig
+// returns for the same kind, so the two producers can never disagree.
+func TestResolveAgentSettings_PassthroughMatchesAgentAdapterConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{
+		Agent: AgentConfig{Kind: "claude-code", Command: "claude"},
+		Extensions: map[string]any{
+			"codex": map[string]any{"approval_policy": "never"},
+		},
+	}
+
+	got := ResolveAgentSettings(cfg, "codex", "")
+	want := AgentAdapterConfig(cfg, "codex")
+
+	if len(got.Passthrough) != len(want) {
+		t.Fatalf("ResolveAgentSettings().Passthrough = %v (len %d), want %v (len %d)", got.Passthrough, len(got.Passthrough), want, len(want))
+	}
+	for k, wantVal := range want {
+		if gotVal, ok := got.Passthrough[k]; !ok || gotVal != wantVal {
+			t.Errorf("ResolveAgentSettings().Passthrough[%q] = %v, want %v", k, gotVal, wantVal)
+		}
+	}
+}
+
+// TestResolveAgentSettings_IndependentAllocationAcrossCalls asserts that
+// two calls return independently allocated Passthrough maps: mutating
+// one call's result must not affect another.
+func TestResolveAgentSettings_IndependentAllocationAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{Agent: AgentConfig{Kind: "codex", Command: "codex"}}
+
+	first := ResolveAgentSettings(cfg, "codex", "")
+	first.Passthrough["command"] = "mutated"
+
+	second := ResolveAgentSettings(cfg, "codex", "")
+	if second.Passthrough["command"] != "codex" {
+		t.Errorf(`ResolveAgentSettings() second call Passthrough["command"] = %v, want "codex" (unaffected by mutating the first call's map)`, second.Passthrough["command"])
+	}
+}
+
+// --- MergeAdapterExtensions tests ---
+//
+// These cases re-home the coverage cmd/sortie's now-deleted
+// TestMergeExtensions gave the duplicate mergeExtensions helper before
+// it was removed in favor of this primitive: nil maps, non-overwrite of
+// an existing key, and the claude-code extension merge.
+
+func TestMergeAdapterExtensions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("copies extension keys", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		cfg := ServiceConfig{Extensions: map[string]any{
+			"file": map[string]any{"path": "issues.json", "extra": 42},
+		}}
+
+		MergeAdapterExtensions(dst, cfg, "file")
+
+		if dst["path"] != "issues.json" {
+			t.Errorf("dst[%q] = %v, want %q", "path", dst["path"], "issues.json")
+		}
+		if dst["extra"] != 42 {
+			t.Errorf("dst[%q] = %v, want %d", "extra", dst["extra"], 42)
+		}
+	})
+
+	t.Run("does not overwrite existing keys", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file", "path": "original.json"}
+		cfg := ServiceConfig{Extensions: map[string]any{
+			"file": map[string]any{"path": "overridden.json"},
+		}}
+
+		MergeAdapterExtensions(dst, cfg, "file")
+
+		if dst["path"] != "original.json" {
+			t.Errorf("dst[%q] = %v, want %q (must not overwrite)", "path", dst["path"], "original.json")
+		}
+	})
+
+	t.Run("missing kind is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "jira"}
+		cfg := ServiceConfig{Extensions: map[string]any{
+			"file": map[string]any{"path": "issues.json"},
+		}}
+
+		MergeAdapterExtensions(dst, cfg, "jira")
+
+		if _, ok := dst["path"]; ok {
+			t.Error("dst[\"path\"] present, want absent when kind has no extensions block")
+		}
+	})
+
+	t.Run("nil extensions is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		cfg := ServiceConfig{}
+
+		MergeAdapterExtensions(dst, cfg, "file")
+
+		if len(dst) != 1 {
+			t.Errorf("len(dst) = %d, want 1 (nil Extensions must be a no-op)", len(dst))
+		}
+	})
+
+	t.Run("non-map extension value is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		cfg := ServiceConfig{Extensions: map[string]any{
+			"file": "not a map",
+		}}
+
+		MergeAdapterExtensions(dst, cfg, "file")
+
+		if len(dst) != 1 {
+			t.Errorf("len(dst) = %d, want 1 (non-map extension value must be a no-op)", len(dst))
+		}
+	})
+
+	t.Run("adapter max_turns passthrough", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "claude-code"}
+		cfg := ServiceConfig{Extensions: map[string]any{
+			"claude-code": map[string]any{"max_turns": float64(50)},
+		}}
+
+		MergeAdapterExtensions(dst, cfg, "claude-code")
+
+		got, ok := dst["max_turns"]
+		if !ok {
+			t.Fatal("dst[\"max_turns\"] not present after MergeAdapterExtensions")
+		}
+		if got != float64(50) {
+			t.Errorf("dst[%q] = %v, want 50 (adapter value, not orchestrator value)", "max_turns", got)
+		}
+	})
+}
+
 // --- buildWorkspaceConfig / workspace.retention_days tests ---
 
 func TestBuildWorkspaceConfig(t *testing.T) {
