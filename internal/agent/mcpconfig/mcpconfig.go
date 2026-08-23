@@ -155,6 +155,14 @@ func Parse(path string) ([]Server, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, &Error{Kind: ErrorNotJSON, Path: path, Err: err}
 	}
+	// A JSON null unmarshals into a nil map without an error, so the
+	// null document and the null member both have to be rejected
+	// explicitly. Reading either as "no servers" would launch a
+	// translating adapter with none of the tools its declaration
+	// promises.
+	if doc == nil {
+		return nil, &Error{Kind: ErrorNotJSON, Path: path, Err: fmt.Errorf("document is null, want an object")}
+	}
 
 	serversRaw, ok := doc["mcpServers"]
 	if !ok {
@@ -164,6 +172,9 @@ func Parse(path string) ([]Server, error) {
 	var entries map[string]json.RawMessage
 	if err := json.Unmarshal(serversRaw, &entries); err != nil {
 		return nil, &Error{Kind: ErrorNotJSON, Path: path, Err: fmt.Errorf("mcpServers is not an object: %w", err)}
+	}
+	if entries == nil {
+		return nil, &Error{Kind: ErrorNotJSON, Path: path, Err: fmt.Errorf("mcpServers is null, want an object")}
 	}
 
 	names := slices.Sorted(maps.Keys(entries))
@@ -176,6 +187,36 @@ func Parse(path string) ([]Server, error) {
 		servers = append(servers, server)
 	}
 	return servers, nil
+}
+
+// urlTransportTypes are the type names that describe a URL-addressed
+// server. The set is deliberately partial: a name outside it, and
+// outside the stdio name, is left alone rather than judged against a
+// vocabulary this package does not own.
+var urlTransportTypes = []string{"http", "sse", "streamable-http"}
+
+// checkTransportAgreement rejects an entry whose declared type
+// contradicts the transport its own fields imply. The type is optional
+// and its absence is not an error; accepting a present one without
+// reading it would let a contradictory entry through under a key the
+// parser claims to model.
+func checkTransportAgreement(path, name string, fields map[string]json.RawMessage, hasCommand bool) error {
+	raw, ok := fields["type"]
+	if !ok {
+		return nil
+	}
+
+	var declared string
+	if err := json.Unmarshal(raw, &declared); err != nil {
+		return &Error{Kind: ErrorNotJSON, Path: path, Server: name, Key: "type", Err: err}
+	}
+
+	contradicts := (declared == "stdio" && !hasCommand) ||
+		(slices.Contains(urlTransportTypes, declared) && hasCommand)
+	if contradicts {
+		return &Error{Kind: ErrorEntryNotExpressible, Path: path, Server: name, Key: "type"}
+	}
+	return nil
 }
 
 // parseEntry normalizes one mcpServers object member into a [Server].
@@ -195,6 +236,10 @@ func parseEntry(path, name string, raw json.RawMessage) (Server, error) {
 	_, hasURL := fields["url"]
 	if hasCommand == hasURL {
 		return Server{}, &Error{Kind: ErrorEntryNotExpressible, Path: path, Server: name}
+	}
+
+	if err := checkTransportAgreement(path, name, fields, hasCommand); err != nil {
+		return Server{}, err
 	}
 
 	server := Server{Name: name}

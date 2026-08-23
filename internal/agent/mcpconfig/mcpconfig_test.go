@@ -125,6 +125,30 @@ func TestParse_MalformedDocument(t *testing.T) {
 	}
 }
 
+func TestParse_NullIsNotAnObject(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "null document", content: `null`},
+		{name: "null mcpServers", content: `{"mcpServers":null}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, tt.content)
+			parseErr := mustParseError(t, path)
+			if parseErr.Kind != ErrorNotJSON {
+				t.Errorf("Error.Kind = %q, want %q", parseErr.Kind, ErrorNotJSON)
+			}
+		})
+	}
+}
+
 func TestParse_EntryNotExpressible(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +163,14 @@ func TestParse_EntryNotExpressible(t *testing.T) {
 		{
 			name:    "both command and url",
 			content: `{"mcpServers":{"broken":{"command":"/bin/echo","url":"https://example.invalid"}}}`,
+		},
+		{
+			name:    "stdio type carrying a url",
+			content: `{"mcpServers":{"broken":{"type":"stdio","url":"https://example.invalid/mcp"}}}`,
+		},
+		{
+			name:    "http type carrying a command",
+			content: `{"mcpServers":{"broken":{"type":"http","command":"/bin/echo"}}}`,
 		},
 	}
 
