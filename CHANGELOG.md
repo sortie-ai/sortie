@@ -21,9 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sortie validate` now reports a warning when an agent block sets
   `mcp_config` for an agent kind that never receives the generated MCP
-  configuration file. `kiro` and `mock` never receive it; every other
-  built-in kind does, so an `mcp_config` value in one of those two
-  kinds' blocks had no effect and nothing said so. The reference
+  configuration file. `claude-code`, `codex`, `copilot-cli` and
+  `opencode` receive it; `kiro` does not, so an `mcp_config` value in
+  a `kiro` block had no effect and nothing said so. The reference
   documentation now states which kinds consume the file. It is a
   warning and not an error: such a configuration stays valid, the run
   proceeds, and the exit code is unchanged.
@@ -120,11 +120,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their own runtime's configuration form and deliver it on a local
   launch, so a tool the prompt advertises to them is reachable; an SSH
   session on either kind gets neither the channel nor the
-  advertisement. `kiro` and `mock` stop receiving the advertisement
-  entirely, since neither can reach a tool by any means: `kiro`'s
-  runtime disables MCP under API-key authentication, and `mock`
-  launches no process. `sortie validate` also warns once per
-  reachable kind with no tool execution channel.
+  advertisement. `kiro` stops receiving the advertisement entirely,
+  since its runtime disables MCP under API-key authentication and can
+  reach a tool by no other means. `sortie validate` also warns once
+  per reachable kind with no tool execution channel.
   ([#841](https://github.com/sortie-ai/sortie/issues/841))
 
 ## [1.21.0] - 2026-08-20
@@ -1934,8 +1933,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TokenUsage`, `AgentConfig`, `Session`, `TurnResult`, and `AgentError` with
   9 error kinds.
 - Agent adapter registry (`registry.Agents`) for registration and lookup by kind.
-- Mock agent adapter (kind `"mock"`) with configurable turn outcomes, delays,
-  and cumulative token accumulation for orchestrator and integration testing.
 - Claude Code agent adapter (kind `"claude-code"`) that launches the CLI as a
   subprocess, reads JSONL events from stdout, and normalizes them to domain event
   types. Supports graceful SIGTERM→SIGKILL shutdown on context cancellation and
