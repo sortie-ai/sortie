@@ -155,12 +155,13 @@ Policy requirements:
   configuration value that would let the agent stop and wait for a person is refused before the
   run, rather than satisfied when it arrives mid-turn.
 
-Unsupported dynamic tool calls:
+Unsupported tool calls:
 
 - No adapter routes a tool call: every kind with an execution channel routes calls to the same
-  MCP sidecar (§10.4.3), and the sidecar answers a name not in the `ToolRegistry` with a failure
-  result rather than a protocol error.
-- The session continues after such a failure. This is the channel's behavior, not adapter-level
+  MCP sidecar (§10.4.3), and the sidecar answers a name not in the `ToolRegistry` with a JSON-RPC
+  error object, code `-32602`, rather than a result. A result carrying `isError` is reserved
+  for a tool that was found and whose execution failed.
+- The session continues after either answer. This is the channel's behavior, not adapter-level
   behavior; no adapter intercepts or routes a tool call itself.
 
 Ending on a request only a person could answer:

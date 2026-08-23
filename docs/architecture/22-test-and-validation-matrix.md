@@ -367,8 +367,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Stdout and stderr are handled separately; protocol JSON is parsed from stdout only
 - Non-JSON stderr lines are logged but do not crash parsing
 - Command/file-change approvals are handled according to the implementation's documented policy
-- Unsupported dynamic tool calls are answered by the MCP execution channel with a failure result,
-  not by the adapter, without stalling the session
+- Unsupported tool calls are answered by the MCP execution channel with a JSON-RPC error rather
+  than a result, not by the adapter, without stalling the session
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
@@ -385,8 +385,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - API-level errors produce `success: false` with a normalized `{kind, message}` error envelope
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - the tool is scoped to the configured project
-- Unsupported tool names return a failure result over the MCP execution channel, not at the
-  adapter level, without stalling the session
+- Unsupported tool names return a JSON-RPC error rather than a result over the MCP execution
+  channel, not at the adapter level, without stalling the session
 
 ### 17.6 Observability
 
