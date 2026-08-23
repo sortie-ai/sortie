@@ -456,9 +456,10 @@ machine-readable form, and the adapter leaves `Model` empty on the events it emi
 
 Kiro CLI is an MCP client. MCP servers are managed with the `mcp` subcommand
 (`add`, `remove`, `list`, `import`, `status`) and configured via JSON files. The global
-configuration lives at `~/.kiro/settings/mcp.json`, with a workspace-level `mcp.json` also
-supported. The config uses the standard `mcpServers` object (the binary references the
-`mcpServers` key, local `strings` probe).
+configuration lives at `~/.kiro/settings/mcp.json` and the workspace-level one at
+`.kiro/settings/mcp.json` inside the project directory; the rendered docs spell both out as
+"global" and "workspace" respectively. The config uses the standard `mcpServers` object (the
+binary references the `mcpServers` key, local `strings` probe).
 
 There is no per-launch `--mcp-config <path>` flag on `chat` (the `chat --help` flag table
 above has none). Servers are configured out of band with `kiro-cli mcp import --file <FILE>
@@ -673,7 +674,7 @@ while turns within one session are serialized by the orchestrator.
 | Permission bypass | `--dangerously-skip-permissions` | `approvalPolicy: "never"` | `--dangerously-skip-permissions` | `--trust-all-tools` or `--trust-tools` |
 | Session resume | `--resume <id>` | `thread/resume` | `--session <id>` | `--resume` (directory-scoped, no ID) |
 | Models | Claude family | OpenAI family | provider/model | Backend-served set (Claude, DeepSeek observed) |
-| MCP config | `--mcp-config <path>` | `mcp_servers` in `config.toml` (`CODEX_HOME` or a trusted project's own `.codex/`) | `opencode.json` | `~/.kiro/settings/mcp.json`, workspace `mcp.json` |
+| MCP config | Claude Code `--mcp-config <path>` | Codex `config.toml` `mcp_servers` (under `CODEX_HOME`, or a trusted project's own `.codex/`) | OpenCode `opencode.json` | Kiro `~/.kiro/settings/mcp.json` (global), `.kiro/settings/mcp.json` (workspace) |
 | Cancellation | Signal | `turn/interrupt` then signal | Signal | Signal (no native interrupt) |
 
 The fifth adapter, `internal/agent/copilot`, is also launch-per-turn and parses a structured
