@@ -3049,7 +3049,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("Marshal defaultData: %v", err)
+			t.Fatalf("Marshal default operator config: %v", err)
 		}
 		if err := os.WriteFile(defaultPath, defaultData, 0o600); err != nil {
 			t.Fatalf("WriteFile default operator config: %v", err)
@@ -3062,7 +3062,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("Marshal routedData: %v", err)
+			t.Fatalf("Marshal routed operator config: %v", err)
 		}
 		if err := os.WriteFile(routedPath, routedData, 0o600); err != nil {
 			t.Fatalf("WriteFile routed operator config: %v", err)
@@ -3227,7 +3227,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("Marshal firstData: %v", err)
+			t.Fatalf("Marshal first operator config: %v", err)
 		}
 		if err := os.WriteFile(firstOperatorPath, firstData, 0o600); err != nil {
 			t.Fatalf("WriteFile first operator config: %v", err)
@@ -3240,7 +3240,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("Marshal secondData: %v", err)
+			t.Fatalf("Marshal second operator config: %v", err)
 		}
 		if err := os.WriteFile(secondOperatorPath, secondData, 0o600); err != nil {
 			t.Fatalf("WriteFile second operator config: %v", err)
