@@ -88,11 +88,19 @@ execute on the host under the account Sortie runs as.
 
 Processes an agent runtime starts on its own behalf are not confined by that agent's sandbox
 setting. The sandbox governs commands the agent executes; it does not govern the transports and
-helper processes the runtime launches to serve the session. Any write-capable sandbox admits this
-class of exposure, a read-only one does not, and the approval policy makes no difference to it.
-Tightening the sandbox setting therefore does not close it, which is the limit of the hardening
-guidance above: the setting that would close it is also the one that removes the write access an
-implementing agent needs.
+helper processes the runtime launches to serve the session. Nor does it govern whether workspace
+configuration is read at all. A runtime that gates that reading on a recorded trust decision
+consults the sandbox only when deciding whether to record trust for a path it has not seen
+before, so a restrictive sandbox prevents the decision rather than the loading. A path already
+carrying that decision keeps loading its configuration, and keeps starting the processes that
+configuration declares, whatever the sandbox says on the run that reaches it. The approval policy
+makes no difference to any of this. Tightening the sandbox setting therefore does not close the
+exposure, which is the limit of the hardening guidance above.
+
+Sortie derives a workspace path from the issue identifier, so runs for the same unit of work
+share a path. A trust decision recorded against that path outlives both the run and the workspace
+content that earned it, so the first permissive run for an issue arms every later run at the same
+path.
 
 The workspace Sortie creates and hands over is the boundary that matters, and two operator-facing
 controls act on it. Give the agent runtime a configuration home scoped to the run, so whatever it

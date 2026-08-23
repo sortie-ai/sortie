@@ -787,20 +787,25 @@ resolved Git root, or for the working directory when that is not a repository, i
 `config.toml` and reloads the configuration before the thread starts. Which sandbox value counts
 differs by release. v0.147.0 tests the requested sandbox mode, so a requested `workspace-write` or
 `danger-full-access` grants trust outright, even where a managed constraint reduces the effective
-permission to read-only. v0.149.0 tests the effective permission profile after those constraints,
-so a request reduced to read-only grants nothing; v0.147.0 is the more permissive of the two. The
-entry persists, so the write lands the first time a project is seen rather than on every run. The
+permission to read-only. v0.149.0 tests the effective permission profile after those constraints, so
+a request reduced to read-only grants nothing; v0.147.0 is the more permissive of the two. The entry
+persists, so the write lands the first time a project is seen rather than on every run. The
 interactive TUI asks first (it prompts `Do you trust the contents of this directory?`), while the
 app-server surface the adapter drives has no equivalent prompt. Sortie sends both a `cwd` and a
 `workspace-write` sandbox on `thread/start`, so a normal run takes this path. The reload happens
 before the thread starts, so a `.codex/config.toml` arriving with the checkout is live in the same
 run that grants the trust. Arriving with the checkout is the only route under this sandbox:
 `workspace-write` makes the workspace's own `.codex` directory a read-only entry, so the agent
-cannot write that file itself. An explicit `trust_level = "untrusted"` recorded for the path
-blocks both the grant and the project-local layer, because the grant is skipped whenever any
-trust level is already present. A project that is neither trusted nor granted trust contributes
-nothing either: the loader gates project-local configuration on a positive trust decision, and
-reports an unlisted path and an explicitly untrusted one with different diagnostics.
+cannot write that file itself. An explicit `trust_level = "untrusted"` recorded for the path blocks
+both the grant and the project-local layer, because the grant is skipped whenever any trust level is
+already present. The sandbox gates the grant, not the loading. A path already marked trusted keeps
+loading its project-local configuration and starting the MCP servers that configuration declares
+under a `read-only` sandbox, on v0.147.0 and v0.149.0 alike, because the
+sandbox is consulted only when deciding whether to record trust for a path that has none yet. Sortie
+derives the workspace path from the issue identifier and reuses it, so one earlier `workspace-write`
+run for an issue arms every later run at that path. A project that is neither trusted nor granted
+trust contributes nothing either: the loader gates project-local configuration on a positive trust
+decision, and reports an unlisted path and an explicitly untrusted one with different diagnostics.
 
 MCP servers declared in that layer run as child processes of the app-server and are not confined
 by the `sandbox` value sent on `thread/start`. That value governs the commands the agent
