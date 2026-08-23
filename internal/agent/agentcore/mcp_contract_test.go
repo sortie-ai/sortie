@@ -609,6 +609,54 @@ func start(params domain.StartSessionParams, xs []string) {
 			wantCount: 1,
 		},
 		{
+			// A single-target range clause assigns to the key, which is
+			// the other of the two branches a range target can take.
+			name:    "Y2 negative: a range key target is not a read",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionUnsupported,
+	})
+}
+
+func start(params domain.StartSessionParams, xs map[string]int) {
+	for params.MCPConfigPath = range xs {
+	}
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:    "Y3: a range key target does not satisfy supported",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+func start(params domain.StartSessionParams, xs map[string]int) {
+	for params.MCPConfigPath, _ = range xs {
+	}
+}
+`,
+			wantCount: 1,
+		},
+		{
 			// Ranging over the field reads it; only a target is excluded.
 			name:    "Y3: ranging over the field is a read",
 			dirName: "fixture",
