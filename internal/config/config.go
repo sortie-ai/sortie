@@ -57,10 +57,14 @@ type ServiceConfig struct {
 	// already-open database connection.
 	DBPath string
 
-	// Extensions holds top-level front matter keys not covered by the
-	// core schema (e.g. "server", "worker"). Consumers access these
-	// via map lookup. Never nil after construction.
-	Extensions map[string]any
+	// extensions holds top-level front matter keys not covered by the
+	// core schema (e.g. "server", "worker"). Never nil after
+	// construction. Unexported: every access goes through
+	// [ServiceConfig.ExtensionSection], [ServiceConfig.ExtensionValue],
+	// or [ServiceConfig.SetExtensionSection], and a kind-scoped read
+	// goes through [AgentAdapterConfig], [ResolveAgentSettings], or
+	// [MergeAdapterExtensions] instead.
+	extensions map[string]any
 
 	// extensionsPreResolution maps a dotted-and-indexed extension field
 	// path (for example "github.api_key" or "worker.ssh_hosts[0]") to
@@ -88,6 +92,40 @@ type ServiceConfig struct {
 // runs.
 func (c *ServiceConfig) SetDispatch(d DispatchConfig) {
 	c.Dispatch = d
+}
+
+// ExtensionSection returns the top-level extension section named
+// name, or nil when the section is absent or is not a
+// map[string]any. name is a section name known at compile time, never
+// a kind; a kind-scoped read goes through [AgentAdapterConfig],
+// [ResolveAgentSettings], or [MergeAdapterExtensions] instead. The
+// returned map is the one stored inside c, not a copy; callers MUST
+// treat it as read-only.
+func (c ServiceConfig) ExtensionSection(name string) map[string]any {
+	section, _ := c.extensions[name].(map[string]any)
+	return section
+}
+
+// ExtensionValue returns the raw value stored under the top-level
+// extension key name and whether that key is present, with no type
+// assertion applied. name is a section name known at compile time,
+// never a kind. Use ExtensionValue instead of ExtensionSection when a
+// caller's behavior depends on telling an absent key apart from a key
+// present with an unexpected type.
+func (c ServiceConfig) ExtensionValue(name string) (any, bool) {
+	v, ok := c.extensions[name]
+	return v, ok
+}
+
+// SetExtensionSection replaces the top-level extension section named
+// name with section. It exists for callers that build a ServiceConfig
+// directly instead of through [NewServiceConfig], matching the
+// [ServiceConfig.SetDispatch] precedent above.
+func (c *ServiceConfig) SetExtensionSection(name string, section map[string]any) {
+	if c.extensions == nil {
+		c.extensions = make(map[string]any)
+	}
+	c.extensions[name] = section
 }
 
 // TrackerConfig holds issue tracker connection and query settings.
@@ -196,7 +234,7 @@ type AgentConfig struct {
 // this map reaches a constructor, and including them would shadow an
 // adapter extension key of the same name during the merge below.
 //
-// The kind-named sub-object under cfg.Extensions, if present, is
+// The kind-named sub-object under cfg.extensions, if present, is
 // merged in without overwriting any of the five keys above. The
 // returned map is freshly allocated on every call.
 func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
@@ -207,7 +245,7 @@ func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
 		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
 		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
 	}
-	mergeExtensionSection(m, cfg.Extensions, kind)
+	mergeExtensionSection(m, cfg.extensions, kind)
 	return m
 }
 
@@ -265,7 +303,7 @@ func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) Ag
 // agent family goes through [AgentAdapterConfig] and
 // [ResolveAgentSettings] instead.
 func MergeAdapterExtensions(dst map[string]any, cfg ServiceConfig, kind string) {
-	mergeExtensionSection(dst, cfg.Extensions, kind)
+	mergeExtensionSection(dst, cfg.extensions, kind)
 }
 
 // mergeExtensionSection copies the kind-named sub-object from
@@ -283,7 +321,7 @@ func mergeExtensionSection(dst map[string]any, extensions map[string]any, kind s
 }
 
 // knownTopLevelKeys enumerates the front matter keys consumed by the
-// core schema. Anything else is collected into Extensions.
+// core schema. Anything else is collected into extensions.
 var knownTopLevelKeys = map[string]bool{
 	"tracker":       true,
 	"polling":       true,
@@ -479,7 +517,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		Reactions:               reactions,
 		LabelCommands:           labelCommands,
 		DBPath:                  dbPath,
-		Extensions:              extensions,
+		extensions:              extensions,
 		extensionsPreResolution: preResolution,
 		Notifications:           notifications,
 	}, nil
@@ -1085,7 +1123,7 @@ func ValidateInProgressState(inProgressState string, activeStates, terminalState
 	return nil
 }
 
-// resolveExtensionEnvRefs walks the Extensions subtree and resolves
+// resolveExtensionEnvRefs walks the extensions subtree and resolves
 // $VAR references on every string leaf using [os.ExpandEnv]. Nested
 // map[string]any and []any values are traversed; non-string leaves are
 // returned unchanged. The function mutates the input map in place.

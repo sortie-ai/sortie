@@ -257,123 +257,93 @@ func TestParseWorkerConfig(t *testing.T) {
 
 	tests := []struct {
 		name                      string
-		extensions                map[string]any
+		workerSection             map[string]any
 		wantHosts                 []string
 		wantMaxPerHost            int
 		wantSSHStrictHostKeyCheck string
 		wantWarnings              []WorkerWarning
 	}{
 		{
-			name:       "nil extensions",
-			extensions: nil,
-		},
-		{
-			name:       "missing worker key",
-			extensions: map[string]any{"other": "value"},
-		},
-		{
-			name:       "worker not a map",
-			extensions: map[string]any{"worker": "invalid"},
+			name:          "nil worker section",
+			workerSection: nil,
 		},
 		{
 			name: "empty ssh_hosts",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_hosts": []any{},
-				},
+			workerSection: map[string]any{
+				"ssh_hosts": []any{},
 			},
 		},
 		{
 			name: "valid config",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_hosts":                      []any{"host-a", "host-b"},
-					"max_concurrent_agents_per_host": 3,
-				},
+			workerSection: map[string]any{
+				"ssh_hosts":                      []any{"host-a", "host-b"},
+				"max_concurrent_agents_per_host": 3,
 			},
 			wantHosts:      []string{"host-a", "host-b"},
 			wantMaxPerHost: 3,
 		},
 		{
 			name: "float64 max_concurrent_agents_per_host",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_hosts":                      []any{"host-a"},
-					"max_concurrent_agents_per_host": float64(2),
-				},
+			workerSection: map[string]any{
+				"ssh_hosts":                      []any{"host-a"},
+				"max_concurrent_agents_per_host": float64(2),
 			},
 			wantHosts:      []string{"host-a"},
 			wantMaxPerHost: 2,
 		},
 		{
 			name: "deduplicates hosts",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_hosts": []any{"host-a", "host-a", "host-b"},
-				},
+			workerSection: map[string]any{
+				"ssh_hosts": []any{"host-a", "host-a", "host-b"},
 			},
 			wantHosts: []string{"host-a", "host-b"},
 		},
 		{
 			name: "skips empty and non-string hosts",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_hosts": []any{"", 42, "host-a"},
-				},
+			workerSection: map[string]any{
+				"ssh_hosts": []any{"", 42, "host-a"},
 			},
 			wantHosts: []string{"host-a"},
 		},
 		// ssh_strict_host_key_checking cases
 		{
-			name: "absent ssh_strict_host_key_checking",
-			extensions: map[string]any{
-				"worker": map[string]any{"ssh_hosts": []any{"host-a"}},
-			},
+			name:                      "absent ssh_strict_host_key_checking",
+			workerSection:             map[string]any{"ssh_hosts": []any{"host-a"}},
 			wantHosts:                 []string{"host-a"},
 			wantSSHStrictHostKeyCheck: "",
 		},
 		{
 			name: "valid accept-new",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": "accept-new",
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": "accept-new",
 			},
 			wantSSHStrictHostKeyCheck: "accept-new",
 		},
 		{
 			name: "valid yes",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": "yes",
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": "yes",
 			},
 			wantSSHStrictHostKeyCheck: "yes",
 		},
 		{
 			name: "valid no",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": "no",
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": "no",
 			},
 			wantSSHStrictHostKeyCheck: "no",
 		},
 		{
 			name: "uppercase YES normalized to yes",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": "YES",
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": "YES",
 			},
 			wantSSHStrictHostKeyCheck: "yes",
 		},
 		{
 			name: "invalid string falls back to empty",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": "ask",
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": "ask",
 			},
 			wantSSHStrictHostKeyCheck: "",
 			wantWarnings: []WorkerWarning{
@@ -385,10 +355,8 @@ func TestParseWorkerConfig(t *testing.T) {
 		},
 		{
 			name: "wrong type integer falls back to empty",
-			extensions: map[string]any{
-				"worker": map[string]any{
-					"ssh_strict_host_key_checking": 42,
-				},
+			workerSection: map[string]any{
+				"ssh_strict_host_key_checking": 42,
 			},
 			wantSSHStrictHostKeyCheck: "",
 			wantWarnings: []WorkerWarning{
@@ -404,7 +372,7 @@ func TestParseWorkerConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			wc := ParseWorkerConfig(tt.extensions)
+			wc := ParseWorkerConfig(tt.workerSection)
 
 			if len(wc.SSHHosts) != len(tt.wantHosts) {
 				t.Fatalf("ParseWorkerConfig() SSHHosts = %v, want %v", wc.SSHHosts, tt.wantHosts)

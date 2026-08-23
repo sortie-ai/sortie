@@ -359,7 +359,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	warnings = checkHooksTimeoutSemantic(warnings, raw)
 	warnings = checkByStateSemantic(warnings, raw)
 
-	// Surface unresolved $VAR references in Extensions by replaying the
+	// Surface unresolved $VAR references in extensions by replaying the
 	// snapshot captured during NewServiceConfig. A non-empty resolved
 	// leaf indicates the variable was set; a resolved empty leaf is the
 	// warning trigger.
@@ -383,7 +383,7 @@ func checkUnresolvedExtensionVars(warnings []FrontMatterWarning, cfg ServiceConf
 	paths := maputil.SortedKeys(cfg.extensionsPreResolution)
 	for _, path := range paths {
 		before := cfg.extensionsPreResolution[path]
-		_, ok := lookupExtensionValue(cfg.Extensions, path)
+		_, ok := lookupExtensionValue(cfg.extensions, path)
 		if !ok {
 			continue
 		}

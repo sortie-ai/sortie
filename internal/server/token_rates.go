@@ -20,19 +20,19 @@ type TokenRateConfig struct {
 // on the dashboard.
 type TokenRates map[string]TokenRateConfig
 
-// ParseTokenRates extracts and validates token rates from the
-// Extensions map produced by config parsing. Returns nil rates when
-// the "token_rates" key is absent or empty. Warnings are advisory
-// and do not prevent boot.
-func ParseTokenRates(extensions map[string]any) (TokenRates, []string) {
-	raw, ok := extensions["token_rates"]
-	if !ok || raw == nil {
+// ParseTokenRates extracts and validates token rates from the raw
+// "token_rates" extension value. present tells whether the key
+// existed in the extensions map at all, distinguishing an absent key
+// from one holding a nil value. Returns nil rates when the key is
+// absent or empty. Warnings are advisory and do not prevent boot.
+func ParseTokenRates(rawSection any, present bool) (TokenRates, []string) {
+	if !present || rawSection == nil {
 		return nil, nil
 	}
 
-	topMap, ok := raw.(map[string]any)
+	topMap, ok := rawSection.(map[string]any)
 	if !ok {
-		return nil, []string{fmt.Sprintf("token_rates: expected map, got %T", raw)}
+		return nil, []string{fmt.Sprintf("token_rates: expected map, got %T", rawSection)}
 	}
 	if len(topMap) == 0 {
 		return nil, nil

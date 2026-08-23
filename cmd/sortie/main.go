@@ -771,7 +771,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	var srv *server.Server
 	if serverEnabled {
-		tokenRates, trWarnings := server.ParseTokenRates(br.cfg.Extensions)
+		rawTokenRates, tokenRatesPresent := br.cfg.ExtensionValue("token_rates")
+		tokenRates, trWarnings := server.ParseTokenRates(rawTokenRates, tokenRatesPresent)
 		for _, w := range trWarnings {
 			br.logger.Warn("skipped invalid token rate entry", slog.String("detail", w))
 		}

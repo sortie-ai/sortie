@@ -304,7 +304,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	} else {
 		// Warn if max_concurrent_agents_per_host is set without ssh_hosts.
 		cfg := params.WorkflowManager.Config()
-		if worker, ok := cfg.Extensions["worker"].(map[string]any); ok {
+		if worker := cfg.ExtensionSection("worker"); worker != nil {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
 				logger.Warn("max_concurrent_agents_per_host has no effect without worker.ssh_hosts")
 			}
@@ -548,7 +548,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	// Update host pool from config extensions.
-	wc := ParseWorkerConfig(cfg.Extensions)
+	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"))
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
 	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
 

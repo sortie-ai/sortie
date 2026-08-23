@@ -222,26 +222,17 @@ type WorkerConfig struct {
 	Warnings []WorkerWarning
 }
 
-// ParseWorkerConfig parses worker extension configuration from the
-// Extensions map. Returns a [WorkerConfig] with SSH host list,
-// per-host concurrency cap, and SSH StrictHostKeyChecking behavior.
-// When the worker key is absent or malformed, returns zero-value
-// defaults (local mode).
-func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
-	if extensions == nil {
-		return WorkerConfig{}
-	}
-	workerRaw, ok := extensions["worker"]
-	if !ok {
-		return WorkerConfig{}
-	}
-	workerMap, ok := workerRaw.(map[string]any)
-	if !ok {
+// ParseWorkerConfig parses the worker extension section. Returns a
+// [WorkerConfig] with SSH host list, per-host concurrency cap, and SSH
+// StrictHostKeyChecking behavior. When workerSection is nil, returns
+// zero-value defaults (local mode).
+func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
+	if workerSection == nil {
 		return WorkerConfig{}
 	}
 
 	var hosts []string
-	if rawHosts, ok := workerMap["ssh_hosts"]; ok {
+	if rawHosts, ok := workerSection["ssh_hosts"]; ok {
 		if hostList, ok := rawHosts.([]any); ok {
 			for _, h := range hostList {
 				if s, ok := h.(string); ok && s != "" {
@@ -252,7 +243,7 @@ func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
 	}
 
 	var maxPerHost int
-	if rawMax, ok := workerMap["max_concurrent_agents_per_host"]; ok {
+	if rawMax, ok := workerSection["max_concurrent_agents_per_host"]; ok {
 		switch v := rawMax.(type) {
 		case int:
 			if v > 0 {
@@ -265,7 +256,7 @@ func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
 		}
 	}
 
-	strictHostKeyChecking, warn := parseSSHStrictHostKeyChecking(workerMap)
+	strictHostKeyChecking, warn := parseSSHStrictHostKeyChecking(workerSection)
 
 	var warnings []WorkerWarning
 	if warn != nil {

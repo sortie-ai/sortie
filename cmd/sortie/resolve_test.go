@@ -448,7 +448,8 @@ func TestMergeTrackerCredentialsExtensionsWin(t *testing.T) {
 
 	// Extensions key wins over tracker key.
 	dst := map[string]any{}
-	cfg := config.ServiceConfig{Extensions: map[string]any{"github": map[string]any{"api_key": "ext-tok"}}}
+	var cfg config.ServiceConfig
+	cfg.SetExtensionSection("github", map[string]any{"api_key": "ext-tok"})
 	config.MergeAdapterExtensions(dst, cfg, "github")
 	mergeTrackerCredentials(dst, config.TrackerConfig{APIKey: "tracker-tok", Project: "PROJ"})
 
@@ -511,8 +512,14 @@ func TestKindMatchGuardWiring(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			var cfg config.ServiceConfig
+			for name, section := range tt.extensions {
+				sectionMap, _ := section.(map[string]any)
+				cfg.SetExtensionSection(name, sectionMap)
+			}
+
 			adapterCfgMap := make(map[string]any)
-			config.MergeAdapterExtensions(adapterCfgMap, config.ServiceConfig{Extensions: tt.extensions}, tt.ciKind)
+			config.MergeAdapterExtensions(adapterCfgMap, cfg, tt.ciKind)
 			if tt.ciKind == tt.trackerKind {
 				mergeTrackerCredentials(adapterCfgMap, tt.tc)
 			}
@@ -773,7 +780,8 @@ func TestResolveServerPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotPort, gotEnabled, gotErr := resolveServerPort(tt.portFlag, tt.portFlagSet, tt.extensions)
+			serverSection, _ := tt.extensions["server"].(map[string]any)
+			gotPort, gotEnabled, gotErr := resolveServerPort(tt.portFlag, tt.portFlagSet, serverSection)
 			if gotPort != tt.wantPort {
 				t.Errorf("resolveServerPort() port = %d, want %d", gotPort, tt.wantPort)
 			}
@@ -782,6 +790,60 @@ func TestResolveServerPort(t *testing.T) {
 			}
 			if (gotErr != nil) != tt.wantErr {
 				t.Errorf("resolveServerPort() err = %v, wantErr %v", gotErr, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHasServerPortExtension(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		extensions map[string]any
+		want       bool
+	}{
+		{
+			name:       "nil extensions",
+			extensions: nil,
+			want:       false,
+		},
+		{
+			name:       "no server key",
+			extensions: map[string]any{"other": "value"},
+			want:       false,
+		},
+		{
+			name:       "server extension is not a map",
+			extensions: map[string]any{"server": "not-a-map"},
+			want:       false,
+		},
+		{
+			name:       "server map without port key",
+			extensions: map[string]any{"server": map[string]any{"host": "0.0.0.0"}},
+			want:       false,
+		},
+		{
+			name:       "server map with port key matching the default value still counts as explicit",
+			extensions: map[string]any{"server": map[string]any{"port": defaultServerPort}},
+			want:       true,
+		},
+		{
+			name:       "server map with port key present",
+			extensions: map[string]any{"server": map[string]any{"port": 9090}},
+			want:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			serverSection, _ := tt.extensions["server"].(map[string]any)
+			got := hasServerPortExtension(serverSection)
+
+			if got != tt.want {
+				t.Errorf("hasServerPortExtension(%v) = %v, want %v", serverSection, got, tt.want)
 			}
 		})
 	}
@@ -885,7 +947,8 @@ func TestResolveServerHost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotHost, gotErr := resolveServerHost(tt.hostFlag, tt.hostFlagSet, tt.extensions)
+			serverSection, _ := tt.extensions["server"].(map[string]any)
+			gotHost, gotErr := resolveServerHost(tt.hostFlag, tt.hostFlagSet, serverSection)
 			if gotHost != tt.wantHost {
 				t.Errorf("resolveServerHost() host = %q, want %q", gotHost, tt.wantHost)
 			}
@@ -995,7 +1058,8 @@ func TestResolveLogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := resolveLogLevel(tt.flagValue, tt.flagSet, tt.extensions)
+			loggingSection, _ := tt.extensions["logging"].(map[string]any)
+			got, err := resolveLogLevel(tt.flagValue, tt.flagSet, loggingSection)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("resolveLogLevel(%q, %v, ...) = %v, want error", tt.flagValue, tt.flagSet, got)
@@ -1109,7 +1173,8 @@ func TestResolveLogFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := resolveLogFormat(tt.flagValue, tt.flagSet, tt.extensions)
+			loggingSection, _ := tt.extensions["logging"].(map[string]any)
+			got, err := resolveLogFormat(tt.flagValue, tt.flagSet, loggingSection)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("resolveLogFormat(%q, %v, ...) = %v, want error", tt.flagValue, tt.flagSet, got)

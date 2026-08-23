@@ -2911,9 +2911,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile operator config: %v", err)
 		}
 
-		cfg.Extensions = map[string]any{
-			"mock": map[string]any{"mcp_config": operatorPath},
-		}
+		cfg.SetExtensionSection("mock", map[string]any{"mcp_config": operatorPath})
 
 		var startCalled atomic.Bool
 		ec := newExitCapture()
@@ -2954,8 +2952,8 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	// Extension lookup: operator mcp_config from cfg.Extensions[agentKind]
-	// must be merged into the generated .sortie/mcp.json.
+	// Extension lookup: operator mcp_config from the agent kind's own
+	// extension section must be merged into the generated .sortie/mcp.json.
 	t.Run("operator_config_merged_from_extensions", func(t *testing.T) {
 		t.Parallel()
 
@@ -2975,9 +2973,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile operator config: %v", err)
 		}
 
-		cfg.Extensions = map[string]any{
-			"mock": map[string]any{"mcp_config": operatorPath},
-		}
+		cfg.SetExtensionSection("mock", map[string]any{"mcp_config": operatorPath})
 
 		var capturedMCPConfigPath atomic.Value
 		ec := newExitCapture()
@@ -3068,10 +3064,8 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile routed operator config: %v", err)
 		}
 
-		cfg.Extensions = map[string]any{
-			"claude-code": map[string]any{"mcp_config": defaultPath},
-			"codex":       map[string]any{"mcp_config": routedPath},
-		}
+		cfg.SetExtensionSection("claude-code", map[string]any{"mcp_config": defaultPath})
+		cfg.SetExtensionSection("codex", map[string]any{"mcp_config": routedPath})
 
 		var capturedMCPConfigPath atomic.Value
 		ec := newExitCapture()
@@ -3162,10 +3156,8 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		cfg.Extensions = map[string]any{
-			// Relative path — worker must resolve it via filepath.Dir(WorkflowPath).
-			"mock": map[string]any{"mcp_config": relName},
-		}
+		// Relative path — worker must resolve it via filepath.Dir(WorkflowPath).
+		cfg.SetExtensionSection("mock", map[string]any{"mcp_config": relName})
 
 		var capturedMCPConfigPath atomic.Value
 		ec := newExitCapture()
@@ -3254,9 +3246,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			if configCalls.Add(1) > 1 {
 				operatorPath = secondOperatorPath
 			}
-			cfg.Extensions = map[string]any{
-				"mock": map[string]any{"mcp_config": operatorPath},
-			}
+			cfg.SetExtensionSection("mock", map[string]any{"mcp_config": operatorPath})
 			return cfg
 		}
 

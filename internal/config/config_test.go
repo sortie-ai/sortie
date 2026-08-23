@@ -35,8 +35,8 @@ func TestNewServiceConfig(t *testing.T) {
 		if len(cfg.Agent.MaxConcurrentByState) != 0 {
 			t.Errorf("Agent.MaxConcurrentByState has %d entries, want 0", len(cfg.Agent.MaxConcurrentByState))
 		}
-		if cfg.Extensions == nil {
-			t.Error("Extensions is nil, want empty map")
+		if cfg.extensions == nil {
+			t.Error("extensions is nil, want empty map")
 		}
 	})
 
@@ -348,7 +348,7 @@ func TestNewServiceConfig(t *testing.T) {
 		assertIntEqual(t, "Hooks.TimeoutMS", 60000, cfg.Hooks.TimeoutMS)
 	})
 
-	t.Run("Extensions/Collected", func(t *testing.T) {
+	t.Run("extensions/Collected", func(t *testing.T) {
 		t.Parallel()
 		raw := map[string]any{
 			"server": map[string]any{"port": 8080},
@@ -358,19 +358,19 @@ func TestNewServiceConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		serverExt, ok := cfg.Extensions["server"]
+		serverExt, ok := cfg.extensions["server"]
 		if !ok {
-			t.Fatal("Extensions missing 'server'")
+			t.Fatal("extensions missing 'server'")
 		}
 		serverMap, ok := serverExt.(map[string]any)
 		if !ok {
-			t.Fatalf("Extensions['server'] is %T, want map[string]any", serverExt)
+			t.Fatalf("extensions['server'] is %T, want map[string]any", serverExt)
 		}
 		if serverMap["port"] != 8080 {
 			t.Errorf("server.port = %v, want 8080", serverMap["port"])
 		}
-		if _, ok := cfg.Extensions["worker"]; !ok {
-			t.Error("Extensions missing 'worker'")
+		if _, ok := cfg.extensions["worker"]; !ok {
+			t.Error("extensions missing 'worker'")
 		}
 	})
 
@@ -518,7 +518,7 @@ func TestNewServiceConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewServiceConfig(db_path=/data/sortie.db) unexpected error: %v", err)
 		}
-		if _, ok := cfg.Extensions["db_path"]; ok {
+		if _, ok := cfg.extensions["db_path"]; ok {
 			t.Error("db_path should not appear in Extensions")
 		}
 	})
@@ -1845,8 +1845,8 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
 		}
-		if _, ok := cfg.Extensions["ci_feedback"]; ok {
-			t.Error("ci_feedback leaked into cfg.Extensions; want absent")
+		if _, ok := cfg.extensions["ci_feedback"]; ok {
+			t.Error("ci_feedback leaked into cfg.extensions; want absent")
 		}
 	})
 }
@@ -2011,8 +2011,8 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
 		}
-		if _, ok := cfg.Extensions["self_review"]; ok {
-			t.Error("self_review leaked into cfg.Extensions; want absent")
+		if _, ok := cfg.extensions["self_review"]; ok {
+			t.Error("self_review leaked into cfg.extensions; want absent")
 		}
 	})
 }
@@ -2634,9 +2634,9 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 		// Core field: the SORTIE_* override wins.
 		assertStringEqual(t, "Tracker.APIKey", "from-env-override", cfg.Tracker.APIKey)
 		// Extension field: $VAR resolved against process environment.
-		extMap, ok := cfg.Extensions["myext"].(map[string]any)
+		extMap, ok := cfg.extensions["myext"].(map[string]any)
 		if !ok {
-			t.Fatal("cfg.Extensions[myext] not a map")
+			t.Fatal("cfg.extensions[myext] not a map")
 		}
 		assertStringEqual(t, "myext.api_key resolved", "ext-resolved-value", extMap["api_key"].(string))
 	})
@@ -2652,9 +2652,9 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
 		}
-		workerExt, ok := cfg.Extensions["worker"].(map[string]any)
+		workerExt, ok := cfg.extensions["worker"].(map[string]any)
 		if !ok {
-			t.Fatal("cfg.Extensions[worker] not a map")
+			t.Fatal("cfg.extensions[worker] not a map")
 		}
 		hosts, ok := workerExt["ssh_hosts"].([]any)
 		if !ok {
@@ -2679,9 +2679,9 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewServiceConfig with int32 leaf: %v", err)
 		}
-		extMap, ok := cfg.Extensions["myext"].(map[string]any)
+		extMap, ok := cfg.extensions["myext"].(map[string]any)
 		if !ok {
-			t.Fatal("cfg.Extensions[myext] not a map")
+			t.Fatal("cfg.extensions[myext] not a map")
 		}
 		if extMap["count"] != int32(42) {
 			t.Errorf("myext.count = %v (%T), want int32(42)", extMap["count"], extMap["count"])
@@ -2718,7 +2718,7 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 
 // TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions asserts that
 // AgentAdapterConfig returns exactly the five documented keys when
-// cfg.Extensions carries no sub-object for kind.
+// cfg.extensions carries no sub-object for kind.
 func TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions(t *testing.T) {
 	t.Parallel()
 
@@ -2781,7 +2781,7 @@ func TestAgentAdapterConfig_ExtensionCollisionWithOrchestratorOnlyFieldSurvives(
 			Command:  "codex",
 			MaxTurns: 20,
 		},
-		Extensions: map[string]any{
+		extensions: map[string]any{
 			"codex": map[string]any{
 				"max_turns":       float64(5),
 				"approval_policy": "never",
@@ -2820,7 +2820,7 @@ func TestAgentAdapterConfig_DoesNotOverwriteDocumentedKeys(t *testing.T) {
 
 	cfg := ServiceConfig{
 		Agent: AgentConfig{Kind: "codex", Command: "codex"},
-		Extensions: map[string]any{
+		extensions: map[string]any{
 			"codex": map[string]any{
 				"command": "should-not-win",
 			},
@@ -2886,7 +2886,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "block is not an object",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": "not-a-map",
 			}},
 			kind:        "codex",
@@ -2895,7 +2895,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "block has no mcp_config key",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"approval_policy": "never"},
 			}},
 			kind:        "codex",
@@ -2904,7 +2904,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "mcp_config is not a string",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"mcp_config": 42},
 			}},
 			kind:        "codex",
@@ -2913,7 +2913,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "mcp_config is the empty string",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"mcp_config": ""},
 			}},
 			kind:        "codex",
@@ -2922,7 +2922,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "mcp_config is an absolute path",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"mcp_config": absOperatorPath},
 			}},
 			kind:        "codex",
@@ -2931,7 +2931,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "mcp_config is relative and workflowDir is non-empty",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"mcp_config": "op.json"},
 			}},
 			kind:        "codex",
@@ -2940,7 +2940,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		},
 		{
 			name: "mcp_config is relative and workflowDir is empty",
-			cfg: ServiceConfig{Extensions: map[string]any{
+			cfg: ServiceConfig{extensions: map[string]any{
 				"codex": map[string]any{"mcp_config": "op.json"},
 			}},
 			kind:        "codex",
@@ -2973,7 +2973,7 @@ func TestResolveAgentSettings_PassthroughMatchesAgentAdapterConfig(t *testing.T)
 
 	cfg := ServiceConfig{
 		Agent: AgentConfig{Kind: "claude-code", Command: "claude"},
-		Extensions: map[string]any{
+		extensions: map[string]any{
 			"codex": map[string]any{"approval_policy": "never"},
 		},
 	}
@@ -3022,7 +3022,7 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		t.Parallel()
 
 		dst := map[string]any{"kind": "file"}
-		cfg := ServiceConfig{Extensions: map[string]any{
+		cfg := ServiceConfig{extensions: map[string]any{
 			"file": map[string]any{"path": "issues.json", "extra": 42},
 		}}
 
@@ -3040,7 +3040,7 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		t.Parallel()
 
 		dst := map[string]any{"kind": "file", "path": "original.json"}
-		cfg := ServiceConfig{Extensions: map[string]any{
+		cfg := ServiceConfig{extensions: map[string]any{
 			"file": map[string]any{"path": "overridden.json"},
 		}}
 
@@ -3055,7 +3055,7 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		t.Parallel()
 
 		dst := map[string]any{"kind": "jira"}
-		cfg := ServiceConfig{Extensions: map[string]any{
+		cfg := ServiceConfig{extensions: map[string]any{
 			"file": map[string]any{"path": "issues.json"},
 		}}
 
@@ -3083,7 +3083,7 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		t.Parallel()
 
 		dst := map[string]any{"kind": "file"}
-		cfg := ServiceConfig{Extensions: map[string]any{
+		cfg := ServiceConfig{extensions: map[string]any{
 			"file": "not a map",
 		}}
 
@@ -3098,7 +3098,7 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		t.Parallel()
 
 		dst := map[string]any{"kind": "claude-code"}
-		cfg := ServiceConfig{Extensions: map[string]any{
+		cfg := ServiceConfig{extensions: map[string]any{
 			"claude-code": map[string]any{"max_turns": float64(50)},
 		}}
 
@@ -3168,4 +3168,141 @@ func TestBuildWorkspaceConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExtensionSection(t *testing.T) {
+	t.Parallel()
+
+	server := map[string]any{"port": 8080}
+	cfg := ServiceConfig{extensions: map[string]any{
+		"server":  server,
+		"logging": "not-a-section",
+		"nothing": nil,
+		"empty":   map[string]any{},
+	}}
+
+	tests := []struct {
+		name    string
+		section string
+		wantNil bool
+		wantLen int
+	}{
+		{name: "present section", section: "server", wantLen: 1},
+		{name: "absent section", section: "worker", wantNil: true},
+		{name: "section holding a non-object", section: "logging", wantNil: true},
+		{name: "section holding nil", section: "nothing", wantNil: true},
+		{name: "present but empty section", section: "empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := cfg.ExtensionSection(tt.section)
+			if (got == nil) != tt.wantNil {
+				t.Fatalf("ExtensionSection(%q) nil = %t, want %t", tt.section, got == nil, tt.wantNil)
+			}
+			if len(got) != tt.wantLen {
+				t.Errorf("ExtensionSection(%q) len = %d, want %d", tt.section, len(got), tt.wantLen)
+			}
+		})
+	}
+}
+
+// TestExtensionSectionCollapsesAbsentAndNonObject pins the equivalence
+// every section-scoped caller depends on: a caller that reached for a
+// section and got nil cannot tell an absent key from a key holding
+// something that is not an object, and does not need to, because both
+// mean the same thing to it. A caller whose behavior does differ
+// between the two uses [ServiceConfig.ExtensionValue] instead.
+func TestExtensionSectionCollapsesAbsentAndNonObject(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{"worker": "not-a-section"}}
+
+	absent := cfg.ExtensionSection("nothing-here")
+	nonObject := cfg.ExtensionSection("worker")
+
+	if absent != nil || nonObject != nil {
+		t.Fatalf("ExtensionSection absent = %v and non-object = %v, want both nil", absent, nonObject)
+	}
+}
+
+// TestExtensionSectionReturnsTheStoredMap pins the documented contract
+// that the returned map is the stored one rather than a copy, which is
+// why callers must treat it as read-only.
+func TestExtensionSectionReturnsTheStoredMap(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{"server": map[string]any{"port": 8080}}}
+
+	cfg.ExtensionSection("server")["port"] = 9090
+
+	if got := cfg.ExtensionSection("server")["port"]; got != 9090 {
+		t.Errorf("port after mutating the returned map = %v, want 9090", got)
+	}
+}
+
+func TestExtensionValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{
+		"token_rates": "not-a-map",
+		"nothing":     nil,
+	}}
+
+	tests := []struct {
+		name        string
+		key         string
+		wantPresent bool
+		wantValue   any
+	}{
+		{name: "present non-object value", key: "token_rates", wantPresent: true, wantValue: "not-a-map"},
+		{name: "present nil value", key: "nothing", wantPresent: true},
+		{name: "absent key", key: "worker"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, present := cfg.ExtensionValue(tt.key)
+			if present != tt.wantPresent {
+				t.Fatalf("ExtensionValue(%q) present = %t, want %t", tt.key, present, tt.wantPresent)
+			}
+			if got != tt.wantValue {
+				t.Errorf("ExtensionValue(%q) = %v, want %v", tt.key, got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestSetExtensionSection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("allocates on a zero-value config", func(t *testing.T) {
+		t.Parallel()
+
+		var cfg ServiceConfig
+		cfg.SetExtensionSection("worker", map[string]any{"ssh_hosts": []any{"host-a"}})
+
+		if got := len(cfg.ExtensionSection("worker")); got != 1 {
+			t.Errorf("worker section len = %d, want 1", got)
+		}
+	})
+
+	t.Run("replaces an existing section", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := ServiceConfig{extensions: map[string]any{"server": map[string]any{"port": 8080, "host": "127.0.0.1"}}}
+		cfg.SetExtensionSection("server", map[string]any{"port": 9090})
+
+		section := cfg.ExtensionSection("server")
+		if got := section["port"]; got != 9090 {
+			t.Errorf("port = %v, want 9090", got)
+		}
+		if _, ok := section["host"]; ok {
+			t.Error("host survived the replacement, want the section replaced wholesale")
+		}
+	})
 }

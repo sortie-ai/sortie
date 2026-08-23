@@ -969,7 +969,8 @@ func runStats(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
-	rates, rateWarnings := server.ParseTokenRates(cfg.Extensions)
+	rawTokenRates, tokenRatesPresent := cfg.ExtensionValue("token_rates")
+	rates, rateWarnings := server.ParseTokenRates(rawTokenRates, tokenRatesPresent)
 
 	agg := newStatsAggregator(caps, rates)
 	if err := store.ScanRunHistoryRange(ctx, caps, since, until, agg.add); err != nil {

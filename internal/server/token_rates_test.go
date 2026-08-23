@@ -205,7 +205,8 @@ func TestParseTokenRates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, warnings := ParseTokenRates(tt.extensions)
+			rawSection, present := tt.extensions["token_rates"]
+			got, warnings := ParseTokenRates(rawSection, present)
 
 			if len(warnings) != tt.wantWarnings {
 				t.Errorf("ParseTokenRates warnings = %d, want %d: %v", len(warnings), tt.wantWarnings, warnings)
