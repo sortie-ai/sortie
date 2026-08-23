@@ -52,7 +52,11 @@ Two consequences worth holding onto. Anything that arrives with the checkout und
 
 ## Sortie's own tools do not reach this adapter
 
-The adapter reads its tool registry from a key in the raw configuration map it is constructed with. Nothing in a shipped build ever sets that key: only tests do. So in production the registry is nil, no client-side tools are registered on thread start, and a Codex session can call none of Sortie's tools, while the orchestrator still appends the tool advertisement to the rendered prompt. The agent is told about tools it cannot invoke. The dispatch path itself is complete and covered by tests, so what is missing is the wiring, not the mechanism.
+The adapter reads its tool registry from a key in the raw configuration map it is constructed with, and no shipped code path puts a registry there: only tests do. An operator cannot supply one from the workflow file either, because the value is type-asserted to the registry type and anything parsed out of YAML fails that assertion. The registry is therefore nil in a real run, the thread-start request carries no client-side tool declarations at all, since those are attached only when the tool list is non-empty, and a Codex session can call none of Sortie's tools.
+
+The prompt says otherwise. The worker appends the tool advertisement on the first turn of a session, and nothing in that path is conditioned on the agent kind. What gates it is the per-session tool registry the worker builds for that turn coming back non-empty, and one tool registers on nothing more than the workspace path being set, which the worker always has by then. An ordinary Codex run therefore carries the advertisement, and the agent is told about tools it cannot invoke. The section is dropped only when building that registry fails outright, which logs a warning; the registry built once at startup is a fallback the orchestrator does not use.
+
+The dispatch path itself is complete and covered by tests, so what is missing is the wiring, not the mechanism.
 
 The generated MCP configuration path is copied into session state and never read again. This adapter writes no MCP configuration and passes no MCP argument.
 
