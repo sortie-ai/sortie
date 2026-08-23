@@ -9,1351 +9,408 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A `sortie_candidate_holds_total` counter reports how many issues
-  the scheduler held back and why, separating an unfinished blocker
-  from a blocker list that could not be read, one the tracker
-  reported as incomplete, and one left unread because the poll had
-  already spent its budget of dependency lookups. `sortie --dry-run`
-  names the same reason for each issue it would not start, so an
-  issue held by a dependency is no longer indistinguishable from one
-  held by a full slot.
+- A `sortie_candidate_holds_total` counter reports how many issues the scheduler held back and why, separating an unfinished blocker from a blocker list that could not be read, one the tracker reported as incomplete, and one left unread because the poll had already spent its budget of dependency lookups. `sortie --dry-run` names the same reason for each issue it would not start, so an issue held by a dependency is no longer indistinguishable from one held by a full slot.
   ([#920](https://github.com/sortie-ai/sortie/issues/920))
 
-- `sortie validate` now reports a warning when an agent block sets
-  `mcp_config` for an agent kind that never receives the generated MCP
-  configuration file. `claude-code`, `codex`, `copilot-cli` and
-  `opencode` receive it; `kiro` does not, so an `mcp_config` value in
-  a `kiro` block had no effect and nothing said so. The reference
-  documentation now states which kinds consume the file. It is a
-  warning and not an error: such a configuration stays valid, the run
-  proceeds, and the exit code is unchanged.
+- `sortie validate` now reports a warning when an agent block sets `mcp_config` for an agent kind that never receives the generated MCP configuration file. `claude-code`, `codex`, `copilot-cli` and `opencode` receive it; `kiro` does not, so an `mcp_config` value in a `kiro` block had no effect and nothing said so. The reference documentation now states which kinds consume the file. It is a warning and not an error: such a configuration stays valid, the run proceeds, and the exit code is unchanged.
   ([#928](https://github.com/sortie-ai/sortie/issues/928))
 
 ### Fixed
 
-- A malformed end-of-turn notification from the `codex app-server` no
-  longer leaves the turn outcome reported as the bare word `turn`
-  followed by a trailing space. A payload that fails to parse carries
-  no status word, so the turn now reports the shared failure message
-  instead: the status API's `last_message` field and the recorded run
-  history both read `turn failed`.
+- A malformed end-of-turn notification from the `codex app-server` no longer leaves the turn outcome reported as the bare word `turn` followed by a trailing space. A payload that fails to parse carries no status word, so the turn now reports the shared failure message instead: the status API's `last_message` field and the recorded run history both read `turn failed`.
   ([#842](https://github.com/sortie-ai/sortie/issues/842))
 
-- A malformed `tracker.endpoint` is now reported by `sortie validate`
-  and rejected at startup by every adapter that accepts one, instead
-  of passing validation and failing later as a network error. The
-  GitHub, Gitea and Linear adapters handed the configured value to
-  the HTTP client without parsing it, and the Gitea CI status
-  provider and SCM adapter accepted an unusable one with no error at
-  all. An IPv6 address written without brackets,
-  `http://fd00::1:3000` instead of `http://[fd00::1]:3000`, is now
-  named as a fault in the endpoint field before any request is made.
-  A username or password embedded in the endpoint is masked in that
-  diagnostic; previously the failure arrived as a transport error
-  quoting the whole endpoint, credential included.
+- A malformed `tracker.endpoint` is now reported by `sortie validate` and rejected at startup by every adapter that accepts one, instead of passing validation and failing later as a network error. The GitHub, Gitea and Linear adapters handed the configured value to the HTTP client without parsing it, and the Gitea CI status provider and SCM adapter accepted an unusable one with no error at all. An IPv6 address written without brackets, `http://fd00::1:3000` instead of `http://[fd00::1]:3000`, is now named as a fault in the endpoint field before any request is made. A username or password embedded in the endpoint is masked in that diagnostic; previously the failure arrived as a transport error quoting the whole endpoint, credential included.
   ([#908](https://github.com/sortie-ai/sortie/issues/908))
 
-- A run no longer stalls when an agent stops to ask for something only
-  a person could give, such as permission to run a command, to change
-  a file, or an answer to a direct question. Where the runtime can be
-  answered, Sortie declines the request and the agent carries on by
-  another route; where it cannot be answered, or where the agent is
-  putting a question to a person, the attempt ends at once and releases
-  its claim on the issue. Previously the turn stayed open until a
-  timeout expired, the attempt was reported as a timeout rather than as
-  a run that needed a person, and the retry that followed could only
-  re-enter the same wait. A run that ended this way is now recorded
-  under its own `needs_person` status instead of being counted among
-  ordinary failures in run reports.
+- A run no longer stalls when an agent stops to ask for something only a person could give, such as permission to run a command, to change a file, or an answer to a direct question. Where the runtime can be answered, Sortie declines the request and the agent carries on by another route; where it cannot be answered, or where the agent is putting a question to a person, the attempt ends at once and releases its claim on the issue. Previously the turn stayed open until a timeout expired, the attempt was reported as a timeout rather than as a run that needed a person, and the retry that followed could only re-enter the same wait. A run that ended this way is now recorded under its own `needs_person` status instead of being counted among ordinary failures in run reports.
   ([#837](https://github.com/sortie-ai/sortie/issues/837))
 
-- A runtime configuration that would let an agent stop and ask for
-  approval mid-turn (`codex.approval_policy`,
-  `claude-code.permission_mode`) is now refused by `sortie validate`,
-  at startup and on reload, instead of being accepted and surfacing
-  later as a stalled run. Not every such request is governed by an
-  approval setting, so this check reduces how often the situation
-  arises rather than removing it.
+- A runtime configuration that would let an agent stop and ask for approval mid-turn (`codex.approval_policy`, `claude-code.permission_mode`) is now refused by `sortie validate`, at startup and on reload, instead of being accepted and surfacing later as a stalled run. Not every such request is governed by an approval setting, so this check reduces how often the situation arises rather than removing it.
   ([#837](https://github.com/sortie-ai/sortie/issues/837))
 
-- A failed OpenCode turn now reports the failure detail OpenCode put on
-  the run stream, instead of its generic `Unexpected server error.
-  Check server logs for details.` placeholder. One failure can produce
-  both reports in either order, and the adapter kept whichever arrived
-  last. Only the unknown-model case was recovered afterwards, by a
-  second `opencode` call; every other cause reached the operator as the
-  placeholder.
+- A failed OpenCode turn now reports the failure detail OpenCode put on the run stream, instead of its generic `Unexpected server error. Check server logs for details.` placeholder. One failure can produce both reports in either order, and the adapter kept whichever arrived last. Only the unknown-model case was recovered afterwards, by a second `opencode` call; every other cause reached the operator as the placeholder.
   ([#839](https://github.com/sortie-ai/sortie/issues/839))
 
-- On GitHub and Gitea, an issue whose blockers are still open is no
-  longer started. Both trackers reported every candidate issue as
-  having no blockers at all, so a dependency recorded in the tracker
-  had no effect on what ran: work began on issues whose prerequisites
-  were unfinished, holding a slot until the agent discovered for
-  itself that it could not proceed. Jira and Linear were unaffected.
-  An issue is now held until every blocker reaches a terminal state,
-  and where its blocker list cannot be read the issue is held and
-  retried on the next poll rather than started on an unread list. A
-  forge that does not serve issue dependencies at all is now reported
-  as an error instead of read as an empty list, and no issue on it is
-  started while that lasts. Reading dependencies costs GitHub and
-  Gitea up to four extra tracker requests per poll; an issue whose
-  own tracker data already proves it has no dependencies costs none.
-  Workflow templates on those two trackers now receive the real
-  blocker list, which was previously always empty.
+- On GitHub and Gitea, an issue whose blockers are still open is no longer started. Both trackers reported every candidate issue as having no blockers at all, so a dependency recorded in the tracker had no effect on what ran: work began on issues whose prerequisites were unfinished, holding a slot until the agent discovered for itself that it could not proceed. Jira and Linear were unaffected. An issue is now held until every blocker reaches a terminal state, and where its blocker list cannot be read the issue is held and retried on the next poll rather than started on an unread list. A forge that does not serve issue dependencies at all is now reported as an error instead of read as an empty list, and no issue on it is started while that lasts. Reading dependencies costs GitHub and Gitea up to four extra tracker requests per poll; an issue whose own tracker data already proves it has no dependencies costs none. Workflow templates on those two trackers now receive the real blocker list, which was previously always empty.
   ([#920](https://github.com/sortie-ai/sortie/issues/920))
 
-- An issue routed by a dispatch rule to an agent kind other than the
-  workflow default now runs with the MCP servers configured in its own
-  agent settings block. It was given the default kind's `mcp_config`
-  instead: servers and credentials meant for another agent were
-  loaded, its own were silently dropped, and a stale or malformed path
-  in the default block failed the session at startup and sent it into
-  retry backoff, naming a file the operator had never associated with
-  that agent. A session running on the workflow default was
-  unaffected.
+- An issue routed by a dispatch rule to an agent kind other than the workflow default now runs with the MCP servers configured in its own agent settings block. It was given the default kind's `mcp_config` instead: servers and credentials meant for another agent were loaded, its own were silently dropped, and a stale or malformed path in the default block failed the session at startup and sent it into retry backoff, naming a file the operator had never associated with that agent. A session running on the workflow default was unaffected.
   ([#924](https://github.com/sortie-ai/sortie/issues/924))
 
-- A `codex` or `opencode` session no longer keeps the first-turn
-  "Available Sortie tools" section for tools it has no way to call.
-  Both kinds now translate the worker-generated MCP configuration into
-  their own runtime's configuration form and deliver it on a local
-  launch, so a tool the prompt advertises to them is reachable; an SSH
-  session on either kind gets neither the channel nor the
-  advertisement. `kiro` stops receiving the advertisement entirely,
-  since its runtime disables MCP under API-key authentication and can
-  reach a tool by no other means. `sortie validate` also warns once
-  per reachable kind with no tool execution channel.
+- A `codex` or `opencode` session no longer keeps the first-turn "Available Sortie tools" section for tools it has no way to call. Both kinds now translate the worker-generated MCP configuration into their own runtime's configuration form and deliver it on a local launch, so a tool the prompt advertises to them is reachable; an SSH session on either kind gets neither the channel nor the advertisement. `kiro` stops receiving the advertisement entirely, since its runtime disables MCP under API-key authentication and can reach a tool by no other means. `sortie validate` also warns once per reachable kind with no tool execution channel.
   ([#841](https://github.com/sortie-ai/sortie/issues/841))
 
 ## [1.21.0] - 2026-08-20
 
 ### Fixed
 
-- A check run cancelled by a newer commit no longer spends a retry from
-  the `reactions.ci_failure` budget. The CI verdict counts only
-  `failure` and `timed_out` as failing; a cancelled check now withholds
-  green instead of asserting failure, holding the verdict at pending, so
-  it dispatches no fix continuation and appends no failure to run
-  history. A required workflow configured to cancel its own in-flight
-  runs when a newer commit lands was spending the whole bounded budget
-  on ordinary pushes, so a commit that genuinely failed later went
-  unremediated. The merge gate answers by the same rule and reports such
-  a head as pending rather than failing, which on GitLab also covers a
-  `canceled` pipeline status. The escalation raised on budget exhaustion
-  now names exactly the checks the verdict counted as failing.
+- A check run cancelled by a newer commit no longer spends a retry from the `reactions.ci_failure` budget. The CI verdict counts only `failure` and `timed_out` as failing; a cancelled check now withholds green instead of asserting failure, holding the verdict at pending, so it dispatches no fix continuation and appends no failure to run history. A required workflow configured to cancel its own in-flight runs when a newer commit lands was spending the whole bounded budget on ordinary pushes, so a commit that genuinely failed later went unremediated. The merge gate answers by the same rule and reports such a head as pending rather than failing, which on GitLab also covers a `canceled` pipeline status. The escalation raised on budget exhaustion now names exactly the checks the verdict counted as failing.
   ([#831](https://github.com/sortie-ai/sortie/issues/831))
 
-- Merge-completion polling no longer retries forever when a forge
-  reports a pull request merged but never supplies its merge commit
-  identifier. The first such response starts a persisted thirty-minute
-  grace period with exponential polling backoff; if the identifier is
-  still absent, Sortie stops without transitioning the issue and sends
-  the configured escalation. Time spent waiting for review does not
-  count toward the grace period, restarts do not reset it, and failed
-  escalation delivery can be retried by a later fresh pending entry
-  without reopening the stopped polling loop. If such a later entry
-  observes a real identifier, it follows the normal exactly-once
-  transition path. A retry can occasionally redeliver the escalation
-  instead of delivering it for the first time, when the tracker write
-  succeeded but the internal marker that records delivery failed to
-  write: a label escalation repeats harmlessly, because reapplying a
-  present label is a no-op, but a comment escalation posts a second
-  comment.
+- Merge-completion polling no longer retries forever when a forge reports a pull request merged but never supplies its merge commit identifier. The first such response starts a persisted thirty-minute grace period with exponential polling backoff; if the identifier is still absent, Sortie stops without transitioning the issue and sends the configured escalation. Time spent waiting for review does not count toward the grace period, restarts do not reset it, and failed escalation delivery can be retried by a later fresh pending entry without reopening the stopped polling loop. If such a later entry observes a real identifier, it follows the normal exactly-once transition path. A retry can occasionally redeliver the escalation instead of delivering it for the first time, when the tracker write succeeded but the internal marker that records delivery failed to write: a label escalation repeats harmlessly, because reapplying a present label is a no-op, but a comment escalation posts a second comment.
   ([#777](https://github.com/sortie-ai/sortie/issues/777))
 
-- The `ci_failure` reaction now evaluates the pull request's current
-  head on every pass and keeps watching after a passing result, so a
-  commit pushed later that fails CI is observed and receives a fix
-  continuation. Previously the watch retired on the first passing
-  result and the commit it polled never advanced past the one the agent
-  handed off, so a branch could sit on a failing commit with its linked
-  issue stuck in the review state and no escalation raised. A new head
-  restores the attempt budget only when Sortie can establish that the
-  commit is not its own work, so an agent cannot extend its own budget
-  by pushing. The watch ends when the pull request merges or closes,
-  and otherwise after `reactions.ci_failure.watch_window_ms`
-  (default `86400000`, twenty-four hours) with no new commit; `0`
-  removes that bound, and applying the configured fix label re-arms a
-  pull request by hand.
+- The `ci_failure` reaction now evaluates the pull request's current head on every pass and keeps watching after a passing result, so a commit pushed later that fails CI is observed and receives a fix continuation. Previously the watch retired on the first passing result and the commit it polled never advanced past the one the agent handed off, so a branch could sit on a failing commit with its linked issue stuck in the review state and no escalation raised. A new head restores the attempt budget only when Sortie can establish that the commit is not its own work, so an agent cannot extend its own budget by pushing. The watch ends when the pull request merges or closes, and otherwise after `reactions.ci_failure.watch_window_ms` (default `86400000`, twenty-four hours) with no new commit; `0` removes that bound, and applying the configured fix label re-arms a pull request by hand.
   ([#871](https://github.com/sortie-ai/sortie/issues/871))
 
-- `agent.turn_timeout_ms` is now enforced. A turn that exceeds the
-  configured bound ends, the attempt is recorded as failed with the
-  `turn_timeout` reason, and a retry is scheduled with the usual
-  exponential backoff. The bound covers self-review turns too: a
-  self-review turn that exceeds it fails the attempt rather than
-  completing it, so such a run is retried instead of handed off.
-  Previously the value was parsed and reported by `sortie resolve` but
-  applied nowhere, so nothing bounded a turn whose agent kept producing
-  output; stall detection could not cover the gap, because it measures
-  silence rather than duration.
+- `agent.turn_timeout_ms` is now enforced. A turn that exceeds the configured bound ends, the attempt is recorded as failed with the `turn_timeout` reason, and a retry is scheduled with the usual exponential backoff. The bound covers self-review turns too: a self-review turn that exceeds it fails the attempt rather than completing it, so such a run is retried instead of handed off. Previously the value was parsed and reported by `sortie resolve` but applied nowhere, so nothing bounded a turn whose agent kept producing output; stall detection could not cover the gap, because it measures silence rather than duration.
   ([#834](https://github.com/sortie-ai/sortie/issues/834))
 
-- An agent that writes `blocked` to its status file during a self-review
-  turn now ends the run as a blocked soft stop however the run entered
-  that phase. Previously the signal was honoured only when the agent had
-  signalled completion; a run that entered self-review by exhausting
-  `agent.max_turns` had it discarded and finished as an ordinary
-  completed run, so the issue moved to `tracker.handoff_state` where one
-  is configured, or was dispatched again on a continuation retry, over
-  work the agent had just reported it could not carry further. Such a
-  run now takes no handoff transition and schedules no retry: the claim
-  is released and the issue is parked, held out of dispatch until a
-  human changes its state or removes the parking label. Releasing a
-  parked issue now also clears its consecutive handoff-absence count
-  whatever reason parked it, so a release no longer leaves a count
-  behind that would park the issue again sooner than expected.
+- An agent that writes `blocked` to its status file during a self-review turn now ends the run as a blocked soft stop however the run entered that phase. Previously the signal was honoured only when the agent had signalled completion; a run that entered self-review by exhausting `agent.max_turns` had it discarded and finished as an ordinary completed run, so the issue moved to `tracker.handoff_state` where one is configured, or was dispatched again on a continuation retry, over work the agent had just reported it could not carry further. Such a run now takes no handoff transition and schedules no retry: the claim is released and the issue is parked, held out of dispatch until a human changes its state or removes the parking label. Releasing a parked issue now also clears its consecutive handoff-absence count whatever reason parked it, so a release no longer leaves a count behind that would park the issue again sooner than expected.
   ([#856](https://github.com/sortie-ai/sortie/issues/856))
 
-- A cancelled Codex turn no longer consumes CPU while it waits for the
-  agent to wind down. It previously spun a full core from the moment of
-  cancellation until the turn reached its terminal state, so a shutdown
-  that cancelled several concurrent Codex turns spun one core each.
-  Cancellation reaches this path on shutdown, on stall detection, and
-  when `agent.turn_timeout_ms` expires.
+- A cancelled Codex turn no longer consumes CPU while it waits for the agent to wind down. It previously spun a full core from the moment of cancellation until the turn reached its terminal state, so a shutdown that cancelled several concurrent Codex turns spun one core each. Cancellation reaches this path on shutdown, on stall detection, and when `agent.turn_timeout_ms` expires.
   ([#845](https://github.com/sortie-ai/sortie/issues/845))
 
 ### Changed
 
-- `reactions.ci_failure` now resolves the pull request's current head
-  through the same SCM provider every other active SCM-backed reaction
-  uses, so a deployment naming `reactions.ci_failure` with one provider
-  and another active SCM-backed reaction with a different provider now
-  fails at startup instead of running with a currency-blind CI watch.
-  `sortie validate` now reports the same conflict offline, under the
-  `reactions.scm_provider_conflict` check. The previously accepted
-  shape, two providers across the active SCM-backed reactions including
-  `ci_failure`, is no longer valid; name one forge across every active
-  SCM-backed reaction, including `ci_failure`, to start again.
+- `reactions.ci_failure` now resolves the pull request's current head through the same SCM provider every other active SCM-backed reaction uses, so a deployment naming `reactions.ci_failure` with one provider and another active SCM-backed reaction with a different provider now fails at startup instead of running with a currency-blind CI watch. `sortie validate` now reports the same conflict offline, under the `reactions.scm_provider_conflict` check. The previously accepted shape, two providers across the active SCM-backed reactions including `ci_failure`, is no longer valid; name one forge across every active SCM-backed reaction, including `ci_failure`, to start again.
   ([#871](https://github.com/sortie-ai/sortie/issues/871),
   [#890](https://github.com/sortie-ai/sortie/issues/890))
 
-- A non-positive `agent.turn_timeout_ms` is now rejected at startup, by
-  `sortie validate`, and on reload. `0` or a negative number is no
-  longer accepted; `0` did not disable the bound before either, it
-  silently meant one hour. Unlike `agent.stall_timeout_ms`, this bound
-  cannot be disabled.
+- A non-positive `agent.turn_timeout_ms` is now rejected at startup, by `sortie validate`, and on reload. `0` or a negative number is no longer accepted; `0` did not disable the bound before either, it silently meant one hour. Unlike `agent.stall_timeout_ms`, this bound cannot be disabled.
   ([#834](https://github.com/sortie-ai/sortie/issues/834))
 
-- The `codex.skip_git_repo_check` pass-through key is removed. It never
-  had an effect: the value was parsed and read by no launch path, and
-  the `codex app-server` transport the adapter drives exposes no
-  equivalent protocol field and rejects the equivalent flag, which
-  exists only on `codex exec`. The key also promised something the
-  adapter never needed. A workspace that is not a Git repository is the
-  default and already works, because the refusal the key named lives in
-  the `codex exec` wrapper, above the layer the adapter talks to.
-  Nothing validates unknown keys inside the `codex` block, so a
-  WORKFLOW.md that still sets the key is ignored rather than rejected.
+- The `codex.skip_git_repo_check` pass-through key is removed. It never had an effect: the value was parsed and read by no launch path, and the `codex app-server` transport the adapter drives exposes no equivalent protocol field and rejects the equivalent flag, which exists only on `codex exec`. The key also promised something the adapter never needed. A workspace that is not a Git repository is the default and already works, because the refusal the key named lives in the `codex exec` wrapper, above the layer the adapter talks to. Nothing validates unknown keys inside the `codex` block, so a WORKFLOW.md that still sets the key is ignored rather than rejected.
   ([#840](https://github.com/sortie-ai/sortie/issues/840))
 
 ## [1.20.0] - 2026-08-18
 
 ### Added
 
-- `sortie validate` now checks the numeric settings of the
-  `reactions.review_comments` and `reactions.merge_conflicts` blocks: a
-  `poll_interval_ms` below `30000` on either block, and a negative
-  `debounce_ms` or a `max_continuation_turns` of zero or less on
-  `review_comments`. All four previously passed validation and then
-  stopped the run at startup, after the state database had already been
-  created.
+- `sortie validate` now checks the numeric settings of the `reactions.review_comments` and `reactions.merge_conflicts` blocks: a `poll_interval_ms` below `30000` on either block, and a negative `debounce_ms` or a `max_continuation_turns` of zero or less on `review_comments`. All four previously passed validation and then stopped the run at startup, after the state database had already been created.
   ([#803](https://github.com/sortie-ai/sortie/issues/803))
 
-- Sortie now withholds the handoff transition from a run that produced
-  no work it could observe. The workspace is compared against a
-  baseline taken immediately before the agent starts, and the issue
-  advances to `tracker.handoff_state` only when the run moved the
-  committed position, changed the working tree, or left a pushed branch
-  or pull request behind - so a session that finished with nothing to
-  show no longer arrives for human review as if it had. Such a run is
-  recorded as failed, names the verdict as its reason, counts on
-  `sortie_handoff_transitions_total{result="withheld"}`, and leaves the
-  issue in its active state for a backoff retry. The new
-  `tracker.handoff_evidence` field selects the policy: `observed`, the
-  default, withholds only where the workspace could be inspected and
-  showed nothing; `strict` also withholds where it could not be
-  inspected at all, such as a workspace that is not a Git tree; `off`
-  computes no verdict and restores the previous behavior. A deployment
-  whose agents leave their result outside the workspace - a tracker
-  comment, say - sees those issues withheld and re-dispatched on every
-  run, and sets the field to `off`.
+- Sortie now withholds the handoff transition from a run that produced no work it could observe. The workspace is compared against a baseline taken immediately before the agent starts, and the issue advances to `tracker.handoff_state` only when the run moved the committed position, changed the working tree, or left a pushed branch or pull request behind - so a session that finished with nothing to show no longer arrives for human review as if it had. Such a run is recorded as failed, names the verdict as its reason, counts on `sortie_handoff_transitions_total{result="withheld"}`, and leaves the issue in its active state for a backoff retry. The new `tracker.handoff_evidence` field selects the policy: `observed`, the default, withholds only where the workspace could be inspected and showed nothing; `strict` also withholds where it could not be inspected at all, such as a workspace that is not a Git tree; `off` computes no verdict and restores the previous behavior. A deployment whose agents leave their result outside the workspace - a tracker comment, say - sees those issues withheld and re-dispatched on every run, and sets the field to `off`.
   ([#768](https://github.com/sortie-ai/sortie/issues/768))
 
-- An issue whose runs keep producing nothing is now parked instead of
-  being dispatched again indefinitely. Sortie counts the consecutive
-  withheld handoffs on each issue and, on reaching the ceiling, attaches
-  the escalation label configured under
-  `reactions.review_comments.escalation_label` (`needs-human` when that
-  block or value is absent), stops the retry sequence, and dispatches
-  the issue no further. The ceiling is `agent.max_sessions` where the
-  deployment sets one and `3` otherwise, which is the first attempt plus
-  two more. Parking is announced with the issue, how many consecutive
-  empty runs were seen, the ceiling, and the label applied, so a parked
-  issue can be told apart from an abandoned one. A run that produces
-  work clears the count at once; a run that ends without an evidence
-  verdict, such as an agent reporting itself blocked, leaves the count
-  where it stood. The count is neither kept nor consulted under
-  `tracker.handoff_evidence: off`, and a review-comment or CI
-  continuation retry is never stopped by this ceiling.
+- An issue whose runs keep producing nothing is now parked instead of being dispatched again indefinitely. Sortie counts the consecutive withheld handoffs on each issue and, on reaching the ceiling, attaches the escalation label configured under `reactions.review_comments.escalation_label` (`needs-human` when that block or value is absent), stops the retry sequence, and dispatches the issue no further. The ceiling is `agent.max_sessions` where the deployment sets one and `3` otherwise, which is the first attempt plus two more. Parking is announced with the issue, how many consecutive empty runs were seen, the ceiling, and the label applied, so a parked issue can be told apart from an abandoned one. A run that produces work clears the count at once; a run that ends without an evidence verdict, such as an agent reporting itself blocked, leaves the count where it stood. The count is neither kept nor consulted under `tracker.handoff_evidence: off`, and a review-comment or CI continuation retry is never stopped by this ceiling.
   ([#769](https://github.com/sortie-ai/sortie/issues/769))
 
 ### Fixed
 
-- Adapter endpoint validation errors no longer print credentials
-  embedded in the configured `endpoint`. A Jira or GitLab endpoint
-  written as `scheme://user:secret@host` that fails validation is now
-  reported with its user and password masked, so the secret cannot
-  reach the operator log.
+- Adapter endpoint validation errors no longer print credentials embedded in the configured `endpoint`. A Jira or GitLab endpoint written as `scheme://user:secret@host` that fails validation is now reported with its user and password masked, so the secret cannot reach the operator log.
   ([#791](https://github.com/sortie-ai/sortie/issues/791))
 
-- GitHub: inline review comments now reach the agent with the lines
-  they were written against. Both human and bot review feedback
-  arrived with no location at all, so the agent had to find the
-  referenced code itself and a prompt template guarded on the start
-  line - including the example published in the reference
-  documentation - never rendered its branch. Comments left on an
-  outdated diff report their original lines; pull-request-level review
-  bodies remain unlocated.
+- GitHub: inline review comments now reach the agent with the lines they were written against. Both human and bot review feedback arrived with no location at all, so the agent had to find the referenced code itself and a prompt template guarded on the start line - including the example published in the reference documentation - never rendered its branch. Comments left on an outdated diff report their original lines; pull-request-level review bodies remain unlocated.
   ([#776](https://github.com/sortie-ai/sortie/issues/776))
 
-- Gitea: review comments anchored to the old side of the diff now
-  reach the agent, carrying the line they were left on, instead of
-  being silently discarded as outdated. A review whose comments were
-  all on the old side dispatched no agent turn and never escalated
-  either, so sortie appeared to ignore the review outright until the
-  pending check expired. Gitea review comments are no longer filtered
-  as outdated at all, because the platform reports no signal for an
-  anchor that a later push has superseded.
+- Gitea: review comments anchored to the old side of the diff now reach the agent, carrying the line they were left on, instead of being silently discarded as outdated. A review whose comments were all on the old side dispatched no agent turn and never escalated either, so sortie appeared to ignore the review outright until the pending check expired. Gitea review comments are no longer filtered as outdated at all, because the platform reports no signal for an anchor that a later push has superseded.
   ([#778](https://github.com/sortie-ai/sortie/issues/778))
 
-- A review comment whose author is listed in `reactions.bot_review.bot_usernames`
-  no longer triggers the human `review_comments` reaction. The allowlist
-  previously suppressed an author only from the bot-review loop, so an
-  allowlisted reviewer's `CHANGES_REQUESTED` review also drove the human
-  loop on any provider with a bot-account marker, consuming two
-  independent continuation budgets for the same feedback. On Gitea, which
-  exposes no bot-account marker at all, the allowlist is the only
-  classification signal that exists, so a bot review there drove the human
-  loop unconditionally. The exclusion requires an active
-  `reactions.bot_review` block, because that is where `bot_usernames`
-  lives.
+- A review comment whose author is listed in `reactions.bot_review.bot_usernames` no longer triggers the human `review_comments` reaction. The allowlist previously suppressed an author only from the bot-review loop, so an allowlisted reviewer's `CHANGES_REQUESTED` review also drove the human loop on any provider with a bot-account marker, consuming two independent continuation budgets for the same feedback. On Gitea, which exposes no bot-account marker at all, the allowlist is the only classification signal that exists, so a bot review there drove the human loop unconditionally. The exclusion requires an active `reactions.bot_review` block, because that is where `bot_usernames` lives.
   ([#665](https://github.com/sortie-ai/sortie/issues/665))
 
-- Self-review now runs when the agent reports its work complete,
-  instead of only when the agent exhausts its turn budget. An operator
-  who set `self_review.enabled: true` got the verification commands and
-  the review turn on the one path a finished run never takes, so work
-  reached the handoff state with none of the configured checks having
-  run. A run that ends this way now takes longer, counts its review and
-  fix turns alongside its coding turns, records a review outcome where
-  it previously recorded none, and passes that outcome to the
-  `after_run` hook in place of `disabled`.
+- Self-review now runs when the agent reports its work complete, instead of only when the agent exhausts its turn budget. An operator who set `self_review.enabled: true` got the verification commands and the review turn on the one path a finished run never takes, so work reached the handoff state with none of the configured checks having run. A run that ends this way now takes longer, counts its review and fix turns alongside its coding turns, records a review outcome where it previously recorded none, and passes that outcome to the `after_run` hook in place of `disabled`.
   ([#813](https://github.com/sortie-ai/sortie/issues/813))
 
-- An agent that writes `blocked` to `.sortie/status` now holds its
-  issue until a person acts, instead of having it dispatched again on
-  the next poll and on every poll after that. Sortie parks the issue:
-  it attaches the escalation label configured under
-  `reactions.review_comments.escalation_label` (`needs-human` when that
-  block or value is absent), holds the issue out of dispatch and out of
-  the retry lane, keeps it parked across a restart, and counts it on
-  `sortie_issue_parks_total{reason}`. The issue keeps the tracker state
-  it was dispatched in, so the label is what marks it as waiting on a
-  person. Nothing previously outlasted the run, leaving
-  `agent.max_sessions` as the only bound on the repeat and no bound at
-  all where it is unset. A park is released when Sortie observes
-  someone act on the issue: moving it to another tracker state, or
-  removing the parking label. The same release now applies to an issue
-  parked for producing no observable work. Where `tracker.query_filter`
-  excludes the parking label, Sortie never confirms the label is
-  present and removing it releases nothing, so release those issues by
-  moving them instead.
+- An agent that writes `blocked` to `.sortie/status` now holds its issue until a person acts, instead of having it dispatched again on the next poll and on every poll after that. Sortie parks the issue: it attaches the escalation label configured under `reactions.review_comments.escalation_label` (`needs-human` when that block or value is absent), holds the issue out of dispatch and out of the retry lane, keeps it parked across a restart, and counts it on `sortie_issue_parks_total{reason}`. The issue keeps the tracker state it was dispatched in, so the label is what marks it as waiting on a person. Nothing previously outlasted the run, leaving `agent.max_sessions` as the only bound on the repeat and no bound at all where it is unset. A park is released when Sortie observes someone act on the issue: moving it to another tracker state, or removing the parking label. The same release now applies to an issue parked for producing no observable work. Where `tracker.query_filter` excludes the parking label, Sortie never confirms the label is present and removing it releases nothing, so release those issues by moving them instead.
   ([#811](https://github.com/sortie-ai/sortie/issues/811))
 
-- GitLab: a merge request whose pipeline is waiting on a manual job is
-  no longer held out of auto-merge indefinitely. Such a pipeline was
-  reported as still running on every poll, so the auto-merge entry
-  expired on its timeout and the merge fell to a person. The verdict
-  now follows the pipeline's own jobs: one waiting only on manual jobs
-  counts as passing, one that also holds a failed job reports failing
-  instead of looking identical to a healthy one, and one with work
-  still queued stays pending. Reading a pipeline in this state costs
-  one extra API call per poll; every other pipeline state is unchanged.
+- GitLab: a merge request whose pipeline is waiting on a manual job is no longer held out of auto-merge indefinitely. Such a pipeline was reported as still running on every poll, so the auto-merge entry expired on its timeout and the merge fell to a person. The verdict now follows the pipeline's own jobs: one waiting only on manual jobs counts as passing, one that also holds a failed job reports failing instead of looking identical to a healthy one, and one with work still queued stays pending. Reading a pipeline in this state costs one extra API call per poll; every other pipeline state is unchanged.
   ([#827](https://github.com/sortie-ai/sortie/issues/827))
 
-- GitLab: auto-merge no longer acts on a CI verdict belonging to an
-  earlier commit. GitLab reports a merge request's pipeline as stored,
-  not as re-checked against the current commit, so a push that produced
-  no pipeline of its own - removing the CI configuration, or a change
-  the pipeline rules exclude - left the previous commit's result in
-  place. A merge request could merge on a passing result that never
-  covered the commit being merged, and the same staleness held the gate
-  shut the other way. The verdict is now withheld as pending whenever
-  the pipeline on offer describes a commit other than the merge request
-  head. A merge request whose branch never produced a pipeline still
-  reports no verdict and merges where the deployment allows it.
-  Projects using merged results pipelines or merge trains keep the
-  previous behavior, because those pipelines run on a commit that
-  exists in neither branch and never match the head by design.
+- GitLab: auto-merge no longer acts on a CI verdict belonging to an earlier commit. GitLab reports a merge request's pipeline as stored, not as re-checked against the current commit, so a push that produced no pipeline of its own - removing the CI configuration, or a change the pipeline rules exclude - left the previous commit's result in place. A merge request could merge on a passing result that never covered the commit being merged, and the same staleness held the gate shut the other way. The verdict is now withheld as pending whenever the pipeline on offer describes a commit other than the merge request head. A merge request whose branch never produced a pipeline still reports no verdict and merges where the deployment allows it. Projects using merged results pipelines or merge trains keep the previous behavior, because those pipelines run on a commit that exists in neither branch and never match the head by design.
   ([#828](https://github.com/sortie-ai/sortie/issues/828))
 
-- GitLab: mergeability reads no longer warn about values GitLab
-  documents and the adapter already handles. A draft merge request, one
-  that is no longer open, and one whose pipeline is still running each
-  logged `unrecognized gitlab detailed_merge_status value` at WARN on
-  every poll for as long as the condition held, burying the diagnostic
-  that exists to surface a value a newer GitLab release introduced. The
-  warning is now raised only for a value outside the set GitLab's API
-  documents, and every mergeability verdict is unchanged. Licensed
-  instances stop warning on five further blocking values, among them
-  failing status checks and security policy violations, which the
-  adapter had been matching against the wrong spelling. A merge request
-  held back by a merge check is now reported at DEBUG, naming the value
-  and the merge request it came from.
+- GitLab: mergeability reads no longer warn about values GitLab documents and the adapter already handles. A draft merge request, one that is no longer open, and one whose pipeline is still running each logged `unrecognized gitlab detailed_merge_status value` at WARN on every poll for as long as the condition held, burying the diagnostic that exists to surface a value a newer GitLab release introduced. The warning is now raised only for a value outside the set GitLab's API documents, and every mergeability verdict is unchanged. Licensed instances stop warning on five further blocking values, among them failing status checks and security policy violations, which the adapter had been matching against the wrong spelling. A merge request held back by a merge check is now reported at DEBUG, naming the value and the merge request it came from.
   ([#829](https://github.com/sortie-ai/sortie/issues/829))
 
 ### Migrations
 
-- Add the `handoff_absence_resets` table, recording per issue where its
-  consecutive-absence count was last cleared by an observed piece of
-  work. An issue with no row there has its recorded empty runs counted
-  in full, so an upgrade carries any absences already in the database
-  into the new ceiling.
+- Add the `handoff_absence_resets` table, recording per issue where its consecutive-absence count was last cleared by an observed piece of work. An issue with no row there has its recorded empty runs counted in full, so an upgrade carries any absences already in the database into the new ceiling.
 
-- Add the `parked_issues` table, holding one row per issue currently
-  held out of dispatch. It records current state rather than history:
-  the row is deleted when the park is released. An upgrade starts with
-  no parked issues, so an issue whose agent reported itself blocked
-  before the upgrade is parked the next time it reports it.
+- Add the `parked_issues` table, holding one row per issue currently held out of dispatch. It records current state rather than history: the row is deleted when the park is released. An upgrade starts with no parked issues, so an issue whose agent reported itself blocked before the upgrade is parked the next time it reports it.
 
 ## [1.19.0] - 2026-08-12
 
 ### Added
 
-- Install script (macOS and Linux): command-line flags next to the
-  existing environment variables - `--version`, `--install-dir`,
-  `--no-verify`, `--binary`, and `--help` - passed through a pipe with
-  `sh -s --`. A flag overrides the matching variable, and an
-  unrecognized flag now aborts the install instead of being ignored.
-  `--binary` installs a binary already on disk instead of downloading
-  one. Re-running the script no longer re-downloads a release that is
-  already installed in the target directory. On a GitHub Actions runner
-  the install directory is appended to `$GITHUB_PATH`, so later steps
-  find `sortie` without extra wiring. Resolving the latest release no
-  longer consumes the unauthenticated GitHub API quota, which is what
-  made unpinned installs fail on shared CI runners.
+- Install script (macOS and Linux): command-line flags next to the existing environment variables - `--version`, `--install-dir`, `--no-verify`, `--binary`, and `--help` - passed through a pipe with `sh -s --`. A flag overrides the matching variable, and an unrecognized flag now aborts the install instead of being ignored. `--binary` installs a binary already on disk instead of downloading one. Re-running the script no longer re-downloads a release that is already installed in the target directory. On a GitHub Actions runner the install directory is appended to `$GITHUB_PATH`, so later steps find `sortie` without extra wiring. Resolving the latest release no longer consumes the unauthenticated GitHub API quota, which is what made unpinned installs fail on shared CI runners.
 
-- `sortie validate` Jira adapter config validation: emits offline
-  diagnostics for `tracker.kind: jira` covering endpoint presence,
-  endpoint URL shape (a scheme and a host), an endpoint that already
-  contains `/rest/api/`, and `api_key` shape (a colon in the first or
-  last position, and a colon-free key against an Atlassian Cloud host).
-  All four checks are errors that block dispatch.
+- `sortie validate` Jira adapter config validation: emits offline diagnostics for `tracker.kind: jira` covering endpoint presence, endpoint URL shape (a scheme and a host), an endpoint that already contains `/rest/api/`, and `api_key` shape (a colon in the first or last position, and a colon-free key against an Atlassian Cloud host). All four checks are errors that block dispatch.
 
-- `sortie validate` now reports a malformed Gitea `tracker.query_filter`
-  using the same grammar the adapter enforces at startup, and an
-  untrimmed element in `tracker.active_states` or `tracker.terminal_states`
-  on GitHub and Gitea, matching the existing GitLab and Linear
-  diagnostics. The empty-element and untrimmed-element diagnostic
-  wording is now identical across every tracker adapter that reports it.
+- `sortie validate` now reports a malformed Gitea `tracker.query_filter` using the same grammar the adapter enforces at startup, and an untrimmed element in `tracker.active_states` or `tracker.terminal_states` on GitHub and Gitea, matching the existing GitLab and Linear diagnostics. The empty-element and untrimmed-element diagnostic wording is now identical across every tracker adapter that reports it.
 
-- `sortie validate` now checks the Jira API version, catching three
-  `tracker.kind: jira` misconfigurations that used to pass validation
-  and then abort the run at startup: a `tracker.api_version` other than
-  `"2"` or `"3"`; `"2"` against an Atlassian Cloud endpoint, which only
-  serves version 3; and a colon-free `tracker.api_key` against a
-  self-hosted endpoint whose effective version is `"3"` - the default
-  when `tracker.api_version` is unset - where a personal access token
-  needs either an `email:token` key or `tracker.api_version: "2"`. All
-  three are errors that block dispatch.
+- `sortie validate` now checks the Jira API version, catching three `tracker.kind: jira` misconfigurations that used to pass validation and then abort the run at startup: a `tracker.api_version` other than `"2"` or `"3"`; `"2"` against an Atlassian Cloud endpoint, which only serves version 3; and a colon-free `tracker.api_key` against a self-hosted endpoint whose effective version is `"3"` - the default when `tracker.api_version` is unset - where a personal access token needs either an `email:token` key or `tracker.api_version: "2"`. All three are errors that block dispatch.
   ([#785](https://github.com/sortie-ai/sortie/issues/785))
 
-- GitLab SCM provider: Sortie's pull-request automation now runs against
-  GitLab.com or a self-managed GitLab instance, at parity with the GitHub
-  and Gitea SCM providers. Set `provider: gitlab` on a
-  `reactions.auto_merge`, `reactions.review_comments`,
-  `reactions.bot_review`, `reactions.merge_conflicts`,
-  `reactions.ci_failure`, or `reactions.label_commands` block to drive it
-  through GitLab: Sortie routes human and bot review feedback on a merge
-  request back into the agent session, reacts to merge conflicts, to a
-  failing pipeline on an agent's merge request (surfacing an excerpt of
-  the failing job's log), and to the `sortie:review` / `sortie:fix` label
-  commands, and, with `reactions.auto_merge`, merges an approved merge
-  request once its approval state, pipeline status, and mergeability
-  satisfy the configured preconditions (sending the expected head SHA so
-  a moved head aborts the merge rather than merging stale work) and
-  deletes the merged branch. Auto-merge on GitLab requires an access
-  token carrying GitLab's `api` scope; a token without it is reported at
-  startup.
+- GitLab SCM provider: Sortie's pull-request automation now runs against GitLab.com or a self-managed GitLab instance, at parity with the GitHub and Gitea SCM providers. Set `provider: gitlab` on a `reactions.auto_merge`, `reactions.review_comments`, `reactions.bot_review`, `reactions.merge_conflicts`, `reactions.ci_failure`, or `reactions.label_commands` block to drive it through GitLab: Sortie routes human and bot review feedback on a merge request back into the agent session, reacts to merge conflicts, to a failing pipeline on an agent's merge request (surfacing an excerpt of the failing job's log), and to the `sortie:review` / `sortie:fix` label commands, and, with `reactions.auto_merge`, merges an approved merge request once its approval state, pipeline status, and mergeability satisfy the configured preconditions (sending the expected head SHA so a moved head aborts the merge rather than merging stale work) and deletes the merged branch. Auto-merge on GitLab requires an access token carrying GitLab's `api` scope; a token without it is reported at startup.
   ([#720](https://github.com/sortie-ai/sortie/issues/720),
   [#721](https://github.com/sortie-ai/sortie/issues/721),
   [#722](https://github.com/sortie-ai/sortie/issues/722))
 
 ### Fixed
 
-- Follow-up work already queued for an issue is no longer discarded
-  when a second kind of follow-up becomes due for the same issue.
-  Sortie keeps one queued continuation per issue and the last writer
-  won silently, so a queued CI fix, review fix, bot-review fix,
-  post-merge-conflict rebase, or `sortie:review` / `sortie:fix` label
-  command could be dropped and never run, and a dropped continuation
-  could reappear after a restart. The losing side now waits and runs on
-  a later poll once the queued work has been dispatched; a label
-  command keeps its label on the pull request until it actually starts,
-  so an unremoved label means the command is accepted but not yet
-  running; and a worker finishing normally no longer cancels work
-  queued while it was running. Two cases that could otherwise hold the
-  queue indefinitely are now bounded and reported: a reaction for an
-  issue parked outside every configured state is dropped after 30
-  minutes with a warning naming the reaction kind and the issue state,
-  instead of retrying at the backoff ceiling for the life of the
-  process and blocking that issue's other reactions, and a retry whose
-  timer event was lost under load is re-armed on a later poll instead
-  of stalling.
+- Follow-up work already queued for an issue is no longer discarded when a second kind of follow-up becomes due for the same issue. Sortie keeps one queued continuation per issue and the last writer won silently, so a queued CI fix, review fix, bot-review fix, post-merge-conflict rebase, or `sortie:review` / `sortie:fix` label command could be dropped and never run, and a dropped continuation could reappear after a restart. The losing side now waits and runs on a later poll once the queued work has been dispatched; a label command keeps its label on the pull request until it actually starts, so an unremoved label means the command is accepted but not yet running; and a worker finishing normally no longer cancels work queued while it was running. Two cases that could otherwise hold the queue indefinitely are now bounded and reported: a reaction for an issue parked outside every configured state is dropped after 30 minutes with a warning naming the reaction kind and the issue state, instead of retrying at the backoff ceiling for the life of the process and blocking that issue's other reactions, and a retry whose timer event was lost under load is re-armed on a later poll instead of stalling.
   ([#743](https://github.com/sortie-ai/sortie/issues/743))
 
-- Token usage recorded for a run was undercounted on every adapter that
-  reports it - `claude-code`, `codex`, `copilot-cli`, and `opencode` -
-  by between one and three orders of magnitude, and was zero on `codex`
-  turns and on `claude-code` sessions whose work ran inside sub-agents.
-  A multi-turn session recorded only its largest single turn rather than
-  the whole session. Recorded figures now match what each runtime
-  reports for the same session, and `total_tokens` means input plus
-  output on every adapter, counting prompt-cache reads once within the
-  input total instead of adding them again. Everything derived from
-  these figures moves with them - `agent.max_tokens` enforcement, the
-  `cost_budget` agent tool, `sortie stats`, dashboard cost estimates,
-  and the Prometheus token counters - so an `agent.max_tokens` ceiling
-  tuned against the previous behavior will bind far sooner and is worth
-  revisiting before upgrading. Rows already written to `run_history`
-  keep their original figures, so a `sortie stats` window spanning the
-  upgrade mixes both. On `copilot-cli` input tokens are recovered from
-  the runtime's session journal after the agent process exits, so they
-  remain unreported when the agent runs over SSH.
+- Token usage recorded for a run was undercounted on every adapter that reports it - `claude-code`, `codex`, `copilot-cli`, and `opencode` - by between one and three orders of magnitude, and was zero on `codex` turns and on `claude-code` sessions whose work ran inside sub-agents. A multi-turn session recorded only its largest single turn rather than the whole session. Recorded figures now match what each runtime reports for the same session, and `total_tokens` means input plus output on every adapter, counting prompt-cache reads once within the input total instead of adding them again. Everything derived from these figures moves with them - `agent.max_tokens` enforcement, the `cost_budget` agent tool, `sortie stats`, dashboard cost estimates, and the Prometheus token counters - so an `agent.max_tokens` ceiling tuned against the previous behavior will bind far sooner and is worth revisiting before upgrading. Rows already written to `run_history` keep their original figures, so a `sortie stats` window spanning the upgrade mixes both. On `copilot-cli` input tokens are recovered from the runtime's session journal after the agent process exits, so they remain unreported when the agent runs over SSH.
   ([#756](https://github.com/sortie-ai/sortie/issues/756))
 
-- A run whose coding agent reported no token usage was stored, summed,
-  priced, and displayed as a run that spent nothing, so an unmeasured
-  run looked identical to a genuinely free one. Each run now records
-  whether its token figures are a measurement, and the surfaces that
-  report spend keep the two apart. `sortie stats` counts tokens and cost
-  over measured runs only, labels them that way, and footnotes how many
-  runs it skipped; `--format json` gains `tokens_unmeasured_runs`
-  overall and per group. The dashboard shows a running session that has
-  reported no usage yet as `not reported`, leaves it out of the active
-  token and cost totals, and says how many it left out; the state API
-  gains `tokens_measured` per running entry. The `cost_budget` agent
-  tool gains `unmeasured_sessions` and `used_tokens_complete` so an
-  agent can tell a lower bound from an exact figure. An unmeasured run
-  still contributes nothing to the `agent.max_tokens` ceiling, but the
-  orchestrator now logs a warning that the ceiling could not be fully
-  evaluated instead of treating the incomplete total as authoritative;
-  the dispatch proceeds either way.
+- A run whose coding agent reported no token usage was stored, summed, priced, and displayed as a run that spent nothing, so an unmeasured run looked identical to a genuinely free one. Each run now records whether its token figures are a measurement, and the surfaces that report spend keep the two apart. `sortie stats` counts tokens and cost over measured runs only, labels them that way, and footnotes how many runs it skipped; `--format json` gains `tokens_unmeasured_runs` overall and per group. The dashboard shows a running session that has reported no usage yet as `not reported`, leaves it out of the active token and cost totals, and says how many it left out; the state API gains `tokens_measured` per running entry. The `cost_budget` agent tool gains `unmeasured_sessions` and `used_tokens_complete` so an agent can tell a lower bound from an exact figure. An unmeasured run still contributes nothing to the `agent.max_tokens` ceiling, but the orchestrator now logs a warning that the ceiling could not be fully evaluated instead of treating the incomplete total as authoritative; the dispatch proceeds either way.
   ([#757](https://github.com/sortie-ai/sortie/issues/757))
 
-- An `opencode` turn that exits cleanly having produced no model output
-  at all - no text, no reasoning, no tool call - is no longer reported
-  as completed. The turn now fails and is retried, instead of counting
-  as work done and letting the run advance the issue on nothing.
+- An `opencode` turn that exits cleanly having produced no model output at all - no text, no reasoning, no tool call - is no longer reported as completed. The turn now fails and is retried, instead of counting as work done and letting the run advance the issue on nothing.
 
-- A failed or cancelled turn on `opencode` and `codex` now records why
-  it ended. Both agents reported the outcome with no accompanying
-  error, so the run's `error` column and the dashboard showed a failure
-  with no reason attached; the runtime's own diagnostic now reaches
-  both. On `codex`, a turn that fails before it starts and one whose
-  subprocess output ends early also reach the event stream, so the
-  dashboard's last event no longer stops at the last step that worked.
+- A failed or cancelled turn on `opencode` and `codex` now records why it ended. Both agents reported the outcome with no accompanying error, so the run's `error` column and the dashboard showed a failure with no reason attached; the runtime's own diagnostic now reaches both. On `codex`, a turn that fails before it starts and one whose subprocess output ends early also reach the event stream, so the dashboard's last event no longer stops at the last step that worked.
 
-- The GitHub auto-merge CI gate read only the first page of a commit's
-  combined statuses and check runs, so a commit carrying more than 30
-  of either could report the wrong merge verdict. Both routes are now
-  paginated to exhaustion.
+- The GitHub auto-merge CI gate read only the first page of a commit's combined statuses and check runs, so a commit carrying more than 30 of either could report the wrong merge verdict. Both routes are now paginated to exhaustion.
   ([#784](https://github.com/sortie-ai/sortie/issues/784))
 
-- The Gitea auto-merge CI gate treated a commit status it did not
-  recognize as passing, letting auto-merge proceed on a signal it could
-  not interpret. It now treats an unrecognized or empty status as
-  pending, matching the Gitea CI reaction's own reading of the same
-  value.
+- The Gitea auto-merge CI gate treated a commit status it did not recognize as passing, letting auto-merge proceed on a signal it could not interpret. It now treats an unrecognized or empty status as pending, matching the Gitea CI reaction's own reading of the same value.
 
-- An auto-merge on GitHub that lost the race to a merge performed by
-  someone else no longer retries until it escalates. Sortie recognized
-  that case only when GitHub's rejection wording said the pull request
-  was already merged, which it does not say, so the reaction re-polled
-  a merge that had already landed and eventually asked for a human.
-  Sortie now re-reads the pull request after a rejected merge and
-  treats a confirmed merge as success, closing out the reaction and
-  counting it as merged, which is what Gitea already did.
+- An auto-merge on GitHub that lost the race to a merge performed by someone else no longer retries until it escalates. Sortie recognized that case only when GitHub's rejection wording said the pull request was already merged, which it does not say, so the reaction re-polled a merge that had already landed and eventually asked for a human. Sortie now re-reads the pull request after a rejected merge and treats a confirmed merge as success, closing out the reaction and counting it as merged, which is what Gitea already did.
   ([#786](https://github.com/sortie-ai/sortie/issues/786))
 
-- On GitHub, `reactions.merge_completion` never moved an issue to its
-  terminal state after the pull request merged. The GitHub API version
-  Sortie pins stopped reporting the merge commit the reaction uses to
-  recognize a merge, so the issue stayed in its pre-merge state, its
-  workspace was never cleaned up, and a warning repeated at every poll
-  for the life of the process. Sortie now reads the merge commit from
-  GitHub's GraphQL API and the transition lands on the first poll after
-  the merge. A GitHub token used with `merge_completion` must therefore
-  be able to read the GraphQL API; a token that cannot now fails the
-  read with a logged error and backoff instead of looping silently.
+- On GitHub, `reactions.merge_completion` never moved an issue to its terminal state after the pull request merged. The GitHub API version Sortie pins stopped reporting the merge commit the reaction uses to recognize a merge, so the issue stayed in its pre-merge state, its workspace was never cleaned up, and a warning repeated at every poll for the life of the process. Sortie now reads the merge commit from GitHub's GraphQL API and the transition lands on the first poll after the merge. A GitHub token used with `merge_completion` must therefore be able to read the GraphQL API; a token that cannot now fails the read with a logged error and backoff instead of looping silently.
   ([#775](https://github.com/sortie-ai/sortie/issues/775))
 
-- On Gitea, a pull request label event whose timestamp the forge
-  returned in an unreadable form silently skipped the `sortie:review`
-  and `sortie:fix` label commands. The unreadable value was substituted
-  with the epoch, which sorts ahead of every position the detector had
-  already recorded, so the command was passed over and its label left on
-  the pull request. The read now fails with a payload error and backs
-  off, which is what GitHub already did. A review comment's timestamp is
-  still tolerated, because it feeds only the review debounce window. And
-  because Gitea folds its review decision from each review's submission
-  time, a review that can change the verdict and carries an unreadable
-  timestamp now fails the precondition read rather than letting a
-  superseded approval outrank the changes-requested review that
-  supersedes it, so `reactions.auto_merge` defers instead of merging on
-  a misread verdict.
+- On Gitea, a pull request label event whose timestamp the forge returned in an unreadable form silently skipped the `sortie:review` and `sortie:fix` label commands. The unreadable value was substituted with the epoch, which sorts ahead of every position the detector had already recorded, so the command was passed over and its label left on the pull request. The read now fails with a payload error and backs off, which is what GitHub already did. A review comment's timestamp is still tolerated, because it feeds only the review debounce window. And because Gitea folds its review decision from each review's submission time, a review that can change the verdict and carries an unreadable timestamp now fails the precondition read rather than letting a superseded approval outrank the changes-requested review that supersedes it, so `reactions.auto_merge` defers instead of merging on a misread verdict.
   ([#798](https://github.com/sortie-ai/sortie/issues/798))
 
 ### Changed
 
-- `opencode` transport failures - a stdout read error, a session id
-  mismatch, or a timeout waiting for the first response - now report
-  `exit_reason=turn_failed` instead of `turn_ended_with_error`, which
-  no built-in coding agent reports any more. An alert or dashboard
-  filter on the old value must match on the error kind instead, which
-  already drew the same distinction.
+- `opencode` transport failures - a stdout read error, a session id mismatch, or a timeout waiting for the first response - now report `exit_reason=turn_failed` instead of `turn_ended_with_error`, which no built-in coding agent reports any more. An alert or dashboard filter on the old value must match on the error kind instead, which already drew the same distinction.
 
-- Turn failure text is now the same across every coding agent: a turn
-  that exits successfully having produced nothing reports `agent exited
-  without producing output`, and a non-zero exit reports `exit code N`.
-  An alert matching the previous `kiro` or `opencode` wording needs
-  updating.
+- Turn failure text is now the same across every coding agent: a turn that exits successfully having produced nothing reports `agent exited without producing output`, and a non-zero exit reports `exit code N`. An alert matching the previous `kiro` or `opencode` wording needs updating.
 
-- `run_history.turns_completed` no longer counts a turn that ended in
-  failure or cancellation on `opencode` and `codex`, so the column
-  means the same thing on every coding agent. Turn counts and mean
-  turns per run in `sortie stats` and on the dashboard drop for those
-  two agents at this release, with no change in behavior behind the
-  numbers.
+- `run_history.turns_completed` no longer counts a turn that ended in failure or cancellation on `opencode` and `codex`, so the column means the same thing on every coding agent. Turn counts and mean turns per run in `sortie stats` and on the dashboard drop for those two agents at this release, with no change in behavior behind the numbers.
 
-- The multi-label state WARN, logged when an issue carries more than
-  one configured active, terminal, or handoff label, now identifies the
-  issue with `issue_identifier` on every forge, replacing `issue_index`
-  on Gitea and `iid` on GitLab. GitHub now logs this WARN as well,
-  matching Gitea and GitLab. An operator's saved log filter on the old
-  attribute name needs updating.
+- The multi-label state WARN, logged when an issue carries more than one configured active, terminal, or handoff label, now identifies the issue with `issue_identifier` on every forge, replacing `issue_index` on Gitea and `iid` on GitLab. GitHub now logs this WARN as well, matching Gitea and GitLab. An operator's saved log filter on the old attribute name needs updating.
 
-- A source-control failure on GitHub or Gitea that is not a merge no
-  longer reports the `scm_conflict_error` category. A 405 or 409 from a
-  review read, a CI read, a label removal, or a branch delete now
-  reports `scm_api_error`; only a rejected merge reports a conflict. An
-  operator's alert on `scm_conflict_error` now fires on merges only.
+- A source-control failure on GitHub or Gitea that is not a merge no longer reports the `scm_conflict_error` category. A 405 or 409 from a review read, a CI read, a label removal, or a branch delete now reports `scm_api_error`; only a rejected merge reports a conflict. An operator's alert on `scm_conflict_error` now fires on merges only.
 
-- Release tags now carry a `v` prefix (`v1.19.0`). Every earlier version
-  was additionally tagged under its prefixed name against the same
-  commit, so the Go module proxy now publishes the full version list and
-  `go install github.com/sortie-ai/sortie/cmd/sortie@v1.18.0` resolves;
-  it previously published no versions at all, leaving the module
-  installable only at a pseudo-version. The install scripts for macOS,
-  Linux, and Windows take a pinned version with or without the prefix,
-  so an existing `SORTIE_VERSION=1.18.0` or `--version 1.18.0` still
-  selects that release.
+- Release tags now carry a `v` prefix (`v1.19.0`). Every earlier version was additionally tagged under its prefixed name against the same commit, so the Go module proxy now publishes the full version list and `go install github.com/sortie-ai/sortie/cmd/sortie@v1.18.0` resolves; it previously published no versions at all, leaving the module installable only at a pseudo-version. The install scripts for macOS, Linux, and Windows take a pinned version with or without the prefix, so an existing `SORTIE_VERSION=1.18.0` or `--version 1.18.0` still selects that release.
 
 ### Migrations
 
-- Add `tokens_measured INTEGER NOT NULL DEFAULT 1` to `run_history`;
-  pre-migration rows read back as measured, so a run recorded before the
-  upgrade that reported no token usage still counts as a genuine zero.
+- Add `tokens_measured INTEGER NOT NULL DEFAULT 1` to `run_history`; pre-migration rows read back as measured, so a run recorded before the upgrade that reported no token usage still counts as a genuine zero.
 
 ## [1.18.0] - 2026-08-09
 
 ### Added
 
-- `sortie stats` subcommand: summarizes how past runs went and what they
-  cost, opening the database read-only so it never blocks a running
-  orchestrator. `--format text|json` selects the output; `--since` and
-  `--until` bound the report by when a run finished, accepting an exact
-  timestamp, a `YYYY-MM-DD` date, or an age such as `24h`. The report
-  breaks runs down by outcome, by coding agent, by dispatch rule, and by
-  prompt template, with run counts, success rate, p50/p95/mean duration,
-  mean turns, and token totals for each. When the workflow configures
-  `token_rates`, USD cost is derived through the same formula and
-  renderers the dashboard uses, reported as total spend and as spend per
-  succeeded run; without `token_rates` the report shows token counts and
-  no cost figures rather than zeros. Against a database written by an
-  older binary the command still works: it reports the figures that
-  database can supply and warns which ones are missing, rather than
-  failing outright.
+- `sortie stats` subcommand: summarizes how past runs went and what they cost, opening the database read-only so it never blocks a running orchestrator. `--format text|json` selects the output; `--since` and `--until` bound the report by when a run finished, accepting an exact timestamp, a `YYYY-MM-DD` date, or an age such as `24h`. The report breaks runs down by outcome, by coding agent, by dispatch rule, and by prompt template, with run counts, success rate, p50/p95/mean duration, mean turns, and token totals for each. When the workflow configures `token_rates`, USD cost is derived through the same formula and renderers the dashboard uses, reported as total spend and as spend per succeeded run; without `token_rates` the report shows token counts and no cost figures rather than zeros. Against a database written by an older binary the command still works: it reports the figures that database can supply and warns which ones are missing, rather than failing outright.
   ([#274](https://github.com/sortie-ai/sortie/issues/274))
-- `workspace.retention_days`: an opt-in age bound that removes a swept
-  workspace whose latest recorded activity is older than the configured
-  window, independently of tracker state. Off by default (`0`); the
-  smallest permitted non-zero value is 30 days, matching the window
-  pending-reaction recovery honors after a restart, so a workspace the
-  bound removes is always one recovery would already treat as stale. The
-  periodic sweep now emits one summary record per pass, whether or not
-  it removed anything, reporting how many workspaces were excluded as
-  in-flight, removed as terminal, removed by age, retained inside the
-  window, retained for want of an activity record, or not yet evaluated.
+- `workspace.retention_days`: an opt-in age bound that removes a swept workspace whose latest recorded activity is older than the configured window, independently of tracker state. Off by default (`0`); the smallest permitted non-zero value is 30 days, matching the window pending-reaction recovery honors after a restart, so a workspace the bound removes is always one recovery would already treat as stale. The periodic sweep now emits one summary record per pass, whether or not it removed anything, reporting how many workspaces were excluded as in-flight, removed as terminal, removed by age, retained inside the window, retained for want of an activity record, or not yet evaluated.
   ([#706](https://github.com/sortie-ai/sortie/issues/706))
-- `reactions.merge_completion`: an opt-in, default-off reaction that
-  observes the merge of a Sortie-managed pull request, whether performed
-  by the orchestrator, by a human, or by a forge automation rule, and
-  transitions the linked issue to a single configured terminal state
-  exactly once. Requires `tracker.handoff_state` and a written
-  `tracker.terminal_states` list; `sortie validate` reports a
-  misconfigured target state, an unset prerequisite, or a poll interval
-  below the floor before a run begins.
+- `reactions.merge_completion`: an opt-in, default-off reaction that observes the merge of a Sortie-managed pull request, whether performed by the orchestrator, by a human, or by a forge automation rule, and transitions the linked issue to a single configured terminal state exactly once. Requires `tracker.handoff_state` and a written `tracker.terminal_states` list; `sortie validate` reports a misconfigured target state, an unset prerequisite, or a poll interval below the floor before a run begins.
   ([#707](https://github.com/sortie-ai/sortie/issues/707))
 
 ### Fixed
 
-- `reactions.ci_failure` and `reactions.review_comments` escalation now
-  clears only its own kind's pending entry, attempt counter, and
-  fingerprint instead of every reaction on the issue, so an unrelated
-  escalation no longer silently ends `reactions.merge_completion`
-  observation (or any other sibling reaction) for that issue.
+- `reactions.ci_failure` and `reactions.review_comments` escalation now clears only its own kind's pending entry, attempt counter, and fingerprint instead of every reaction on the issue, so an unrelated escalation no longer silently ends `reactions.merge_completion` observation (or any other sibling reaction) for that issue.
   ([#707](https://github.com/sortie-ai/sortie/issues/707))
-- An issue reaching a terminal tracker state now stops all of its
-  reaction polling immediately, including for a `sortie:review` or
-  `sortie:fix` label-command entry, which previously kept polling the
-  pull request's label journal for the life of the orchestrator process
-  even after the issue closed. This applies whether or not a worker is
-  still running for the issue, and it releases the issue for a fresh
-  dispatch as soon as it is reopened into an active state, rather than
-  after a pending retry happens to fire.
+- An issue reaching a terminal tracker state now stops all of its reaction polling immediately, including for a `sortie:review` or `sortie:fix` label-command entry, which previously kept polling the pull request's label journal for the life of the orchestrator process even after the issue closed. This applies whether or not a worker is still running for the issue, and it releases the issue for a fresh dispatch as soon as it is reopened into an active state, rather than after a pending retry happens to fire.
   ([#741](https://github.com/sortie-ai/sortie/issues/741))
-- An issue moved to a state in `tracker.terminal_states` while its worker
-  is finishing its last turn is no longer overwritten with
-  `tracker.handoff_state`. Cancelling a running task by relabelling the
-  issue took effect before only when a reconcile tick observed the new
-  state ahead of the worker exit; otherwise the exit applied the handoff
-  state from the state read at dispatch, leaving a closed, cancelled
-  issue marked as awaiting review. Sortie now decides from the freshest
-  state it has observed and re-reads the issue immediately before the
-  transition, and a terminal state suppresses the handoff transition, the
-  continuation retry, and every pending reaction for that run - so
-  `reactions.auto_merge` can no longer merge the pull request of an issue
-  the operator cancelled. The suppression is logged and counted on
-  `sortie_handoff_transitions_total{result="skipped"}`; a failed
-  pre-transition read proceeds with the handoff as before. The same
-  applies without `tracker.handoff_state` configured, where a terminal
-  state now ends the run instead of scheduling a continuation retry.
+- An issue moved to a state in `tracker.terminal_states` while its worker is finishing its last turn is no longer overwritten with `tracker.handoff_state`. Cancelling a running task by relabelling the issue took effect before only when a reconcile tick observed the new state ahead of the worker exit; otherwise the exit applied the handoff state from the state read at dispatch, leaving a closed, cancelled issue marked as awaiting review. Sortie now decides from the freshest state it has observed and re-reads the issue immediately before the transition, and a terminal state suppresses the handoff transition, the continuation retry, and every pending reaction for that run - so `reactions.auto_merge` can no longer merge the pull request of an issue the operator cancelled. The suppression is logged and counted on `sortie_handoff_transitions_total{result="skipped"}`; a failed pre-transition read proceeds with the handoff as before. The same applies without `tracker.handoff_state` configured, where a terminal state now ends the run instead of scheduling a continuation retry.
   ([#749](https://github.com/sortie-ai/sortie/issues/749))
 
 ### Changed
 
-- A terminal issue whose pull request still carries a pending
-  `sortie:review` or `sortie:fix` label-command entry is now cleaned up
-  by the periodic workspace sweep like any other terminal issue, instead
-  of being retained forever. This reaches every deployment on upgrade
-  without an opt-in: previously, a pending label-command entry excluded
-  its workspace from cleanup even after the linked issue reached a
-  terminal tracker state; the label-command detection loop is unaffected
-  by the change, since it reads nothing from the workspace directory.
+- A terminal issue whose pull request still carries a pending `sortie:review` or `sortie:fix` label-command entry is now cleaned up by the periodic workspace sweep like any other terminal issue, instead of being retained forever. This reaches every deployment on upgrade without an opt-in: previously, a pending label-command entry excluded its workspace from cleanup even after the linked issue reached a terminal tracker state; the label-command detection loop is unaffected by the change, since it reads nothing from the workspace directory.
   ([#706](https://github.com/sortie-ai/sortie/issues/706))
 
 ## [1.17.0] - 2026-08-06
 
 ### Added
 
-- GitLab tracker adapter: set `tracker.kind: gitlab` to run Sortie
-  against GitLab.com or a self-managed instance, with `tracker.project`
-  the target project as a `group/project` path or numeric project ID,
-  `tracker.api_key` a GitLab access token, and `tracker.endpoint` the
-  instance base URL (optional; defaults to `https://gitlab.com`, and
-  `/api/v4` is appended when absent). It runs the same autonomous
-  workflow as the Jira, GitHub, Linear, and Gitea adapters: candidate
-  polling, handoff transitions, lifecycle comments, and CI-failure
-  escalation labels. State is label-driven through `active_states`,
-  `terminal_states`, and `handoff_state`; a transition to a terminal
-  state closes the issue and a transition back to an active state
-  reopens it, escalation labels are attached without disturbing the
-  issue's other labels, and a state label the project does not yet hold
-  is created on first use. At startup the adapter checks the project and
-  reads its label catalog, so a bad token, a wrong project, or an
-  unreachable instance fails before the first poll. Because GitLab
-  issues carry no priority field and Community Edition has no blocking
-  relationship, `issue.priority` and `issue.blocked_by` are always empty
-  in prompt templates. `tracker.query_filter` takes a GitLab issue-list
-  query fragment (for example
-  `assignee_username=review-bot&labels=ready`, `not[...]` negation
-  included) to scope candidate polling to matching issues; the
-  adapter-owned keys `state`, `issue_type`, `order_by`, `sort`, `page`,
-  `per_page`, `pagination`, and `with_labels_details` are rejected, as
-  is any key GitLab's issue list does not support, so a typo fails at
-  startup instead of being silently ignored.
+- GitLab tracker adapter: set `tracker.kind: gitlab` to run Sortie against GitLab.com or a self-managed instance, with `tracker.project` the target project as a `group/project` path or numeric project ID, `tracker.api_key` a GitLab access token, and `tracker.endpoint` the instance base URL (optional; defaults to `https://gitlab.com`, and `/api/v4` is appended when absent). It runs the same autonomous workflow as the Jira, GitHub, Linear, and Gitea adapters: candidate polling, handoff transitions, lifecycle comments, and CI-failure escalation labels. State is label-driven through `active_states`, `terminal_states`, and `handoff_state`; a transition to a terminal state closes the issue and a transition back to an active state reopens it, escalation labels are attached without disturbing the issue's other labels, and a state label the project does not yet hold is created on first use. At startup the adapter checks the project and reads its label catalog, so a bad token, a wrong project, or an unreachable instance fails before the first poll. Because GitLab issues carry no priority field and Community Edition has no blocking relationship, `issue.priority` and `issue.blocked_by` are always empty in prompt templates. `tracker.query_filter` takes a GitLab issue-list query fragment (for example `assignee_username=review-bot&labels=ready`, `not[...]` negation included) to scope candidate polling to matching issues; the adapter-owned keys `state`, `issue_type`, `order_by`, `sort`, `page`, `per_page`, `pagination`, and `with_labels_details` are rejected, as is any key GitLab's issue list does not support, so a typo fails at startup instead of being silently ignored.
   ([#676](https://github.com/sortie-ai/sortie/issues/676),
   [#677](https://github.com/sortie-ai/sortie/issues/677),
   [#679](https://github.com/sortie-ai/sortie/issues/679))
-- `sortie validate` GitLab adapter config validation: emits offline
-  diagnostics for `tracker.kind: gitlab` covering `tracker.endpoint` URL
-  shape (flagging a cleartext `http` scheme and a base URL that already
-  ends in `/api/v4`), `tracker.project` as a `group/project` path or a
-  numeric project ID, a `$SORTIE_GITLAB_TOKEN` environment-variable
-  hint, `tracker.query_filter` syntax and adapter-owned keys, and empty,
-  untrimmed, or overlapping active/terminal state labels. Errors block
-  dispatch; warnings are advisory.
+- `sortie validate` GitLab adapter config validation: emits offline diagnostics for `tracker.kind: gitlab` covering `tracker.endpoint` URL shape (flagging a cleartext `http` scheme and a base URL that already ends in `/api/v4`), `tracker.project` as a `group/project` path or a numeric project ID, a `$SORTIE_GITLAB_TOKEN` environment-variable hint, `tracker.query_filter` syntax and adapter-owned keys, and empty, untrimmed, or overlapping active/terminal state labels. Errors block dispatch; warnings are advisory.
   ([#678](https://github.com/sortie-ai/sortie/issues/678))
 
 ## [1.16.1] - 2026-08-03
 
 ### Fixed
 
-- `sortie validate` no longer reports `unknown template variable` for the
-  reaction continuation variables (`ci_failure`, `review_comments`,
-  `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`). A
-  mistyped sub-field of one of them is now reported as an unknown field with
-  the valid field list, and a reference to one of them from inside a
-  `{{ range }}` or `{{ with }}` body is now reported as dot-context misuse.
+- `sortie validate` no longer reports `unknown template variable` for the reaction continuation variables (`ci_failure`, `review_comments`, `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`). A mistyped sub-field of one of them is now reported as an unknown field with the valid field list, and a reference to one of them from inside a `{{ range }}` or `{{ with }}` body is now reported as dot-context misuse.
   ([#696](https://github.com/sortie-ai/sortie/issues/696))
-- `sortie validate` and startup now reject a `tracker.handoff_state` or
-  `tracker.in_progress_state` that collides with the tracker adapter's own
-  fallback state list when the matching workflow list is empty. Leaving
-  `tracker.active_states` or `tracker.terminal_states` out no longer hides the
-  collision, so a workflow that passed validation before this release can now
-  fail: either write the list out or pick a state outside the adapter's
-  fallback. ([#695](https://github.com/sortie-ai/sortie/issues/695))
+- `sortie validate` and startup now reject a `tracker.handoff_state` or `tracker.in_progress_state` that collides with the tracker adapter's own fallback state list when the matching workflow list is empty. Leaving `tracker.active_states` or `tracker.terminal_states` out no longer hides the collision, so a workflow that passed validation before this release can now fail: either write the list out or pick a state outside the adapter's fallback.
+  ([#695](https://github.com/sortie-ai/sortie/issues/695))
 
 ## [1.16.0] - 2026-07-19
 
 ### Added
 
-- Gitea SCM provider: Sortie's pull-request automation now runs against a
-  self-hosted Gitea instance (Forgejo and Codeberg included), at parity with
-  the GitHub SCM provider. Set `provider: gitea` on a `reactions.auto_merge`,
-  `reactions.review_comments`, `reactions.bot_review`,
-  `reactions.merge_conflicts`, `reactions.ci_failure`, or
-  `reactions.label_commands` block to drive it through Gitea: Sortie routes
-  human and bot review comments back into the agent session, reacts to merge
-  conflicts, to a failing CI run on an agent's pull request (surfacing an
-  excerpt of the first failing check when available), and to the
-  `sortie:review` / `sortie:fix` label commands, and, with
-  `reactions.auto_merge`, merges an approved pull request once its review
-  decision, CI status, and mergeability satisfy the configured preconditions
-  (sending the expected head SHA so a moved head aborts the merge rather than
-  merging stale work) and deletes the merged branch. Auto-merge on Gitea
-  requires the configured token's user to hold repository write access; a
-  token that cannot push is reported at startup.
+- Gitea SCM provider: Sortie's pull-request automation now runs against a self-hosted Gitea instance (Forgejo and Codeberg included), at parity with the GitHub SCM provider. Set `provider: gitea` on a `reactions.auto_merge`, `reactions.review_comments`, `reactions.bot_review`, `reactions.merge_conflicts`, `reactions.ci_failure`, or `reactions.label_commands` block to drive it through Gitea: Sortie routes human and bot review comments back into the agent session, reacts to merge conflicts, to a failing CI run on an agent's pull request (surfacing an excerpt of the first failing check when available), and to the `sortie:review` / `sortie:fix` label commands, and, with `reactions.auto_merge`, merges an approved pull request once its review decision, CI status, and mergeability satisfy the configured preconditions (sending the expected head SHA so a moved head aborts the merge rather than merging stale work) and deletes the merged branch. Auto-merge on Gitea requires the configured token's user to hold repository write access; a token that cannot push is reported at startup.
   ([#656](https://github.com/sortie-ai/sortie/issues/656),
   [#657](https://github.com/sortie-ai/sortie/issues/657),
   [#658](https://github.com/sortie-ai/sortie/issues/658))
-- `sortie validate` reaction and CI feedback checks: before dispatch,
-  `sortie validate` now reports a reaction or `ci_feedback` block that
-  names an SCM or CI provider Sortie does not recognize, active reactions
-  that disagree on the SCM provider, a `bot_review` `bot_usernames`
-  allowlist that is not a list of names, and an `auto_merge` `strategy`
-  that is not `merge`, `squash`, or `rebase`. These faults block dispatch,
-  and apply to every SCM provider including the new Gitea one.
+- `sortie validate` reaction and CI feedback checks: before dispatch, `sortie validate` now reports a reaction or `ci_feedback` block that names an SCM or CI provider Sortie does not recognize, active reactions that disagree on the SCM provider, a `bot_review` `bot_usernames` allowlist that is not a list of names, and an `auto_merge` `strategy` that is not `merge`, `squash`, or `rebase`. These faults block dispatch, and apply to every SCM provider including the new Gitea one.
   ([#659](https://github.com/sortie-ai/sortie/issues/659))
 
 ## [1.15.0] - 2026-07-16
 
 ### Added
 
-- Gitea tracker adapter: set `tracker.kind: gitea` to run Sortie against a
-  self-hosted Gitea instance (Forgejo and Codeberg included), with
-  `tracker.endpoint` the instance URL (required; there is no default
-  host), `tracker.api_key` a Gitea access token, and `tracker.project` the
-  target `owner/repo`. It runs the same autonomous workflow as the Jira,
-  GitHub, and Linear adapters: candidate polling, handoff transitions,
-  lifecycle comments, and CI-failure escalation labels. State is
-  label-driven through `active_states`, `terminal_states`, and
-  `handoff_state`; a terminal transition closes the issue and an active
-  transition reopens it, and any missing state or escalation label is
-  created in the repository on demand. `tracker.query_filter` takes a Gitea
-  issue-list query fragment (for example
-  `assigned_by=review-bot&labels=ready`) to scope candidate polling to
-  matching issues; the adapter-owned keys `state`, `type`, `page`, and
-  `limit` are rejected.
+- Gitea tracker adapter: set `tracker.kind: gitea` to run Sortie against a self-hosted Gitea instance (Forgejo and Codeberg included), with `tracker.endpoint` the instance URL (required; there is no default host), `tracker.api_key` a Gitea access token, and `tracker.project` the target `owner/repo`. It runs the same autonomous workflow as the Jira, GitHub, and Linear adapters: candidate polling, handoff transitions, lifecycle comments, and CI-failure escalation labels. State is label-driven through `active_states`, `terminal_states`, and `handoff_state`; a terminal transition closes the issue and an active transition reopens it, and any missing state or escalation label is created in the repository on demand. `tracker.query_filter` takes a Gitea issue-list query fragment (for example `assigned_by=review-bot&labels=ready`) to scope candidate polling to matching issues; the adapter-owned keys `state`, `type`, `page`, and `limit` are rejected.
   ([#629](https://github.com/sortie-ai/sortie/issues/629),
   [#630](https://github.com/sortie-ai/sortie/issues/630),
   [#632](https://github.com/sortie-ai/sortie/issues/632))
-- `sortie validate` Gitea adapter config validation: emits offline
-  diagnostics for `tracker.kind: gitea` covering `tracker.endpoint`
-  presence and URL shape (required for a self-hosted instance, which has
-  no default host to fall back on), `tracker.project` as `owner/repo`, a
-  `$SORTIE_GITEA_TOKEN` environment-variable hint, empty state labels,
-  and active/terminal state overlap. Errors block dispatch; warnings are
-  advisory.
+- `sortie validate` Gitea adapter config validation: emits offline diagnostics for `tracker.kind: gitea` covering `tracker.endpoint` presence and URL shape (required for a self-hosted instance, which has no default host to fall back on), `tracker.project` as `owner/repo`, a `$SORTIE_GITEA_TOKEN` environment-variable hint, empty state labels, and active/terminal state overlap. Errors block dispatch; warnings are advisory.
   ([#631](https://github.com/sortie-ai/sortie/issues/631))
 
 ## [1.14.1] - 2026-07-13
 
 ### Fixed
 
-- Failing lifecycle hooks (`after_create`, `before_run`, `after_run`,
-  `before_remove`) now log their captured stdout and stderr in a
-  `hook_output` attribute on the failure WARN record, so the output is
-  visible at the default log level without enabling debug; previously
-  the output was discarded and a failed hook, such as a `git clone` in
-  `after_create`, could not be diagnosed from the logs even at
-  `--log-level debug`. A hook that succeeds while printing output logs
-  it at debug level on a `hook completed` record. `hook_output` keeps
-  the last 8 KiB of output and starts with a truncation marker when
-  longer.
+- Failing lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`) now log their captured stdout and stderr in a `hook_output` attribute on the failure WARN record, so the output is visible at the default log level without enabling debug; previously the output was discarded and a failed hook, such as a `git clone` in `after_create`, could not be diagnosed from the logs even at `--log-level debug`. A hook that succeeds while printing output logs it at debug level on a `hook completed` record. `hook_output` keeps the last 8 KiB of output and starts with a truncation marker when longer.
   ([#643](https://github.com/sortie-ai/sortie/issues/643))
 
 ## [1.14.0] - 2026-07-11
 
 ### Added
 
-- Bot-review reaction kind: review-bot comments (linters, static
-  analyzers, security scanners, and AI reviewers) on a Sortie-created
-  pull request are now detected and routed back into the agent session
-  as continuation turns, separately from human review comments.
-  Configure it with a `reactions.bot_review` block in WORKFLOW.md, where
-  `provider` activates the kind, `bot_usernames` allowlists bot logins,
-  and `max_continuation_turns`, `poll_interval_ms`, and `escalation`
-  tune the retry budget, poll cadence, and handoff. A comment is
-  classified as bot-authored by its platform author type or the
-  allowlist, never by its content; bot comments dispatch immediately
-  with no debounce window and own an independent retry budget,
-  fingerprint, and escalation, so the bot-review and human-review kinds
-  never interfere on the same pull request.
+- Bot-review reaction kind: review-bot comments (linters, static analyzers, security scanners, and AI reviewers) on a Sortie-created pull request are now detected and routed back into the agent session as continuation turns, separately from human review comments. Configure it with a `reactions.bot_review` block in WORKFLOW.md, where `provider` activates the kind, `bot_usernames` allowlists bot logins, and `max_continuation_turns`, `poll_interval_ms`, and `escalation` tune the retry budget, poll cadence, and handoff. A comment is classified as bot-authored by its platform author type or the allowlist, never by its content; bot comments dispatch immediately with no debounce window and own an independent retry budget, fingerprint, and escalation, so the bot-review and human-review kinds never interfere on the same pull request.
   ([#415](https://github.com/sortie-ai/sortie/issues/415))
 
-- Merge-conflict reaction kind: the orchestrator now polls mergeability
-  of each open Sortie-managed pull request per reconcile cycle and, on a
-  no-conflict-to-conflict transition, dispatches a single continuation
-  turn that rebases the PR branch onto its base and resolves the
-  conflicts on the existing workspace. Configure it with a
-  `reactions.merge_conflicts` block in WORKFLOW.md, where `provider`
-  activates the kind and `max_retries`, `poll_interval_ms`, and
-  `escalation` tune the retry budget, poll cadence, and handoff; the
-  retry budget defaults lower than other reaction kinds because conflict
-  resolution rarely succeeds on retry. Tracking is episodic: resolving a
-  conflict resets the budget, so a later independent conflict gets a
-  fresh attempt rather than immediate escalation.
+- Merge-conflict reaction kind: the orchestrator now polls mergeability of each open Sortie-managed pull request per reconcile cycle and, on a no-conflict-to-conflict transition, dispatches a single continuation turn that rebases the PR branch onto its base and resolves the conflicts on the existing workspace. Configure it with a `reactions.merge_conflicts` block in WORKFLOW.md, where `provider` activates the kind and `max_retries`, `poll_interval_ms`, and `escalation` tune the retry budget, poll cadence, and handoff; the retry budget defaults lower than other reaction kinds because conflict resolution rarely succeeds on retry. Tracking is episodic: resolving a conflict resets the budget, so a later independent conflict gets a fresh attempt rather than immediate escalation.
   ([#416](https://github.com/sortie-ai/sortie/issues/416))
 
-- PR label commands: apply a label to a Sortie-managed pull request to
-  trigger an agent action on it. Two commands share a
-  `reactions.label_commands` block in WORKFLOW.md. Applying `sortie:review`
-  (the `review_label`) runs a read-only session that posts review comments
-  and changes no code; applying `sortie:fix` (the `fix_label`) runs a
-  session that checks out the PR branch, addresses the outstanding review
-  comments, pushes the fixes, and posts a summary comment. `provider`
-  activates the feature (for example `provider: github`); both labels
-  default to their `sortie:` names and are active once `provider` is set,
-  so disable either command by setting its label to `""`.
-  `poll_interval_ms` (default 60000, minimum 30000) sets how often the
-  labels are checked. Sortie removes the label once it accepts the
-  command, so re-applying it after the run finishes starts a new one. The
-  operator creates the labels (Sortie never creates them) and adds the
-  matching `{{ if .label_review }}` or `{{ if .label_fix }}` branch to the
-  prompt template.
+- PR label commands: apply a label to a Sortie-managed pull request to trigger an agent action on it. Two commands share a `reactions.label_commands` block in WORKFLOW.md. Applying `sortie:review` (the `review_label`) runs a read-only session that posts review comments and changes no code; applying `sortie:fix` (the `fix_label`) runs a session that checks out the PR branch, addresses the outstanding review comments, pushes the fixes, and posts a summary comment. `provider` activates the feature (for example `provider: github`); both labels default to their `sortie:` names and are active once `provider` is set, so disable either command by setting its label to `""`. `poll_interval_ms` (default 60000, minimum 30000) sets how often the labels are checked. Sortie removes the label once it accepts the command, so re-applying it after the run finishes starts a new one. The operator creates the labels (Sortie never creates them) and adds the matching `{{ if .label_review }}` or `{{ if .label_fix }}` branch to the prompt template.
   ([#584](https://github.com/sortie-ai/sortie/issues/584),
   [#585](https://github.com/sortie-ai/sortie/issues/585))
 
 ### Changed
 
-- Homebrew installs now use `brew install --cask sortie-ai/tap/sortie`.
-  The tap distributes a Homebrew cask covering both macOS and Linux,
-  replacing the previous formula.
+- Homebrew installs now use `brew install --cask sortie-ai/tap/sortie`. The tap distributes a Homebrew cask covering both macOS and Linux, replacing the previous formula.
   ([#613](https://github.com/sortie-ai/sortie/issues/613))
 
 ## [1.13.0] - 2026-06-15
 
 ### Added
 
-- Linear tracker adapter: configure with `tracker.kind: linear` and
-  `tracker.project` set to a Linear team key (the prefix in identifiers
-  such as `ABC-123`). The adapter speaks Linear's GraphQL API over a
-  single endpoint and authenticates with a personal API key,
-  validating the key against the workspace at construction time. It
-  implements the full `TrackerAdapter` interface: cursor-paginated
-  candidate fetch, issue and comment retrieval, and state reconciliation
-  on the read path; `TransitionIssue`, `CommentIssue`, and `AddLabel` on
-  the write path, so a Linear-backed deployment performs handoff
-  transitions, posts lifecycle comments, and attaches escalation labels
-  on par with the Jira and GitHub adapters. Workflow states are mapped
-  by display name, matched case-insensitively and verified against the
-  team at startup, rather than by Linear's immutable state `type`.
-  `tracker.query_filter` accepts a Linear `IssueFilter` JSON fragment
-  merged with the adapter-owned team and state constraints; a top-level
-  `team` or `state` key is reserved and rejected. Linear returns
-  application errors inside HTTP 200 bodies, so the adapter classifies
-  the response body before any HTTP-status check; the request rate limit
-  is read from response headers rather than hardcoded. Ships with an
-  `examples/WORKFLOW.linear.md` sample workflow.
+- Linear tracker adapter: configure with `tracker.kind: linear` and `tracker.project` set to a Linear team key (the prefix in identifiers such as `ABC-123`). The adapter speaks Linear's GraphQL API over a single endpoint and authenticates with a personal API key, validating the key against the workspace at construction time. It implements the full `TrackerAdapter` interface: cursor-paginated candidate fetch, issue and comment retrieval, and state reconciliation on the read path; `TransitionIssue`, `CommentIssue`, and `AddLabel` on the write path, so a Linear-backed deployment performs handoff transitions, posts lifecycle comments, and attaches escalation labels on par with the Jira and GitHub adapters. Workflow states are mapped by display name, matched case-insensitively and verified against the team at startup, rather than by Linear's immutable state `type`. `tracker.query_filter` accepts a Linear `IssueFilter` JSON fragment merged with the adapter-owned team and state constraints; a top-level `team` or `state` key is reserved and rejected. Linear returns application errors inside HTTP 200 bodies, so the adapter classifies the response body before any HTTP-status check; the request rate limit is read from response headers rather than hardcoded. Ships with an `examples/WORKFLOW.linear.md` sample workflow.
   ([#237](https://github.com/sortie-ai/sortie/issues/237),
   [#589](https://github.com/sortie-ai/sortie/issues/589),
   [#599](https://github.com/sortie-ai/sortie/issues/599),
   [#593](https://github.com/sortie-ai/sortie/issues/593))
-- `sortie validate` Linear adapter config validation: emits offline
-  diagnostics for `tracker.kind: linear` covering `tracker.project` as a
-  Linear team key, a `$SORTIE_LINEAR_API_KEY` environment-variable hint,
-  empty state labels, and active/terminal state overlap, matching the
-  checks already provided for the Jira and GitHub adapters. Errors block
-  dispatch; warnings are advisory.
+- `sortie validate` Linear adapter config validation: emits offline diagnostics for `tracker.kind: linear` covering `tracker.project` as a Linear team key, a `$SORTIE_LINEAR_API_KEY` environment-variable hint, empty state labels, and active/terminal state overlap, matching the checks already provided for the Jira and GitHub adapters. Errors block dispatch; warnings are advisory.
   ([#590](https://github.com/sortie-ai/sortie/issues/590))
 
 ## [1.12.0] - 2026-06-12
 
 ### Added
 
-- `cost_budget` agent tool with per-issue token budget enforcement: a
-  new Tier 1 MCP tool reports cumulative token spend and remaining
-  budget for the current issue so an agent can adjust strategy - skip
-  expensive work, return a partial result, or hand off - before hitting
-  a ceiling. It reads cumulative totals from `run_history` in read-only
-  mode and returns the standard `{"success": true, "data": ...}`
-  envelope. A companion hard ceiling, the new optional `agent.max_tokens`
-  field (sibling to `agent.max_sessions`, default `0` for unlimited),
-  blocks dispatch at preflight once an issue's cumulative token spend is
-  exhausted; when the session and token budgets are exceeded on the same
-  evaluation, the token reason takes precedence in the recorded
-  budget-exhaustion state. `cost_budget` calls are counted on
-  `sortie_tool_calls_total`.
+- `cost_budget` agent tool with per-issue token budget enforcement: a new Tier 1 MCP tool reports cumulative token spend and remaining budget for the current issue so an agent can adjust strategy - skip expensive work, return a partial result, or hand off - before hitting a ceiling. It reads cumulative totals from `run_history` in read-only mode and returns the standard `{"success": true, "data": ...}` envelope. A companion hard ceiling, the new optional `agent.max_tokens` field (sibling to `agent.max_sessions`, default `0` for unlimited), blocks dispatch at preflight once an issue's cumulative token spend is exhausted; when the session and token budgets are exceeded on the same evaluation, the token reason takes precedence in the recorded budget-exhaustion state. `cost_budget` calls are counted on `sortie_tool_calls_total`.
   ([#240](https://github.com/sortie-ai/sortie/issues/240))
-- `notify_operator` agent tool: a new Tier 2 MCP tool lets an agent send
-  real-time notifications to operator-configured channels during a
-  session - to escalate a decision, report progress on a long-running
-  task, or flag a blocker - without terminating the session. Version 1
-  ships Slack and generic-webhook backends, configured under a new
-  optional top-level `notifications` block in `WORKFLOW.md`, with
-  per-session volume bounded by `max_per_session`. Backend secrets must
-  use the `$SORTIE_`-prefixed environment indirection or they stay
-  invisible to the sidecar process. Envelope fields (issue, session,
-  attempt, agent kind) are injected by the orchestrator and cannot be
-  forged by the agent, and error paths never echo the endpoint URL or
-  payload. Registration is all-or-nothing: an invalid backend config
-  fails sidecar startup rather than partially registering, so the prompt
-  advertisement and `tools/list` always agree. When no backend is
-  configured the tool is not registered.
+- `notify_operator` agent tool: a new Tier 2 MCP tool lets an agent send real-time notifications to operator-configured channels during a session - to escalate a decision, report progress on a long-running task, or flag a blocker - without terminating the session. Version 1 ships Slack and generic-webhook backends, configured under a new optional top-level `notifications` block in `WORKFLOW.md`, with per-session volume bounded by `max_per_session`. Backend secrets must use the `$SORTIE_`-prefixed environment indirection or they stay invisible to the sidecar process. Envelope fields (issue, session, attempt, agent kind) are injected by the orchestrator and cannot be forged by the agent, and error paths never echo the endpoint URL or payload. Registration is all-or-nothing: an invalid backend config fails sidecar startup rather than partially registering, so the prompt advertisement and `tools/list` always agree. When no backend is configured the tool is not registered.
   ([#242](https://github.com/sortie-ai/sortie/issues/242))
-- Jira adapter: Jira Server and Data Center support via a new optional
-  `tracker.api_version` field. The default `"3"` targets Jira Cloud
-  (REST v3) and leaves existing configurations unchanged; `"2"` targets
-  Server / Data Center (REST v2), switching to `/rest/api/2` endpoints,
-  offset-based search pagination, and raw issue and comment bodies in
-  Jira wiki markup (the v3 ADF-to-text flattening does not run on v2, so
-  descriptions reach prompts as markup rather than plain text). On v2 the
-  `api_key` shape selects authentication: a colon-free value is sent as a
-  Personal Access Token (`Authorization: Bearer`), while a `user:password`
-  value uses HTTP Basic; Cloud v3 continues to use Basic `email:token`.
-  Comment creation posts a raw `{"body": ...}` payload on v2 instead of an
-  ADF document. A construction-time guard rejects inconsistent
-  configuration at startup: a Cloud (`*.atlassian.net`) endpoint combined
-  with `api_version: 2`, or an endpoint that is not a URL with a scheme and
-  host; it also warns when a self-hosted endpoint is left on the default
-  v3. A bare YAML integer (`api_version: 2`) is coerced rather than treated
-  as absent, though `sortie validate` still advises quoting it.
+- Jira adapter: Jira Server and Data Center support via a new optional `tracker.api_version` field. The default `"3"` targets Jira Cloud (REST v3) and leaves existing configurations unchanged; `"2"` targets Server / Data Center (REST v2), switching to `/rest/api/2` endpoints, offset-based search pagination, and raw issue and comment bodies in Jira wiki markup (the v3 ADF-to-text flattening does not run on v2, so descriptions reach prompts as markup rather than plain text). On v2 the `api_key` shape selects authentication: a colon-free value is sent as a Personal Access Token (`Authorization: Bearer`), while a `user:password` value uses HTTP Basic; Cloud v3 continues to use Basic `email:token`. Comment creation posts a raw `{"body": ...}` payload on v2 instead of an ADF document. A construction-time guard rejects inconsistent configuration at startup: a Cloud (`*.atlassian.net`) endpoint combined with `api_version: 2`, or an endpoint that is not a URL with a scheme and host; it also warns when a self-hosted endpoint is left on the default v3. A bare YAML integer (`api_version: 2`) is coerced rather than treated as absent, though `sortie validate` still advises quoting it.
   ([#549](https://github.com/sortie-ai/sortie/issues/549))
 
 ### Changed
 
-- Agent tools: the built-in tools now share one uniform result
-  envelope - `{"success": true, "data": <payload>}` on success and
-  `{"success": false, "error": {"kind": "...", "message": "..."}}` on a
-  domain failure. For operators upgrading, this changes the result shape
-  of the two pre-existing Tier 1 tools: `sortie_status` and
-  `workspace_history` previously returned a bare success object and a
-  flat `{"error": "message"}` failure, and now nest their payload under
-  `data` and report failures with a closed `error.kind`
-  (`state_unavailable` / `state_malformed` for `sortie_status`,
-  `query_failed` for `workspace_history`). `tracker_api`'s output is
-  unchanged, and the new `cost_budget` and `notify_operator` tools adopt
-  the envelope natively. Agent prompts or downstream consumers that
-  parsed the previous bare or flat shapes must now read the payload under
-  `data` and read failures as `error.kind` and `error.message`.
+- Agent tools: the built-in tools now share one uniform result envelope - `{"success": true, "data": <payload>}` on success and `{"success": false, "error": {"kind": "...", "message": "..."}}` on a domain failure. For operators upgrading, this changes the result shape of the two pre-existing Tier 1 tools: `sortie_status` and `workspace_history` previously returned a bare success object and a flat `{"error": "message"}` failure, and now nest their payload under `data` and report failures with a closed `error.kind` (`state_unavailable` / `state_malformed` for `sortie_status`, `query_failed` for `workspace_history`). `tracker_api`'s output is unchanged, and the new `cost_budget` and `notify_operator` tools adopt the envelope natively. Agent prompts or downstream consumers that parsed the previous bare or flat shapes must now read the payload under `data` and read failures as `error.kind` and `error.message`.
   ([#567](https://github.com/sortie-ai/sortie/issues/567))
 
 ### Fixed
 
-- OpenCode adapter: restore the actionable "model not found" diagnostic
-  on invalid-model turns. OpenCode 1.16.0 replaced its per-run
-  unknown-model error with a generic masked server error, so a turn
-  configured with a model absent from the catalog failed with no
-  actionable detail. The adapter now detects the masked placeholder,
-  queries `opencode models`, and emits a "model not found" turn failure
-  when the configured model is missing - including over SSH, reusing the
-  existing remote-command path.
+- OpenCode adapter: restore the actionable "model not found" diagnostic on invalid-model turns. OpenCode 1.16.0 replaced its per-run unknown-model error with a generic masked server error, so a turn configured with a model absent from the catalog failed with no actionable detail. The adapter now detects the masked placeholder, queries `opencode models`, and emits a "model not found" turn failure when the configured model is missing - including over SSH, reusing the existing remote-command path.
   ([#562](https://github.com/sortie-ai/sortie/issues/562))
-- Agent tool advertisement: the first-turn prompt now lists the same
-  tools the MCP server serves for the session. Previously the prompt
-  advertised only `tracker_api` while the sidecar also served the Tier 1
-  `sortie_status` and `workspace_history` tools, so an agent that relied
-  on the prompt for tool discovery was never told those tools existed.
-  The orchestrator worker and the MCP sidecar now build the session tool
-  set through a single shared path, keeping the advertised set and the
-  MCP `tools/list` response identical.
+- Agent tool advertisement: the first-turn prompt now lists the same tools the MCP server serves for the session. Previously the prompt advertised only `tracker_api` while the sidecar also served the Tier 1 `sortie_status` and `workspace_history` tools, so an agent that relied on the prompt for tool discovery was never told those tools existed. The orchestrator worker and the MCP sidecar now build the session tool set through a single shared path, keeping the advertised set and the MCP `tools/list` response identical.
   ([#565](https://github.com/sortie-ai/sortie/issues/565))
-- Windows: workspace hook cleanup no longer fails with a sharing
-  violation when a hook spawns child processes. `TerminateJobObject` and
-  `KILL_ON_JOB_CLOSE` can return before dying descendants release their
-  handles, so a child still holding the hook working directory open made
-  the caller's cleanup fail. `RunHook` now terminates any survivors and
-  polls the Job Object until its active-process count reaches zero
-  (2-second cap) before returning.
-  ([PR #575](https://github.com/sortie-ai/sortie/pull/575))
+- Windows: workspace hook cleanup no longer fails with a sharing violation when a hook spawns child processes. `TerminateJobObject` and `KILL_ON_JOB_CLOSE` can return before dying descendants release their handles, so a child still holding the hook working directory open made the caller's cleanup fail. `RunHook` now terminates any survivors and polls the Job Object until its active-process count reaches zero (2-second cap) before returning. ([PR #575](https://github.com/sortie-ai/sortie/pull/575))
 
 ### Migrations
 
-- Add token-accounting columns (`input_tokens`, `output_tokens`,
-  `total_tokens`, `cache_read_tokens`) to `run_history` as
-  `NOT NULL DEFAULT 0`; pre-migration rows read back as zero.
+- Add token-accounting columns (`input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`) to `run_history` as `NOT NULL DEFAULT 0`; pre-migration rows read back as zero.
 
 ## [1.11.0] - 2026-05-29
 
 ### Added
 
-- Kiro CLI agent adapter: configure with `agent.kind: kiro` for
-  autonomous issue-to-code workflows using the Kiro CLI via
-  `kiro-cli chat --no-interactive`, following the subprocess-per-turn
-  model of the `claude-code` and `copilot-cli` adapters. Kiro headless
-  mode emits no structured event stream and no token counts, so turn
-  outcome is classified from process exit status and stderr: the
-  `▸ Credits:` cost trailer marks success, an `Authentication failed.`
-  line on a bare exit 0 marks failure, and signal exits map to
-  cancellation. `StartSession` requires `KIRO_API_KEY` and validates it
-  up front to avoid the silent device-login hang an invalid key would
-  otherwise trigger. The model is pinned per turn with `--model`,
-  continuation turns resume the workspace conversation with `--resume`,
-  and a `kiro` passthrough config block exposes the model selector, the
-  tool-trust mode (`--trust-tools` / `--trust-all-tools`), and an
-  optional `--agent` selector. Because the headless path reports no
-  tokens, only time-based budget enforcement applies and no
-  `token_usage` events are emitted; MCP tool injection is unavailable on
-  the `KIRO_API_KEY` path. `sortie validate` accepts `agent.kind: kiro`
-  and flags unknown `kiro` subkeys. Ships with a companion
-  `examples/docker/kiro.Dockerfile` (a glibc Debian base, since
-  `kiro-cli` is dynamically linked) and an `examples/WORKFLOW.kiro.md`
-  sample workflow.
+- Kiro CLI agent adapter: configure with `agent.kind: kiro` for autonomous issue-to-code workflows using the Kiro CLI via `kiro-cli chat --no-interactive`, following the subprocess-per-turn model of the `claude-code` and `copilot-cli` adapters. Kiro headless mode emits no structured event stream and no token counts, so turn outcome is classified from process exit status and stderr: the `▸ Credits:` cost trailer marks success, an `Authentication failed.` line on a bare exit 0 marks failure, and signal exits map to cancellation. `StartSession` requires `KIRO_API_KEY` and validates it up front to avoid the silent device-login hang an invalid key would otherwise trigger. The model is pinned per turn with `--model`, continuation turns resume the workspace conversation with `--resume`, and a `kiro` passthrough config block exposes the model selector, the tool-trust mode (`--trust-tools` / `--trust-all-tools`), and an optional `--agent` selector. Because the headless path reports no tokens, only time-based budget enforcement applies and no `token_usage` events are emitted; MCP tool injection is unavailable on the `KIRO_API_KEY` path. `sortie validate` accepts `agent.kind: kiro` and flags unknown `kiro` subkeys. Ships with a companion `examples/docker/kiro.Dockerfile` (a glibc Debian base, since `kiro-cli` is dynamically linked) and an `examples/WORKFLOW.kiro.md` sample workflow.
   ([#515](https://github.com/sortie-ai/sortie/issues/515),
   [#517](https://github.com/sortie-ai/sortie/issues/517))
-- `install.ps1` PowerShell installer for Windows: install with the
-  one-liner `irm 'https://get.sortie-ai.com/install.ps1' | iex`,
-  mirroring the POSIX `install.sh`. Detects architecture, resolves the
-  release tag (honoring `SORTIE_VERSION` when set), downloads the
-  matching `sortie_<version>_windows_<arch>.zip`, verifies its SHA-256
-  against `checksums.txt` (skippable with `SORTIE_NO_VERIFY=1`),
-  installs to `%LOCALAPPDATA%\Programs\sortie` by default (override with
-  `SORTIE_INSTALL_DIR`), and appends the install directory to the
-  User-scope `PATH`. Compatible with Windows PowerShell 5.1 and
-  PowerShell 7+, depends only on built-in cmdlets, and forces TLS 1.2.
+- `install.ps1` PowerShell installer for Windows: install with the one-liner `irm 'https://get.sortie-ai.com/install.ps1' | iex`, mirroring the POSIX `install.sh`. Detects architecture, resolves the release tag (honoring `SORTIE_VERSION` when set), downloads the matching `sortie_<version>_windows_<arch>.zip`, verifies its SHA-256 against `checksums.txt` (skippable with `SORTIE_NO_VERIFY=1`), installs to `%LOCALAPPDATA%\Programs\sortie` by default (override with `SORTIE_INSTALL_DIR`), and appends the install directory to the User-scope `PATH`. Compatible with Windows PowerShell 5.1 and PowerShell 7+, depends only on built-in cmdlets, and forces TLS 1.2.
   ([#541](https://github.com/sortie-ai/sortie/issues/541))
-- Authenticode-signed Windows binaries: the release pipeline now signs
-  Windows `.exe` artifacts via SignPath before they are archived, so
-  downloaded binaries are no longer blocked by Microsoft SmartScreen or
-  Smart App Control. Signing runs as a GoReleaser post-build hook and is
-  a no-op for local, snapshot, and pull-request builds.
-  ([PR #548](https://github.com/sortie-ai/sortie/pull/548))
+- Authenticode-signed Windows binaries: the release pipeline now signs Windows `.exe` artifacts via SignPath before they are archived, so downloaded binaries are no longer blocked by Microsoft SmartScreen or Smart App Control. Signing runs as a GoReleaser post-build hook and is a no-op for local, snapshot, and pull-request builds. ([PR #548](https://github.com/sortie-ai/sortie/pull/548))
 
 ## [1.10.0] - 2026-05-27
 
 ### Added
 
-- Auto-merge reaction for Sortie-created PRs: a new opt-in
-  `reactions.auto_merge` block in `WORKFLOW.md` instructs the
-  orchestrator to merge an agent-created pull request directly through
-  the SCM adapter once review decision, CI conclusion, draft state,
-  and mergeability all satisfy the configured preconditions. The
-  reconcile loop polls every `poll_interval_ms` (default 60 s,
-  minimum 30 s), calls `MergePR` with the expected head SHA to close
-  the TOCTOU window, and treats an "already merged" 409 response as
-  success. Merge strategy (`squash` default, also `merge` or
-  `rebase`), `require_ci` (default `true`), `delete_branch` (default
-  `true`), and the standard `max_retries` / `escalation` /
-  `escalation_label` fields are configurable. At startup the
-  orchestrator runs a one-shot scope preflight against the SCM
-  provider; an auth-class failure sets a sticky
-  `auto_merge_preflight_failed` flag that disables merge attempts for
-  the process lifetime, while a transport-class failure schedules a
-  single retry after 5 minutes. `reactions.review_comments` and
-  `reactions.auto_merge` must declare the same SCM provider; a
-  mismatch or an unknown provider fails startup. Workflows without an
-  `auto_merge` block are unaffected. The `SCMAdapter` interface gains
-  five write methods (`GetReviewDecision`, `GetCIStatus`,
-  `GetMergeability`, `MergePR`, `DeleteBranch`) and a new
-  `ErrSCMConflict` error kind; see
-  [ADR-0012](https://github.com/sortie-ai/sortie/blob/main/docs/decisions/0012-auto-merge-reaction.md).
+- Auto-merge reaction for Sortie-created PRs: a new opt-in `reactions.auto_merge` block in `WORKFLOW.md` instructs the orchestrator to merge an agent-created pull request directly through the SCM adapter once review decision, CI conclusion, draft state, and mergeability all satisfy the configured preconditions. The reconcile loop polls every `poll_interval_ms` (default 60 s, minimum 30 s), calls `MergePR` with the expected head SHA to close the TOCTOU window, and treats an "already merged" 409 response as success. Merge strategy (`squash` default, also `merge` or `rebase`), `require_ci` (default `true`), `delete_branch` (default `true`), and the standard `max_retries` / `escalation` / `escalation_label` fields are configurable. At startup the orchestrator runs a one-shot scope preflight against the SCM provider; an auth-class failure sets a sticky `auto_merge_preflight_failed` flag that disables merge attempts for the process lifetime, while a transport-class failure schedules a single retry after 5 minutes. `reactions.review_comments` and `reactions.auto_merge` must declare the same SCM provider; a mismatch or an unknown provider fails startup. Workflows without an `auto_merge` block are unaffected. The `SCMAdapter` interface gains five write methods (`GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`) and a new `ErrSCMConflict` error kind; see [ADR-0012](https://github.com/sortie-ai/sortie/blob/main/docs/decisions/0012-auto-merge-reaction.md).
   ([#417](https://github.com/sortie-ai/sortie/issues/417))
-- Extension `$VAR` resolution: every string leaf inside top-level
-  front matter keys outside the core schema (for example
-  `github.api_key`, `worker.ssh_hosts[0]`, `server.host`) now resolves
-  `$VAR` and `${VAR}` environment indirection in a single pass during
-  `NewServiceConfig`, after `SORTIE_*` overrides are applied. Nested
-  maps and lists are traversed recursively; non-string leaves
-  (integers, booleans, floats, timestamps, nil) are returned
-  unchanged. `sortie validate` now emits a new advisory
-  `unresolved_extension_var` warning naming the field path and the
-  unset variable name when a referenced variable is absent from the
-  process environment; the variable's resolved value never appears in
-  any warning, log, or error. Exit code remains 0 and `valid` remains
-  `true` when only this advisory warning is present. Operators of
-  cross-platform setups (for example a Jira tracker paired with a
-  GitHub SCM adapter) may now reference secrets such as
-  `$SORTIE_GITHUB_TOKEN` directly inside the adapter extension block
-  without an external `envsubst` step.
+- Extension `$VAR` resolution: every string leaf inside top-level front matter keys outside the core schema (for example `github.api_key`, `worker.ssh_hosts[0]`, `server.host`) now resolves `$VAR` and `${VAR}` environment indirection in a single pass during `NewServiceConfig`, after `SORTIE_*` overrides are applied. Nested maps and lists are traversed recursively; non-string leaves (integers, booleans, floats, timestamps, nil) are returned unchanged. `sortie validate` now emits a new advisory `unresolved_extension_var` warning naming the field path and the unset variable name when a referenced variable is absent from the process environment; the variable's resolved value never appears in any warning, log, or error. Exit code remains 0 and `valid` remains `true` when only this advisory warning is present. Operators of cross-platform setups (for example a Jira tracker paired with a GitHub SCM adapter) may now reference secrets such as `$SORTIE_GITHUB_TOKEN` directly inside the adapter extension block without an external `envsubst` step.
   ([#512](https://github.com/sortie-ai/sortie/issues/512))
-- Dispatch rule routing: a new optional `dispatch:` block in
-  `WORKFLOW.md` front matter routes each issue to a specific agent
-  kind and prompt template based on issue metadata. Rules match
-  first-wins on `labels`, `issue_type`, `priority`, `identifier`, and
-  `assignee` (AND across keys, OR within a key), with optional
-  `dispatch.default` and a final fallback to the workflow-wide
-  `agent.kind` and body template. Per-rule templates live as
-  Markdown files under the workflow tree and must not carry their
-  own front matter; absolute paths, `~` expansion, and symlink
-  targets that escape the tree are rejected at load time.
-  `sortie validate` reports unknown agent kinds, unreachable
-  catch-all rules, duplicate names, malformed globs and priority
-  predicates, and missing or out-of-tree templates before dispatch.
-  The resolved `(agent_kind, template_id, rule_name)` is frozen at
-  first dispatch and reused across every retry and reaction
-  continuation. Routing outcomes are exposed via the
-  `sortie_dispatch_rule_match_total{layer,rule}` Prometheus counter
-  and new `dispatched_by_rule` / `dispatched_by_default` /
-  `dispatched_by_fallback` fields on the `tick completed` log line.
-  Workflows without a `dispatch:` section are unaffected.
+- Dispatch rule routing: a new optional `dispatch:` block in `WORKFLOW.md` front matter routes each issue to a specific agent kind and prompt template based on issue metadata. Rules match first-wins on `labels`, `issue_type`, `priority`, `identifier`, and `assignee` (AND across keys, OR within a key), with optional `dispatch.default` and a final fallback to the workflow-wide `agent.kind` and body template. Per-rule templates live as Markdown files under the workflow tree and must not carry their own front matter; absolute paths, `~` expansion, and symlink targets that escape the tree are rejected at load time. `sortie validate` reports unknown agent kinds, unreachable catch-all rules, duplicate names, malformed globs and priority predicates, and missing or out-of-tree templates before dispatch. The resolved `(agent_kind, template_id, rule_name)` is frozen at first dispatch and reused across every retry and reaction continuation. Routing outcomes are exposed via the `sortie_dispatch_rule_match_total{layer,rule}` Prometheus counter and new `dispatched_by_rule` / `dispatched_by_default` / `dispatched_by_fallback` fields on the `tick completed` log line. Workflows without a `dispatch:` section are unaffected.
   ([#435](https://github.com/sortie-ai/sortie/issues/435))
 
 ### Fixed
 
-- Orchestrator: CI-failure and review-comment retries now continue from
-  the configured `tracker.handoff_state` instead of being dropped when
-  the issue is no longer in an active state. Fresh dispatch remains
-  limited to active states.
+- Orchestrator: CI-failure and review-comment retries now continue from the configured `tracker.handoff_state` instead of being dropped when the issue is no longer in an active state. Fresh dispatch remains limited to active states.
   ([#513](https://github.com/sortie-ai/sortie/issues/513))
 
 ### Migrations
 
-- Add `rule_name`, `template_id`, and `agent_kind` to
-  `retry_entries` and `rule_name`, `template_id` to `run_history`.
-  Existing rows read back as empty strings and are treated as legacy
-  fallback dispatches.
+- Add `rule_name`, `template_id`, and `agent_kind` to `retry_entries` and `rule_name`, `template_id` to `run_history`. Existing rows read back as empty strings and are treated as legacy fallback dispatches.
 
 ## [1.9.1] - 2026-05-14
 
 ### Fixed
 
-- Orchestrator: CI and PR review pending reactions are now enqueued when
-  `tracker.handoff_state` is configured. Previously, a successful handoff
-  released the claim before `HandleWorkerExit` checked reaction
-  eligibility, so the reconcile loop had no entry to poll - post-run CI
-  failures and review comments on agent-created PRs went unobserved and
-  no continuation turn was dispatched. Eligibility now derives from the
-  exit-time claim state and the handoff path; blocked soft stops remain
-  ineligible and existing review-reaction idempotency is preserved.
+- Orchestrator: CI and PR review pending reactions are now enqueued when `tracker.handoff_state` is configured. Previously, a successful handoff released the claim before `HandleWorkerExit` checked reaction eligibility, so the reconcile loop had no entry to poll - post-run CI failures and review comments on agent-created PRs went unobserved and no continuation turn was dispatched. Eligibility now derives from the exit-time claim state and the handoff path; blocked soft stops remain ineligible and existing review-reaction idempotency is preserved.
   ([#506](https://github.com/sortie-ai/sortie/issues/506))
-- Orchestrator: handoff-stage pending review and CI reactions are now
-  reconstructed on startup. `state.PendingReactions` is a runtime-only
-  map, so a restart after a successful handoff previously left the
-  issue with no pending review entry - the tracker issue was no longer
-  active, the dispatch loop did not rediscover it, and human review
-  comments on agent-created PRs went unobserved until an operator
-  manually re-engaged the issue. Startup now rebuilds eligible review
-  and CI pending entries from `run_history`, tracker state, and
-  `.sortie/scm.json`, bounded to the most recent 200 unique issues
-  completed within the last 30 days and gated by a single batched
-  `FetchIssueStatesByIDs` call. Stale candidates age out via a new
-  optional `pushed_at` field in `.sortie/scm.json` (falling back to
-  `run_history.completed_at` when absent), and existing
-  `reaction_fingerprints` continue to suppress duplicate review-fix
-  dispatches.
+- Orchestrator: handoff-stage pending review and CI reactions are now reconstructed on startup. `state.PendingReactions` is a runtime-only map, so a restart after a successful handoff previously left the issue with no pending review entry - the tracker issue was no longer active, the dispatch loop did not rediscover it, and human review comments on agent-created PRs went unobserved until an operator manually re-engaged the issue. Startup now rebuilds eligible review and CI pending entries from `run_history`, tracker state, and `.sortie/scm.json`, bounded to the most recent 200 unique issues completed within the last 30 days and gated by a single batched `FetchIssueStatesByIDs` call. Stale candidates age out via a new optional `pushed_at` field in `.sortie/scm.json` (falling back to `run_history.completed_at` when absent), and existing `reaction_fingerprints` continue to suppress duplicate review-fix dispatches.
   ([#507](https://github.com/sortie-ai/sortie/issues/507))
 
 ## [1.9.0] - 2026-04-26
 
 ### Added
 
-- OpenCode CLI agent adapter: configure with `agent.kind: opencode` for
-  autonomous issue-to-code workflows using the OpenCode CLI via
-  `opencode run --format json`. Supports fork-per-turn execution, JSON
-  event normalization, SSH remote dispatch, permission policy synthesis,
-  token accounting, and companion deployment examples via
-  `examples/docker/opencode.Dockerfile` and `examples/WORKFLOW.opencode.md`.
+- OpenCode CLI agent adapter: configure with `agent.kind: opencode` for autonomous issue-to-code workflows using the OpenCode CLI via `opencode run --format json`. Supports fork-per-turn execution, JSON event normalization, SSH remote dispatch, permission policy synthesis, token accounting, and companion deployment examples via `examples/docker/opencode.Dockerfile` and `examples/WORKFLOW.opencode.md`.
   ([#476](https://github.com/sortie-ai/sortie/issues/476),
   [#478](https://github.com/sortie-ai/sortie/issues/478),
   [#479](https://github.com/sortie-ai/sortie/issues/479))
 
 ### Fixed
 
-- SSH worker command assembly: multi-token remote commands are now
-  appended verbatim instead of shell-quoted as a single word, so remote
-  agent launches such as `codex app-server` and other pre-formed shell
-  fragments no longer fail with `command not found`.
+- SSH worker command assembly: multi-token remote commands are now appended verbatim instead of shell-quoted as a single word, so remote agent launches such as `codex app-server` and other pre-formed shell fragments no longer fail with `command not found`.
   ([#493](https://github.com/sortie-ai/sortie/issues/493))
-- GitHub and Jira tracker adapters no longer return partially populated
-  issues, slices, or state maps when tracked fetch operations fail; the
-  nil-on-error contract is preserved for issue detail and state lookups.
-  ([PR #496](https://github.com/sortie-ai/sortie/pull/496))
+- GitHub and Jira tracker adapters no longer return partially populated issues, slices, or state maps when tracked fetch operations fail; the nil-on-error contract is preserved for issue detail and state lookups. ([PR #496](https://github.com/sortie-ai/sortie/pull/496))
 
 ## [1.8.0] - 2026-04-17
 
 ### Added
 
-- Codex CLI agent adapter: configure with `agent.kind: codex` for
-  autonomous issue-to-code workflows using OpenAI Codex CLI via the
-  `codex app-server` JSON-RPC 2.0 protocol. Supports the same structured
-  lifecycle as Claude Code and Copilot CLI adapters - event normalization,
-  token tracking, timeout enforcement, graceful SIGTERM→SIGKILL shutdown,
-  and session resume via `ResumeSessionID`. Tool calls are serialized
-  through a channel to prevent concurrent stdin corruption. Handshake
-  reads are cancellable via context, preventing stalled subprocesses from
-  hanging the worker indefinitely.
+- Codex CLI agent adapter: configure with `agent.kind: codex` for autonomous issue-to-code workflows using OpenAI Codex CLI via the `codex app-server` JSON-RPC 2.0 protocol. Supports the same structured lifecycle as Claude Code and Copilot CLI adapters - event normalization, token tracking, timeout enforcement, graceful SIGTERM→SIGKILL shutdown, and session resume via `ResumeSessionID`. Tool calls are serialized through a channel to prevent concurrent stdin corruption. Handshake reads are cancellable via context, preventing stalled subprocesses from hanging the worker indefinitely.
   ([#238](https://github.com/sortie-ai/sortie/issues/238))
 
 ## [1.7.1] - 2026-04-15
 
 ### Changed
 
-- CLI: `--version` now outputs a single diagnostic line including commit SHA,
-  build date, Go version, and OS/architecture - e.g.
-  `sortie 1.7.0 (commit: a1b2c3d, built: 2026-04-15, go1.26.1, linux/amd64)`.
-  The previous GNU-style copyright/warranty block is removed. Build tooling
-  (`Makefile`, `Dockerfile`, `.goreleaser.yaml`, and the release workflow) now
-  injects `Commit` and `Date` via `-ldflags` at all build sites.
+- CLI: `--version` now outputs a single diagnostic line including commit SHA, build date, Go version, and OS/architecture - e.g. `sortie 1.7.0 (commit: a1b2c3d, built: 2026-04-15, go1.26.1, linux/amd64)`. The previous GNU-style copyright/warranty block is removed. Build tooling (`Makefile`, `Dockerfile`, `.goreleaser.yaml`, and the release workflow) now injects `Commit` and `Date` via `-ldflags` at all build sites.
 
 ### Fixed
 
-- Orchestrator: `sortie_ci_escalations_total` over-counted during CI escalation.
-  `escalateCIFailure` incremented the metric unconditionally before calling the
-  tracker API, then incremented again on error - producing two increments for one
-  failed operation. It also incremented when `TrackerAdapter` was nil, recording a
-  phantom escalation that was never performed. Both defects are fixed; the metric
-  now increments exactly once per operation outcome, matching the pattern in
-  `escalateReviewFailure`.
+- Orchestrator: `sortie_ci_escalations_total` over-counted during CI escalation. `escalateCIFailure` incremented the metric unconditionally before calling the tracker API, then incremented again on error - producing two increments for one failed operation. It also incremented when `TrackerAdapter` was nil, recording a phantom escalation that was never performed. Both defects are fixed; the metric now increments exactly once per operation outcome, matching the pattern in `escalateReviewFailure`.
   ([#449](https://github.com/sortie-ai/sortie/issues/449))
 
 ## [1.7.0] - 2026-04-13
 
 ### Added
 
-- Cross-retry session resume: continuation retries now propagate the
-  session ID from the exiting worker through the retry entry so the next
-  worker can resume the agent conversation instead of starting a fresh
-  session. The session ID is persisted to SQLite and restored on startup
-  recovery.
+- Cross-retry session resume: continuation retries now propagate the session ID from the exiting worker through the retry entry so the next worker can resume the agent conversation instead of starting a fresh session. The session ID is persisted to SQLite and restored on startup recovery.
   ([#207](https://github.com/sortie-ai/sortie/issues/207))
-- Token usage cost estimation on the dashboard and JSON API: operators
-  configure per-adapter token rates in WORKFLOW.md front matter
-  (`token_rates` block); the dashboard surfaces per-session and aggregate
-  USD cost estimates computed from running sessions. The JSON API includes
-  `active_estimated_cost_usd` when token rates are configured.
+- Token usage cost estimation on the dashboard and JSON API: operators configure per-adapter token rates in WORKFLOW.md front matter (`token_rates` block); the dashboard surfaces per-session and aggregate USD cost estimates computed from running sessions. The JSON API includes `active_estimated_cost_usd` when token rates are configured.
   ([#436](https://github.com/sortie-ai/sortie/issues/436))
-- Dashboard accordion tables: Running Sessions, Retry Queue, and Run
-  History tables use an expand/collapse accordion pattern. Primary status
-  columns are visible at a glance; secondary detail expands on click.
-  Expansion state survives the 5-second auto-refresh via sessionStorage.
+- Dashboard accordion tables: Running Sessions, Retry Queue, and Run History tables use an expand/collapse accordion pattern. Primary status columns are visible at a glance; secondary detail expands on click. Expansion state survives the 5-second auto-refresh via sessionStorage.
   ([#432](https://github.com/sortie-ai/sortie/issues/432),
   [#444](https://github.com/sortie-ai/sortie/issues/444))
-- `StderrCollector` buffer hardening: agent stderr collection now uses a
-  10 MiB scanner buffer cap and a head/tail ring-buffer retention strategy
-  with a configurable byte budget, preventing silent line truncation and
-  unbounded memory growth during long agent turns.
+- `StderrCollector` buffer hardening: agent stderr collection now uses a 10 MiB scanner buffer cap and a head/tail ring-buffer retention strategy with a configurable byte budget, preventing silent line truncation and unbounded memory growth during long agent turns.
   ([#387](https://github.com/sortie-ai/sortie/issues/387))
 
 ### Changed
 
-- Retry timer tracker validation: `HandleRetryTimer` now calls
-  `FetchIssueByID` instead of scanning all candidate issues via
-  `FetchCandidateIssues`, reducing each retry timer fire from O(pages)
-  tracker API calls to exactly one.
+- Retry timer tracker validation: `HandleRetryTimer` now calls `FetchIssueByID` instead of scanning all candidate issues via `FetchCandidateIssues`, reducing each retry timer fire from O(pages) tracker API calls to exactly one.
   ([#206](https://github.com/sortie-ai/sortie/issues/206))
 
 ### Migrations
@@ -1364,297 +421,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Runtime terminal workspace sweep: workspace directories for issues that
-  reach a terminal tracker state after their worker has exited are now
-  cleaned up periodically by the event loop. This closes the gap between
-  the startup sweep and in-flight reconciliation, preventing unbounded
-  disk accumulation on long-running instances.
+- Runtime terminal workspace sweep: workspace directories for issues that reach a terminal tracker state after their worker has exited are now cleaned up periodically by the event loop. This closes the gap between the startup sweep and in-flight reconciliation, preventing unbounded disk accumulation on long-running instances.
   ([#428](https://github.com/sortie-ai/sortie/issues/428))
 
 ### Fixed
 
-- Orchestrator: `needs-human-review` soft-stop now correctly triggers the
-  handoff transition. Previously, the `SoftStop` branch in `HandleWorkerExit`
-  matched all soft-stop reasons before the handoff case was reached, leaving
-  the issue active and causing an infinite re-dispatch loop.
+- Orchestrator: `needs-human-review` soft-stop now correctly triggers the handoff transition. Previously, the `SoftStop` branch in `HandleWorkerExit` matched all soft-stop reasons before the handoff case was reached, leaving the issue active and causing an infinite re-dispatch loop.
   ([#426](https://github.com/sortie-ai/sortie/issues/426))
 
 ## [1.6.0] - 2026-04-10
 
 ### Added
 
-- Self-review loop before PR creation: the orchestrator generates a workspace
-  diff, executes configurable verification commands (tests, linters), assembles
-  a structured review prompt, and iterates with the agent up to a configurable
-  cap before proceeding. Opt-in via the `self_review:` block in WORKFLOW.md
-  front matter (`max_iterations`, `verify_commands`, `diff_max_bytes`).
+- Self-review loop before PR creation: the orchestrator generates a workspace diff, executes configurable verification commands (tests, linters), assembles a structured review prompt, and iterates with the agent up to a configurable cap before proceeding. Opt-in via the `self_review:` block in WORKFLOW.md front matter (`max_iterations`, `verify_commands`, `diff_max_bytes`).
   ([#312](https://github.com/sortie-ai/sortie/issues/312))
-- PR review comment routing: when a reviewer requests changes on an
-  agent-created PR, the orchestrator detects `CHANGES_REQUESTED` reviews,
-  extracts the review comments, and dispatches a continuation turn so the
-  agent can address feedback automatically. Configurable via
-  `reactions.review_comments` in WORKFLOW.md (`max_retries`, `debounce_ms`,
-  `escalation`, `escalation_label`). Includes `SCMAdapter` domain interface
-  for PR and review operations with a GitHub Checks/Reviews API
-  implementation.
+- PR review comment routing: when a reviewer requests changes on an agent-created PR, the orchestrator detects `CHANGES_REQUESTED` reviews, extracts the review comments, and dispatches a continuation turn so the agent can address feedback automatically. Configurable via `reactions.review_comments` in WORKFLOW.md (`max_retries`, `debounce_ms`, `escalation`, `escalation_label`). Includes `SCMAdapter` domain interface for PR and review operations with a GitHub Checks/Reviews API implementation.
   ([#305](https://github.com/sortie-ai/sortie/issues/305))
-- Unified `reactions` config block in WORKFLOW.md for event-driven
-  continuation triggers. `reactions.ci_failure` replaces the top-level
-  `ci_feedback` key (which remains supported for backward compatibility).
-  Each reaction type shares `provider`, `max_retries`, `escalation`, and
-  `escalation_label` fields.
+- Unified `reactions` config block in WORKFLOW.md for event-driven continuation triggers. `reactions.ci_failure` replaces the top-level `ci_feedback` key (which remains supported for backward compatibility). Each reaction type shares `provider`, `max_retries`, `escalation`, and `escalation_label` fields.
   ([#418](https://github.com/sortie-ai/sortie/issues/418))
-- Windows process lifecycle support for agent adapters and workspace hooks.
-  Agent subprocesses are now placed in Windows Job Objects with
-  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, enabling full process tree cleanup on
-  timeout or cancellation. Graceful shutdown sends `CTRL_BREAK_EVENT` to the
-  process group; force-terminate uses `TerminateJobObject`. Workspace hooks
-  execute via `cmd.exe /C` on Windows with their own Job Object for timeout
-  enforcement. The `procutil` package exposes cross-platform functions -
-  `SignalGraceful`, `AssignProcess`, `CleanupProcess`, `SetProcessGroup`,
-  `KillProcessGroup` - and `WasSignaled` is now platform-aware. Adapters
-  no longer reference `syscall.SIGTERM` directly.
+- Windows process lifecycle support for agent adapters and workspace hooks. Agent subprocesses are now placed in Windows Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, enabling full process tree cleanup on timeout or cancellation. Graceful shutdown sends `CTRL_BREAK_EVENT` to the process group; force-terminate uses `TerminateJobObject`. Workspace hooks execute via `cmd.exe /C` on Windows with their own Job Object for timeout enforcement. The `procutil` package exposes cross-platform functions - `SignalGraceful`, `AssignProcess`, `CleanupProcess`, `SetProcessGroup`, `KillProcessGroup` - and `WasSignaled` is now platform-aware. Adapters no longer reference `syscall.SIGTERM` directly.
   ([#390](https://github.com/sortie-ai/sortie/issues/390),
   [#391](https://github.com/sortie-ai/sortie/issues/391))
 
 ### Changed
 
-- CI pending backoff base now derives from the operator-configured
-  `poll_interval` instead of a hardcoded 10 s default. A 30 s poll interval
-  produces a `(60 s, 120 s, 240 s, 300 s…)` backoff schedule. Falls back to
-  10 s when `poll_interval` is zero or negative.
+- CI pending backoff base now derives from the operator-configured `poll_interval` instead of a hardcoded 10 s default. A 30 s poll interval produces a `(60 s, 120 s, 240 s, 300 s…)` backoff schedule. Falls back to 10 s when `poll_interval` is zero or negative.
   ([#385](https://github.com/sortie-ai/sortie/issues/385))
 
 ### Deprecated
 
-- `ci_feedback` top-level config key in WORKFLOW.md. Use
-  `reactions.ci_failure` instead. The legacy key continues to work; when both
-  are present, `reactions.ci_failure` takes precedence.
+- `ci_feedback` top-level config key in WORKFLOW.md. Use `reactions.ci_failure` instead. The legacy key continues to work; when both are present, `reactions.ci_failure` takes precedence.
   ([#418](https://github.com/sortie-ai/sortie/issues/418))
 
 ### Fixed
 
-- Workflow Manager continued using the pre-reconfiguration logger after
-  `logging.level` was applied from WORKFLOW.md extensions, causing reload
-  diagnostics to use the wrong log level. The Manager now updates its
-  logger after every reconfiguration.
+- Workflow Manager continued using the pre-reconfiguration logger after `logging.level` was applied from WORKFLOW.md extensions, causing reload diagnostics to use the wrong log level. The Manager now updates its logger after every reconfiguration.
   ([#394](https://github.com/sortie-ai/sortie/issues/394))
-- Reaction dispatch fingerprinting: `MarkReactionDispatched` was called at
-  schedule time rather than actual dispatch time. If the process restarted
-  between scheduling and dispatch, the fingerprint was permanently marked
-  dispatched while the retry entry was lost, silencing future CI-fix
-  reactions for that SHA.
+- Reaction dispatch fingerprinting: `MarkReactionDispatched` was called at schedule time rather than actual dispatch time. If the process restarted between scheduling and dispatch, the fingerprint was permanently marked dispatched while the retry entry was lost, silencing future CI-fix reactions for that SHA.
   ([#420](https://github.com/sortie-ai/sortie/issues/420))
-- Config: non-string YAML values in `reactions` fields (`provider`,
-  `escalation`, `escalation_label`) now produce a `ConfigError` instead of
-  silently coercing to an empty string.
+- Config: non-string YAML values in `reactions` fields (`provider`, `escalation`, `escalation_label`) now produce a `ConfigError` instead of silently coercing to an empty string.
   ([#423](https://github.com/sortie-ai/sortie/issues/423))
-- `install.sh`: detect Rosetta 2 on macOS and prefer the native `arm64`
-  binary over `amd64`.
+- `install.sh`: detect Rosetta 2 on macOS and prefer the native `arm64` binary over `amd64`.
   ([#391](https://github.com/sortie-ai/sortie/issues/391))
 
 ### Migrations
 
 - Add nullable `review_metadata TEXT` column to `run_history`
-- Add `reaction_fingerprints` table for cross-restart reaction
-  deduplication
+- Add `reaction_fingerprints` table for cross-restart reaction deduplication
 
 ## [1.5.1] - 2026-04-08
 
 ### Added
 
-- GNU-style CLI help output with grouped sections, column-aligned
-  descriptions, usage examples, and a "Learn more" link. Short aliases
-  `-h` (help) and `-V` (version) are now recognized. Help text prints
-  to stdout instead of stderr. Covers all three commands: `sortie`,
-  `sortie validate`, `sortie mcp-server`.
+- GNU-style CLI help output with grouped sections, column-aligned descriptions, usage examples, and a "Learn more" link. Short aliases `-h` (help) and `-V` (version) are now recognized. Help text prints to stdout instead of stderr. Covers all three commands: `sortie`, `sortie validate`, `sortie mcp-server`.
   ([#398](https://github.com/sortie-ai/sortie/issues/398))
 
 ### Fixed
 
-- Copilot CLI adapter: prefix `--additional-mcp-config` file paths with
-  `@` to match the documented Copilot CLI syntax. Bare file paths
-  worked in Copilot CLI ≤1.0.18 via an undocumented fallback that was
-  removed in v1.0.21, causing `Invalid JSON in --additional-mcp-config`
-  on every turn. Operator-provided `copilot-cli.mcp_config` values are
-  now auto-detected: inline JSON is passed unchanged, `@`-prefixed
-  paths are preserved, and bare file paths receive the `@` prefix
-  automatically.
+- Copilot CLI adapter: prefix `--additional-mcp-config` file paths with `@` to match the documented Copilot CLI syntax. Bare file paths worked in Copilot CLI ≤1.0.18 via an undocumented fallback that was removed in v1.0.21, causing `Invalid JSON in --additional-mcp-config` on every turn. Operator-provided `copilot-cli.mcp_config` values are now auto-detected: inline JSON is passed unchanged, `@`-prefixed paths are preserved, and bare file paths receive the `@` prefix automatically.
   ([#404](https://github.com/sortie-ai/sortie/issues/404))
-- Agent adapters: reclassify exit-code-0 turns with zero output tokens
-  and no `result` event as `turn_failed` instead of `turn_completed`.
-  Previously, when an agent subprocess crashed immediately (e.g., MCP
-  config parse error) but exited 0, all turns were counted as
-  successful, causing the orchestrator to exhaust `max_turns` and
-  trigger a false-positive handoff transition. Failed turns now retry
-  with exponential backoff. Applies to both Claude Code and Copilot CLI
-  adapters.
+- Agent adapters: reclassify exit-code-0 turns with zero output tokens and no `result` event as `turn_failed` instead of `turn_completed`. Previously, when an agent subprocess crashed immediately (e.g., MCP config parse error) but exited 0, all turns were counted as successful, causing the orchestrator to exhaust `max_turns` and trigger a false-positive handoff transition. Failed turns now retry with exponential backoff. Applies to both Claude Code and Copilot CLI adapters.
   ([#404](https://github.com/sortie-ai/sortie/issues/404))
 
 ## [1.5.0] - 2026-04-07
 
 ### Added
 
-- Always-on HTTP server with default port 7678 (mnemonic: SORT on T9).
-  The server now starts unconditionally; the `--port` flag overrides the
-  default but no longer acts as an activation trigger. Pass `--port=0`
-  to disable. Prometheus metrics, health probes, and dashboard are
-  available out of the box without flags.
-- `--host` CLI flag and `server.host` workflow config field for
-  configurable bind address. Default `127.0.0.1`; container deployments
-  override with `--host 0.0.0.0`. Resolution order: CLI flag > config >
-  default.
-- `--log-format` CLI flag with values `text` (default) and `json`.
-  JSON format emits one JSON object per log line with `time`, `level`,
-  `msg`, and structured fields (`issue_id`, `session_id`, etc.) for
-  integration with Loki, Datadog, CloudWatch, and ELK.
-- Dockerfile: multi-stage build producing a distroless container image
-  with only `/usr/bin/sortie`. Users consume via
-  `COPY --from=ghcr.io/sortie-ai/sortie:latest /usr/bin/sortie /usr/bin/sortie`
-  in their own Dockerfile. Build flags match `.goreleaser.yaml`:
-  `CGO_ENABLED=0`, `-trimpath`, `-s -w`, tags `osusergo,netgo`.
-- `.dockerignore` excluding build artifacts, `.git`, test fixtures, and
-  documentation.
-- Agent-specific example Dockerfiles:
-  [`docker/claude-code.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/claude-code.Dockerfile)
-  and [`docker/copilot.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/copilot.Dockerfile)
-  with non-root user, health checks, and volume mounts.
-- Kubernetes deployment examples: [`k8s/deployment.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/deployment.yaml)
-  (Recreate strategy, liveness/readiness probes on `/livez` and `/readyz`),
-  [`k8s/configmap.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/configmap.yaml),
-  [`k8s/service.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/service.yaml),
-  [`k8s/pvc.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/pvc.yaml).
-- Grafana dashboard template at [`grafana-dashboard.json`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/grafana-dashboard.json)
-  covering all 22 Prometheus metrics. Panels for `dispatch_transitions_total`,
-  `tracker_comments_total`, `ci_status_checks_total`, and
-  `ci_escalations_total` added in dedicated CI Feedback and Integration
-  rows. Uses `__inputs`/`DS_PROMETHEUS` pattern for portable data source
-  selection.
+- Always-on HTTP server with default port 7678 (mnemonic: SORT on T9). The server now starts unconditionally; the `--port` flag overrides the default but no longer acts as an activation trigger. Pass `--port=0` to disable. Prometheus metrics, health probes, and dashboard are available out of the box without flags.
+- `--host` CLI flag and `server.host` workflow config field for configurable bind address. Default `127.0.0.1`; container deployments override with `--host 0.0.0.0`. Resolution order: CLI flag > config > default.
+- `--log-format` CLI flag with values `text` (default) and `json`. JSON format emits one JSON object per log line with `time`, `level`, `msg`, and structured fields (`issue_id`, `session_id`, etc.) for integration with Loki, Datadog, CloudWatch, and ELK.
+- Dockerfile: multi-stage build producing a distroless container image with only `/usr/bin/sortie`. Users consume via `COPY --from=ghcr.io/sortie-ai/sortie:latest /usr/bin/sortie /usr/bin/sortie` in their own Dockerfile. Build flags match `.goreleaser.yaml`: `CGO_ENABLED=0`, `-trimpath`, `-s -w`, tags `osusergo,netgo`.
+- `.dockerignore` excluding build artifacts, `.git`, test fixtures, and documentation.
+- Agent-specific example Dockerfiles: [`docker/claude-code.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/claude-code.Dockerfile) and [`docker/copilot.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/copilot.Dockerfile) with non-root user, health checks, and volume mounts.
+- Kubernetes deployment examples: [`k8s/deployment.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/deployment.yaml) (Recreate strategy, liveness/readiness probes on `/livez` and `/readyz`), [`k8s/configmap.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/configmap.yaml), [`k8s/service.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/service.yaml), [`k8s/pvc.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/pvc.yaml).
+- Grafana dashboard template at [`grafana-dashboard.json`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/grafana-dashboard.json) covering all 22 Prometheus metrics. Panels for `dispatch_transitions_total`, `tracker_comments_total`, `ci_status_checks_total`, and `ci_escalations_total` added in dedicated CI Feedback and Integration rows. Uses `__inputs`/`DS_PROMETHEUS` pattern for portable data source selection.
 
 ### Fixed
 
-- Agent stderr is now surfaced at WARN level when a turn fails instead
-  of DEBUG. Both Claude Code and Copilot CLI adapters buffer stderr
-  during a turn and log at WARN on non-zero exit, making startup
-  rejections (e.g., `--dangerously-skip-permissions` under root)
-  visible at default log level. Successful turns continue to log stderr
-  at DEBUG.
+- Agent stderr is now surfaced at WARN level when a turn fails instead of DEBUG. Both Claude Code and Copilot CLI adapters buffer stderr during a turn and log at WARN on non-zero exit, making startup rejections (e.g., `--dangerously-skip-permissions` under root) visible at default log level. Successful turns continue to log stderr at DEBUG.
 
 ## [1.4.0] - 2026-04-04
 
 ### Added
 
-- CI feedback loop: when a CI pipeline fails on an agent-created branch,
-  the orchestrator detects the failure, injects the CI failure logs into
-  the next agent turn, and dispatches a continuation session so the agent
-  can diagnose and fix the issue automatically. Controlled by a new
-  `ci_feedback` config section in `WORKFLOW.md` (`kind`, `max_retries`,
-  `max_log_lines`, `escalation`). Feature activation follows kind-based
-  convention: present `ci_feedback.kind` enables, absent disables.
-- `CIStatusProvider` domain interface: adapter contract for fetching CI
-  check status from an SCM platform. Returns structured `CIResult` with
-  overall status (pending/passing/failing), individual check runs, and
-  an optional log excerpt from the first failing check.
-- GitHub `CIStatusProvider` implementation via the Checks API: fetches
-  check runs for a git ref, computes aggregate status, and retrieves
-  truncated log output from the first failing GitHub Actions job. Log
-  fetching is controlled by `max_log_lines` (0 disables). ANSI escape
-  sequences are stripped from log output.
-- CI failure escalation: when `ci_feedback.max_retries` is exceeded, the
-  orchestrator applies a configurable escalation action -- add a label
-  (default `needs-human`) or post a comment on the issue.
-- Exponential backoff for CI pending re-enqueue: `reconcileCIStatus`
-  now applies `base * 2^attempts` backoff (capped at 5 minutes) when CI
-  checks remain pending or on transient API errors, reducing GitHub
-  Checks API request volume from ~120 to ~15 per 20-minute CI run per
-  issue. Stale pending entries expire after a 30-minute TTL.
-- `TrackerOpsWg` shutdown drain: fire-and-forget tracker API goroutines
-  (comment posting, label adding) are now tracked by a dedicated
-  `sync.WaitGroup` and drained during graceful shutdown with a 35-second
-  timeout, preventing orphaned goroutines on process exit.
-- Automatic credential merging: when `ci_feedback.kind` matches
-  `tracker.kind`, the orchestrator merges tracker credentials (`api_key`,
-  `project`, `endpoint`) into the CI provider adapter config at startup,
-  eliminating the need to duplicate credentials in a pass-through block.
+- CI feedback loop: when a CI pipeline fails on an agent-created branch, the orchestrator detects the failure, injects the CI failure logs into the next agent turn, and dispatches a continuation session so the agent can diagnose and fix the issue automatically. Controlled by a new `ci_feedback` config section in `WORKFLOW.md` (`kind`, `max_retries`, `max_log_lines`, `escalation`). Feature activation follows kind-based convention: present `ci_feedback.kind` enables, absent disables.
+- `CIStatusProvider` domain interface: adapter contract for fetching CI check status from an SCM platform. Returns structured `CIResult` with overall status (pending/passing/failing), individual check runs, and an optional log excerpt from the first failing check.
+- GitHub `CIStatusProvider` implementation via the Checks API: fetches check runs for a git ref, computes aggregate status, and retrieves truncated log output from the first failing GitHub Actions job. Log fetching is controlled by `max_log_lines` (0 disables). ANSI escape sequences are stripped from log output.
+- CI failure escalation: when `ci_feedback.max_retries` is exceeded, the orchestrator applies a configurable escalation action -- add a label (default `needs-human`) or post a comment on the issue.
+- Exponential backoff for CI pending re-enqueue: `reconcileCIStatus` now applies `base * 2^attempts` backoff (capped at 5 minutes) when CI checks remain pending or on transient API errors, reducing GitHub Checks API request volume from ~120 to ~15 per 20-minute CI run per issue. Stale pending entries expire after a 30-minute TTL.
+- `TrackerOpsWg` shutdown drain: fire-and-forget tracker API goroutines (comment posting, label adding) are now tracked by a dedicated `sync.WaitGroup` and drained during graceful shutdown with a 35-second timeout, preventing orphaned goroutines on process exit.
+- Automatic credential merging: when `ci_feedback.kind` matches `tracker.kind`, the orchestrator merges tracker credentials (`api_key`, `project`, `endpoint`) into the CI provider adapter config at startup, eliminating the need to duplicate credentials in a pass-through block.
 
 ## [1.3.0] - 2026-04-03
 
 ### Added
 
-- MCP tool execution channel: agents can now call registered tools at
-  runtime via the Model Context Protocol. The worker generates
-  `.sortie/mcp.json` per session and passes it to the agent runtime via
-  `--mcp-config` (Claude Code) or `--additional-mcp-config` (Copilot CLI).
-  The agent runtime spawns `sortie mcp-server` as a stdio sidecar; the
-  orchestrator does not manage the sidecar lifecycle.
-- `sortie mcp-server` subcommand: MCP stdio JSON-RPC server that exposes
-  registered `AgentTool` implementations via `tools/list` and `tools/call`.
-  Constructs its own `TrackerAdapter` and `ToolRegistry` by re-reading
-  WORKFLOW.md from an absolute path passed via `--workflow`.
-- `sortie_status` MCP tool (Tier 1): returns live session runtime
-  metadata -- current turn number, remaining turns, attempt number,
-  session duration, and cumulative token usage. Reads from
-  `.sortie/state.json`, a worker-written file updated at session start,
-  each turn start, and on token usage events.
-- `workspace_history` MCP tool (Tier 1): returns up to 10 most recent
-  completed run attempts for the current issue from the `run_history`
-  SQLite table. Opens the database in read-only mode (`?mode=ro`).
-  Non-fatal on database open failure -- the MCP server continues with
-  other tools available.
-- Agent-to-orchestrator file protocol: agents can write `blocked` or
-  `needs-human-review` to `.sortie/status` to suppress continuation
-  retries. The orchestrator reads the file after each turn and before
-  the tracker state refresh. Absent, unrecognized, or unreadable files
-  degrade to normal behavior. Symlinks on either path component are
-  rejected via `Lstat`.
-- `RuntimeStatusSuffix` auto-injection: the orchestrator appends A2O
-  protocol instructions to the first-turn prompt so agents know how to
-  signal blocked status without workflow author intervention.
-  Continuation turns omit the suffix.
-- Soft-stop exit path in `HandleWorkerExit`: when the worker exits with
-  a recognized status file signal, the orchestrator releases the claim
-  and suppresses continuation retry. The issue re-dispatches only on
-  tracker state change.
-- Operator MCP config merging: if `mcp_config` is set in WORKFLOW.md,
-  the worker merges the operator's config with the `sortie-tools` entry.
-  Name collision on `sortie-tools` is a validation error.
+- MCP tool execution channel: agents can now call registered tools at runtime via the Model Context Protocol. The worker generates `.sortie/mcp.json` per session and passes it to the agent runtime via `--mcp-config` (Claude Code) or `--additional-mcp-config` (Copilot CLI). The agent runtime spawns `sortie mcp-server` as a stdio sidecar; the orchestrator does not manage the sidecar lifecycle.
+- `sortie mcp-server` subcommand: MCP stdio JSON-RPC server that exposes registered `AgentTool` implementations via `tools/list` and `tools/call`. Constructs its own `TrackerAdapter` and `ToolRegistry` by re-reading WORKFLOW.md from an absolute path passed via `--workflow`.
+- `sortie_status` MCP tool (Tier 1): returns live session runtime metadata -- current turn number, remaining turns, attempt number, session duration, and cumulative token usage. Reads from `.sortie/state.json`, a worker-written file updated at session start, each turn start, and on token usage events.
+- `workspace_history` MCP tool (Tier 1): returns up to 10 most recent completed run attempts for the current issue from the `run_history` SQLite table. Opens the database in read-only mode (`?mode=ro`). Non-fatal on database open failure -- the MCP server continues with other tools available.
+- Agent-to-orchestrator file protocol: agents can write `blocked` or `needs-human-review` to `.sortie/status` to suppress continuation retries. The orchestrator reads the file after each turn and before the tracker state refresh. Absent, unrecognized, or unreadable files degrade to normal behavior. Symlinks on either path component are rejected via `Lstat`.
+- `RuntimeStatusSuffix` auto-injection: the orchestrator appends A2O protocol instructions to the first-turn prompt so agents know how to signal blocked status without workflow author intervention. Continuation turns omit the suffix.
+- Soft-stop exit path in `HandleWorkerExit`: when the worker exits with a recognized status file signal, the orchestrator releases the claim and suppresses continuation retry. The issue re-dispatches only on tracker state change.
+- Operator MCP config merging: if `mcp_config` is set in WORKFLOW.md, the worker merges the operator's config with the `sortie-tools` entry. Name collision on `sortie-tools` is a validation error.
 
 ### Documentation
 
-- Agent-to-orchestrator file protocol specification
-  (`docs/agent-to-orchestrator-protocol.md`): 9-section normative
-  document covering file format, recognized values, read timing,
-  cleanup lifecycle, symlink rejection, and conformance checklist.
-- ADR-0009: MCP stdio sidecar for tool execution -- documents the
-  chosen transport mechanism, process model, credential handling,
-  adapter integration, and alternatives analysis.
-- Architecture Section 10.4 rewrite: `AgentTool` interface contract,
-  `ToolRegistry` invariants, tier classification framework, and
-  `tracker_api` tool specification aligned with implementation.
+- Agent-to-orchestrator file protocol specification (`docs/agent-to-orchestrator-protocol.md`): 9-section normative document covering file format, recognized values, read timing, cleanup lifecycle, symlink rejection, and conformance checklist.
+- ADR-0009: MCP stdio sidecar for tool execution -- documents the chosen transport mechanism, process model, credential handling, adapter integration, and alternatives analysis.
+- Architecture Section 10.4 rewrite: `AgentTool` interface contract, `ToolRegistry` invariants, tier classification framework, and `tracker_api` tool specification aligned with implementation.
 
 ## [1.2.1] - 2026-04-01
 
 ### Fixed
 
-- Prevent re-dispatch loop when effort budget (`agent.max_sessions`) is
-  exhausted for an issue; the orchestrator now records a durable
-  budget-exhaustion guard so the dispatch loop does not restart the issue
-  on the next tick
-- Persist and display `turns_completed` per run in the dashboard and run
-  history table
-- Show fully qualified `owner/repo#N` display identifiers for GitHub
-  issues in the dashboard and API instead of bare issue numbers
-- Pass `handoff_state` to `findCurrentStateLabel`, `extractState`,
-  `normalizeIssue`, and `normalizeBlockers` in the GitHub adapter so
-  `TransitionIssue` accepts the handoff state and stale labels are
-  removed during transitions
-- Rename dashboard footer cache label from "Cache:" to "Cache Read:" and
-  add explanatory tooltips in the footer and Running Sessions table
-- Defer `token_usage` event emission in the Claude adapter when an
-  assistant message carries zero output tokens (tool_use-only messages
-  in Claude Code 2.x `stream-json` format); the adapter now accumulates
-  input tokens and falls back to the result event which carries correct
-  totals
+- Prevent re-dispatch loop when effort budget (`agent.max_sessions`) is exhausted for an issue; the orchestrator now records a durable budget-exhaustion guard so the dispatch loop does not restart the issue on the next tick
+- Persist and display `turns_completed` per run in the dashboard and run history table
+- Show fully qualified `owner/repo#N` display identifiers for GitHub issues in the dashboard and API instead of bare issue numbers
+- Pass `handoff_state` to `findCurrentStateLabel`, `extractState`, `normalizeIssue`, and `normalizeBlockers` in the GitHub adapter so `TransitionIssue` accepts the handoff state and stale labels are removed during transitions
+- Rename dashboard footer cache label from "Cache:" to "Cache Read:" and add explanatory tooltips in the footer and Running Sessions table
+- Defer `token_usage` event emission in the Claude adapter when an assistant message carries zero output tokens (tool_use-only messages in Claude Code 2.x `stream-json` format); the adapter now accumulates input tokens and falls back to the result event which carries correct totals
 
 ### Migrations
 
@@ -1666,284 +552,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- GitHub Copilot CLI adapter: configure with `agent.kind: copilot` for
-  fully automated issue-to-code workflows using GitHub's headless Copilot
-  CLI. Supports local execution and SSH remote dispatch via `worker.ssh_hosts`.
-  Tool scope is controlled by `allowed_tools`, `denied_tools`,
-  `available_tools`, and `excluded_tools`; `--allow-all` is the default when
-  none are set. Session continuity across turns via `--resume`. Authentication
-  uses token env vars when present, falling back to `gh auth status`.
-- `worker.ssh_strict_host_key_checking`: new optional worker config field
-  controlling OpenSSH `StrictHostKeyChecking` for remote SSH agent sessions.
-  Accepts `accept-new` (default, Trust On First Use), `yes` (strict
-  verification, requires a pre-populated `known_hosts`), or `no` (disable
-  host-key checking). Applies to both the Claude Code and Copilot CLI
-  adapters.
+- GitHub Copilot CLI adapter: configure with `agent.kind: copilot` for fully automated issue-to-code workflows using GitHub's headless Copilot CLI. Supports local execution and SSH remote dispatch via `worker.ssh_hosts`. Tool scope is controlled by `allowed_tools`, `denied_tools`, `available_tools`, and `excluded_tools`; `--allow-all` is the default when none are set. Session continuity across turns via `--resume`. Authentication uses token env vars when present, falling back to `gh auth status`.
+- `worker.ssh_strict_host_key_checking`: new optional worker config field controlling OpenSSH `StrictHostKeyChecking` for remote SSH agent sessions. Accepts `accept-new` (default, Trust On First Use), `yes` (strict verification, requires a pre-populated `known_hosts`), or `no` (disable host-key checking). Applies to both the Claude Code and Copilot CLI adapters.
 
 ## [1.1.0] - 2026-03-30
 
 ### Added
 
-- GitHub Issues tracker adapter: configure with `tracker.kind: github` and
-  `tracker.project: OWNER/REPO`. State management is label-based;
-  `TransitionIssue` applies and removes GitHub labels with convergent retry on
-  partial failure.
-- GitHub adapter: in-memory ETag cache for reconciliation polls -
-  `If-None-Match` conditional requests return `304 Not Modified` on unchanged
-  issues, reducing GitHub API rate limit consumption during active runs.
-- `sortie validate` GitHub adapter config validation: emits diagnostics for
-  `tracker.project` format (`OWNER/REPO`), `GITHUB_TOKEN` environment variable
-  hint, empty state labels, and active/terminal state label overlap. Errors
-  block dispatch; warnings are advisory.
+- GitHub Issues tracker adapter: configure with `tracker.kind: github` and `tracker.project: OWNER/REPO`. State management is label-based; `TransitionIssue` applies and removes GitHub labels with convergent retry on partial failure.
+- GitHub adapter: in-memory ETag cache for reconciliation polls - `If-None-Match` conditional requests return `304 Not Modified` on unchanged issues, reducing GitHub API rate limit consumption during active runs.
+- `sortie validate` GitHub adapter config validation: emits diagnostics for `tracker.project` format (`OWNER/REPO`), `GITHUB_TOKEN` environment variable hint, empty state labels, and active/terminal state label overlap. Errors block dispatch; warnings are advisory.
 
 ### Fixed
 
-- `install.sh`: checksum verification used substring matching (`grep | awk`)
-  that could accept a checksum entry for the wrong archive entry; now uses
-  exact field matching (`awk '$2 == f'`).
+- `install.sh`: checksum verification used substring matching (`grep | awk`) that could accept a checksum entry for the wrong archive entry; now uses exact field matching (`awk '$2 == f'`).
 
 ## [1.0.0] - 2026-03-29
 
 ### Added
 
-- SPDX JSON Software Bill of Materials (SBOM) included with every release
-  archive, generated via `syft` in the GoReleaser pipeline for supply-chain
-  auditing.
+- SPDX JSON Software Bill of Materials (SBOM) included with every release archive, generated via `syft` in the GoReleaser pipeline for supply-chain auditing.
 
 ## [0.0.10] - 2026-03-28
 
 ### Added
 
-- `sortie validate` template static analysis: three advisory warning
-  classes - `WarnDotContext` (top-level key referenced inside `{{ range }}`
-  or `{{ with }}` where dot is redefined), `WarnUnknownVar` (variable not in
-  the `{issue, attempt, run}` contract), and `WarnUnknownField` (valid
-  top-level key with an unknown sub-field, including depth-4+ field chains on
-  known level-3 scalars). Warnings appear in both text and JSON output
-  without blocking dispatch or changing the exit code.
-- `sortie validate` front matter schema validation: detects unknown
-  top-level keys, unknown sub-keys within known sections, type mismatches,
-  and semantic issues (non-positive `hooks.timeout_ms`, non-numeric
-  `max_concurrent_agents_by_state` entries). Field paths are included in
-  every diagnostic so operators can locate the offending key. Warnings are
-  advisory only.
-- `SORTIE_*` environment variable config overrides: any workflow front
-  matter key can be overridden via a `SORTIE_`-prefixed environment variable
-  (e.g., `SORTIE_POLLING_INTERVAL_MS=5000`). Non-empty real env vars take
-  precedence over `.env` file values. Raw line content is removed from `.env`
-  parse errors and override values are excluded from debug logs to prevent
-  secret leakage.
-- Orchestrator: tracker comments posted at session lifecycle points -
-  session start, successful completion, and failure - with run duration and
-  attempt metadata. Comments fire from a detached goroutine to avoid blocking
-  the event loop.
-- Orchestrator: issues are transitioned to the configured `in_progress_state`
-  on dispatch, with a no-op skip when the issue is already in the
-  target state. `sortie_dispatch_transitions_total` Prometheus counter
-  tracks `success`, `error`, and `skipped` outcomes.
+- `sortie validate` template static analysis: three advisory warning classes - `WarnDotContext` (top-level key referenced inside `{{ range }}` or `{{ with }}` where dot is redefined), `WarnUnknownVar` (variable not in the `{issue, attempt, run}` contract), and `WarnUnknownField` (valid top-level key with an unknown sub-field, including depth-4+ field chains on known level-3 scalars). Warnings appear in both text and JSON output without blocking dispatch or changing the exit code.
+- `sortie validate` front matter schema validation: detects unknown top-level keys, unknown sub-keys within known sections, type mismatches, and semantic issues (non-positive `hooks.timeout_ms`, non-numeric `max_concurrent_agents_by_state` entries). Field paths are included in every diagnostic so operators can locate the offending key. Warnings are advisory only.
+- `SORTIE_*` environment variable config overrides: any workflow front matter key can be overridden via a `SORTIE_`-prefixed environment variable (e.g., `SORTIE_POLLING_INTERVAL_MS=5000`). Non-empty real env vars take precedence over `.env` file values. Raw line content is removed from `.env` parse errors and override values are excluded from debug logs to prevent secret leakage.
+- Orchestrator: tracker comments posted at session lifecycle points - session start, successful completion, and failure - with run duration and attempt metadata. Comments fire from a detached goroutine to avoid blocking the event loop.
+- Orchestrator: issues are transitioned to the configured `in_progress_state` on dispatch, with a no-op skip when the issue is already in the target state. `sortie_dispatch_transitions_total` Prometheus counter tracks `success`, `error`, and `skipped` outcomes.
 
 ## [0.0.9] - 2026-03-27
 
 ### Added
 
-- `sortie validate` subcommand for one-shot workflow file validation
-  without starting the orchestrator, opening the database, or spawning a
-  filesystem watcher. Supports `--format text` (stderr diagnostics) and
-  `--format json` (structured stdout output) for CI pipelines and pre-commit
-  hooks. Flag-parse errors are routed through the diagnostics emitter.
-- `--dry-run` flag for a single read-only poll cycle that validates
-  the full startup sequence (workflow load, preflight, database, adapter
-  wiring) without dispatching work or persisting state.
-- `--log-level` flag and `logging.level` workflow extension key to set
-  the minimum log severity at startup (`debug`, `info`, `warn`, `error`).
-- Dashboard: Workflow column in Active Sessions table and a new Run History
-  table showing completed session outcomes, timing, and workflow file.
-  SQL migration 003 adds a nullable `workflow_file` column to `run_history`.
-- Workspace root write-permission check in dispatch preflight -
-  surfaces a clear diagnostic instead of failing mid-dispatch.
-- Homebrew tap distribution via GoReleaser-managed tap repository
-  (`brew install sortie-ai/tap/sortie`).
-- Jira adapter: `User-Agent` header (`sortie/<version>`) sent on
-  every HTTP request.
-- Claude Code adapter: per-request `APIDurationMS` on `token_usage` events
-  for API-call-level latency visibility, clamped to a minimum of
-  1 ms.
-- Claude Code adapter: tool error text now included in
-  `EventToolResult.Message`.
+- `sortie validate` subcommand for one-shot workflow file validation without starting the orchestrator, opening the database, or spawning a filesystem watcher. Supports `--format text` (stderr diagnostics) and `--format json` (structured stdout output) for CI pipelines and pre-commit hooks. Flag-parse errors are routed through the diagnostics emitter.
+- `--dry-run` flag for a single read-only poll cycle that validates the full startup sequence (workflow load, preflight, database, adapter wiring) without dispatching work or persisting state.
+- `--log-level` flag and `logging.level` workflow extension key to set the minimum log severity at startup (`debug`, `info`, `warn`, `error`).
+- Dashboard: Workflow column in Active Sessions table and a new Run History table showing completed session outcomes, timing, and workflow file. SQL migration 003 adds a nullable `workflow_file` column to `run_history`.
+- Workspace root write-permission check in dispatch preflight - surfaces a clear diagnostic instead of failing mid-dispatch.
+- Homebrew tap distribution via GoReleaser-managed tap repository (`brew install sortie-ai/tap/sortie`).
+- Jira adapter: `User-Agent` header (`sortie/<version>`) sent on every HTTP request.
+- Claude Code adapter: per-request `APIDurationMS` on `token_usage` events for API-call-level latency visibility, clamped to a minimum of 1 ms.
+- Claude Code adapter: tool error text now included in `EventToolResult.Message`.
 
 ### Fixed
 
-- CLI: adapters implementing `io.Closer` are now closed during graceful
-  shutdown, preventing resource leaks.
-- Orchestrator: `TurnCount` increments on `session_started` instead of
-  session finalization, correctly reflecting in-progress turns.
-- Claude Code adapter: tool error messages stripped of XML markup and
-  tail-truncated to prevent oversized events.
+- CLI: adapters implementing `io.Closer` are now closed during graceful shutdown, preventing resource leaks.
+- Orchestrator: `TurnCount` increments on `session_started` instead of session finalization, correctly reflecting in-progress turns.
+- Claude Code adapter: tool error messages stripped of XML markup and tail-truncated to prevent oversized events.
 
 ## [0.0.8] - 2026-03-26
 
 ### Added
 
-- JSON API server with `GET /api/v1/state`, `GET /api/v1/<identifier>`, and
-  `POST /api/v1/refresh` endpoints for programmatic access to orchestrator
-  state. Enabled via `--port` flag or `server.port` config.
-- HTML dashboard at `/` with auto-refreshing view of running sessions, retry
-  queue, token totals, and runtime statistics when the HTTP server is enabled.
-- `/livez` and `/readyz` health endpoints following Kubernetes z-pages
-  conventions. `/readyz` checks database accessibility, preflight validation,
-  and workflow loading.
-- Prometheus `/metrics` endpoint exposing session gauges, dispatch/worker/retry
-  counters, token counters, tracker request counters, tool call counters,
-  poll and worker duration histograms, and `sortie_build_info`. Uses a dedicated
-  `prometheus.Registry` - compatible with standard Prometheus scrape configs.
-- `tracker_api` client-side tool: agents can query the tracker during sessions
-  to fetch issues and comments, scoped to the configured project.
-- SSH worker extension via `worker.ssh_hosts` config: dispatch agent runs to
-  remote hosts over SSH with round-robin host selection and per-host concurrency
-  limits (`worker.max_concurrent_agents_per_host`).
-- Per-session token breakdown in JSON API and dashboard: `input_tokens`,
-  `output_tokens`, `cache_creation_tokens`, `cache_read_tokens`.
-- Per-session timing breakdown in JSON API and dashboard: `elapsed`,
-  `agent_time`, `idle_time`, `agent_pct`.
-- Claude Code adapter: `tool_result` events now emitted, making agent tool
-  invocations visible in the dashboard and API.
-- Worker failure logging in `HandleWorkerExit`: WARN with `next_attempt` and
-  `delay_ms` for retryable errors, ERROR for non-retryable errors.
-- Structured logging: `issue_id`, `issue_identifier`, and `session_id` context
-  fields now present on all orchestrator lifecycle log lines. Agent tool calls
-  logged at INFO level.
-- POSIX-compatible install script (`install.sh`) for automated binary
-  installation.
+- JSON API server with `GET /api/v1/state`, `GET /api/v1/<identifier>`, and `POST /api/v1/refresh` endpoints for programmatic access to orchestrator state. Enabled via `--port` flag or `server.port` config.
+- HTML dashboard at `/` with auto-refreshing view of running sessions, retry queue, token totals, and runtime statistics when the HTTP server is enabled.
+- `/livez` and `/readyz` health endpoints following Kubernetes z-pages conventions. `/readyz` checks database accessibility, preflight validation, and workflow loading.
+- Prometheus `/metrics` endpoint exposing session gauges, dispatch/worker/retry counters, token counters, tracker request counters, tool call counters, poll and worker duration histograms, and `sortie_build_info`. Uses a dedicated `prometheus.Registry` - compatible with standard Prometheus scrape configs.
+- `tracker_api` client-side tool: agents can query the tracker during sessions to fetch issues and comments, scoped to the configured project.
+- SSH worker extension via `worker.ssh_hosts` config: dispatch agent runs to remote hosts over SSH with round-robin host selection and per-host concurrency limits (`worker.max_concurrent_agents_per_host`).
+- Per-session token breakdown in JSON API and dashboard: `input_tokens`, `output_tokens`, `cache_creation_tokens`, `cache_read_tokens`.
+- Per-session timing breakdown in JSON API and dashboard: `elapsed`, `agent_time`, `idle_time`, `agent_pct`.
+- Claude Code adapter: `tool_result` events now emitted, making agent tool invocations visible in the dashboard and API.
+- Worker failure logging in `HandleWorkerExit`: WARN with `next_attempt` and `delay_ms` for retryable errors, ERROR for non-retryable errors.
+- Structured logging: `issue_id`, `issue_identifier`, and `session_id` context fields now present on all orchestrator lifecycle log lines. Agent tool calls logged at INFO level.
+- POSIX-compatible install script (`install.sh`) for automated binary installation.
 
 ### Changed
 
-- `POST /api/v1/refresh` returns `409 Conflict` during graceful shutdown
-  instead of accepting requests that cannot be fulfilled.
+- `POST /api/v1/refresh` returns `409 Conflict` during graceful shutdown instead of accepting requests that cannot be fulfilled.
 
 ### Fixed
 
-- Claude Code adapter: duplicate `token_usage` events no longer emitted when
-  assistant-level usage is already reported in the result message.
-- HTTP server: `405 Method Not Allowed` responses now include the `Allow`
-  header per RFC 9110.
-- Jira adapter: `sortie_tracker_requests_total` counter no longer increments
-  on no-op calls with empty ID lists.
+- Claude Code adapter: duplicate `token_usage` events no longer emitted when assistant-level usage is already reported in the result message.
+- HTTP server: `405 Method Not Allowed` responses now include the `Allow` header per RFC 9110.
+- Jira adapter: `sortie_tracker_requests_total` counter no longer increments on no-op calls with empty ID lists.
 
 ## [0.0.7] - 2026-03-24
 
 ### Added
 
-- Graceful shutdown: on SIGTERM/SIGINT the orchestrator now drains running
-  workers (up to 30 s), persists final state to SQLite, flushes pending
-  agent events, and cancels retry timers before exiting.
-- Issue handoff via `tracker.handoff_state` config field - when an agent
-  session completes normally and the issue is still in an active state, the
-  orchestrator transitions it to the configured handoff state (e.g.,
-  "In Review") and skips the continuation retry.
-- `TransitionIssue` operation on the `TrackerAdapter` interface - Jira
-  adapter uses the workflow transitions API; file adapter uses an in-memory
-  override map.
-- Per-issue effort budget via `agent.max_sessions` - limits total agent
-  sessions dispatched per issue before releasing the claim. Default 0
-  (unlimited).
-- Documentation site at https://docs.sortie-ai.com/ with initial
-  configuration reference.
+- Graceful shutdown: on SIGTERM/SIGINT the orchestrator now drains running workers (up to 30 s), persists final state to SQLite, flushes pending agent events, and cancels retry timers before exiting.
+- Issue handoff via `tracker.handoff_state` config field - when an agent session completes normally and the issue is still in an active state, the orchestrator transitions it to the configured handoff state (e.g., "In Review") and skips the continuation retry.
+- `TransitionIssue` operation on the `TrackerAdapter` interface - Jira adapter uses the workflow transitions API; file adapter uses an in-memory override map.
+- Per-issue effort budget via `agent.max_sessions` - limits total agent sessions dispatched per issue before releasing the claim. Default 0 (unlimited).
+- Documentation site at https://docs.sortie-ai.com/ with initial configuration reference.
 
 ### Fixed
 
-- Orchestrator: continuation retry attempt counter now increments correctly
-  across sessions instead of resetting to 1 on every normal exit.
-- CLI: orchestrator-only fields (`max_turns`, `max_concurrent_agents`,
-  `max_retry_backoff_ms`, `max_concurrent_agents_by_state`) removed from
-  the adapter config map, fixing silent shadowing of adapter extension keys
-  such as `claude-code.max_turns`.
-- Jira adapter: `extractStringSlice` now handles `[]string` from the config
-  layer - previously only `[]any` was handled, silently reverting to default
-  states and causing configured `active_states` / `terminal_states` to be
-  ignored.
-- Jira adapter: `FetchIssueStatesByIDs` now queries by numeric `id` instead
-  of `key`, and results are keyed by issue ID, fixing reconciliation failures
-  where state changes on running issues were never detected.
-- Jira adapter: non-numeric IDs are now rejected instead of silently mangled,
-  and empty ID lists no longer produce invalid `id IN ()` JQL.
-- File and Jira adapters now return `ErrTrackerNotFound` for missing issues
-  in `FetchIssueByID` and `FetchIssueComments`.
-- Orchestrator: INFO-level tick summary log after each dispatch cycle with
-  candidate, dispatched, running, and retrying counters to distinguish normal
-  operation from a stall.
+- Orchestrator: continuation retry attempt counter now increments correctly across sessions instead of resetting to 1 on every normal exit.
+- CLI: orchestrator-only fields (`max_turns`, `max_concurrent_agents`, `max_retry_backoff_ms`, `max_concurrent_agents_by_state`) removed from the adapter config map, fixing silent shadowing of adapter extension keys such as `claude-code.max_turns`.
+- Jira adapter: `extractStringSlice` now handles `[]string` from the config layer - previously only `[]any` was handled, silently reverting to default states and causing configured `active_states` / `terminal_states` to be ignored.
+- Jira adapter: `FetchIssueStatesByIDs` now queries by numeric `id` instead of `key`, and results are keyed by issue ID, fixing reconciliation failures where state changes on running issues were never detected.
+- Jira adapter: non-numeric IDs are now rejected instead of silently mangled, and empty ID lists no longer produce invalid `id IN ()` JQL.
+- File and Jira adapters now return `ErrTrackerNotFound` for missing issues in `FetchIssueByID` and `FetchIssueComments`.
+- Orchestrator: INFO-level tick summary log after each dispatch cycle with candidate, dispatched, running, and retrying counters to distinguish normal operation from a stall.
 
 ## [0.0.6] - 2026-03-23
 
 ### Added
 
-- Orchestrator engine with state management, concurrency-limited dispatch,
-  worker lifecycle, exponential-backoff retry scheduling, active-run
-  reconciliation, and event-driven poll loop with graceful shutdown.
-- Full startup sequence: workflow load, preflight validation, database open,
-  state reconciliation, and poll loop - in that order.
-- Dispatch preflight checks that validate adapter availability, required API
-  keys, and agent configuration before dispatching work.
-- Adapter metadata via `AdapterMeta` and `RegisterWithMeta` so adapters can
-  declare requirements (e.g., `RequiresAPIKey`) checked during preflight.
-- Retry classification on `TrackerErrorKind` and `AgentErrorKind` - errors
-  are now classified as retryable or permanent for dispatch decisions.
-- `ErrTrackerNotFound` error kind for HTTP 404 responses from tracker
-  adapters.
-- Configurable `db_path` field in workflow configuration with `~` and `$VAR`
-  expansion.
-- Workflow validation callback (`ValidateFunc`) that guards config promotion
-  during hot-reload.
+- Orchestrator engine with state management, concurrency-limited dispatch, worker lifecycle, exponential-backoff retry scheduling, active-run reconciliation, and event-driven poll loop with graceful shutdown.
+- Full startup sequence: workflow load, preflight validation, database open, state reconciliation, and poll loop - in that order.
+- Dispatch preflight checks that validate adapter availability, required API keys, and agent configuration before dispatching work.
+- Adapter metadata via `AdapterMeta` and `RegisterWithMeta` so adapters can declare requirements (e.g., `RequiresAPIKey`) checked during preflight.
+- Retry classification on `TrackerErrorKind` and `AgentErrorKind` - errors are now classified as retryable or permanent for dispatch decisions.
+- `ErrTrackerNotFound` error kind for HTTP 404 responses from tracker adapters.
+- Configurable `db_path` field in workflow configuration with `~` and `$VAR` expansion.
+- Workflow validation callback (`ValidateFunc`) that guards config promotion during hot-reload.
 
 ### Fixed
 
-- Workspace `CleanupByPath` now rejects non-canonical paths and uses the
-  actual workspace path for pending cleanup instead of reconstructing it
-  from config.
-- Startup: preflight checks now run before opening the database, preventing
-  `.sortie.db` creation when configuration is invalid.
-- Startup: `.sortie.db` is now created adjacent to WORKFLOW.md instead of in
-  the working directory.
+- Workspace `CleanupByPath` now rejects non-canonical paths and uses the actual workspace path for pending cleanup instead of reconstructing it from config.
+- Startup: preflight checks now run before opening the database, preventing `.sortie.db` creation when configuration is invalid.
+- Startup: `.sortie.db` is now created adjacent to WORKFLOW.md instead of in the working directory.
 
 ## [0.0.5] - 2026-03-21
 
 ### Added
 
-- Workspace manager: safe path computation from issue identifiers with
-  containment validation and symlink rejection.
-- Workspace manager: atomic directory creation and reuse with `CreatedNow`
-  flag for hook gating.
-- Workspace hook execution with configurable timeout, truncated output
-  capture, and restricted subprocess environment (only `PATH`, `HOME`,
-  `SHELL`, and `SORTIE_*` variables are inherited).
-- Workspace lifecycle orchestration: `Prepare`, `Finish`, and `Cleanup`
-  functions that sequence `after_create`, `before_run`, `after_run`, and
-  `before_remove` hooks with appropriate failure semantics (fatal vs
-  best-effort) and `context.WithoutCancel` for teardown hooks.
-- Batch workspace cleanup (`CleanupTerminal`) for removing terminal-state
-  issue workspaces with per-identifier error collection and best-effort
-  `before_remove` hook execution.
-- `ListWorkspaceKeys` for enumerating workspace directory names under a
-  root, skipping non-directories and symlinks.
+- Workspace manager: safe path computation from issue identifiers with containment validation and symlink rejection.
+- Workspace manager: atomic directory creation and reuse with `CreatedNow` flag for hook gating.
+- Workspace hook execution with configurable timeout, truncated output capture, and restricted subprocess environment (only `PATH`, `HOME`, `SHELL`, and `SORTIE_*` variables are inherited).
+- Workspace lifecycle orchestration: `Prepare`, `Finish`, and `Cleanup` functions that sequence `after_create`, `before_run`, `after_run`, and `before_remove` hooks with appropriate failure semantics (fatal vs best-effort) and `context.WithoutCancel` for teardown hooks.
+- Batch workspace cleanup (`CleanupTerminal`) for removing terminal-state issue workspaces with per-identifier error collection and best-effort `before_remove` hook execution.
+- `ListWorkspaceKeys` for enumerating workspace directory names under a root, skipping non-directories and symlinks.
 
 ## [0.0.4] - 2026-03-20
 
 ### Added
 
-- `AgentAdapter` interface and normalized event model: 13 event types,
-  `TokenUsage`, `AgentConfig`, `Session`, `TurnResult`, and `AgentError` with
-  9 error kinds.
+- `AgentAdapter` interface and normalized event model: 13 event types, `TokenUsage`, `AgentConfig`, `Session`, `TurnResult`, and `AgentError` with 9 error kinds.
 - Agent adapter registry (`registry.Agents`) for registration and lookup by kind.
-- Claude Code agent adapter (kind `"claude-code"`) that launches the CLI as a
-  subprocess, reads JSONL events from stdout, and normalizes them to domain event
-  types. Supports graceful SIGTERM→SIGKILL shutdown on context cancellation and
-  session resumption via `ResumeSessionID`.
+- Claude Code agent adapter (kind `"claude-code"`) that launches the CLI as a subprocess, reads JSONL events from stdout, and normalizes them to domain event types. Supports graceful SIGTERM→SIGKILL shutdown on context cancellation and session resumption via `ResumeSessionID`.
 
 ### Fixed
 
-- Claude Code adapter: double-wait race between `RunTurn` and `StopSession` -
-  `gracefulKill` is now fire-and-forget with timer-based SIGKILL escalation.
-- Claude Code adapter: error on missing binary now includes the actual command
-  name instead of a hardcoded string.
+- Claude Code adapter: double-wait race between `RunTurn` and `StopSession` - `gracefulKill` is now fire-and-forget with timer-based SIGKILL escalation.
+- Claude Code adapter: error on missing binary now includes the actual command name instead of a hardcoded string.
 
 ## [0.0.3] - 2026-03-20
 
@@ -1952,20 +700,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalized `Issue` model and `TrackerAdapter` interface for multi-tracker support.
 - Typed adapter registry with thread-safe registration and lookup.
 - File-based tracker adapter for local JSON task definitions.
-- Jira Cloud REST API v3 adapter with cursor-based paginated search, issue detail
-  retrieval, state tracking, and comment fetching.
+- Jira Cloud REST API v3 adapter with cursor-based paginated search, issue detail retrieval, state tracking, and comment fetching.
 - BFS flattener for Atlassian Document Format (ADF) descriptions to plain text.
 - JQL builder with string escaping and optional `query_filter` clause support.
 - `query_filter` field in tracker configuration for custom JQL expressions.
-- GoReleaser configuration for reproducible cross-platform binary releases
-  (linux/darwin/windows, amd64/arm64).
+- GoReleaser configuration for reproducible cross-platform binary releases (linux/darwin/windows, amd64/arm64).
 
 ### Fixed
 
-- Jira search endpoint migrated from retired `/rest/api/3/search` to
-  `/rest/api/3/search/jql` (Atlassian returns 410 Gone on the old endpoint).
-- Infinite loop guard in Jira comment pagination when the API returns
-  inconsistent offsets.
+- Jira search endpoint migrated from retired `/rest/api/3/search` to `/rest/api/3/search/jql` (Atlassian returns 410 Gone on the old endpoint).
+- Infinite loop guard in Jira comment pagination when the API returns inconsistent offsets.
 
 ## [0.0.2] - 2026-03-19
 
@@ -1973,44 +717,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SQLite persistence layer with WAL mode and single-writer enforcement.
 - Schema migration runner with versioned SQL files.
-- CRUD operations for retry entries, run history, session metadata, and
-  aggregate metrics.
+- CRUD operations for retry entries, run history, session metadata, and aggregate metrics.
 - Startup recovery loader that resumes incomplete retry entries on restart.
 
 ### Fixed
 
-- Deterministic ordering for session metadata queries via `session_id`
-  tie-breaker.
+- Deterministic ordering for session metadata queries via `session_id` tie-breaker.
 
 ## [0.0.1] - 2026-03-18
 
 ### Added
 
 - WORKFLOW.md file loader with YAML front matter and prompt body parsing.
-- Typed configuration layer with `$VAR` environment variable resolution
-  and `~` home directory expansion.
-- Prompt template engine using Go `text/template` in strict mode
-  (unknown variables and filters cause hard errors).
+- Typed configuration layer with `$VAR` environment variable resolution and `~` home directory expansion.
+- Prompt template engine using Go `text/template` in strict mode (unknown variables and filters cause hard errors).
 - Turn-based prompt builder for multi-turn agent conversations.
 - Filesystem watcher for live WORKFLOW.md reload via `fsnotify`.
 - CLI entry point (`sortie`) with graceful shutdown and signal handling.
 
 ### Fixed
 
-- Environment variable expansion now preserves inline `$VAR` references
-  inside URIs instead of silently dropping them.
-- Fractional float values no longer silently coerced to integers during
-  config parsing.
+- Environment variable expansion now preserves inline `$VAR` references inside URIs instead of silently dropping them.
+- Fractional float values no longer silently coerced to integers during config parsing.
 
 ## [0.0.0] - 2026-03-18
 
 ### Added
 
 - Go module scaffold and project directory structure.
-- Structured logging built on `log/slog` with issue-aware and
-  session-aware contextual fields.
-- CI pipeline with `golangci-lint`, `gofmt` enforcement, and test
-  execution via GitHub Actions.
+- Structured logging built on `log/slog` with issue-aware and session-aware contextual fields.
+- CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
 [Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.20.1...HEAD
