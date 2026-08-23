@@ -159,6 +159,22 @@ func TestRegistration(t *testing.T) {
 	}
 }
 
+// TestMCPInjectionConformance proves mock's declared disposition pins
+// its true behavior: it launches no process, so its launch surface is
+// empty. The call stays in place even though mock builds no launch
+// surface, because a kind with no call is a kind whose declaration
+// nothing checks.
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("mock")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("mock") reported not registered`)
+	}
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, "/ws/.sortie/mcp.json", agenttest.MCPLaunchSurface{})
+}
+
 func TestStartSession(t *testing.T) {
 	t.Parallel()
 

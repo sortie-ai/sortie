@@ -2410,6 +2410,13 @@ Each adapter (tracker or agent) may define configuration in a top-level object n
 after its `kind` value. These values are passed through to the adapter without validation
 by the orchestrator core.
 
+A session reads the block belonging to the agent kind it was dispatched on, and reads it
+again on every attempt of that session. That kind is the one a matching `dispatch.rules`
+entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the
+fallback chain in [Section 2.11](#211-dispatch--rule-based-routing). The block named by
+`agent.kind` therefore applies only when neither a matching rule nor the dispatch default
+chose another kind.
+
 **File tracker adapter:**
 
 ```yaml
@@ -2615,6 +2622,38 @@ bound. A turn that goes silent is caught first by `agent.stall_timeout_ms`.
 **MCP:** Under `KIRO_API_KEY` authentication the backend `GetProfile` gate
 disables MCP. A workspace `mcp.json` is not loaded and `--require-mcp-startup`
 is unreachable, so MCP-dependent workflows cannot run on the API-key path.
+
+**MCP configuration and the generated file:**
+
+For every agent kind, the worker writes a generated MCP configuration file into the
+session workspace at `.sortie/mcp.json`. It always carries Sortie's own `sortie-tools`
+server. When the session's own agent block sets `mcp_config`, the servers declared in
+the file that key names are merged into the generated copy; the operator's file itself
+is never modified, and a file that already declares a server named `sortie-tools` fails
+the attempt.
+
+Which adapters hand that generated file to the agent process differs by kind:
+
+| Agent kind | Generated file reaches the agent | How |
+| --- | --- | --- |
+| `claude-code` | Yes | passed to `--mcp-config` |
+| `copilot-cli` | Yes | passed to `--additional-mcp-config` as `@<path>` |
+| `codex` | No | the adapter passes no MCP argument |
+| `kiro` | No | the backend profile gate disables MCP under API-key authentication |
+| `opencode` | No | the adapter passes no MCP configuration to the agent process |
+| `mock` | No | the adapter launches no process |
+
+Setting `mcp_config` in a block belonging to a kind in a `No` row therefore has no
+effect on the agent. `sortie validate` reports that combination as a warning naming the
+kind. It is a warning and not an error: such a configuration stays valid, the run
+proceeds, and the exit code is unchanged.
+
+`claude-code.mcp_config` is documented in the Claude Code table above. The Copilot CLI
+reads the same key:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `copilot-cli.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--additional-mcp-config` prefixed with `@`, which is how the Copilot CLI reads a configuration from a file. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. |
 
 **Custom or future adapters (illustrative example):**
 

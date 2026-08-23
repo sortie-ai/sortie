@@ -216,12 +216,27 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// a block no run reads.
 	for _, kind := range orderedUniqueAgentKinds(cfg) {
 		agentMeta, registered := params.AgentRegistry.Meta(kind)
+		settings := config.ResolveAgentSettings(cfg, kind, "")
+
+		// A kind whose adapter never hands the generated MCP config
+		// path to the agent process cannot make use of an mcp_config
+		// value in its own block. This is evaluated for every kind,
+		// including one with no config validator (for example
+		// "mock"), so it is not folded behind the early continue
+		// below.
+		if registered && agentMeta.MCPInjection == registry.MCPInjectionUnsupported && settings.MCPConfigPath != "" {
+			warns = append(warns, PreflightWarning{
+				Check:   "agent.mcp_config",
+				Message: "mcp_config in the " + strconv.Quote(kind) + " block cannot reach the agent: this agent kind receives no MCP configuration",
+			})
+		}
+
 		if !registered || agentMeta.ValidateAgentConfig == nil {
 			continue
 		}
 		fields := registry.AgentConfigFields{
 			Kind:        kind,
-			Passthrough: config.AgentAdapterConfig(cfg, kind),
+			Passthrough: settings.Passthrough,
 		}
 		for _, d := range agentMeta.ValidateAgentConfig(fields) {
 			switch d.Severity {

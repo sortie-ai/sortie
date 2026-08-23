@@ -60,7 +60,7 @@ The prompt half. The worker appends the tool advertisement on the first turn of 
 
 The dispatch path itself is complete and covered by tests, so what is missing is the wiring, not the mechanism.
 
-The generated MCP configuration path is copied into session state and never read again. This adapter writes no MCP configuration and passes no MCP argument.
+The generated MCP configuration path is discarded: the adapter neither stores it nor reads it. This adapter writes no MCP configuration and passes no MCP argument.
 
 Whether Sortie's tools reach an agent at all is a per-adapter property, and this is the adapter where the answer is currently no.
 

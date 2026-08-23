@@ -41,6 +41,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
+		MCPInjection:        registry.MCPInjectionSupported,
 	})
 }
 

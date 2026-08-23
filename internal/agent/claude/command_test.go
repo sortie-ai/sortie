@@ -4,6 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // assertHasArgPair fails if flag and value do not appear as consecutive
@@ -34,6 +37,24 @@ func newFirstTurnState(mcpConfigPath string) *sessionState {
 		isContinuation:  false,
 		mcpConfigPath:   mcpConfigPath,
 	}
+}
+
+// TestMCPInjectionConformance proves claude-code's real buildArgs
+// output carries the generated MCP config path, matching its declared
+// disposition.
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("claude-code")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("claude-code") reported not registered`)
+	}
+
+	const mcpConfigPath = "/ws/.sortie/mcp.json"
+	state := newFirstTurnState(mcpConfigPath)
+	args := buildArgs(state, 1, "do work", passthroughConfig{SessionPersistence: true})
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args})
 }
 
 func TestBuildArgs_MCPConfig(t *testing.T) {

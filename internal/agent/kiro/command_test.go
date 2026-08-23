@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -378,6 +379,24 @@ func TestBuildArgs_EmptyConfigDefaultsToTrustAllTools(t *testing.T) {
 			assertNoToken(t, args, "--trust-tools=")
 		})
 	}
+}
+
+// TestMCPInjectionConformance proves kiro's real buildArgs output
+// never carries the generated MCP config path, matching its declared
+// disposition. buildArgs takes no MCP config parameter at all, so the
+// path passed here reaches nothing by construction.
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("kiro")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("kiro") reported not registered`)
+	}
+
+	const mcpConfigPath = "/ws/.sortie/mcp.json"
+	args := buildArgs(&sessionState{}, 1, "do work", passthroughConfig{})
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args})
 }
 
 func TestKiroRegistered(t *testing.T) {

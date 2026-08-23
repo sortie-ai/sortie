@@ -5,6 +5,10 @@
 // stream carried nothing but opencode's masked generic server error, the
 // adapter consults `opencode models` to reconstruct the unknown-model
 // diagnostic.
+//
+// The adapter passes no MCP configuration to the agent process:
+// [domain.StartSessionParams] MCPConfigPath is ignored and no MCP startup
+// flag is passed.
 package opencode
 
 import (
@@ -34,6 +38,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
+		MCPInjection:        registry.MCPInjectionUnsupported,
 	})
 }
 

@@ -33,6 +33,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("codex", NewCodexAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
+		MCPInjection:        registry.MCPInjectionUnsupported,
 	})
 }
 
@@ -76,8 +77,6 @@ type sessionState struct {
 	// object has been processed for this run. Monotone: set true once
 	// and never cleared.
 	usageMeasured bool
-
-	mcpConfigPath string
 
 	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
 	// concurrent access from StopSession and the event read loop.
@@ -127,10 +126,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	state := &sessionState{
-		target:        target,
-		agentConfig:   params.AgentConfig,
-		mcpConfigPath: params.MCPConfigPath,
-		acc:           agentcore.NewRunUsage(),
+		target:      target,
+		agentConfig: params.AgentConfig,
+		acc:         agentcore.NewRunUsage(),
 	}
 
 	var cmd *exec.Cmd

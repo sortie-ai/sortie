@@ -857,6 +857,168 @@ func TestValidateDispatchConfig_AgentConfigValidation(t *testing.T) {
 	})
 }
 
+// TestValidateDispatchConfig_MCPConfigWarning covers the five states an
+// mcp_config value in an agent kind's block can draw the "agent.mcp_config"
+// warning from: a non-injecting kind with the value set, a non-injecting
+// kind without it, an injecting kind with it, a kind the registry reports
+// unregistered, and a registered non-injecting kind whose adapter supplies
+// no config validator. The last state is mock's own shape and is the one
+// that reddens if the check is folded behind ValidateDispatchConfig's
+// existing "no validator" early continue, since that continue would skip
+// the warning for exactly the kind most likely to carry mcp_config in
+// practice.
+func TestValidateDispatchConfig_MCPConfigWarning(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a non-injecting kind with mcp_config set draws one warning and no error", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("test-agent", map[string]any{"mcp_config": "/ws/.sortie/mcp.json"})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionUnsupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.mcp_config")
+		requireNoCheck(t, result, "agent.mcp_config")
+		if !result.OK() {
+			t.Errorf("ValidateDispatchConfig().OK() = false, want true: a warning must not block dispatch")
+		}
+
+		// Exactly one warning per affected kind, and it names the kind,
+		// so an operator reading it knows which block to edit.
+		var got []PreflightWarning
+		for _, w := range result.Warnings {
+			if w.Check == "agent.mcp_config" {
+				got = append(got, w)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("ValidateDispatchConfig() produced %d agent.mcp_config warnings, want 1: %v", len(got), got)
+		}
+		if !strings.Contains(got[0].Message, "test-agent") {
+			t.Errorf("warning message = %q, want it to name the agent kind %q", got[0].Message, "test-agent")
+		}
+	})
+
+	t.Run("a non-injecting kind without mcp_config draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionUnsupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.mcp_config")
+	})
+
+	t.Run("an injecting kind with mcp_config draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("test-agent", map[string]any{"mcp_config": "/ws/.sortie/mcp.json"})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionSupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.mcp_config")
+	})
+
+	t.Run("a kind reached only through a dispatch rule that the registry reports unregistered draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "rule-agent"}},
+					},
+				},
+			}
+			cfg.SetExtensionSection("rule-agent", map[string]any{"mcp_config": "/ws/.sortie/mcp.json"})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "rule-agent" {
+					return registry.AgentMeta{}, false
+				}
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionUnsupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.mcp_config")
+	})
+
+	t.Run("mock's shape: registered, no config validator, block sets mcp_config draws one warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "mock"}},
+					},
+				},
+			}
+			cfg.SetExtensionSection("mock", map[string]any{"mcp_config": "/ws/.sortie/mcp.json"})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "mock" {
+					return registry.AgentMeta{MCPInjection: registry.MCPInjectionUnsupported}, true
+				}
+				return registry.AgentMeta{}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.mcp_config")
+		requireNoCheck(t, result, "agent.mcp_config")
+	})
+}
+
 // TestValidateDispatchConfig_DefaultedTrackerStates covers the collision
 // rules re-run against the effective state lists, the ones a tracker
 // adapter fills from its own fallback when the workflow list is empty.
