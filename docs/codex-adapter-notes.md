@@ -6,15 +6,19 @@
 > Coverage. The configuration surface, including the approval policy and the sandbox modes,
 > follows OpenAI's published [configuration schema](https://developers.openai.com/codex/config-schema.json),
 > which tracks the current release and is the authoritative source for those fields. The approval
-> value set and the flag surface were re-checked against **v0.147.0** on the research host and
-> agree with it. The app-server transcripts, the `codex exec` JSONL samples, and the `userAgent`
-> values quoted in the examples date from **v0.121.0** and have not been re-captured since, so a
-> shape shown in an example may lag the current release even where the surrounding claim does
-> not. Hosted-tool and model-tier behavior and the feature-flag surface were recorded against
-> v0.134.0 in May 2026 and have not been re-observed, which makes them the weakest claims in this
-> document. Where a local build and the published schema disagree, the schema wins and the
-> divergence is named at the claim. The dynamic-tool response payload rests on OpenAI Symphony's
-> Elixir app-server client, not on a local probe.
+> value set is confirmed on **v0.147.0** and **v0.149.0**, and the flag surface is anchored to
+> **v0.147.0**, both on the research host. MCP server
+> configuration and app-server project trust are read from the upstream sources for **v0.147.0**
+> and **v0.149.0**; those releases do not behave identically on that surface, and each difference
+> is named at the claim rather than folded into a single version. The app-server transcripts, the
+> `codex exec` JSONL samples, and the `userAgent` values quoted in the examples date from
+> **v0.121.0** and have not been re-captured since, so a shape shown in an example may lag the
+> current release even where the surrounding claim does not. Hosted-tool and model-tier behavior
+> and the feature-flag surface were recorded against v0.134.0 in May 2026 and have not been
+> re-observed, which makes them the weakest claims in this document. Where a local build and the
+> published schema disagree, the schema wins and the divergence is named at the claim. The
+> dynamic-tool response payload is exercised end to end against **v0.149.0** on the research
+> host.
 >
 > Claims about Sortie's own code name a Go symbol and were verified against the tree.
 > Primary sources are linked under "Sources" at the end.
@@ -196,7 +200,8 @@ Then:
 ```
 
 `initializeHandshake` always requests `capabilities.experimentalApi: true`, which is what
-unlocks the `dynamicTools` field on `thread/start`.
+unlocks the `dynamicTools` field on `thread/start`. Sending tools without that capability draws
+`-32600` with the message `thread/start.dynamicTools requires experimentalApi capability`.
 
 ---
 
@@ -490,12 +495,26 @@ required, and `request_permissions` and `skill_approval` are optional. A `false`
 that category automatically instead of showing it.
 
 Values and behaviors above come from OpenAI's published configuration schema
-([config-schema.json](https://developers.openai.com/codex/config-schema.json)), which is the
-authoritative surface for this field. A fourth string, `on-failure`, existed in v0.121.0 with a
-help text marking it deprecated, and it is gone: neither the published schema nor the protocol
-schema v0.147.0 generates for itself declares it, and `--ask-for-approval` at that version
-documents only the three surviving values. A value outside the accepted set is rejected at
-`thread/start`.
+([config-schema.json](https://developers.openai.com/codex/config-schema.json)) and the protocol
+schema the app-server generates for itself. Those two surfaces disagree on `untrusted`: the
+protocol schema each release generates declares it, while the published configuration schema
+lists only `on-request` and `never` among its strings. Upstream describes `untrusted` as an
+internal policy for projects marked untrusted. Because `approvalPolicy` travels on
+`thread/start`, the protocol schema governs the value set here. A fourth string, `on-failure`,
+existed in v0.121.0 with a help text marking it deprecated, and it is gone: neither the published
+schema nor the protocol schema v0.147.0 generates for itself declares it, and
+`--ask-for-approval` at that version documents only the three surviving values. A value outside
+the accepted set is rejected at `thread/start` with `-32600`:
+
+```json
+{"code": -32600, "message": "Invalid request: unknown variant `on-failure`, expected one of `untrusted`, `on-request`, `granular`, `never`"}
+```
+
+That enumeration is the protocol's own statement of what it accepts, and it shows this field
+enforcing what it declares: the server resolved the field and rejected the value rather than
+failing to parse the frame. It names four variants because the object arm is flattened into the
+same list under its tag, `granular`, which is the same surface as three strings plus the object
+form.
 
 `startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it, and
 `typeutil.StringFrom` accepts only the string form, so the `granular` object cannot be expressed
@@ -632,12 +651,24 @@ A missing binary is caught before launch: `agentcore.ResolveBinary` returns
 
 ## Dynamic tool calls
 
-`StartSession` passes every tool in `domain.ToolRegistry` to `thread/start` as a dynamic tool;
-in a normal Sortie run that registry holds `trackerapi.TrackerAPITool`, whose `Name()` is
-`tracker_api`. When the agent invokes one, the app-server sends an `item/tool/call` request:
+`StartSession` passes every tool in `domain.ToolRegistry` to `thread/start` as a dynamic tool,
+named by the tool's `Name()`. The examples below use `tracker_api`, the name
+`trackerapi.TrackerAPITool` reports.
+
+A `dynamicTools` entry is a union tagged on `type`. The function arm carries `name`,
+`description`, `inputSchema` and an optional `deferLoading`; the namespace arm carries `name`,
+`description` and a nested `tools` list. The generated schema marks `type` required on both arms.
+`buildDynamicTools` emits no `type` and depends on the server not enforcing it, which is a
+forward-compatibility risk that one field would retire.
+
+When the agent invokes a tool, the app-server sends an `item/tool/call` request:
 
 ```json
 {"method": "item/tool/call", "id": 50, "params": {
+  "threadId": "<thread id>",
+  "turnId": "<turn id>",
+  "callId": "<call id>",
+  "namespace": null,
   "tool": "tracker_api",
   "arguments": {
     "operation": "fetch_issue",
@@ -645,6 +676,11 @@ in a normal Sortie run that registry holds `trackerapi.TrackerAPITool`, whose `N
   }
 }}
 ```
+
+`DynamicToolCallParams` requires `threadId`, `turnId`, `callId`, `tool` and `arguments`, and
+carries a nullable `namespace`. The decoder reads `tool` and `arguments`; the rest are declared
+and ignored. `namespace` is non-null only for namespace-form tools, which the adapter does not
+emit.
 
 `handleToolCall` looks the name up in the registry and runs `AgentTool.Execute` in its own
 goroutine so the event read loop keeps draining stdout. `toolResultFor` builds the response:
@@ -657,7 +693,12 @@ goroutine so the event read loop keeps draining stdout. `toolResultFor` builds t
 }}
 ```
 
-The result carries `success` (boolean), `output` (string), and `contentItems` (array). A tool
+`DynamicToolCallResponse` declares exactly two required members, `contentItems` and `success`.
+The `output` string sent alongside them is outside the declared type; the first-party client
+sends it too and the current release accepts a response carrying all three, so it is an accepted
+extension rather than part of the contract. A `contentItems` entry is a union tagged on `type`
+with three arms: `inputText` with `text`, `inputImage` with `imageUrl`, and `inputAudio` with
+`audioUrl`. The adapter emits only `inputText`. A tool
 that returns an error responds with `success: false` and the error text as `output`, and emits
 a `domain.EventToolResult` with `ToolError` set. When the tool name is not registered, or no
 registry was configured, the response is `success: false` with `unsupported tool: <name>` and
@@ -736,14 +777,49 @@ invocation with `-c mcp_servers.<name>.command=...` overrides, or reached by poi
 `trust_level = "trusted"` under `[projects."<path>"]` in the user-level config, also gets an
 `mcp_servers` table read from a `config.toml` file inside that project's own `.codex`
 directory: confirmed empirically on a running v0.149.0 binary, where an untrusted project's
-`.codex/config.toml` contributes nothing to `codex mcp list` and a trusted one's does. Codex
-reads no project-level `.codex/mcp.json` in either case. The only `.mcp.json` the binary
+`.codex/config.toml` contributes nothing to `codex mcp list` and a trusted one's does.
+
+That trust is not necessarily something the operator grants. On `thread/start` the app server
+records it unprompted whenever the request carries a `cwd`, the project has no `trust_level` yet,
+and the sandbox permits writing the working directory: it writes `trust_level = "trusted"` for the
+resolved Git root, or for the working directory when that is not a repository, into the user-level
+`config.toml` and reloads the configuration before the thread starts. Which sandbox value counts
+differs by release. v0.147.0 tests the requested sandbox mode, so a requested `workspace-write` or
+`danger-full-access` grants trust outright, even where a managed constraint reduces the effective
+permission to read-only. v0.149.0 tests the effective permission profile after those constraints,
+so a request reduced to read-only grants nothing; v0.147.0 is the more permissive of the two. The
+entry persists, so the write lands the first time a project is seen rather than on every run. The
+interactive TUI asks first (it prompts `Do you trust the contents of this directory?`), while the
+app-server surface the adapter drives has no equivalent prompt. Sortie sends both a `cwd` and a
+`workspace-write` sandbox on `thread/start`, so a normal run takes this path. The reload happens
+before the thread starts, so a `.codex/config.toml` arriving with the checkout is live in the same
+run that grants the trust. Arriving with the checkout is the only route under this sandbox:
+`workspace-write` makes the workspace's own `.codex` directory a read-only entry, so the agent
+cannot write that file itself. An explicit `trust_level = "untrusted"` recorded for the path
+blocks both the grant and the project-local layer, because the grant is skipped whenever any
+trust level is already present.
+
+MCP servers declared in that layer run as child processes of the app-server and are not confined
+by the `sandbox` value sent on `thread/start`. That value governs the commands the agent
+executes, not the transports it connects to: the local launcher builds the configured command
+directly, and the executor path starts it with no sandbox.
+
+Codex reads no project-level `.codex/mcp.json` in either case. The only `.mcp.json` the binary
 recognizes is plugin-scoped: a package carrying a `.codex-plugin/plugin.json` manifest may
 ship one holding an `mcpServers` object, which the plugin manager loads. That is a packaging
 artifact, not a file an operator points Codex at.
 
-When an enabled MCP server is configured with `required = true` and fails to initialize,
-`thread/start` fails instead of continuing without it.
+When an enabled MCP server is configured with `required = true` and fails to initialize, session
+initialization fails rather than continuing without that server: `thread/start` returns a JSON-RPC
+internal error reading `error creating thread: Fatal error: Failed to initialize session: required
+MCP servers failed to initialize: <name>: <cause>`, and `thread/resume` returns the same text
+behind an `error resuming thread:` prefix. The key defaults to `false`; under that default Codex
+starts the thread without the server and reports the failure in an
+`mcpServer/startupStatus/updated` notification. Its parameters require `name` and `status` and
+may carry `threadId`, `error` and `failureReason`; `status` runs over `starting`, `ready`,
+`failed` and `cancelled`, moving from `starting` to `failed` for a server that does not come up,
+and `failureReason` has the single value `reauthenticationRequired`. Both v0.147.0 and
+v0.149.0 carry this path.
 
 Sortie reaches Codex tools through dynamic tool registration on `thread/start` instead, which
 needs no separate server process. `StartSession` copies
@@ -1021,7 +1097,24 @@ Each entry names the probe that would settle it.
 - [Non-interactive mode](https://developers.openai.com/codex/noninteractive)
 - [App Server protocol](https://developers.openai.com/codex/app-server)
 - [Agent approvals & security](https://developers.openai.com/codex/agent-approvals-security)
+- [Model Context Protocol](https://developers.openai.com/codex/mcp)
+- [Configuration reference](https://developers.openai.com/codex/config-reference)
 - [Authentication](https://developers.openai.com/codex/auth)
 - [Hooks](https://developers.openai.com/codex/hooks)
 - [Codex SDK](https://developers.openai.com/codex/sdk)
 - [openai/codex GitHub repository](https://github.com/openai/codex)
+- `codex app-server generate-json-schema --out <dir>`, which writes the JSON Schema set for the
+  app-server protocol; 39 documents on v0.149.0
+- `codex app-server generate-ts --out <dir>`, which writes the equivalent TypeScript declarations
+
+Both are generated from the types the running binary uses, which makes them the authoritative,
+version-exact description of the wire protocol and the first source to consult for any
+wire-format question. Both require an output directory. They are easy to miss because top-level
+help marks their parent `app-server` as experimental.
+
+The generated schema is authoritative for what the app-server declares and unreliable for what it
+enforces. The two come apart per field rather than per surface: on one request a field rejects
+every value it does not declare, while another is marked required and is not enforced at all.
+A `dynamicTools` entry omitting `type` starts a thread, while omitting `name` or `inputSchema`
+draws `-32600 Invalid request: missing field '<name>'`. Read enforcement off a probe of the
+field, never off the schema.
