@@ -1,6 +1,6 @@
 # Linear adapter notes
 
-Notes for a developer changing sortie's Linear tracker adapter: what GraphQL costs us that REST does not, where Linear's model and ours disagree, and the traps that are invisible until they bite.
+Notes for a developer changing Sortie's Linear tracker adapter: what GraphQL costs us that REST does not, where Linear's model and ours disagree, and the traps that are invisible until they bite.
 
 Last updated: 2026-08-23
 

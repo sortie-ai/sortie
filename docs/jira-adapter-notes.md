@@ -1,6 +1,6 @@
 # Jira adapter notes
 
-Notes for a developer changing sortie's Jira tracker adapter: the decisions it encodes, the places Jira's model does not line up with ours, and the failure modes worth recognizing before you spend a day rediscovering one.
+Notes for a developer changing Sortie's Jira tracker adapter: the decisions it encodes, the places Jira's model does not line up with ours, and the failure modes worth recognizing before you spend a day rediscovering one.
 
 Last updated: 2026-08-23
 
@@ -34,7 +34,7 @@ Every interpolated project key, state name, and issue key passes through a quote
 
 `tracker.query_filter` is a raw JQL fragment the adapter neither parses nor validates. It is ANDed into the candidate and by-states queries and deliberately left out of the two batch state lookups: those issues already passed filtering at dispatch time, and re-applying the filter would make a running session invisible the moment an operator narrowed the fragment.
 
-The fragment is wrapped in parentheses when it is appended, and that is load-bearing rather than tidy. Without them a fragment containing a top-level `OR` binds loosely enough to widen the query past the project and state constraints the adapter just built, and an operator would be selecting issues sortie was never configured to touch. Parenthesization is the only containment there is, since nothing parses the fragment.
+The fragment is wrapped in parentheses when it is appended, and that is load-bearing rather than tidy. Without them a fragment containing a top-level `OR` binds loosely enough to widen the query past the project and state constraints the adapter just built, and an operator would be selecting issues Sortie was never configured to touch. Parenthesization is the only containment there is, since nothing parses the fragment.
 
 ## Field mapping traps
 
@@ -50,7 +50,7 @@ Comments never arrive with a search result. The candidate fetch leaves `Comments
 
 The adapter keeps issue links whose type name equals "Blocks" and whose inward side is present, and builds blocker refs from that inward side. A link carrying only the outward side is skipped, so a dependent issue is never mistaken for a blocker.
 
-The comparison is exact and against a compile-time constant. Rename that link type in Jira and every blocker silently vanishes from the adapter's view, after which blocked issues dispatch as though nothing were blocking them. There is no error and no warning. When an operator reports that sortie started work on a blocked issue, check the configured name of their link type first, and check which side of the link their instance puts the blocking issue on before changing the extraction.
+The comparison is exact and against a compile-time constant. Rename that link type in Jira and every blocker silently vanishes from the adapter's view, after which blocked issues dispatch as though nothing were blocking them. There is no error and no warning. When an operator reports that Sortie started work on a blocked issue, check the configured name of their link type first, and check which side of the link their instance puts the blocking issue on before changing the extraction.
 
 ## Bodies differ by version, and one of them can lose text
 
