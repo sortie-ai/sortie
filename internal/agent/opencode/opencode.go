@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -71,8 +70,9 @@ type sessionState struct {
 	// mcpConfigContent is the translated MCP configuration document
 	// delivered through the runtime's inline configuration environment
 	// variable on every turn's subprocess. Empty when the session
-	// carries no generated configuration, or when the launch target is
-	// remote. Set once in StartSession and never mutated after.
+	// carries no generated configuration, when that configuration
+	// declares no server, or when the launch target is remote. Set
+	// once in StartSession and never mutated after.
 	mcpConfigContent string
 
 	// usageMeasured reports whether a session export has yielded a
@@ -125,25 +125,13 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 		return domain.Session{}, agentErr
 	}
 
-	var mcpConfigContent string
-	if params.MCPConfigPath != "" && target.RemoteCommand == "" {
-		servers, parseErr := mcpconfig.Parse(params.MCPConfigPath)
-		if parseErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrResponseError,
-				Message: fmt.Sprintf("parse MCP config: %v", parseErr),
-				Err:     parseErr,
-			}
+	mcpConfigContent, mcpErr := buildMCPConfigContent(params.MCPConfigPath, target.RemoteCommand != "")
+	if mcpErr != nil {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrResponseError,
+			Message: fmt.Sprintf("translate MCP config: %v", mcpErr),
+			Err:     mcpErr,
 		}
-		document, renderErr := renderMCPConfigDocument(servers)
-		if renderErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrResponseError,
-				Message: fmt.Sprintf("render MCP config document: %v", renderErr),
-				Err:     renderErr,
-			}
-		}
-		mcpConfigContent = document
 	}
 
 	state := &sessionState{
@@ -189,9 +177,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			Err:     err,
 		}
 	}
-	if state.mcpConfigContent != "" {
-		env = append(env, "OPENCODE_CONFIG_CONTENT="+state.mcpConfigContent)
-	}
+	env = appendMCPConfigEnv(env, state.mcpConfigContent)
 
 	managedEnv, err := buildManagedEnv(a.passthrough)
 	if err != nil {

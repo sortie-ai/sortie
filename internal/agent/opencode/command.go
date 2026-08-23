@@ -239,6 +239,36 @@ type mcpConfigDocumentEntry struct {
 // renderMCPConfigDocument translates servers into the runtime's own
 // MCP configuration document as compact JSON. A nil Server.Enabled
 // renders true, matching the runtime's own default.
+// buildMCPConfigContent returns the translated configuration document
+// a session started with these parameters delivers, or an empty string
+// when it delivers none: a remote launch, no generated configuration,
+// or a configuration declaring no server. It is the adapter's own
+// composition, so a conformance test measures what a session does
+// rather than repeating the steps and measuring itself.
+func buildMCPConfigContent(mcpConfigPath string, remote bool) (string, error) {
+	if mcpConfigPath == "" || remote {
+		return "", nil
+	}
+
+	servers, err := mcpconfig.Parse(mcpConfigPath)
+	if err != nil {
+		return "", err
+	}
+	if len(servers) == 0 {
+		return "", nil
+	}
+	return renderMCPConfigDocument(servers)
+}
+
+// appendMCPConfigEnv appends the delivery variable to env when content
+// is non-empty, and returns env unchanged otherwise.
+func appendMCPConfigEnv(env []string, content string) []string {
+	if content == "" {
+		return env
+	}
+	return append(env, "OPENCODE_CONFIG_CONTENT="+content)
+}
+
 func renderMCPConfigDocument(servers []mcpconfig.Server) (string, error) {
 	doc := mcpConfigDocument{MCP: make(map[string]mcpConfigDocumentEntry, len(servers))}
 

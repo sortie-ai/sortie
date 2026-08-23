@@ -241,13 +241,9 @@ func TestMCPInjectionConformance(t *testing.T) {
 	t.Run("local launch delivers the translated document", func(t *testing.T) {
 		t.Parallel()
 
-		servers, err := mcpconfig.Parse(mcpConfigPath)
+		document, err := buildMCPConfigContent(mcpConfigPath, false)
 		if err != nil {
-			t.Fatalf("mcpconfig.Parse() error = %v", err)
-		}
-		document, err := renderMCPConfigDocument(servers)
-		if err != nil {
-			t.Fatalf("renderMCPConfigDocument() error = %v", err)
+			t.Fatalf("buildMCPConfigContent() error = %v", err)
 		}
 
 		state := newTestSessionState("/workspace", "")
@@ -256,7 +252,7 @@ func TestMCPInjectionConformance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildRunEnv() error = %v", err)
 		}
-		env = append(env, "OPENCODE_CONFIG_CONTENT="+document)
+		env = appendMCPConfigEnv(env, document)
 
 		agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
 	})

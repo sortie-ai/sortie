@@ -240,6 +240,57 @@ func TestStartSession_ResumeSession(t *testing.T) {
 	}
 }
 
+func TestStartSession_MCPConfigContent(t *testing.T) {
+	t.Parallel()
+
+	write := func(t *testing.T, content string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "mcp.json")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		return path
+	}
+
+	const withServer = `{"mcpServers":{"sortie-tools":{"command":"/usr/local/bin/sortie","args":["mcp-server"]}}}`
+
+	tests := []struct {
+		name    string
+		content string
+		sshHost string
+		want    bool
+	}{
+		{name: "local launch carries the document", content: withServer, want: true},
+		{name: "remote launch carries none", content: withServer, sshHost: "build-host", want: false},
+		{name: "no declared server carries none", content: `{"mcpServers":{}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a, _ := NewOpenCodeAdapter(map[string]any{})
+			session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+				WorkspacePath: t.TempDir(),
+				AgentConfig:   domain.AgentConfig{Command: "/bin/sh"},
+				MCPConfigPath: write(t, tt.content),
+				SSHHost:       tt.sshHost,
+			})
+			if err != nil {
+				t.Fatalf("StartSession() error = %v", err)
+			}
+
+			state, ok := session.Internal.(*sessionState)
+			if !ok {
+				t.Fatalf("session.Internal = %T, want *sessionState", session.Internal)
+			}
+			if got := state.mcpConfigContent != ""; got != tt.want {
+				t.Errorf("StartSession() delivered content = %v, want %v (content %q)", got, tt.want, state.mcpConfigContent)
+			}
+		})
+	}
+}
+
 func TestRunTurn_WrongInternalType(t *testing.T) {
 	t.Parallel()
 
