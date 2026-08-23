@@ -5,20 +5,21 @@
 >
 > Coverage. The configuration surface, including the approval policy and the sandbox modes,
 > follows OpenAI's published [configuration schema](https://developers.openai.com/codex/config-schema.json),
-> which tracks the current release and is the authoritative source for those fields. The approval
-> value set is confirmed on **v0.147.0** and **v0.149.0**, and the flag surface is anchored to
-> **v0.147.0**, both on the research host. MCP server
-> configuration and app-server project trust are read from the upstream sources for **v0.147.0**
-> and **v0.149.0**; those releases do not behave identically on that surface, and each difference
-> is named at the claim rather than folded into a single version. The app-server transcripts, the
-> `codex exec` JSONL samples, and the `userAgent` values quoted in the examples date from
-> **v0.121.0** and have not been re-captured since, so a shape shown in an example may lag the
-> current release even where the surrounding claim does not. Hosted-tool and model-tier behavior
+> which tracks the current release. The approval value set is confirmed on **v0.147.0** and
+> **v0.149.0**, and the flag surface is anchored to **v0.147.0**, both on the research host. MCP
+> server configuration and app-server project trust are read from the upstream sources for
+> **v0.147.0** and **v0.149.0**; those releases do not behave identically on that surface, and each
+> difference is named at the claim rather than folded into a single version. The app-server
+> transcripts, the `codex exec` JSONL samples, and the `userAgent` values quoted in the examples
+> date from **v0.121.0** and have not been re-captured since, so a shape shown in an example may lag
+> the current release even where the surrounding claim does not. Hosted-tool and model-tier behavior
 > and the feature-flag surface were recorded against v0.134.0 in May 2026 and have not been
-> re-observed, which makes them the weakest claims in this document. Where a local build and the
-> published schema disagree, the schema wins and the divergence is named at the claim. The
-> dynamic-tool response payload is exercised end to end against **v0.149.0** on the research
-> host.
+> re-observed, which makes them the weakest claims in this document. Two schemas cover this ground
+> and are authoritative for different surfaces: the published configuration schema for what an
+> operator may write in a configuration file, and the protocol schema each release generates for
+> values that travel on a request. They agree almost everywhere. Where they disagree, the surface
+> the value crosses governs, and the divergence is named at the claim. The dynamic-tool response
+> payload is exercised end to end against **v0.149.0** on the research host.
 >
 > Claims about Sortie's own code name a Go symbol and were verified against the tree.
 > Primary sources are linked under "Sources" at the end.
