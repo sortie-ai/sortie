@@ -3043,21 +3043,27 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		cfg.Agent.Kind = "claude-code"
 
 		defaultPath := filepath.Join(workflowDir, "default-mcp.json")
-		defaultData, _ := json.Marshal(map[string]any{
+		defaultData, err := json.Marshal(map[string]any{
 			"mcpServers": map[string]any{
 				"default-marker": map[string]any{"type": "stdio", "command": "/bin/default"},
 			},
 		})
+		if err != nil {
+			t.Fatalf("Marshal defaultData: %v", err)
+		}
 		if err := os.WriteFile(defaultPath, defaultData, 0o600); err != nil {
 			t.Fatalf("WriteFile default operator config: %v", err)
 		}
 
 		routedPath := filepath.Join(workflowDir, "routed-mcp.json")
-		routedData, _ := json.Marshal(map[string]any{
+		routedData, err := json.Marshal(map[string]any{
 			"mcpServers": map[string]any{
 				"routed-marker": map[string]any{"type": "stdio", "command": "/bin/routed"},
 			},
 		})
+		if err != nil {
+			t.Fatalf("Marshal routedData: %v", err)
+		}
 		if err := os.WriteFile(routedPath, routedData, 0o600); err != nil {
 			t.Fatalf("WriteFile routed operator config: %v", err)
 		}
@@ -3215,21 +3221,27 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		workspaceTmpDir := t.TempDir()
 
 		firstOperatorPath := filepath.Join(workflowDir, "first-mcp.json")
-		firstData, _ := json.Marshal(map[string]any{
+		firstData, err := json.Marshal(map[string]any{
 			"mcpServers": map[string]any{
 				"first-attempt-marker": map[string]any{"type": "stdio", "command": "/bin/first"},
 			},
 		})
+		if err != nil {
+			t.Fatalf("Marshal firstData: %v", err)
+		}
 		if err := os.WriteFile(firstOperatorPath, firstData, 0o600); err != nil {
 			t.Fatalf("WriteFile first operator config: %v", err)
 		}
 
 		secondOperatorPath := filepath.Join(workflowDir, "second-mcp.json")
-		secondData, _ := json.Marshal(map[string]any{
+		secondData, err := json.Marshal(map[string]any{
 			"mcpServers": map[string]any{
 				"second-attempt-marker": map[string]any{"type": "stdio", "command": "/bin/second"},
 			},
 		})
+		if err != nil {
+			t.Fatalf("Marshal secondData: %v", err)
+		}
 		if err := os.WriteFile(secondOperatorPath, secondData, 0o600); err != nil {
 			t.Fatalf("WriteFile second operator config: %v", err)
 		}
