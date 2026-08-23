@@ -112,11 +112,20 @@ checkout, because the exposure is bounded by who can place a file in the checked
 workflow that checks out contributor-supplied refs widens it well beyond one that builds only the
 default branch.
 
-Sortie launches agents with the orchestrator's environment. Tracker credentials reach the
-orchestrator through variable indirection, so an agent that runs with approvals disabled in a
-write-capable sandbox can read them out of its own environment block. The sandbox does not help
-here: it governs filesystem and network reach, not what a process reads from the environment it
-was started with.
+Sortie launches a local agent with the orchestrator's environment, so any credential present
+there is readable by an agent running with approvals disabled in a write-capable sandbox. Whether
+a tracker credential is present depends on how it is supplied. A value named indirectly through
+an environment variable, or supplied by an environment override, sits in the orchestrator's
+environment and is inherited. A value written literally into workflow configuration does not, and
+reaches the tracker client without passing through the environment, although it then sits in the
+configuration file instead.
+
+Dispatching a run to a remote host bounds this differently. Only an explicitly constructed set of
+variables crosses with the command, so the remote agent inherits that set rather than the
+orchestrator's environment, and the exposure is the size of that set.
+
+The sandbox does not help in either case. It governs filesystem and network reach, not what a
+process reads from the environment it was started with.
 
 Which runtimes read workspace configuration, which files they key on, and how any of this differs
 between their releases are adapter concerns and belong in the adapter notes.
