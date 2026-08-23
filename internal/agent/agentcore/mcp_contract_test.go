@@ -28,9 +28,13 @@ const mcpConfigPathIdentifier = "MCPConfigPath"
 const mcpContractUndeclaredSelector = "MCPInjectionUndeclared"
 
 // mcpContractAllowlist names the packages under internal/agent/ this
-// check exempts because they register no agent kind, and why. A
-// package absent from this map that this walk reaches is expected to
-// register an agent kind and declare a disposition.
+// check exempts, and why: each is a support package that registers no
+// agent kind. The exemption is belt alongside braces, because
+// checkMCPContractPackage already draws no violation from a package
+// that registers nothing; naming them keeps a later change to
+// registration detection from starting to judge them. What puts a
+// package under the rules is registering a kind, never its absence
+// from this map.
 var mcpContractAllowlist = map[string]string{
 	"agentcore":       "the shared decision package itself; registers no agent kind",
 	"agenttest":       "the conformance-assertion package itself; registers no agent kind",
@@ -95,18 +99,33 @@ func mcpPackageReferencesIdentifier(files []*ast.File, name string) bool {
 
 // fileReadsSelector reports whether file contains a selector
 // expression naming name in a position that reads it. Assignment
-// targets are collected first and excluded from the second pass;
-// compound assignments are left in, since an operator such as += reads
-// the field before it writes it.
+// targets are collected first and excluded from the second pass.
+// Compound assignments are left in, since an operator such as += reads
+// the field before it writes it, as is an increment for the same
+// reason. A plain assignment and a range clause are the only two
+// statement forms whose target can be a selector, so collecting both
+// closes the set.
 func fileReadsSelector(file *ast.File, name string) bool {
 	assigned := make(map[ast.Node]bool)
 	ast.Inspect(file, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || assign.Tok != token.ASSIGN {
-			return true
-		}
-		for _, lhs := range assign.Lhs {
-			assigned[lhs] = true
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			if stmt.Tok != token.ASSIGN {
+				return true
+			}
+			for _, lhs := range stmt.Lhs {
+				assigned[lhs] = true
+			}
+		case *ast.RangeStmt:
+			if stmt.Tok != token.ASSIGN {
+				return true
+			}
+			if stmt.Key != nil {
+				assigned[stmt.Key] = true
+			}
+			if stmt.Value != nil {
+				assigned[stmt.Value] = true
+			}
 		}
 		return true
 	})
@@ -537,6 +556,81 @@ func start(params domain.StartSessionParams) string {
 	var path string
 	path = params.MCPConfigPath
 	return path
+}
+`,
+			wantCount: 0,
+		},
+		{
+			// A range clause with "=" assigns to existing lvalues, so a
+			// selector used as its target is written, not read.
+			name:    "Y2 negative: a range-assignment target is not a read",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionUnsupported,
+	})
+}
+
+func start(params domain.StartSessionParams, xs []string) {
+	for _, params.MCPConfigPath = range xs {
+	}
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:    "Y3: a range-assignment target does not satisfy supported",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+func start(params domain.StartSessionParams, xs []string) {
+	for _, params.MCPConfigPath = range xs {
+	}
+}
+`,
+			wantCount: 1,
+		},
+		{
+			// Ranging over the field reads it; only a target is excluded.
+			name:    "Y3: ranging over the field is a read",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+func start(params domain.StartSessionParams) int {
+	n := 0
+	for range params.MCPConfigPath {
+		n++
+	}
+	return n
 }
 `,
 			wantCount: 0,
