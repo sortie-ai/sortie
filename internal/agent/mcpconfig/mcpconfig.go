@@ -8,6 +8,7 @@
 package mcpconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -226,9 +227,17 @@ func parseEntry(path, name string, raw json.RawMessage) (Server, error) {
 		return Server{}, &Error{Kind: ErrorNotJSON, Path: path, Server: name, Err: err}
 	}
 
-	for key := range fields {
+	for key, raw := range fields {
 		if !slices.Contains(modeledKeys, key) {
 			return Server{}, &Error{Kind: ErrorUnmodeledKey, Path: path, Server: name, Key: key}
+		}
+		// A null decodes into the zero value of every modeled field's
+		// type without an error, so a null command would survive its
+		// own presence check and render a server with no command at
+		// all. Treat a declared-but-null field as unexpressible rather
+		// than as its zero value.
+		if string(bytes.TrimSpace(raw)) == "null" {
+			return Server{}, &Error{Kind: ErrorEntryNotExpressible, Path: path, Server: name, Key: key}
 		}
 	}
 

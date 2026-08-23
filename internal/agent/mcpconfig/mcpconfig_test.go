@@ -172,6 +172,18 @@ func TestParse_EntryNotExpressible(t *testing.T) {
 			name:    "http type carrying a command",
 			content: `{"mcpServers":{"broken":{"type":"http","command":"/bin/echo"}}}`,
 		},
+		{
+			name:    "null command",
+			content: `{"mcpServers":{"broken":{"command":null}}}`,
+		},
+		{
+			name:    "null url",
+			content: `{"mcpServers":{"broken":{"url":null}}}`,
+		},
+		{
+			name:    "null enabled beside a command",
+			content: `{"mcpServers":{"broken":{"command":"/bin/echo","enabled":null}}}`,
+		},
 	}
 
 	for _, tt := range tests {
