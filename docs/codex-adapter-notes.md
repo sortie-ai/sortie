@@ -797,7 +797,9 @@ run that grants the trust. Arriving with the checkout is the only route under th
 `workspace-write` makes the workspace's own `.codex` directory a read-only entry, so the agent
 cannot write that file itself. An explicit `trust_level = "untrusted"` recorded for the path
 blocks both the grant and the project-local layer, because the grant is skipped whenever any
-trust level is already present.
+trust level is already present. A project that is neither trusted nor granted trust contributes
+nothing either: the loader gates project-local configuration on a positive trust decision, and
+reports an unlisted path and an explicitly untrusted one with different diagnostics.
 
 MCP servers declared in that layer run as child processes of the app-server and are not confined
 by the `sandbox` value sent on `thread/start`. That value governs the commands the agent
@@ -1033,7 +1035,7 @@ workspace.
 | Result event              | Final `result` message with `subtype`, `is_error`, `usage`   | `turn/completed` notification with `turn.status`; usage arrives separately on `thread/tokenUsage/updated` |
 | Hooks location            | `.claude/hooks.json`                                          | `.codex/hooks.json`                                            |
 | OTel configuration        | `CLAUDE_CODE_ENABLE_TELEMETRY=1`                             | `[otel]` block in `config.toml`                                |
-| MCP config                | `--mcp-config <path>`, `--strict-mcp-config`                 | `mcp_servers` in `config.toml` (`CODEX_HOME`, or a trusted project's own `.codex/`), `-c` overrides |
+| MCP config                | `--mcp-config <path>`, `--strict-mcp-config`                 | `mcp_servers` in `config.toml` (`CODEX_HOME`, or a trusted project's own `.codex/config.toml`), `-c` overrides |
 | Models                    | Claude family (Sonnet, Opus, Haiku)                           | OpenAI family (GPT-5.4 default), configurable providers        |
 
 ## Differences from Copilot adapter
