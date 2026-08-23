@@ -367,7 +367,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Stdout and stderr are handled separately; protocol JSON is parsed from stdout only
 - Non-JSON stderr lines are logged but do not crash parsing
 - Command/file-change approvals are handled according to the implementation's documented policy
-- Unsupported dynamic tool calls are handled at the adapter level without stalling the session
+- Unsupported dynamic tool calls are answered by the MCP execution channel with a failure result,
+  not by the adapter, without stalling the session
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
@@ -376,15 +377,16 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   run-cumulative scope and monotonicity contract of Section 10.3
 - Each coding-agent adapter carries a test proving it emits no `token_usage` event and reports
   the run unmeasured when its runtime supplies no usage figure for that run
-- `ToolRegistry` is populated at startup and all registered tools appear in prompt-time
-  advertisement
+- `ToolRegistry` is populated at startup; a registered tool appears in the prompt-time
+  advertisement when the session's agent kind and launch mode deliver an execution channel, and
+  every advertised tool is callable over that channel, asserted per adapter
 - `tracker_api` tool:
   - inputs execute against configured tracker auth
   - API-level errors produce `success: false` with a normalized `{kind, message}` error envelope
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - the tool is scoped to the configured project
-- Unsupported tool names return a failure result at the adapter level without stalling the
-  session
+- Unsupported tool names return a failure result over the MCP execution channel, not at the
+  adapter level, without stalling the session
 
 ### 17.6 Observability
 

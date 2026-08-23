@@ -62,7 +62,11 @@ Work evidence for the turn is this turn's own parsed assistant parts, text, reas
 
 ## Sortie's own tools
 
-This adapter passes no MCP configuration to OpenCode, so a session gets none of Sortie's own tools even though the worker generates the configuration file for every session. Whether those tools reach an agent is a per-adapter property: the mechanism depends on what the CLI accepts and how the adapter wires it, and it varies across the fleet. Do not assume a tool call available in one adapter's session is available here.
+`StartSession` parses the worker-generated MCP configuration and translates it into OpenCode's own configuration document, keyed under `mcp`. That document is delivered on every turn's subprocess through the runtime's inline configuration environment variable, additive to whatever an operator's own project or global configuration already declares, never as the generated file's path handed over verbatim; live probing found the runtime rejects that standard `mcpServers` key outright. The variable is set only in the turn's own environment build and never in the shared managed-environment builder, so the `export` and `models` auxiliary invocations that builder also serves never carry it and never spawn a tool sidecar of their own.
+
+Delivery happens on a local launch only. An SSH session gets no document: this adapter already renders its managed environment as `KEY=<value>` onto the remote command string, and doing the same with the generated servers would publish credential values on the local `ssh` process's own argument list, so the adapter delivers nothing there and the session runs exactly as it does today, without tools.
+
+The run projection this adapter reads carries no MCP startup-status signal: see "The surface we drive, and what it is not" above for the event types it omits. A server that fails to start is visible only indirectly, as the agent's own tool calls failing, not as a distinct diagnostic on this surface.
 
 ## Verifying a change
 

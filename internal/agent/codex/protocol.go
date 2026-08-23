@@ -319,7 +319,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-cha
 
 // startThread sends thread/start and waits for the thread/started
 // notification. Returns the thread ID.
-func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, pt passthroughConfig, tools []domain.AgentTool) (string, error) {
+func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, pt passthroughConfig) (string, error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "never"
@@ -340,11 +340,6 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 	}
 	if pt.Personality != "" {
 		params["personality"] = pt.Personality
-	}
-
-	dynTools := buildDynamicTools(tools)
-	if len(dynTools) > 0 {
-		params["dynamicTools"] = dynTools
 	}
 
 	id, err := sendRequest(state, "thread/start", params)
@@ -415,30 +410,6 @@ func resumeThread(ctx context.Context, state *sessionState, scanCh <-chan scanRe
 		return fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 	return nil
-}
-
-// buildDynamicTools converts registered agent tools into the schema
-// map array required by thread/start.
-func buildDynamicTools(tools []domain.AgentTool) []map[string]any {
-	if len(tools) == 0 {
-		return nil
-	}
-	result := make([]map[string]any, 0, len(tools))
-	for _, t := range tools {
-		entry := map[string]any{
-			"name":        t.Name(),
-			"description": t.Description(),
-		}
-		schema := t.InputSchema()
-		if len(schema) > 0 {
-			var parsed any
-			if err := json.Unmarshal(schema, &parsed); err == nil {
-				entry["inputSchema"] = parsed
-			}
-		}
-		result = append(result, entry)
-	}
-	return result
 }
 
 // buildSandboxPolicy constructs the sandboxPolicy for turn/start.

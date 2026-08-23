@@ -2,12 +2,15 @@ package opencode
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -212,8 +215,8 @@ func TestNewOpenCodeAdapter_ParsePassthroughConfig(t *testing.T) {
 }
 
 // TestMCPInjectionConformance proves opencode's real launch surface
-// never carries the generated MCP config path, matching its declared
-// disposition. Both channels the adapter builds are captured, not the
+// matches its declared disposition, on both a local and a remote
+// launch. Both channels the adapter builds are captured, not the
 // argument slice alone: opencode is the adapter that carries most of
 // its configuration through the environment, so an environment-only
 // leak would otherwise go unseen.
@@ -225,15 +228,179 @@ func TestMCPInjectionConformance(t *testing.T) {
 		t.Fatal(`registry.Agents.Meta("opencode") reported not registered`)
 	}
 
-	const mcpConfigPath = "/ws/.sortie/mcp.json"
-	state := newTestSessionState("/workspace", "")
-	args := buildRunArgs(state, "do work", passthroughConfig{})
-	env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{})
+	dir := t.TempDir()
+	mcpConfigPath := filepath.Join(dir, ".sortie", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	const generatedConfig = `{"mcpServers":{"sortie-tools":{"type":"stdio","command":"/usr/local/bin/sortie","args":["mcp-server","--workflow","/repo/WORKFLOW.md"],"env":{"SORTIE_ISSUE_ID":"abc-123"}}}}`
+	if err := os.WriteFile(mcpConfigPath, []byte(generatedConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	t.Run("local launch delivers the translated document", func(t *testing.T) {
+		t.Parallel()
+
+		servers, err := mcpconfig.Parse(mcpConfigPath)
+		if err != nil {
+			t.Fatalf("mcpconfig.Parse() error = %v", err)
+		}
+		document, err := renderMCPConfigDocument(servers)
+		if err != nil {
+			t.Fatalf("renderMCPConfigDocument() error = %v", err)
+		}
+
+		state := newTestSessionState("/workspace", "")
+		args := buildRunArgs(state, "do work", passthroughConfig{})
+		env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{})
+		if err != nil {
+			t.Fatalf("buildRunEnv() error = %v", err)
+		}
+		env = append(env, "OPENCODE_CONFIG_CONTENT="+document)
+
+		agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
+	})
+
+	t.Run("remote launch delivers nothing", func(t *testing.T) {
+		t.Parallel()
+
+		state := newTestSessionState("/workspace", "")
+		args := buildRunArgs(state, "do work", passthroughConfig{})
+		env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{})
+		if err != nil {
+			t.Fatalf("buildRunEnv() error = %v", err)
+		}
+
+		// StartSession's remote guard skips rendering entirely, so a
+		// remote session's turn environment carries nothing to append
+		// here.
+		agenttest.AssertMCPInjection(t, registry.MCPInjectionUnsupported, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
+	})
+}
+
+// --- renderMCPConfigDocument ---
+
+// TestRenderMCPConfigDocument_DeclaresEveryServer asserts that the
+// translated document declares every server from the generated file,
+// in the runtime's own "local"/"remote" entry shapes.
+func TestRenderMCPConfigDocument_DeclaresEveryServer(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcpconfig.Server{
+		{
+			Name:      "sortie-tools",
+			Transport: mcpconfig.TransportStdio,
+			Command:   "/usr/local/bin/sortie",
+			Args:      []string{"mcp-server"},
+			Env:       map[string]string{"SORTIE_ISSUE_ID": "abc-123"},
+		},
+		{
+			Name:      "remote-tools",
+			Transport: mcpconfig.TransportHTTP,
+			URL:       "https://example.invalid/mcp",
+			Headers:   map[string]string{"Authorization": "Bearer token"},
+		},
+	}
+
+	document, err := renderMCPConfigDocument(servers)
+	if err != nil {
+		t.Fatalf("renderMCPConfigDocument() error = %v", err)
+	}
+
+	var doc mcpConfigDocument
+	if err := json.Unmarshal([]byte(document), &doc); err != nil {
+		t.Fatalf("renderMCPConfigDocument() produced invalid JSON: %v; document = %q", err, document)
+	}
+
+	local, ok := doc.MCP["sortie-tools"]
+	if !ok {
+		t.Fatal("renderMCPConfigDocument() document missing \"sortie-tools\" entry")
+	}
+	if local.Type != "local" {
+		t.Errorf("sortie-tools entry Type = %q, want %q", local.Type, "local")
+	}
+	wantCommand := []string{"/usr/local/bin/sortie", "mcp-server"}
+	if !slices.Equal(local.Command, wantCommand) {
+		t.Errorf("sortie-tools entry Command = %v, want %v", local.Command, wantCommand)
+	}
+	if local.Environment["SORTIE_ISSUE_ID"] != "abc-123" {
+		t.Errorf("sortie-tools entry Environment[%q] = %q, want %q", "SORTIE_ISSUE_ID", local.Environment["SORTIE_ISSUE_ID"], "abc-123")
+	}
+	if !local.Enabled {
+		t.Error("sortie-tools entry Enabled = false, want true (nil Server.Enabled defaults true)")
+	}
+
+	remote, ok := doc.MCP["remote-tools"]
+	if !ok {
+		t.Fatal("renderMCPConfigDocument() document missing \"remote-tools\" entry")
+	}
+	if remote.Type != "remote" {
+		t.Errorf("remote-tools entry Type = %q, want %q", remote.Type, "remote")
+	}
+	if remote.URL != "https://example.invalid/mcp" {
+		t.Errorf("remote-tools entry URL = %q, want %q", remote.URL, "https://example.invalid/mcp")
+	}
+	if remote.Headers["Authorization"] != "Bearer token" {
+		t.Errorf("remote-tools entry Headers[%q] = %q, want %q", "Authorization", remote.Headers["Authorization"], "Bearer token")
+	}
+}
+
+// TestRenderMCPConfigDocument_EnabledFalseRoundTrips asserts that an
+// entry carrying enabled: false round-trips into the rendered document
+// as a disabled server.
+func TestRenderMCPConfigDocument_EnabledFalseRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	disabled := false
+	servers := []mcpconfig.Server{
+		{
+			Name:      "sortie-tools",
+			Transport: mcpconfig.TransportStdio,
+			Command:   "/usr/local/bin/sortie",
+			Enabled:   &disabled,
+		},
+	}
+
+	document, err := renderMCPConfigDocument(servers)
+	if err != nil {
+		t.Fatalf("renderMCPConfigDocument() error = %v", err)
+	}
+
+	var doc mcpConfigDocument
+	if err := json.Unmarshal([]byte(document), &doc); err != nil {
+		t.Fatalf("renderMCPConfigDocument() produced invalid JSON: %v", err)
+	}
+
+	entry, ok := doc.MCP["sortie-tools"]
+	if !ok {
+		t.Fatal("renderMCPConfigDocument() document missing \"sortie-tools\" entry")
+	}
+	if entry.Enabled {
+		t.Error("sortie-tools entry Enabled = true, want false (Server.Enabled = false must round-trip)")
+	}
+}
+
+// TestRunTurn_InheritedOpencodeConfigContentScrubbed asserts that an
+// inherited OPENCODE_CONFIG_CONTENT value from the parent process is
+// scrubbed from the turn environment, so only the adapter's own
+// rendered document, appended after buildRunEnv, can ever set it.
+func TestRunTurn_InheritedOpencodeConfigContentScrubbed(t *testing.T) {
+	t.Parallel()
+
+	base := []string{"OPENCODE_CONFIG_CONTENT=inherited-from-parent-process", "PATH=/usr/bin"}
+
+	env, err := buildRunEnv(base, passthroughConfig{})
 	if err != nil {
 		t.Fatalf("buildRunEnv() error = %v", err)
 	}
 
-	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
+	assertEnvAbsent(t, env, "OPENCODE_CONFIG_CONTENT")
+
+	// The adapter's own document is appended only after buildRunEnv
+	// returns, so the final turn environment carries exactly the
+	// adapter's own value, never the inherited one.
+	env = append(env, "OPENCODE_CONFIG_CONTENT=own-document")
+	assertEnvPresent(t, env, "OPENCODE_CONFIG_CONTENT", "own-document")
 }
 
 func TestBuildRunArgs(t *testing.T) {

@@ -1,0 +1,4 @@
+{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"method":"mcpServer/startupStatus/updated","params":{"threadId":"thread-001","name":"sortie-tools","status":"failed","failureReason":"executable not found"}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}

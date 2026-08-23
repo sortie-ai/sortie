@@ -22,7 +22,7 @@ This is the one adapter in the fleet that does not fork per turn. `StartSession`
 
 Everything downstream follows from the process outliving the turn. There is no per-turn exit code to classify, so the adapter reports work as unobservable and the shared decision's zero-work row can never fire for it. The failure signal in its place is the channel itself: stdout closing before the turn reports completion, a read error on stdout, a failed write of the turn request. Teardown belongs to the session, not the turn, which is why the graceful-then-forced shutdown sequence lives in `StopSession` and not on the cancellation path.
 
-The handshake requests the experimental capability, which is what unlocks client-side tool registration on thread start. If you change the handshake, expect tool registration to be the first thing that stops working.
+The handshake requests the experimental capability. The adapter no longer registers any client-side tool set on thread start; Sortie's tools reach the agent through the MCP sidecar described below, not through this capability.
 
 Resume is a soft path. When resuming a thread fails, the adapter logs a warning and starts a fresh thread rather than failing the session. That keeps a run alive at the cost of a real trap: a session that looks resumed may be a new thread with no history at all, and nothing downstream distinguishes the two. Check the log before concluding that the model forgot something.
 
@@ -50,19 +50,17 @@ The decision then outlives everything you would expect to reset it. It is record
 
 Two consequences worth holding onto. Anything that arrives with the checkout under the agent's own configuration directory is live in the same run that grants the trust. And servers started from that layer run as children of the app-server and are not confined by the sandbox value we send: that value governs the commands the agent executes, not the transports it connects to.
 
-## Tools the prompt advertises and the session cannot call
+## How the tool sidecar reaches this adapter
 
-A Codex agent is told about tools it has no way to invoke. The prompt carries Sortie's tool advertisement, the thread carries no tool declarations, and nothing reconciles the two. Each half has its own cause, and both are worth knowing before you go debugging either one.
+`StartSession` parses the worker-generated MCP configuration and re-expresses each declared server as a `-c mcp_servers.<name>=<inline table>` override on the app-server command line, one override per server so an operator's own `[mcp_servers]` entries in their own `config.toml` merge rather than being replaced (confirmed live: both an operator's pre-existing entry and Sortie's own survive the same override run). The runtime spawns the declared server itself, over stdio, which is the same sidecar every other kind uses; nothing changes about how the sidecar answers a tool call.
 
-The session half. The adapter reads its tool registry from a key in the raw configuration map it is constructed with, and no shipped code path puts a registry there: only tests do. An operator cannot supply one from the workflow file either, because the value is type-asserted to the registry type and anything parsed out of YAML fails that assertion. The registry is therefore nil in a real run, the thread-start request carries no client-side tool declarations at all, since those are attached only when the tool list is non-empty, and a Codex session can call none of Sortie's tools.
+Delivery happens on a local launch only. An SSH session gets no override: `LaunchTarget.Args` carries nothing across an SSH launch, and routing the override through the remote command string instead would either drop it silently or publish credential values on the local `ssh` process's own argument list, so the adapter delivers nothing there and the session runs exactly as it does today, without tools.
 
-The prompt half. The worker appends the tool advertisement on the first turn of a session, and nothing in that path is conditioned on the agent kind. What gates it is the per-session tool registry the worker builds for that turn coming back non-empty, and one tool registers on nothing more than the workspace path being set, which the worker always has by then. An ordinary Codex run therefore carries the advertisement. The section is dropped only when building that registry fails outright, which logs a warning; the registry built once at startup is a fallback the orchestrator does not use.
+Credentials travel by name, not by value. For a stdio server's environment entry, when the adapter's own process already holds that name under the same value, the override carries the name in `env_vars` and the runtime resolves it from the process environment it hands the spawned server; every other entry is rendered as a literal `env` value. Live probing found the runtime scrubs the environment it gives a spawned MCP server to ten variables, so a passthrough name is both how a credential is delivered and how it is kept off the command line the local process table exposes.
 
-The dispatch path itself is complete and covered by tests, so what is missing is the wiring, not the mechanism.
+An HTTP-transport entry (an operator's own `mcp_config`, never Sortie's own server) renders as `url` plus a `http_headers` table of literal header values; `codex mcp add --help` and `codex mcp get` on the installed binary are the authoritative source for that key and for the sibling `bearer_token_env_var` and `env_http_headers` forms this adapter does not currently use. Consult those over pinning a shape here, since they are read straight off the running binary.
 
-The generated MCP configuration path is discarded: the adapter neither stores it nor reads it. This adapter writes no MCP configuration and passes no MCP argument.
-
-Whether Sortie's tools reach an agent at all is a per-adapter property, and this is the adapter where the answer is currently no.
+The runtime reports a declared server's startup outcome on `mcpServer/startupStatus/updated`. A failure status is logged at warn, naming the server and the reported reason; it never fails the turn or the session, so a session that lost its tools this way still completes and the log is the only place that says so.
 
 ## Usage accounting
 
@@ -82,4 +80,4 @@ A handshake or authentication failure tears the subprocess down and returns befo
 
 ## Verifying a change
 
-Unit tests cover argument and request construction, the handshake, event parsing, tool dispatch, and disposition, and they are unusually thorough about the protocol because there is no cheap way to re-derive it. The tests that drive the real binary are env-gated on `SORTIE_CODEX_TEST=1` and skip cleanly without it; keep them skipping cleanly rather than failing. `SORTIE_CODEX_COMMAND` overrides the command and `SORTIE_CODEX_MODEL` the model, and the binary needs a working credential in the environment.
+Unit tests cover argument and request construction, the handshake, event parsing, MCP override rendering, and disposition, and they are unusually thorough about the protocol because there is no cheap way to re-derive it. The tests that drive the real binary are env-gated on `SORTIE_CODEX_TEST=1` and skip cleanly without it; keep them skipping cleanly rather than failing. `SORTIE_CODEX_COMMAND` overrides the command and `SORTIE_CODEX_MODEL` the model, and the binary needs a working credential in the environment.

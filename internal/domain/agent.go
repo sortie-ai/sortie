@@ -37,10 +37,6 @@ const (
 	// the shared agentcore layer produces, not a policy footnote.
 	EventTurnInputRequired AgentEventType = "turn_input_required"
 
-	// EventUnsupportedToolCall indicates the agent requested an
-	// unsupported tool.
-	EventUnsupportedToolCall AgentEventType = "unsupported_tool_call"
-
 	// EventTokenUsage carries normalized token usage counters:
 	// input_tokens, output_tokens, total_tokens.
 	EventTokenUsage AgentEventType = "token_usage"

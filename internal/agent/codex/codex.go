@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -33,7 +34,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("codex", NewCodexAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
-		MCPInjection:        registry.MCPInjectionUnsupported,
+		MCPInjection:        registry.MCPInjectionTranslated,
 	})
 }
 
@@ -45,8 +46,7 @@ var _ domain.AgentAdapter = (*CodexAdapter)(nil)
 // concurrent sessions; per-session state is held in [sessionState] via
 // the [domain.Session] Internal field.
 type CodexAdapter struct {
-	passthrough  passthroughConfig
-	toolRegistry *domain.ToolRegistry
+	passthrough passthroughConfig
 }
 
 // sessionState is adapter-internal state stored in [domain.Session]
@@ -107,12 +107,6 @@ func NewCodexAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	pt := parsePassthroughConfig(config)
 	adapter := &CodexAdapter{passthrough: pt}
 
-	if tr, ok := config["tool_registry"]; ok {
-		if reg, ok := tr.(*domain.ToolRegistry); ok {
-			adapter.toolRegistry = reg
-		}
-	}
-
 	return adapter, nil
 }
 
@@ -123,6 +117,26 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
+	}
+
+	if params.MCPConfigPath != "" && target.RemoteCommand == "" {
+		servers, parseErr := mcpconfig.Parse(params.MCPConfigPath)
+		if parseErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: fmt.Sprintf("parse MCP config: %v", parseErr),
+				Err:     parseErr,
+			}
+		}
+		overrideArgs, renderErr := renderMCPServerOverrides(servers, os.Environ())
+		if renderErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: fmt.Sprintf("render MCP server overrides: %v", renderErr),
+				Err:     renderErr,
+			}
+		}
+		target.Args = append(target.Args, overrideArgs...)
 	}
 
 	state := &sessionState{
@@ -259,11 +273,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			logger.Warn("thread resume failed, starting new thread",
 				slog.String("resume_id", params.ResumeSessionID),
 				slog.Any("error", err))
-			var tools []domain.AgentTool
-			if a.toolRegistry != nil {
-				tools = a.toolRegistry.List()
-			}
-			tid, startErr := startThread(ctx, state, scanCh, a.passthrough, tools)
+			tid, startErr := startThread(ctx, state, scanCh, a.passthrough)
 			if startErr != nil {
 				state.closeStop.Do(func() { close(state.stopCh) })
 				killOnError()
@@ -278,11 +288,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			threadID = params.ResumeSessionID
 		}
 	} else {
-		var tools []domain.AgentTool
-		if a.toolRegistry != nil {
-			tools = a.toolRegistry.List()
-		}
-		tid, startErr := startThread(ctx, state, scanCh, a.passthrough, tools)
+		tid, startErr := startThread(ctx, state, scanCh, a.passthrough)
 		if startErr != nil {
 			state.closeStop.Do(func() { close(state.stopCh) })
 			killOnError()
@@ -463,8 +469,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	turnID := turnResult.Turn.ID
 
 	inFlight := agentcore.NewToolTracker()
-	var toolWg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
 	ctxDone := ctx.Done()
 	// cancelDeadline stays nil, and so never selectable, until the
 	// ctxDone arm below arms it with a one-shot timer bounding how long
@@ -495,9 +499,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 	for {
 		select {
-		case evt := <-toolEventCh:
-			params.OnEvent(evt)
-
 		case <-ctxDone:
 			// A cancelled context's Done channel stays ready forever. Disable
 			// this arm before sending the one-shot interrupt so later selects
@@ -523,16 +524,15 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				Usage:         state.acc.Snapshot(),
 				UsageMeasured: state.usageMeasured,
 			}
-			result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, ev, meta)
-			return result, agentErr
+			result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
+			if agentErr != nil {
+				return result, agentErr
+			}
+			return result, nil
 
 		case msg, ok := <-state.msgCh:
 			if !ok {
 				// Channel closed — subprocess stdout ended.
-				go func() { toolWg.Wait(); close(toolEventCh) }()
-				for evt := range toolEventCh {
-					params.OnEvent(evt)
-				}
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -550,10 +550,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return result, nil
 			}
 			if msg.Err != nil {
-				go func() { toolWg.Wait(); close(toolEventCh) }()
-				for evt := range toolEventCh {
-					params.OnEvent(evt)
-				}
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -675,11 +671,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					UsageMeasured: state.usageMeasured,
 				}
 
-				go func() { toolWg.Wait(); close(toolEventCh) }()
-				for evt := range toolEventCh {
-					params.OnEvent(evt)
-				}
-
 				result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
 				if agentErr != nil {
 					return result, agentErr
@@ -724,11 +715,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			case "item/agentMessage/delta", "item/commandExecution/outputDelta":
 				agentcore.EmitNotification(params.OnEvent, "")
 
-			case "item/tool/call":
-				if evt := a.handleToolCall(ctx, state, &toolWg, msg, toolEventCh, logger); evt != nil {
-					params.OnEvent(*evt)
-				}
-
 			case "item/commandExecution/requestApproval", "item/fileChange/requestApproval",
 				"applyPatchApproval", "execCommandApproval",
 				"mcpServer/elicitation/request", "item/permissions/requestApproval",
@@ -753,7 +739,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						Usage:         state.acc.Snapshot(),
 						UsageMeasured: state.usageMeasured,
 					}
-					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, ev, meta)
+					result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
 					return result, agentErr
 				}
 
@@ -789,7 +775,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						UsageMeasured: state.usageMeasured,
 					}
 					evidence := agentcore.HumanInputEvidence(detailAnswerToQuestion)
-					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, evidence, meta)
 					return result, agentErr
 
 				case "item/permissions/requestApproval":
@@ -805,7 +791,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						UsageMeasured: state.usageMeasured,
 					}
 					evidence := agentcore.HumanInputEvidence(detailWiderAccess)
-					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, evidence, meta)
 					return result, agentErr
 
 				case "item/tool/requestUserInput":
@@ -821,7 +807,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						UsageMeasured: state.usageMeasured,
 					}
 					evidence := agentcore.HumanInputEvidence(detailAnswerToQuestion)
-					result, agentErr := drainToolEventsAndFinalize(&toolWg, toolEventCh, params.OnEvent, logger, evidence, meta)
+					result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, evidence, meta)
 					return result, agentErr
 				}
 
@@ -830,6 +816,19 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 			case "turn/diff/updated":
 				logger.Debug("diff updated")
+
+			case "mcpServer/startupStatus/updated":
+				var su mcpServerStartupStatus
+				if err := json.Unmarshal(msg.Notification.Params, &su); err != nil {
+					logger.Debug("mcpServer/startupStatus/updated unmarshal failed", slog.Any("error", err))
+					continue
+				}
+				if su.Status == "failed" {
+					reason := cmp.Or(su.FailureReason, su.Error)
+					logger.Warn("MCP server failed to start",
+						slog.String("mcp_server", su.Name),
+						slog.String("reason", reason))
+				}
 
 			default:
 				params.OnEvent(domain.AgentEvent{
@@ -840,109 +839,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			}
 		}
 	}
-}
-
-// drainToolEventsAndFinalize closes toolEventCh once every tool
-// goroutine toolWg tracks has sent its result, delivers the buffered
-// events through emit, and returns through agentcore.FinalizeTurn.
-// Every terminal return RunTurn takes for a recognized human-only
-// request calls this first: toolEventCh is buffered, and skipping the
-// drain leaves an in-flight tool goroutine blocked on a full channel
-// for the life of the process.
-func drainToolEventsAndFinalize(
-	toolWg *sync.WaitGroup,
-	toolEventCh chan domain.AgentEvent,
-	emit func(domain.AgentEvent),
-	logger *slog.Logger,
-	ev agentcore.TurnEvidence,
-	meta agentcore.TurnMeta,
-) (domain.TurnResult, *domain.AgentError) {
-	go func() { toolWg.Wait(); close(toolEventCh) }()
-	for evt := range toolEventCh {
-		emit(evt)
-	}
-	return agentcore.FinalizeTurn(emit, logger, ev, meta)
-}
-
-// handleToolCall dispatches a dynamic tool call from the app-server to
-// the ToolRegistry. The tool is executed asynchronously to avoid
-// blocking the event read loop. The provided WaitGroup is incremented
-// before launching the goroutine so RunTurn can wait for in-flight
-// tools before returning. Asynchronous tool completion events are sent
-// via toolEventCh. Synchronous early-return events (unsupported tool)
-// are returned directly so the caller can deliver them without risking
-// a channel send from the reader goroutine.
-func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, toolEventCh chan<- domain.AgentEvent, logger *slog.Logger) *domain.AgentEvent {
-	now := time.Now().UTC()
-	requestID := msg.Response.ID
-
-	var tc toolCallParams
-	if err := json.Unmarshal(msg.Notification.Params, &tc); err != nil {
-		logger.Warn("item/tool/call unmarshal failed", slog.Any("error", err))
-		state.mu.Lock()
-		sendResponse(state, requestID, toolResultFor(false, "invalid tool call params")) //nolint:errcheck,gosec // best-effort error response
-		state.mu.Unlock()
-		return nil
-	}
-
-	toolName := tc.Tool
-
-	if a.toolRegistry == nil {
-		state.mu.Lock()
-		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
-		state.mu.Unlock()
-		return &domain.AgentEvent{
-			Type:      domain.EventUnsupportedToolCall,
-			Timestamp: now,
-			ToolName:  toolName,
-			Message:   fmt.Sprintf("no tool registry configured for tool %q", toolName),
-		}
-	}
-
-	tool, found := a.toolRegistry.Get(toolName)
-	if !found {
-		state.mu.Lock()
-		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
-		state.mu.Unlock()
-		return &domain.AgentEvent{
-			Type:      domain.EventUnsupportedToolCall,
-			Timestamp: now,
-			ToolName:  toolName,
-			Message:   fmt.Sprintf("tool %q not registered", toolName),
-		}
-	}
-
-	wg.Go(func() {
-		start := time.Now()
-		result, execErr := tool.Execute(ctx, tc.Arguments)
-
-		state.mu.Lock()
-		if execErr != nil {
-			sendResponse(state, requestID, toolResultFor(false, execErr.Error())) //nolint:errcheck,gosec // best-effort error response
-		} else {
-			sendResponse(state, requestID, toolResultFor(true, string(result))) //nolint:errcheck,gosec // best-effort success response
-		}
-		state.mu.Unlock()
-
-		if execErr != nil {
-			toolEventCh <- domain.AgentEvent{
-				Type:           domain.EventToolResult,
-				Timestamp:      time.Now().UTC(),
-				ToolName:       toolName,
-				ToolDurationMS: time.Since(start).Milliseconds(),
-				ToolError:      true,
-				Message:        execErr.Error(),
-			}
-		} else {
-			toolEventCh <- domain.AgentEvent{
-				Type:           domain.EventToolResult,
-				Timestamp:      time.Now().UTC(),
-				ToolName:       toolName,
-				ToolDurationMS: time.Since(start).Milliseconds(),
-			}
-		}
-	})
-	return nil
 }
 
 // StopSession terminates the persistent app-server subprocess.

@@ -54,7 +54,7 @@ The identity the session carries is Sortie's own resume value. It is reported ba
 
 MCP on this CLI is gated by a server-side profile check, and that check fails on the unattended credential path: the runtime logs that MCP is disabled and prints a warning on every invocation, and with MCP off, workspace-level server configuration is not loaded at all. The adapter reflects that rather than fighting it: it passes no MCP flag and ignores the generated configuration path entirely, which means a Kiro session gets none of Sortie's own tools.
 
-Whether Sortie's tools reach an agent is a per-adapter property, decided by what the CLI accepts and how the adapter wires it. Here the answer is no, and the cause is upstream of us.
+Whether Sortie's tools reach an agent is a per-adapter property, decided by what the CLI accepts and how the adapter wires it. Here the answer is no, and the cause is upstream of us. Because of that, the first-turn prompt no longer carries the "Available Sortie tools" section for this kind either: the orchestrator withholds the advertisement from any kind with no execution channel, so an absent section here is the correct behavior, not a defect to chase.
 
 ## How this differs from its siblings
 

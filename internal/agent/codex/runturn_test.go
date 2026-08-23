@@ -6,12 +6,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -71,8 +71,7 @@ func loadFixture(t *testing.T, name string) []byte {
 }
 
 // makeTestState builds a sessionState backed by in-memory pipes, safe
-// for use in RunTurn and handleToolCall unit tests that do not launch a
-// real subprocess.
+// for use in RunTurn unit tests that do not launch a real subprocess.
 func makeTestState(fixtureData []byte) *sessionState {
 	state := &sessionState{
 		threadID:   "thread-001",
@@ -704,109 +703,40 @@ func TestRunTurn_MiscNotifications(t *testing.T) {
 	}
 }
 
-func TestRunTurn_ToolCallWithNilRegistry(t *testing.T) {
-	t.Parallel()
+// TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn asserts that
+// a failed mcpServer/startupStatus/updated notification is logged at
+// warn, naming the server and the reported reason, and does not fail
+// the turn or the session.
+func TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn(t *testing.T) {
+	var logs bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
-	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{}) // no tool_registry
+	state := makeTestState(loadFixture(t, "runturn_mcp_startup_failed.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
-	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
 		OnEvent: collectEvents(&events),
-	}); err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	e, ok := firstEventOfType(events, domain.EventUnsupportedToolCall)
-	if !ok {
-		t.Fatal("expected EventUnsupportedToolCall with nil registry, not found")
-	}
-	if e.ToolName != "create_issue" {
-		t.Errorf("ToolName = %q, want %q", e.ToolName, "create_issue")
-	}
-}
-
-func TestRunTurn_ToolCallWithRegisteredTool(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{
-		name:   "create_issue",
-		result: json.RawMessage(`{"id":"123"}`),
 	})
-
-	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-
-	var events []domain.AgentEvent
-	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
-		OnEvent: collectEvents(&events),
-	}); err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil (a failed MCP server startup must not fail the turn)", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %v, want EventTurnCompleted", result.ExitReason)
 	}
 
-	e, ok := firstEventOfType(events, domain.EventToolResult)
-	if !ok {
-		t.Fatal("expected EventToolResult from registered tool, not found")
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "level=WARN") {
+		t.Errorf("log output = %q, want a WARN-level entry", logOutput)
 	}
-	if e.ToolError {
-		t.Error("EventToolResult.ToolError = true, want false")
+	if !strings.Contains(logOutput, "sortie-tools") {
+		t.Errorf("log output = %q, want it to name the server %q", logOutput, "sortie-tools")
 	}
-	if e.ToolName != "create_issue" {
-		t.Errorf("EventToolResult.ToolName = %q, want %q", e.ToolName, "create_issue")
-	}
-}
-
-func TestRunTurn_ToolCallWithToolError(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{
-		name:    "create_issue",
-		execErr: errors.New("tracker unavailable"),
-	})
-
-	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-
-	var events []domain.AgentEvent
-	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
-		OnEvent: collectEvents(&events),
-	}); err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	e, ok := firstEventOfType(events, domain.EventToolResult)
-	if !ok {
-		t.Fatal("expected EventToolResult from failed tool, not found")
-	}
-	if !e.ToolError {
-		t.Error("EventToolResult.ToolError = false, want true")
-	}
-}
-
-func TestRunTurn_ToolCallToolNotInRegistry(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	// Registry has no "create_issue" tool.
-
-	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-
-	var events []domain.AgentEvent
-	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
-		OnEvent: collectEvents(&events),
-	}); err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	if _, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
-		t.Fatal("expected EventUnsupportedToolCall for unregistered tool, not found")
+	if !strings.Contains(logOutput, "executable not found") {
+		t.Errorf("log output = %q, want it to name the reported reason %q", logOutput, "executable not found")
 	}
 }
 
@@ -1023,41 +953,6 @@ func TestRunTurn_HumanInputRequestEndsAttempt(t *testing.T) {
 	}
 }
 
-// TestRunTurn_HumanInputRequestDrainsInFlightToolCall pins the
-// refusal path: with a tool call in flight when a ClassHumanInput
-// request arrives, the terminal return must close and drain toolEventCh
-// so the tool goroutine's send completes rather than leaking. If the
-// drain were skipped, RunTurn would return before the delayed tool
-// finishes and its EventToolResult would never be observed by this test,
-// because OnEvent is only ever called while RunTurn itself is still
-// running.
-func TestRunTurn_HumanInputRequestDrainsInFlightToolCall(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: 50 * time.Millisecond})
-
-	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
-		"{\"method\":\"turn/started\",\"params\":{}}\n" +
-		"{\"id\":41,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"slow_tool\",\"arguments\":{}}}\n" +
-		"{\"id\":42,\"method\":\"mcpServer/elicitation/request\",\"params\":{}}\n"
-
-	state := makeTestState([]byte(fixture))
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
-		OnEvent: collectEvents(&events),
-	})
-
-	dispositiontest.AssertDispositionContract(t, agentcore.HumanInputEvidence(detailAnswerToQuestion), result, err)
-
-	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
-		t.Fatal("in-flight tool call's EventToolResult was not drained before the terminal return")
-	}
-}
-
 // TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives
 // pins the post-cancellation bound: after the best-effort turn/interrupt,
 // the loop must return once read_timeout_ms elapses rather than reading
@@ -1130,264 +1025,6 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 		requireAgentError(t, got.err, domain.ErrTurnCancelled)
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunTurn did not return within the bound; it kept reading after cancellation with no turn/completed")
-	}
-}
-
-// TestRunTurn_CancelledDrainsInFlightToolCall asserts that when the
-// post-cancellation bound elapses with a tool call in flight, the timeout
-// return still closes and drains toolEventCh before calling FinalizeTurn.
-func TestRunTurn_CancelledDrainsInFlightToolCall(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: 20 * time.Millisecond})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	state := newInterruptedStatusState()
-	state.agentConfig = domain.AgentConfig{ReadTimeoutMS: 200}
-	close(state.readerDone)
-
-	type outcome struct {
-		result domain.TurnResult
-		err    error
-	}
-	outcomeCh := make(chan outcome, 1)
-	finished := make(chan struct{})
-	var events []domain.AgentEvent
-
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-	go func() {
-		defer close(finished)
-		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
-			Prompt:  "use tool",
-			OnEvent: collectEvents(&events),
-		})
-		outcomeCh <- outcome{result: result, err: err}
-	}()
-
-	t.Cleanup(func() {
-		select {
-		case <-finished:
-			return
-		default:
-		}
-		close(state.msgCh)
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-		}
-	})
-
-	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
-	state.msgCh <- parseMessage([]byte(`{"id":60,"method":"item/tool/call","params":{"tool":"slow_tool","arguments":{}}}`))
-
-	cancel()
-
-	select {
-	case got := <-outcomeCh:
-		if got.result.ExitReason != domain.EventTurnCancelled {
-			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
-		}
-		requireAgentError(t, got.err, domain.ErrTurnCancelled)
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunTurn did not return within the bound with a tool call in flight")
-	}
-
-	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
-		t.Fatal("in-flight tool call's EventToolResult was not drained before the cancellation-timeout return")
-	}
-}
-
-// --- handleToolCall direct tests ---
-
-func TestHandleToolCall_InvalidParams(t *testing.T) {
-	t.Parallel()
-
-	a, _ := NewCodexAdapter(map[string]any{})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 42},
-		Notification: rpcNotification{
-			Method: "item/tool/call",
-			Params: json.RawMessage(`not-valid-json`),
-		},
-	}
-
-	// Should not panic; writes an error response to stdin (discarded).
-	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	if evt != nil {
-		events = append(events, *evt)
-	}
-	for e := range toolEventCh {
-		events = append(events, e)
-	}
-
-	// Invalid params: no event emitted (returns early after sendResponse).
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
-	}
-}
-
-func TestHandleToolCall_NilRegistryEmitsUnsupported(t *testing.T) {
-	t.Parallel()
-
-	a, _ := NewCodexAdapter(map[string]any{})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 1},
-		Notification: rpcNotification{
-			Params: json.RawMessage(`{"tool":"my_tool","arguments":{}}`),
-		},
-	}
-
-	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	if evt != nil {
-		events = append(events, *evt)
-	}
-	for e := range toolEventCh {
-		events = append(events, e)
-	}
-
-	if e, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
-		t.Fatal("expected EventUnsupportedToolCall with nil registry")
-	} else if e.ToolName != "my_tool" {
-		t.Errorf("ToolName = %q, want %q", e.ToolName, "my_tool")
-	}
-}
-
-func TestHandleToolCall_ToolNotFound(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	a, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 1},
-		Notification: rpcNotification{
-			Params: json.RawMessage(`{"tool":"unknown_tool","arguments":{}}`),
-		},
-	}
-
-	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	if evt != nil {
-		events = append(events, *evt)
-	}
-	for e := range toolEventCh {
-		events = append(events, e)
-	}
-
-	if _, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
-		t.Fatal("expected EventUnsupportedToolCall for unregistered tool")
-	}
-}
-
-func TestHandleToolCall_ToolSuccess(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{name: "my_tool", result: json.RawMessage(`"ok"`)})
-	a, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 7},
-		Notification: rpcNotification{
-			Params: json.RawMessage(`{"tool":"my_tool","arguments":{"x":1}}`),
-		},
-	}
-
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
-	}
-
-	e, ok := firstEventOfType(events, domain.EventToolResult)
-	if !ok {
-		t.Fatal("expected EventToolResult on success")
-	}
-	if e.ToolError {
-		t.Error("EventToolResult.ToolError = true, want false")
-	}
-	if e.ToolName != "my_tool" {
-		t.Errorf("ToolName = %q, want %q", e.ToolName, "my_tool")
-	}
-}
-
-func TestHandleToolCall_ToolError(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{name: "my_tool", execErr: errors.New("service down")})
-	a, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 7},
-		Notification: rpcNotification{
-			Params: json.RawMessage(`{"tool":"my_tool","arguments":{}}`),
-		},
-	}
-
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
-	}
-
-	e, ok := firstEventOfType(events, domain.EventToolResult)
-	if !ok {
-		t.Fatal("expected EventToolResult on tool error")
-	}
-	if !e.ToolError {
-		t.Error("EventToolResult.ToolError = false, want true")
-	}
-	if e.Message != "service down" {
-		t.Errorf("Message = %q, want %q", e.Message, "service down")
 	}
 }
 
@@ -1512,94 +1149,5 @@ func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
 		// OK
 	default:
 		t.Error("readerDone should be closed after StopSession")
-	}
-}
-
-// --- fakeTool for tool registry tests ---
-
-type fakeTool struct {
-	name    string
-	result  json.RawMessage
-	execErr error
-	delay   time.Duration
-}
-
-func (f *fakeTool) Name() string                 { return f.name }
-func (f *fakeTool) Description() string          { return "fake tool for testing" }
-func (f *fakeTool) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
-func (f *fakeTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
-	if f.delay > 0 {
-		time.Sleep(f.delay)
-	}
-	return f.result, f.execErr
-}
-
-// --- Race-detection tests ---
-
-func TestHandleToolCall_EventsSerialized(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: time.Millisecond})
-	a, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-	adapter := a.(*CodexAdapter)
-	state := makeTestState(nil)
-	var wg sync.WaitGroup
-	toolEventCh := make(chan domain.AgentEvent, 8)
-
-	msg := parsedMessage{
-		IsNotification: true,
-		Response:       rpcResponse{ID: 1},
-		Notification: rpcNotification{
-			Params: json.RawMessage(`{"tool":"slow_tool","arguments":{}}`),
-		},
-	}
-
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
-	wg.Wait()
-	close(toolEventCh)
-
-	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
-	}
-
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Type != domain.EventToolResult {
-		t.Errorf("event type = %v, want EventToolResult", events[0].Type)
-	}
-}
-
-func TestRunTurn_ToolCallEventSerialization(t *testing.T) {
-	t.Parallel()
-
-	reg := domain.NewToolRegistry()
-	reg.Register(&fakeTool{
-		name:   "create_issue",
-		result: json.RawMessage(`{"id":"42"}`),
-		delay:  time.Millisecond,
-	})
-	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
-	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "use tool",
-		OnEvent: collectEvents(&events),
-	})
-
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("ExitReason = %v, want EventTurnCompleted", result.ExitReason)
-	}
-	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
-		t.Error("expected EventToolResult, not found")
-	}
-	if _, ok := firstEventOfType(events, domain.EventTokenUsage); !ok {
-		t.Error("expected EventTokenUsage, not found")
 	}
 }

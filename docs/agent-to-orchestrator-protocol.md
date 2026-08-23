@@ -561,7 +561,8 @@ agent is aware of the signaling mechanism. This injection:
 The ordering of first-turn suffixes is:
 
 1. Rendered workflow template.
-2. Tool advertisement (if a tool registry is configured).
+2. Tool advertisement (appears when the session's agent kind and launch mode deliver a
+   tool execution channel and the tool registry is non-empty; omitted otherwise).
 3. Status protocol instructions (this section).
 
 This ordering places the protocol instructions at the end, closest to the agent's point of

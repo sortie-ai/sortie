@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -64,6 +65,8 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 		if !hit {
 			t.Errorf("declared = %q, hit = %t, want the surface to carry mcpConfigPath", declared, hit)
 		}
+	case registry.MCPInjectionTranslated:
+		assertTranslatedInjection(t, mcpConfigPath, surface)
 	case registry.MCPInjectionUnsupported:
 		if hit {
 			t.Errorf("declared = %q, hit = %t, want the surface not to carry mcpConfigPath", declared, hit)
@@ -73,6 +76,48 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 	default:
 		t.Errorf("declared = %q, want a supported or unsupported MCP injection disposition", declared)
 	}
+}
+
+// assertTranslatedInjection fails t unless every server declared in
+// the generated configuration at mcpConfigPath, and the command path
+// of every stdio server among them, appears on surface. Unlike
+// carriesMCPConfigPath's exact-or-composition-marker match, this
+// check is a plain substring test: a translated adapter embeds each
+// server's name and command inside one larger rendered value (a TOML
+// inline table, a JSON document), never as a whole surface element on
+// its own.
+func assertTranslatedInjection(t mcpInjectionReporter, mcpConfigPath string, surface MCPLaunchSurface) {
+	t.Helper()
+
+	servers, err := mcpconfig.Parse(mcpConfigPath)
+	if err != nil {
+		t.Errorf("mcpconfig.Parse(%q) error = %v, want a real generated file for a translated declaration", mcpConfigPath, err)
+		return
+	}
+
+	for _, server := range servers {
+		if !surfaceContains(surface, server.Name) {
+			t.Errorf("declared = %q, server %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name)
+		}
+		if server.Transport == mcpconfig.TransportStdio && !surfaceContains(surface, server.Command) {
+			t.Errorf("declared = %q, server %q command %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name, server.Command)
+		}
+	}
+}
+
+// surfaceContains reports whether value appears as a substring of any
+// argument or environment element on surface. Returns false for an
+// empty value so a stdio server with no command never passes
+// vacuously.
+func surfaceContains(surface MCPLaunchSurface, value string) bool {
+	if value == "" {
+		return false
+	}
+	return slices.ContainsFunc(surface.Args, func(arg string) bool {
+		return strings.Contains(arg, value)
+	}) || slices.ContainsFunc(surface.Env, func(env string) bool {
+		return strings.Contains(env, value)
+	})
 }
 
 // carriesMCPConfigPath reports whether one launch-surface element hands

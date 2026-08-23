@@ -714,3 +714,36 @@ func TestHas(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPInjection_DeliversTools(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		injection MCPInjection
+		remote    bool
+		want      bool
+	}{
+		{"supported local", MCPInjectionSupported, false, true},
+		{"supported remote", MCPInjectionSupported, true, true},
+		{"translated local", MCPInjectionTranslated, false, true},
+		{"translated remote", MCPInjectionTranslated, true, false},
+		{"unsupported local", MCPInjectionUnsupported, false, false},
+		{"unsupported remote", MCPInjectionUnsupported, true, false},
+		{"undeclared local", MCPInjectionUndeclared, false, false},
+		{"undeclared remote", MCPInjectionUndeclared, true, false},
+		{"unrecognized value local", MCPInjection("bogus"), false, false},
+		{"unrecognized value remote", MCPInjection("bogus"), true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.injection.DeliversTools(tt.remote)
+			if got != tt.want {
+				t.Errorf("MCPInjection(%q).DeliversTools(%v) = %v, want %v", tt.injection, tt.remote, got, tt.want)
+			}
+		})
+	}
+}

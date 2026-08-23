@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -93,32 +94,23 @@ func TestNewCodexAdapter(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_registry stored when provided", func(t *testing.T) {
+	t.Run("tool_registry config key is not read", func(t *testing.T) {
 		t.Parallel()
 		reg := domain.NewToolRegistry()
-		adapter, err := NewCodexAdapter(map[string]any{
+		withKey, err := NewCodexAdapter(map[string]any{
 			"tool_registry": reg,
 		})
 		if err != nil {
 			t.Fatalf("NewCodexAdapter() error = %v", err)
 		}
-		a := adapter.(*CodexAdapter)
-		if a.toolRegistry != reg {
-			t.Error("toolRegistry not stored on adapter")
-		}
-	})
-
-	t.Run("non-registry tool_registry value is ignored", func(t *testing.T) {
-		t.Parallel()
-		adapter, err := NewCodexAdapter(map[string]any{
-			"tool_registry": "not-a-registry",
-		})
+		without, err := NewCodexAdapter(map[string]any{})
 		if err != nil {
 			t.Fatalf("NewCodexAdapter() error = %v", err)
 		}
-		a := adapter.(*CodexAdapter)
-		if a.toolRegistry != nil {
-			t.Error("toolRegistry should be nil for invalid type")
+		a := withKey.(*CodexAdapter)
+		b := without.(*CodexAdapter)
+		if !reflect.DeepEqual(a.passthrough, b.passthrough) {
+			t.Errorf("adapter constructed with tool_registry present = %+v, want identical to %+v", a.passthrough, b.passthrough)
 		}
 	})
 }

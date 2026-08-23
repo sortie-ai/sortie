@@ -103,10 +103,15 @@ type itemParams struct {
 	} `json:"item"`
 }
 
-// toolCallParams is the params payload of an item/tool/call request.
-type toolCallParams struct {
-	Tool      string          `json:"tool"`
-	Arguments json.RawMessage `json:"arguments"`
+// mcpServerStartupStatus is the params payload of an
+// mcpServer/startupStatus/updated notification, reporting whether a
+// declared MCP server started successfully.
+type mcpServerStartupStatus struct {
+	ThreadID      string `json:"threadId"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	FailureReason string `json:"failureReason"`
 }
 
 // threadResult is the subset of thread/start or thread/resume
@@ -262,16 +267,4 @@ func mapCodexErrorInfo(info string) domain.AgentErrorKind {
 func summarizeItem(itemType, itemID string) string {
 	s := fmt.Sprintf("[%s] %s", itemType, itemID)
 	return typeutil.TruncateRunes(s, 200)
-}
-
-// toolResultFor constructs the JSON-RPC result payload for a dynamic
-// tool call response.
-func toolResultFor(success bool, output string) map[string]any {
-	return map[string]any{
-		"success": success,
-		"output":  output,
-		"contentItems": []map[string]any{
-			{"type": "inputText", "text": output},
-		},
-	}
 }

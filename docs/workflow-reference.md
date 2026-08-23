@@ -2632,21 +2632,28 @@ the file that key names are merged into the generated copy; the operator's file 
 is never modified, and a file that already declares a server named `sortie-tools` fails
 the attempt.
 
-Which adapters hand that generated file to the agent process differs by kind:
+Which adapters hand that generated file's servers to the agent process differs by
+kind, and by delivery form:
 
-| Agent kind | Generated file reaches the agent | How |
+| Agent kind | Servers reach the agent | How |
 | --- | --- | --- |
-| `claude-code` | Yes | passed to `--mcp-config` |
-| `copilot-cli` | Yes | passed to `--additional-mcp-config` as `@<path>` |
-| `codex` | No | the adapter passes no MCP argument |
+| `claude-code` | Yes | the generated file's path is passed to `--mcp-config` |
+| `copilot-cli` | Yes | the generated file's path is passed to `--additional-mcp-config` as `@<path>` |
+| `codex` | Yes, local launch only | the generated servers are re-expressed as configuration overrides on the app-server command line, which the runtime parses into its own configuration |
+| `opencode` | Yes, local launch only | the generated servers are re-expressed as the runtime's own configuration document, delivered through an inline configuration environment variable |
 | `kiro` | No | the backend profile gate disables MCP under API-key authentication |
-| `opencode` | No | the adapter passes no MCP configuration to the agent process |
 | `mock` | No | the adapter launches no process |
 
-Setting `mcp_config` in a block belonging to a kind in a `No` row therefore has no
-effect on the agent. `sortie validate` reports that combination as a warning naming the
-kind. It is a warning and not an error: such a configuration stays valid, the run
-proceeds, and the exit code is unchanged.
+An SSH session on `codex` or `opencode` receives neither form of delivery: both
+translating kinds carry the generated servers only on a local launch.
+
+Setting `mcp_config` in a block belonging to `kiro` or `mock` therefore has no effect
+on the agent. `sortie validate` reports that combination as a warning naming the kind,
+under the check `agent.mcp_config`. A separate warning, `agent.kind.no_tool_channel`,
+fires for any agent kind whose disposition delivers no channel on a local launch,
+stating that Sortie's tools will be neither advertised nor callable for it. Both are
+warnings and not errors: such a configuration stays valid, the run proceeds, and the
+exit code is unchanged.
 
 `claude-code.mcp_config` is documented in the Claude Code table above. The Copilot CLI
 reads the same key:

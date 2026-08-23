@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -10,21 +9,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
-
-// stubTool is a minimal [domain.AgentTool] implementation for testing
-// buildDynamicTools.
-type stubTool struct {
-	name        string
-	description string
-	schema      json.RawMessage
-}
-
-func (s *stubTool) Name() string                 { return s.name }
-func (s *stubTool) Description() string          { return s.description }
-func (s *stubTool) InputSchema() json.RawMessage { return s.schema }
-func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
-	return nil, nil
-}
 
 func TestParsePassthroughConfig(t *testing.T) {
 	t.Parallel()
@@ -394,131 +378,6 @@ func TestSummarizeItem(t *testing.T) {
 		want := "[agentMessage] " + exactID
 		if got != want {
 			t.Errorf("summarizeItem() = %q, want %q", got, want)
-		}
-	})
-}
-
-func TestToolResultFor(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success result", func(t *testing.T) {
-		t.Parallel()
-		result := toolResultFor(true, "all good")
-		if result["success"] != true {
-			t.Errorf("success = %v, want true", result["success"])
-		}
-		if result["output"] != "all good" {
-			t.Errorf("output = %v, want %q", result["output"], "all good")
-		}
-		items, ok := result["contentItems"].([]map[string]any)
-		if !ok || len(items) == 0 {
-			t.Fatalf("contentItems missing or wrong type: %T", result["contentItems"])
-		}
-		if items[0]["text"] != "all good" {
-			t.Errorf("contentItems[0].text = %v, want %q", items[0]["text"], "all good")
-		}
-		if items[0]["type"] != "inputText" {
-			t.Errorf("contentItems[0].type = %v, want %q", items[0]["type"], "inputText")
-		}
-	})
-
-	t.Run("failure result", func(t *testing.T) {
-		t.Parallel()
-		result := toolResultFor(false, "tool error")
-		if result["success"] != false {
-			t.Errorf("success = %v, want false", result["success"])
-		}
-		if result["output"] != "tool error" {
-			t.Errorf("output = %v, want %q", result["output"], "tool error")
-		}
-	})
-}
-
-func TestBuildDynamicTools(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil tools returns nil", func(t *testing.T) {
-		t.Parallel()
-		got := buildDynamicTools(nil)
-		if got != nil {
-			t.Errorf("buildDynamicTools(nil) = %v, want nil", got)
-		}
-	})
-
-	t.Run("empty slice returns nil", func(t *testing.T) {
-		t.Parallel()
-		got := buildDynamicTools([]domain.AgentTool{})
-		if got != nil {
-			t.Errorf("buildDynamicTools(empty) = %v, want nil", got)
-		}
-	})
-
-	t.Run("single tool with schema", func(t *testing.T) {
-		t.Parallel()
-		tool := &stubTool{
-			name:        "my_tool",
-			description: "does something useful",
-			schema:      json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}}}`),
-		}
-		result := buildDynamicTools([]domain.AgentTool{tool})
-		if len(result) != 1 {
-			t.Fatalf("buildDynamicTools() len = %d, want 1", len(result))
-		}
-		entry := result[0]
-		if entry["name"] != "my_tool" {
-			t.Errorf("entry.name = %v, want %q", entry["name"], "my_tool")
-		}
-		if entry["description"] != "does something useful" {
-			t.Errorf("entry.description = %v, want %q", entry["description"], "does something useful")
-		}
-		if entry["inputSchema"] == nil {
-			t.Error("inputSchema is nil, want non-nil")
-		}
-	})
-
-	t.Run("tool without schema omits inputSchema key", func(t *testing.T) {
-		t.Parallel()
-		tool := &stubTool{name: "no_schema", description: "no schema tool"}
-		result := buildDynamicTools([]domain.AgentTool{tool})
-		if len(result) != 1 {
-			t.Fatalf("len = %d, want 1", len(result))
-		}
-		if _, has := result[0]["inputSchema"]; has {
-			t.Error("inputSchema present, want absent when schema is nil")
-		}
-	})
-
-	t.Run("multiple tools preserved in input order", func(t *testing.T) {
-		t.Parallel()
-		tools := []domain.AgentTool{
-			&stubTool{name: "alpha", description: "first"},
-			&stubTool{name: "beta", description: "second"},
-		}
-		result := buildDynamicTools(tools)
-		if len(result) != 2 {
-			t.Fatalf("len = %d, want 2", len(result))
-		}
-		if result[0]["name"] != "alpha" {
-			t.Errorf("result[0].name = %v, want %q", result[0]["name"], "alpha")
-		}
-		if result[1]["name"] != "beta" {
-			t.Errorf("result[1].name = %v, want %q", result[1]["name"], "beta")
-		}
-	})
-
-	t.Run("invalid schema JSON omits inputSchema key", func(t *testing.T) {
-		t.Parallel()
-		tool := &stubTool{
-			name:        "bad_schema",
-			description: "tool with invalid schema JSON",
-			schema:      json.RawMessage(`{not valid json`),
-		}
-		result := buildDynamicTools([]domain.AgentTool{tool})
-		if len(result) != 1 {
-			t.Fatalf("len = %d, want 1", len(result))
-		}
-		if _, has := result[0]["inputSchema"]; has {
-			t.Error("inputSchema present, want absent for invalid JSON schema")
 		}
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
@@ -210,11 +211,68 @@ func shouldDropManagedEnv(entry string) bool {
 		"OPENCODE_DISABLE_AUTOCOMPACT",
 		"OPENCODE_DISABLE_AUTOUPDATE",
 		"OPENCODE_DISABLE_LSP_DOWNLOAD",
-		"OPENCODE_PERMISSION":
+		"OPENCODE_PERMISSION",
+		"OPENCODE_CONFIG_CONTENT":
 		return true
 	default:
 		return false
 	}
+}
+
+// mcpConfigDocument is the runtime's own inline MCP configuration
+// document shape, delivered through its inline-configuration
+// environment variable.
+type mcpConfigDocument struct {
+	MCP map[string]mcpConfigDocumentEntry `json:"mcp"`
+}
+
+// mcpConfigDocumentEntry is one server entry of [mcpConfigDocument].
+type mcpConfigDocumentEntry struct {
+	Type        string            `json:"type"`
+	Command     []string          `json:"command,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Enabled     bool              `json:"enabled"`
+}
+
+// renderMCPConfigDocument translates servers into the runtime's own
+// MCP configuration document as compact JSON. A nil Server.Enabled
+// renders true, matching the runtime's own default.
+func renderMCPConfigDocument(servers []mcpconfig.Server) (string, error) {
+	doc := mcpConfigDocument{MCP: make(map[string]mcpConfigDocumentEntry, len(servers))}
+
+	for _, server := range servers {
+		enabled := true
+		if server.Enabled != nil {
+			enabled = *server.Enabled
+		}
+
+		switch server.Transport {
+		case mcpconfig.TransportStdio:
+			doc.MCP[server.Name] = mcpConfigDocumentEntry{
+				Type:        "local",
+				Command:     append([]string{server.Command}, server.Args...),
+				Environment: server.Env,
+				Enabled:     enabled,
+			}
+		case mcpconfig.TransportHTTP:
+			doc.MCP[server.Name] = mcpConfigDocumentEntry{
+				Type:    "remote",
+				URL:     server.URL,
+				Headers: server.Headers,
+				Enabled: enabled,
+			}
+		default:
+			return "", fmt.Errorf("mcp server %q: entry carries neither command nor url", server.Name)
+		}
+	}
+
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("marshal opencode mcp document: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func logUnknownPermissionKey(key string) {

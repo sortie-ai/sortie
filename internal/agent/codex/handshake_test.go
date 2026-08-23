@@ -203,7 +203,7 @@ func TestStartThread_Success(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	threadID, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, nil)
+	threadID, err := startThread(context.Background(), state, scanCh, passthroughConfig{})
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestStartThread_DefaultApprovalPolicyIsNever(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	if _, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, nil); err != nil {
+	if _, err := startThread(context.Background(), state, scanCh, passthroughConfig{}); err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
 
@@ -264,34 +264,12 @@ func TestStartThread_WithModelAndPersonality(t *testing.T) {
 		ThreadSandbox:  "workspaceWrite",
 	}
 
-	threadID, err := startThread(context.Background(), state, scanCh, pt, nil)
+	threadID, err := startThread(context.Background(), state, scanCh, pt)
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
 	if threadID != "thread-xyz" {
 		t.Errorf("startThread() threadID = %q, want %q", threadID, "thread-xyz")
-	}
-}
-
-func TestStartThread_WithTools(t *testing.T) {
-	t.Parallel()
-
-	state := handshakeState()
-	scanCh := scanChanFromLines(
-		`{"id":1,"result":{"thread":{"id":"thread-tools"}}}`,
-		`{"method":"thread/started","params":{}}`,
-	)
-	tools := []domain.AgentTool{
-		&fakeTool{name: "list_issues", result: nil},
-		&fakeTool{name: "create_issue", result: nil},
-	}
-
-	threadID, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, tools)
-	if err != nil {
-		t.Fatalf("startThread() error = %v", err)
-	}
-	if threadID != "thread-tools" {
-		t.Errorf("startThread() threadID = %q, want %q", threadID, "thread-tools")
 	}
 }
 
@@ -301,7 +279,7 @@ func TestStartThread_ErrorResponse(t *testing.T) {
 	state := handshakeState()
 	scanCh := scanChanFromLines(`{"id":1,"error":{"code":-32000,"message":"workspace not found"}}`)
 
-	_, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, nil)
+	_, err := startThread(context.Background(), state, scanCh, passthroughConfig{})
 	if err == nil {
 		t.Fatal("startThread() expected error for error response")
 	}
@@ -314,7 +292,7 @@ func TestStartThread_EmptyThreadID(t *testing.T) {
 	// Response with empty thread ID.
 	scanCh := scanChanFromLines(`{"id":1,"result":{"thread":{"id":""}}}`)
 
-	_, err := startThread(context.Background(), state, scanCh, passthroughConfig{}, nil)
+	_, err := startThread(context.Background(), state, scanCh, passthroughConfig{})
 	if err == nil {
 		t.Fatal("startThread() expected error for empty thread ID")
 	}
@@ -409,7 +387,7 @@ func TestStartThread_ContextCancelledDuringNotificationWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := startThread(ctx, handshakeState(), scanCh, passthroughConfig{}, nil)
+	_, err := startThread(ctx, handshakeState(), scanCh, passthroughConfig{})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("startThread() = %v, want context.Canceled", err)
 	}
