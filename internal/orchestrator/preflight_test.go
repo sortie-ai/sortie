@@ -1088,6 +1088,9 @@ func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
 
 		requireNoWarnCheck(t, result, "agent.kind.no_tool_channel")
 		requireNoWarnCheck(t, result, "agent.mcp_config")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: a translating kind is a valid configuration", result.Errors)
+		}
 	})
 
 	t.Run("a kind reached only through a dispatch rule that the registry reports unregistered draws no warning", func(t *testing.T) {
@@ -1119,6 +1122,9 @@ func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
 		result := ValidateDispatchConfig(params)
 
 		requireNoWarnCheck(t, result, "agent.kind.no_tool_channel")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: an unregistered kind is diagnosed elsewhere, not here", result.Errors)
+		}
 	})
 }
 
