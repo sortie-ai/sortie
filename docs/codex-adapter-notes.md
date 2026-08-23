@@ -679,9 +679,9 @@ When the agent invokes a tool, the app-server sends an `item/tool/call` request:
 ```
 
 `DynamicToolCallParams` requires `threadId`, `turnId`, `callId`, `tool` and `arguments`, and
-carries a nullable `namespace`. The decoder reads `tool` and `arguments`; the rest are declared
-and ignored. `namespace` is non-null only for namespace-form tools, which the adapter does not
-emit.
+carries a nullable `namespace`. The decoder reads `tool` and `arguments`; the protocol declares
+the rest and the adapter does not model them. `namespace` is non-null only for namespace-form
+tools, which the adapter does not emit.
 
 `handleToolCall` looks the name up in the registry and runs `AgentTool.Execute` in its own
 goroutine so the event read loop keeps draining stdout. `toolResultFor` builds the response:
