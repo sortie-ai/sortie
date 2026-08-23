@@ -66,9 +66,12 @@ func resolveExtensionsImportName(file *ast.File, importPath string) string {
 
 // isExtensionsIndexBase reports whether expr is the base of an index
 // expression that X1 forbids outside the allow-list: the extensions
-// field selector, or a bare identifier named extensions.
+// field selector, or a bare identifier named extensions. Enclosing
+// parentheses are stripped first, since the parser wraps a
+// parenthesized expression in a node of its own and the shape the rule
+// forbids is the same with or without them.
 func isExtensionsIndexBase(expr ast.Expr) bool {
-	switch e := expr.(type) {
+	switch e := ast.Unparen(expr).(type) {
 	case *ast.Ident:
 		return e.Name == "extensions"
 	case *ast.SelectorExpr:
@@ -79,13 +82,14 @@ func isExtensionsIndexBase(expr ast.Expr) bool {
 
 // isAgentKindSelector reports whether expr is a selector expression
 // ending in Agent.Kind, the shape of the original defect spelled in
-// the new API.
+// the new API. Parentheses are stripped at both selector levels for
+// the reason [isExtensionsIndexBase] gives.
 func isAgentKindSelector(expr ast.Expr) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
+	sel, ok := ast.Unparen(expr).(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Kind" {
 		return false
 	}
-	inner, ok := sel.X.(*ast.SelectorExpr)
+	inner, ok := ast.Unparen(sel.X).(*ast.SelectorExpr)
 	return ok && inner.Sel.Name == "Agent"
 }
 
@@ -131,14 +135,14 @@ func checkExtensionsX2X3(fset *token.FileSet, file *ast.File) []extensionsViolat
 			return true
 		}
 
-		switch fun := call.Fun.(type) {
+		switch fun := ast.Unparen(call.Fun).(type) {
 		case *ast.SelectorExpr:
 			switch fun.Sel.Name {
 			case "ExtensionSection", "ExtensionValue":
 				if len(call.Args) != 1 {
 					return true
 				}
-				if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if lit, ok := ast.Unparen(call.Args[0]).(*ast.BasicLit); ok && lit.Kind == token.STRING {
 					return true
 				}
 				violations = append(violations, extensionsViolation{
@@ -146,7 +150,7 @@ func checkExtensionsX2X3(fset *token.FileSet, file *ast.File) []extensionsViolat
 					text: fun.Sel.Name + " called with a non-literal name argument",
 				})
 			case "ResolveAgentSettings":
-				ident, ok := fun.X.(*ast.Ident)
+				ident, ok := ast.Unparen(fun.X).(*ast.Ident)
 				if !ok || configIdent == "" || ident.Name != configIdent {
 					return true
 				}
@@ -286,6 +290,36 @@ func resolve(cfg ServiceConfig, dir string) config.AgentSettings {
 }
 `,
 			wantCount: 1,
+		},
+		{
+			name: "parentheses do not hide any of the three shapes",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/config"
+
+func leakExtensions(cfg ServiceConfig) any {
+	return (cfg.extensions)["worker"]
+}
+
+func readSection(cfg ServiceConfig, name string) map[string]any {
+	return (cfg.ExtensionSection)(name)
+}
+
+func resolve(cfg ServiceConfig, dir string) config.AgentSettings {
+	return config.ResolveAgentSettings(cfg, (cfg.Agent).Kind, dir)
+}
+`,
+			wantCount: 3,
+		},
+		{
+			name: "a parenthesized string literal is still a literal section name",
+			src: `package fixture
+
+func readSection(cfg ServiceConfig) map[string]any {
+	return cfg.ExtensionSection(("worker"))
+}
+`,
+			wantCount: 0,
 		},
 	}
 

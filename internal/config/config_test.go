@@ -36,7 +36,7 @@ func TestNewServiceConfig(t *testing.T) {
 			t.Errorf("Agent.MaxConcurrentByState has %d entries, want 0", len(cfg.Agent.MaxConcurrentByState))
 		}
 		if cfg.extensions == nil {
-			t.Error("Extensions is nil, want empty map")
+			t.Error("extensions is nil, want empty map")
 		}
 	})
 
@@ -348,7 +348,7 @@ func TestNewServiceConfig(t *testing.T) {
 		assertIntEqual(t, "Hooks.TimeoutMS", 60000, cfg.Hooks.TimeoutMS)
 	})
 
-	t.Run("Extensions/Collected", func(t *testing.T) {
+	t.Run("extensions/Collected", func(t *testing.T) {
 		t.Parallel()
 		raw := map[string]any{
 			"server": map[string]any{"port": 8080},
@@ -360,17 +360,17 @@ func TestNewServiceConfig(t *testing.T) {
 		}
 		serverExt, ok := cfg.extensions["server"]
 		if !ok {
-			t.Fatal("Extensions missing 'server'")
+			t.Fatal("extensions missing 'server'")
 		}
 		serverMap, ok := serverExt.(map[string]any)
 		if !ok {
-			t.Fatalf("Extensions['server'] is %T, want map[string]any", serverExt)
+			t.Fatalf("extensions['server'] is %T, want map[string]any", serverExt)
 		}
 		if serverMap["port"] != 8080 {
 			t.Errorf("server.port = %v, want 8080", serverMap["port"])
 		}
 		if _, ok := cfg.extensions["worker"]; !ok {
-			t.Error("Extensions missing 'worker'")
+			t.Error("extensions missing 'worker'")
 		}
 	})
 
@@ -3168,4 +3168,141 @@ func TestBuildWorkspaceConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExtensionSection(t *testing.T) {
+	t.Parallel()
+
+	server := map[string]any{"port": 8080}
+	cfg := ServiceConfig{extensions: map[string]any{
+		"server":  server,
+		"logging": "not-a-section",
+		"nothing": nil,
+		"empty":   map[string]any{},
+	}}
+
+	tests := []struct {
+		name    string
+		section string
+		wantNil bool
+		wantLen int
+	}{
+		{name: "present section", section: "server", wantLen: 1},
+		{name: "absent section", section: "worker", wantNil: true},
+		{name: "section holding a non-object", section: "logging", wantNil: true},
+		{name: "section holding nil", section: "nothing", wantNil: true},
+		{name: "present but empty section", section: "empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := cfg.ExtensionSection(tt.section)
+			if (got == nil) != tt.wantNil {
+				t.Fatalf("ExtensionSection(%q) nil = %t, want %t", tt.section, got == nil, tt.wantNil)
+			}
+			if len(got) != tt.wantLen {
+				t.Errorf("ExtensionSection(%q) len = %d, want %d", tt.section, len(got), tt.wantLen)
+			}
+		})
+	}
+}
+
+// TestExtensionSectionCollapsesAbsentAndNonObject pins the equivalence
+// every section-scoped caller depends on: a caller that reached for a
+// section and got nil cannot tell an absent key from a key holding
+// something that is not an object, and does not need to, because both
+// mean the same thing to it. A caller whose behavior does differ
+// between the two uses [ServiceConfig.ExtensionValue] instead.
+func TestExtensionSectionCollapsesAbsentAndNonObject(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{"worker": "not-a-section"}}
+
+	absent := cfg.ExtensionSection("nothing-here")
+	nonObject := cfg.ExtensionSection("worker")
+
+	if absent != nil || nonObject != nil {
+		t.Fatalf("ExtensionSection absent = %v and non-object = %v, want both nil", absent, nonObject)
+	}
+}
+
+// TestExtensionSectionReturnsTheStoredMap pins the documented contract
+// that the returned map is the stored one rather than a copy, which is
+// why callers must treat it as read-only.
+func TestExtensionSectionReturnsTheStoredMap(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{"server": map[string]any{"port": 8080}}}
+
+	cfg.ExtensionSection("server")["port"] = 9090
+
+	if got := cfg.ExtensionSection("server")["port"]; got != 9090 {
+		t.Errorf("port after mutating the returned map = %v, want 9090", got)
+	}
+}
+
+func TestExtensionValue(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{
+		"token_rates": "not-a-map",
+		"nothing":     nil,
+	}}
+
+	tests := []struct {
+		name        string
+		key         string
+		wantPresent bool
+		wantValue   any
+	}{
+		{name: "present non-object value", key: "token_rates", wantPresent: true, wantValue: "not-a-map"},
+		{name: "present nil value", key: "nothing", wantPresent: true},
+		{name: "absent key", key: "worker"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, present := cfg.ExtensionValue(tt.key)
+			if present != tt.wantPresent {
+				t.Fatalf("ExtensionValue(%q) present = %t, want %t", tt.key, present, tt.wantPresent)
+			}
+			if got != tt.wantValue {
+				t.Errorf("ExtensionValue(%q) = %v, want %v", tt.key, got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestSetExtensionSection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("allocates on a zero-value config", func(t *testing.T) {
+		t.Parallel()
+
+		var cfg ServiceConfig
+		cfg.SetExtensionSection("worker", map[string]any{"ssh_hosts": []any{"host-a"}})
+
+		if got := len(cfg.ExtensionSection("worker")); got != 1 {
+			t.Errorf("worker section len = %d, want 1", got)
+		}
+	})
+
+	t.Run("replaces an existing section", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := ServiceConfig{extensions: map[string]any{"server": map[string]any{"port": 8080, "host": "127.0.0.1"}}}
+		cfg.SetExtensionSection("server", map[string]any{"port": 9090})
+
+		section := cfg.ExtensionSection("server")
+		if got := section["port"]; got != 9090 {
+			t.Errorf("port = %v, want 9090", got)
+		}
+		if _, ok := section["host"]; ok {
+			t.Error("host survived the replacement, want the section replaced wholesale")
+		}
+	})
 }
