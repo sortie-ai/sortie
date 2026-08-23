@@ -14,9 +14,10 @@ import (
 // TestMCPInjectionConformance proves codex's real launch surface never
 // carries the generated MCP config path, matching its declared
 // disposition. codex builds no CLI-flag argument slice for MCP; its
-// only launch surface is [agentcore.ResolveLaunchTarget]'s Args, so the
-// override command below stands in for "codex app-server" to keep the
-// check independent of whether a codex binary is installed on the host
+// only launch surface is [agentcore.ResolveLaunchTarget]'s Args. A
+// non-empty AgentConfig.Command supersedes the default, so the
+// "codex app-server" argument below is never resolved and the check
+// does not depend on a codex binary being installed on the host
 // running the test.
 func TestMCPInjectionConformance(t *testing.T) {
 	t.Parallel()

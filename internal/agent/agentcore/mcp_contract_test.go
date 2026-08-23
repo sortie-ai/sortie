@@ -77,30 +77,53 @@ func mcpCompositeLitKeyValue(expr ast.Expr, key string) ast.Expr {
 // mcpPackageReferencesIdentifier reports whether any file in files
 // reads name as the trailing field of a selector expression, which is
 // the form an adapter takes when it reads the worker-generated path
-// off its start-session parameters. A declaration of the same name,
-// and a bare identifier, are deliberately not reads: a package that
-// only declares a field called MCPConfigPath hands nothing to the
-// agent process, so it must neither satisfy the supported rule nor
-// breach the unsupported one. The match stays syntactic, resolving no
-// symbol, so this check does not become a type-checking pass.
+// off its start-session parameters. Three shapes are deliberately not
+// reads, because none of them hands anything to the agent process: a
+// declaration of a field with the same name, a bare identifier, and
+// the target of a plain assignment. A package matching only one of
+// them must neither satisfy the supported rule nor breach the
+// unsupported one. The match stays syntactic, resolving no symbol, so
+// this check does not become a type-checking pass.
 func mcpPackageReferencesIdentifier(files []*ast.File, name string) bool {
 	for _, file := range files {
-		found := false
-		ast.Inspect(file, func(n ast.Node) bool {
-			if found {
-				return false
-			}
-			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
-				found = true
-				return false
-			}
-			return true
-		})
-		if found {
+		if fileReadsSelector(file, name) {
 			return true
 		}
 	}
 	return false
+}
+
+// fileReadsSelector reports whether file contains a selector
+// expression naming name in a position that reads it. Assignment
+// targets are collected first and excluded from the second pass;
+// compound assignments are left in, since an operator such as += reads
+// the field before it writes it.
+func fileReadsSelector(file *ast.File, name string) bool {
+	assigned := make(map[ast.Node]bool)
+	ast.Inspect(file, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || assign.Tok != token.ASSIGN {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			assigned[lhs] = true
+		}
+		return true
+	})
+
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != name || assigned[sel] {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
 }
 
 // mcpRegistrationFacts scans every file of one package for a call to
@@ -444,6 +467,79 @@ type sessionParams struct {
 }
 `,
 			wantCount: 1,
+		},
+		{
+			// Assigning to the field on a by-value parameter writes to a
+			// local copy and hands nothing over, so it is not a read.
+			name:    "Y2 negative: writing the field is not a read",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionUnsupported,
+	})
+}
+
+func start(params domain.StartSessionParams) {
+	params.MCPConfigPath = ""
+}
+`,
+			wantCount: 0,
+		},
+		{
+			// The mirror: a write must not let a package claim supported.
+			name:    "Y3: writing the field does not satisfy supported",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+func start(params domain.StartSessionParams) {
+	params.MCPConfigPath = ""
+}
+`,
+			wantCount: 1,
+		},
+		{
+			// A read on the right-hand side of an assignment is still a
+			// read; only the target of one is excluded.
+			name:    "Y3: reading the field on an assignment right-hand side satisfies supported",
+			dirName: "fixture",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+func start(params domain.StartSessionParams) string {
+	var path string
+	path = params.MCPConfigPath
+	return path
+}
+`,
+			wantCount: 0,
 		},
 		{
 			name:    "a package this walk never observed registering draws no violation",
