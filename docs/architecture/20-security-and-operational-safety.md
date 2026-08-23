@@ -77,3 +77,55 @@ Possible hardening measures include:
 The correct controls are deployment-specific, but deployments should document them clearly and
 treat harness hardening as part of the core safety model rather than an optional afterthought.
 
+### 15.6 Workspace Content as Agent Configuration
+
+Some agent runtimes read configuration out of the working directory they are handed, and start
+helper processes from what they find there. Sortie creates a workspace, checks repository content
+into it, and gives that directory to the agent as its working directory, so repository content
+reaches the runtime's configuration loader. Content that arrives with a checkout can therefore
+shape how the agent runs, and on a runtime that launches processes from configuration it can
+execute on the host under the account Sortie runs as.
+
+Processes an agent runtime starts on its own behalf are not confined by that agent's sandbox
+setting. The sandbox governs commands the agent executes; it does not govern the transports and
+helper processes the runtime launches to serve the session. Nor does it govern whether workspace
+configuration is read at all. A runtime that gates that reading on a recorded trust decision
+consults the sandbox only when deciding whether to record trust for a path it has not seen
+before, so a restrictive sandbox prevents the decision rather than the loading. On a path that
+has never been trusted it therefore does protect: no decision is recorded, so nothing project
+scoped is read and no helper declared there is started. A path already carrying that decision
+keeps loading its configuration, and keeps starting the processes that configuration declares,
+whatever the sandbox says on the run that reaches it. The approval policy
+makes no difference to any of this. Tightening the sandbox setting therefore does not close the
+exposure, which is the limit of the hardening guidance above.
+
+Sortie derives a workspace path from the issue identifier, so runs for the same unit of work
+share a path. A trust decision recorded against that path outlives both the run and the workspace
+content that earned it, so the first permissive run for an issue arms every later run at the same
+path.
+
+The workspace Sortie creates and hands over is the boundary that matters, and two operator-facing
+controls act on it. Give the agent runtime a configuration home scoped to the run, so whatever it
+records while running dies with the run instead of accumulating in the operator's own
+configuration; this is demonstrated workable rather than theoretical. Control what lands in the
+checkout, because the exposure is bounded by who can place a file in the checked-out tree: a
+workflow that checks out contributor-supplied refs widens it well beyond one that builds only the
+default branch.
+
+Sortie launches a local agent with the orchestrator's environment, so any credential present
+there is readable by an agent running with approvals disabled in a write-capable sandbox. Whether
+a tracker credential is present depends on how it is supplied. A value named indirectly through
+an environment variable, or supplied by an environment override, sits in the orchestrator's
+environment and is inherited. A value written literally into workflow configuration does not, and
+reaches the tracker client without passing through the environment, although it then sits in the
+configuration file instead.
+
+Dispatching a run to a remote host bounds this differently. Only an explicitly constructed set of
+variables crosses with the command, so the remote agent inherits that set rather than the
+orchestrator's environment, and the exposure is the size of that set.
+
+The sandbox does not help in either case. It governs filesystem and network reach, not what a
+process reads from the environment it was started with.
+
+Which runtimes read workspace configuration, which files they key on, and how any of this differs
+between their releases are adapter concerns and belong in the adapter notes.
