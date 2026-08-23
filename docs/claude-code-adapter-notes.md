@@ -62,7 +62,7 @@ Session transcripts live under the user's home directory, not in the workspace. 
 
 ## Sortie's own tools
 
-The worker generates one MCP configuration file per session, declaring the Sortie tool server and carrying the per-session variables it needs. This CLI accepts exactly one such config path, which is why an operator-supplied config cannot simply be passed alongside ours: the worker merges the two, and a name collision on our reserved server key fails the attempt rather than silently overwriting. Credentials reach the tool server through the inherited environment, never through the file.
+The worker generates one MCP configuration file per session, declaring the Sortie tool server and carrying the per-session variables it needs. This CLI accepts exactly one such config path, which is why an operator-supplied config cannot simply be passed alongside ours: the worker merges the two, and a name collision on our reserved server key fails the attempt rather than silently overwriting. That merged file is also where credentials for the tool server come from: the worker copies every `SORTIE_`-prefixed variable out of its own process environment into the config's env block, which is how a workflow's `$SORTIE_*` credential indirection resolves inside the tool server. Treat that file as carrying secrets, not just plumbing.
 
 Whether Sortie's tools reach an agent at all is a per-adapter property, not a guarantee of the fleet. The mechanism depends on what the CLI accepts, so some adapters wire the generated config through and others cannot. Do not assume, from this adapter, that a tool call is available in another.
 
