@@ -2861,6 +2861,15 @@ func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
 func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 	t.Parallel()
 
+	// filepath.FromSlash("/abs/op.json") yields a drive-relative path
+	// on Windows, which filepath.IsAbs correctly rejects. Resolve it to
+	// a genuinely absolute path so the case tests absoluteness rather
+	// than the host's path syntax.
+	absOperatorPath, err := filepath.Abs(filepath.FromSlash("/abs/op.json"))
+	if err != nil {
+		t.Fatalf("filepath.Abs: %v", err)
+	}
+
 	tests := []struct {
 		name        string
 		cfg         ServiceConfig
@@ -2914,11 +2923,11 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		{
 			name: "mcp_config is an absolute path",
 			cfg: ServiceConfig{Extensions: map[string]any{
-				"codex": map[string]any{"mcp_config": filepath.FromSlash("/abs/op.json")},
+				"codex": map[string]any{"mcp_config": absOperatorPath},
 			}},
 			kind:        "codex",
 			workflowDir: "/wf",
-			wantPath:    filepath.FromSlash("/abs/op.json"),
+			wantPath:    absOperatorPath,
 		},
 		{
 			name: "mcp_config is relative and workflowDir is non-empty",
