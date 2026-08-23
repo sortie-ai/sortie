@@ -146,6 +146,81 @@ func TestRenderMCPServerOverrides_OnePerServer(t *testing.T) {
 // server is keyed under its own dotted path, so an operator's own
 // [mcp_servers] table entries merge rather than being replaced by a
 // single override.
+func TestRenderMCPServerOverrides_HTTPHeaderRefused(t *testing.T) {
+	t.Parallel()
+
+	const secret = "Bearer s3cr3t-token"
+	servers := []mcpconfig.Server{
+		{
+			Name:      "remote-tools",
+			Transport: mcpconfig.TransportHTTP,
+			URL:       "https://example.invalid/mcp",
+			Headers:   map[string]string{"Authorization": secret},
+		},
+	}
+
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err == nil {
+		t.Fatalf("renderMCPServerOverrides() error = nil, want a refusal; args = %v", args)
+	}
+	if !strings.Contains(err.Error(), "remote-tools") {
+		t.Errorf("renderMCPServerOverrides() error = %q, want it to name the server", err)
+	}
+	if !strings.Contains(err.Error(), "Authorization") {
+		t.Errorf("renderMCPServerOverrides() error = %q, want it to name the header", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("renderMCPServerOverrides() error names the header value, which is the leak the refusal exists to prevent")
+	}
+}
+
+func TestRenderMCPServerOverrides_HTTPHeaderByVariableName(t *testing.T) {
+	t.Parallel()
+
+	const secret = "Bearer s3cr3t-token"
+	servers := []mcpconfig.Server{
+		{
+			Name:      "remote-tools",
+			Transport: mcpconfig.TransportHTTP,
+			URL:       "https://example.invalid/mcp",
+			Headers:   map[string]string{"Authorization": secret},
+		},
+	}
+
+	args, err := renderMCPServerOverrides(servers, []string{"SORTIE_REMOTE_TOKEN=" + secret})
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v, want a header whose value is in the environment to render", err)
+	}
+
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, secret) {
+		t.Fatalf("renderMCPServerOverrides() put the header value in the argument list: %v", args)
+	}
+	if !strings.Contains(joined, "SORTIE_REMOTE_TOKEN") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the variable name delivered instead of the value", args)
+	}
+	if !strings.Contains(joined, "env_http_headers") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the runtime's environment-sourced header field", args)
+	}
+}
+
+func TestRenderMCPServerOverrides_HTTPWithoutHeaders(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcpconfig.Server{
+		{Name: "remote-tools", Transport: mcpconfig.TransportHTTP, URL: "https://example.invalid/mcp"},
+	}
+
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v, want a headerless HTTP entry to render", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "https://example.invalid/mcp") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the url on the override", args)
+	}
+}
+
 func TestRenderMCPServerOverrides_DottedPathPerServer(t *testing.T) {
 	t.Parallel()
 

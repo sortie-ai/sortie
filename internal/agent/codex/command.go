@@ -140,11 +140,11 @@ func renderMCPServerTable(server mcpconfig.Server, envLookup map[string]string) 
 		fields = append(fields, "url="+urlValue)
 
 		if len(server.Headers) > 0 {
-			headerBody, err := renderQuotedKeyTable(server.Headers)
+			headerEntries, err := splitHeadersForPassthrough(server.Headers, envLookup)
 			if err != nil {
-				return "", fmt.Errorf("headers: %w", err)
+				return "", err
 			}
-			fields = append(fields, "http_headers={"+headerBody+"}")
+			fields = append(fields, "env_http_headers={"+strings.Join(headerEntries, ", ")+"}")
 		}
 
 	default:
@@ -184,23 +184,36 @@ func splitEnvForPassthrough(env map[string]string, envLookup map[string]string) 
 	return literalEntries, passthroughNames, nil
 }
 
-// renderQuotedKeyTable renders m as the body of a TOML inline table,
-// without the surrounding braces, sorted by key for deterministic
-// output, with every key emitted as a TOML quoted key.
-func renderQuotedKeyTable(m map[string]string) (string, error) {
-	entries := make([]string, 0, len(m))
-	for _, name := range slices.Sorted(maps.Keys(m)) {
-		keyStr, err := tomlQuotedKey(name)
-		if err != nil {
-			return "", err
+// splitHeadersForPassthrough maps each header name to the name of an
+// environment variable holding its value, sorted by header name for
+// deterministic output. A header is delivered by variable name so its
+// value never reaches the agent's argument list, which any local user
+// of the host can read. A header whose value matches no variable
+// cannot be delivered that way and fails by name, carrying the header
+// name but never the value.
+func splitHeadersForPassthrough(headers map[string]string, envLookup map[string]string) ([]string, error) {
+	entries := make([]string, 0, len(headers))
+	for _, header := range slices.Sorted(maps.Keys(headers)) {
+		var matches []string
+		for name, value := range envLookup {
+			if value == headers[header] {
+				matches = append(matches, name)
+			}
 		}
-		valueStr, err := tomlString(m[name])
-		if err != nil {
-			return "", err
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("header %q: value is in no environment variable, and delivering it inline would place it in the agent's argument list", header)
 		}
-		entries = append(entries, keyStr+"="+valueStr)
+		headerKey, err := tomlQuotedKey(header)
+		if err != nil {
+			return nil, fmt.Errorf("headers: %w", err)
+		}
+		variable, err := tomlString(slices.Min(matches))
+		if err != nil {
+			return nil, fmt.Errorf("headers: %w", err)
+		}
+		entries = append(entries, headerKey+"="+variable)
 	}
-	return strings.Join(entries, ", "), nil
+	return entries, nil
 }
 
 // isTOMLBareKeySegment reports whether s matches the TOML bare-key
