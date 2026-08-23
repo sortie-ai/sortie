@@ -77,3 +77,36 @@ Possible hardening measures include:
 The correct controls are deployment-specific, but deployments should document them clearly and
 treat harness hardening as part of the core safety model rather than an optional afterthought.
 
+### 15.6 Workspace Content as Agent Configuration
+
+Some agent runtimes read configuration out of the working directory they are handed, and start
+helper processes from what they find there. Sortie creates a workspace, checks repository content
+into it, and gives that directory to the agent as its working directory, so repository content
+reaches the runtime's configuration loader. Content that arrives with a checkout can therefore
+shape how the agent runs, and on a runtime that launches processes from configuration it can
+execute on the host under the account Sortie runs as.
+
+Processes an agent runtime starts on its own behalf are not confined by that agent's sandbox
+setting. The sandbox governs commands the agent executes; it does not govern the transports and
+helper processes the runtime launches to serve the session. Any write-capable sandbox admits this
+class of exposure, a read-only one does not, and the approval policy makes no difference to it.
+Tightening the sandbox setting therefore does not close it, which is the limit of the hardening
+guidance above: the setting that would close it is also the one that removes the write access an
+implementing agent needs.
+
+The workspace Sortie creates and hands over is the boundary that matters, and two operator-facing
+controls act on it. Give the agent runtime a configuration home scoped to the run, so whatever it
+records while running dies with the run instead of accumulating in the operator's own
+configuration; this is demonstrated workable rather than theoretical. Control what lands in the
+checkout, because the exposure is bounded by who can place a file in the checked-out tree: a
+workflow that checks out contributor-supplied refs widens it well beyond one that builds only the
+default branch.
+
+Sortie launches agents with the orchestrator's environment. Tracker credentials reach the
+orchestrator through variable indirection, so an agent that runs with approvals disabled in a
+write-capable sandbox can read them out of its own environment block. The sandbox does not help
+here: it governs filesystem and network reach, not what a process reads from the environment it
+was started with.
+
+Which runtimes read workspace configuration, which files they key on, and how any of this differs
+between their releases are adapter concerns and belong in the adapter notes.
