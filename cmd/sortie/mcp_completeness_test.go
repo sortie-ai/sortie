@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,9 +17,17 @@ import (
 )
 
 // mcpCompletenessAgentRoot is the directory holding one package
-// subdirectory per agent kind, relative to this package's own
-// directory.
-const mcpCompletenessAgentRoot = "../../internal/agent"
+// subdirectory per agent kind. It is resolved from this source file's
+// own location rather than from the working directory, because many
+// tests in this package change the process working directory and this
+// one runs in parallel with them.
+var mcpCompletenessAgentRoot = func() string {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return filepath.Join("..", "..", "internal", "agent")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "internal", "agent")
+}()
 
 // mcpCompletenessRegistryImportPath is the import path the directory
 // discovery step resolves the "registry" package qualifier from, per

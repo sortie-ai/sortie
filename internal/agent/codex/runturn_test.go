@@ -749,16 +749,18 @@ func TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn(t *testing.T) {
 // none when the request is expected to end the attempt before any more
 // input is read).
 func runTurnFixtureWithServerRequest(requestID int64, method string, trailing ...string) []byte {
-	fixture := fmt.Sprintf(
+	var fixture strings.Builder
+	fmt.Fprintf(&fixture,
 		"{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n"+
 			"{\"method\":\"turn/started\",\"params\":{}}\n"+
 			"{\"id\":%d,\"method\":%q,\"params\":{}}\n",
 		requestID, method,
 	)
 	for _, line := range trailing {
-		fixture += line + "\n"
+		fixture.WriteString(line)
+		fixture.WriteString("\n")
 	}
-	return []byte(fixture)
+	return []byte(fixture.String())
 }
 
 const turnCompletedLine = `{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`
