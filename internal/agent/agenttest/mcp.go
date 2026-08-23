@@ -102,6 +102,9 @@ func assertTranslatedInjection(t mcpInjectionReporter, mcpConfigPath string, sur
 		if server.Transport == mcpconfig.TransportStdio && !surfaceContains(surface, server.Command) {
 			t.Errorf("declared = %q, server %q command %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name, server.Command)
 		}
+		if server.Transport == mcpconfig.TransportHTTP && !surfaceContains(surface, server.URL) {
+			t.Errorf("declared = %q, server %q url %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name, server.URL)
+		}
 	}
 }
 

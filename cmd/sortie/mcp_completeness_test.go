@@ -152,8 +152,26 @@ func fileCallsAssertMCPInjection(file *ast.File) bool {
 	}
 
 	found := false
-	ast.Inspect(file, func(n ast.Node) bool {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+			continue
+		}
 		if found {
+			break
+		}
+		inspectForAssertCall(fn.Body, alias, &found)
+	}
+	return found
+}
+
+// inspectForAssertCall sets *found when body calls the conformance
+// assertion through alias. Only a test function's own body is walked:
+// a call sitting in a helper nothing runs would otherwise count as
+// coverage, which is the failure this check exists to catch.
+func inspectForAssertCall(body *ast.BlockStmt, alias string, found *bool) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if *found {
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
@@ -168,10 +186,9 @@ func fileCallsAssertMCPInjection(file *ast.File) bool {
 		if !ok || ident.Name != alias {
 			return true
 		}
-		found = true
+		*found = true
 		return false
 	})
-	return found
 }
 
 // kindsMissingMCPInjectionCoverage reports, in the order kinds are
@@ -309,13 +326,43 @@ func TestFixtureSomethingElse(t *testing.T) {
 }
 `
 
+// fixtureHelperOnlyKindRegister registers "helper-only-kind" from a
+// directory whose test file calls AssertMCPInjection only from a
+// helper no test runs.
+const fixtureHelperOnlyKindRegister = `package helperonlydir
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.RegisterWithMeta("helper-only-kind", newHelperOnlyAdapter, registry.AgentMeta{})
+}
+`
+
+const fixtureHelperOnlyKindTest = `package helperonlydir
+
+import (
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+)
+
+func assertNothingRunsThis(t *testing.T) {
+	agenttest.AssertMCPInjection(t, "supported", "/tmp/mcp.json", agenttest.MCPLaunchSurface{})
+}
+
+func TestFixtureUnrelated(t *testing.T) {
+	_ = t
+}
+`
+
 // TestKindsMissingMCPInjectionCoverage proves the completeness
 // mechanism itself can fail: a synthetic kind registered under a
 // directory name that does not match its kind string, but whose test
 // file calls AssertMCPInjection, is not reported; a kind whose test
-// file never calls it is reported by name; and a kind with no
-// registration anywhere under the fixture root is reported by name
-// too.
+// file never calls it is reported by name; a kind whose only call
+// sits in a helper no test runs is reported too, since an
+// unreachable assertion is not coverage; and a kind with no
+// registration anywhere under the fixture root is reported by name.
 func TestKindsMissingMCPInjectionCoverage(t *testing.T) {
 	t.Parallel()
 
@@ -324,12 +371,14 @@ func TestKindsMissingMCPInjectionCoverage(t *testing.T) {
 	writeFixtureFile(t, filepath.Join(root, "covered-dir"), "register_test.go", fixtureCoveredKindTest)
 	writeFixtureFile(t, filepath.Join(root, "uncovered-dir"), "register.go", fixtureUncoveredKindRegister)
 	writeFixtureFile(t, filepath.Join(root, "uncovered-dir"), "register_test.go", fixtureUncoveredKindTest)
+	writeFixtureFile(t, filepath.Join(root, "helper-only-dir"), "register.go", fixtureHelperOnlyKindRegister)
+	writeFixtureFile(t, filepath.Join(root, "helper-only-dir"), "register_test.go", fixtureHelperOnlyKindTest)
 	// "missing-kind" is registered nowhere under root.
 
-	kinds := []string{"covered-kind", "uncovered-kind", "missing-kind"}
+	kinds := []string{"covered-kind", "uncovered-kind", "helper-only-kind", "missing-kind"}
 	got := kindsMissingMCPInjectionCoverage(kinds, root)
 
-	want := []string{"uncovered-kind", "missing-kind"}
+	want := []string{"uncovered-kind", "helper-only-kind", "missing-kind"}
 	if len(got) != len(want) {
 		t.Fatalf("kindsMissingMCPInjectionCoverage(%v, %q) = %v, want %v", kinds, root, got, want)
 	}
