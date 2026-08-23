@@ -4,6 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // assertHasArgPair fails if flag and value do not appear as consecutive
@@ -124,6 +127,25 @@ func TestParsePassthroughConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMCPInjectionConformance proves copilot-cli's real buildArgs
+// output carries the generated MCP config path, matching its declared
+// disposition. The path is checked by substring containment because
+// buildArgs composes it as "@<path>".
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("copilot-cli")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("copilot-cli") reported not registered`)
+	}
+
+	const mcpConfigPath = "/ws/.sortie/mcp.json"
+	state := &sessionState{mcpConfigPath: mcpConfigPath}
+	args := buildArgs(state, 1, "do work", passthroughConfig{})
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args})
 }
 
 func TestBuildArgs(t *testing.T) {

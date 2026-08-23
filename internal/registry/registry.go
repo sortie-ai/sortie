@@ -179,7 +179,32 @@ type AgentMeta struct {
 	// pipeline calls to run agent-specific config validation. Nil
 	// means no adapter-specific validation.
 	ValidateAgentConfig func(fields AgentConfigFields) []ValidationDiag
+
+	// MCPInjection declares what this adapter does with the
+	// worker-generated MCP config path today, not what the underlying
+	// CLI is capable of. The empty value means undeclared.
+	MCPInjection MCPInjection
 }
+
+// MCPInjection declares what an agent adapter does with the
+// worker-generated MCP config path. The value describes what the
+// adapter does with the path today, not what the underlying CLI is
+// capable of, and the empty value means undeclared.
+type MCPInjection string
+
+const (
+	// MCPInjectionUndeclared is the zero value: the adapter has not
+	// declared a disposition toward the generated MCP config path.
+	MCPInjectionUndeclared MCPInjection = ""
+
+	// MCPInjectionSupported declares that the adapter hands the
+	// generated MCP config path to the agent process.
+	MCPInjectionSupported MCPInjection = "supported"
+
+	// MCPInjectionUnsupported declares that the adapter never hands
+	// the generated MCP config path to the agent process.
+	MCPInjectionUnsupported MCPInjection = "unsupported"
+)
 
 // AgentConfigFields holds the config values passed to agent adapter
 // validation functions. This is a plain data struct that avoids

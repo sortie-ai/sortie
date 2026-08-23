@@ -8,6 +8,9 @@ import (
 
 	// Trigger adapter init() registrations.
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
+	_ "github.com/sortie-ai/sortie/internal/agent/codex"
+	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
+	_ "github.com/sortie-ai/sortie/internal/agent/kiro"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
@@ -106,23 +109,45 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		t.Parallel()
 
 		tests := []struct {
-			name        string
-			kind        string
-			wantCommand bool
+			name             string
+			kind             string
+			wantCommand      bool
+			wantMCPInjection registry.MCPInjection
 		}{
 			{
-				name:        "claude-code requires command",
-				kind:        "claude-code",
-				wantCommand: true,
+				name:             "claude-code requires command and declares MCP injection supported",
+				kind:             "claude-code",
+				wantCommand:      true,
+				wantMCPInjection: registry.MCPInjectionSupported,
 			},
 			{
-				name:        "opencode requires command",
-				kind:        "opencode",
-				wantCommand: true,
+				name:             "copilot-cli requires command and declares MCP injection supported",
+				kind:             "copilot-cli",
+				wantCommand:      true,
+				wantMCPInjection: registry.MCPInjectionSupported,
 			},
 			{
-				name: "mock requires nothing",
-				kind: "mock",
+				name:             "codex requires command and declares MCP injection unsupported",
+				kind:             "codex",
+				wantCommand:      true,
+				wantMCPInjection: registry.MCPInjectionUnsupported,
+			},
+			{
+				name:             "kiro requires command and declares MCP injection unsupported",
+				kind:             "kiro",
+				wantCommand:      true,
+				wantMCPInjection: registry.MCPInjectionUnsupported,
+			},
+			{
+				name:             "opencode requires command and declares MCP injection unsupported",
+				kind:             "opencode",
+				wantCommand:      true,
+				wantMCPInjection: registry.MCPInjectionUnsupported,
+			},
+			{
+				name:             "mock requires nothing and declares MCP injection unsupported",
+				kind:             "mock",
+				wantMCPInjection: registry.MCPInjectionUnsupported,
 			},
 		}
 
@@ -137,6 +162,9 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 
 				if meta.RequiresCommand != tt.wantCommand {
 					t.Errorf("Agents.Meta(%q).RequiresCommand = %v, want %v", tt.kind, meta.RequiresCommand, tt.wantCommand)
+				}
+				if meta.MCPInjection != tt.wantMCPInjection {
+					t.Errorf("Agents.Meta(%q).MCPInjection = %q, want %q", tt.kind, meta.MCPInjection, tt.wantMCPInjection)
 				}
 			})
 		}

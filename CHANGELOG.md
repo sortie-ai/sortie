@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   held by a full slot.
   ([#920](https://github.com/sortie-ai/sortie/issues/920))
 
+- `sortie validate` now reports a warning when an agent block sets
+  `mcp_config` for an agent kind that never receives the generated MCP
+  configuration file. `claude-code` and `copilot-cli` pass that file to
+  the agent process; `codex`, `kiro` and `opencode` do not, so an
+  `mcp_config` value in one of their blocks had no effect and nothing
+  said so. The reference documentation now states which kinds consume
+  the file. It is a warning and not an error: such a configuration
+  stays valid, the run proceeds, and the exit code is unchanged.
+  ([#928](https://github.com/sortie-ai/sortie/issues/928))
+
 ### Fixed
 
 - A malformed end-of-turn notification from the `codex app-server` no

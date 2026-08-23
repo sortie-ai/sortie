@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // envLookup returns the value for key in an env []string slice.
@@ -207,6 +209,31 @@ func TestNewOpenCodeAdapter_ParsePassthroughConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMCPInjectionConformance proves opencode's real launch surface
+// never carries the generated MCP config path, matching its declared
+// disposition. Both channels the adapter builds are captured, not the
+// argument slice alone: opencode is the adapter that carries most of
+// its configuration through the environment, so an environment-only
+// leak would otherwise go unseen.
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("opencode")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("opencode") reported not registered`)
+	}
+
+	const mcpConfigPath = "/ws/.sortie/mcp.json"
+	state := newTestSessionState("/workspace", "")
+	args := buildRunArgs(state, "do work", passthroughConfig{})
+	env, err := buildRunEnv([]string{"PATH=/usr/bin"}, passthroughConfig{})
+	if err != nil {
+		t.Fatalf("buildRunEnv() error = %v", err)
+	}
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: args, Env: env})
 }
 
 func TestBuildRunArgs(t *testing.T) {

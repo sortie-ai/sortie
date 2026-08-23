@@ -18,7 +18,9 @@ import (
 )
 
 func init() {
-	registry.Agents.Register("mock", NewMockAdapter)
+	registry.Agents.RegisterWithMeta("mock", NewMockAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionUnsupported,
+	})
 }
 
 // Compile-time interface satisfaction check.

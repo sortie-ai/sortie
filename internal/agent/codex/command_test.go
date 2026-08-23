@@ -4,8 +4,42 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// TestMCPInjectionConformance proves codex's real launch surface never
+// carries the generated MCP config path, matching its declared
+// disposition. codex builds no CLI-flag argument slice for MCP; its
+// only launch surface is [agentcore.ResolveLaunchTarget]'s Args, so the
+// override command below stands in for "codex app-server" to keep the
+// check independent of whether a codex binary is installed on the host
+// running the test.
+func TestMCPInjectionConformance(t *testing.T) {
+	t.Parallel()
+
+	declared, ok := registry.Agents.Meta("codex")
+	if !ok {
+		t.Fatal(`registry.Agents.Meta("codex") reported not registered`)
+	}
+
+	const mcpConfigPath = "/ws/.sortie/mcp.json"
+	params := domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: "sh -c"},
+		MCPConfigPath: mcpConfigPath,
+	}
+
+	target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
+	if agentErr != nil {
+		t.Fatalf("agentcore.ResolveLaunchTarget() error = %v", agentErr)
+	}
+
+	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: target.Args})
+}
 
 func TestBuildSSHRemoteCmd(t *testing.T) {
 	t.Parallel()

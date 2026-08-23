@@ -27,6 +27,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
+		MCPInjection:        registry.MCPInjectionSupported,
 	})
 }
 
