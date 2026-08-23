@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -154,7 +156,7 @@ func fileCallsAssertMCPInjection(file *ast.File) bool {
 	found := false
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+		if !ok || !isRunnableTestFunc(fn) {
 			continue
 		}
 		if found {
@@ -163,6 +165,40 @@ func fileCallsAssertMCPInjection(file *ast.File) bool {
 		inspectForAssertCall(fn.Body, alias, &found)
 	}
 	return found
+}
+
+// isRunnableTestFunc reports whether fn is a function the test binary
+// actually runs. It applies the toolchain's own two rules: the name is
+// "Test" followed by nothing or by a rune that is not lower case, and
+// the signature is one *testing.T parameter with no results. A
+// declaration failing either rule is never executed, so an assertion
+// inside it is not coverage, which is the whole point of the check
+// this predicate guards.
+func isRunnableTestFunc(fn *ast.FuncDecl) bool {
+	if fn.Recv != nil || fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+		return false
+	}
+	if suffix := fn.Name.Name[len("Test"):]; suffix != "" {
+		if r, _ := utf8.DecodeRuneInString(suffix); unicode.IsLower(r) {
+			return false
+		}
+	}
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		return false
+	}
+	if fn.Type.Params == nil || len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
+		return false
+	}
+	star, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "T" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "testing"
 }
 
 // inspectForAssertCall sets *found when body calls the conformance
@@ -350,6 +386,14 @@ func assertNothingRunsThis(t *testing.T) {
 	agenttest.AssertMCPInjection(t, "supported", "/tmp/mcp.json", agenttest.MCPLaunchSurface{})
 }
 
+func Testlowercase(t *testing.T) {
+	agenttest.AssertMCPInjection(t, "supported", "/tmp/mcp.json", agenttest.MCPLaunchSurface{})
+}
+
+func TestWrongSignature(b *testing.B) {
+	agenttest.AssertMCPInjection(b, "supported", "/tmp/mcp.json", agenttest.MCPLaunchSurface{})
+}
+
 func TestFixtureUnrelated(t *testing.T) {
 	_ = t
 }
@@ -359,8 +403,9 @@ func TestFixtureUnrelated(t *testing.T) {
 // mechanism itself can fail: a synthetic kind registered under a
 // directory name that does not match its kind string, but whose test
 // file calls AssertMCPInjection, is not reported; a kind whose test
-// file never calls it is reported by name; a kind whose only call
-// sits in a helper no test runs is reported too, since an
+// file never calls it is reported by name; a kind whose only calls
+// sit in declarations the test binary never runs -- a helper, a
+// lower-case suffix, a non-T signature -- is reported too, since an
 // unreachable assertion is not coverage; and a kind with no
 // registration anywhere under the fixture root is reported by name.
 func TestKindsMissingMCPInjectionCoverage(t *testing.T) {
