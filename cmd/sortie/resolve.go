@@ -77,11 +77,12 @@ func resolveDBPath(cfgPath, workflowDir string) string {
 }
 
 // resolveServerPort determines the effective HTTP server port from the
-// CLI flag and workflow extensions. Returns the port, whether the
-// server should be started, and an error if an explicitly configured
-// port is invalid. When no port is configured, the default port is
-// returned with the server enabled. Port 0 disables the server.
-func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool, error) {
+// CLI flag and the server extension section. Returns the port,
+// whether the server should be started, and an error if an explicitly
+// configured port is invalid. When no port is configured, the default
+// port is returned with the server enabled. Port 0 disables the
+// server.
+func resolveServerPort(portFlag int, portFlagSet bool, serverSection map[string]any) (int, bool, error) {
 	if portFlagSet {
 		if portFlag < 0 || portFlag > 65535 {
 			return 0, false, fmt.Errorf("invalid --port value %d: must be between 0 and 65535", portFlag)
@@ -89,12 +90,11 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 		return portFlag, portFlag != 0, nil
 	}
 
-	serverExt, ok := extensions["server"].(map[string]any)
-	if !ok {
+	if serverSection == nil {
 		return defaultServerPort, true, nil
 	}
 
-	portVal, exists := serverExt["port"]
+	portVal, exists := serverSection["port"]
 	if !exists {
 		return defaultServerPort, true, nil
 	}
@@ -119,10 +119,10 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 }
 
 // resolveServerHost determines the effective HTTP server bind address
-// from the CLI flag and workflow extensions. Returns an error if the
-// resolved value is not a parseable IP address. When no host is
-// configured, the loopback address is returned.
-func resolveServerHost(hostFlag string, hostFlagSet bool, extensions map[string]any) (string, error) {
+// from the CLI flag and the server extension section. Returns an
+// error if the resolved value is not a parseable IP address. When no
+// host is configured, the loopback address is returned.
+func resolveServerHost(hostFlag string, hostFlagSet bool, serverSection map[string]any) (string, error) {
 	if hostFlagSet {
 		if net.ParseIP(hostFlag) == nil {
 			return "", fmt.Errorf("invalid --host value %q: not a valid IP address", hostFlag)
@@ -130,12 +130,11 @@ func resolveServerHost(hostFlag string, hostFlagSet bool, extensions map[string]
 		return hostFlag, nil
 	}
 
-	serverExt, ok := extensions["server"].(map[string]any)
-	if !ok {
+	if serverSection == nil {
 		return defaultServerHost, nil
 	}
 
-	hostVal, exists := serverExt["host"]
+	hostVal, exists := serverSection["host"]
 	if !exists {
 		return defaultServerHost, nil
 	}
@@ -151,32 +150,30 @@ func resolveServerHost(hostFlag string, hostFlagSet bool, extensions map[string]
 	return hostStr, nil
 }
 
-// hasServerPortExtension reports whether the extensions map contains a
-// server object with a port key. The check is presence-based: even
-// server.port matching the default counts as explicit configuration.
-func hasServerPortExtension(extensions map[string]any) bool {
-	serverExt, ok := extensions["server"].(map[string]any)
-	if !ok {
+// hasServerPortExtension reports whether the server extension section
+// contains a port key. The check is presence-based: even server.port
+// matching the default counts as explicit configuration.
+func hasServerPortExtension(serverSection map[string]any) bool {
+	if serverSection == nil {
 		return false
 	}
-	_, exists := serverExt["port"]
+	_, exists := serverSection["port"]
 	return exists
 }
 
 // resolveLogLevel determines the effective log level from the CLI flag
-// and workflow extensions. Precedence: CLI flag > logging.level
-// extension > default (info).
-func resolveLogLevel(flagValue string, flagSet bool, extensions map[string]any) (slog.Level, error) {
+// and the logging extension section. Precedence: CLI flag >
+// logging.level extension > default (info).
+func resolveLogLevel(flagValue string, flagSet bool, loggingSection map[string]any) (slog.Level, error) {
 	if flagSet {
 		return logging.ParseLevel(flagValue)
 	}
 
-	loggingExt, ok := extensions["logging"].(map[string]any)
-	if !ok {
+	if loggingSection == nil {
 		return slog.LevelInfo, nil
 	}
 
-	rawLevel, ok := loggingExt["level"]
+	rawLevel, ok := loggingSection["level"]
 	if !ok || rawLevel == nil {
 		return slog.LevelInfo, nil
 	}
@@ -189,25 +186,21 @@ func resolveLogLevel(flagValue string, flagSet bool, extensions map[string]any) 
 	return logging.ParseLevel(levelStr)
 }
 
-// resolveLogFormat determines the effective log output format from the CLI
-// flag and workflow extensions. Precedence: CLI flag > logging.format
-// extension > default (text). All map and type accesses use the comma-ok
-// idiom to avoid panics on unexpected extension shapes.
-func resolveLogFormat(flagValue string, flagSet bool, extensions map[string]any) (logging.Format, error) {
+// resolveLogFormat determines the effective log output format from the
+// CLI flag and the logging extension section. Precedence: CLI flag >
+// logging.format extension > default (text). All map and type
+// accesses use the comma-ok idiom to avoid panics on unexpected
+// extension shapes.
+func resolveLogFormat(flagValue string, flagSet bool, loggingSection map[string]any) (logging.Format, error) {
 	if flagSet {
 		return logging.ParseFormat(flagValue)
 	}
 
-	loggingRaw, ok := extensions["logging"]
-	if !ok {
-		return logging.FormatText, nil
-	}
-	loggingExt, ok := loggingRaw.(map[string]any)
-	if !ok {
+	if loggingSection == nil {
 		return logging.FormatText, nil
 	}
 
-	formatRaw, ok := loggingExt["format"]
+	formatRaw, ok := loggingSection["format"]
 	if !ok {
 		return logging.FormatText, nil
 	}

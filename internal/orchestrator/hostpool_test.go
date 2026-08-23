@@ -404,7 +404,8 @@ func TestParseWorkerConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			wc := ParseWorkerConfig(tt.extensions)
+			workerSection, _ := tt.extensions["worker"].(map[string]any)
+			wc := ParseWorkerConfig(workerSection)
 
 			if len(wc.SSHHosts) != len(tt.wantHosts) {
 				t.Fatalf("ParseWorkerConfig() SSHHosts = %v, want %v", wc.SSHHosts, tt.wantHosts)

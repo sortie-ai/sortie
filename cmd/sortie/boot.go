@@ -181,7 +181,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 
 	var needResetup bool
 	if !logLevelSet {
-		lvl, err := resolveLogLevel("", false, cfg.Extensions)
+		lvl, err := resolveLogLevel("", false, cfg.ExtensionSection("logging"))
 		if err != nil {
 			fmt.Fprintf(p.stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 			return bootResult{}, 1
@@ -192,7 +192,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		}
 	}
 	if !logFormatSet {
-		resolvedFmt, err := resolveLogFormat("", false, cfg.Extensions)
+		resolvedFmt, err := resolveLogFormat("", false, cfg.ExtensionSection("logging"))
 		if err != nil {
 			fmt.Fprintf(p.stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 			return bootResult{}, 1
@@ -207,12 +207,12 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		mgr.SetLogger(logger)
 	}
 
-	serverPort, serverEnabled, portErr := resolveServerPort(*port, portFlagSet, cfg.Extensions)
+	serverPort, serverEnabled, portErr := resolveServerPort(*port, portFlagSet, cfg.ExtensionSection("server"))
 	if portErr != nil {
 		logger.Error("server port configuration error", slog.Any("error", portErr))
 		return bootResult{}, 1
 	}
-	serverHost, hostErr := resolveServerHost(*host, hostFlagSet, cfg.Extensions)
+	serverHost, hostErr := resolveServerHost(*host, hostFlagSet, cfg.ExtensionSection("server"))
 	if hostErr != nil {
 		logger.Error("server host configuration error", slog.Any("error", hostErr))
 		return bootResult{}, 1
@@ -258,7 +258,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		serverPort:      serverPort,
 		serverHost:      serverHost,
 		serverEnabled:   serverEnabled,
-		portIsImplicit:  !portFlagSet && !hasServerPortExtension(cfg.Extensions),
+		portIsImplicit:  !portFlagSet && !hasServerPortExtension(cfg.ExtensionSection("server")),
 		dryRun:          *dryRun,
 		effectiveLevel:  effectiveLevel,
 		effectiveFormat: effectiveFormat,

@@ -111,8 +111,8 @@ func parseNotificationBackend(index int, elem any) (NotificationBackend, error) 
 		passthrough[key] = val
 	}
 
-	// A typed knownTopLevelKeys section is excluded from Extensions, and
-	// the only existing $VAR walker runs over Extensions, so resolve the
+	// A typed knownTopLevelKeys section is excluded from extensions, and
+	// the only existing $VAR walker runs over extensions, so resolve the
 	// entry leaves here. An unset reference resolves to the empty string,
 	// which the backend constructor then rejects as a missing secret.
 	var snapshot map[string]string

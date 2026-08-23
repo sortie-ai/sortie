@@ -5449,12 +5449,10 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 			Kind:                "mock",
 			MaxConcurrentAgents: 1,
 		},
-		Extensions: map[string]any{
-			"worker": map[string]any{
-				"ssh_strict_host_key_checking": "ask",
-			},
-		},
 	}
+	cfg.SetExtensionSection("worker", map[string]any{
+		"ssh_strict_host_key_checking": "ask",
+	})
 
 	wm := &stubWorkflowManager{config: cfg}
 	state := NewState(60000, 1, nil, AgentTotals{})
@@ -5484,11 +5482,9 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	}
 
 	// Change to a different invalid value — a new warning must appear.
-	cfg.Extensions = map[string]any{
-		"worker": map[string]any{
-			"ssh_strict_host_key_checking": "strict",
-		},
-	}
+	cfg.SetExtensionSection("worker", map[string]any{
+		"ssh_strict_host_key_checking": "strict",
+	})
 	wm.setConfig(cfg)
 	o.handleTick(ctx)
 	if got := strings.Count(buf.String(), warnMsg); got != 2 {
@@ -5496,12 +5492,10 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	}
 
 	// Change SSHHosts while keeping the same invalid value — warning must be suppressed.
-	cfg.Extensions = map[string]any{
-		"worker": map[string]any{
-			"ssh_strict_host_key_checking": "strict",
-			"ssh_hosts":                    []any{"host-a"},
-		},
-	}
+	cfg.SetExtensionSection("worker", map[string]any{
+		"ssh_strict_host_key_checking": "strict",
+		"ssh_hosts":                    []any{"host-a"},
+	})
 	wm.setConfig(cfg)
 	o.handleTick(ctx)
 	if got := strings.Count(buf.String(), warnMsg); got != 2 {
@@ -5629,10 +5623,8 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	codexMCPConfigPath := filepath.Join(tmpDir, "codex-mcp.json")
 	writeMarkerMCPConfig(t, codexMCPConfigPath, "codex-marker")
 
-	cfg.Extensions = map[string]any{
-		"claude-code": map[string]any{"mcp_config": claudeMCPConfigPath},
-		"codex":       map[string]any{"mcp_config": codexMCPConfigPath},
-	}
+	cfg.SetExtensionSection("claude-code", map[string]any{"mcp_config": claudeMCPConfigPath})
+	cfg.SetExtensionSection("codex", map[string]any{"mcp_config": codexMCPConfigPath})
 
 	bugIssue := domain.Issue{
 		ID:         "id-bug",
