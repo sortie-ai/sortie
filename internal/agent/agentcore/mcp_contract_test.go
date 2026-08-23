@@ -75,9 +75,14 @@ func mcpCompositeLitKeyValue(expr ast.Expr, key string) ast.Expr {
 }
 
 // mcpPackageReferencesIdentifier reports whether any file in files
-// contains the bare identifier name anywhere in its syntax tree,
-// which catches both a plain reference and a selector's trailing
-// field name (e.g. params.MCPConfigPath).
+// reads name as the trailing field of a selector expression, which is
+// the form an adapter takes when it reads the worker-generated path
+// off its start-session parameters. A declaration of the same name,
+// and a bare identifier, are deliberately not reads: a package that
+// only declares a field called MCPConfigPath hands nothing to the
+// agent process, so it must neither satisfy the supported rule nor
+// breach the unsupported one. The match stays syntactic, resolving no
+// symbol, so this check does not become a type-checking pass.
 func mcpPackageReferencesIdentifier(files []*ast.File, name string) bool {
 	for _, file := range files {
 		found := false
@@ -85,7 +90,7 @@ func mcpPackageReferencesIdentifier(files []*ast.File, name string) bool {
 			if found {
 				return false
 			}
-			if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
 				found = true
 				return false
 			}
@@ -336,7 +341,9 @@ func init() {
 	})
 }
 
-var _ = MCPConfigPath
+func start(params domain.StartSessionParams) string {
+	return params.MCPConfigPath
+}
 `,
 			wantCount: 1,
 		},
@@ -389,13 +396,54 @@ func init() {
 	})
 }
 
-func useParams(mcpConfigPath string) []string {
-	return []string{"--mcp-config", mcpConfigPath}
+func useParams(params domain.StartSessionParams) []string {
+	return []string{"--mcp-config", params.MCPConfigPath}
 }
-
-var _ = MCPConfigPath
 `,
 			wantCount: 0,
+		},
+		{
+			// A field named MCPConfigPath is a declaration, not a read.
+			// The package hands nothing to the agent process, so an
+			// unsupported declaration is not in breach.
+			name:    "Y2 negative: declaring a field of the same name is not a read",
+			dirName: "fixture",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionUnsupported,
+	})
+}
+
+type sessionParams struct {
+	MCPConfigPath string
+}
+`,
+			wantCount: 0,
+		},
+		{
+			// The mirror of the case above: a declaration must not let a
+			// package claim supported without ever reading the path.
+			name:    "Y3: declaring a field of the same name does not satisfy supported",
+			dirName: "fixture",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.RegisterWithMeta("fixture", newFixtureAdapter, registry.AgentMeta{
+		MCPInjection: registry.MCPInjectionSupported,
+	})
+}
+
+type sessionParams struct {
+	MCPConfigPath string
+}
+`,
+			wantCount: 1,
 		},
 		{
 			name:    "a package this walk never observed registering draws no violation",

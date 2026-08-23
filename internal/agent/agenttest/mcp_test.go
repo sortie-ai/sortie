@@ -61,6 +61,19 @@ func TestAssertMCPInjection_Passing(t *testing.T) {
 		AssertMCPInjection(t, registry.MCPInjectionUnsupported, "/ws/.sortie/mcp.json",
 			MCPLaunchSurface{Args: []string{"--model", "gpt-5"}})
 	})
+
+	t.Run("unsupported with a neighbouring file that extends the path", func(t *testing.T) {
+		t.Parallel()
+
+		// The workspace holds mcp.json.tmp beside the generated file
+		// during generation. An element naming it delivers nothing, so
+		// an unsupported adapter must not be failed for carrying it.
+		AssertMCPInjection(t, registry.MCPInjectionUnsupported, "/ws/.sortie/mcp.json",
+			MCPLaunchSurface{
+				Args: []string{"--mcp-config", "/ws/.sortie/mcp.json.tmp"},
+				Env:  []string{"BACKUP=/ws/.sortie/mcp.json-disabled"},
+			})
+	})
 }
 
 // TestAssertMCPInjection_Violating drives assertMCPInjection through a
@@ -106,6 +119,21 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			declared:      registry.MCPInjectionUndeclared,
 			mcpConfigPath: "/ws/.sortie/mcp.json",
 			surface:       MCPLaunchSurface{},
+		},
+		{
+			// Delivering a neighbouring file is not delivering the
+			// generated one: a supported adapter handed <path>.tmp has
+			// injected nothing, and the assertion must say so.
+			name:          "supported declared but the surface carries only a file extending the path",
+			declared:      registry.MCPInjectionSupported,
+			mcpConfigPath: "/ws/.sortie/mcp.json",
+			surface:       MCPLaunchSurface{Args: []string{"--mcp-config", "/ws/.sortie/mcp.json.tmp"}},
+		},
+		{
+			name:          "supported declared but an env value only extends the path",
+			declared:      registry.MCPInjectionSupported,
+			mcpConfigPath: "/ws/.sortie/mcp.json",
+			surface:       MCPLaunchSurface{Env: []string{"BACKUP=/ws/.sortie/mcp.json-disabled"}},
 		},
 		{
 			// MCPInjection is a string type, so a value outside the

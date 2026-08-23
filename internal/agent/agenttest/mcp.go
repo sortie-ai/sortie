@@ -1,6 +1,7 @@
 package agenttest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,10 +20,15 @@ type MCPLaunchSurface struct {
 // launch surface an adapter actually produced for a session carrying
 // mcpConfigPath. The caller captures surface from its own command
 // construction (argument slice, environment slice, or both) for a
-// session whose MCPConfigPath is mcpConfigPath; the check is substring
-// containment against every element of surface.Args and surface.Env,
-// so an adapter that passes the path inside a composed argument (for
-// example, prefixed with an '@') is still detected.
+// session whose MCPConfigPath is mcpConfigPath.
+//
+// An element carries the path when it is the path exactly, or when the
+// path is its tail behind a single composition marker: an adapter may
+// pass the path prefixed with an '@', and an environment entry carries
+// it as KEY=<path>. An element that continues past the path names a
+// different file, so it is not a match; the workspace holds a
+// <path>.tmp beside the generated file during generation, and an
+// adapter handed that one has delivered nothing.
 func AssertMCPInjection(t *testing.T, declared registry.MCPInjection, mcpConfigPath string, surface MCPLaunchSurface) {
 	t.Helper()
 	assertMCPInjection(t, declared, mcpConfigPath, surface)
@@ -47,21 +53,11 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 		return
 	}
 
-	hit := false
-	for _, arg := range surface.Args {
-		if strings.Contains(arg, mcpConfigPath) {
-			hit = true
-			break
-		}
-	}
-	if !hit {
-		for _, env := range surface.Env {
-			if strings.Contains(env, mcpConfigPath) {
-				hit = true
-				break
-			}
-		}
-	}
+	hit := slices.ContainsFunc(surface.Args, func(arg string) bool {
+		return carriesMCPConfigPath(arg, mcpConfigPath)
+	}) || slices.ContainsFunc(surface.Env, func(env string) bool {
+		return carriesMCPConfigPath(env, mcpConfigPath)
+	})
 
 	switch declared {
 	case registry.MCPInjectionSupported:
@@ -76,5 +72,25 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 		t.Errorf("declared = %q, want a kind that declares an MCP injection disposition", declared)
 	default:
 		t.Errorf("declared = %q, want a supported or unsupported MCP injection disposition", declared)
+	}
+}
+
+// carriesMCPConfigPath reports whether one launch-surface element hands
+// path to the agent process. The path must be the whole element, or its
+// tail behind one composition marker, so an element naming a neighbouring
+// file such as <path>.tmp is not read as a delivery.
+func carriesMCPConfigPath(elem, path string) bool {
+	if elem == path {
+		return true
+	}
+	prefix, ok := strings.CutSuffix(elem, path)
+	if !ok || prefix == "" {
+		return false
+	}
+	switch prefix[len(prefix)-1] {
+	case '@', '=':
+		return true
+	default:
+		return false
 	}
 }
