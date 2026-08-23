@@ -1044,7 +1044,9 @@ func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
 		result := ValidateDispatchConfig(params)
 
 		requireWarnCheck(t, result, "agent.kind.no_tool_channel")
-		requireNoCheck(t, result, "agent.kind.no_tool_channel")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: the channel diagnostic is a warning", result.Errors)
+		}
 		if !result.OK() {
 			t.Errorf("ValidateDispatchConfig().OK() = false, want true: a warning must not block dispatch")
 		}
