@@ -789,7 +789,7 @@ invocation with `-c mcp_servers.<name>.command=...` overrides, or reached by poi
 directory: confirmed empirically on a running v0.149.0 binary, where an untrusted project's
 `.codex/config.toml` contributes nothing to `codex mcp list` and a trusted one's does.
 
-That trust is not necessarily something the operator grants. On `thread/start` the app server
+That trust is not necessarily something the operator grants. On `thread/start` the app-server
 records it unprompted whenever the request carries a `cwd`, the project has no `trust_level` yet,
 and the sandbox permits writing the working directory: it writes `trust_level = "trusted"` for the
 resolved Git root, or for the working directory when that is not a repository, into the user-level

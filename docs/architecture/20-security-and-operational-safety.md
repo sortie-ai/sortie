@@ -91,9 +91,11 @@ setting. The sandbox governs commands the agent executes; it does not govern the
 helper processes the runtime launches to serve the session. Nor does it govern whether workspace
 configuration is read at all. A runtime that gates that reading on a recorded trust decision
 consults the sandbox only when deciding whether to record trust for a path it has not seen
-before, so a restrictive sandbox prevents the decision rather than the loading. A path already
-carrying that decision keeps loading its configuration, and keeps starting the processes that
-configuration declares, whatever the sandbox says on the run that reaches it. The approval policy
+before, so a restrictive sandbox prevents the decision rather than the loading. On a path that
+has never been trusted it therefore does protect: no decision is recorded, so nothing project
+scoped is read and no helper declared there is started. A path already carrying that decision
+keeps loading its configuration, and keeps starting the processes that configuration declares,
+whatever the sandbox says on the run that reaches it. The approval policy
 makes no difference to any of this. Tightening the sandbox setting therefore does not close the
 exposure, which is the limit of the hardening guidance above.
 
