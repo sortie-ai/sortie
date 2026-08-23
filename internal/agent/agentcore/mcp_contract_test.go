@@ -235,11 +235,11 @@ func checkMCPContractPackage(fset *token.FileSet, pkg mcpContractPackage) []mcpC
 				text: "declares MCPInjectionUnsupported but non-test files reference " + mcpConfigPathIdentifier,
 			})
 		}
-	case "MCPInjectionSupported":
+	case "MCPInjectionSupported", "MCPInjectionTranslated":
 		if !referencesPath {
 			violations = append(violations, mcpContractViolation{
 				pos:  pos,
-				text: "declares MCPInjectionSupported but non-test files never reference " + mcpConfigPathIdentifier,
+				text: "declares " + declared + " but non-test files never reference " + mcpConfigPathIdentifier,
 			})
 		}
 	}

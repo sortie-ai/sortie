@@ -201,10 +201,34 @@ const (
 	// generated MCP config path to the agent process.
 	MCPInjectionSupported MCPInjection = "supported"
 
+	// MCPInjectionTranslated declares that the adapter re-expresses
+	// the servers declared in the generated configuration in the
+	// form its runtime parses, and delivers that to the agent
+	// process.
+	MCPInjectionTranslated MCPInjection = "translated"
+
 	// MCPInjectionUnsupported declares that the adapter never hands
 	// the generated MCP config path to the agent process.
 	MCPInjectionUnsupported MCPInjection = "unsupported"
 )
+
+// DeliversTools reports whether a session of this disposition,
+// launched in the given mode, can reach the servers declared in the
+// generated configuration. remote is true when the session runs over
+// SSH. It is total over the value set: true for
+// MCPInjectionSupported; true for MCPInjectionTranslated only when
+// remote is false; false for every other value, including a value
+// outside the declared set.
+func (m MCPInjection) DeliversTools(remote bool) bool {
+	switch m {
+	case MCPInjectionSupported:
+		return true
+	case MCPInjectionTranslated:
+		return !remote
+	default:
+		return false
+	}
+}
 
 // AgentConfigFields holds the config values passed to agent adapter
 // validation functions. This is a plain data struct that avoids

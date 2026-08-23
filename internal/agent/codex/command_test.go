@@ -1,24 +1,28 @@
 package codex
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// TestMCPInjectionConformance proves codex's real launch surface never
-// carries the generated MCP config path, matching its declared
-// disposition. codex builds no CLI-flag argument slice for MCP; its
-// only launch surface is [agentcore.ResolveLaunchTarget]'s Args. A
+// TestMCPInjectionConformance proves codex's real launch surface
+// matches its declared disposition, on both a local and a remote
+// launch. codex renders the generated MCP config as override
+// arguments appended to [agentcore.ResolveLaunchTarget]'s Args; a
 // non-empty AgentConfig.Command supersedes the default, so the
-// "codex app-server" argument below is never resolved and the check
-// does not depend on a codex binary being installed on the host
-// running the test.
+// "codex app-server" argument is never resolved and the check does
+// not depend on a codex binary being installed on the host running
+// the test.
 func TestMCPInjectionConformance(t *testing.T) {
 	t.Parallel()
 
@@ -27,19 +31,405 @@ func TestMCPInjectionConformance(t *testing.T) {
 		t.Fatal(`registry.Agents.Meta("codex") reported not registered`)
 	}
 
-	const mcpConfigPath = "/ws/.sortie/mcp.json"
-	params := domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: "sh -c"},
-		MCPConfigPath: mcpConfigPath,
+	dir := t.TempDir()
+	mcpConfigPath := filepath.Join(dir, ".sortie", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	const mcpConfigContent = `{"mcpServers":{"sortie-tools":{"type":"stdio","command":"/usr/local/bin/sortie","args":["mcp-server","--workflow","/repo/WORKFLOW.md"],"env":{"SORTIE_ISSUE_ID":"abc-123"}}}}`
+	if err := os.WriteFile(mcpConfigPath, []byte(mcpConfigContent), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
-	if agentErr != nil {
-		t.Fatalf("agentcore.ResolveLaunchTarget() error = %v", agentErr)
+	t.Run("local launch delivers the translated overrides", func(t *testing.T) {
+		t.Parallel()
+
+		params := domain.StartSessionParams{
+			WorkspacePath: dir,
+			AgentConfig:   domain.AgentConfig{Command: "sh -c"},
+			MCPConfigPath: mcpConfigPath,
+		}
+		target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
+		if agentErr != nil {
+			t.Fatalf("agentcore.ResolveLaunchTarget() error = %v", agentErr)
+		}
+		servers, err := mcpconfig.Parse(mcpConfigPath)
+		if err != nil {
+			t.Fatalf("mcpconfig.Parse() error = %v", err)
+		}
+		overrideArgs, err := renderMCPServerOverrides(servers, os.Environ())
+		if err != nil {
+			t.Fatalf("renderMCPServerOverrides() error = %v", err)
+		}
+		target.Args = append(target.Args, overrideArgs...)
+
+		agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: target.Args})
+	})
+
+	t.Run("remote launch delivers nothing", func(t *testing.T) {
+		t.Parallel()
+
+		params := domain.StartSessionParams{
+			WorkspacePath: dir,
+			AgentConfig:   domain.AgentConfig{Command: "sh -c"},
+			MCPConfigPath: mcpConfigPath,
+			SSHHost:       "remote.example",
+		}
+		target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
+		if agentErr != nil {
+			t.Fatalf("agentcore.ResolveLaunchTarget() error = %v", agentErr)
+		}
+
+		// StartSession's remote guard skips rendering entirely, so the
+		// launch surface a remote session produces carries nothing to
+		// append here.
+		agenttest.AssertMCPInjection(t, registry.MCPInjectionUnsupported, mcpConfigPath, agenttest.MCPLaunchSurface{Args: target.Args})
+	})
+}
+
+// --- renderMCPServerOverrides ---
+
+// TestRenderMCPServerOverrides_OnePerServer asserts that a session
+// whose generated file names the sortie-tools server plus one
+// operator server renders one override per server.
+func TestRenderMCPServerOverrides_OnePerServer(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcpconfig.Server{
+		{
+			Name:      "operator-server",
+			Transport: mcpconfig.TransportStdio,
+			Command:   "/usr/local/bin/operator-mcp",
+		},
+		{
+			Name:      "sortie-tools",
+			Transport: mcpconfig.TransportStdio,
+			Command:   "/usr/local/bin/sortie",
+			Args:      []string{"mcp-server"},
+		},
 	}
 
-	agenttest.AssertMCPInjection(t, declared.MCPInjection, mcpConfigPath, agenttest.MCPLaunchSurface{Args: target.Args})
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v", err)
+	}
+
+	// Two servers, one "-c" flag/value pair each.
+	if len(args) != 4 {
+		t.Fatalf("renderMCPServerOverrides() returned %d args, want 4 (2 servers x 2 args each): %v", len(args), args)
+	}
+
+	var overrideKeys []string
+	for i := 0; i < len(args); i += 2 {
+		if args[i] != "-c" {
+			t.Errorf("renderMCPServerOverrides() arg[%d] = %q, want \"-c\"", i, args[i])
+		}
+		key, _, ok := strings.Cut(args[i+1], "=")
+		if !ok {
+			t.Fatalf("renderMCPServerOverrides() arg[%d] = %q, want a key=value override", i+1, args[i+1])
+		}
+		overrideKeys = append(overrideKeys, key)
+	}
+
+	wantKeys := []string{"mcp_servers.operator-server", "mcp_servers.sortie-tools"}
+	if len(overrideKeys) != len(wantKeys) {
+		t.Fatalf("renderMCPServerOverrides() keys = %v, want %v", overrideKeys, wantKeys)
+	}
+	for _, want := range wantKeys {
+		if !slices.Contains(overrideKeys, want) {
+			t.Errorf("renderMCPServerOverrides() keys = %v, missing %q", overrideKeys, want)
+		}
+	}
+}
+
+// TestRenderMCPServerOverrides_DottedPathPerServer asserts that each
+// server is keyed under its own dotted path, so an operator's own
+// [mcp_servers] table entries merge rather than being replaced by a
+// single override.
+func TestRenderMCPServerOverrides_HTTPHeaderRefused(t *testing.T) {
+	t.Parallel()
+
+	const secret = "Bearer s3cr3t-token"
+	servers := []mcpconfig.Server{
+		{
+			Name:      "remote-tools",
+			Transport: mcpconfig.TransportHTTP,
+			URL:       "https://example.invalid/mcp",
+			Headers:   map[string]string{"Authorization": secret},
+		},
+	}
+
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err == nil {
+		t.Fatalf("renderMCPServerOverrides() error = nil, want a refusal; args = %v", args)
+	}
+	if !strings.Contains(err.Error(), "remote-tools") {
+		t.Errorf("renderMCPServerOverrides() error = %q, want it to name the server", err)
+	}
+	if !strings.Contains(err.Error(), "Authorization") {
+		t.Errorf("renderMCPServerOverrides() error = %q, want it to name the header", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("renderMCPServerOverrides() error names the header value, which is the leak the refusal exists to prevent")
+	}
+}
+
+func TestRenderMCPServerOverrides_HTTPHeaderByVariableName(t *testing.T) {
+	t.Parallel()
+
+	const secret = "Bearer s3cr3t-token"
+	servers := []mcpconfig.Server{
+		{
+			Name:      "remote-tools",
+			Transport: mcpconfig.TransportHTTP,
+			URL:       "https://example.invalid/mcp",
+			Headers:   map[string]string{"Authorization": secret},
+		},
+	}
+
+	args, err := renderMCPServerOverrides(servers, []string{"SORTIE_REMOTE_TOKEN=" + secret})
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v, want a header whose value is in the environment to render", err)
+	}
+
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, secret) {
+		t.Fatalf("renderMCPServerOverrides() put the header value in the argument list: %v", args)
+	}
+	if !strings.Contains(joined, "SORTIE_REMOTE_TOKEN") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the variable name delivered instead of the value", args)
+	}
+	if !strings.Contains(joined, "env_http_headers") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the runtime's environment-sourced header field", args)
+	}
+}
+
+func TestRenderMCPServerOverrides_HTTPWithoutHeaders(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcpconfig.Server{
+		{Name: "remote-tools", Transport: mcpconfig.TransportHTTP, URL: "https://example.invalid/mcp"},
+	}
+
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v, want a headerless HTTP entry to render", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "https://example.invalid/mcp") {
+		t.Errorf("renderMCPServerOverrides() = %v, want the url on the override", args)
+	}
+}
+
+func TestRenderMCPServerOverrides_DottedPathPerServer(t *testing.T) {
+	t.Parallel()
+
+	servers := []mcpconfig.Server{
+		{Name: "sortie-tools", Transport: mcpconfig.TransportStdio, Command: "/usr/local/bin/sortie"},
+	}
+
+	args, err := renderMCPServerOverrides(servers, nil)
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v", err)
+	}
+	if len(args) != 2 {
+		t.Fatalf("renderMCPServerOverrides() returned %d args, want 2", len(args))
+	}
+	if args[0] != "-c" {
+		t.Errorf("renderMCPServerOverrides() arg[0] = %q, want \"-c\"", args[0])
+	}
+	if !strings.HasPrefix(args[1], "mcp_servers.sortie-tools=") {
+		t.Errorf("renderMCPServerOverrides() arg[1] = %q, want prefix %q", args[1], "mcp_servers.sortie-tools=")
+	}
+	// The override must not carry a bracketed [mcp_servers] table header,
+	// which would replace the operator's whole table instead of merging
+	// one entry into it.
+	if strings.Contains(args[1], "[mcp_servers]") {
+		t.Errorf("renderMCPServerOverrides() arg[1] = %q, contains a table header that would replace the operator's table", args[1])
+	}
+}
+
+// TestRenderMCPServerOverrides_CredentialPassthrough asserts that an
+// env entry whose name and value both match the adapter's own process
+// environment is delivered by name only, never by value; an env entry
+// with no match in the process environment is rendered literally.
+func TestRenderMCPServerOverrides_CredentialPassthrough(t *testing.T) {
+	t.Parallel()
+
+	processEnv := []string{"SORTIE_TRACKER_TOKEN=super-secret-value"}
+
+	servers := []mcpconfig.Server{
+		{
+			Name:      "sortie-tools",
+			Transport: mcpconfig.TransportStdio,
+			Command:   "/usr/local/bin/sortie",
+			Env: map[string]string{
+				"SORTIE_TRACKER_TOKEN": "super-secret-value",
+				"SORTIE_ISSUE_ID":      "abc-123",
+			},
+		},
+	}
+
+	args, err := renderMCPServerOverrides(servers, processEnv)
+	if err != nil {
+		t.Fatalf("renderMCPServerOverrides() error = %v", err)
+	}
+	if len(args) != 2 {
+		t.Fatalf("renderMCPServerOverrides() returned %d args, want 2", len(args))
+	}
+	rendered := args[1]
+
+	if strings.Contains(rendered, "super-secret-value") {
+		t.Errorf("renderMCPServerOverrides() rendered the credential value %q, want name-only passthrough: %q", "super-secret-value", rendered)
+	}
+	if !strings.Contains(rendered, "SORTIE_TRACKER_TOKEN") {
+		t.Errorf("renderMCPServerOverrides() rendered = %q, want it to name the passthrough variable %q", rendered, "SORTIE_TRACKER_TOKEN")
+	}
+	if !strings.Contains(rendered, `env_vars=`) {
+		t.Errorf("renderMCPServerOverrides() rendered = %q, want an env_vars passthrough list", rendered)
+	}
+
+	if !strings.Contains(rendered, "SORTIE_ISSUE_ID") || !strings.Contains(rendered, "abc-123") {
+		t.Errorf("renderMCPServerOverrides() rendered = %q, want the session-only variable rendered literally", rendered)
+	}
+}
+
+// --- encoding contract ---
+
+// TestRenderMCPServerTable_EncodingContract asserts the exact
+// rendered argument for each encoding case the renderer must handle.
+func TestRenderMCPServerTable_EncodingContract(t *testing.T) {
+	t.Parallel()
+
+	trueVal := true
+	falseVal := false
+
+	tests := []struct {
+		name       string
+		server     mcpconfig.Server
+		wantErr    bool
+		wantSubstr []string
+	}{
+		{
+			name: "server name outside bare-key set fails",
+			server: mcpconfig.Server{
+				Name:      "bad name!",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "structural keys rendered bare",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Args:      []string{"a"},
+			},
+			wantSubstr: []string{`command="/bin/echo"`, `args=["a"]`},
+		},
+		{
+			name: "environment variable name rendered as quoted key",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Env:       map[string]string{"MY_VAR": "value"},
+			},
+			wantSubstr: []string{`"MY_VAR"="value"`},
+		},
+		{
+			name: "environment variable name outside bare-key set is still a quoted key",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Env:       map[string]string{"my.var with space": "value"},
+			},
+			wantSubstr: []string{`"my.var with space"="value"`},
+		},
+		{
+			name: "value with quote, backslash, space, and control character is escaped",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Env:       map[string]string{"MY_VAR": "a\"b\\c d\te"},
+			},
+			wantSubstr: []string{`"MY_VAR"="a\"b\\c d\te"`},
+		},
+		{
+			name: "invalid UTF-8 value fails",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Env:       map[string]string{"MY_VAR": "\xff\xfe"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Enabled true is rendered as the enable field",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Enabled:   &trueVal,
+			},
+			wantSubstr: []string{"enabled=true"},
+		},
+		{
+			name: "Enabled false is rendered as the enable field",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Enabled:   &falseVal,
+			},
+			wantSubstr: []string{"enabled=false"},
+		},
+		{
+			name: "nil Enabled omits the field",
+			server: mcpconfig.Server{
+				Name:      "sortie-tools",
+				Transport: mcpconfig.TransportStdio,
+				Command:   "/bin/echo",
+				Enabled:   nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			args, err := renderMCPServerOverrides([]mcpconfig.Server{tt.server}, nil)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("renderMCPServerOverrides(%+v) = %v, nil, want error", tt.server, args)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("renderMCPServerOverrides(%+v) unexpected error: %v", tt.server, err)
+			}
+			if len(args) != 2 {
+				t.Fatalf("renderMCPServerOverrides(%+v) returned %d args, want 2", tt.server, len(args))
+			}
+			rendered := args[1]
+
+			for _, substr := range tt.wantSubstr {
+				if !strings.Contains(rendered, substr) {
+					t.Errorf("renderMCPServerOverrides(%+v) = %q, want substring %q", tt.server, rendered, substr)
+				}
+			}
+			if tt.name == "nil Enabled omits the field" && strings.Contains(rendered, "enabled=") {
+				t.Errorf("renderMCPServerOverrides(%+v) = %q, want no enabled field", tt.server, rendered)
+			}
+		})
+	}
 }
 
 func TestBuildSSHRemoteCmd(t *testing.T) {

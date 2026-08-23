@@ -33,8 +33,8 @@ Built-in adapter summary:
 |---|---|---|---|---|
 | `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from the terminal `result` event's per-model usage, aggregated across models and added to the run total per turn. |
 | `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. A run whose session-state journal cannot be read, which includes SSH mode, is reported measured on the stream's output-token figures alone: it carries no input or cache-read component, so its recorded total is output-only. It is reported unmeasured only when no assistant message carried the output-token field either. |
-| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
-| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_failed` with error kind `response_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
+| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool handling is the MCP sidecar the runtime spawns from configuration overrides the adapter supplies on the app-server command line, on a local launch only; approval handling is unchanged and stays part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
+| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_failed` with error kind `response_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. Tool handling is the same MCP sidecar, delivered through the runtime's inline configuration environment variable, on a local launch only. |
 | `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply; `agent.turn_timeout_ms` is the wall-clock budget bound, and a silent turn is caught first by `agent.stall_timeout_ms`. Every run is reported unmeasured, because the headless runtime reports no token counts. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and, only in local mode and once per session, runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight forecloses and which stall detection, not the turn timeout, would otherwise end. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
 
 ### 10.2 Session Lifecycle
@@ -78,7 +78,6 @@ native protocol events to this normalized set:
 - `turn_cancelled`: turn was cancelled
 - `turn_ended_with_error`: turn ended due to an error condition
 - `turn_input_required`: agent asked for a decision only a person could give, ending the attempt under the shared refusal posture
-- `unsupported_tool_call`: agent requested an unsupported tool
 - `token_usage`: normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
 
   Counter definitions: `input_tokens` counts every token sent to the model, including
@@ -156,11 +155,14 @@ Policy requirements:
   configuration value that would let the agent stop and wait for a person is refused before the
   run, rather than satisfied when it arrives mid-turn.
 
-Unsupported dynamic tool calls:
+Unsupported tool calls:
 
-- If the agent adapter receives a tool call request for a name not in the `ToolRegistry`, the
-  adapter returns a tool failure response and continues the session.
-- This is adapter-level behavior; the orchestrator does not intercept tool call routing.
+- No adapter routes a tool call: every kind with an execution channel routes calls to the same
+  MCP sidecar (§10.4.3), and the sidecar answers a name not in the `ToolRegistry` with a JSON-RPC
+  error object, code `-32602`, rather than a result. A result carrying `isError` is reserved
+  for a tool that was found and whose execution failed.
+- The session continues after either answer. This is the channel's behavior, not adapter-level
+  behavior; no adapter intercepts or routes a tool call itself.
 
 Ending on a request only a person could answer:
 
@@ -201,9 +203,11 @@ Invariants:
 - The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
   a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
 - Duplicate names panic (programming error, not runtime input).
-- The registry feeds prompt-time tool advertisement and the runtime execution channel through
-  which agents invoke tools at call time. The execution channel is an MCP stdio sidecar exposed
-  by the `sortie mcp-server` subcommand.
+- The registry feeds both the prompt-time tool advertisement and the runtime execution channel
+  for an agent kind whose declared disposition delivers one; a kind whose declaration delivers
+  none receives neither, which is what keeps the two consistent for every kind. What decides is
+  the declaration, not the kind. The execution channel, where one exists, is an MCP stdio sidecar
+  exposed by the `sortie mcp-server` subcommand.
 
 #### 10.4.4 Tool tiers
 

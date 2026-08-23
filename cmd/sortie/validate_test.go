@@ -70,8 +70,11 @@ func TestValidateValidWorkflow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want empty", stderr.String())
+	// The fixture's agent.kind is "mock", which has no tool execution
+	// channel by design, so the one expected warning is that one.
+	const wantWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
+	if stderr.String() != wantWarning {
+		t.Errorf("stderr = %q, want %q", stderr.String(), wantWarning)
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want empty (text format produces no output on success)", stdout.String())
@@ -109,15 +112,10 @@ func TestValidateValidWorkflowJSON(t *testing.T) {
 		t.Errorf("JSON output = %q, want to contain %q", raw, `"errors":[]`)
 	}
 
-	// Warnings must be a non-null empty array in JSON output.
-	if out.Warnings == nil {
-		t.Errorf("validateOutput.Warnings = nil, want [] (must not be null in JSON)")
-	}
-	if len(out.Warnings) != 0 {
-		t.Errorf("validateOutput.Warnings = %v, want empty slice", out.Warnings)
-	}
-	if !strings.Contains(raw, `"warnings":[]`) {
-		t.Errorf("JSON output = %q, want to contain %q", raw, `"warnings":[]`)
+	// The fixture's agent.kind is "mock", which has no tool execution
+	// channel by design, so the one expected warning is that one.
+	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
+		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
 }
 
@@ -271,8 +269,11 @@ func TestValidateExplicitTextFormat(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate --format text) = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want empty", stderr.String())
+	// The fixture's agent.kind is "mock", which has no tool execution
+	// channel by design, so the one expected warning is that one.
+	const wantWarning = "warning: agent.kind.no_tool_channel: agent kind \"mock\" has no tool execution channel: Sortie's tools are neither advertised nor callable for it\n"
+	if stderr.String() != wantWarning {
+		t.Errorf("stderr = %q, want %q", stderr.String(), wantWarning)
 	}
 }
 
@@ -602,8 +603,10 @@ func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
 	if len(out.Errors) != 0 {
 		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
 	}
-	if len(out.Warnings) != 1 {
-		t.Fatalf("validateOutput.Warnings = %v (len %d), want 1", out.Warnings, len(out.Warnings))
+	// agent.kind "mock" always draws a second, unrelated warning
+	// (no-tool-channel), so this fixture produces two.
+	if len(out.Warnings) != 2 {
+		t.Fatalf("validateOutput.Warnings = %v (len %d), want 2", out.Warnings, len(out.Warnings))
 	}
 	if out.Warnings[0].Severity != "warning" {
 		t.Errorf("warnings[0].Severity = %q, want %q", out.Warnings[0].Severity, "warning")
@@ -613,6 +616,9 @@ func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
 	}
 	if !strings.Contains(out.Warnings[0].Message, "trackers") {
 		t.Errorf("warnings[0].Message = %q, want to contain %q", out.Warnings[0].Message, "trackers")
+	}
+	if out.Warnings[1].Check != "agent.kind.no_tool_channel" {
+		t.Errorf("warnings[1].Check = %q, want %q", out.Warnings[1].Check, "agent.kind.no_tool_channel")
 	}
 }
 
@@ -1231,13 +1237,35 @@ func TestEmitDiagsJSONFallback(t *testing.T) {
 }
 
 func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
-	// No t.Parallel: setupRunDir calls t.Chdir.
+	// No t.Parallel: t.Chdir below.
 	//
 	// When the success-path JSON write fails and there are no errors or
 	// warnings to fall back on, emitDiags has nothing to print to stderr.
 	// runValidate still returns 0 (the workflow is valid; the I/O failure
-	// is best-effort output delivery).
-	wfPath := setupRunDir(t)
+	// is best-effort output delivery). The shared minimal fixture's
+	// agent.kind ("mock") always draws the no-tool-channel warning by
+	// design, so this test selects claude-code instead to keep the
+	// "no diagnostics" premise true.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeWorkflowFileWithContent(t, dir, []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: claude-code
+  command: /usr/bin/true
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`))
 
 	var stderr bytes.Buffer
 	ctx := context.Background()
@@ -2323,8 +2351,10 @@ func TestValidateWorkspaceRetentionDaysValid(t *testing.T) {
 	if !out.Valid {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 	}
-	if len(out.Warnings) != 0 {
-		t.Errorf("validateOutput.Warnings = %v, want empty", out.Warnings)
+	// agent.kind "mock" always draws the no-tool-channel warning by
+	// design; retention_days itself must add no warning beyond it.
+	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
+		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
 }
 
@@ -2362,8 +2392,10 @@ func TestValidateWorkspaceRetentionDaysFromEnvOverride(t *testing.T) {
 	if !out.Valid {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 	}
-	if len(out.Warnings) != 0 {
-		t.Errorf("validateOutput.Warnings = %v, want empty", out.Warnings)
+	// agent.kind "mock" always draws the no-tool-channel warning by
+	// design; retention_days itself must add no warning beyond it.
+	if len(out.Warnings) != 1 || out.Warnings[0].Check != "agent.kind.no_tool_channel" {
+		t.Errorf("validateOutput.Warnings = %v, want one agent.kind.no_tool_channel warning", out.Warnings)
 	}
 }
 

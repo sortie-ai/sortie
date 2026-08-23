@@ -200,6 +200,13 @@ type WorkerResult struct {
 // [WorkerDeps.ToolRegistry].
 type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath, sessionID string) (*domain.ToolRegistry, error)
 
+// AgentToolChannelFunc reports whether a session of the given agent
+// kind, launched in the given mode, can execute the tools the
+// registry holds. remote is true when the session runs over SSH. A
+// nil [WorkerDeps.AgentToolChannelFunc] means the answer is unknown,
+// not that no channel exists.
+type AgentToolChannelFunc func(kind string, remote bool) bool
+
 // DispatchPosture selects the worker behavior for a dispatch. Exactly
 // one posture applies per dispatch; the type makes the invariant
 // representable and eliminates invalid flag combinations.
@@ -315,6 +322,13 @@ type WorkerDeps struct {
 	// instead of from ToolRegistry. When nil, the worker falls back to
 	// ToolRegistry. Optional.
 	SessionToolRegistryFunc SessionToolRegistryFunc
+
+	// AgentToolChannelFunc reports whether a session's agent kind and
+	// launch mode can reach the tools the first-turn advertisement
+	// would name. Nil means the answer is unknown, and the worker
+	// withholds the advertisement rather than risk telling a session
+	// about tools it cannot call. Optional.
+	AgentToolChannelFunc AgentToolChannelFunc
 
 	// Logger is the structured logger with issue-scoped context fields
 	// already attached (issue_id, issue_identifier).
@@ -1007,15 +1021,25 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		if turnNumber == 1 {
-			if deps.SessionToolRegistryFunc != nil {
-				sessionReg, err := deps.SessionToolRegistryFunc(ctx, issue.ID, wsResult.Path, session.ID)
-				if err != nil {
-					logger.Warn("failed to build session tool advertisement", slog.Any("error", err))
-				} else if sessionReg != nil && sessionReg.Len() > 0 {
-					rendered += "\n\n" + buildToolAdvertisement(sessionReg, cfg.Tracker.Project)
+			remote := strings.TrimSpace(deps.SSHHost) != ""
+			switch {
+			case deps.AgentToolChannelFunc == nil:
+				logger.Warn("tool channel unknown for agent kind, withholding tool advertisement",
+					slog.String("agent_kind", agentKind))
+			case !deps.AgentToolChannelFunc(agentKind, remote):
+				logger.Info("no tool execution channel for this session, withholding tool advertisement",
+					slog.String("agent_kind", agentKind), slog.Bool("remote", remote))
+			default:
+				if deps.SessionToolRegistryFunc != nil {
+					sessionReg, err := deps.SessionToolRegistryFunc(ctx, issue.ID, wsResult.Path, session.ID)
+					if err != nil {
+						logger.Warn("failed to build session tool advertisement", slog.Any("error", err))
+					} else if sessionReg != nil && sessionReg.Len() > 0 {
+						rendered += "\n\n" + buildToolAdvertisement(sessionReg, cfg.Tracker.Project)
+					}
+				} else if deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
+					rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
 				}
-			} else if deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
-				rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
 			}
 			rendered += "\n\n" + prompt.RuntimeStatusSuffix
 		}

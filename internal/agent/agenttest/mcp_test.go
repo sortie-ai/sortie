@@ -1,10 +1,28 @@
 package agenttest
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// writeGeneratedMCPConfig writes a real generated MCP config file
+// declaring the given servers to a fresh temp directory, and returns
+// its path. The translated branch reads this file from disk, unlike
+// the other three dispositions, which compare the path alone.
+func writeGeneratedMCPConfig(t *testing.T, content string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	return path
+}
+
+const twoServerMCPConfig = `{"mcpServers":{"sortie-tools":{"command":"/usr/local/bin/sortie","args":["mcp-server"]},"operator-server":{"command":"/usr/local/bin/operator-mcp"}}}`
 
 // mcpFakeReporter is a minimal [mcpInjectionReporter] double that
 // records Errorf calls instead of failing the enclosing test, so a
@@ -62,6 +80,18 @@ func TestAssertMCPInjection_Passing(t *testing.T) {
 			MCPLaunchSurface{Args: []string{"--model", "gpt-5"}})
 	})
 
+	t.Run("translated with every declared server and stdio command on the surface", func(t *testing.T) {
+		t.Parallel()
+
+		mcpConfigPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
+
+		AssertMCPInjection(t, registry.MCPInjectionTranslated, mcpConfigPath,
+			MCPLaunchSurface{Args: []string{
+				"-c", `mcp_servers.sortie-tools={command="/usr/local/bin/sortie", args=["mcp-server"]}`,
+				"-c", `mcp_servers.operator-server={command="/usr/local/bin/operator-mcp"}`,
+			}})
+	})
+
 	t.Run("unsupported with a neighbouring file that extends the path", func(t *testing.T) {
 		t.Parallel()
 
@@ -84,6 +114,9 @@ func TestAssertMCPInjection_Passing(t *testing.T) {
 func TestAssertMCPInjection_Violating(t *testing.T) {
 	t.Parallel()
 
+	translatedNothingPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
+	translatedPartialPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
+
 	tests := []struct {
 		name          string
 		declared      registry.MCPInjection
@@ -95,6 +128,26 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			declared:      registry.MCPInjectionSupported,
 			mcpConfigPath: "",
 			surface:       MCPLaunchSurface{Args: []string{"--mcp-config", "/ws/.sortie/mcp.json"}},
+		},
+		{
+			// A translated declaration requires positive evidence:
+			// a surface that carries nothing must fail, not pass
+			// vacuously because the generated path itself is absent
+			// (the translated branch never looks for the path).
+			name:          "translated declared but the surface carries nothing",
+			declared:      registry.MCPInjectionTranslated,
+			mcpConfigPath: translatedNothingPath,
+			surface:       MCPLaunchSurface{},
+		},
+		{
+			// A surface carrying only one of the two declared servers
+			// must still fail: partial delivery is not delivery.
+			name:          "translated declared but the surface carries only some declared servers",
+			declared:      registry.MCPInjectionTranslated,
+			mcpConfigPath: translatedPartialPath,
+			surface: MCPLaunchSurface{Args: []string{
+				"-c", `mcp_servers.sortie-tools={command="/usr/local/bin/sortie"}`,
+			}},
 		},
 		{
 			name:          "supported declared but the surface carries nothing",

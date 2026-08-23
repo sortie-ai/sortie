@@ -66,8 +66,10 @@ func validPreflightParams() PreflightParams {
 			metaFunc: func(string) (registry.TrackerMeta, bool) { return registry.TrackerMeta{}, true },
 		},
 		AgentRegistry: &stubAgentRegistry{
-			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
-			metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionSupported}, true
+			},
 		},
 	}
 }
@@ -1016,6 +1018,113 @@ func TestValidateDispatchConfig_MCPConfigWarning(t *testing.T) {
 
 		requireWarnCheck(t, result, "agent.mcp_config")
 		requireNoCheck(t, result, "agent.mcp_config")
+	})
+}
+
+// TestValidateDispatchConfig_NoToolChannelWarning covers the new
+// "agent.kind.no_tool_channel" warning: a reachable kind whose
+// disposition delivers no channel on a local launch draws it, a
+// translating kind draws neither it nor the older
+// "agent.mcp_config" warning, and a kind the registry reports
+// unregistered draws neither.
+func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a reachable channelless kind draws the warning and no error", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionUnsupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.kind.no_tool_channel")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: the channel diagnostic is a warning", result.Errors)
+		}
+		if !result.OK() {
+			t.Errorf("ValidateDispatchConfig().OK() = false, want true: a warning must not block dispatch")
+		}
+
+		var got []PreflightWarning
+		for _, w := range result.Warnings {
+			if w.Check == "agent.kind.no_tool_channel" {
+				got = append(got, w)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("ValidateDispatchConfig() produced %d agent.kind.no_tool_channel warnings, want 1: %v", len(got), got)
+		}
+		if !strings.Contains(got[0].Message, "test-agent") {
+			t.Errorf("warning message = %q, want it to name the agent kind %q", got[0].Message, "test-agent")
+		}
+	})
+
+	t.Run("a translating kind draws neither the no_tool_channel nor the mcp_config warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("test-agent", map[string]any{"mcp_config": "/ws/.sortie/mcp.json"})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionTranslated}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.kind.no_tool_channel")
+		requireNoWarnCheck(t, result, "agent.mcp_config")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: a translating kind is a valid configuration", result.Errors)
+		}
+	})
+
+	t.Run("a kind reached only through a dispatch rule that the registry reports unregistered draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "rule-agent"}},
+					},
+				},
+			}
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "rule-agent" {
+					return registry.AgentMeta{}, false
+				}
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionSupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.kind.no_tool_channel")
+		if len(result.Errors) != 0 {
+			t.Errorf("ValidateDispatchConfig() errors = %v, want none: an unregistered kind is diagnosed elsewhere, not here", result.Errors)
+		}
 	})
 }
 

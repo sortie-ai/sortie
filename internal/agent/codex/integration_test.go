@@ -17,7 +17,9 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -566,4 +568,134 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	if result2.SessionID != originalThreadID {
 		t.Errorf("resumed turn: TurnResult.SessionID = %q, want %q", result2.SessionID, originalThreadID)
 	}
+}
+
+// --- Tool round-trip: the generated MCP config actually reaches a
+// callable sortie_status tool, and the model's call returns a result. ---
+
+// repoRoot returns the absolute path to the repository root, derived
+// from this test file's known location at internal/agent/codex/.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs("../../../")
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	return abs
+}
+
+// buildSortieBinary builds the sortie binary from the repository
+// root into a fresh temp directory and returns its absolute path.
+// The generated MCP config's "command" must name a real, runnable
+// binary, matching what internal/orchestrator/mcpconfig.go's
+// GenerateMCPConfig writes in production.
+func buildSortieBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "sortie")
+	cmd := exec.CommandContext(context.Background(), "go", "build", "-o", binPath, "./cmd/sortie")
+	cmd.Dir = repoRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build ./cmd/sortie: %v\n%s", err, out)
+	}
+	return binPath
+}
+
+// minimalMCPServerWorkflow is a WORKFLOW.md body with no tracker
+// section: just enough for workflow.Load and config.NewServiceConfig
+// to succeed, matching cmd/sortie's own mcpServerWorkflow test
+// fixture shape.
+const minimalMCPServerWorkflow = "---\npolling:\n  interval_ms: 30000\nagent:\n  kind: mock\n---\nDo something.\n"
+
+// writeIntegrationMCPConfig writes a real generated-shape MCP config
+// naming one server, "sortie-tools", whose command launches
+// "sortie mcp-server --workflow <wfPath>" with SORTIE_WORKSPACE set,
+// so the sortie_status tool (gated only on a non-empty workspace
+// path) is the one tool this session's sidecar serves. Returns the
+// config's path.
+func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string) string {
+	t.Helper()
+
+	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	doc := fmt.Sprintf(
+		`{"mcpServers":{"sortie-tools":{"command":%s,"args":["mcp-server","--workflow",%s],"env":{"SORTIE_WORKSPACE":%s}}}}`,
+		mustJSONString(t, sortieBin), mustJSONString(t, wfPath), mustJSONString(t, workspace),
+	)
+	if err := os.WriteFile(mcpConfigPath, []byte(doc), 0o600); err != nil {
+		t.Fatalf("WriteFile mcp.json: %v", err)
+	}
+	return mcpConfigPath
+}
+
+// mustJSONString renders s as a JSON string literal.
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("json.Marshal(%q): %v", s, err)
+	}
+	return string(encoded)
+}
+
+// TestIntegration_ToolRoundTrip drives one real turn with a generated
+// MCP config translated into codex's own launch arguments, and
+// asserts the model calls a Sortie tool through the resulting sidecar
+// and receives its result. This is the round trip the spec's own
+// runtime probes left unverified: the sidecar is spawned with its
+// session environment, but whether the model's call reaches it and a
+// result comes back was never observed until this test runs with a
+// real credential.
+func TestIntegration_ToolRoundTrip(t *testing.T) {
+	skipUnlessCodexIntegration(t)
+
+	sortieBin := buildSortieBinary(t)
+	workspace := gitInitWorkspace(t)
+
+	wfPath := filepath.Join(workspace, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, []byte(minimalMCPServerWorkflow), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
+	}
+	mcpConfigPath := writeIntegrationMCPConfig(t, workspace, sortieBin, wfPath)
+
+	adapter := mustNewAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   integrationAgentConfig(),
+		MCPConfigPath: mcpConfigPath,
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+
+	onEvent, collected := makeEventCollector(t)
+
+	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt:  "Call the sortie_status tool now, with no arguments, and report exactly what it returns. Do not explain first; call the tool immediately.",
+		OnEvent: onEvent,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+
+	events := collected()
+	t.Logf("received %d events, exit reason: %q", len(events), result.ExitReason)
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			t.Logf("EventToolResult: ToolName=%q ToolDurationMS=%d", e.ToolName, e.ToolDurationMS)
+		}
+	}
+
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	assertContainsEventType(t, events, domain.EventToolResult)
 }

@@ -21,12 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sortie validate` now reports a warning when an agent block sets
   `mcp_config` for an agent kind that never receives the generated MCP
-  configuration file. `claude-code` and `copilot-cli` pass that file to
-  the agent process; `codex`, `kiro` and `opencode` do not, so an
-  `mcp_config` value in one of their blocks had no effect and nothing
-  said so. The reference documentation now states which kinds consume
-  the file. It is a warning and not an error: such a configuration
-  stays valid, the run proceeds, and the exit code is unchanged.
+  configuration file. `claude-code`, `codex`, `copilot-cli` and
+  `opencode` receive it; `kiro` does not, so an `mcp_config` value in
+  a `kiro` block had no effect and nothing said so. The reference
+  documentation now states which kinds consume the file. It is a
+  warning and not an error: such a configuration stays valid, the run
+  proceeds, and the exit code is unchanged.
   ([#928](https://github.com/sortie-ai/sortie/issues/928))
 
 ### Fixed
@@ -110,9 +110,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded, its own were silently dropped, and a stale or malformed path
   in the default block failed the session at startup and sent it into
   retry backoff, naming a file the operator had never associated with
-  that agent. `claude-code` and `copilot-cli` consume the generated
-  file; a session running on the workflow default was unaffected.
+  that agent. A session running on the workflow default was
+  unaffected.
   ([#924](https://github.com/sortie-ai/sortie/issues/924))
+
+- A `codex` or `opencode` session no longer keeps the first-turn
+  "Available Sortie tools" section for tools it has no way to call.
+  Both kinds now translate the worker-generated MCP configuration into
+  their own runtime's configuration form and deliver it on a local
+  launch, so a tool the prompt advertises to them is reachable; an SSH
+  session on either kind gets neither the channel nor the
+  advertisement. `kiro` stops receiving the advertisement entirely,
+  since its runtime disables MCP under API-key authentication and can
+  reach a tool by no other means. `sortie validate` also warns once
+  per reachable kind with no tool execution channel.
+  ([#841](https://github.com/sortie-ai/sortie/issues/841))
 
 ## [1.21.0] - 2026-08-20
 
@@ -1921,8 +1933,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TokenUsage`, `AgentConfig`, `Session`, `TurnResult`, and `AgentError` with
   9 error kinds.
 - Agent adapter registry (`registry.Agents`) for registration and lookup by kind.
-- Mock agent adapter (kind `"mock"`) with configurable turn outcomes, delays,
-  and cumulative token accumulation for orchestrator and integration testing.
 - Claude Code agent adapter (kind `"claude-code"`) that launches the CLI as a
   subprocess, reads JSONL events from stdout, and normalizes them to domain event
   types. Supports graceful SIGTERM→SIGKILL shutdown on context cancellation and

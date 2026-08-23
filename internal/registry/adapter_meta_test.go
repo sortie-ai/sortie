@@ -127,10 +127,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantMCPInjection: registry.MCPInjectionSupported,
 			},
 			{
-				name:             "codex requires command and declares MCP injection unsupported",
+				name:             "codex requires command and declares MCP injection translated",
 				kind:             "codex",
 				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionUnsupported,
+				wantMCPInjection: registry.MCPInjectionTranslated,
 			},
 			{
 				name:             "kiro requires command and declares MCP injection unsupported",
@@ -139,10 +139,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantMCPInjection: registry.MCPInjectionUnsupported,
 			},
 			{
-				name:             "opencode requires command and declares MCP injection unsupported",
+				name:             "opencode requires command and declares MCP injection translated",
 				kind:             "opencode",
 				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionUnsupported,
+				wantMCPInjection: registry.MCPInjectionTranslated,
 			},
 			{
 				name:             "mock requires nothing and declares MCP injection unsupported",

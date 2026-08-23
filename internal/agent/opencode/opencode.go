@@ -6,9 +6,13 @@
 // adapter consults `opencode models` to reconstruct the unknown-model
 // diagnostic.
 //
-// The adapter passes no MCP configuration to the agent process:
-// [domain.StartSessionParams] MCPConfigPath is ignored and no MCP startup
-// flag is passed.
+// The CLI accepts no MCP configuration path as an argument, so on a local
+// launch the adapter translates the file named by
+// [domain.StartSessionParams] MCPConfigPath into OpenCode's own
+// configuration form and delivers it in the turn's environment. A remote
+// launch receives none: the only delivery route there is the command line,
+// where the document's credentials would be readable by any user of the
+// host.
 package opencode
 
 import (
@@ -38,7 +42,7 @@ func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
-		MCPInjection:        registry.MCPInjectionUnsupported,
+		MCPInjection:        registry.MCPInjectionTranslated,
 	})
 }
 
@@ -62,6 +66,14 @@ type sessionState struct {
 	acc            *agentcore.RunUsage
 	mu             sync.Mutex
 	active         *turnRuntime
+
+	// mcpConfigContent is the translated MCP configuration document
+	// delivered through the runtime's inline configuration environment
+	// variable on every turn's subprocess. Empty when the session
+	// carries no generated configuration, when that configuration
+	// declares no server, or when the launch target is remote. Set
+	// once in StartSession and never mutated after.
+	mcpConfigContent string
 
 	// usageMeasured reports whether a session export has yielded a
 	// usage figure for this run. Monotone: set true once and never
@@ -113,15 +125,25 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 		return domain.Session{}, agentErr
 	}
 
+	mcpConfigContent, mcpErr := buildMCPConfigContent(params.MCPConfigPath, target.RemoteCommand != "")
+	if mcpErr != nil {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrResponseError,
+			Message: fmt.Sprintf("translate MCP config: %v", mcpErr),
+			Err:     mcpErr,
+		}
+	}
+
 	state := &sessionState{
-		target:         target,
-		agentConfig:    params.AgentConfig,
-		passthrough:    a.passthrough,
-		sessionID:      params.ResumeSessionID,
-		baseLogger:     slog.Default().With(slog.String("component", "opencode-adapter")),
-		createdSession: params.ResumeSessionID == "",
-		runStartedAtMS: time.Now().UnixMilli(),
-		acc:            agentcore.NewRunUsage(),
+		target:           target,
+		agentConfig:      params.AgentConfig,
+		passthrough:      a.passthrough,
+		sessionID:        params.ResumeSessionID,
+		baseLogger:       slog.Default().With(slog.String("component", "opencode-adapter")),
+		createdSession:   params.ResumeSessionID == "",
+		runStartedAtMS:   time.Now().UnixMilli(),
+		acc:              agentcore.NewRunUsage(),
+		mcpConfigContent: mcpConfigContent,
 	}
 
 	return domain.Session{
@@ -155,6 +177,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			Err:     err,
 		}
 	}
+	env = appendMCPConfigEnv(env, state.mcpConfigContent)
 
 	managedEnv, err := buildManagedEnv(a.passthrough)
 	if err != nil {
