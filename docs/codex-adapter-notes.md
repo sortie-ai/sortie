@@ -497,25 +497,34 @@ that category automatically instead of showing it.
 
 Values and behaviors above come from OpenAI's published configuration schema
 ([config-schema.json](https://developers.openai.com/codex/config-schema.json)) and the protocol
-schema the app-server generates for itself. Those two surfaces disagree on `untrusted`: the
-protocol schema each release generates declares it, while the published configuration schema
-lists only `on-request` and `never` among its strings. Upstream describes `untrusted` as an
-internal policy for projects marked untrusted. Because `approvalPolicy` travels on
-`thread/start`, the protocol schema governs the value set here. A fourth string, `on-failure`,
-existed in v0.121.0 with a help text marking it deprecated, and it is gone: neither the published
-schema nor the protocol schema v0.147.0 generates for itself declares it, and
-`--ask-for-approval` at that version documents only the three surviving values. A value outside
-the accepted set is rejected at `thread/start` with `-32600`:
+schema the app-server generates for itself. Those two surfaces disagree on `untrusted`: the protocol
+schema each release generates declares it, while the published configuration schema lists only
+`on-request` and `never` among its strings. The v0.149.0 source describes `untrusted` as an internal
+policy for projects marked untrusted; the v0.147.0 source describes the same variant by what it
+auto-approves, as the table does. Because `approvalPolicy` travels on `thread/start`, the protocol
+schema governs the value set here. A fourth string, `on-failure`, carries a second surface split on
+the same field, by a different mechanism. Two distinct types share the name `AskForApproval`: the
+configuration type behind `config.toml`, and the wire type `thread/start` deserializes into, from
+which the generated schema and the TypeScript declarations derive. The configuration type maps
+`on-failure` onto `on-request` through an alias, so the value is accepted in a configuration file.
+The wire type carries no alias, so the same string is rejected on the wire. Both definitions are
+identical across v0.147.0 and v0.149.0, so this split is a property of the surface rather than of
+the release. It matters in practice because `codex.approval_policy` reaches the wire field and not
+the agent's own configuration file: a value an operator has seen work in their `config.toml` is
+rejected when Sortie sends it. The value dates from v0.121.0, where `--ask-for-approval` marked it
+deprecated in help text. A value outside the accepted set is rejected at `thread/start` with
+`-32600`:
 
 ```json
 {"code": -32600, "message": "Invalid request: unknown variant `on-failure`, expected one of `untrusted`, `on-request`, `granular`, `never`"}
 ```
 
-That enumeration is the protocol's own statement of what it accepts, and it shows this field
-enforcing what it declares: the server resolved the field and rejected the value rather than
-failing to parse the frame. It names four variants because the object arm is flattened into the
-same list under its tag, `granular`, which is the same surface as three strings plus the object
-form.
+That enumeration lists the wire type's declared variants rather than everything it would accept,
+because an alias never appears in it. The wire type declares no alias, so on this field the two
+coincide. The message also shows the field enforcing what it declares: the server resolved the field
+and rejected the value rather than failing to parse the frame. It names four variants because the
+object arm is flattened into the same list under its tag, `granular`, which is the same surface as
+three strings plus the object form.
 
 `startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it, and
 `typeutil.StringFrom` accepts only the string form, so the `granular` object cannot be expressed
