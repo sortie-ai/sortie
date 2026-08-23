@@ -222,9 +222,10 @@ func TestMCPInjectionContractInvariant(t *testing.T) {
 			if d.Name() == "testdata" {
 				return filepath.SkipDir
 			}
-			if _, exempt := mcpContractAllowlist[d.Name()]; exempt {
-				return filepath.SkipDir
-			}
+			// An allowlisted directory is not pruned here, only exempted
+			// by checkMCPContractPackage when its own package is judged.
+			// Pruning would also hide any package nested below it, which
+			// would let a registering package escape the walk entirely.
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

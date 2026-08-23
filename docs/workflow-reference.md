@@ -2410,9 +2410,12 @@ Each adapter (tracker or agent) may define configuration in a top-level object n
 after its `kind` value. These values are passed through to the adapter without validation
 by the orchestrator core.
 
-A session dispatched by a `dispatch.rules` entry to an agent kind other than the workflow
-default reads that kind's own block, on every attempt of that session. The block named by
-`agent.kind` applies only to sessions no rule routed elsewhere.
+A session reads the block belonging to the agent kind it was dispatched on, and reads it
+again on every attempt of that session. That kind is the one a matching `dispatch.rules`
+entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the
+fallback chain in [Section 2.11](#211-dispatch--rule-based-routing). The block named by
+`agent.kind` therefore applies only when neither a matching rule nor the dispatch default
+chose another kind.
 
 **File tracker adapter:**
 

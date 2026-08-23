@@ -107,6 +107,17 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			mcpConfigPath: "/ws/.sortie/mcp.json",
 			surface:       MCPLaunchSurface{},
 		},
+		{
+			// MCPInjection is a string type, so a value outside the
+			// declared set is representable. Without the switch's
+			// default arm such a value matches no case and the
+			// assertion returns having checked nothing, which is the
+			// one way this helper can pass while measuring nothing.
+			name:          "a disposition outside the declared set",
+			declared:      registry.MCPInjection("conditional"),
+			mcpConfigPath: "/ws/.sortie/mcp.json",
+			surface:       MCPLaunchSurface{},
+		},
 	}
 
 	for _, tt := range tests {

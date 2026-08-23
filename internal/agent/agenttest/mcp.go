@@ -74,5 +74,7 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 		}
 	case registry.MCPInjectionUndeclared:
 		t.Errorf("declared = %q, want a kind that declares an MCP injection disposition", declared)
+	default:
+		t.Errorf("declared = %q, want a supported or unsupported MCP injection disposition", declared)
 	}
 }
