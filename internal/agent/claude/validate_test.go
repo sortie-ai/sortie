@@ -85,3 +85,53 @@ func TestValidateConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestSessionResumeBlockedBy covers the claude-code declaration directly:
+// disabling session_persistence returns the blocking key, and the key
+// being absent, true, wrong-typed, or read from a nil map all return the
+// empty string, matching typeutil.BoolFrom's own defaulting behavior.
+func TestSessionResumeBlockedBy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		passthrough map[string]any
+		want        string
+	}{
+		{
+			name:        "session_persistence false returns the blocking key",
+			passthrough: map[string]any{"session_persistence": false},
+			want:        "session_persistence",
+		},
+		{
+			name:        "session_persistence absent returns empty",
+			passthrough: map[string]any{},
+			want:        "",
+		},
+		{
+			name:        "session_persistence true returns empty",
+			passthrough: map[string]any{"session_persistence": true},
+			want:        "",
+		},
+		{
+			name:        "session_persistence wrong-typed returns empty",
+			passthrough: map[string]any{"session_persistence": "false"},
+			want:        "",
+		},
+		{
+			name:        "nil map returns empty",
+			passthrough: nil,
+			want:        "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := sessionResumeBlockedBy(tt.passthrough); got != tt.want {
+				t.Errorf("sessionResumeBlockedBy(%v) = %q, want %q", tt.passthrough, got, tt.want)
+			}
+		})
+	}
+}

@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `codex` or `opencode` session no longer keeps the first-turn "Available Sortie tools" section for tools it has no way to call. Both kinds now translate the worker-generated MCP configuration into their own runtime's configuration form and deliver it on a local launch, so a tool the prompt advertises to them is reachable; an SSH session on either kind gets neither the channel nor the advertisement. `kiro` stops receiving the advertisement entirely, since its runtime disables MCP under API-key authentication and can reach a tool by no other means. `sortie validate` also warns once per reachable kind with no tool execution channel.
   ([#841](https://github.com/sortie-ai/sortie/issues/841))
 
+- A workflow that sets `claude-code.session_persistence: false` is now rejected before the run starts, by `sortie validate` and at startup. The setting prevents Claude Code from resuming a session, so such a run previously failed partway through.
+  ([#879](https://github.com/sortie-ai/sortie/issues/879))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed

@@ -1895,6 +1895,276 @@ func TestValidateAgentConfigOfflineVerdict_ClaudeCodePermissionMode(t *testing.T
 	}
 }
 
+// wantSessionResumeMessage is the rendered message the agent.kind.session_resume
+// diagnostic must match exactly for kind "claude-code" and key
+// "session_persistence".
+const wantSessionResumeMessage = "claude-code.session_persistence stops this agent kind from resuming a session across separate agent launches, " +
+	"but Sortie re-dispatches an issue with its earlier session after a retry, a continuation, a stall, or a restart, " +
+	"and every such turn fails. Change claude-code.session_persistence, or use an agent kind that can resume a session."
+
+// claudeCodeSessionResumeWorkflow returns a workflow selecting the
+// claude-code agent with a non-empty command, an optional agent.max_turns
+// value, and an optional claude-code.session_persistence value, used to
+// drive the agent.kind.session_resume offline verdict without
+// constructing any adapter. An empty maxTurns or sessionPersistence
+// omits that line from the fixture entirely.
+func claudeCodeSessionResumeWorkflow(maxTurns, sessionPersistence string) []byte {
+	agentBlock := "agent:\n  kind: claude-code\n  command: /usr/bin/true\n"
+	if maxTurns != "" {
+		agentBlock += "  max_turns: " + maxTurns + "\n"
+	}
+	claudeBlock := ""
+	if sessionPersistence != "" {
+		claudeBlock = "claude-code:\n  session_persistence: " + sessionPersistence + "\n"
+	}
+	return []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states:\n    - To Do\n  terminal_states:\n    - Done\n" +
+		agentBlock +
+		claudeBlock +
+		"file:\n  path: issues.json\n" +
+		"---\nDo {{ .issue.title }}.\n")
+}
+
+// TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResume drives the
+// offline sortie validate path against a workflow whose claude-code block
+// sets session_persistence: false, asserting exit 1, valid: false, and
+// exactly one error whose Check is agent.kind.session_resume and whose
+// Message matches the core-owned template exactly, in both text and JSON
+// output, without constructing any adapter.
+func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResume(t *testing.T) {
+	t.Parallel()
+
+	t.Run("json", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow("", "false"))
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		if out.Valid {
+			t.Errorf("validateOutput.Valid = true, want false")
+		}
+
+		var got []validateDiag
+		for _, e := range out.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				got = append(got, e)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("validateOutput.Errors = %v, want exactly one entry with check %q", out.Errors, "agent.kind.session_resume")
+		}
+		if got[0].Message != wantSessionResumeMessage {
+			t.Errorf("validateOutput.Errors[0].Message = %q, want %q", got[0].Message, wantSessionResumeMessage)
+		}
+	})
+
+	t.Run("text", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow("", "false"))
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stdout: %s", code, stdout.String())
+		}
+
+		wantLine := "error: agent.kind.session_resume: " + wantSessionResumeMessage + "\n"
+		if stderr.String() != wantLine {
+			t.Errorf("stderr = %q, want %q", stderr.String(), wantLine)
+		}
+	})
+}
+
+// TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResumeFalsifiers
+// covers the three properties that keep the verdict tied to
+// session_persistence alone: max_turns absent draws nothing while
+// max_turns present with session_persistence: false still draws it;
+// the diagnostic is emitted identically across a range of agent.max_turns
+// values; and a string-typed "false" is read as the wrong-typed value
+// typeutil.BoolFrom treats as true, drawing nothing, matching the
+// adapter's own parse.
+func TestValidateAgentConfigOfflineVerdict_ClaudeCodeSessionResumeFalsifiers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("max_turns absent with session_persistence absent draws nothing", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow("5", ""))
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		for _, e := range out.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				t.Errorf("validateOutput.Errors contains %v, want no agent.kind.session_resume entry", out.Errors)
+			}
+		}
+	})
+
+	t.Run("max_turns 5 with session_persistence false draws the diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow("5", "false"))
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		found := false
+		for _, e := range out.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("validateOutput.Errors = %v, want an agent.kind.session_resume entry", out.Errors)
+		}
+	})
+
+	for _, maxTurns := range []string{"20", "2", "1", "0", "-1"} {
+		t.Run(fmt.Sprintf("session_persistence false is refused identically at max_turns %s", maxTurns), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow(maxTurns, "false"))
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			var got []validateDiag
+			for _, e := range out.Errors {
+				if e.Check == "agent.kind.session_resume" {
+					got = append(got, e)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("validateOutput.Errors = %v, want exactly one agent.kind.session_resume entry at max_turns %s", out.Errors, maxTurns)
+			}
+			if got[0].Message != wantSessionResumeMessage {
+				t.Errorf("validateOutput.Errors[0].Message = %q, want %q", got[0].Message, wantSessionResumeMessage)
+			}
+		})
+	}
+
+	t.Run(`session_persistence written as the string "false" draws nothing`, func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, claudeCodeSessionResumeWorkflow("", `"false"`))
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		for _, e := range out.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				t.Errorf("validateOutput.Errors contains %v, want no agent.kind.session_resume entry", out.Errors)
+			}
+		}
+	})
+}
+
+// TestValidateAgentConfigOfflineVerdict_MockKindSessionResume drives the
+// offline sortie validate path against a workflow whose default
+// agent.kind is mock, which declares no session-resume blocker at all,
+// asserting no agent.kind.session_resume diagnostic is ever produced and
+// the kind's existing agent.kind.no_tool_channel warning is unchanged.
+func TestValidateAgentConfigOfflineVerdict_MockKindSessionResume(t *testing.T) {
+	t.Parallel()
+
+	for _, maxTurns := range []string{"", "1", "5", "-1"} {
+		t.Run(fmt.Sprintf("max_turns %q", maxTurns), func(t *testing.T) {
+			t.Parallel()
+
+			agentBlock := "agent:\n  kind: mock\n"
+			if maxTurns != "" {
+				agentBlock += "  max_turns: " + maxTurns + "\n"
+			}
+			content := []byte("---\n" +
+				"polling:\n  interval_ms: 30000\n" +
+				"tracker:\n  kind: file\n  active_states:\n    - To Do\n  terminal_states:\n    - Done\n" +
+				agentBlock +
+				"mock:\n  arbitrary_passthrough_key: some-value\n" +
+				"file:\n  path: issues.json\n" +
+				"---\nDo {{ .issue.title }}.\n")
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, content)
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			for _, e := range out.Errors {
+				if e.Check == "agent.kind.session_resume" {
+					t.Errorf("validateOutput.Errors contains %v, want no agent.kind.session_resume entry", out.Errors)
+				}
+			}
+
+			foundWarning := false
+			for _, w := range out.Warnings {
+				if w.Check == "agent.kind.no_tool_channel" {
+					foundWarning = true
+				}
+			}
+			if !foundWarning {
+				t.Errorf("validateOutput.Warnings = %v, want the existing agent.kind.no_tool_channel warning", out.Warnings)
+			}
+		})
+	}
+}
+
 // --- HTTP Server Always-On integration tests ---
 
 func TestValidateShortHelp(t *testing.T) {

@@ -17,7 +17,8 @@ type PreflightError struct {
 	// "workflow_load", "tracker.kind", "tracker.api_key",
 	// "tracker.project", "tracker_adapter", "tracker.handoff_state",
 	// "tracker.in_progress_state", "agent.kind", "agent.command",
-	// "agent_adapter", "workspace.root_writable".
+	// "agent_adapter", "workspace.root_writable",
+	// "agent.kind.session_resume".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -239,6 +240,21 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 				Check:   "agent.kind.no_tool_channel",
 				Message: "agent kind " + strconv.Quote(kind) + " has no tool execution channel: Sortie's tools are neither advertised nor callable for it",
 			})
+		}
+
+		// A kind whose declaration reports a blocking key under this
+		// configuration's passthrough cannot resume a session, but
+		// Sortie re-dispatches an issue with its earlier session on
+		// every retry, continuation, stall, or restart.
+		if registered && agentMeta.SessionResumeBlockedBy != nil {
+			if key := agentMeta.SessionResumeBlockedBy(settings.Passthrough); key != "" {
+				errs = append(errs, PreflightError{
+					Check: "agent.kind.session_resume",
+					Message: kind + "." + key + " stops this agent kind from resuming a session across separate agent launches, " +
+						"but Sortie re-dispatches an issue with its earlier session after a retry, a continuation, a stall, or a restart, " +
+						"and every such turn fails. Change " + kind + "." + key + ", or use an agent kind that can resume a session.",
+				})
+			}
 		}
 
 		if !registered || agentMeta.ValidateAgentConfig == nil {

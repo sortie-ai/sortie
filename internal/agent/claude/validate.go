@@ -32,3 +32,15 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 			"for approval, and an unattended run has no one to answer; only \"bypassPermissions\" is supported",
 	}}
 }
+
+// sessionResumeBlockedBy reports the claude-code.session_persistence key
+// when the given passthrough disables it, using the same helper and
+// default parsePassthroughConfig uses so this verdict cannot diverge
+// from what the adapter would build.
+func sessionResumeBlockedBy(passthrough map[string]any) string {
+	if typeutil.BoolFrom(passthrough, "session_persistence", true) {
+		return ""
+	}
+
+	return "session_persistence"
+}

@@ -244,8 +244,10 @@ value. These are pass-through values interpreted by the adapter and not by the o
 core. For example, a Codex adapter may accept `codex.approval_policy` and
 `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an
 OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`; a Kiro adapter
-may accept `kiro.model` and `kiro.trust_tools`. The orchestrator forwards the entire
-sub-object to the adapter without validation.
+may accept `kiro.model` and `kiro.trust_tools`. The orchestrator forwards the sub-object to
+the adapter. An adapter may declare a validator that preflight runs over its own sub-object,
+and an adapter may declare metadata that a core preflight rule reads to refuse a value of
+that sub-object.
 
 #### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
 

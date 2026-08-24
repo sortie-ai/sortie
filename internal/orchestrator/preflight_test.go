@@ -1021,6 +1021,152 @@ func TestValidateDispatchConfig_MCPConfigWarning(t *testing.T) {
 	})
 }
 
+// TestValidateDispatchConfig_SessionResumeWithoutAdapterValidator covers
+// the rule's placement inside the agent-kind loop: a registered kind with
+// no ValidateAgentConfig hook at all must still draw the
+// "agent.kind.session_resume" diagnostic when its declaration reports a
+// blocking key, so the rule cannot be folded behind the loop's early
+// continue for a validator-less kind.
+func TestValidateDispatchConfig_SessionResumeWithoutAdapterValidator(t *testing.T) {
+	t.Parallel()
+
+	params := validPreflightParams()
+	params.AgentRegistry = &stubAgentRegistry{
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(string) (registry.AgentMeta, bool) {
+			return registry.AgentMeta{
+				ValidateAgentConfig: nil,
+				SessionResumeBlockedBy: func(map[string]any) string {
+					return "session_persistence"
+				},
+			}, true
+		},
+	}
+
+	result := ValidateDispatchConfig(params)
+
+	requireCheck(t, result, "agent.kind.session_resume")
+}
+
+// TestValidateDispatchConfig_SessionResumeNilDeclaration covers the
+// nil-declaration guard in isolation: a registered kind whose
+// SessionResumeBlockedBy is nil draws no "agent.kind.session_resume"
+// diagnostic, panics on nothing, and leaves the rest of the verdict
+// unaffected. This is the
+// branch five of the six shipped agent kinds take on every preflight
+// evaluation, and it is also reachable from a kind this repository does
+// not control, so the stub pins the guard rather than any one kind's
+// metadata.
+func TestValidateDispatchConfig_SessionResumeNilDeclaration(t *testing.T) {
+	t.Parallel()
+
+	params := validPreflightParams()
+	params.AgentRegistry = &stubAgentRegistry{
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(string) (registry.AgentMeta, bool) {
+			return registry.AgentMeta{SessionResumeBlockedBy: nil}, true
+		},
+	}
+
+	result := ValidateDispatchConfig(params)
+
+	requireNoCheck(t, result, "agent.kind.session_resume")
+	if !result.OK() {
+		t.Errorf("ValidateDispatchConfig().OK() = false, want true: a nil declaration must never fail preflight")
+	}
+}
+
+// TestValidateDispatchConfig_SessionResumePerKind covers per-kind
+// emission and ordering: a configuration reaching two declaring kinds,
+// one through agent.kind and one through a dispatch rule, produces one
+// "agent.kind.session_resume" diagnostic per kind in
+// orderedUniqueAgentKinds order, and a single kind reached twice
+// produces exactly one diagnostic.
+func TestValidateDispatchConfig_SessionResumePerKind(t *testing.T) {
+	t.Parallel()
+
+	t.Run("two declaring kinds produce two diagnostics in default-then-rule order", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "kind-a", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "kind-b"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{SessionResumeBlockedBy: func(map[string]any) string {
+					return "blocker"
+				}}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var got []PreflightError
+		for _, e := range result.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				got = append(got, e)
+			}
+		}
+		want := []string{"kind-a.blocker", "kind-b.blocker"}
+		if len(got) != len(want) {
+			t.Fatalf("ValidateDispatchConfig() agent.kind.session_resume errors = %v, want %d entries naming %v", got, len(want), want)
+		}
+		for i, wantPrefix := range want {
+			if !strings.HasPrefix(got[i].Message, wantPrefix+" ") {
+				t.Errorf("errors[%d].Message = %q, want it to start with %q", i, got[i].Message, wantPrefix+" ")
+			}
+		}
+	})
+
+	t.Run("one kind reached twice produces exactly one diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "kind-a", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Default: config.DispatchSelection{AgentKind: "kind-a"},
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "kind-a"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.AgentMeta, bool) {
+				return registry.AgentMeta{SessionResumeBlockedBy: func(map[string]any) string {
+					return "blocker"
+				}}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var got []PreflightError
+		for _, e := range result.Errors {
+			if e.Check == "agent.kind.session_resume" {
+				got = append(got, e)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("ValidateDispatchConfig() agent.kind.session_resume errors = %v, want exactly 1", got)
+		}
+	})
+}
+
 // TestValidateDispatchConfig_NoToolChannelWarning covers the new
 // "agent.kind.no_tool_channel" warning: a reachable kind whose
 // disposition delivers no channel on a local launch draws it, a
