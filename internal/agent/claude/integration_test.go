@@ -402,4 +402,13 @@ func TestIntegration_SessionResume(t *testing.T) {
 	if result2.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("resumed turn ExitReason = %q, want %q", result2.ExitReason, domain.EventTurnCompleted)
 	}
+	// A turn that silently started a fresh session would also complete,
+	// so completion alone does not show the session was resumed. The CLI
+	// appends to the existing conversation under the same identifier
+	// unless --fork-session is passed, which this adapter never passes,
+	// so an identifier that changed means no resume happened.
+	if result2.SessionID != result1.SessionID {
+		t.Errorf("resumed turn SessionID = %q, want %q: the turn did not resume the first turn's session",
+			result2.SessionID, result1.SessionID)
+	}
 }

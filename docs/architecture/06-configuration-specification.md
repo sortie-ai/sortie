@@ -112,8 +112,8 @@ Validation checks:
   (case-insensitive), with no fallback to the adapter's default terminal-state list. Reaction
   configuration is not rebuilt on `WORKFLOW.md` reload (Section 6.4), so this check runs at
   startup and in `sortie validate`, never on a dispatch tick.
-- `workspace.root_writable`: when `workspace.root` is set, the directory must exist and be
-  writable.
+- `workspace.root_writable`: when `workspace.root` is set, the directory must be writable; a
+  missing directory is created.
 
 Effort-budget and notification config are validated outside this preflight, by design:
 

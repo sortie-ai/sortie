@@ -60,7 +60,7 @@ An uncorrelated tool result reports the tool name as unknown. That means the mat
 
 Session transcripts live under the user's home directory, not in the workspace. Removing a workspace does not reclaim them, and a long-running fleet accumulates them.
 
-`claude-code.session_persistence: false` cannot hold in a Sortie workflow: preflight refuses the configuration before the run starts. The adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag reads a session file persistence off never writes. A maintainer who sees the refusal named `agent.kind.session_resume` should look for `session_persistence: false` in the `claude-code` block.
+`claude-code.session_persistence: false` cannot hold in a Sortie workflow: preflight refuses the configuration before the run starts. The adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag reads the session file that `session_persistence: false` prevents Claude Code from writing. A maintainer who sees the refusal named `agent.kind.session_resume` should look for `session_persistence: false` in the `claude-code` block.
 
 ## Sortie's own tools
 
