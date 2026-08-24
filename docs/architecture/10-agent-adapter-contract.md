@@ -510,7 +510,7 @@ The family has the following parts:
   its own transport and non-2xx errors into a category that omits the URL and payload.
 
 The backend packages obey the adapter-family boundary rules: no cross-adapter imports, no
-orchestrator imports, normalization to the domain type at the boundary, and generic
+importing the orchestrator, normalization to the domain type at the boundary, and generic
 `notifier_*` vocabulary in the core, never `slack_*`.
 
 Backends register via the notifier registry using `init()` functions:

@@ -6,7 +6,7 @@ Last updated: 2026-08-23
 
 ## Shape of the package
 
-One package registers three kinds under the name `gitea`: the tracker, the SCM adapter, and the CI status provider. That is the same combined layout the GitHub adapter uses, and the `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three through `internal/registry` and never import this package directly.
+One package registers three kinds under the name `gitea`: the tracker, the SCM adapter, and the CI status provider. That is the same combined layout the GitHub adapter uses, and the `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three through `internal/registry` and never call into this package directly.
 
 There is no Gitea client library in the dependency set and there should not be one; the zero-runtime-dependency model is the reason. Transport, pagination, and preflight backoff come from `internal/httpkit`, label-state derivation and normalization from `internal/issuekit`, and the forge decisions every SCM adapter shares (error conversion, merge-conflict promotion, bot classification, sortable event ids, the CI aggregate and merge gate) come from `internal/scm/scmcore`. The overlap with the GitHub adapter is transport-shaped rather than domain-shaped, which is why the two share `httpkit` and no base structs.
 

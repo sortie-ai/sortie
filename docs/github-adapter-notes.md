@@ -6,7 +6,7 @@ Last updated: 2026-08-23
 
 ## Shape of the package
 
-One package registers three kinds under the name `github`: the tracker, the SCM adapter, and the CI status provider. The `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three through `internal/registry` and never import this package directly.
+One package registers three kinds under the name `github`: the tracker, the SCM adapter, and the CI status provider. The `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three through `internal/registry` and never call into this package directly.
 
 There is no GitHub client library in the dependency set and there should not be one; the zero-runtime-dependency model is the reason. Transport, the link-header paginator, and the page-number paginator come from `internal/httpkit`; label-state derivation and normalization from `internal/issuekit`; and the decisions every SCM adapter shares (tracker-to-SCM error conversion, merge-conflict promotion, the already-merged marker, bot classification, sortable event ids, the CI aggregate and the merge gate) from `internal/scm/scmcore`.
 
