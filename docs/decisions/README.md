@@ -33,3 +33,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0024](0024-start-a-new-feedback-epoch-when-the-head-moves.md) | Start a New Feedback Epoch When the Pull Request Head Moves | Accepted |
 | [0025](0025-refuse-agent-requests-only-a-human-could-answer.md) | Refuse Agent Requests That Only a Human Could Answer | Accepted |
 | [0026](0026-re-read-issue-state-before-recording-absence-failure.md) | Re-Read the Issue State Before Recording an Absence Failure | Accepted |
+| [0027](0027-give-the-consecutive-absence-ceiling-its-own-setting.md) | Give the Consecutive-Absence Ceiling Its Own Setting | Accepted |
