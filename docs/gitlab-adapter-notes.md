@@ -8,7 +8,7 @@ Last updated: 2026-08-23
 
 One package registers three kinds under the name `gitlab`: the tracker, the SCM adapter, and the CI status provider. GitLab is a full forge, and its issue half and merge-request half share their authentication, project addressing, pagination, error envelopes, comment entity, and label-event journal. Splitting them across packages would have meant re-declaring all of that twice, which is why they live together.
 
-The `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three kinds through `internal/registry` and never import this package directly.
+The `internal/scm/` boundary rules apply unchanged: no cross-adapter imports, no importing the orchestrator, and every external response normalized to a domain type before it leaves the package. The orchestrator and `cmd/sortie` reach all three kinds through `internal/registry` and never call into this package directly.
 
 There is no GitLab client library in the dependency set and there should not be one. Transport, the link-header paginator, the page-number paginator, and preflight retry come from `internal/httpkit`; label-state derivation and normalization from `internal/issuekit`; offline validate primitives from `internal/registry`; conformance assertions from `internal/adaptertest`. GitLab's REST is not GitHub-shaped, so the only overlap with the sibling adapters is transport-shaped and already lives in `httpkit`.
 
