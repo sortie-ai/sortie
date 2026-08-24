@@ -649,9 +649,8 @@ func TestRebuildBudgetExhaustedRestoresAbsenceParkingAfterRestart(t *testing.T) 
 
 // TestParkExhaustedAbsencesLeavesBudgetExhaustedEmpty verifies that an
 // absence park taken by the tick pass produces a parked_issues row with
-// reason handoff_absence and leaves BudgetExhausted and
-// BudgetExhaustedReason empty: the absence park is the sole gate, not a
-// second budget-exhaustion mechanism.
+// reason handoff_absence and leaves BudgetExhausted empty: the absence
+// park is the sole gate, not a second budget-exhaustion mechanism.
 func TestParkExhaustedAbsencesLeavesBudgetExhaustedEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -679,9 +678,6 @@ func TestParkExhaustedAbsencesLeavesBudgetExhaustedEmpty(t *testing.T) {
 	}
 	if len(state.BudgetExhausted) != 0 {
 		t.Errorf("BudgetExhausted = %v, want empty", state.BudgetExhausted)
-	}
-	if len(state.BudgetExhaustedReason) != 0 {
-		t.Errorf("BudgetExhaustedReason = %v, want empty", state.BudgetExhaustedReason)
 	}
 }
 

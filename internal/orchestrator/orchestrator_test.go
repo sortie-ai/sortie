@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,8 +107,9 @@ type stubStore struct {
 	sessions        []persistence.SessionMetadata
 	savedRetries    []persistence.RetryEntry
 	deletedRetryIDs []string
-	// Budget exhaustion query configuration (per-tick rebuild).
-	budgetExhaustedIDs []string
+	// Budget exhaustion query configuration (per-tick rebuild). The map
+	// value is the run-history session count for that issue.
+	budgetExhaustedIDs map[string]int
 	budgetExhaustedErr error
 	absenceCounts      map[string]int
 	absenceCountErr    error
@@ -197,14 +199,14 @@ func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (persistence.
 	}, nil
 }
 
-func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
+func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ int) (map[string]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.budgetExhaustedErr != nil {
 		return nil, s.budgetExhaustedErr
 	}
-	result := make([]string, len(s.budgetExhaustedIDs))
-	copy(result, s.budgetExhaustedIDs)
+	result := make(map[string]int, len(s.budgetExhaustedIDs))
+	maps.Copy(result, s.budgetExhaustedIDs)
 	return result, nil
 }
 
@@ -467,7 +469,7 @@ func TestShouldDispatchWithSets(t *testing.T) {
 			issue:     baseIssue,
 			activeSet: activeSet, terminalS: terminalSet,
 			setupState: func(s *State) {
-				s.BudgetExhausted[baseIssue.ID] = struct{}{}
+				s.BudgetExhausted[baseIssue.ID] = &BudgetExhaustedEntry{}
 			},
 			want: false,
 		},
@@ -476,7 +478,7 @@ func TestShouldDispatchWithSets(t *testing.T) {
 			issue:     baseIssue,
 			activeSet: activeSet, terminalS: terminalSet,
 			setupState: func(s *State) {
-				s.BudgetExhausted["other-id"] = struct{}{}
+				s.BudgetExhausted["other-id"] = &BudgetExhaustedEntry{}
 			},
 			want: true,
 		},
@@ -3873,6 +3875,25 @@ func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *
 	})
 }
 
+// budgetOrchestratorWithMetrics mirrors budgetOrchestrator but accepts an
+// explicit logger and metrics implementation, for tests asserting on the
+// per-issue budget-ceiling log record and the counter together.
+func budgetOrchestratorWithMetrics(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger, metrics domain.Metrics) *Orchestrator {
+	regs := passingPreflightRegistries()
+	regs.ReloadWorkflow = func() error { return nil }
+	regs.ConfigFunc = wm.Config
+	return NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          logger,
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: regs,
+		Metrics:         metrics,
+	})
+}
+
 func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 	t.Parallel()
 
@@ -3882,7 +3903,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		t.Parallel()
 
 		wm := budgetTickConfig(3)
-		store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 1}}
 		state := NewState(60000, 10, nil, AgentTotals{})
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
@@ -3900,7 +3921,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		t.Parallel()
 
 		wm := budgetTickConfig(3)
-		store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 1}}
 		state := NewState(60000, 10, nil, AgentTotals{})
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
@@ -3920,8 +3941,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		wm := budgetTickConfig(3)
 		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
-		state.BudgetExhaustedReason[issue.ID] = budgetReasonSession
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession} // pre-populated
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -3941,7 +3961,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		wm := budgetTickConfig(0) // MaxSessions=0 → unlimited
 		store := &stubStore{}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // pre-populated
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -3960,7 +3980,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		wm := budgetTickConfig(3)
 		store := &stubStore{}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // pre-populated
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return nil, nil },
@@ -4013,11 +4033,12 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
-			t.Errorf("BudgetExhausted[%s] missing after tick, want present (token ceiling)", issueA.ID)
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
+			t.Fatalf("BudgetExhausted[%s] missing after tick, want present (token ceiling)", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonToken)
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q", issueA.ID, entry.Reason, budgetReasonToken)
 		}
 		if _, running := state.Running[issueA.ID]; running {
 			t.Errorf("Running[%s] present, want absent (token budget exhausted)", issueA.ID)
@@ -4029,18 +4050,19 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		wm := budgetTickConfigTokens(3, 1000)
 		store := &stubStore{
-			budgetExhaustedIDs: []string{issueA.ID},
+			budgetExhaustedIDs: map[string]int{issueA.ID: 1},
 			tokenExhaustedIDs:  []string{issueA.ID},
 		}
 		state := NewState(60000, 10, nil, AgentTotals{})
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
 			t.Fatalf("BudgetExhausted[%s] missing after tick, want present", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence)", issueA.ID, got, budgetReasonToken)
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (token precedence)", issueA.ID, entry.Reason, budgetReasonToken)
 		}
 	})
 
@@ -4049,37 +4071,28 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		wm := budgetTickConfigTokens(3, 1000)
 		store := &stubStore{
-			budgetExhaustedIDs: []string{issueA.ID},
+			budgetExhaustedIDs: map[string]int{issueA.ID: 1},
 			tokenExhaustedIDs:  []string{issueB.ID},
 		}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		// Stale entry from a previous tick: must be pruned from both
-		// structures in lockstep.
-		state.BudgetExhausted["iss-stale"] = struct{}{}
-		state.BudgetExhaustedReason["iss-stale"] = budgetReasonSession
+		// Stale entry from a previous tick: must be pruned from the set.
+		state.BudgetExhausted["iss-stale"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA, issueB)).handleTick(context.Background())
 
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonSession {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonSession)
+		if got := state.BudgetExhausted[issueA.ID].Reason; got != budgetReasonSession {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q", issueA.ID, got, budgetReasonSession)
 		}
-		if got := state.BudgetExhaustedReason[issueB.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueB.ID, got, budgetReasonToken)
+		if got := state.BudgetExhausted[issueB.ID].Reason; got != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q", issueB.ID, got, budgetReasonToken)
 		}
 		if _, ok := state.BudgetExhausted["iss-stale"]; ok {
 			t.Error("BudgetExhausted[iss-stale] survived the rebuild, want pruned")
 		}
-		if got, ok := state.BudgetExhaustedReason["iss-stale"]; ok {
-			t.Errorf("BudgetExhaustedReason[iss-stale] = %q, want pruned in lockstep", got)
-		}
-		// Total coverage: the reason map carries exactly the set's issues.
-		if len(state.BudgetExhaustedReason) != len(state.BudgetExhausted) {
-			t.Errorf("reason map has %d entries, set has %d, want equal",
-				len(state.BudgetExhaustedReason), len(state.BudgetExhausted))
-		}
-		for id := range state.BudgetExhausted {
-			if _, ok := state.BudgetExhaustedReason[id]; !ok {
-				t.Errorf("BudgetExhaustedReason[%s] missing, want a reason for every exhausted issue", id)
+		// Total coverage: every entry in the rebuilt set carries a reason.
+		for id, entry := range state.BudgetExhausted {
+			if entry.Reason == "" {
+				t.Errorf("BudgetExhausted[%s].Reason empty, want a reason for every exhausted issue", id)
 			}
 		}
 	})
@@ -4092,20 +4105,20 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		// token query fails: the prior set must be folded in for the token
 		// axis so the issue stays blocked this tick.
 		store := &stubStore{
-			budgetExhaustedIDs: []string{},
+			budgetExhaustedIDs: map[string]int{},
 			tokenExhaustedErr:  fmt.Errorf("db error"),
 		}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
-			t.Errorf("BudgetExhausted[%s] dropped on token query error, want retained (prior set folded)", issueA.ID)
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
+			t.Fatalf("BudgetExhausted[%s] dropped on token query error, want retained (prior set folded)", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (prior reason carried)", issueA.ID, got, budgetReasonToken)
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (prior reason carried)", issueA.ID, entry.Reason, budgetReasonToken)
 		}
 		if _, running := state.Running[issueA.ID]; running {
 			t.Errorf("Running[%s] present, want absent (issue stays blocked this tick)", issueA.ID)
@@ -4118,16 +4131,16 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		wm := budgetTickConfigTokens(3, 0)
 		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonSession
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
-			t.Errorf("BudgetExhausted[%s] dropped on session query error, want retained", issueA.ID)
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
+			t.Fatalf("BudgetExhausted[%s] dropped on session query error, want retained", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonSession {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (prior reason carried)", issueA.ID, got, budgetReasonSession)
+		if entry.Reason != budgetReasonSession {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (prior reason carried)", issueA.ID, entry.Reason, budgetReasonSession)
 		}
 	})
 
@@ -4140,16 +4153,12 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		// resurrect an entry attributed to the token budget.
 		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
-			t.Errorf("BudgetExhausted[%s] retained by session-axis fold, want dropped (fresh token result cleared it)", issueA.ID)
-		}
-		if got, ok := state.BudgetExhaustedReason[issueA.ID]; ok {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want pruned in lockstep", issueA.ID, got)
+		if entry, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] = %+v, want dropped (fresh token result cleared it)", issueA.ID, entry)
 		}
 	})
 
@@ -4162,16 +4171,12 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		// carry it forward.
 		store := &stubStore{tokenExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonSession
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
-			t.Errorf("BudgetExhausted[%s] retained by token-axis fold, want dropped (session ceiling disabled)", issueA.ID)
-		}
-		if got, ok := state.BudgetExhaustedReason[issueA.ID]; ok {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want pruned in lockstep", issueA.ID, got)
+		if entry, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] = %+v, want dropped (session ceiling disabled)", issueA.ID, entry)
 		}
 	})
 
@@ -4184,20 +4189,20 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		// carried entry reports the token budget, matching the precedence
 		// the success path applies when both axes block an issue.
 		store := &stubStore{
-			budgetExhaustedIDs: []string{issueA.ID},
+			budgetExhaustedIDs: map[string]int{issueA.ID: 1},
 			tokenExhaustedErr:  fmt.Errorf("db error"),
 		}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
 			t.Fatalf("BudgetExhausted[%s] missing after tick, want present (blocked on both axes)", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence on carried entry)", issueA.ID, got, budgetReasonToken)
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (token precedence on carried entry)", issueA.ID, entry.Reason, budgetReasonToken)
 		}
 	})
 
@@ -4207,16 +4212,12 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		wm := budgetTickConfigTokens(0, 0)
 		store := &stubStore{}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
 
 		if len(state.BudgetExhausted) != 0 {
 			t.Errorf("BudgetExhausted = %v, want empty with both ceilings disabled", state.BudgetExhausted)
-		}
-		if len(state.BudgetExhaustedReason) != 0 {
-			t.Errorf("BudgetExhaustedReason = %v, want empty with both ceilings disabled", state.BudgetExhaustedReason)
 		}
 	})
 
@@ -4226,8 +4227,7 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		wm := budgetTickConfigTokens(3, 1000)
 		store := &stubStore{}
 		state := NewState(60000, 10, nil, AgentTotals{})
-		state.BudgetExhausted[issueA.ID] = struct{}{}
-		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+		state.BudgetExhausted[issueA.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
 
 		budgetOrchestrator(state, wm, store, candidates()).handleTick(context.Background())
 
@@ -4236,9 +4236,6 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		// the next tick that has candidates, from the run_history ledger.
 		if len(state.BudgetExhausted) != 0 {
 			t.Errorf("BudgetExhausted = %v, want cleared on empty candidate list", state.BudgetExhausted)
-		}
-		if len(state.BudgetExhaustedReason) != 0 {
-			t.Errorf("BudgetExhaustedReason = %v, want cleared in lockstep", state.BudgetExhaustedReason)
 		}
 	})
 
@@ -4295,11 +4292,12 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		budgetOrchestratorWithLogger(state, wm, store, candidates(issueA), logger).handleTick(context.Background())
 
-		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+		entry, ok := state.BudgetExhausted[issueA.ID]
+		if !ok {
 			t.Fatalf("BudgetExhausted[%s] missing, want present (at the ceiling)", issueA.ID)
 		}
-		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonToken)
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("BudgetExhausted[%s].Reason = %q, want %q", issueA.ID, entry.Reason, budgetReasonToken)
 		}
 		if _, ok := state.TokenBudgetIncomplete[issueA.ID]; ok {
 			t.Errorf("TokenBudgetIncomplete[%s] present, want absent for a blocked issue", issueA.ID)
@@ -4343,6 +4341,430 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 			t.Errorf("TokenBudgetIncomplete = %v, want cleared after the token ceiling was removed", state.TokenBudgetIncomplete)
 		}
 	})
+}
+
+// TestHandleTick_BudgetLogRecord fails if the polling lane stops
+// announcing a session-ceiling hold on the tick it enters the set.
+func TestHandleTick_BudgetLogRecord(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-log", Identifier: "PROJ-LOG", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+	output := buf.String()
+	if !strings.Contains(output, "candidate held by budget ceiling") {
+		t.Fatalf("log output = %q, want to contain the budget-ceiling record", output)
+	}
+	for _, attr := range []string{
+		"reason=session_budget",
+		"used_sessions=5",
+		"budget_sessions=3",
+		"issue_id=" + issue.ID,
+		"issue_identifier=" + issue.Identifier,
+	} {
+		if !strings.Contains(output, attr) {
+			t.Errorf("log output missing attribute %q; log:\n%s", attr, output)
+		}
+	}
+}
+
+// TestHandleTick_BudgetLogRecordOnce fails if the per-issue record or the
+// counter starts repeating on a tick that re-observes the same hold.
+func TestHandleTick_BudgetLogRecordOnce(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-once", Identifier: "PROJ-ONCE", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	spy := &spyMetrics{}
+
+	orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+	orch.handleTick(context.Background())
+	orch.handleTick(context.Background())
+
+	if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 1 {
+		t.Errorf("record count across two ticks = %d, want 1 (edge-triggered)", got)
+	}
+	if len(spy.budgetExhaustions) != 1 || spy.budgetExhaustions[0] != budgetReasonSession {
+		t.Errorf("IncBudgetExhaustions calls = %v, want [%q]", spy.budgetExhaustions, budgetReasonSession)
+	}
+}
+
+// TestHandleTick_BudgetLogRecordTokenAxis covers the token ceiling on the
+// polling lane and the both-axes-in-one-pass precedence case.
+func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
+	t.Parallel()
+
+	t.Run("token ceiling alone logs reason=token_budget", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-tok-log", Identifier: "PROJ-TOK-LOG", Title: "title", State: "To Do"}
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenExhaustedIDs: []string{issue.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+		output := buf.String()
+		if !strings.Contains(output, "candidate held by budget ceiling") {
+			t.Fatalf("log output = %q, want to contain the budget-ceiling record", output)
+		}
+		for _, attr := range []string{"reason=token_budget", "used_tokens=1000", "budget_tokens=1000"} {
+			if !strings.Contains(output, attr) {
+				t.Errorf("log output missing attribute %q; log:\n%s", attr, output)
+			}
+		}
+	})
+
+	t.Run("exhausted on both axes in one evaluation logs reason=token_budget", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-both-log", Identifier: "PROJ-BOTH-LOG", Title: "title", State: "To Do"}
+		wm := budgetTickConfigTokens(3, 1000)
+		store := &stubStore{
+			budgetExhaustedIDs: map[string]int{issue.ID: 5},
+			tokenExhaustedIDs:  []string{issue.ID},
+		}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+		output := buf.String()
+		if !strings.Contains(output, "reason=token_budget") {
+			t.Errorf("log output missing %q (token precedence); log:\n%s", "reason=token_budget", output)
+		}
+		if strings.Contains(output, "reason=session_budget") {
+			t.Errorf("log output contains %q, want only the token reason announced; log:\n%s", "reason=session_budget", output)
+		}
+		if got := strings.Count(output, "candidate held by budget ceiling"); got != 1 {
+			t.Errorf("record count = %d, want 1 (one entry, one announcement)", got)
+		}
+	})
+}
+
+// TestHandleTick_BudgetLogRecordQueryError fails if a transient query
+// error on either axis re-announces a hold that was already told, which
+// would reproduce the repeating-log defect this unit fixes.
+func TestHandleTick_BudgetLogRecordQueryError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("session query error folds forward without announcing", func(t *testing.T) {
+		t.Parallel()
+
+		priorAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		issue := domain.Issue{ID: "iss-sess-err", Identifier: "PROJ-SESS-ERR", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession, ExhaustedAt: priorAt}
+		state.BudgetAnnounced[issue.ID] = BudgetAnnouncement{Reason: budgetReasonSession, At: priorAt}
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+
+		budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy).handleTick(context.Background())
+
+		output := buf.String()
+		if !strings.Contains(output, "budget exhaustion query failed, retaining previous set") {
+			t.Errorf("log output missing the existing fail-open warning; log:\n%s", output)
+		}
+		if strings.Contains(output, "candidate held by budget ceiling") {
+			t.Errorf("log output contains a new announcement for a folded-forward entry; log:\n%s", output)
+		}
+		if len(spy.budgetExhaustions) != 0 {
+			t.Errorf("IncBudgetExhaustions calls = %v, want none on a query error", spy.budgetExhaustions)
+		}
+	})
+
+	t.Run("token query error folds forward without announcing", func(t *testing.T) {
+		t.Parallel()
+
+		priorAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		issue := domain.Issue{ID: "iss-tok-err", Identifier: "PROJ-TOK-ERR", Title: "title", State: "To Do"}
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		usedTokens := int64(1500)
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{Reason: budgetReasonToken, UsedTokens: &usedTokens, ExhaustedAt: priorAt}
+		state.BudgetAnnounced[issue.ID] = BudgetAnnouncement{Reason: budgetReasonToken, At: priorAt}
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+
+		budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy).handleTick(context.Background())
+
+		output := buf.String()
+		if !strings.Contains(output, "token budget exhaustion query failed, retaining previous set") {
+			t.Errorf("log output missing the existing fail-open warning; log:\n%s", output)
+		}
+		if strings.Contains(output, "candidate held by budget ceiling") {
+			t.Errorf("log output contains a new announcement for a folded-forward entry; log:\n%s", output)
+		}
+		if len(spy.budgetExhaustions) != 0 {
+			t.Errorf("IncBudgetExhaustions calls = %v, want none on a query error", spy.budgetExhaustions)
+		}
+	})
+}
+
+// TestHandleTick_BudgetAnnouncementLifecycle covers the announcement
+// decision table's remaining reachable rows: a reason change re-announces,
+// a candidacy gap does not re-announce a still-held reason, and a genuine
+// clearance under the ceiling lets a later hold announce again.
+func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reason change from session to token re-announces", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-reason-change", Identifier: "PROJ-REASON", Title: "title", State: "To Do"}
+		wm := budgetTickConfigTokens(3, 1000)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+
+		orch.handleTick(context.Background())
+
+		store.budgetExhaustedIDs = map[string]int{}
+		store.tokenExhaustedIDs = []string{issue.ID}
+		orch.handleTick(context.Background())
+
+		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 2 {
+			t.Errorf("record count across the reason change = %d, want 2 (re-announced)", got)
+		}
+		if len(spy.budgetExhaustions) != 2 {
+			t.Fatalf("IncBudgetExhaustions calls = %v, want 2", spy.budgetExhaustions)
+		}
+		if spy.budgetExhaustions[0] != budgetReasonSession || spy.budgetExhaustions[1] != budgetReasonToken {
+			t.Errorf("IncBudgetExhaustions calls = %v, want [%q %q]", spy.budgetExhaustions, budgetReasonSession, budgetReasonToken)
+		}
+	})
+
+	t.Run("held, absent, held again under the same reason produces exactly one record and unchanged ExhaustedAt", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-flap", Identifier: "PROJ-FLAP", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		present := true
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if present {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+
+		orch.handleTick(context.Background())
+		entry1, ok := state.BudgetExhausted[issue.ID]
+		if !ok {
+			t.Fatal("BudgetExhausted missing after the first tick, want present")
+		}
+		firstExhaustedAt := entry1.ExhaustedAt
+
+		present = false
+		store.budgetExhaustedIDs = map[string]int{} // stub mirrors production: query results are bounded by candidateIDs
+		orch.handleTick(context.Background())
+		if _, ok := state.BudgetExhausted[issue.ID]; ok {
+			t.Fatal("BudgetExhausted present while the issue is not a candidate, want absent")
+		}
+
+		present = true
+		store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+		orch.handleTick(context.Background())
+
+		entry3, ok := state.BudgetExhausted[issue.ID]
+		if !ok {
+			t.Fatal("BudgetExhausted missing after the third tick, want present")
+		}
+		if !entry3.ExhaustedAt.Equal(firstExhaustedAt) {
+			t.Errorf("ExhaustedAt = %v, want %v (unchanged across the candidacy gap)", entry3.ExhaustedAt, firstExhaustedAt)
+		}
+		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 1 {
+			t.Errorf("record count across three ticks = %d, want 1", got)
+		}
+		if len(spy.budgetExhaustions) != 1 {
+			t.Errorf("IncBudgetExhaustions calls = %v, want 1", spy.budgetExhaustions)
+		}
+	})
+
+	t.Run("clearing under the ceiling prunes the memory so a later hold announces again", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-clear", Identifier: "PROJ-CLEAR", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+
+		orch.handleTick(context.Background())
+
+		store.budgetExhaustedIDs = map[string]int{}
+		orch.handleTick(context.Background())
+		if _, ok := state.BudgetExhausted[issue.ID]; ok {
+			t.Fatal("BudgetExhausted present after clearing under the ceiling, want absent")
+		}
+
+		store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+		orch.handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
+			t.Fatal("BudgetExhausted missing after re-exhaustion, want present")
+		}
+		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 2 {
+			t.Errorf("record count across the clearance = %d, want 2 (announced again after a genuine clearance)", got)
+		}
+		if len(spy.budgetExhaustions) != 2 {
+			t.Errorf("IncBudgetExhaustions calls = %v, want 2", spy.budgetExhaustions)
+		}
+	})
+}
+
+// TestHandleTick_BudgetCrossLaneAnnouncement fails if the polling lane
+// re-announces a hold the retry lane already discovered and reported,
+// or if it disagrees with the retry lane about when the hold began.
+func TestHandleTick_BudgetCrossLaneAnnouncement(t *testing.T) {
+	t.Parallel()
+
+	issueID := "iss-cross"
+	identifier := "PROJ-CROSS"
+	spy := &spyMetrics{}
+
+	state := retryState(t, issueID, identifier, 1)
+	retryStore := &mockRetryStore{runHistoryCount: 5}
+	retryTracker := &mockRetryTracker{}
+	retryParams := defaultRetryParams(t, retryStore, retryTracker)
+	retryParams.MaxSessions = 3
+	retryParams.Metrics = spy
+
+	HandleRetryTimer(state, issueID, retryParams)
+
+	blockedEntry, ok := state.BudgetExhausted[issueID]
+	if !ok {
+		t.Fatal("BudgetExhausted missing after the retry-lane block, want present")
+	}
+	if len(spy.budgetExhaustions) != 1 || spy.budgetExhaustions[0] != budgetReasonSession {
+		t.Fatalf("IncBudgetExhaustions calls after the retry-lane block = %v, want [%q]", spy.budgetExhaustions, budgetReasonSession)
+	}
+	retryExhaustedAt := blockedEntry.ExhaustedAt
+
+	issue := domain.Issue{ID: issueID, Identifier: identifier, Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	pollStore := &stubStore{budgetExhaustedIDs: map[string]int{issueID: 5}}
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	budgetOrchestratorWithMetrics(state, wm, pollStore, tracker, logger, spy).handleTick(context.Background())
+
+	if strings.Contains(buf.String(), "candidate held by budget ceiling") {
+		t.Errorf("poll tick emitted a new announcement for a hold the retry lane already announced; log:\n%s", buf.String())
+	}
+	if len(spy.budgetExhaustions) != 1 {
+		t.Errorf("IncBudgetExhaustions calls after the poll tick = %v, want still [%q] (one increment in total)", spy.budgetExhaustions, budgetReasonSession)
+	}
+	rebuiltEntry, ok := state.BudgetExhausted[issueID]
+	if !ok {
+		t.Fatal("BudgetExhausted missing after the poll tick, want present")
+	}
+	if !rebuiltEntry.ExhaustedAt.Equal(retryExhaustedAt) {
+		t.Errorf("ExhaustedAt = %v, want %v (the retry lane's own timestamp, not the tick's)", rebuiltEntry.ExhaustedAt, retryExhaustedAt)
+	}
+}
+
+// TestHandleTick_BudgetTickSummary fails if the "tick completed" record
+// stops carrying the held-candidate count the poll summary depends on.
+func TestHandleTick_BudgetTickSummary(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-summary", Identifier: "PROJ-SUMMARY", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+	var tickLine string
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if strings.Contains(line, "tick completed") {
+			tickLine = line
+			break
+		}
+	}
+	if tickLine == "" {
+		t.Fatalf("no %q record found; log:\n%s", "tick completed", buf.String())
+	}
+	for _, attr := range []string{"candidates=1", "dispatched=0", "budget_exhausted=1"} {
+		if !strings.Contains(tickLine, attr) {
+			t.Errorf("tick completed line missing %q: %q", attr, tickLine)
+		}
+	}
 }
 
 // --- Incremental session_metadata write tests ---
@@ -4608,7 +5030,7 @@ func TestBudgetExhaustionPreventsRedispatch(t *testing.T) {
 
 	issue := domain.Issue{ID: "iss-redisp", Identifier: "PROJ-1", Title: "Work", State: "To Do"}
 	wm := budgetTickConfig(3)
-	store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 1}}
 	state := NewState(60000, 10, nil, AgentTotals{}) // fresh; BudgetExhausted is empty
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{},
@@ -4635,7 +5057,7 @@ func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 	wm := budgetTickConfig(0) // max_sessions=0 → all issues eligible
 	store := &stubStore{}
 	state := NewState(60000, 10, nil, AgentTotals{})
-	state.BudgetExhausted[issue.ID] = struct{}{} // was previously blocked
+	state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // was previously blocked
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{},
 		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },

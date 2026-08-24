@@ -283,15 +283,31 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// blockBudget releases the claim and drops the retry entry for an issue
-	// whose budget is exhausted, recording the firing ceiling's reason. The
-	// block is identical whichever ceiling triggers it; only the recorded
-	// reason differs. The token gate may call this after the session gate
-	// already did, overwriting the reason with the token budget so an issue
-	// exhausted on both axes reports the token budget.
+	// whose budget is exhausted, recording the firing ceiling's reason and
+	// numbers. The block is identical whichever ceiling triggers it; only
+	// the recorded entry differs. The token gate may call this after the
+	// session gate already did, overwriting the entry with the token
+	// budget so an issue exhausted on both axes reports the token budget.
+	// ExhaustedAt is sourced from the announcement memory when it already
+	// knows this issue under the same reason, so a hold that survives a
+	// gap in candidacy keeps reporting when it began.
 	blocked := false
-	blockBudget := func(reason string) {
-		state.BudgetExhausted[issueID] = struct{}{}
-		state.BudgetExhaustedReason[issueID] = reason
+	blockBudget := func(reason string, usedSessions int, usedTokens *int64, unmeasuredSessions *int) {
+		at := time.Now().UTC()
+		if told, wasTold := state.BudgetAnnounced[issueID]; wasTold && told.Reason == reason {
+			at = told.At
+		}
+		state.BudgetExhausted[issueID] = &BudgetExhaustedEntry{
+			Identifier:         popped.Identifier,
+			DisplayID:          popped.DisplayID,
+			Reason:             reason,
+			UsedSessions:       usedSessions,
+			BudgetSessions:     params.MaxSessions,
+			UsedTokens:         usedTokens,
+			BudgetTokens:       int64(params.MaxTokens),
+			UnmeasuredSessions: unmeasuredSessions,
+			ExhaustedAt:        at,
+		}
 		delete(state.Claimed, issueID)
 		if !blocked {
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
@@ -314,10 +330,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			)
 		} else if count >= params.MaxSessions {
 			log.Warn("effort budget exhausted, blocking re-dispatch",
+				slog.String("reason", budgetReasonSession),
 				slog.Int("count", count),
 				slog.Int("max_sessions", params.MaxSessions),
 			)
-			blockBudget(budgetReasonSession)
+			blockBudget(budgetReasonSession, count, nil, nil)
 		}
 	}
 
@@ -341,17 +358,33 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int("used_sessions", usage.Sessions),
 				slog.Int("budget_sessions", params.MaxSessions),
 			)
-			blockBudget(budgetReasonToken)
-		} else if usage.UnmeasuredSessions > 0 {
-			log.Warn("token budget cannot be fully evaluated, allowing dispatch",
-				slog.Int64("used_tokens", usage.TotalTokens),
-				slog.Int64("budget_tokens", int64(params.MaxTokens)),
-				slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
-			)
+			blockBudget(budgetReasonToken, usage.Sessions, &usage.TotalTokens, &usage.UnmeasuredSessions)
+		} else {
+			if blocked {
+				// The session gate already blocked; the token axis was
+				// evaluated for this issue on this pass, so enrich the
+				// entry with both token fields, mirroring the rebuild's
+				// own enrichment.
+				state.BudgetExhausted[issueID].UsedTokens = &usage.TotalTokens
+				state.BudgetExhausted[issueID].UnmeasuredSessions = &usage.UnmeasuredSessions
+			}
+			if usage.UnmeasuredSessions > 0 {
+				log.Warn("token budget cannot be fully evaluated, allowing dispatch",
+					slog.Int64("used_tokens", usage.TotalTokens),
+					slog.Int64("budget_tokens", int64(params.MaxTokens)),
+					slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
+				)
+			}
 		}
 	}
 
 	if blocked {
+		held := state.BudgetExhausted[issueID]
+		told, wasTold := state.BudgetAnnounced[issueID]
+		if !wasTold || told.Reason != held.Reason {
+			state.BudgetAnnounced[issueID] = BudgetAnnouncement{Reason: held.Reason, At: held.ExhaustedAt}
+			metrics.IncBudgetExhaustions(held.Reason)
+		}
 		return
 	}
 

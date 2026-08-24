@@ -37,10 +37,12 @@ type dashboardData struct {
 	TotalTokens    int64
 
 	// Tables
-	Running    []dashboardRunningEntry
-	Retrying   []dashboardRetryEntry
-	RunHistory []dashboardRunHistoryEntry
-	HasSSH     bool
+	Running              []dashboardRunningEntry
+	Retrying             []dashboardRetryEntry
+	RunHistory           []dashboardRunHistoryEntry
+	HasSSH               bool
+	BudgetExhaustedCount int
+	BudgetExhausted      []dashboardBudgetEntry
 
 	// Footer
 	RuntimeDisplay  string
@@ -83,6 +85,25 @@ type dashboardRetryEntry struct {
 	Attempt    int
 	DueIn      string
 	Error      string
+}
+
+// dashboardBudgetEntry is one pre-formatted row of the budget-blocked
+// table. All formatting happens in Go; the template computes nothing.
+type dashboardBudgetEntry struct {
+	Identifier string
+	Reason     string
+	Used       string
+	BlockedFor string
+	DetailURL  string
+}
+
+// budgetReasonLabels maps a machine-readable budget reason to the
+// human-readable label the dashboard renders. A reason absent from this
+// map renders as its raw value, keeping the mapping open to a later
+// reason this table has not yet been taught to humanize.
+var budgetReasonLabels = map[string]string{
+	"session_budget": "Session budget",
+	"token_budget":   "Token budget",
 }
 
 type dashboardRunHistoryEntry struct {
@@ -316,6 +337,48 @@ func buildDashboardData(
 		}
 	}
 	data.Retrying = retrying
+
+	// snap.BudgetExhausted is already sorted by Identifier; no re-sort
+	// needed here, unlike Running and Retrying above.
+	budgetExhausted := make([]dashboardBudgetEntry, len(snap.BudgetExhausted))
+	for i, e := range snap.BudgetExhausted {
+		budgetDisplayID := e.Identifier
+		if e.DisplayID != "" {
+			budgetDisplayID = e.DisplayID
+		}
+		if budgetDisplayID == "" {
+			budgetDisplayID = e.IssueID
+		}
+
+		reasonLabel, known := budgetReasonLabels[e.Reason]
+		if !known {
+			reasonLabel = e.Reason
+		}
+
+		var used string
+		switch e.Reason {
+		case "token_budget":
+			var usedTokens int64
+			if e.UsedTokens != nil {
+				usedTokens = *e.UsedTokens
+			}
+			used = FormatInt(usedTokens) + " of " + FormatInt(e.BudgetTokens)
+		default:
+			used = FormatInt(int64(e.UsedSessions)) + " of " + FormatInt(int64(e.BudgetSessions))
+		}
+
+		blockedFor := max(snap.GeneratedAt.Sub(e.ExhaustedAt), 0)
+
+		budgetExhausted[i] = dashboardBudgetEntry{
+			Identifier: budgetDisplayID,
+			Reason:     reasonLabel,
+			Used:       used,
+			BlockedFor: FormatDuration(blockedFor),
+			DetailURL:  "/api/v1/" + url.PathEscape(e.Identifier),
+		}
+	}
+	data.BudgetExhaustedCount = len(budgetExhausted)
+	data.BudgetExhausted = budgetExhausted
 
 	return data
 }

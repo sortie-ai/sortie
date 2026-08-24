@@ -138,6 +138,8 @@ func TestNewPromMetrics(t *testing.T) {
 	m.IncAutoMergeReactions("merged")
 	m.IncDispatchRuleMatch("rule", "bug-rule")
 	m.IncCandidateHolds("blocked_by")
+	m.IncBudgetExhaustions("session_budget")
+	m.SetBudgetExhaustedIssues("session_budget", 1)
 	m.IncSelfReviewIterations("pass")
 	m.IncSelfReviewSessions("pass")
 	m.ObserveSelfReviewVerificationDuration("go test ./...", 1.5)

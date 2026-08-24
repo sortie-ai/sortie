@@ -331,6 +331,57 @@
             "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
             "fieldConfig": {
                 "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "orange", "value": 1 },
+                            { "color": "red", "value": 3 }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 4, "w": 5, "x": 19, "y": 5 },
+            "id": 41,
+            "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "calcs": ["lastNotNull"],
+                    "fields": "",
+                    "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "editorMode": "code",
+                    "expr": "sortie_budget_exhausted_issues",
+                    "instant": false,
+                    "legendFormat": "{{reason}}",
+                    "range": true,
+                    "refId": "A"
+                }
+            ],
+            "title": "Budget Blocked",
+            "description": "Issues currently held out of dispatch by a budget ceiling, by reason.",
+            "type": "stat"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "fieldConfig": {
+                "defaults": {
                     "color": { "mode": "palette-classic" },
                     "custom": {
                         "axisBorderShow": false,
@@ -408,7 +459,7 @@
                     }
                 ]
             },
-            "gridPos": { "h": 7, "w": 24, "x": 0, "y": 5 },
+            "gridPos": { "h": 7, "w": 19, "x": 0, "y": 5 },
             "id": 7,
             "options": {
                 "legend": {
@@ -1249,6 +1300,81 @@
             "title": "Reconciliation Actions",
             "description": "Reconciliation outcomes per second by action (stop, cleanup, keep).",
             "type": "timeseries"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "red", "value": 1 }
+                        ]
+                    }
+                },
+                "overrides": [
+                    {
+                        "matcher": { "id": "byName", "options": "session_budget" },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "fixedColor": "orange",
+                                    "mode": "fixed"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": { "id": "byName", "options": "token_budget" },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "fixedColor": "red",
+                                    "mode": "fixed"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+            "id": 42,
+            "options": {
+                "colorMode": "background",
+                "graphMode": "none",
+                "justifyMode": "center",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "calcs": ["lastNotNull"],
+                    "fields": "",
+                    "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "editorMode": "code",
+                    "expr": "sum(increase(sortie_budget_exhaustions_total[1h])) by (reason)",
+                    "legendFormat": "{{reason}}",
+                    "instant": false,
+                    "range": true,
+                    "refId": "A"
+                }
+            ],
+            "title": "Budget Exhaustions",
+            "description": "Issue entries into the budget-exhausted set over the last hour, by reason (session_budget, token_budget).",
+            "type": "stat"
         },
         {
             "collapsed": false,

@@ -190,6 +190,22 @@ type Metrics interface {
 	// "blockers_incomplete"
 	// (sortie_candidate_holds_total{reason} counter).
 	IncCandidateHolds(reason string)
+
+	// IncBudgetExhaustions increments the counter of issues that entered
+	// the per-issue budget exhausted set. reason is one of the
+	// dispatch-gate reason values, and the vocabulary may gain a third
+	// value later. Called once per entry from whichever lane discovered
+	// it (sortie_budget_exhaustions_total{reason} counter).
+	IncBudgetExhaustions(reason string)
+
+	// SetBudgetExhaustedIssues records how many issues are currently
+	// held out of dispatch under the given reason, one of the
+	// dispatch-gate reason values whose vocabulary may gain a third
+	// value later. Called for every known reason value on every
+	// recompute, so a reason that no longer holds any issue reports
+	// zero rather than keeping its last value
+	// (sortie_budget_exhausted_issues{reason} gauge).
+	SetBudgetExhaustedIssues(reason string, count int)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -235,6 +251,8 @@ func (*NoopMetrics) IncMergeConflictChecks(string)                         {}
 func (*NoopMetrics) IncMergeConflictEscalations(string)                    {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 func (*NoopMetrics) IncCandidateHolds(string)                              {}
+func (*NoopMetrics) IncBudgetExhaustions(string)                           {}
+func (*NoopMetrics) SetBudgetExhaustedIssues(string, int)                  {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.

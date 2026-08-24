@@ -162,6 +162,21 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - The worker-exit absence park records the same tracker state the run's own terminal observation
   resolved, not an unrecorded state, and is releasable by a later state change without an
   intervening backfill tick
+- An issue entering the per-issue budget-exhausted set, on either the poll tick's rebuild or the
+  retry lane, produces exactly one log record naming the issue, the reason, and the used and
+  budgeted numbers
+- The record and its counter increment fire once per hold: repeated ticks over the same held
+  issue produce neither, and an issue that leaves the candidate set and returns still held under
+  the same reason produces neither either
+- Whichever lane, poll tick or retry timer, discovers a hold is the only one that announces it;
+  the other lane's rebuild or block leaves the announcement memory alone
+- The budget-exhausted gauge reports a per-reason level derived from the current set, seeded to
+  zero for every declared reason on each recompute, so a reason that clears reports zero rather
+  than freezing at its last published value
+- Both `GET /api/v1/state` and `GET /api/v1/{identifier}` carry the budget-exhausted record's
+  identifier, reason, and numbers, and the per-issue endpoint answers for a budget-blocked issue
+  instead of reporting it unknown
+- The dashboard renders a budget-blocked card and table only when the exhausted set is non-empty
 - A dispatch that does not drive issue state performs neither the dispatch-time transition nor the
   handoff transition, and enqueues no reaction on its own exit
 - Abnormal worker exit increments retries with 10s-based exponential backoff

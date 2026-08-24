@@ -1927,8 +1927,8 @@ func TestQueryBudgetExhaustedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-EXACT" {
-			t.Errorf("result = %v, want [ISS-EXACT]", result)
+		if _, ok := result["ISS-EXACT"]; !ok || len(result) != 1 {
+			t.Errorf("result = %v, want {ISS-EXACT: ...}", result)
 		}
 	})
 
@@ -1947,8 +1947,43 @@ func TestQueryBudgetExhaustedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-OVER" {
-			t.Errorf("result = %v, want [ISS-OVER]", result)
+		if _, ok := result["ISS-OVER"]; !ok || len(result) != 1 {
+			t.Errorf("result = %v, want {ISS-OVER: ...}", result)
+		}
+	})
+
+	t.Run("over-ceiling candidate reports its run-history count, under-ceiling candidate is absent", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-OVER-COUNT"
+			appendOrFatal(t, s, run)
+		}
+		for i := 6; i <= 7; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-UNDER-COUNT"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(
+			context.Background(),
+			[]string{"ISS-OVER-COUNT", "ISS-UNDER-COUNT"},
+			3,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got, want := result["ISS-OVER-COUNT"], 5; got != want {
+			t.Errorf("result[ISS-OVER-COUNT] = %d, want %d (run-history row count)", got, want)
+		}
+		if _, ok := result["ISS-UNDER-COUNT"]; ok {
+			t.Errorf("result[ISS-UNDER-COUNT] = %v, want absent (count 2 < maxSessions 3)", result["ISS-UNDER-COUNT"])
+		}
+		if len(result) != 1 {
+			t.Errorf("len(result) = %d, want 1", len(result))
 		}
 	})
 
@@ -1977,8 +2012,8 @@ func TestQueryBudgetExhaustedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-EXHAUST" {
-			t.Errorf("result = %v, want [ISS-EXHAUST]", result)
+		if _, ok := result["ISS-EXHAUST"]; !ok || len(result) != 1 {
+			t.Errorf("result = %v, want {ISS-EXHAUST: ...}", result)
 		}
 	})
 
@@ -1995,8 +2030,8 @@ func TestQueryBudgetExhaustedIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-SINGLE" {
-			t.Errorf("result = %v, want [ISS-SINGLE]", result)
+		if _, ok := result["ISS-SINGLE"]; !ok || len(result) != 1 {
+			t.Errorf("result = %v, want {ISS-SINGLE: ...}", result)
 		}
 	})
 

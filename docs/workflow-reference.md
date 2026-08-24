@@ -2027,7 +2027,8 @@ aggregate token/runtime totals, and rate limits.
   "generated_at": "2026-02-24T20:15:30Z",
   "counts": {
     "running": 2,
-    "retrying": 1
+    "retrying": 1,
+    "budget_exhausted": 1
   },
   "running": [
     {
@@ -2061,6 +2062,19 @@ aggregate token/runtime totals, and rate limits.
       "attempt": 3,
       "due_at": "2026-02-24T20:16:00Z",
       "error": "no available orchestrator slots"
+    }
+  ],
+  "budget_exhausted": [
+    {
+      "issue_id": "ghi789",
+      "issue_identifier": "MT-651",
+      "reason": "session_budget",
+      "used_sessions": 3,
+      "budget_sessions": 3,
+      "used_tokens": null,
+      "budget_tokens": 0,
+      "unmeasured_sessions": null,
+      "exhausted_at": "2026-02-24T20:12:00Z"
     }
   ],
   "agent_totals": {
@@ -2136,6 +2150,7 @@ not in current orchestrator state.
     "api_time_percent": 45.6
   },
   "retry": null,
+  "budget_exhausted": null,
   "recent_events": [],
   "last_error": null,
   "tracked": {}
@@ -2143,8 +2158,12 @@ not in current orchestrator state.
 ```
 
 The `running` object uses the same per-session field schema as `GET /api/v1/state`
-(see the per-session fields table above). When the issue is retrying rather than
-running, `running` is `null` and `retry` contains the retry entry.
+(see the per-session fields table above). `status` is `"running"` when the issue has a
+running session, `"retrying"` when it does not but has a pending retry, and
+`"budget_exhausted"` when it has neither but is held out of dispatch by a per-issue
+budget ceiling; the two fields for whichever case does not apply are `null`, and
+`budget_exhausted` carries the same record shape as the `budget_exhausted` array on
+`GET /api/v1/state`.
 
 #### `POST /api/v1/refresh`
 
@@ -2231,6 +2250,8 @@ are included alongside Sortie-specific metrics.
 | `sortie_worker_duration_seconds`                | Histogram | `exit_type`                 | Worker session wall-clock time.                                |
 | `sortie_build_info`                             | Gauge     | `version`, `go_version`     | Always `1`; carries build metadata as labels.                  |
 | `sortie_ssh_host_usage`                         | Gauge     | `host`                      | Current session count per SSH host.                            |
+| `sortie_budget_exhaustions_total`               | Counter   | `reason`                    | Issue entries into the per-issue budget-exhausted set (`token_budget`, `session_budget`). |
+| `sortie_budget_exhausted_issues`                | Gauge     | `reason`                    | Issues currently held out of dispatch by a per-issue budget ceiling.                     |
 
 Example scrape:
 

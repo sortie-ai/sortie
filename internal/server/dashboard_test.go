@@ -499,6 +499,222 @@ func TestBuildDashboardData(t *testing.T) {
 	})
 }
 
+// TestBuildDashboardData_Budget fails if the budget-blocked rows stop
+// carrying the identifier, the humanized reason, or the ceiling-relative
+// numbers an operator reads at a glance.
+func TestBuildDashboardData_Budget(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	t.Run("session axis renders the qualified identifier, humanized reason, and session cell", func(t *testing.T) {
+		t.Parallel()
+
+		usedTokens := int64(0)
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{
+					IssueID:        "id-budget-1",
+					Identifier:     "MT-649",
+					DisplayID:      "org/repo#649",
+					Reason:         "session_budget",
+					UsedSessions:   3,
+					BudgetSessions: 3,
+					UsedTokens:     &usedTokens,
+					ExhaustedAt:    now.Add(-90 * time.Second),
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now, nil, now, nil)
+
+		if data.BudgetExhaustedCount != 1 {
+			t.Errorf("BudgetExhaustedCount = %d, want 1", data.BudgetExhaustedCount)
+		}
+		if len(data.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(data.BudgetExhausted))
+		}
+		row := data.BudgetExhausted[0]
+		if row.Identifier != "org/repo#649" {
+			t.Errorf("Identifier = %q, want %q (DisplayID preferred)", row.Identifier, "org/repo#649")
+		}
+		if row.Reason != "Session budget" {
+			t.Errorf("Reason = %q, want %q (humanized)", row.Reason, "Session budget")
+		}
+		if row.Used != "3 of 3" {
+			t.Errorf("Used = %q, want %q (session pair)", row.Used, "3 of 3")
+		}
+		if row.DetailURL != "/api/v1/MT-649" {
+			t.Errorf("DetailURL = %q, want %q", row.DetailURL, "/api/v1/MT-649")
+		}
+	})
+
+	t.Run("token axis renders the token cell", func(t *testing.T) {
+		t.Parallel()
+
+		usedTokens := int64(1500)
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{
+					IssueID:      "id-budget-2",
+					Identifier:   "MT-650",
+					Reason:       "token_budget",
+					UsedTokens:   &usedTokens,
+					BudgetTokens: 1000,
+					ExhaustedAt:  now,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now, nil, now, nil)
+
+		if len(data.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(data.BudgetExhausted))
+		}
+		if got := data.BudgetExhausted[0].Used; got != "1,500 of 1,000" {
+			t.Errorf("Used = %q, want %q (token pair)", got, "1,500 of 1,000")
+		}
+	})
+
+	t.Run("falls back to the issue ID when the identifier is empty", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{IssueID: "id-noident", Reason: "session_budget", ExhaustedAt: now},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now, nil, now, nil)
+
+		if len(data.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(data.BudgetExhausted))
+		}
+		if got := data.BudgetExhausted[0].Identifier; got != "id-noident" {
+			t.Errorf("Identifier = %q, want %q (issue-ID fallback)", got, "id-noident")
+		}
+	})
+
+	t.Run("an unmapped reason falls back to its raw value", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{IssueID: "id-future", Identifier: "MT-1", Reason: "future_budget", ExhaustedAt: now},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now, nil, now, nil)
+
+		if len(data.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(data.BudgetExhausted))
+		}
+		if got := data.BudgetExhausted[0].Reason; got != "future_budget" {
+			t.Errorf("Reason = %q, want %q (raw fallback for an unmapped reason)", got, "future_budget")
+		}
+	})
+
+	t.Run("empty set produces a zero count and no rows", func(t *testing.T) {
+		t.Parallel()
+
+		data := buildDashboardData(orchestrator.RuntimeSnapshotResult{GeneratedAt: now}, "v1", now, nil, now, nil)
+
+		if data.BudgetExhaustedCount != 0 {
+			t.Errorf("BudgetExhaustedCount = %d, want 0", data.BudgetExhaustedCount)
+		}
+		if len(data.BudgetExhausted) != 0 {
+			t.Errorf("len(BudgetExhausted) = %d, want 0", len(data.BudgetExhausted))
+		}
+	})
+}
+
+// TestHandleDashboard_Budget covers the HTML surface: the card and table
+// render only when something is blocked, and no rendered string names a
+// setting as a thing to change.
+func TestHandleDashboard_Budget(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	t.Run("card and table render when the set is non-empty", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{
+					IssueID:        "id-budget-3",
+					Identifier:     "MT-651",
+					Reason:         "session_budget",
+					UsedSessions:   3,
+					BudgetSessions: 3,
+					ExhaustedAt:    now.Add(-90 * time.Second),
+				},
+			},
+		}
+
+		ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+		dr := getDashboard(t, ts, "/")
+
+		if dr.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+		}
+		for _, want := range []string{"MT-651", "Session budget", "3 of 3"} {
+			if !strings.Contains(dr.Body, want) {
+				t.Errorf("body missing %q", want)
+			}
+		}
+	})
+
+	t.Run("no card or table rendered when the set is empty", func(t *testing.T) {
+		t.Parallel()
+
+		ts := dashboardServer(t, fixedSnapshot(orchestrator.RuntimeSnapshotResult{GeneratedAt: now}), "1.0.0", nil)
+		dr := getDashboard(t, ts, "/")
+
+		if dr.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+		}
+		if strings.Contains(dr.Body, "Budget Blocked") {
+			t.Error("body contains a budget-blocked card/table with nothing blocked")
+		}
+	})
+
+	t.Run("no rendered string names a setting to change", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{
+					IssueID:        "id-budget-4",
+					Identifier:     "MT-652",
+					Reason:         "session_budget",
+					UsedSessions:   3,
+					BudgetSessions: 3,
+					ExhaustedAt:    now,
+				},
+			},
+		}
+
+		ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+		dr := getDashboard(t, ts, "/")
+
+		if dr.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+		}
+		for _, forbidden := range []string{"max_sessions", "max_tokens", "max_consecutive_absences"} {
+			if strings.Contains(dr.Body, forbidden) {
+				t.Errorf("body contains %q, want absent", forbidden)
+			}
+		}
+	})
+}
+
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
 

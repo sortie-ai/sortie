@@ -44,6 +44,7 @@ type PromMetrics struct {
 	mergeConflictEscalationsTotal *prometheus.CounterVec
 	dispatchRuleMatchTotal        *prometheus.CounterVec
 	candidateHoldsTotal           *prometheus.CounterVec
+	budgetExhaustionsTotal        *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -53,7 +54,8 @@ type PromMetrics struct {
 	pollDuration   prometheus.Histogram
 	workerDuration *prometheus.HistogramVec
 
-	sshHostUsage *prometheus.GaugeVec
+	sshHostUsage          *prometheus.GaugeVec
+	budgetExhaustedIssues *prometheus.GaugeVec
 }
 
 // NewPromMetrics creates a [PromMetrics] that registers all Sortie
@@ -199,6 +201,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Current session count per SSH host.",
 	}, []string{"host"})
 
+	budgetExhaustedIssues := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "sortie",
+		Name:      "budget_exhausted_issues",
+		Help:      "Issues currently held out of dispatch, by reason.",
+	}, []string{"reason"})
+
 	ciStatusChecksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "ci_status_checks_total",
@@ -265,6 +273,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Candidates the dispatch loop held, by reason.",
 	}, []string{"reason"})
 
+	budgetExhaustionsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "budget_exhaustions_total",
+		Help:      "Issue entries into the budget-exhausted set, by reason.",
+	}, []string{"reason"})
+
 	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "self_review_iterations_total",
@@ -323,6 +337,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		mergeConflictEscalationsTotal,
 		dispatchRuleMatchTotal,
 		candidateHoldsTotal,
+		budgetExhaustionsTotal,
+		budgetExhaustedIssues,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
 		selfReviewVerificationDuration,
@@ -351,6 +367,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollDuration:                   pollDuration,
 		workerDuration:                 workerDuration,
 		sshHostUsage:                   sshHostUsage,
+		budgetExhaustedIssues:          budgetExhaustedIssues,
 		ciStatusChecksTotal:            ciStatusChecksTotal,
 		ciEscalationsTotal:             ciEscalationsTotal,
 		reviewChecksTotal:              reviewChecksTotal,
@@ -362,6 +379,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		mergeConflictEscalationsTotal:  mergeConflictEscalationsTotal,
 		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
 		candidateHoldsTotal:            candidateHoldsTotal,
+		budgetExhaustionsTotal:         budgetExhaustionsTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
 		selfReviewVerificationDuration: selfReviewVerificationDuration,
@@ -550,6 +568,18 @@ func (p *PromMetrics) IncDispatchRuleMatch(layer, rule string) {
 // "blockers_not_read", or "blockers_incomplete".
 func (p *PromMetrics) IncCandidateHolds(reason string) {
 	p.candidateHoldsTotal.WithLabelValues(reason).Inc()
+}
+
+// IncBudgetExhaustions increments the counter of issues that entered the
+// per-issue budget exhausted set, by reason.
+func (p *PromMetrics) IncBudgetExhaustions(reason string) {
+	p.budgetExhaustionsTotal.WithLabelValues(reason).Inc()
+}
+
+// SetBudgetExhaustedIssues records how many issues are currently held out
+// of dispatch under the given reason.
+func (p *PromMetrics) SetBudgetExhaustedIssues(reason string, count int) {
+	p.budgetExhaustedIssues.WithLabelValues(reason).Set(float64(count))
 }
 
 // IncSelfReviewIterations increments the review iteration counter.
