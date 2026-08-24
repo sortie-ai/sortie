@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A workflow that sets `claude-code.session_persistence: false` is now rejected before the run starts, by `sortie validate` and at startup. The setting prevents Claude Code from resuming a session, so such a run previously failed partway through.
   ([#879](https://github.com/sortie-ai/sortie/issues/879))
 
+- An issue that reached a terminal state during a run no longer receives a session-failure comment, a failed run record, or a retry that is then discarded. Sortie now re-checks the issue's tracker state immediately before recording that kind of failure, and stays silent when the issue is already finished.
+  ([#887](https://github.com/sortie-ai/sortie/issues/887))
+
 ## [1.21.0] - 2026-08-20
 
 ### Fixed

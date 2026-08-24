@@ -241,8 +241,10 @@ tracker:
   no value can classify as terminal there. A failed verification read is logged and the
   handoff proceeds.
 - A transition suppressed by a terminal state, or by the issue not being in an active state at
-  worker exit, increments `sortie_handoff_transitions_total` with `result="skipped"`. One withheld
-  by the evidence verdict increments the same counter with `result="withheld"` instead
+  worker exit, increments `sortie_handoff_transitions_total` with `result="skipped"`. A run withheld
+  by the evidence verdict increments the same counter with `result="withheld"` instead, but only
+  when its own verification read below does not find the issue terminal; when that read does find
+  the issue terminal, the run increments `result="skipped"` instead
   (see [Section 4.1](#41-http-server-serverport-serverhost)).
 
 **`handoff_evidence` runtime behavior:**
@@ -255,10 +257,15 @@ tracker:
   determinable. It is computed at worker exit over the run's workspace against a baseline captured
   immediately before the agent starts. Under `off` no baseline is captured and no verdict is
   computed, so the four-condition decision stands unchanged.
-- A withheld run makes no handoff transition and no pre-write verification read, leaves the issue
-  in its active tracker state, is recorded in run history as `failed` with an error reason composed
-  of a reserved marker prefix, the verdict, and the policy that withheld it, and schedules the
-  ordinary exponential-backoff failure path rather than the fixed-delay continuation path.
+- A withheld verdict is, immediately before any of its effects, checked once more against the
+  tracker: a verification read for the issue, gated the same way the permit path's own pre-write
+  read above is gated. When that read reports the issue terminal, the run takes the terminal
+  disposition instead: no handoff transition, no failure record, no retry, and the completion
+  comment where `tracker.comments.on_completion` is enabled. Only when that read does not find the
+  issue terminal does the withheld run make no handoff transition, leave the issue in its active
+  tracker state, get recorded in run history as `failed` with an error reason composed of a
+  reserved marker prefix, the verdict, and the policy that withheld it, and schedule the ordinary
+  exponential-backoff failure path rather than the fixed-delay continuation path.
 - Consecutive withheld outcomes are counted per issue, and reaching the ceiling parks the issue
   under a label whose name is taken from `reactions.review_comments.escalation_label`. That
   ceiling's derivation from `agent.max_sessions`, the reset rule for the count, and the two
@@ -2217,7 +2224,7 @@ are included alongside Sortie-specific metrics.
 | `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total`                      | Counter   | `result`                    | Poll tick completions (`success`, `error`, `skipped`).         |
 | `sortie_tracker_requests_total`                 | Counter   | `operation`, `result`       | Tracker adapter API calls by operation and result.             |
-| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`, `withheld`). `skipped` covers two suppression causes: the issue had already reached a terminal state, or the issue was not in an active state at worker exit. `withheld` is the third: the run's handoff-evidence verdict did not permit the write, and the run is recorded as failed. Recorded only when `tracker.handoff_state` is set. |
+| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`, `withheld`). `skipped` covers three suppression causes: the issue had already reached a terminal state, the issue was not in an active state at worker exit, or a withheld verdict's own verification read reported the issue terminal, suppressing the absence-failure recording. `withheld` covers the remaining case: the run's handoff-evidence verdict did not permit the write and its own verification read did not find the issue terminal, so the run is recorded as failed. Recorded only when `tracker.handoff_state` is set. |
 | `sortie_issue_parks_total`                      | Counter   | `reason`                    | Issue park events (`agent_blocked`, `handoff_absence`).        |
 | `sortie_tool_calls_total`                       | Counter   | `tool`, `result`            | Agent tool call completions by tool name and result.           |
 | `sortie_poll_duration_seconds`                  | Histogram | —                           | Wall-clock time per poll cycle.                                |
