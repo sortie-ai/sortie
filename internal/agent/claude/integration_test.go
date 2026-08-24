@@ -21,10 +21,12 @@ func skipUnlessIntegration(t *testing.T) {
 	}
 }
 
-// integrationConfig builds the adapter config map for integration tests.
-// Session persistence is disabled to prevent ~/.claude/ pollution from
-// repeated test runs.
-func integrationConfig(t *testing.T) map[string]any {
+// singleTurnIntegrationConfig builds the adapter config map for
+// single-turn integration tests. Session persistence is disabled to
+// prevent ~/.claude/ pollution from repeated test runs, which makes the
+// resulting config non-resumable: a test that resumes a session must not
+// use this helper.
+func singleTurnIntegrationConfig(t *testing.T) map[string]any {
 	t.Helper()
 	model := os.Getenv("SORTIE_CLAUDE_MODEL")
 	if model == "" {
@@ -78,7 +80,7 @@ func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domai
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(integrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -105,7 +107,7 @@ func TestIntegration_StartSession(t *testing.T) {
 func TestIntegration_StopSession(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(integrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -128,7 +130,7 @@ func TestIntegration_StopSession(t *testing.T) {
 func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(integrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -158,7 +160,7 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 func TestIntegration_RunTurn(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(integrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -267,7 +269,7 @@ func TestIntegration_RunTurn(t *testing.T) {
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(integrationConfig(t))
+	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -319,5 +321,85 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 	}
 	if result.ExitReason != domain.EventTurnCancelled {
 		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
+	}
+}
+
+// TestIntegration_SessionResume drives two real turns against the live
+// claude-code binary in the same workspace: a first turn to completion,
+// then a second turn from a freshly constructed adapter that resumes the
+// first turn's session ID, asserting the resumed turn also completes.
+// It builds its own config with session persistence left at its
+// default, rather than calling singleTurnIntegrationConfig, because
+// that helper disables the persistence this test exercises.
+func TestIntegration_SessionResume(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	model := os.Getenv("SORTIE_CLAUDE_MODEL")
+	if model == "" {
+		model = "claude-haiku-4-5"
+	}
+	cfg := map[string]any{"model": model}
+
+	workspace := t.TempDir()
+	noopEvent := func(domain.AgentEvent) {}
+
+	adapter, err := NewClaudeCodeAdapter(cfg)
+	if err != nil {
+		t.Fatalf("NewClaudeCodeAdapter: %v", err)
+	}
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
+	})
+	if err != nil {
+		t.Fatalf("StartSession (first turn): %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	result1, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt:  "Say exactly: turn one",
+		OnEvent: noopEvent,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn (first turn): %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("first turn ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+	if result1.SessionID == "" {
+		t.Fatal("first turn TurnResult.SessionID is empty")
+	}
+
+	adapter2, err := NewClaudeCodeAdapter(cfg)
+	if err != nil {
+		t.Fatalf("NewClaudeCodeAdapter (resumed turn): %v", err)
+	}
+
+	session2, err := adapter2.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:   workspace,
+		AgentConfig:     domain.AgentConfig{Command: integrationCommand(t)},
+		ResumeSessionID: result1.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("StartSession (resumed turn): %v", err)
+	}
+	t.Cleanup(func() { _ = adapter2.StopSession(context.Background(), session2) })
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel2()
+
+	result2, err := adapter2.RunTurn(ctx2, session2, domain.RunTurnParams{
+		Prompt:  "What did I say in the previous message?",
+		OnEvent: noopEvent,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn (resumed turn): %v", err)
+	}
+	if result2.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("resumed turn ExitReason = %q, want %q", result2.ExitReason, domain.EventTurnCompleted)
 	}
 }

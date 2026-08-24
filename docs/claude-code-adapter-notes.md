@@ -60,6 +60,8 @@ An uncorrelated tool result reports the tool name as unknown. That means the mat
 
 Session transcripts live under the user's home directory, not in the workspace. Removing a workspace does not reclaim them, and a long-running fleet accumulates them.
 
+`claude-code.session_persistence: false` cannot hold in a Sortie workflow: preflight refuses the configuration before the run starts. The adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag reads a session file persistence off never writes. A maintainer who sees the refusal named `agent.kind.session_resume` should look for `session_persistence: false` in the `claude-code` block.
+
 ## Sortie's own tools
 
 The worker generates one MCP configuration file per session, declaring the Sortie tool server and carrying the per-session variables it needs. This CLI accepts exactly one such config path, which is why an operator-supplied config cannot simply be passed alongside ours: the worker merges the two, and a name collision on our reserved server key fails the attempt rather than silently overwriting. That merged file is also where credentials for the tool server come from: the worker copies every `SORTIE_`-prefixed variable out of its own process environment into the config's env block, which is how a workflow's `$SORTIE_*` credential indirection resolves inside the tool server. Treat that file as carrying secrets, not just plumbing.

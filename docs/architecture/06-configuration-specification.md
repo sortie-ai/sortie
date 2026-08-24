@@ -89,6 +89,9 @@ Validation checks:
 - `agent.command` is present and non-empty when `agent.kind` requires a local command.
 - Tracker adapter for the configured `tracker.kind` is registered and available.
 - Agent adapter for the configured `agent.kind` is registered and available.
+- `agent.kind.session_resume`: for every agent kind the effective configuration can reach, the
+  adapter's declared blocking key is evaluated against that kind's resolved pass-through, and
+  the configuration is refused when the key is non-empty.
 - Rule-set validation: `dispatch.rules` parses; every referenced `agent` kind is registered;
   every referenced per-rule template path resolves and parses; no rule name is duplicated;
   no non-final rule is a catch-all; every match key is recognized; every glob pattern is
@@ -109,6 +112,8 @@ Validation checks:
   (case-insensitive), with no fallback to the adapter's default terminal-state list. Reaction
   configuration is not rebuilt on `WORKFLOW.md` reload (Section 6.4), so this check runs at
   startup and in `sortie validate`, never on a dispatch tick.
+- `workspace.root_writable`: when `workspace.root` is set, the directory must exist and be
+  writable.
 
 Effort-budget and notification config are validated outside this preflight, by design:
 

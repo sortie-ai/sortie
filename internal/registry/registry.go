@@ -184,6 +184,21 @@ type AgentMeta struct {
 	// worker-generated MCP config path today, not what the underlying
 	// CLI is capable of. The empty value means undeclared.
 	MCPInjection MCPInjection
+
+	// SessionResumeBlockedBy reports which of this adapter's own
+	// operator-visible config keys, under the given passthrough,
+	// stops it from resuming a session across separate process
+	// launches. A nil field declares that no key of this adapter
+	// blocks resume. A non-nil field returns the bare key name, with
+	// no agent-kind prefix, when the given passthrough leaves the
+	// adapter unable to resume, and the empty string when the given
+	// passthrough leaves the adapter able to resume across separate
+	// process launches; it MUST return the empty string for a nil
+	// map and for an empty map. It MUST be pure - no map mutation,
+	// no environment read, no filesystem or network access, no
+	// adapter construction, no process launch - deterministic, and
+	// safe for concurrent use.
+	SessionResumeBlockedBy func(passthrough map[string]any) string
 }
 
 // MCPInjection declares what an agent adapter does with the
