@@ -2631,6 +2631,39 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_PrefersProducingRunOverLate
 	}
 }
 
+// TestLoadLatestSuccessfulRunsForReactionRecovery_SuppressedRunBecomesCandidate
+// guards the MAX(id) selection this query already performs against a
+// later change that adds a discriminator excluding a suppressed row (one
+// whose handoff was withheld by evidence but suppressed by a verified
+// terminal state, and which records "succeeded" with a nil error like
+// any other run taking the terminal disposition). The selection itself
+// is unchanged by that population's existence: this test exists to fail
+// loudly if a later change carves it out of the query, not to endorse
+// which run's attribution a rebuilt reaction entry inherits.
+func TestLoadLatestSuccessfulRunsForReactionRecovery_SuppressedRunBecomesCandidate(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	appendRecoveryRun(t, s, "ISS-SUPPRESSED", "PROJ-S", 1, recentCompletedAt(2))
+	suppressed := appendRecoveryRun(t, s, "ISS-SUPPRESSED", "PROJ-S", 2, recentCompletedAt(1))
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 1", len(got))
+	}
+	if got[0].ID != suppressed.ID || got[0].Attempt != suppressed.Attempt {
+		t.Errorf("recovery run = (id=%d, attempt=%d), want the later succeeded run (id=%d, attempt=%d)",
+			got[0].ID, got[0].Attempt, suppressed.ID, suppressed.Attempt)
+	}
+}
+
 func TestLoadLatestSuccessfulRunsForReactionRecovery_DisplayIDRoundTrip(t *testing.T) {
 	t.Parallel()
 

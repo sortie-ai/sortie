@@ -72,9 +72,13 @@
     above, on either admission path into the phase.
 
 - Withheld handoff evidence:
-  - Leave the issue in its active tracker state, record the run as `failed` with the evidence verdict
-    in its error reason, and schedule the ordinary exponential-backoff failure path. Do not use the
-    fixed-delay continuation path.
+  - Immediately before recording an absence failure, re-read the issue's tracker state once, gated
+    the same way the permit path's own pre-write read is gated (§11.5). A terminal result routes
+    the exit to the terminal disposition (§7.3) instead: no failure record, no failure comment, no
+    retry, no absence count. Only when that read finds no terminal state does the withheld
+    disposition below apply: leave the issue in its active tracker state, record the run as `failed`
+    with the evidence verdict in its error reason, and schedule the ordinary exponential-backoff
+    failure path. Do not use the fixed-delay continuation path.
   - Maintain a count of consecutive outcomes treated as handoff absences for each issue. `Absence of
     work observed` increments it, as does `evidence not determinable` under `strict`. A
     `work observed` verdict resets it to zero immediately; a later handoff-write error cannot restore
@@ -204,8 +208,13 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
   rather than waiting for the next polling cycle to discover them.
 - Pending reaction recovery reconstructs runtime reaction entries after a restart from the most
   recent `run_history` row recorded as `succeeded` for each issue and by reading that candidate's
-  workspace SCM metadata. A later handoff withheld for absence is recorded as `failed`, so it no
-  longer displaces an earlier producing run in this selection; no query-shape change is required.
+  workspace SCM metadata. A handoff withheld for absence still records `failed` and is not
+  selectable by this query. A handoff withheld by evidence but suppressed by a verified terminal
+  state (§11.5, §14.2) records `succeeded` and is selectable, so it becomes its issue's candidate
+  for as long as it is that issue's newest such row; no query-shape change is required either way.
+  `docs/decisions/0026-re-read-issue-state-before-recording-absence-failure.md`, "Re-Read the
+  Issue State Before Recording an Absence Failure", ratifies this reach into restart reaction
+  recovery and bounds what a suppressed row's candidacy can actually change.
   Recovery considers only a candidate whose selected successful activity falls inside its lookback
   window. The pass narrows in a fixed order: it first drops any candidate
   the orchestrator already holds as running, retry-queued, or claimed, then truncates what is left

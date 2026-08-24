@@ -217,9 +217,12 @@ retry.
 
 The transition is additionally subject to the run's `tracker.handoff_evidence` verdict
 ([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
-Where that verdict withholds the transition, no tracker write is attempted: the issue keeps its
-active state and its claim, and the exit takes the exponential-backoff failure path instead of
-releasing the claim.
+Where that verdict withholds the transition, the orchestrator re-reads the issue's tracker state
+once before recording the outcome. When that read does not find the issue terminal, no tracker
+write is attempted: the issue keeps its active state and its claim, and the exit takes the
+exponential-backoff failure path instead of releasing the claim. When that read does find the issue
+terminal, the exit releases the claim and records `succeeded` instead, exactly as it would have had
+the issue already been observed terminal.
 
 This distinction reflects the semantic difference between the two values: `blocked` means "I
 cannot proceed" (no completed work to hand off), while `needs-human-review` means "work is
@@ -253,6 +256,13 @@ For both recognized values, the orchestrator:
 Additionally, for `needs-human-review` only: when `tracker.handoff_state` is configured and the
 issue is in an active tracker state, the orchestrator attempts the handoff transition between
 steps 6 and 8. See Section 2.3.2 for failure handling.
+
+Steps 7 and 8 carry one exception, also for `needs-human-review` only. Where the run's
+`tracker.handoff_evidence` verdict withholds that transition and the verification read described in
+Section 2.3.2 does not find the issue in a terminal state, the orchestrator keeps the issue claim
+and schedules a retry on the exponential-backoff failure path. That retry is a failure-path retry
+rather than a continuation retry, so step 2 still holds and the run takes no further turns. Where
+that read does find the issue terminal, steps 7 and 8 apply as written.
 
 For `needs-human-review`, after the orchestrator releases the claim, the issue becomes eligible
 for re-dispatch on a subsequent tracker poll if it still satisfies normal dispatch rules (active
@@ -520,9 +530,12 @@ without touching any label.
 Every row that performs the handoff is additionally subject to the run's
 `tracker.handoff_evidence` verdict
 ([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
-Where the verdict withholds the transition, the issue keeps its active state and its claim, the
-run is recorded as failed with the verdict as its reason, and the exit takes the
-exponential-backoff failure path rather than the row's stated retry outcome.
+Where the verdict withholds the transition, the orchestrator re-reads the issue's tracker state
+once before recording the outcome. When that read does not find the issue terminal, the issue
+keeps its active state and its claim, the run is recorded as failed with the verdict as its
+reason, and the exit takes the exponential-backoff failure path rather than the row's stated
+retry outcome. When that read does find the issue terminal, the exit releases the claim and
+records `succeeded` instead.
 
 The semantic distinction drives the difference: `blocked` means the agent cannot proceed, so
 there is no completed work to hand off. `needs-human-review` means the agent completed its work

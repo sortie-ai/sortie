@@ -38,9 +38,11 @@ Recognized values:
   `tracker.handoff_state` is not configured, the issue becomes eligible for re-dispatch on future
   tracker polls under normal dispatch rules; unlike `blocked` in that deployment, no park is
   recorded, so the two values are still distinguishable. The transition is also subject to the
-  run's `tracker.handoff_evidence` verdict (Section 7.3): a
-  verdict that withholds it leaves the issue in its active state, keeps the claim, and takes the
-  backoff failure path instead of releasing the claim. Where
+  run's `tracker.handoff_evidence` verdict (Section 7.3): a verdict that withholds it is checked
+  once more against the tracker before the exit records it. Only when that check does not find the
+  issue terminal does the withheld verdict leave the issue in its active state, keep the claim, and
+  take the backoff failure path instead of releasing the claim; when it does find the issue
+  terminal, the exit releases the claim instead. Where
   self-review is enabled and the phase's other gate conditions hold, this value first admits the
   run to the self-review phase (Section 7); the handoff transition and claim release described
   above happen once that phase ends, rather than at the read.

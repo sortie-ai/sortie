@@ -115,8 +115,11 @@ itself observed:
   permits the write; `absence of work observed` withholds it; `evidence not determinable` permits it
   under `observed` and withholds it under `strict`; and `off` computes no verdict and preserves the
   four-condition decision. This condition can suppress a write and can never cause one. A withheld
-  outcome makes no handoff transition or pre-write verification call, leaves the issue in its active
-  state, and follows the failure and retry disposition in §14.2.
+  outcome is itself preceded by one verification read, gated the same way the permit path's own
+  pre-write read described below is gated. A terminal result from that read routes the exit to the
+  terminal disposition instead of the failure and retry disposition in §14.2. Otherwise the withheld
+  outcome makes no handoff transition, leaves the issue in its active state, and follows that
+  failure and retry disposition.
 
   A write that the evidence policy permits is still preceded by a terminal test against the freshest
   available observation of the issue's state and, when `tracker.terminal_states` is non-empty and

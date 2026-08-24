@@ -85,8 +85,11 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Unconditional steps, taken on every normal exit: remove the running entry and update aggregate
     runtime totals. Every exit also persists exactly one completed run attempt to SQLite after any
     handoff-evidence verdict needed for its status is known and before scheduling a retry. The normal
-    exit-kind mapping supplies the status unless the policy withholds the transition; that outcome
-    records `failed` with the evidence verdict named as the cause (§19.2).
+    exit-kind mapping supplies the status, unless the policy withholds the transition and the
+    withheld verdict's own verification read (disposition 3 below) does not find the issue
+    terminal: in that case the run instead records `failed`, with the evidence verdict named as the
+    cause (§19.2). A withheld verdict whose verification read does find the issue terminal keeps
+    the exit-kind mapping's status.
   - The exit then takes exactly one disposition. The conditions are evaluated in the order below
     and the first match wins, so an earlier disposition overrides every later one:
 
@@ -101,9 +104,10 @@ Distinct terminal reasons are important because retry logic and logs differ.
        continue to either way.
     2. The freshest tracker observation for the issue reports a terminal state, resolved with
        precedence reconciliation's observation, then the worker's own per-turn observation, then
-       the dispatch-time snapshot. Suppress the handoff transition and the continuation retry,
-       cancel any pending retry, and release the claim. A terminal state is a decision already
-       made about this issue; overwriting it with the handoff state would undo it.
+       the dispatch-time snapshot, or the withheld path's own verification read below reports one
+       instead. Suppress the handoff transition and the continuation retry, cancel any pending
+       retry, and release the claim. A terminal state is a decision already made about this issue;
+       overwriting it with the handoff state would undo it.
     3. A handoff state is configured, the issue is still in an active state, the exit is not a
        blocked soft stop, and the dispatch drives issue state. Only where all four conditions hold,
        apply the run's frozen `tracker.handoff_evidence` policy as a fifth condition:
@@ -122,9 +126,14 @@ Distinct terminal reasons are important because retry logic and logs differ.
        schedules the continuation retry instead, unless the retry slot is already occupied, in which
        case the exit defers to the incumbent.
 
-       A verdict that withholds the write makes no tracker transition and leaves the issue in its
-       active state. Record the unsuccessful attempt, increment the consecutive-absence count, and
-       use the ordinary failure path with exponential backoff and retry-slot arbitration—not the
+       A verdict that withholds the write is, immediately before any of its effects, checked once
+       more against the tracker: a `fetch_issue_states_by_ids` read for the issue, gated the same
+       way the permit path's own pre-write read is gated. When that read reports a terminal state,
+       the exit takes disposition 2 above instead. Only when it does not—because no terminal states
+       are configured, the read reports an active state, the issue is absent from the response, or
+       the read fails—does the withheld verdict make no tracker transition and leave the issue in
+       its active state. Record the unsuccessful attempt, increment the consecutive-absence count,
+       and use the ordinary failure path with exponential backoff and retry-slot arbitration—not the
        short continuation path. When the count reaches its ceiling, park the issue and stop the
        sequence as specified in §14.2.
     4. Any other soft stop. Suppress the continuation retry, cancel any pending retry, and release

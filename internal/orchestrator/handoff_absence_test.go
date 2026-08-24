@@ -345,6 +345,55 @@ func TestHandleWorkerExitSucceededWithoutVerdictKeepsAbsenceSequence(t *testing.
 	}
 }
 
+// TestHandleWorkerExitSuppressedTerminalKeepsAbsenceSequence verifies that
+// a suppressed exit neither advances nor resets the consecutive-absence
+// count: it must not even query it, since a verified terminal issue was
+// never withheld for absence in the first place.
+func TestHandleWorkerExitSuppressedTerminalKeepsAbsenceSequence(t *testing.T) {
+	const issueID = "ABS-SUPPRESSED"
+	store := &mockExitStore{}
+	seedMockHandoffAbsences(store, issueID, 2)
+	tracker := newRecordingHandoffTracker()
+	tracker.fetchStatesFn = func(_ context.Context, ids []string) (map[string]string, error) {
+		result := make(map[string]string, len(ids))
+		for _, id := range ids {
+			result[id] = "Done"
+		}
+		return result, nil
+	}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
+	params.TrackerAdapter = tracker
+
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-SUPPRESSED",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+
+	if len(store.absenceResetOf) != 0 {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want none", store.absenceResetOf)
+	}
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("QueryConsecutiveHandoffAbsenceCounts issue IDs = %v, want none: a suppressed exit must not query", store.absenceCountedIssueIDs)
+	}
+	counts, err := store.QueryConsecutiveHandoffAbsenceCounts(context.Background(), []string{issueID})
+	if err != nil {
+		t.Fatalf("QueryConsecutiveHandoffAbsenceCounts: %v", err)
+	}
+	if got := counts[issueID]; got != 2 {
+		t.Fatalf("consecutive absences after a suppressed exit = %d, want 2 (unchanged)", got)
+	}
+	if calls := tracker.labels(); len(calls) != 0 {
+		t.Errorf("AddLabel calls = %+v, want none", calls)
+	}
+}
+
 func TestHandleRetryTimerKeepsRecoveredExhaustedAbsenceParkedWhenLabelFails(t *testing.T) {
 	const issueID = "ABS-RECOVERED"
 	store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}

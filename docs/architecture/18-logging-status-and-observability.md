@@ -20,12 +20,17 @@ Message formatting requirements:
 
 Handoff-evidence records are part of the required operator surface:
 
-- A withheld handoff emits a `Warn` record naming the verdict and carrying
-  `turns_completed` plus the resulting `consecutive_absences` count. The standard issue context
-  fields identify the affected issue.
+- A withheld verdict whose verification read (§11.5, §14.2) does not find the issue terminal emits
+  a `Warn` record naming the verdict and carrying `turns_completed` plus the resulting
+  `consecutive_absences` count. The standard issue context fields identify the affected issue.
+- A withheld verdict whose verification read does find the issue terminal emits an `Info` record at
+  the read site naming the discarded verdict, its reason, `state_source="verified"`, and
+  `turns_completed`, instead of the `Warn` record above. The terminal disposition's own `Info`
+  record then follows, carrying the verified state and the same `state_source="verified"` value.
 - An `evidence not determinable` verdict emits an `Info` record under both `observed` and `strict`,
   carrying the policy and `turns_completed`. Under `strict`, the separate withheld warning is also
-  emitted because that policy converts the verdict into the absence disposition.
+  emitted because that policy converts the verdict into the absence disposition, unless the
+  verification read above finds the issue terminal.
 - A run frozen to `tracker.handoff_evidence: off` emits none of these evidence records.
 
 Parking an issue, whichever trigger produced it, emits exactly one `Warn` record, message
@@ -441,7 +446,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `fetch_blockers`, `transition`, `comment`, `add_label`) and result (`success`, `error`). |
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
-| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state dispositions, partitioned by result (`success`, `error`, `skipped`, `withheld`). `withheld` means the handoff-evidence policy selected the absence failure path before any transition attempt, distinguishing it from an ordinary worker failure. `skipped` retains its two earlier causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). All four values are counted only when `tracker.handoff_state` is configured. |
+| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state dispositions, partitioned by result (`success`, `error`, `skipped`, `withheld`). `withheld` means the handoff-evidence policy selected the absence failure path before any transition attempt, distinguishing it from an ordinary worker failure; a withholding verdict whose own verification read then finds the issue terminal does not increment this label, it increments `skipped` instead. `skipped` names three causes and does not distinguish them: the issue was no longer in an active state at worker exit, the issue was already reported terminal and the handoff write was suppressed (Section 11.5), or a withheld verdict's own verification read reported the issue terminal and suppressed the absence-failure recording (Section 14.2). All four values are counted only when `tracker.handoff_state` is configured. |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
 | `sortie_issue_parks_total{reason}` | Counter | Issue park events, partitioned by reason (`agent_blocked`, `handoff_absence`). Incremented once per park, whichever trigger produced it. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |

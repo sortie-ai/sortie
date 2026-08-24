@@ -2203,6 +2203,55 @@ func TestRunWorkerAttempt_ObservedIssueStateEmptyWhenNoRefresh(t *testing.T) {
 	}
 }
 
+// TestRunWorkerAttempt_AfterRunHookCannotReachWorkerResult pins the
+// ordering that makes a hook's terminal tracker write invisible to the
+// exit disposition: the after_run hook runs after the turn loop's last
+// per-turn refresh and after workspace teardown, immediately before
+// OnExit, so nothing it does can feed back into ObservedIssueState.
+func TestRunWorkerAttempt_AfterRunHookCannotReachWorkerResult(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses touch command")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "after_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		// The default mockTrackerAdapter reports "To Do" for every per-turn
+		// refresh, an active state under defaultWorkerConfig's ActiveStates,
+		// so ObservedIssueState is non-empty by the time the loop ends on
+		// max_turns.
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		// Posture left at its zero value, PostureNormal, so the after_run
+		// hook runs.
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("after_run marker file not found: %v (workspace.Finish not called)", err)
+	}
+	if result.ObservedIssueState != "To Do" {
+		t.Errorf("ObservedIssueState = %q, want %q (the last per-turn refresh, not a hook write)", result.ObservedIssueState, "To Do")
+	}
+}
+
 // --- stopSessionBestEffort unit tests ---
 
 func TestStopSessionBestEffort(t *testing.T) {

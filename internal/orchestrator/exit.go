@@ -323,6 +323,37 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				)
 			}
 			evidenceWithheld = handoffEvidenceWithholds(policy, evidenceResult)
+
+			// Before recording an absence failure, re-read the issue's
+			// tracker state once: the resolved observation above may
+			// already be stale by the time the worker's teardown has
+			// completed. With no terminal states configured no value
+			// can classify as terminal, so the read would spend a
+			// tracker call and up to one request timeout on the event
+			// loop without ever changing the disposition.
+			if evidenceWithheld && len(params.TerminalStates) > 0 && params.TrackerAdapter != nil {
+				if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
+					log.Warn("withheld handoff verification read failed, recording withheld handoff",
+						slog.Any("error", verifyErr),
+						slog.String("state_source", observationSource),
+					)
+				} else if verifiedState, ok := verified[workerResult.IssueID]; ok && isTerminalState(verifiedState, params.TerminalStates) {
+					log.Info("withheld handoff suppressed for terminal issue",
+						slog.String("state", verifiedState),
+						slog.String("state_source", "verified"),
+						slog.String("handoff_state", params.HandoffState),
+						slog.String("policy", string(policy)),
+						slog.String("verdict", string(evidenceResult.Verdict)),
+						slog.String("reason", evidenceResult.Reason),
+						slog.Int("turns_completed", workerResult.TurnsCompleted),
+					)
+					observation = verifiedState
+					observationSource = "verified"
+					terminal = true
+					evidenceWithheld = false
+				}
+			}
+
 			if evidenceWithheld {
 				evidenceErr = handoffEvidenceFailure(policy, evidenceResult)
 				metrics.IncHandoffTransitions(handoffWithheld)

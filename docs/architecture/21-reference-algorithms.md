@@ -454,6 +454,26 @@ on_worker_exit(issue_id, reason, worker_result, state):
       absence = evidence.verdict == "absence of work observed"
       undeterminable = evidence.verdict == "evidence not determinable"
       evidence_withheld = absence or (undeterminable and policy == "strict")
+
+      # Before recording an absence failure, re-read the issue's state
+      # once, gated the same way the permit path's own pre-write read is
+      # gated below. A terminal result routes this exit to disposition 2
+      # instead of the withheld path: no failure record, no failure
+      # comment, no retry, no absence count.
+      if evidence_withheld and cfg.tracker.terminal_states and tracker_adapter:
+        verified, verify_err = tracker_adapter.fetch_issue_states_by_ids([issue_id])
+        if verify_err:
+          log_warn("withheld handoff verification read failed, recording withheld handoff",
+                    verify_err, observation_source)
+        elif issue_id in verified and is_terminal_state(verified[issue_id], cfg.tracker.terminal_states):
+          log_info("withheld handoff suppressed for terminal issue",
+                    verified[issue_id], "verified", cfg.tracker.handoff_state,
+                    policy, evidence.verdict, evidence.reason, worker_result.turns_completed)
+          observation = verified[issue_id]
+          observation_source = "verified"
+          terminal = true
+          evidence_withheld = false
+
       if evidence_withheld:
         # A withheld handoff is an unsuccessful run even though the agent
         # process exited normally, so the persisted status is failed with

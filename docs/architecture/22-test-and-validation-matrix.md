@@ -117,6 +117,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - With terminal states configured and a non-terminal observation, one verification read runs
   immediately before the handoff write; a terminal result suppresses the write and a failed read
   lets it proceed
+- With a withheld handoff-evidence verdict, terminal states configured, and a tracker adapter
+  present, one verification read runs before any withheld-handoff effect; a terminal result
+  routes the exit to the terminal disposition, and a non-terminal result, a response omitting the
+  issue, or a failed read keeps the withheld disposition
 - With no terminal states configured, no verification read is issued
 - A blocked soft stop releases the claim with no handoff and no continuation retry, and, where
   the dispatch drives issue state, records a durable park, applies the parking label, and holds

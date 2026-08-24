@@ -52,16 +52,21 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `tokens_measured`   | INTEGER | `1` when the four token columns above carry a figure the coding agent's runtime reported; `0` when the run's spend is unknown and all four are zero (migration 012) |
 
 `status` is no longer a pure mapping from the worker's exit kind. A normal exit that reaches an
-otherwise-eligible handoff and is withheld by the handoff-evidence policy records `failed`; its
-`error` value names the evidence verdict as the cause. For an otherwise-normal exit on that handoff
-path, `succeeded` means the policy did not withhold it. It does not assert that work was positively
-observed: an undeterminable verdict under `observed`, and every normal exit under `off`, may still
-record `succeeded`.
+otherwise-eligible handoff and is withheld by the handoff-evidence policy records `failed`, with its
+`error` value naming the evidence verdict as the cause, only when a verification read taken
+immediately before that recording does not find the issue in a terminal tracker state (§11.5,
+§14.2). When that read does find the issue terminal, the exit takes the terminal disposition
+instead and records `succeeded` with no error, exactly as an exit whose observation was terminal
+earlier already does. For an otherwise-normal exit on that handoff path, `succeeded` means the
+policy did not withhold it, or withheld it but the verification read then found the issue terminal.
+It does not assert that work was positively observed: an undeterminable verdict under `observed`,
+every normal exit under `off`, and a withheld verdict suppressed by that verification read may all
+still record `succeeded`.
 
 Rows written before this rule and rows written under `tracker.handoff_evidence: off` retain the
-earlier exit-kind-only meaning and are not rewritten. Reports spanning the change therefore span two
-definitions of `succeeded` and must not present a changed success rate as proof that agent behavior
-changed.
+earlier exit-kind-only meaning and are not rewritten. Reports spanning the change therefore span
+three definitions of `succeeded`, not two, and must not present a changed success rate as proof that
+agent behavior changed.
 
 No column stores the handoff-evidence verdict. The verdict is logged and counted, and a withheld
 run carries it in the existing `error` field. In particular, this change adds no evidence field to
