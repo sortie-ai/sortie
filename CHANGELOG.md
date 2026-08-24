@@ -755,7 +755,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.20.1...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.21.0...HEAD
 [1.21.0]: https://github.com/sortie-ai/sortie/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/sortie-ai/sortie/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/sortie-ai/sortie/compare/v1.18.0...v1.19.0
