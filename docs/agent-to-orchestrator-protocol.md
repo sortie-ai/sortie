@@ -257,6 +257,13 @@ Additionally, for `needs-human-review` only: when `tracker.handoff_state` is con
 issue is in an active tracker state, the orchestrator attempts the handoff transition between
 steps 6 and 8. See Section 2.3.2 for failure handling.
 
+Steps 7 and 8 carry one exception, also for `needs-human-review` only. Where the run's
+`tracker.handoff_evidence` verdict withholds that transition and the verification read described in
+Section 2.3.2 does not find the issue in a terminal state, the orchestrator keeps the issue claim
+and schedules a retry on the exponential-backoff failure path. That retry is a failure-path retry
+rather than a continuation retry, so step 2 still holds and the run takes no further turns. Where
+that read does find the issue terminal, steps 7 and 8 apply as written.
+
 For `needs-human-review`, after the orchestrator releases the claim, the issue becomes eligible
 for re-dispatch on a subsequent tracker poll if it still satisfies normal dispatch rules (active
 state, not claimed, not budget-exhausted, not parked). For `blocked`, where the dispatch drove
