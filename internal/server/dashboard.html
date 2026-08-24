@@ -379,6 +379,12 @@
           <div class="card-label">{{.EstimatedCostLabel}}</div>
         </div>
         {{end}}
+        {{if .BudgetExhaustedCount}}
+        <div class="card card-neutral">
+          <div class="card-number">{{.BudgetExhaustedCount}}</div>
+          <div class="card-label">Budget Blocked</div>
+        </div>
+        {{end}}
       </section>
 
       <section>
@@ -591,6 +597,32 @@
                   </dl>
                 </div>
               </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </section>
+      {{end}}
+
+      {{if .BudgetExhausted}}
+      <section>
+        <h2>Budget Blocked</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Identifier</th>
+              <th>Reason</th>
+              <th>Used</th>
+              <th>Blocked For</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range $i, $e := .BudgetExhausted}}
+            <tr class="{{if even $i}}row-even{{end}}">
+              <td><a href="{{$e.DetailURL}}">{{$e.Identifier}}</a></td>
+              <td>{{$e.Reason}}</td>
+              <td>{{$e.Used}}</td>
+              <td>{{$e.BlockedFor}}</td>
             </tr>
             {{end}}
           </tbody>

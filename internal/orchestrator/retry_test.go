@@ -971,11 +971,12 @@ func TestHandleRetryTimer(t *testing.T) {
 					t.Errorf("Running[%s] present, want absent (token budget exhausted)", id)
 				}
 				// BudgetExhausted set must contain this issue with the token reason.
-				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
-					t.Errorf("BudgetExhausted[%s] missing, want present after token budget exhaustion", id)
+				entry, exhausted := state.BudgetExhausted[id]
+				if !exhausted {
+					t.Fatalf("BudgetExhausted[%s] missing, want present after token budget exhaustion", id)
 				}
-				if got := state.BudgetExhaustedReason[id]; got != budgetReasonToken {
-					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", id, got, budgetReasonToken)
+				if entry.Reason != budgetReasonToken {
+					t.Errorf("BudgetExhausted[%s].Reason = %q, want %q", id, entry.Reason, budgetReasonToken)
 				}
 				// The dispatcher gate must refuse the issue.
 				if ShouldDispatch(candidateIssue(id, "PROJ-TOK", "To Do"), state, []string{"To Do", "In Progress"}, []string{"Done"}) {
@@ -1032,9 +1033,9 @@ func TestHandleRetryTimer(t *testing.T) {
 				if !workerCalled {
 					t.Error("worker function not invoked, want invoked")
 				}
-				// No reason recorded for a dispatched issue.
-				if got, ok := state.BudgetExhaustedReason[id]; ok {
-					t.Errorf("BudgetExhaustedReason[%s] = %q, want absent", id, got)
+				// No entry recorded for a dispatched issue.
+				if entry, ok := state.BudgetExhausted[id]; ok {
+					t.Errorf("BudgetExhausted[%s] = %+v, want absent", id, entry)
 				}
 			},
 		},
@@ -1153,13 +1154,14 @@ func TestHandleRetryTimer(t *testing.T) {
 				if tracker.fetchCount != 0 {
 					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 				}
-				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
-					t.Errorf("BudgetExhausted[%s] missing, want present after exhaustion", id)
+				entry, exhausted := state.BudgetExhausted[id]
+				if !exhausted {
+					t.Fatalf("BudgetExhausted[%s] missing, want present after exhaustion", id)
 				}
 				// A single evaluation that finds both ceilings exhausted must
 				// report the token budget.
-				if got := state.BudgetExhaustedReason[id]; got != budgetReasonToken {
-					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence)", id, got, budgetReasonToken)
+				if entry.Reason != budgetReasonToken {
+					t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (token precedence)", id, entry.Reason, budgetReasonToken)
 				}
 			},
 		},
@@ -1190,12 +1192,13 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released (session budget exhausted)", id)
 				}
-				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
-					t.Errorf("BudgetExhausted[%s] missing, want present after session exhaustion", id)
+				entry, exhausted := state.BudgetExhausted[id]
+				if !exhausted {
+					t.Fatalf("BudgetExhausted[%s] missing, want present after session exhaustion", id)
 				}
 				// The errored token gate must not overwrite the session reason.
-				if got := state.BudgetExhaustedReason[id]; got != budgetReasonSession {
-					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token axis failed open)", id, got, budgetReasonSession)
+				if entry.Reason != budgetReasonSession {
+					t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (token axis failed open)", id, entry.Reason, budgetReasonSession)
 				}
 				// Token sum was attempted before failing open.
 				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
@@ -1877,6 +1880,165 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 	if ShouldDispatch(candidateIssue(id, "PROJ-COMP", "To Do"), state, params.ActiveStates, params.TerminalStates) {
 		t.Error("ShouldDispatch() = true after budget exhaustion, want false")
 	}
+}
+
+// TestHandleRetryTimer_BudgetMetrics covers the counter's cross-gate
+// cadence on the retry lane: an enrichment of an already-blocked entry
+// must not fire a second increment, and a fire that blocks on both
+// ceilings at once must fire exactly one.
+func TestHandleRetryTimer_BudgetMetrics(t *testing.T) {
+	t.Parallel()
+
+	t.Run("token gate enriches a session-blocked entry on a non-blocking read without a second increment", func(t *testing.T) {
+		t.Parallel()
+
+		spy := &spyMetrics{}
+		store := &mockRetryStore{runHistoryCount: 5, tokenSum: 500, tokenSessionCount: 2, tokenUnmeasured: 0}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, "ISS-ENRICH", "PROJ-ENRICH", 1)
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+		params.MaxTokens = 1000
+		params.Metrics = spy
+
+		HandleRetryTimer(state, "ISS-ENRICH", params)
+
+		entry, ok := state.BudgetExhausted["ISS-ENRICH"]
+		if !ok {
+			t.Fatal("BudgetExhausted[ISS-ENRICH] missing, want present")
+		}
+		if entry.Reason != budgetReasonSession {
+			t.Errorf("Reason = %q, want %q (session gate blocked first)", entry.Reason, budgetReasonSession)
+		}
+		if entry.UsedTokens == nil || *entry.UsedTokens != 500 {
+			t.Errorf("UsedTokens = %v, want 500 (enriched by the non-blocking token read)", entry.UsedTokens)
+		}
+		if entry.UnmeasuredSessions == nil || *entry.UnmeasuredSessions != 0 {
+			t.Errorf("UnmeasuredSessions = %v, want 0", entry.UnmeasuredSessions)
+		}
+		if len(spy.budgetExhaustions) != 1 || spy.budgetExhaustions[0] != budgetReasonSession {
+			t.Errorf("IncBudgetExhaustions calls = %v, want [%q] (one increment; enrichment does not re-fire)", spy.budgetExhaustions, budgetReasonSession)
+		}
+	})
+
+	t.Run("blocking on both ceilings in one timer fire produces exactly one increment carrying token_budget", func(t *testing.T) {
+		t.Parallel()
+
+		spy := &spyMetrics{}
+		store := &mockRetryStore{runHistoryCount: 5, tokenSum: 1500, tokenSessionCount: 5}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, "ISS-BOTH", "PROJ-BOTH", 1)
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+		params.MaxTokens = 1000
+		params.Metrics = spy
+
+		HandleRetryTimer(state, "ISS-BOTH", params)
+
+		entry, ok := state.BudgetExhausted["ISS-BOTH"]
+		if !ok {
+			t.Fatal("BudgetExhausted[ISS-BOTH] missing, want present")
+		}
+		if entry.Reason != budgetReasonToken {
+			t.Errorf("Reason = %q, want %q (the token gate overwrites the session block)", entry.Reason, budgetReasonToken)
+		}
+		if len(spy.budgetExhaustions) != 1 || spy.budgetExhaustions[0] != budgetReasonToken {
+			t.Errorf("IncBudgetExhaustions calls = %v, want [%q] (once per timer fire, not once per gate)", spy.budgetExhaustions, budgetReasonToken)
+		}
+	})
+}
+
+// TestHandleRetryTimer_SessionBudgetLogLine covers the retry lane's
+// session-exhaustion warning's reason attribute, the counterpart to the
+// token-exhaustion warning [TestHandleRetryTimer_TokenBudgetLogLine]
+// already covers.
+func TestHandleRetryTimer_SessionBudgetLogLine(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := &mockRetryStore{runHistoryCount: 5}
+	tracker := &mockRetryTracker{}
+	state := retryState(t, "ISS-SESS-LOG", "PROJ-SESS-LOG", 1)
+
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 3
+	params.Logger = logger
+
+	HandleRetryTimer(state, "ISS-SESS-LOG", params)
+
+	output := buf.String()
+	if !strings.Contains(output, "effort budget exhausted, blocking re-dispatch") {
+		t.Fatalf("log output = %q, want to contain the session refusal message", output)
+	}
+	for _, attr := range []string{
+		"reason=session_budget",
+		"count=5",
+		"max_sessions=3",
+		"issue_id=ISS-SESS-LOG",
+	} {
+		if !strings.Contains(output, attr) {
+			t.Errorf("log output missing attribute %q: %q", attr, output)
+		}
+	}
+}
+
+// TestHandleRetryTimer_ExhaustedAtSourcedFromAnnouncement covers
+// blockBudget's ExhaustedAt sourcing rule: reused from the announcement
+// memory when its reason matches the reason now firing, and the current
+// time otherwise.
+func TestHandleRetryTimer_ExhaustedAtSourcedFromAnnouncement(t *testing.T) {
+	t.Parallel()
+
+	t.Run("matching reason reuses the announced time", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockRetryStore{runHistoryCount: 5}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, "ISS-REUSE", "PROJ-REUSE", 1)
+		announcedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		state.BudgetAnnounced["ISS-REUSE"] = BudgetAnnouncement{Reason: budgetReasonSession, At: announcedAt}
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		HandleRetryTimer(state, "ISS-REUSE", params)
+
+		entry, ok := state.BudgetExhausted["ISS-REUSE"]
+		if !ok {
+			t.Fatal("BudgetExhausted[ISS-REUSE] missing, want present")
+		}
+		if !entry.ExhaustedAt.Equal(announcedAt) {
+			t.Errorf("ExhaustedAt = %v, want %v (reused from the matching announcement)", entry.ExhaustedAt, announcedAt)
+		}
+	})
+
+	t.Run("no matching announcement uses the current time", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockRetryStore{runHistoryCount: 5}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, "ISS-FRESH", "PROJ-FRESH", 1)
+		state.BudgetAnnounced["ISS-FRESH"] = BudgetAnnouncement{Reason: budgetReasonToken, At: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		before := time.Now().UTC()
+		HandleRetryTimer(state, "ISS-FRESH", params)
+		after := time.Now().UTC()
+
+		entry, ok := state.BudgetExhausted["ISS-FRESH"]
+		if !ok {
+			t.Fatal("BudgetExhausted[ISS-FRESH] missing, want present")
+		}
+		if entry.ExhaustedAt.Before(before) || entry.ExhaustedAt.After(after) {
+			t.Errorf("ExhaustedAt = %v, want within [%v, %v] (fresh timestamp on a reason mismatch)", entry.ExhaustedAt, before, after)
+		}
+	})
 }
 
 func TestHandleRetryTimer_ContinuationContextPropagated(t *testing.T) {

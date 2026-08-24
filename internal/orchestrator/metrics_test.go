@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,27 +18,34 @@ import (
 type spyMetrics struct {
 	mu sync.Mutex
 
-	runningSessions      []int
-	retryingSessions     []int
-	availableSlots       []int
-	activeSessionElapsed []float64
-	tokens               []tokenCall
-	agentRuntime         []float64
-	dispatches           []string
-	workerExits          []string
-	retries              []string
-	reconciliationActs   []string
-	pollCycles           []string
-	trackerRequests      []trackerReqCall
-	handoffTransitions   []string
-	issueParks           []string
-	dispatchTransitions  []string
-	toolCalls            []toolCallCall
-	pollDurations        []float64
-	workerDurations      []workerDurCall
-	sshHostUsage         []sshHostUsageCall
-	trackerComments      []trackerCommentCall
-	candidateHolds       []string
+	runningSessions       []int
+	retryingSessions      []int
+	availableSlots        []int
+	activeSessionElapsed  []float64
+	tokens                []tokenCall
+	agentRuntime          []float64
+	dispatches            []string
+	workerExits           []string
+	retries               []string
+	reconciliationActs    []string
+	pollCycles            []string
+	trackerRequests       []trackerReqCall
+	handoffTransitions    []string
+	issueParks            []string
+	dispatchTransitions   []string
+	toolCalls             []toolCallCall
+	pollDurations         []float64
+	workerDurations       []workerDurCall
+	sshHostUsage          []sshHostUsageCall
+	trackerComments       []trackerCommentCall
+	candidateHolds        []string
+	budgetExhaustions     []string
+	budgetExhaustedIssues []budgetExhaustedIssuesCall
+}
+
+type budgetExhaustedIssuesCall struct {
+	reason string
+	count  int
 }
 
 type tokenCall struct {
@@ -225,6 +234,18 @@ func (s *spyMetrics) IncCandidateHolds(reason string) {
 	s.candidateHolds = append(s.candidateHolds, reason)
 }
 
+func (s *spyMetrics) IncBudgetExhaustions(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.budgetExhaustions = append(s.budgetExhaustions, reason)
+}
+
+func (s *spyMetrics) SetBudgetExhaustedIssues(reason string, count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.budgetExhaustedIssues = append(s.budgetExhaustedIssues, budgetExhaustedIssuesCall{reason, count})
+}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {
@@ -362,6 +383,166 @@ func TestUpdateGauges_SSH(t *testing.T) {
 	if usageMap["host-b"] != 1 {
 		t.Errorf("host-b usage = %d, want 1", usageMap["host-b"])
 	}
+}
+
+// TestUpdateGauges_BudgetLevels covers the level-behaviour cases that a
+// single recompute can exercise: per-reason partitioning of a mixed set,
+// and every declared reason reporting a value, zero when nothing is held.
+func TestUpdateGauges_BudgetLevels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("counts per reason for a mixed set", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+		spy := &spyMetrics{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.BudgetExhausted["iss-1"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
+		state.BudgetExhausted["iss-2"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
+		state.BudgetExhausted["iss-3"] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
+
+		o := &Orchestrator{
+			state:    state,
+			metrics:  spy,
+			hostPool: NewHostPool(nil, 0),
+		}
+		o.updateGauges(now)
+
+		got := make(map[string]int, len(spy.budgetExhaustedIssues))
+		for _, c := range spy.budgetExhaustedIssues {
+			got[c.reason] = c.count
+		}
+		if got[budgetReasonSession] != 2 {
+			t.Errorf("SetBudgetExhaustedIssues(%q, ...) = %d, want 2", budgetReasonSession, got[budgetReasonSession])
+		}
+		if got[budgetReasonToken] != 1 {
+			t.Errorf("SetBudgetExhaustedIssues(%q, ...) = %d, want 1", budgetReasonToken, got[budgetReasonToken])
+		}
+	})
+
+	t.Run("every declared reason reports a value, zero when nothing is held", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+		spy := &spyMetrics{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		o := &Orchestrator{
+			state:    state,
+			metrics:  spy,
+			hostPool: NewHostPool(nil, 0),
+		}
+		o.updateGauges(now)
+
+		if len(spy.budgetExhaustedIssues) != 2 {
+			t.Fatalf("SetBudgetExhaustedIssues call count = %d, want 2 (one per declared reason)", len(spy.budgetExhaustedIssues))
+		}
+		got := make(map[string]int, len(spy.budgetExhaustedIssues))
+		for _, c := range spy.budgetExhaustedIssues {
+			got[c.reason] = c.count
+		}
+		// The reasons are named literally rather than iterated from
+		// knownBudgetReasons, so a constant missing from that list would
+		// still fail this assertion.
+		for _, reason := range []string{budgetReasonSession, budgetReasonToken} {
+			count, ok := got[reason]
+			if !ok {
+				t.Errorf("SetBudgetExhaustedIssues never called for %q, want called with 0", reason)
+				continue
+			}
+			if count != 0 {
+				t.Errorf("SetBudgetExhaustedIssues(%q, ...) = %d, want 0", reason, count)
+			}
+		}
+	})
+}
+
+// lastSessionBudgetGaugeReading returns the most recently recorded
+// SetBudgetExhaustedIssues value for budgetReasonSession, or -1 if it was
+// never recorded.
+func lastSessionBudgetGaugeReading(spy *spyMetrics) int {
+	got := -1
+	for _, c := range spy.budgetExhaustedIssues {
+		if c.reason == budgetReasonSession {
+			got = c.count
+		}
+	}
+	return got
+}
+
+// TestHandleTick_BudgetGaugeRecompute covers the two level-behaviour cases
+// that need two ticks: the gauge must not freeze at its last published
+// value when a hold clears, and it must track the set even when a held
+// issue's disappearance is never announced.
+func TestHandleTick_BudgetGaugeRecompute(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a reason whose last held issue clears under the ceiling reports zero on the next recompute", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-gauge-clear", Identifier: "PROJ-GAUGE-CLEAR", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		spy := &spyMetrics{}
+		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, discardLogger(), spy)
+
+		orch.handleTick(context.Background())
+		if got := lastSessionBudgetGaugeReading(spy); got != 1 {
+			t.Fatalf("session_budget gauge after the first tick = %d, want 1", got)
+		}
+
+		store.budgetExhaustedIDs = map[string]int{}
+		orch.handleTick(context.Background())
+
+		if got := lastSessionBudgetGaugeReading(spy); got != 0 {
+			t.Errorf("session_budget gauge after the clearing tick = %d, want 0 (not frozen at the previous value)", got)
+		}
+	})
+
+	t.Run("a held issue leaving the candidate set reports one fewer without an announcement", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-gauge-leave", Identifier: "PROJ-GAUGE-LEAVE", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		present := true
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if present {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		spy := &spyMetrics{}
+		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+
+		orch.handleTick(context.Background())
+		if got := lastSessionBudgetGaugeReading(spy); got != 1 {
+			t.Fatalf("session_budget gauge after the first tick = %d, want 1", got)
+		}
+		recordsAfterFirstTick := strings.Count(buf.String(), "candidate held by budget ceiling")
+
+		present = false
+		store.budgetExhaustedIDs = map[string]int{}
+		orch.handleTick(context.Background())
+
+		if got := lastSessionBudgetGaugeReading(spy); got != 0 {
+			t.Errorf("session_budget gauge after the issue left the candidate set = %d, want 0 (derived from the set)", got)
+		}
+		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != recordsAfterFirstTick {
+			t.Errorf("record count changed after the issue merely left the candidate set: got %d, want unchanged at %d (no announcement)", got, recordsAfterFirstTick)
+		}
+	})
 }
 
 func TestHandleAgentEvent_TokenMetrics(t *testing.T) {

@@ -130,37 +130,55 @@ Retry handling behavior:
 
 Per-issue effort budget (defense-in-depth):
 
-- When `agent.max_sessions > 0`, the retry handler counts completed sessions for the issue
-  from `run_history` before fetching candidates.
-- If the count reaches `max_sessions`, the claim is released and a warning is logged instead
-  of re-dispatching.
-- If the count query fails, the budget check is skipped (fail-open) and dispatch proceeds
-  normally.
+- When `agent.max_sessions > 0`, two lanes evaluate it: the retry handler counts completed
+  sessions for the issue from `run_history` before fetching candidates, once per retry; the
+  poll tick's rebuild runs the same count as one batch query over the whole candidate set,
+  once per tick, before dispatch (see the rebuild bullet below).
+- If the count reaches `max_sessions`, a warning is logged on both lanes. The retry handler
+  releases the claim it holds and does not re-dispatch; the rebuild writes the candidate into
+  the exhausted-issue set instead, because a candidate the rebuild holds never held a claim to
+  release.
+- If the retry handler's count query fails, its check is skipped (fail-open) and dispatch
+  proceeds normally for that issue. The rebuild's own fail-open, which differs because it
+  rebuilds a whole set rather than deciding one dispatch, is described in the rebuild bullet
+  below.
 - `max_sessions = 0` (default) disables the budget entirely.
 
 Per-issue token budget (cost ceiling):
 
-- When `agent.max_tokens > 0`, the retry handler sums `total_tokens` across the issue's
-  `run_history` entries on the same pre-dispatch path, after the session check.
-- If the sum reaches `max_tokens`, the claim is released and a warning is logged instead of
-  re-dispatching, identical in mechanism to the session ceiling.
+- When `agent.max_tokens > 0`, two lanes evaluate it: the retry handler sums `total_tokens`
+  across the issue's `run_history` entries on the same pre-dispatch path, after the session
+  check, once per retry; the poll tick's rebuild runs the same sum as one batch query over the
+  whole candidate set, once per tick, after the session-count query (see the rebuild bullet
+  below).
+- If the sum reaches `max_tokens`, a warning is logged on both lanes. The retry handler
+  releases the claim it holds and does not re-dispatch; the rebuild writes the candidate into
+  the exhausted-issue set instead, for the reason the effort-budget bullet above states.
 - The session and token ceilings are independent hard ceilings. A re-dispatch is blocked when
   either is reached, so whichever fills first across polling cycles is the one that fires. When
   a single evaluation finds both exhausted, the reported and logged reason names the token
   budget; the block itself is identical regardless of which ceiling triggered it.
 - The per-tick rebuild of the exhausted-issue set accounts for these two ceilings only: it runs
   the session-count batch query when `max_sessions > 0` and the token-sum batch query when
-  `max_tokens > 0`, and unions the results. Each blocked issue carries a machine-readable reason
-  (`token_budget` or `session_budget`, token taking precedence over session) surfaced in the
-  runtime snapshot beside the exhausted set. The rebuild is skipped entirely when both budgets
-  are disabled.
+  `max_tokens > 0`, and unions the results, token taking precedence over session when one issue
+  reaches both. On the tick an issue enters the set, the rebuild emits one warning record naming
+  the issue, the reason, and the used and budgeted numbers, and increments a counter for that
+  reason; a tick that re-observes an issue already in the set under the same reason emits
+  neither, so the record and the counter fire once per hold rather than once per tick. Each
+  blocked issue's reason and numbers travel with its own entry, keyed by issue, rather than in a
+  map alongside the set. On a query error for one axis, the rebuild folds the prior set's
+  entries for that axis forward unchanged and keeps the other axis fresh, which is a different
+  fail-open mechanism from the retry lane's own skip-and-proceed; dispatch still proceeds for
+  every candidate not in the set. The rebuild is skipped entirely when both budgets are
+  disabled.
 - The consecutive handoff-absence ceiling (§14.2) is evaluated separately, by the same
   mechanism that parks a `blocked` soft stop, after the release-evaluation step below so a
   park released this tick is not immediately re-parked. It shares the `parked` reason
   vocabulary with the `blocked` park rather than the exhausted-issue set's own reasons, and is
   skipped entirely under `tracker.handoff_evidence: off`, which records no absence.
-- If the token query fails, the check fails open and dispatch proceeds, matching the session
-  check. A token sum recorded before the token columns were added reads as zero.
+- If the retry handler's token query fails, its check fails open and dispatch proceeds for that
+  issue, the same fail-open shape the session check above uses. A token sum recorded before the
+  token columns were added reads as zero.
 - A sum below the ceiling that includes at least one unmeasured run allows the dispatch and
   logs a warning naming the issue, the sum, the ceiling, and the unmeasured count, matching the
   visibility of the query-failure fail-open case above. The retry path warns on every occurrence

@@ -118,10 +118,11 @@ Validation checks:
 Effort-budget and notification config are validated outside this preflight, by design:
 
 - The per-issue token ceiling (`agent.max_tokens`) is not a scheduler preflight check. It is a
-  re-dispatch gate evaluated on the retry path alongside `agent.max_sessions` (Section 8.4), so
-  the ceiling stops a blocked issue from being re-dispatched rather than failing startup or a
-  poll tick. Config-level validation rejects a negative `agent.max_tokens` when the config is
-  parsed, which both startup validation and the live-reload fail-safe path consume.
+  re-dispatch gate evaluated on both the retry path and the poll tick's own rebuild, alongside
+  `agent.max_sessions` (Section 8.4), so the ceiling stops a blocked issue from being
+  re-dispatched rather than failing startup or a poll tick. Config-level validation rejects a
+  negative `agent.max_tokens` when the config is parsed, which both startup validation and the
+  live-reload fail-safe path consume.
 - The `notifications` backend list (Section 5.3.11) is structurally validated when the config is
   parsed: the value must be a sequence, every entry must carry a non-empty string `kind`, and
   `max_per_session`, when present, must be a non-negative integer. `max_per_session` is optional:

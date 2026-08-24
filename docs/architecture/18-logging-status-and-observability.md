@@ -42,6 +42,14 @@ message `"park label write failed"`, at `Warn`, and does not suppress the parkin
 a park emits one `Info` record, message `"issue unparked"`, carrying `trigger`
 (`state_changed`, `label_removed`, or `evidence_observed`) and `reason`.
 
+An issue entering the per-issue budget-exhausted set, on either the poll tick's rebuild or the
+retry lane, emits exactly one `Warn` record, message `"candidate held by budget ceiling"`, carrying
+the standard issue context fields plus `reason` (`token_budget` or `session_budget`),
+`used_sessions`, `budget_sessions`, and, when the token ceiling was evaluated for that issue,
+`used_tokens` and `budget_tokens`. The record fires once per hold: a tick that re-observes an
+already-announced hold under the same reason emits nothing further, and whichever lane discovers a
+hold is the only one that announces it.
+
 The periodic workspace sweep emits exactly one summary record per pass, at `Info` level, message
 `"sweep: pass complete"`, on every pass that produced a candidate set, including a pass over zero
 keys, a pass whose tracker read failed, and a pass that removed nothing. This is deliberate: a
@@ -66,7 +74,9 @@ removed expired workspace"`, carrying `workspace_key`, `last_activity` (RFC3339)
 
 The `"tick completed"` `Info` record carries four integer attributes for the blocker gate in
 addition to its existing ones: `held_by_blockers`, `blockers_unresolved`, `blockers_not_read`, and
-`blockers_incomplete`, each counting the candidates the tick held for that reason.
+`blockers_incomplete`, each counting the candidates the tick held for that reason. It also carries
+`budget_exhausted`, the number of this tick's candidates in the per-issue budget-exhausted set
+after the rebuild.
 
 A candidate the dispatch gate holds for a blocker reason produces exactly one of five per-issue
 records, and a pass whose reads were refused by the forge produces exactly one pass-level record in
@@ -122,12 +132,12 @@ should return:
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
 - `rate_limits` (latest coding-agent rate limit payload, if available)
 - `budget_exhausted_count` (number of issues currently blocked by a re-dispatch budget; always present)
-- `budget_exhausted` (sorted list of blocked issue IDs; omitted when the set is empty)
-- `budget_exhausted_reason` (map from blocked issue ID to the gate that fired, `token_budget` or
-  `session_budget`; `token_budget` takes precedence over `session_budget` when one issue reaches
-  both gates; omitted when the set is empty). The exhausted set and its reasons are rebuilt per
-  tick from those two gates (Section 8.4); an issue's reason entry exists exactly when that issue
-  is in `budget_exhausted`.
+- `budget_exhausted` (list of blocked-issue records, sorted by identifier; always present, empty
+  when the set is empty). Each record carries the issue's ID and identifier, the reason
+  (`token_budget` or `session_budget`; `token_budget` takes precedence over `session_budget` when
+  one issue reaches both gates), the used and budgeted session and token counts, and the time the
+  hold began. The set is rebuilt per tick from those two gates (Section 8.4) and also updated by
+  the retry lane when it discovers a hold between ticks.
 - `parked_count` (number of issues currently held out of primary dispatch; always present)
 - `parked` (sorted list of parked issue IDs; omitted when the set is empty)
 - `parked_reason` (map from parked issue ID to the park's reason, `agent_blocked` or
@@ -281,7 +291,8 @@ Minimum endpoints:
       "generated_at": "2026-02-24T20:15:30Z",
       "counts": {
         "running": 2,
-        "retrying": 1
+        "retrying": 1,
+        "budget_exhausted": 1
       },
       "running": [
         {
@@ -315,6 +326,19 @@ Minimum endpoints:
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
           "error": "no available orchestrator slots"
+        }
+      ],
+      "budget_exhausted": [
+        {
+          "issue_id": "ghi789",
+          "issue_identifier": "MT-651",
+          "reason": "session_budget",
+          "used_sessions": 3,
+          "budget_sessions": 3,
+          "used_tokens": null,
+          "budget_tokens": 0,
+          "unmeasured_sessions": null,
+          "exhausted_at": "2026-02-24T20:12:00Z"
         }
       ],
       "agent_totals": {
@@ -360,6 +384,7 @@ Minimum endpoints:
         }
       },
       "retry": null,
+      "budget_exhausted": null,
       "logs": {
         "agent_session_logs": [
           {
@@ -381,8 +406,13 @@ Minimum endpoints:
     }
     ```
 
+  - `status` is `"running"` when the issue has a running session, otherwise `"retrying"` when it has
+    a pending retry, otherwise `"budget_exhausted"` when it is held out of dispatch by a per-issue
+    budget ceiling; `budget_exhausted` in the response body carries the same record shape as the
+    `budget_exhausted` array on `GET /api/v1/state` and is `null` when the issue is not in that set.
   - If the issue is unknown to the current in-memory state, return `404` with an error response
-    (for example `{"error":{"code":"issue_not_found","message":"..."}}`).
+    (for example `{"error":{"code":"issue_not_found","message":"..."}}`); an issue held by a budget
+    ceiling is not unknown to it, so this case is distinct from that one.
 
 - `POST /api/v1/refresh`
   - Queues an immediate tracker poll + reconciliation cycle (best-effort trigger; implementations
@@ -451,6 +481,8 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_issue_parks_total{reason}` | Counter | Issue park events, partitioned by reason (`agent_blocked`, `handoff_absence`). Incremented once per park, whichever trigger produced it. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
 | `sortie_candidate_holds_total{reason}` | Counter | `IncCandidateHolds`. Candidates the dispatch loop held, partitioned by reason (`blocked_by`, `blockers_unresolved`, `blockers_not_read`, `blockers_incomplete`). Incremented once per held candidate; never incremented for a candidate rejected by an eligibility or capacity gate, and never incremented a second time for the pass-level `blocker reads halted for this tick` ERROR that accompanies a run of `blockers_unresolved` holds. |
+| `sortie_budget_exhaustions_total{reason}` | Counter | `IncBudgetExhaustions`. Issue entries into the per-issue budget-exhausted set, partitioned by reason (`token_budget`, `session_budget`, open to a later value). Incremented once per hold, from whichever lane discovered it; never incremented on a tick that merely re-observes an already-announced hold. |
+| `sortie_budget_exhausted_issues{reason}` | Gauge | `SetBudgetExhaustedIssues`. Issues currently held out of dispatch, partitioned by reason. Recomputed from the full budget-exhausted set on every gauge update, including every declared reason at zero when nothing is held, so a reason that clears reports zero rather than freezing at its last value. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |

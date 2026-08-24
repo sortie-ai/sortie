@@ -221,15 +221,20 @@ Fields:
   - Default: `0` (unlimited; no effort budget enforced).
   - Maximum number of completed worker sessions for a single issue before the orchestrator
     stops re-dispatching it. Counted from `run_history` entries.
-  - When the count reaches `max_sessions`, the claim is released and a warning is logged.
+  - When the count reaches `max_sessions`, a warning is logged. The retry handler releases the
+    claim it holds; the poll tick's own rebuild of the exhausted-issue set writes the candidate
+    into that set instead, because a held candidate never held a claim to release.
   - `0` disables the budget (unlimited retries).
   - Changes are re-applied at runtime and affect future retry timer evaluations.
 - `max_tokens` (integer)
   - Default: `0` (unlimited; no token budget enforced).
   - Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the
     issue's `run_history` entries and stops re-dispatching once the sum reaches `max_tokens`.
-  - When the sum reaches `max_tokens`, the claim is released and a warning is logged, exactly
-    as `max_sessions` does. A failed token query fails open: dispatch proceeds.
+  - When the sum reaches `max_tokens`, a warning is logged, on the same two lanes and for the
+    same reason `max_sessions` states above. A failed token query fails open, but not the same
+    way on both lanes: the retry handler's check is skipped and dispatch proceeds for that
+    issue, while the rebuild folds the prior set's entries for the failing axis forward
+    unchanged and keeps the other axis fresh.
   - A run whose coding agent reported no token usage is recorded unmeasured and contributes
     nothing to the sum. A sum below `max_tokens` that includes at least one unmeasured run
     allows the dispatch and logs a warning naming the issue, the sum, the ceiling, and the

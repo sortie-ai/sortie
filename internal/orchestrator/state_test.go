@@ -683,7 +683,7 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 
-	t.Run("empty BudgetExhausted produces zero count and nil slice", func(t *testing.T) {
+	t.Run("empty BudgetExhausted produces zero count and empty non-nil slice", func(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
@@ -693,8 +693,8 @@ func TestRuntimeSnapshot(t *testing.T) {
 		if result.BudgetExhaustedCount != 0 {
 			t.Errorf("BudgetExhaustedCount = %d, want 0", result.BudgetExhaustedCount)
 		}
-		if result.BudgetExhausted != nil {
-			t.Errorf("BudgetExhausted = %v, want nil", result.BudgetExhausted)
+		if result.BudgetExhausted == nil || len(result.BudgetExhausted) != 0 {
+			t.Errorf("BudgetExhausted = %v, want empty non-nil slice", result.BudgetExhausted)
 		}
 	})
 
@@ -702,10 +702,11 @@ func TestRuntimeSnapshot(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
-		// Insert out-of-order to verify sorting.
-		state.BudgetExhausted["ISS-C"] = struct{}{}
-		state.BudgetExhausted["ISS-A"] = struct{}{}
-		state.BudgetExhausted["ISS-B"] = struct{}{}
+		// Insert out-of-order to verify sorting; empty Identifier on every
+		// entry means the sort falls through to the IssueID tiebreaker.
+		state.BudgetExhausted["ISS-C"] = &BudgetExhaustedEntry{}
+		state.BudgetExhausted["ISS-A"] = &BudgetExhaustedEntry{}
+		state.BudgetExhausted["ISS-B"] = &BudgetExhaustedEntry{}
 
 		result := RuntimeSnapshot(state, fixedNow)
 
@@ -717,8 +718,8 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Fatalf("len(BudgetExhausted) = %d, want %d", len(result.BudgetExhausted), len(want))
 		}
 		for i, id := range want {
-			if result.BudgetExhausted[i] != id {
-				t.Errorf("BudgetExhausted[%d] = %q, want %q", i, result.BudgetExhausted[i], id)
+			if result.BudgetExhausted[i].IssueID != id {
+				t.Errorf("BudgetExhausted[%d].IssueID = %q, want %q", i, result.BudgetExhausted[i].IssueID, id)
 			}
 		}
 	})
@@ -727,12 +728,12 @@ func TestRuntimeSnapshot(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
-		state.BudgetExhausted["ISS-X"] = struct{}{}
+		state.BudgetExhausted["ISS-X"] = &BudgetExhaustedEntry{}
 
 		result := RuntimeSnapshot(state, fixedNow)
 
 		// Mutate source after snapshot.
-		state.BudgetExhausted["ISS-Y"] = struct{}{}
+		state.BudgetExhausted["ISS-Y"] = &BudgetExhaustedEntry{}
 
 		if result.BudgetExhaustedCount != 1 {
 			t.Errorf("BudgetExhaustedCount after source mutation = %d, want 1 (snapshot isolation)", result.BudgetExhaustedCount)
@@ -742,64 +743,102 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 
-	t.Run("BudgetExhaustedReason projected for every exhausted issue", func(t *testing.T) {
+	t.Run("BudgetExhausted entry reason projected for every exhausted issue", func(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
-		state.BudgetExhausted["ISS-A"] = struct{}{}
-		state.BudgetExhaustedReason["ISS-A"] = budgetReasonToken
-		state.BudgetExhausted["ISS-B"] = struct{}{}
-		state.BudgetExhaustedReason["ISS-B"] = budgetReasonSession
+		state.BudgetExhausted["ISS-A"] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
+		state.BudgetExhausted["ISS-B"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		if got := result.BudgetExhaustedReason["ISS-A"]; got != budgetReasonToken {
-			t.Errorf("BudgetExhaustedReason[ISS-A] = %q, want %q", got, budgetReasonToken)
+		reasons := make(map[string]string, len(result.BudgetExhausted))
+		for _, entry := range result.BudgetExhausted {
+			reasons[entry.IssueID] = entry.Reason
 		}
-		if got := result.BudgetExhaustedReason["ISS-B"]; got != budgetReasonSession {
-			t.Errorf("BudgetExhaustedReason[ISS-B] = %q, want %q", got, budgetReasonSession)
+		if got := reasons["ISS-A"]; got != budgetReasonToken {
+			t.Errorf("BudgetExhausted[ISS-A].Reason = %q, want %q", got, budgetReasonToken)
 		}
-		// Total coverage: the projected reason map carries exactly the
-		// issues in the projected set.
-		if len(result.BudgetExhaustedReason) != len(result.BudgetExhausted) {
-			t.Errorf("len(BudgetExhaustedReason) = %d, want %d (one reason per exhausted issue)",
-				len(result.BudgetExhaustedReason), len(result.BudgetExhausted))
+		if got := reasons["ISS-B"]; got != budgetReasonSession {
+			t.Errorf("BudgetExhausted[ISS-B].Reason = %q, want %q", got, budgetReasonSession)
 		}
-		for _, id := range result.BudgetExhausted {
-			if _, ok := result.BudgetExhaustedReason[id]; !ok {
-				t.Errorf("BudgetExhaustedReason missing entry for %q", id)
+	})
+
+	t.Run("BudgetExhausted sorted by Identifier ascending with IssueID as tiebreaker", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.BudgetExhausted["iss-z"] = &BudgetExhaustedEntry{Identifier: "PROJ-2"}
+		state.BudgetExhausted["iss-a"] = &BudgetExhaustedEntry{Identifier: "PROJ-1"}
+		// Two entries share an Identifier: the IssueID breaks the tie.
+		state.BudgetExhausted["iss-y"] = &BudgetExhaustedEntry{Identifier: "PROJ-1"}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		want := []struct {
+			identifier string
+			issueID    string
+		}{
+			{"PROJ-1", "iss-a"},
+			{"PROJ-1", "iss-y"},
+			{"PROJ-2", "iss-z"},
+		}
+		if len(result.BudgetExhausted) != len(want) {
+			t.Fatalf("len(BudgetExhausted) = %d, want %d", len(result.BudgetExhausted), len(want))
+		}
+		for i, w := range want {
+			got := result.BudgetExhausted[i]
+			if got.Identifier != w.identifier || got.IssueID != w.issueID {
+				t.Errorf("BudgetExhausted[%d] = {Identifier: %q, IssueID: %q}, want {Identifier: %q, IssueID: %q}",
+					i, got.Identifier, got.IssueID, w.identifier, w.issueID)
 			}
 		}
 	})
 
-	t.Run("BudgetExhaustedReason omits issues outside the exhausted set", func(t *testing.T) {
+	t.Run("BudgetExhausted entries are value-copied, not aliased to the state pointer", func(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
-		state.BudgetExhausted["ISS-A"] = struct{}{}
-		state.BudgetExhaustedReason["ISS-A"] = budgetReasonToken
-		// A stray reason without a set entry must not be projected.
-		state.BudgetExhaustedReason["ISS-GONE"] = budgetReasonSession
+		entry := &BudgetExhaustedEntry{Identifier: "PROJ-9", Reason: budgetReasonSession, UsedSessions: 3}
+		state.BudgetExhausted["iss-9"] = entry
 
 		result := RuntimeSnapshot(state, fixedNow)
-
-		if got, ok := result.BudgetExhaustedReason["ISS-GONE"]; ok {
-			t.Errorf("BudgetExhaustedReason[ISS-GONE] = %q, want absent (not in BudgetExhausted)", got)
+		if len(result.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(result.BudgetExhausted))
 		}
-		if len(result.BudgetExhaustedReason) != 1 {
-			t.Errorf("len(BudgetExhaustedReason) = %d, want 1", len(result.BudgetExhaustedReason))
+		snapshotted := result.BudgetExhausted[0]
+
+		// Mutate the pointee after the snapshot was taken. A snapshot that
+		// merely copied the pointer would observe this change; a
+		// value-copied snapshot must not.
+		entry.Reason = budgetReasonToken
+		entry.UsedSessions = 99
+
+		if snapshotted.Reason != budgetReasonSession {
+			t.Errorf("snapshot Reason = %q after source mutation, want %q (value-copy isolation)", snapshotted.Reason, budgetReasonSession)
+		}
+		if snapshotted.UsedSessions != 3 {
+			t.Errorf("snapshot UsedSessions = %d after source mutation, want 3 (value-copy isolation)", snapshotted.UsedSessions)
 		}
 	})
 
-	t.Run("empty BudgetExhausted omits the reason map", func(t *testing.T) {
+	t.Run("BudgetExhausted entry with an empty Identifier is copied through without a fallback", func(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, nil, AgentTotals{})
+		state.BudgetExhausted["iss-noident"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		if result.BudgetExhaustedReason != nil {
-			t.Errorf("BudgetExhaustedReason = %v, want nil for an empty exhausted set", result.BudgetExhaustedReason)
+		if len(result.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(result.BudgetExhausted))
+		}
+		got := result.BudgetExhausted[0]
+		if got.Identifier != "" {
+			t.Errorf("Identifier = %q, want empty (no fallback to IssueID at the state layer)", got.Identifier)
+		}
+		if got.IssueID != "iss-noident" {
+			t.Errorf("IssueID = %q, want %q", got.IssueID, "iss-noident")
 		}
 	})
 

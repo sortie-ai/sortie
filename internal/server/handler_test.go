@@ -1199,6 +1199,128 @@ func TestHandleState(t *testing.T) {
 	})
 }
 
+// TestHandleState_Budget fails if the reason or its numbers stop reaching
+// the JSON API, or if a surface this change adds names a setting as a
+// thing to change.
+func TestHandleState_Budget(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	t.Run("decodes identifier, reason, and the used and budgeted numbers", func(t *testing.T) {
+		t.Parallel()
+
+		usedTokens := int64(1500)
+		unmeasured := 1
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt:          fixedTime,
+			BudgetExhaustedCount: 1,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{
+					IssueID:            "id-budget-1",
+					Identifier:         "MT-649",
+					DisplayID:          "org/repo#649",
+					Reason:             "session_budget",
+					UsedSessions:       3,
+					BudgetSessions:     3,
+					UsedTokens:         &usedTokens,
+					BudgetTokens:       10000,
+					UnmeasuredSessions: &unmeasured,
+					ExhaustedAt:        fixedTime,
+				},
+			},
+		}
+
+		ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/state")
+		if err != nil {
+			t.Fatalf("GET /api/v1/state: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		body := decodeJSON[stateResponse](t, resp)
+		if body.Counts.BudgetExhausted != 1 {
+			t.Errorf("Counts.BudgetExhausted = %d, want 1", body.Counts.BudgetExhausted)
+		}
+		if len(body.BudgetExhausted) != 1 {
+			t.Fatalf("len(BudgetExhausted) = %d, want 1", len(body.BudgetExhausted))
+		}
+		entry := body.BudgetExhausted[0]
+		if entry.IssueID != "id-budget-1" {
+			t.Errorf("IssueID = %q, want %q", entry.IssueID, "id-budget-1")
+		}
+		if entry.IssueIdentifier != "MT-649" {
+			t.Errorf("IssueIdentifier = %q, want %q", entry.IssueIdentifier, "MT-649")
+		}
+		if entry.Reason != "session_budget" {
+			t.Errorf("Reason = %q, want %q", entry.Reason, "session_budget")
+		}
+		if entry.UsedSessions != 3 || entry.BudgetSessions != 3 {
+			t.Errorf("UsedSessions/BudgetSessions = %d/%d, want 3/3", entry.UsedSessions, entry.BudgetSessions)
+		}
+		if entry.UsedTokens == nil || *entry.UsedTokens != 1500 {
+			t.Errorf("UsedTokens = %v, want 1500", entry.UsedTokens)
+		}
+		if entry.BudgetTokens != 10000 {
+			t.Errorf("BudgetTokens = %d, want 10000", entry.BudgetTokens)
+		}
+		if entry.UnmeasuredSessions == nil || *entry.UnmeasuredSessions != 1 {
+			t.Errorf("UnmeasuredSessions = %v, want 1", entry.UnmeasuredSessions)
+		}
+	})
+
+	t.Run("empty set serializes as an empty array, not null", func(t *testing.T) {
+		t.Parallel()
+
+		ts := testServer(t, fixedSnapshot(orchestrator.RuntimeSnapshotResult{GeneratedAt: fixedTime}), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/state")
+		if err != nil {
+			t.Fatalf("GET /api/v1/state: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		var rawMap map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &rawMap); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if string(rawMap["budget_exhausted"]) == "null" {
+			t.Error("budget_exhausted = null in JSON, want []")
+		}
+	})
+
+	t.Run("no emitted string names a setting to change", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: fixedTime,
+			BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+				{IssueID: "id-1", Identifier: "MT-1", Reason: "session_budget", UsedSessions: 3, BudgetSessions: 3, ExhaustedAt: fixedTime},
+			},
+		}
+
+		ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/state")
+		if err != nil {
+			t.Fatalf("GET /api/v1/state: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		for _, forbidden := range []string{"max_sessions", "max_tokens", "max_consecutive_absences"} {
+			if strings.Contains(string(raw), forbidden) {
+				t.Errorf("response body contains %q, want absent", forbidden)
+			}
+		}
+	})
+}
+
 func TestHandleIssueDetail(t *testing.T) {
 	t.Parallel()
 
@@ -1284,6 +1406,100 @@ func TestHandleIssueDetail(t *testing.T) {
 		wantMsg := "orchestrator state snapshot unavailable"
 		if body.Error.Message != wantMsg {
 			t.Errorf("error message = %q, want %q", body.Error.Message, wantMsg)
+		}
+	})
+}
+
+// TestHandleIssueDetail_Budget fails if the per-issue endpoint stops
+// answering for a budget-blocked issue, or if a surface this change adds
+// names a setting as a thing to change.
+func TestHandleIssueDetail_Budget(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	usedTokens := int64(1500)
+	unmeasured := 1
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: fixedTime,
+		BudgetExhausted: []orchestrator.SnapshotBudgetEntry{
+			{
+				IssueID:            "id-budget-2",
+				Identifier:         "MT-650",
+				Reason:             "token_budget",
+				UsedSessions:       2,
+				UsedTokens:         &usedTokens,
+				BudgetTokens:       1000,
+				UnmeasuredSessions: &unmeasured,
+				ExhaustedAt:        fixedTime,
+			},
+		},
+	}
+
+	t.Run("budget-exhausted issue that is neither running nor retrying returns 200", func(t *testing.T) {
+		t.Parallel()
+
+		ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/MT-650")
+		if err != nil {
+			t.Fatalf("GET /api/v1/MT-650: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		body := decodeJSON[issueDetailResponse](t, resp)
+		if body.Status != "budget_exhausted" {
+			t.Errorf("Status = %q, want %q", body.Status, "budget_exhausted")
+		}
+		if body.BudgetExhausted == nil {
+			t.Fatal("BudgetExhausted = nil, want populated")
+		}
+		if body.BudgetExhausted.Reason != "token_budget" {
+			t.Errorf("BudgetExhausted.Reason = %q, want %q", body.BudgetExhausted.Reason, "token_budget")
+		}
+		if body.BudgetExhausted.UsedTokens == nil || *body.BudgetExhausted.UsedTokens != 1500 {
+			t.Errorf("BudgetExhausted.UsedTokens = %v, want 1500", body.BudgetExhausted.UsedTokens)
+		}
+		if body.LastError != nil {
+			t.Errorf("LastError = %v, want nil (a budget hold is not an error)", body.LastError)
+		}
+	})
+
+	t.Run("genuine miss still returns 404", func(t *testing.T) {
+		t.Parallel()
+
+		ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/NONEXISTENT")
+		if err != nil {
+			t.Fatalf("GET /api/v1/NONEXISTENT: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+		}
+	})
+
+	t.Run("no emitted string names a setting to change", func(t *testing.T) {
+		t.Parallel()
+
+		ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+		resp, err := http.Get(ts.URL + "/api/v1/MT-650")
+		if err != nil {
+			t.Fatalf("GET /api/v1/MT-650: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		for _, forbidden := range []string{"max_sessions", "max_tokens", "max_consecutive_absences"} {
+			if strings.Contains(string(raw), forbidden) {
+				t.Errorf("response body contains %q, want absent", forbidden)
+			}
 		}
 	})
 }

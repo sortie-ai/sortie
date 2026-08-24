@@ -18,14 +18,16 @@ type stateResponse struct {
 	Counts                 stateCounts                      `json:"counts"`
 	Running                []runningEntryResponse           `json:"running"`
 	Retrying               []retryEntryResponse             `json:"retrying"`
+	BudgetExhausted        []budgetExhaustedResponse        `json:"budget_exhausted"`
 	AgentTotals            orchestrator.SnapshotAgentTotals `json:"agent_totals"`
 	RateLimits             map[string]any                   `json:"rate_limits"`
 	ActiveEstimatedCostUSD *float64                         `json:"active_estimated_cost_usd,omitempty"`
 }
 
 type stateCounts struct {
-	Running  int `json:"running"`
-	Retrying int `json:"retrying"`
+	Running         int `json:"running"`
+	Retrying        int `json:"retrying"`
+	BudgetExhausted int `json:"budget_exhausted"`
 }
 
 type runningEntryResponse struct {
@@ -65,17 +67,34 @@ type retryEntryResponse struct {
 	Error             string    `json:"error"`
 }
 
+// budgetExhaustedResponse is the JSON wire format for one issue held out
+// of dispatch by a budget ceiling. Used by GET /api/v1/state and
+// GET /api/v1/{identifier}.
+type budgetExhaustedResponse struct {
+	IssueID            string    `json:"issue_id"`
+	IssueIdentifier    string    `json:"issue_identifier"`
+	DisplayIdentifier  string    `json:"display_identifier,omitempty"`
+	Reason             string    `json:"reason"`
+	UsedSessions       int       `json:"used_sessions"`
+	BudgetSessions     int       `json:"budget_sessions"`
+	UsedTokens         *int64    `json:"used_tokens"`
+	BudgetTokens       int64     `json:"budget_tokens"`
+	UnmeasuredSessions *int      `json:"unmeasured_sessions"`
+	ExhaustedAt        time.Time `json:"exhausted_at"`
+}
+
 type issueDetailResponse struct {
-	IssueIdentifier string                `json:"issue_identifier"`
-	IssueID         string                `json:"issue_id"`
-	Status          string                `json:"status"`
-	Workspace       *workspaceInfo        `json:"workspace"`
-	Attempts        *attemptsInfo         `json:"attempts"`
-	Running         *runningEntryResponse `json:"running"`
-	Retry           *retryEntryResponse   `json:"retry"`
-	RecentEvents    []any                 `json:"recent_events"`
-	LastError       *string               `json:"last_error"`
-	Tracked         map[string]any        `json:"tracked"`
+	IssueIdentifier string                   `json:"issue_identifier"`
+	IssueID         string                   `json:"issue_id"`
+	Status          string                   `json:"status"`
+	Workspace       *workspaceInfo           `json:"workspace"`
+	Attempts        *attemptsInfo            `json:"attempts"`
+	Running         *runningEntryResponse    `json:"running"`
+	Retry           *retryEntryResponse      `json:"retry"`
+	BudgetExhausted *budgetExhaustedResponse `json:"budget_exhausted"`
+	RecentEvents    []any                    `json:"recent_events"`
+	LastError       *string                  `json:"last_error"`
+	Tracked         map[string]any           `json:"tracked"`
 }
 
 type workspaceInfo struct {
@@ -153,6 +172,21 @@ func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse 
 	}
 }
 
+func toBudgetExhaustedResponse(e orchestrator.SnapshotBudgetEntry) budgetExhaustedResponse {
+	return budgetExhaustedResponse{
+		IssueID:            e.IssueID,
+		IssueIdentifier:    e.Identifier,
+		DisplayIdentifier:  e.DisplayID,
+		Reason:             e.Reason,
+		UsedSessions:       e.UsedSessions,
+		BudgetSessions:     e.BudgetSessions,
+		UsedTokens:         e.UsedTokens,
+		BudgetTokens:       e.BudgetTokens,
+		UnmeasuredSessions: e.UnmeasuredSessions,
+		ExhaustedAt:        e.ExhaustedAt,
+	}
+}
+
 func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRates) stateResponse {
 	running := make([]runningEntryResponse, 0, len(snap.Running))
 	for _, e := range snap.Running {
@@ -164,6 +198,11 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRa
 		retrying = append(retrying, toRetryEntryResponse(e))
 	}
 
+	budgetExhausted := make([]budgetExhaustedResponse, 0, len(snap.BudgetExhausted))
+	for _, e := range snap.BudgetExhausted {
+		budgetExhausted = append(budgetExhausted, toBudgetExhaustedResponse(e))
+	}
+
 	rateLimits := snap.RateLimits
 	if rateLimits == nil {
 		rateLimits = map[string]any{}
@@ -172,13 +211,15 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRa
 	resp := stateResponse{
 		GeneratedAt: snap.GeneratedAt.UTC(),
 		Counts: stateCounts{
-			Running:  len(running),
-			Retrying: len(retrying),
+			Running:         len(running),
+			Retrying:        len(retrying),
+			BudgetExhausted: len(budgetExhausted),
 		},
-		Running:     running,
-		Retrying:    retrying,
-		AgentTotals: snap.AgentTotals,
-		RateLimits:  rateLimits,
+		Running:         running,
+		Retrying:        retrying,
+		BudgetExhausted: budgetExhausted,
+		AgentTotals:     snap.AgentTotals,
+		RateLimits:      rateLimits,
 	}
 
 	if len(tokenRates) > 0 {
@@ -374,6 +415,7 @@ func (s *Server) methodNotAllowed(w http.ResponseWriter, r *http.Request, allowe
 func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult) *issueDetailResponse {
 	var runEntry *runningEntryResponse
 	var retryEntry *retryEntryResponse
+	var budgetEntry *budgetExhaustedResponse
 
 	for _, e := range snap.Running {
 		if e.Identifier == identifier {
@@ -389,7 +431,14 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 		}
 	}
 
-	if runEntry == nil && retryEntry == nil {
+	for _, e := range snap.BudgetExhausted {
+		if e.Identifier == identifier {
+			budgetEntry = new(toBudgetExhaustedResponse(e))
+			break
+		}
+	}
+
+	if runEntry == nil && retryEntry == nil && budgetEntry == nil {
 		return nil
 	}
 
@@ -403,6 +452,9 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 	case retryEntry != nil:
 		status = "retrying"
 		issueID = retryEntry.IssueID
+	case budgetEntry != nil:
+		status = "budget_exhausted"
+		issueID = budgetEntry.IssueID
 	default:
 		status = "unknown"
 	}
@@ -439,6 +491,7 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 		Attempts:        attempts,
 		Running:         runEntry,
 		Retry:           retryEntry,
+		BudgetExhausted: budgetEntry,
 		RecentEvents:    []any{},
 		LastError:       lastError,
 		Tracked:         map[string]any{},

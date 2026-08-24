@@ -39,7 +39,7 @@ type OrchestratorStore interface {
 	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
 	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
-	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
+	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) (map[string]int, error)
 	QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error)
 	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
@@ -512,6 +512,17 @@ func (o *Orchestrator) updateGauges(now time.Time) {
 	for host, count := range o.hostPool.Snapshot() {
 		o.metrics.SetSSHHostUsage(host, count)
 	}
+
+	// Always emit a value for every declared budget reason, not only
+	// those currently held, so a reason that clears reports zero rather
+	// than freezing at its last published value.
+	budgetCounts := make(map[string]int, len(knownBudgetReasons))
+	for _, entry := range o.state.BudgetExhausted {
+		budgetCounts[entry.Reason]++
+	}
+	for _, reason := range knownBudgetReasons {
+		o.metrics.SetBudgetExhaustedIssues(reason, budgetCounts[reason])
+	}
 }
 
 // handleTick executes a single poll-and-dispatch cycle: preflight,
@@ -762,6 +773,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		slog.Int("blockers_unresolved", blockersUnresolvedHeld),
 		slog.Int("blockers_not_read", blockersNotReadHeld),
 		slog.Int("blockers_incomplete", blockersIncompleteHeld),
+		slog.Int("budget_exhausted", len(o.state.BudgetExhausted)),
 	)
 
 	o.notifyObservers()
@@ -1090,50 +1102,59 @@ func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.Ser
 	}
 }
 
-// rebuildBudgetExhausted replaces the BudgetExhausted set and its reason
-// map once per tick from run_history, as the union of the session-count
-// and token-sum gates scoped to the candidate set. Token budget takes
-// precedence over the ordinary session budget. On a query error for one
-// axis, the prior entries attributed to that axis are folded back in so a
-// transient error never drops an issue mid-tick, while the other axis
-// keeps its fresh results. Must be called from the event loop goroutine.
+// rebuildBudgetExhausted replaces the BudgetExhausted set once per tick
+// from run_history, as the union of the session-count and token-sum
+// gates scoped to the candidate set. Token budget takes precedence over
+// the ordinary session budget. On a query error for one axis, the prior
+// entries attributed to that axis are folded back in so a transient
+// error never drops an issue mid-tick, while the other axis keeps its
+// fresh results. An issue entering the set for the first time under a
+// given reason, since restart or since its last hold, produces one
+// per-issue log record and one counter increment; a hold the memory
+// already knows about produces neither. Must be called from the event
+// loop goroutine.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
 	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
-		o.state.BudgetExhausted = make(map[string]struct{})
-		o.state.BudgetExhaustedReason = make(map[string]string)
+		o.state.BudgetExhausted = make(map[string]*BudgetExhaustedEntry)
 		o.state.TokenBudgetIncomplete = make(map[string]struct{})
 		return
 	}
 
 	candidateIDs := make([]string, len(sorted))
 	identifierByID := make(map[string]string, len(sorted))
+	displayIDByID := make(map[string]string, len(sorted))
 	for i, issue := range sorted {
 		candidateIDs[i] = issue.ID
 		identifierByID[issue.ID] = issue.Identifier
+		displayIDByID[issue.ID] = issue.DisplayID
 	}
 
 	prior := o.state.BudgetExhausted
-	priorReason := o.state.BudgetExhaustedReason
-	fresh := make(map[string]struct{})
-	freshReason := make(map[string]string)
+	fresh := make(map[string]*BudgetExhaustedEntry)
+	now := time.Now().UTC()
 
 	if cfg.Agent.MaxSessions > 0 {
-		sessionExhausted, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
+		counts, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
 		if qErr != nil {
 			o.logger.Warn("budget exhaustion query failed, retaining previous set",
 				slog.Any("error", qErr),
 			)
-			for id := range prior {
-				if priorReason[id] != budgetReasonSession {
+			for id, entry := range prior {
+				if entry.Reason != budgetReasonSession {
 					continue
 				}
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonSession
+				fresh[id] = entry
 			}
 		} else {
-			for _, id := range sessionExhausted {
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonSession
+			for id, count := range counts {
+				fresh[id] = &BudgetExhaustedEntry{
+					Identifier:     identifierByID[id],
+					DisplayID:      displayIDByID[id],
+					Reason:         budgetReasonSession,
+					UsedSessions:   count,
+					BudgetSessions: cfg.Agent.MaxSessions,
+					BudgetTokens:   int64(cfg.Agent.MaxTokens),
+				}
 			}
 		}
 	}
@@ -1145,20 +1166,31 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 			o.logger.Warn("token budget exhaustion query failed, retaining previous set",
 				slog.Any("error", qErr),
 			)
-			for id := range prior {
-				if priorReason[id] != budgetReasonToken {
+			for id, entry := range prior {
+				if entry.Reason != budgetReasonToken {
 					continue
 				}
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonToken
+				fresh[id] = entry
 			}
 		} else {
 			for _, id := range candidateIDs {
 				usage := usageByIssue[id]
 				if usage.TotalTokens >= int64(cfg.Agent.MaxTokens) {
-					fresh[id] = struct{}{}
-					freshReason[id] = budgetReasonToken
+					fresh[id] = &BudgetExhaustedEntry{
+						Identifier:         identifierByID[id],
+						DisplayID:          displayIDByID[id],
+						Reason:             budgetReasonToken,
+						UsedSessions:       usage.Sessions,
+						BudgetSessions:     cfg.Agent.MaxSessions,
+						UsedTokens:         &usage.TotalTokens,
+						BudgetTokens:       int64(cfg.Agent.MaxTokens),
+						UnmeasuredSessions: &usage.UnmeasuredSessions,
+					}
 					continue
+				}
+				if entry, held := fresh[id]; held {
+					entry.UsedTokens = &usage.TotalTokens
+					entry.UnmeasuredSessions = &usage.UnmeasuredSessions
 				}
 				if usage.UnmeasuredSessions == 0 {
 					continue
@@ -1178,8 +1210,37 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	}
 	o.state.TokenBudgetIncomplete = freshIncomplete
 
+	for id, entry := range fresh {
+		told, wasTold := o.state.BudgetAnnounced[id]
+		if wasTold && told.Reason == entry.Reason {
+			entry.ExhaustedAt = told.At
+			continue
+		}
+		entry.ExhaustedAt = now
+		o.state.BudgetAnnounced[id] = BudgetAnnouncement{Reason: entry.Reason, At: now}
+		issueLog := logging.WithIssue(o.logger, id, entry.Identifier)
+		attrs := []slog.Attr{
+			slog.String("reason", entry.Reason),
+			slog.Int("used_sessions", entry.UsedSessions),
+			slog.Int("budget_sessions", entry.BudgetSessions),
+		}
+		if entry.UsedTokens != nil {
+			attrs = append(attrs,
+				slog.Int64("used_tokens", *entry.UsedTokens),
+				slog.Int64("budget_tokens", entry.BudgetTokens),
+			)
+		}
+		issueLog.LogAttrs(ctx, slog.LevelWarn, "candidate held by budget ceiling", attrs...)
+		o.metrics.IncBudgetExhaustions(entry.Reason)
+	}
+
+	for _, id := range candidateIDs {
+		if _, held := fresh[id]; !held {
+			delete(o.state.BudgetAnnounced, id)
+		}
+	}
+
 	o.state.BudgetExhausted = fresh
-	o.state.BudgetExhaustedReason = freshReason
 }
 
 // drainRunningWorkers cancels all running worker contexts and waits for

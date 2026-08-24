@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -45,13 +46,19 @@ const (
 	handoffWithheld = "withheld"
 )
 
-// Dispatch-gate reason values recorded in [State.BudgetExhaustedReason] and
-// the runtime snapshot. Token budget takes precedence over the ordinary
-// all-session budget.
+// Dispatch-gate reason values recorded in [BudgetExhaustedEntry.Reason]
+// and in the runtime snapshot. Token budget takes precedence over the
+// ordinary all-session budget.
 const (
 	budgetReasonToken   = "token_budget"
 	budgetReasonSession = "session_budget"
 )
+
+// knownBudgetReasons lists every declared dispatch-gate budget reason, in
+// the order the budget-exhausted gauge reports them. A reason added to
+// the constant block above must be added here too, so the gauge recompute
+// reports a value for it on every pass.
+var knownBudgetReasons = []string{budgetReasonSession, budgetReasonToken}
 
 // AgentTotals holds cumulative token and runtime counters across all ended
 // agent sessions. These values are persisted to SQLite (aggregate_metrics
@@ -766,6 +773,30 @@ type MergeCompletionReactionConfig struct {
 	MaxRetries      int
 }
 
+// BudgetExhaustedEntry is the runtime view of one issue held out of
+// dispatch by a per-issue budget ceiling. Owned by the single-writer
+// event loop; replaced wholesale by the per-tick rebuild, and updated
+// in place by the retry lane's own block.
+type BudgetExhaustedEntry struct {
+	Identifier         string // human-readable ticket key; empty when the candidate carried none
+	DisplayID          string // qualified form of Identifier; empty when Identifier is display-ready
+	Reason             string // budgetReasonSession or budgetReasonToken
+	UsedSessions       int    // completed sessions counted from run history
+	BudgetSessions     int    // configured agent.max_sessions; 0 means unlimited
+	UsedTokens         *int64 // nil when the token ceiling was not evaluated for this issue
+	BudgetTokens       int64  // configured agent.max_tokens; 0 means unlimited
+	UnmeasuredSessions *int   // nil exactly when UsedTokens is nil; else runs whose spend is unknown
+	ExhaustedAt        time.Time
+}
+
+// BudgetAnnouncement remembers what the operator has already been told
+// about one issue held by a budget ceiling, so a hold that leaves and
+// re-enters the candidate set is not announced twice.
+type BudgetAnnouncement struct {
+	Reason string
+	At     time.Time
+}
+
 // ParkedEntry is the runtime view of one issue held out of primary dispatch
 // until the orchestrator observes that a person acted on it.
 type ParkedEntry struct {
@@ -826,19 +857,30 @@ type State struct {
 	// Bookkeeping only — not used for dispatch gating.
 	Completed map[string]struct{}
 
-	// BudgetExhausted is the set of issue IDs blocked by a durable
-	// run_history-derived effort budget: the configured max_sessions
-	// budget or the max_tokens budget. Rebuilt from batch SQLite queries
-	// at the start of each poll tick and updated inline by worker-exit
-	// and retry-timer handling. [ShouldDispatch] checks this set before
-	// dispatch.
-	BudgetExhausted map[string]struct{}
+	// BudgetExhausted maps issue ID to the runtime view of one issue
+	// blocked by a durable run_history-derived effort budget: the
+	// configured max_sessions budget or the max_tokens budget. Written
+	// from exactly two places, both on the single-writer event loop: the
+	// poll tick's rebuild, which replaces the map wholesale, and the
+	// retry lane's blockBudget, which writes and enriches one entry.
+	// Read by the three dispatch membership tests, which check only
+	// membership, and by [RuntimeSnapshot], which copies each entry by
+	// value. [ShouldDispatch] checks this map before dispatch.
+	BudgetExhausted map[string]*BudgetExhaustedEntry
 
-	// BudgetExhaustedReason maps issue ID to the budget that fired for
-	// that issue: "token_budget" or "session_budget". It is kept in
-	// lockstep with BudgetExhausted. Owned by the single-writer event
-	// loop.
-	BudgetExhaustedReason map[string]string
+	// BudgetAnnounced maps issue ID to what the operator has already
+	// been told about a budget hold on that issue, so a hold that
+	// leaves and re-enters the candidate set under the same reason is
+	// not announced twice. It is written by the rebuild's announcement
+	// step, the rebuild's evidence-based prune, and the retry lane's
+	// post-gate announcement block. It is read by blockBudget, for
+	// ExhaustedAt only. No dispatch gate and no snapshot reads it. An
+	// entry survives at most until the issue's hold clears through a
+	// candidate observation under the current ceiling, or until the
+	// process restarts, whichever comes first; an issue that never
+	// returns as a candidate keeps its entry for the rest of the
+	// orchestrator's lifetime.
+	BudgetAnnounced map[string]BudgetAnnouncement
 
 	// Parked maps issue ID to the runtime view of an issue held out of
 	// primary dispatch until the orchestrator observes that a person acted
@@ -955,8 +997,8 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		Claimed:               make(map[string]struct{}),
 		RetryAttempts:         make(map[string]*RetryEntry),
 		Completed:             make(map[string]struct{}),
-		BudgetExhausted:       make(map[string]struct{}),
-		BudgetExhaustedReason: make(map[string]string),
+		BudgetExhausted:       make(map[string]*BudgetExhaustedEntry),
+		BudgetAnnounced:       make(map[string]BudgetAnnouncement),
 		Parked:                make(map[string]*ParkedEntry),
 		AgentTotals:           totals,
 		ReactionAttempts:      make(map[string]int),
@@ -1026,6 +1068,22 @@ type SnapshotRetryEntry struct {
 	Error      string `json:"error"`
 }
 
+// SnapshotBudgetEntry is a read-only, value-copied view of one issue held
+// out of dispatch by a budget ceiling, for observability consumers.
+// Produced by [RuntimeSnapshot].
+type SnapshotBudgetEntry struct {
+	IssueID            string    `json:"issue_id"`
+	Identifier         string    `json:"issue_identifier"`
+	DisplayID          string    `json:"display_identifier,omitempty"`
+	Reason             string    `json:"reason"`
+	UsedSessions       int       `json:"used_sessions"`
+	BudgetSessions     int       `json:"budget_sessions"`
+	UsedTokens         *int64    `json:"used_tokens"`
+	BudgetTokens       int64     `json:"budget_tokens"`
+	UnmeasuredSessions *int      `json:"unmeasured_sessions"`
+	ExhaustedAt        time.Time `json:"exhausted_at"`
+}
+
 // SnapshotAgentTotals holds aggregate token counts and runtime seconds
 // at a point in time. Unlike [AgentTotals], SecondsRunning includes
 // elapsed time from currently active sessions.
@@ -1040,17 +1098,16 @@ type SnapshotAgentTotals struct {
 // RuntimeSnapshotResult is a point-in-time capture of the orchestrator's
 // runtime state for observability consumers. Produced by [RuntimeSnapshot].
 type RuntimeSnapshotResult struct {
-	GeneratedAt           time.Time              `json:"generated_at"`
-	Running               []SnapshotRunningEntry `json:"running"`
-	Retrying              []SnapshotRetryEntry   `json:"retrying"`
-	AgentTotals           SnapshotAgentTotals    `json:"agent_totals"`
-	RateLimits            map[string]any         `json:"rate_limits"`
-	BudgetExhaustedCount  int                    `json:"budget_exhausted_count"`
-	BudgetExhausted       []string               `json:"budget_exhausted,omitempty"`
-	BudgetExhaustedReason map[string]string      `json:"budget_exhausted_reason,omitempty"`
-	ParkedCount           int                    `json:"parked_count"`
-	Parked                []string               `json:"parked,omitempty"`
-	ParkedReason          map[string]string      `json:"parked_reason,omitempty"`
+	GeneratedAt          time.Time              `json:"generated_at"`
+	Running              []SnapshotRunningEntry `json:"running"`
+	Retrying             []SnapshotRetryEntry   `json:"retrying"`
+	AgentTotals          SnapshotAgentTotals    `json:"agent_totals"`
+	RateLimits           map[string]any         `json:"rate_limits"`
+	BudgetExhaustedCount int                    `json:"budget_exhausted_count"`
+	BudgetExhausted      []SnapshotBudgetEntry  `json:"budget_exhausted"`
+	ParkedCount          int                    `json:"parked_count"`
+	Parked               []string               `json:"parked,omitempty"`
+	ParkedReason         map[string]string      `json:"parked_reason,omitempty"`
 }
 
 // ActiveElapsedSeconds returns the sum of wall-clock elapsed seconds
@@ -1162,20 +1219,25 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	}
 
 	snap.BudgetExhaustedCount = len(state.BudgetExhausted)
-	if len(state.BudgetExhausted) > 0 {
-		ids := make([]string, 0, len(state.BudgetExhausted))
-		for id := range state.BudgetExhausted {
-			ids = append(ids, id)
-		}
-		slices.Sort(ids)
-		snap.BudgetExhausted = ids
-
-		reasons := make(map[string]string, len(state.BudgetExhausted))
-		for _, id := range ids {
-			reasons[id] = state.BudgetExhaustedReason[id]
-		}
-		snap.BudgetExhaustedReason = reasons
+	budgetExhausted := make([]SnapshotBudgetEntry, 0, len(state.BudgetExhausted))
+	for id, entry := range state.BudgetExhausted {
+		budgetExhausted = append(budgetExhausted, SnapshotBudgetEntry{
+			IssueID:            id,
+			Identifier:         entry.Identifier,
+			DisplayID:          entry.DisplayID,
+			Reason:             entry.Reason,
+			UsedSessions:       entry.UsedSessions,
+			BudgetSessions:     entry.BudgetSessions,
+			UsedTokens:         entry.UsedTokens,
+			BudgetTokens:       entry.BudgetTokens,
+			UnmeasuredSessions: entry.UnmeasuredSessions,
+			ExhaustedAt:        entry.ExhaustedAt,
+		})
 	}
+	slices.SortFunc(budgetExhausted, func(a, b SnapshotBudgetEntry) int {
+		return cmp.Or(cmp.Compare(a.Identifier, b.Identifier), cmp.Compare(a.IssueID, b.IssueID))
+	})
+	snap.BudgetExhausted = budgetExhausted
 
 	snap.ParkedCount = len(state.Parked)
 	if len(state.Parked) > 0 {

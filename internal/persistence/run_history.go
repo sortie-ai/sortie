@@ -404,12 +404,13 @@ func (s *Store) ResetHandoffAbsenceSequence(ctx context.Context, issueID string)
 	return nil
 }
 
-// QueryBudgetExhaustedIssues returns issue IDs from candidateIDs whose
-// run_history entry count meets or exceeds maxSessions. Returns an empty
-// non-nil slice when no issues qualify or candidateIDs is empty.
-func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error) {
+// QueryBudgetExhaustedIssues returns, for each candidate in candidateIDs
+// whose run_history entry count meets or exceeds maxSessions, that count
+// keyed by issue ID. Returns an empty non-nil map when no issues qualify
+// or candidateIDs is empty.
+func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) (map[string]int, error) {
 	if len(candidateIDs) == 0 {
-		return []string{}, nil
+		return map[string]int{}, nil
 	}
 
 	placeholders := strings.Repeat("?,", len(candidateIDs))
@@ -422,7 +423,7 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	args = append(args, maxSessions)
 
 	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(candidateIDs); no user data in format string
-		`SELECT issue_id FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id HAVING COUNT(*) >= ?`,
+		`SELECT issue_id, COUNT(*) FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id HAVING COUNT(*) >= ?`,
 		placeholders,
 	)
 
@@ -432,18 +433,19 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	exhaustedIDs := []string{}
+	exhausted := map[string]int{}
 	for rows.Next() {
 		var issueID string
-		if err := rows.Scan(&issueID); err != nil {
+		var count int
+		if err := rows.Scan(&issueID, &count); err != nil {
 			return nil, fmt.Errorf("scan budget exhausted issue: %w", err)
 		}
-		exhaustedIDs = append(exhaustedIDs, issueID)
+		exhausted[issueID] = count
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query budget exhausted issues: %w", err)
 	}
-	return exhaustedIDs, nil
+	return exhausted, nil
 }
 
 // IssueTokenUsage is the per-issue token spend read by the token
