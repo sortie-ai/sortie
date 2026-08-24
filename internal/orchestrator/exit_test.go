@@ -1816,8 +1816,8 @@ func TestHandleWorkerExit_HandoffEvidenceObservedAbsenceWithholds(t *testing.T) 
 	if len(tracker.commentCalls) != 0 {
 		t.Errorf("completion comment posted for withheld run: %+v", tracker.commentCalls)
 	}
-	if got := tracker.fetchStatesCalls.Load(); got != 0 {
-		t.Errorf("FetchIssueStatesByIDs called %d times, want 0 before a withheld handoff", got)
+	if got := tracker.fetchStatesCalls.Load(); got != 1 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 1 (the verification read that precedes a withheld handoff)", got)
 	}
 	if _, ok := state.Claimed[issueID]; !ok {
 		t.Error("claim released after withheld handoff, want issue to remain active and claimed")
@@ -1862,6 +1862,948 @@ func TestHandleWorkerExit_HandoffEvidenceObservedAbsenceWithholds(t *testing.T) 
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log output missing %q\ngot: %s", want, logs.String())
 		}
+	}
+}
+
+// --- Withheld-handoff verification-read suppression tests ---
+
+// suppressedExitWant carries the read-site log values a suppressed
+// exit's records are asserted against.
+type suppressedExitWant struct {
+	VerifiedState string
+	Policy        config.HandoffEvidencePolicy
+	Verdict       handoffEvidenceVerdict
+}
+
+// suppressedShapeFixture holds the collaborators a suppressed-exit test
+// shares: a tracker whose verification read reports a terminal state,
+// a failure comment configured so only its absence proves the
+// disposition changed, and a Git workspace built unchanged (absence of
+// work observed under the Observed policy) for tests that consume it.
+type suppressedShapeFixture struct {
+	Store         *mockExitStore
+	Tracker       *mockTrackerAdapter
+	Metrics       *spyMetrics
+	State         *State
+	Params        HandleWorkerExitParams
+	Logs          *bytes.Buffer
+	WorkspacePath string
+	Baseline      *workspace.HandoffEvidenceBaseline
+}
+
+func newSuppressedShapeFixture(t *testing.T, issueID string) suppressedShapeFixture {
+	t.Helper()
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "Done"
+			}
+			return result, nil
+		},
+	}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	params.CommentsConfig.OnFailure = true
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+	return suppressedShapeFixture{
+		Store: store, Tracker: tracker, Metrics: spy, State: state, Params: params, Logs: &logs,
+		WorkspacePath: dir, Baseline: baseline,
+	}
+}
+
+// assertSuppressedExitEffects asserts the full effect set a suppressed
+// exit produces: exactly one verification read, no transition, no
+// comment call, one succeeded run-history row with no error, no
+// absence-count query or park, no retry of any kind, the claim
+// released, no pending reaction, one skipped handoff-transition
+// increment, and the read-site log record naming the discarded
+// verdict.
+func assertSuppressedExitEffects(t *testing.T, f suppressedShapeFixture, issueID string, want suppressedExitWant) {
+	t.Helper()
+
+	if got := f.Tracker.fetchStatesCalls.Load(); got != 1 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 1", got)
+	}
+	if len(f.Tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(f.Tracker.transitionCalls))
+	}
+	if len(f.Tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue called %d times, want 0: %+v", len(f.Tracker.commentCalls), f.Tracker.commentCalls)
+	}
+	if len(f.Store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory calls = %d, want 1", len(f.Store.runHistories))
+	}
+	if got := f.Store.runHistories[0].Status; got != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want %q", got, "succeeded")
+	}
+	if f.Store.runHistories[0].Error != nil {
+		t.Errorf("RunHistory.Error = %q, want nil", *f.Store.runHistories[0].Error)
+	}
+	if len(f.Store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("QueryConsecutiveHandoffAbsenceCounts issue IDs = %v, want none", f.Store.absenceCountedIssueIDs)
+	}
+	if len(f.Store.parkedIssues) != 0 {
+		t.Errorf("UpsertParkedIssue calls = %d, want 0", len(f.Store.parkedIssues))
+	}
+	if _, ok := f.State.Parked[issueID]; ok {
+		t.Error("issue parked after a suppressed exit, want not parked")
+	}
+	if _, ok := f.State.RetryAttempts[issueID]; ok {
+		t.Error("RetryAttempts entry present after a suppressed exit, want none")
+	}
+	if len(f.Store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry calls = %d, want 0", len(f.Store.retryEntries))
+	}
+	if _, ok := f.State.Claimed[issueID]; ok {
+		t.Error("claim retained after a suppressed exit, want released")
+	}
+	if len(f.State.PendingReactions) != 0 {
+		t.Errorf("PendingReactions = %v, want none", f.State.PendingReactions)
+	}
+	if len(f.Metrics.handoffTransitions) != 1 || f.Metrics.handoffTransitions[0] != handoffSkipped {
+		t.Errorf("handoffTransitions = %v, want [%s]", f.Metrics.handoffTransitions, handoffSkipped)
+	}
+
+	output := f.Logs.String()
+	if !strings.Contains(output, "withheld handoff suppressed for terminal issue") {
+		t.Errorf("log output missing %q\ngot: %s", "withheld handoff suppressed for terminal issue", output)
+	}
+	if !strings.Contains(output, "state="+want.VerifiedState) {
+		t.Errorf("log output missing verified state %q\ngot: %s", want.VerifiedState, output)
+	}
+	if !strings.Contains(output, "state_source=verified") {
+		t.Errorf("log output missing state_source=verified\ngot: %s", output)
+	}
+	if !strings.Contains(output, "policy="+string(want.Policy)) {
+		t.Errorf("log output missing policy=%q\ngot: %s", want.Policy, output)
+	}
+	if !strings.Contains(output, `verdict="`+string(want.Verdict)+`"`) {
+		t.Errorf("log output missing verdict=%q\ngot: %s", want.Verdict, output)
+	}
+	if strings.Contains(output, "handoff withheld by evidence policy") {
+		t.Errorf("log output contains the withheld-disposition warning, want suppressed:\n%s", output)
+	}
+}
+
+// TestHandleWorkerExit_SuppressedTerminalShape1SoftStopWorkerSource is
+// exit shape one: a soft-stop exit whose resolved observation source is
+// the worker's own per-turn refresh.
+func TestHandleWorkerExit_SuppressedTerminalShape1SoftStopWorkerSource(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "SUP-SHAPE1"
+	f := newSuppressedShapeFixture(t, issueID)
+
+	HandleWorkerExit(f.State, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		TurnsCompleted:          2,
+		WorkspacePath:           f.WorkspacePath,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: f.Baseline,
+		AgentAdapter:            "mock",
+		SoftStop:                true,
+		SoftStopReason:          "needs-human-review",
+		ObservedIssueState:      "In Progress",
+	}, f.Params)
+
+	assertSuppressedExitEffects(t, f, issueID, suppressedExitWant{
+		VerifiedState: "Done",
+		Policy:        config.HandoffEvidenceObserved,
+		Verdict:       handoffAbsenceObserved,
+	})
+}
+
+// TestHandleWorkerExit_SuppressedTerminalShape2NonSoftStopWorkerSource is
+// exit shape two: a non-soft-stop exit whose resolved observation source
+// is the worker's own per-turn refresh.
+func TestHandleWorkerExit_SuppressedTerminalShape2NonSoftStopWorkerSource(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "SUP-SHAPE2"
+	f := newSuppressedShapeFixture(t, issueID)
+
+	HandleWorkerExit(f.State, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		TurnsCompleted:          2,
+		WorkspacePath:           f.WorkspacePath,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: f.Baseline,
+		AgentAdapter:            "mock",
+		ObservedIssueState:      "In Progress",
+	}, f.Params)
+
+	assertSuppressedExitEffects(t, f, issueID, suppressedExitWant{
+		VerifiedState: "Done",
+		Policy:        config.HandoffEvidenceObserved,
+		Verdict:       handoffAbsenceObserved,
+	})
+}
+
+// TestHandleWorkerExit_SuppressedTerminalShape3NonSoftStopSnapshotSource
+// is exit shape three: a non-soft-stop exit whose resolved observation
+// falls through to the dispatch-time snapshot because no per-turn
+// refresh ran.
+func TestHandleWorkerExit_SuppressedTerminalShape3NonSoftStopSnapshotSource(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "SUP-SHAPE3"
+	f := newSuppressedShapeFixture(t, issueID)
+
+	HandleWorkerExit(f.State, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		TurnsCompleted:          2,
+		WorkspacePath:           f.WorkspacePath,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: f.Baseline,
+		AgentAdapter:            "mock",
+	}, f.Params)
+
+	assertSuppressedExitEffects(t, f, issueID, suppressedExitWant{
+		VerifiedState: "Done",
+		Policy:        config.HandoffEvidenceObserved,
+		Verdict:       handoffAbsenceObserved,
+	})
+}
+
+// TestHandleWorkerExit_SuppressedTerminalShape4SoftStopSnapshotSource is
+// exit shape four: a soft-stop exit whose resolved observation falls
+// through to the dispatch-time snapshot, the combination a field report
+// of this behavior would most likely produce.
+func TestHandleWorkerExit_SuppressedTerminalShape4SoftStopSnapshotSource(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "SUP-SHAPE4"
+	f := newSuppressedShapeFixture(t, issueID)
+
+	HandleWorkerExit(f.State, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		TurnsCompleted:          2,
+		WorkspacePath:           f.WorkspacePath,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: f.Baseline,
+		AgentAdapter:            "mock",
+		SoftStop:                true,
+		SoftStopReason:          "needs-human-review",
+	}, f.Params)
+
+	assertSuppressedExitEffects(t, f, issueID, suppressedExitWant{
+		VerifiedState: "Done",
+		Policy:        config.HandoffEvidenceObserved,
+		Verdict:       handoffAbsenceObserved,
+	})
+}
+
+// TestHandleWorkerExit_WithheldReadGating covers the read-gating decision
+// table: the five conditions under which the withheld-path verification
+// read fires or does not.
+func TestHandleWorkerExit_WithheldReadGating(t *testing.T) {
+	t.Parallel()
+
+	t.Run("active-state control: withheld disposition holds in full", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "GATE-ACTIVE"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "In Progress"
+				}
+				return result, nil
+			},
+		}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+		state.TrackerOpsWg.Wait()
+
+		if got := tracker.fetchStatesCalls.Load(); got != 1 {
+			t.Errorf("FetchIssueStatesByIDs called %d times, want 1", got)
+		}
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
+			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
+		}
+		if store.runHistories[0].Error == nil || !strings.HasPrefix(*store.runHistories[0].Error, persistence.HandoffAbsenceErrorPrefix) {
+			t.Errorf("RunHistory.Error = %v, want the %q prefix", store.runHistories[0].Error, persistence.HandoffAbsenceErrorPrefix)
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
+		}
+		if len(store.absenceCountedIssueIDs) != 1 {
+			t.Errorf("QueryConsecutiveHandoffAbsenceCounts issue IDs = %v, want one call", store.absenceCountedIssueIDs)
+		}
+		retry, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("retry not scheduled, want the withheld disposition to schedule one")
+		}
+		if retry.scheduledDelayMS != backoffBaseMS {
+			t.Errorf("retry delay = %d, want exponential-backoff base %d", retry.scheduledDelayMS, backoffBaseMS)
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released, want retained on the withheld disposition")
+		}
+		if len(tracker.commentCalls) != 1 {
+			t.Errorf("CommentIssue called %d times, want 1 (on_failure enabled)", len(tracker.commentCalls))
+		}
+	})
+
+	t.Run("TerminalStates empty: no read, unchanged from pinned revision", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "GATE-NOTERMINAL"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.TerminalStates = nil
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+
+		if got := tracker.fetchStatesCalls.Load(); got != 0 {
+			t.Errorf("FetchIssueStatesByIDs called %d times, want 0 (no terminal states configured)", got)
+		}
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
+			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
+		}
+		if _, ok := state.RetryAttempts[issueID]; !ok {
+			t.Error("retry not scheduled, want the withheld disposition unchanged")
+		}
+	})
+
+	t.Run("TrackerAdapter nil: no read, no panic, withheld disposition preserved", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "GATE-NILADAPTER"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := defaultExitParams(t, store)
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+		params.TerminalStates = []string{"Done"}
+		// TrackerAdapter is left nil: the gate must exclude the read
+		// without panicking on a nil-interface call.
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("HandleWorkerExit panicked: %v", r)
+				}
+			}()
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:                 issueID,
+				Identifier:              issueID + "-ident",
+				ExitKind:                WorkerExitNormal,
+				WorkspacePath:           dir,
+				HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+				HandoffEvidenceBaseline: baseline,
+				AgentAdapter:            "mock",
+			}, params)
+		}()
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
+			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
+		}
+		if _, ok := state.RetryAttempts[issueID]; !ok {
+			t.Error("retry not scheduled, want the withheld disposition preserved")
+		}
+	})
+
+	t.Run("off policy: no verdict computed, zero reads", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "GATE-OFF"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+		// TerminalStates is intentionally left unset: the handoff-write
+		// path's own pre-existing verification read (unrelated to this
+		// change) also gates only on len(TerminalStates) > 0, and
+		// configuring it here would let that read fire too and confound
+		// the zero-call assertion below. The property under test is that
+		// the off policy skips evidence evaluation entirely, before
+		// either read's gate is reached.
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceOff,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+
+		if got := tracker.fetchStatesCalls.Load(); got != 0 {
+			t.Errorf("FetchIssueStatesByIDs called %d times, want 0 under the off policy", got)
+		}
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue called %d times, want 1 (the off policy never withholds)", len(tracker.transitionCalls))
+		}
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "succeeded" {
+			t.Errorf("run histories = %+v, want one succeeded row", store.runHistories)
+		}
+	})
+
+	t.Run("work observed: only the write path's own read fires", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "GATE-WORKOBSERVED"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("work\n"), 0o600); err != nil {
+			t.Fatalf("write work file: %v", err)
+		}
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "In Progress"
+				}
+				return result, nil
+			},
+		}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+
+		if got := tracker.fetchStatesCalls.Load(); got != 1 {
+			t.Errorf("FetchIssueStatesByIDs called %d times, want 1 (the write path's own read, not this change's)", got)
+		}
+		if len(tracker.transitionCalls) != 1 {
+			t.Errorf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+		}
+	})
+}
+
+// TestHandleWorkerExit_WithheldReadFailOpen covers the read's two
+// fail-open causes: a transport error and a response that omits the
+// exiting issue.
+func TestHandleWorkerExit_WithheldReadFailOpen(t *testing.T) {
+	t.Parallel()
+
+	t.Run("read error: fail open, one Warn, positive retry line", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "FAILOPEN-ERROR"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		readErr := errors.New("tracker unavailable")
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
+				return nil, readErr
+			},
+		}
+		spy := newCommentAwareMetrics()
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+		spy.waitComment(t)
+
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
+			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffWithheld {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffWithheld)
+		}
+		retry, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("retry not scheduled, want the withheld disposition preserved on a fail-open read")
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released, want retained on the withheld disposition")
+		}
+
+		output := logs.String()
+		if !strings.Contains(output, "withheld handoff verification read failed, recording withheld handoff") {
+			t.Errorf("log output missing the fail-open Warn\ngot: %s", output)
+		}
+		if !strings.Contains(output, readErr.Error()) {
+			t.Errorf("log output missing the read error %q\ngot: %s", readErr.Error(), output)
+		}
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		wantRetryLine := fmt.Sprintf("Retry: yes (attempt %d)", retry.Attempt)
+		if !strings.Contains(tracker.commentCalls[0].Text, wantRetryLine) {
+			t.Errorf("failure comment = %q, want it to contain %q", tracker.commentCalls[0].Text, wantRetryLine)
+		}
+	})
+
+	t.Run("read omits the issue: fail open, no new log record", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "FAILOPEN-OMIT"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
+				return map[string]string{}, nil
+			},
+		}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		var logs bytes.Buffer
+		params.Logger = debugLogger(t, &logs)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+
+		if len(store.runHistories) != 1 || store.runHistories[0].Status != "failed" {
+			t.Fatalf("run histories = %+v, want one failed row", store.runHistories)
+		}
+		if _, ok := state.RetryAttempts[issueID]; !ok {
+			t.Error("retry not scheduled, want the withheld disposition preserved")
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released, want retained on the withheld disposition")
+		}
+
+		output := logs.String()
+		if strings.Contains(output, "withheld handoff verification read failed") {
+			t.Errorf("log output contains the fail-open Warn, want none for an omitted issue:\n%s", output)
+		}
+		if strings.Contains(output, "withheld handoff suppressed for terminal issue") {
+			t.Errorf("log output contains the suppression Info, want none for an omitted issue:\n%s", output)
+		}
+	})
+}
+
+// TestHandleWorkerExit_StrictUndeterminableTerminalSuppresses covers the
+// strict-policy row of the read-gating table: an undeterminable verdict
+// withholds under strict, and a terminal verification read still
+// suppresses it.
+func TestHandleWorkerExit_StrictUndeterminableTerminalSuppresses(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "STRICT-UNDETERMINED"
+	f := newSuppressedShapeFixture(t, issueID)
+
+	HandleWorkerExit(f.State, WorkerResult{
+		IssueID:               issueID,
+		Identifier:            issueID + "-ident",
+		ExitKind:              WorkerExitNormal,
+		TurnsCompleted:        1,
+		HandoffEvidencePolicy: config.HandoffEvidenceStrict,
+		AgentAdapter:          "mock",
+		// WorkspacePath and HandoffEvidenceBaseline are deliberately not
+		// taken from the fixture: an absent baseline makes the verdict
+		// undeterminable regardless of workspace state, and this test's
+		// whole point is that path, not the unchanged-workspace path the
+		// fixture's Git repository exists to support for its other callers.
+	}, f.Params)
+
+	assertSuppressedExitEffects(t, f, issueID, suppressedExitWant{
+		VerifiedState: "Done",
+		Policy:        config.HandoffEvidenceStrict,
+		Verdict:       handoffEvidenceUndetermined,
+	})
+}
+
+// TestHandleWorkerExit_SuppressedExitDropsForeignIncumbent pins the
+// terminal disposition's unconditional cancellation of a queued
+// retry-slot incumbent: a suppressed exit drops it exactly as the
+// early-observed terminal disposition already does.
+func TestHandleWorkerExit_SuppressedExitDropsForeignIncumbent(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "SUPPRESSED-INCUMBENT"
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "Done"
+			}
+			return result, nil
+		},
+	}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      9,
+		ReactionKind: ReactionKindCI,
+	}
+	params := handoffEvidenceExitParams(t, store, tracker, &spyMetrics{})
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+
+	if _, ok := state.RetryAttempts[issueID]; ok {
+		t.Error("RetryAttempts entry survived a suppressed exit, want destroyed even against a foreign incumbent")
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("claim survived a suppressed exit, want released")
+	}
+	if len(store.deletedRetryIDs) != 0 {
+		t.Errorf("DeleteRetryEntry called for %v, want none: a suppressed exit never persists a deletion for a foreign incumbent's row", store.deletedRetryIDs)
+	}
+	if strings.Contains(logs.String(), "retry slot occupied, deferring") {
+		t.Errorf("log output contains a retry-slot deferral, want none for a suppressed exit:\n%s", logs.String())
+	}
+}
+
+// TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily pins the
+// retry-promise invariant across the withheld family: an operator-facing
+// message never asserts a retry the exit did not actually leave pending.
+func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T) {
+	t.Parallel()
+
+	t.Run("suppressed: no comment mentions a retry", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "PROMISE-SUPPRESSED"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		}
+		spy := newCommentAwareMetrics()
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+		params.CommentsConfig.OnCompletion = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		spy.waitComment(t)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		if strings.Contains(strings.ToLower(tracker.commentCalls[0].Text), "retry") {
+			t.Errorf("comment mentions a retry, want none for a suppressed exit\ngot: %q", tracker.commentCalls[0].Text)
+		}
+	})
+
+	t.Run("parked at ceiling: negative form, no retry entry", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "PROMISE-PARKED"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		seedMockHandoffAbsences(store, issueID, 2) // default ceiling is 3
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "In Progress"
+				}
+				return result, nil
+			},
+		}
+		spy := newCommentAwareMetrics()
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		spy.waitComment(t)
+
+		if _, ok := state.RetryAttempts[issueID]; ok {
+			t.Error("RetryAttempts entry present after parking, want none")
+		}
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		if !strings.Contains(tracker.commentCalls[0].Text, "Retry: no") {
+			t.Errorf("comment = %q, want the negative retry form", tracker.commentCalls[0].Text)
+		}
+	})
+
+	t.Run("scheduled retry: positive form with the scheduled attempt", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "PROMISE-SCHEDULED"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "In Progress"
+				}
+				return result, nil
+			},
+		}
+		spy := newCommentAwareMetrics()
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+		spy.waitComment(t)
+
+		retry, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("retry not scheduled")
+		}
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		wantLine := fmt.Sprintf("Retry: yes (attempt %d)", retry.Attempt)
+		if !strings.Contains(tracker.commentCalls[0].Text, wantLine) {
+			t.Errorf("comment = %q, want it to contain %q", tracker.commentCalls[0].Text, wantLine)
+		}
+	})
+
+	t.Run("deferred to a foreign incumbent: positive form with the incumbent's attempt", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "PROMISE-DEFERRED"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "In Progress"
+				}
+				return result, nil
+			},
+		}
+		spy := newCommentAwareMetrics()
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      5,
+			ReactionKind: ReactionKindCI,
+		}
+		params := handoffEvidenceExitParams(t, store, tracker, spy)
+		params.CommentsConfig.OnFailure = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              issueID + "-ident",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, issueID) })
+		spy.waitComment(t)
+
+		incumbent, ok := state.RetryAttempts[issueID]
+		if !ok || incumbent.Attempt != 5 {
+			t.Fatalf("RetryAttempts[%s] = %+v, want the incumbent preserved at attempt 5", issueID, incumbent)
+		}
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		wantLine := "Retry: yes (attempt 5)"
+		if !strings.Contains(tracker.commentCalls[0].Text, wantLine) {
+			t.Errorf("comment = %q, want it to contain %q", tracker.commentCalls[0].Text, wantLine)
+		}
+	})
+}
+
+// TestHandleWorkerExit_SuppressedExitPostsCompletionCommentNotFailure
+// pins the completion-not-failure rule: a suppressed exit never posts a
+// failure comment, and posts the soft-stop or ordinary completion
+// variant when on_completion is enabled.
+func TestHandleWorkerExit_SuppressedExitPostsCompletionCommentNotFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		issueID        string
+		softStop       bool
+		softStopReason string
+		wantHeadline   string
+	}{
+		{
+			name:           "soft-stop variant",
+			issueID:        "SUP-COMMENT-SOFT",
+			softStop:       true,
+			softStopReason: "needs-human-review",
+			wantHeadline:   "Sortie session completed (agent signaled: needs-human-review).",
+		},
+		{
+			name:         "ordinary completion",
+			issueID:      "SUP-COMMENT-COMPLETE",
+			wantHeadline: "Sortie session completed.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir, baseline := handoffEvidenceGitWorkspace(t)
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "Done"
+					}
+					return result, nil
+				},
+			}
+			spy := newCommentAwareMetrics()
+			state := exitStateWithIssue(t, tt.issueID, "In Progress")
+			params := handoffEvidenceExitParams(t, store, tracker, spy)
+			params.CommentsConfig.OnFailure = true
+			params.CommentsConfig.OnCompletion = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:                 tt.issueID,
+				Identifier:              tt.issueID + "-ident",
+				ExitKind:                WorkerExitNormal,
+				WorkspacePath:           dir,
+				HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+				HandoffEvidenceBaseline: baseline,
+				AgentAdapter:            "mock",
+				SoftStop:                tt.softStop,
+				SoftStopReason:          tt.softStopReason,
+			}, params)
+			spy.waitComment(t)
+
+			if len(tracker.commentCalls) != 1 {
+				t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+			}
+			text := tracker.commentCalls[0].Text
+			if !strings.Contains(text, tt.wantHeadline) {
+				t.Errorf("comment = %q, want headline %q", text, tt.wantHeadline)
+			}
+			if strings.Contains(text, "Sortie session failed.") {
+				t.Errorf("comment contains the failure headline, want none:\n%s", text)
+			}
+			if strings.Contains(text, "Retry:") {
+				t.Errorf("comment contains a retry line, want none:\n%s", text)
+			}
+			if strings.Contains(text, "re-queuing") {
+				t.Errorf("comment contains the re-queuing headline, want none:\n%s", text)
+			}
+
+			spy.mu.Lock()
+			comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+			spy.mu.Unlock()
+			if len(comments) != 1 || comments[0].lifecycle != "completion" {
+				t.Errorf("IncTrackerComments calls = %+v, want one completion call", comments)
+			}
+		})
 	}
 }
 
