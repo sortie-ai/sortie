@@ -2496,7 +2496,7 @@ applies.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `claude-code.permission_mode` | string | _(absent)_ | Forwarded to `--permission-mode`. Values: `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, `manual` (an alias for `default`), and `plan`. When absent, the adapter passes `--dangerously-skip-permissions` instead. |
+| `claude-code.permission_mode` | string | _(absent)_ | Forwarded to `--permission-mode`. `bypassPermissions` is the only value that survives the dispatch preflight; every other non-empty value fails the check `claude-code.permission_mode.interactive` and no agent is dispatched while that value stands. When absent, the adapter passes `--dangerously-skip-permissions` instead. See the note below. |
 | `claude-code.model` | string | _(absent)_ | Forwarded to `--model`. Accepts a model alias such as `sonnet`, or a full model name. |
 | `claude-code.fallback_model` | string | _(absent)_ | Forwarded to `--fallback-model`. Accepts one model or a comma-separated chain. Covers model availability only; see the fallback note below. |
 | `claude-code.max_turns` | integer | _(absent)_ | Forwarded to `--max-turns` when greater than zero. Claude Code's own agentic turn budget within one invocation. |
@@ -2507,6 +2507,14 @@ applies.
 | `claude-code.system_prompt` | string | _(absent)_ | Forwarded to `--append-system-prompt`. The text is appended to the default system prompt rather than replacing it. Claude Code's built-in tool instructions stay in effect. |
 | `claude-code.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--mcp-config`, which takes a single configuration path. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. |
 | `claude-code.session_persistence` | boolean | `true` | When `false`, adds `--no-session-persistence` and Claude Code writes no session file to disk. Setting it to `false` is refused before the run starts, because the adapter passes `--resume <session_id>` on every turn but the first of a session this run created, which uses `--session-id` instead, and `--resume` needs the persisted session. |
+
+> **Important:** `bypassPermissions` is the only `permission_mode` value that
+> survives the dispatch preflight. Any other non-empty value fails the check
+> `claude-code.permission_mode.interactive` and no agent is dispatched while that value
+> stands, because a mode that lets the agent stop and ask for approval leaves an
+> unattended run with no one to answer the prompt. The check is an allowlist rather
+> than a list of asking modes, so a mode the CLI adds later is refused until someone
+> establishes what it does rather than passing validation unexamined.
 
 > **Important:** `agent.max_turns` (orchestrator turn-loop limit) and
 > `claude-code.max_turns` (CLI `--max-turns` flag) are distinct values. The orchestrator
@@ -2607,18 +2615,18 @@ model used by `claude-code`, `copilot-cli`, and `opencode`.
 | --- | --- | --- | --- |
 | `codex.model` | string | _(absent)_ | Forwarded to both `thread/start`'s `model` field and `turn/start`'s `model` field when non-empty. |
 | `codex.effort` | string | _(absent)_ | Forwarded to `turn/start`'s `effort` field when non-empty. Not sent on `thread/start`. |
-| `codex.approval_policy` | string | `never` | Forwarded to `thread/start`'s `approvalPolicy` field, defaulting to `never` when absent. `never` is the only value that survives the dispatch preflight; every other value fails the check `codex.approval_policy.interactive` and the run exits before the agent launches. See the note below. |
+| `codex.approval_policy` | string | `never` | Forwarded to `thread/start`'s `approvalPolicy` field, defaulting to `never` when absent. `never` is the only value that survives the dispatch preflight; every other non-empty value fails the check `codex.approval_policy.interactive` and no agent is dispatched while that value stands. See the note below. |
 | `codex.thread_sandbox` | string | `workspaceWrite` | Reaches two protocol fields: normalized to kebab-case (`workspace-write`, `read-only`, `danger-full-access`, `external-sandbox`) for `thread/start`'s `sandbox` field, and denormalized back to camelCase for `turn/start`'s `sandboxPolicy.type` field. Values: `workspaceWrite`, `readOnly`, `dangerFullAccess`, `externalSandbox`. |
 | `codex.turn_sandbox_policy` | map | _(absent)_ | Merged over the default `sandboxPolicy` sent on `turn/start` (`writableRoots` defaulting to the workspace path, `networkAccess` defaulting to `false`); a key here replaces the matching default key, including `writableRoots` and `networkAccess`. Sent on the first turn of every session, and on every later turn once it is set. |
 | `codex.personality` | string | _(absent)_ | Forwarded to `thread/start`'s `personality` field when non-empty. |
 | `codex.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute, same as the other adapters. On a local launch, the generated file's servers are re-expressed as `-c mcp_servers.<name>=<table>` overrides on the app-server launch arguments. An SSH launch delivers neither form; see the MCP configuration section above. |
 
 > **Important:** `never` is the only `approval_policy` value that survives the dispatch
-> preflight. Any other value, including `untrusted` and `on-request`, fails the check
-> `codex.approval_policy.interactive` and the process exits before any agent launches.
-> Codex also accepts an object form of this policy, a `granular` member whose booleans
-> decide each approval category, but this key is read as a string only, so a map value
-> is treated as absent and `thread/start` receives `never`.
+> preflight. Any other non-empty value, including `untrusted` and `on-request`, fails
+> the check `codex.approval_policy.interactive` and no agent is dispatched while that
+> value stands. Codex also accepts an object form of this policy, a `granular` member
+> whose booleans decide each approval category, but this key is read as a string only,
+> so a map value is treated as absent and `thread/start` receives `never`.
 
 > **Important:** When `thread_sandbox` is omitted, the adapter defaults to
 > `workspaceWrite` with `writableRoots` set to the workspace path and
