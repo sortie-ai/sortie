@@ -2542,9 +2542,10 @@ known, either because the orchestrator resumed the session or because an earlier
 reported one. The first turn of a new session carries neither flag, and a turn that ends
 with no session ID, on a session where none was known already, is followed by
 `--continue`, which resumes the most recent conversation in the workspace directory.
-Values are forwarded unchanged, and the
-adapter validates none of them. A key whose YAML value has the wrong type is ignored
-and the default applies.
+The adapter validates none of these values and forwards each as written, except in the
+two cases described below: a non-positive `max_autopilot_continues` is replaced by `50`,
+and `mcp_config` is reformatted before it reaches `--additional-mcp-config`. A key whose
+YAML value has the wrong type is ignored and the default applies.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2562,8 +2563,8 @@ and the default applies.
 
 > **Important:** the four tool-scoping keys act as one switch, not four independent ones.
 > With all of them unset, the adapter passes `--allow-all` and every tool call is
-> auto-approved. Setting any single one of them drops `--allow-all` from every
-> invocation, so a tool that key says nothing about is no longer blanket-approved
+> auto-approved. Setting any one of them to a non-empty value drops `--allow-all` from
+> every invocation, so a tool that key says nothing about is no longer blanket-approved
 > either; such a call falls to the CLI's own non-interactive policy instead.
 
 > **Important:** the generated MCP configuration file supersedes `copilot-cli.mcp_config`
