@@ -2584,31 +2584,43 @@ YAML value has the wrong type is ignored and the default applies.
 codex:
   model: o3                       # Model override (e.g., "gpt-5.4", "o3")
   effort: medium                  # Reasoning effort: "low", "medium", "high"
-  approval_policy: never          # "never" (default), "untrusted", "on-request"
+  approval_policy: never          # "never" is the only value the preflight allows
   thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
   personality: concise            # Personality preset
   turn_sandbox_policy:            # Per-turn sandbox policy override (optional)
     networkAccess: true
+  mcp_config: ./mcp-servers.json  # Local launch only; ignored over SSH
 ```
 
-The `codex` block is forwarded to the Codex adapter, which uses these fields
-when initializing the `codex app-server` subprocess and starting threads.
+The `codex` block is forwarded to the Codex adapter, which launches `codex app-server`
+once per session and sends these fields on the `thread/start` and `turn/start`
+JSON-RPC requests as the session starts and as each turn runs. One key is checked
+before a run starts, `approval_policy`; the preflight refuses any value other than
+`never`, while the adapter itself refuses nothing further once a run starts. A key
+whose YAML value has the wrong type is ignored and the default applies.
 
 The Codex adapter uses a persistent subprocess model: the app-server is launched
 once in `StartSession` and kept alive across turns, unlike the per-turn subprocess
 model used by `claude-code`, `copilot-cli`, and `opencode`.
 
-> **Approval policy:** the accepted values are `never`, `untrusted`, and
-> `on-request`. A value outside that set is not ignored: the app-server rejects
-> `thread/start`, so the session never starts. Keep the default. `never` is what
-> stops the app-server from asking for a decision that an unattended run has
-> nobody to give; under `untrusted` or `on-request` the app-server sends approval
-> requests that the adapter does not answer, and the turn waits until a timeout
-> ends it. Codex also accepts an object form of this policy, a `granular` member
-> whose booleans decide each approval category, but this key is read as a string
-> only, so a map value is dropped and the thread falls back to `never`.
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `codex.model` | string | _(absent)_ | Forwarded to both `thread/start`'s `model` field and `turn/start`'s `model` field when non-empty. |
+| `codex.effort` | string | _(absent)_ | Forwarded to `turn/start`'s `effort` field when non-empty. Not sent on `thread/start`. |
+| `codex.approval_policy` | string | `never` | Forwarded to `thread/start`'s `approvalPolicy` field, defaulting to `never` when absent. `never` is the only value that survives the dispatch preflight; every other value fails the check `codex.approval_policy.interactive` and the run exits before the agent launches. See the note below. |
+| `codex.thread_sandbox` | string | `workspaceWrite` | Reaches two protocol fields: normalized to kebab-case (`workspace-write`, `read-only`, `danger-full-access`, `external-sandbox`) for `thread/start`'s `sandbox` field, and denormalized back to camelCase for `turn/start`'s `sandboxPolicy.type` field. Values: `workspaceWrite`, `readOnly`, `dangerFullAccess`, `externalSandbox`. |
+| `codex.turn_sandbox_policy` | map | _(absent)_ | Merged over the default `sandboxPolicy` sent on `turn/start` (`writableRoots` defaulting to the workspace path, `networkAccess` defaulting to `false`); a key here replaces the matching default key, including `writableRoots` and `networkAccess`. Sent on the first turn of every session, and on every later turn once it is set. |
+| `codex.personality` | string | _(absent)_ | Forwarded to `thread/start`'s `personality` field when non-empty. |
+| `codex.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute, same as the other adapters. On a local launch, the generated file's servers are re-expressed as `-c mcp_servers.<name>=<table>` overrides on the app-server launch arguments. An SSH launch delivers neither form; see the MCP configuration section above. |
 
-> **Sandbox defaults:** When `thread_sandbox` is omitted, the adapter defaults to
+> **Important:** `never` is the only `approval_policy` value that survives the dispatch
+> preflight. Any other value, including `untrusted` and `on-request`, fails the check
+> `codex.approval_policy.interactive` and the process exits before any agent launches.
+> Codex also accepts an object form of this policy, a `granular` member whose booleans
+> decide each approval category, but this key is read as a string only, so a map value
+> is treated as absent and `thread/start` receives `never`.
+
+> **Important:** When `thread_sandbox` is omitted, the adapter defaults to
 > `workspaceWrite` with `writableRoots` set to the workspace path and
 > `networkAccess: false`. Use `turn_sandbox_policy` to override specific sandbox
 > fields per turn.
@@ -2743,8 +2755,8 @@ stating that Sortie's tools will be neither advertised nor callable for it. Both
 warnings and not errors: such a configuration stays valid, the run proceeds, and the
 exit code is unchanged.
 
-`claude-code.mcp_config` and `copilot-cli.mcp_config` are documented in the Claude Code
-and Copilot CLI tables above.
+`claude-code.mcp_config`, `copilot-cli.mcp_config`, and `codex.mcp_config` are
+documented in the Claude Code, Copilot CLI, and Codex tables above.
 
 **Custom or future adapters (illustrative example):**
 
