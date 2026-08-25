@@ -2564,8 +2564,8 @@ YAML value has the wrong type is ignored and the default applies.
 > **Important:** the four tool-scoping keys act as one switch, not four independent ones.
 > With all of them unset, the adapter passes `--allow-all` and every tool call is
 > auto-approved. Setting any one of them to a non-empty value drops `--allow-all` from
-> every invocation, so a tool that key says nothing about is no longer blanket-approved
-> either; such a call falls to the CLI's own non-interactive policy instead.
+> every invocation, so a tool that no key mentions is no longer blanket-approved; such a
+> call falls to the CLI's own non-interactive policy instead.
 
 > **Important:** the generated MCP configuration file supersedes `copilot-cli.mcp_config`
 > as the value of `--additional-mcp-config`, which is why the operator's servers reach the
