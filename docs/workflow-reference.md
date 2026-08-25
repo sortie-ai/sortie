@@ -2537,10 +2537,12 @@ copilot-cli:
 
 The `copilot-cli` block is forwarded to the Copilot CLI adapter, which runs
 `copilot -p --output-format json -s --autopilot --no-ask-user` once per turn and maps
-these fields to CLI flags. The first turn passes neither resume flag. After a turn in
-which the CLI reported a session ID, the adapter adds `--resume <session_id>`; after a
-turn that ended without one, it adds `--continue`, which resumes the most recent
-conversation in the workspace directory. Values are forwarded unchanged, and the
+these fields to CLI flags. The adapter adds `--resume <session_id>` once a session ID is
+known, either because the orchestrator resumed the session or because an earlier turn
+reported one. The first turn of a new session carries neither flag, and a turn that ends
+with no session ID, on a session where none was known already, is followed by
+`--continue`, which resumes the most recent conversation in the workspace directory.
+Values are forwarded unchanged, and the
 adapter validates none of them. A key whose YAML value has the wrong type is ignored
 and the default applies.
 
