@@ -94,6 +94,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "max_concurrent_agents_by_state", Type: FieldMap},
 			{Name: "max_sessions", Type: FieldInt},
 			{Name: "max_tokens", Type: FieldInt},
+			{Name: "max_consecutive_absences", Type: FieldInt},
 		},
 		AllowAdapterPassthrough: true,
 	},

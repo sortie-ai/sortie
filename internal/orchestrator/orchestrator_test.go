@@ -2742,6 +2742,182 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		}
 	})
 
+	// Test Case: agent.max_consecutive_absences takes effect on the next
+	// poll tick, the next retry timer fire, and the next worker exit
+	// with no restart. The retry-timer and worker-exit lanes are driven
+	// directly rather than through the running event loop, reading
+	// wm.Config() after the reload exactly as the event loop's own
+	// select arms do (cfg := o.workflowManager.Config() per event).
+	t.Run("max_consecutive_absences_change", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := lifecycleConfig(t.TempDir())
+		cfg.Agent.MaxConsecutiveAbsences = 10
+		wm := &stubWorkflowManager{config: cfg}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		const pollIssueID = "RELOAD-ABS-POLL"
+		pollIssue := domain.Issue{ID: pollIssueID, Identifier: "PROJ-POLL", Title: "T", State: "In Progress"}
+		store := &stubStore{absenceCounts: map[string]int{pollIssueID: 3}}
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return []domain.Issue{pollIssue}, nil
+			},
+		}
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		o.handleTick(context.Background())
+		if _, ok := state.Parked[pollIssueID]; ok {
+			t.Fatal("parked at three absences before the ten-value ceiling was reloaded down")
+		}
+
+		cfg.Agent.MaxConsecutiveAbsences = 3
+		wm.setConfig(cfg)
+		o.handleTick(context.Background())
+		if _, ok := state.Parked[pollIssueID]; !ok {
+			t.Error("poll tick did not observe the reloaded ceiling with no restart")
+		}
+
+		const retryIssueID = "RELOAD-ABS-RETRY"
+		retryStore := &mockRetryStore{absenceCounts: map[string]int{retryIssueID: 3}}
+		retryTracker := &mockRetryTracker{}
+		retryIssueState := retryState(t, retryIssueID, "PROJ-RETRY", 1)
+		retryParams := defaultRetryParams(t, retryStore, retryTracker)
+		retryParams.MaxConsecutiveAbsences = wm.Config().Agent.MaxConsecutiveAbsences
+
+		HandleRetryTimer(retryIssueState, retryIssueID, retryParams)
+		retryIssueState.TrackerOpsWg.Wait()
+
+		if entry := retryIssueState.Parked[retryIssueID]; entry == nil || entry.Reason != parkReasonHandoffAbsence {
+			t.Errorf("Parked[%s] = %+v, want the reloaded ceiling to park at three absences with no restart", retryIssueID, entry)
+		}
+
+		const exitIssueID = "RELOAD-ABS-EXIT"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		exitStore := &mockExitStore{}
+		seedMockHandoffAbsences(exitStore, exitIssueID, 2)
+		exitTracker := newRecordingHandoffTracker()
+		exitIssueState := exitStateWithIssue(t, exitIssueID, "In Progress")
+		exitParams := handoffEvidenceExitParams(t, exitStore, exitTracker.mockTrackerAdapter, &spyMetrics{})
+		exitParams.TrackerAdapter = exitTracker
+		exitParams.MaxConsecutiveAbsences = wm.Config().Agent.MaxConsecutiveAbsences
+
+		HandleWorkerExit(exitIssueState, WorkerResult{
+			IssueID:                 exitIssueID,
+			Identifier:              "PROJ-EXIT",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}, exitParams)
+		exitIssueState.TrackerOpsWg.Wait()
+
+		if entry := exitIssueState.Parked[exitIssueID]; entry == nil || entry.Reason != parkReasonHandoffAbsence {
+			t.Errorf("Parked[%s] = %+v, want the reloaded ceiling to park the third absence with no restart", exitIssueID, entry)
+		}
+	})
+
+	// Test Case: a reload whose agent.max_consecutive_absences fails
+	// validation retains the previously loaded value and reports the
+	// failure through LastLoadError(), the same fail-safe path the
+	// sibling agent.turn_timeout_ms field already relies on.
+	t.Run("max_consecutive_absences_reload_failure_retains_previous_value", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+		validContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 60000
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 5
+  max_turns: 1
+  max_consecutive_absences: 7
+---
+do {{ .issue.identifier }}
+`
+		if err := os.WriteFile(workflowPath, []byte(validContent), 0o644); err != nil {
+			t.Fatalf("writing initial WORKFLOW.md: %v", err)
+		}
+
+		wm, err := workflow.NewManager(workflowPath, discardLogger())
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		if got := wm.Config().Agent.MaxConsecutiveAbsences; got != 7 {
+			t.Fatalf("initial Config().Agent.MaxConsecutiveAbsences = %d, want 7", got)
+		}
+
+		invalidContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 60000
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 5
+  max_turns: 1
+  max_consecutive_absences: 0
+---
+do {{ .issue.identifier }}
+`
+		if err := os.WriteFile(workflowPath, []byte(invalidContent), 0o644); err != nil {
+			t.Fatalf("writing broken WORKFLOW.md: %v", err)
+		}
+
+		if err := wm.Reload(); err == nil {
+			t.Fatal("Reload() error = nil, want error")
+		}
+
+		if got := wm.Config().Agent.MaxConsecutiveAbsences; got != 7 {
+			t.Errorf("after failed Reload: Config().Agent.MaxConsecutiveAbsences = %d, want 7 (retained)", got)
+		}
+		if wm.LastLoadError() == nil {
+			t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+		}
+	})
+
 	// Test Case C: reactions.ci_failure.watch_window_ms takes effect on
 	// the next reconcile tick without a process restart, since
 	// cfg.CIFeedback is rebuilt from o.workflowManager.Config() every
@@ -4407,6 +4583,63 @@ func TestHandleTick_BudgetLogRecordOnce(t *testing.T) {
 	}
 }
 
+// TestHandleTick_BudgetLogRecordCeilingSetting covers the ceiling_setting
+// attribute the budget-hold record gains, across the two known reasons
+// and the closed reason vocabulary's absent third arm.
+func TestHandleTick_BudgetLogRecordCeilingSetting(t *testing.T) {
+	t.Parallel()
+
+	t.Run("session hold names agent.max_sessions", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-ceil-sess", Identifier: "PROJ-CEIL-SESS", Title: "title", State: "To Do"}
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+		if !strings.Contains(buf.String(), "ceiling_setting=agent.max_sessions") {
+			t.Errorf("log output missing ceiling_setting=agent.max_sessions; log:\n%s", buf.String())
+		}
+	})
+
+	t.Run("token hold names agent.max_tokens", func(t *testing.T) {
+		t.Parallel()
+
+		issue := domain.Issue{ID: "iss-ceil-tok", Identifier: "PROJ-CEIL-TOK", Title: "title", State: "To Do"}
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenExhaustedIDs: []string{issue.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+
+		if !strings.Contains(buf.String(), "ceiling_setting=agent.max_tokens") {
+			t.Errorf("log output missing ceiling_setting=agent.max_tokens; log:\n%s", buf.String())
+		}
+	})
+
+	t.Run("a reason absent from the lookup has no known governing setting", func(t *testing.T) {
+		t.Parallel()
+
+		if setting, known := ceilingSettingByBudgetReason["unknown_reason"]; known {
+			t.Errorf("ceilingSettingByBudgetReason[%q] = %q, want not known: the reason vocabulary is closed to the two mapped constants", "unknown_reason", setting)
+		}
+	})
+}
+
 // TestHandleTick_BudgetLogRecordTokenAxis covers the token ceiling on the
 // polling lane and the both-axes-in-one-pass precedence case.
 func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
@@ -5020,6 +5253,120 @@ func TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite(t *testing.
 	case <-time.After(10 * time.Second):
 		t.Fatal("drainRunningWorkers did not return within 10 seconds")
 	}
+}
+
+// TestDrainRunningWorkers_AbsenceCeiling verifies that the shutdown-drain
+// lane's own HandleWorkerExitParams construction site reads the
+// configured consecutive-absence ceiling rather than silently resolving
+// the built-in fallback of three, on both a park decision at a value
+// below the fallback and a recorded ceiling at a value above it.
+func TestDrainRunningWorkers_AbsenceCeiling(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parks at a ceiling below the built-in default", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "DRAIN-ABS-BELOW"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.Running[issueID] = &RunningEntry{
+			Identifier: "PROJ-DRAIN-BELOW",
+			Issue:      domain.Issue{ID: issueID, Identifier: "PROJ-DRAIN-BELOW", State: "In Progress"},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: func() {},
+		}
+		store := &stubStore{absenceCounts: map[string]int{issueID: 2}}
+		wm := budgetTickConfig(0)
+		wm.config.Agent.MaxConsecutiveAbsences = 2
+		wm.config.Tracker.ActiveStates = []string{"In Progress"}
+		wm.config.Tracker.TerminalStates = []string{"Done"}
+		wm.config.Tracker.HandoffState = "Human Review"
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		o := budgetOrchestrator(state, wm, store, tracker)
+		o.drainTimeout = 5 * time.Second
+
+		done := make(chan struct{})
+		go func() {
+			o.drainRunningWorkers()
+			close(done)
+		}()
+
+		o.workerExitCh <- WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              "PROJ-DRAIN-BELOW",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}
+
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("drainRunningWorkers did not return within 10 seconds")
+		}
+		state.TrackerOpsWg.Wait()
+
+		if _, ok := state.Parked[issueID]; !ok {
+			t.Error("issue not parked at the two-absence ceiling on the shutdown-drain lane")
+		}
+	})
+
+	t.Run("records the configured ceiling above the built-in default", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "DRAIN-ABS-ABOVE"
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.Running[issueID] = &RunningEntry{
+			Identifier: "PROJ-DRAIN-ABOVE",
+			Issue:      domain.Issue{ID: issueID, Identifier: "PROJ-DRAIN-ABOVE", State: "In Progress"},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: func() {},
+		}
+		store := &stubStore{absenceCounts: map[string]int{issueID: 5}}
+		wm := budgetTickConfig(0)
+		wm.config.Agent.MaxConsecutiveAbsences = 5
+		wm.config.Tracker.ActiveStates = []string{"In Progress"}
+		wm.config.Tracker.TerminalStates = []string{"Done"}
+		wm.config.Tracker.HandoffState = "Human Review"
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		o := budgetOrchestratorWithLogger(state, wm, store, tracker, logger)
+		o.drainTimeout = 5 * time.Second
+
+		done := make(chan struct{})
+		go func() {
+			o.drainRunningWorkers()
+			close(done)
+		}()
+
+		o.workerExitCh <- WorkerResult{
+			IssueID:                 issueID,
+			Identifier:              "PROJ-DRAIN-ABOVE",
+			ExitKind:                WorkerExitNormal,
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+			AgentAdapter:            "mock",
+		}
+
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("drainRunningWorkers did not return within 10 seconds")
+		}
+		state.TrackerOpsWg.Wait()
+
+		if _, ok := state.Parked[issueID]; !ok {
+			t.Fatal("issue not parked at the five-absence ceiling on the shutdown-drain lane")
+		}
+		if !strings.Contains(buf.String(), "absence_ceiling=5") {
+			t.Errorf("issue-parked log missing absence_ceiling=5, want the configured ceiling rather than the built-in default 3\nlogs: %s", buf.String())
+		}
+	})
 }
 
 // TestBudgetExhaustionPreventsRedispatch verifies that an issue whose budget is

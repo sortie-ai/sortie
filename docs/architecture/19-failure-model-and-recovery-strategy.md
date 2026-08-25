@@ -83,14 +83,13 @@
     work observed` increments it, as does `evidence not determinable` under `strict`. A
     `work observed` verdict resets it to zero immediately; a later handoff-write error cannot restore
     the old count. Outcomes that provide no work-observed verdict do not pretend to reset it.
-  - Derive the consecutive-absence ceiling from `agent.max_sessions`, without adding a setting:
-    when `agent.max_sessions > 0`, use that value verbatim; when it is `0`, use `3` for this ceiling
-    only while retaining `0` as unlimited for the ordinary total-session budget. The comparison is
-    against the incremented **consecutive-absence count**, and parking occurs when `count >= ceiling`.
-    Thus the default sequence is absence `1`, retry; absence `2`, retry; absence `3`, park. It is the
-    initial run plus two retries, not three retries. A positive `agent.max_sessions` continues to
-    enforce its existing all-run effort budget independently, so whichever applicable gate is
-    reached first stops re-dispatch.
+  - The consecutive-absence ceiling is `agent.max_consecutive_absences`, a dedicated integer field
+    that defaults to `3` and rejects `0` and negative values as a configuration error. The
+    comparison is against the incremented **consecutive-absence count**, and parking occurs when
+    `count >= ceiling`. Thus the default sequence is absence `1`, retry; absence `2`, retry; absence
+    `3`, park. It is the initial run plus two retries, not three retries. The separate
+    `agent.max_sessions` effort budget continues to enforce its own all-run ceiling independently,
+    so whichever applicable gate is reached first stops re-dispatch.
   - The derived default of `3` follows the `max_retries: 2` default used by most reaction kinds: one
     initial attempt plus two retries. This avoids treating one legitimate no-change conclusion as
     immediately terminal, gives two further sessions a chance to surface work, and bounds the cost
@@ -104,16 +103,16 @@
     the same exhausted absence sequence. The representation is fixed and shared with the `blocked`
     park: the same durable park record, the same runtime gate, and the same release rule, tagged
     with the reason this ceiling produced it rather than the reason a `blocked` signal did. The rule
-    requires neither a second numeric setting nor a durable verdict column on `run_history`.
+    requires no durable verdict column on `run_history`.
   - Under `tracker.handoff_evidence: off`, no absence is ever recorded, so the count is never
     incremented and no *new* park is taken by this ceiling on any path: polling, retry firing, and
     worker exit all skip the trigger, and the policy costs nothing while it is selected. This
     governs only whether a *new* park is taken, not whether an existing one holds: a park already
     recorded, by either trigger, is not lifted by selecting `off` and is released only by the rules
-    below. Raising `agent.max_sessions` above the recorded count has the same narrowed effect: it
-    changes the ceiling a future count is compared against, but it does not lift a park already
-    taken, because the park is a row rather than a value re-derived from the current ceiling on
-    every tick.
+    below. Raising `agent.max_consecutive_absences` above the recorded count has the same narrowed
+    effect: it changes the ceiling a future count is compared against, but it does not lift a park
+    already taken, because the park is a row rather than a value re-derived from the current
+    ceiling on every tick.
   - An operator releases a park with either of two gestures, whichever the orchestrator observes
     first, and both apply to every trigger that parks an issue, not only to this ceiling: moving
     the issue to a tracker state different from the one recorded when it was parked, or removing

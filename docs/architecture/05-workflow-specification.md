@@ -226,6 +226,7 @@ Fields:
     into that set instead, because a held candidate never held a claim to release.
   - `0` disables the budget (unlimited retries).
   - Changes are re-applied at runtime and affect future retry timer evaluations.
+  - The separate `max_consecutive_absences` governs the consecutive-absence ceiling.
 - `max_tokens` (integer)
   - Default: `0` (unlimited; no token budget enforced).
   - Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the
@@ -241,6 +242,16 @@ Fields:
     unmeasured count.
   - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
   - Changes are re-applied at runtime and affect future retry timer evaluations.
+- `max_consecutive_absences` (integer)
+  - Default: `3`.
+  - Bounds how many runs in a row may be observed to have produced no evidence of work before
+    the issue is parked. Any run that produces evidence of work resets the count to zero.
+  - `0` and negative values are rejected as a configuration error at parse time, so startup,
+    `sortie validate`, and the reload fail-safe path all reject them.
+  - Overridable through `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES`.
+  - Changes are re-applied at runtime and affect every lane that evaluates the ceiling: future
+    worker exits, retry timer evaluations, and the poll tick's park sweep.
+  - The separate `max_sessions` governs the total per-issue session budget.
 
 Adapter-specific pass-through config:
 

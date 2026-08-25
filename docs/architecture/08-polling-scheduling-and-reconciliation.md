@@ -171,11 +171,12 @@ Per-issue token budget (cost ceiling):
   fail-open mechanism from the retry lane's own skip-and-proceed; dispatch still proceeds for
   every candidate not in the set. The rebuild is skipped entirely when both budgets are
   disabled.
-- The consecutive handoff-absence ceiling (§14.2) is evaluated separately, by the same
-  mechanism that parks a `blocked` soft stop, after the release-evaluation step below so a
-  park released this tick is not immediately re-parked. It shares the `parked` reason
-  vocabulary with the `blocked` park rather than the exhausted-issue set's own reasons, and is
-  skipped entirely under `tracker.handoff_evidence: off`, which records no absence.
+- The consecutive handoff-absence ceiling (§14.2), governed by `agent.max_consecutive_absences`,
+  is evaluated separately, by the same mechanism that parks a `blocked` soft stop, after the
+  release-evaluation step below so a park released this tick is not immediately re-parked. It
+  shares the `parked` reason vocabulary with the `blocked` park rather than the exhausted-issue
+  set's own reasons, and is skipped entirely under `tracker.handoff_evidence: off`, which
+  records no absence.
 - If the retry handler's token query fails, its check fails open and dispatch proceeds for that
   issue, the same fail-open shape the session check above uses. A token sum recorded before the
   token columns were added reads as zero.

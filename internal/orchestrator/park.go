@@ -102,7 +102,10 @@ func parkIssue(state *State, params parkIssueParams) {
 		attrs = append(attrs, slog.Int("consecutive_absences", params.Absences))
 	}
 	if params.Ceiling != 0 {
-		attrs = append(attrs, slog.Int("absence_ceiling", params.Ceiling))
+		attrs = append(attrs,
+			slog.Int("absence_ceiling", params.Ceiling),
+			slog.String("ceiling_setting", "agent.max_consecutive_absences"),
+		)
 	}
 	log.LogAttrs(ctx, slog.LevelWarn, "issue parked", attrs...)
 

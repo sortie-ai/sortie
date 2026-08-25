@@ -36,8 +36,9 @@ Handoff-evidence records are part of the required operator surface:
 Parking an issue, whichever trigger produced it, emits exactly one `Warn` record, message
 `"issue parked"`, carrying `reason` (`agent_blocked` or `handoff_absence`), `parked_state`
 (the tracker state recorded, empty when unobserved), and `label` (the parking label applied).
-The consecutive-absence ceiling's park additionally carries `consecutive_absences` and
-`absence_ceiling`; a `blocked` park carries neither. A failed label write is recorded separately,
+The consecutive-absence ceiling's park additionally carries `consecutive_absences`,
+`absence_ceiling`, and `ceiling_setting` (the dotted configuration path that produced the
+ceiling); a `blocked` park carries none of the three. A failed label write is recorded separately,
 message `"park label write failed"`, at `Warn`, and does not suppress the parking record. Lifting
 a park emits one `Info` record, message `"issue unparked"`, carrying `trigger`
 (`state_changed`, `label_removed`, or `evidence_observed`) and `reason`.
@@ -46,7 +47,10 @@ An issue entering the per-issue budget-exhausted set, on either the poll tick's 
 retry lane, emits exactly one `Warn` record, message `"candidate held by budget ceiling"`, carrying
 the standard issue context fields plus `reason` (`token_budget` or `session_budget`),
 `used_sessions`, `budget_sessions`, and, when the token ceiling was evaluated for that issue,
-`used_tokens` and `budget_tokens`. The record fires once per hold: a tick that re-observes an
+`used_tokens` and `budget_tokens`. It also carries `ceiling_setting`, the dotted configuration
+path of the setting that governs the fired ceiling, when `reason` maps to a known setting; a
+reason with no known governing setting emits no `ceiling_setting` attribute rather than an empty
+or invented one. The record fires once per hold: a tick that re-observes an
 already-announced hold under the same reason emits nothing further, and whichever lane discovers a
 hold is the only one that announces it.
 

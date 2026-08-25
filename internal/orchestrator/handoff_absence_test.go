@@ -99,28 +99,28 @@ func TestResolveHandoffParkingLabel(t *testing.T) {
 
 func TestHandleWorkerExitParksAtHandoffAbsenceCeiling(t *testing.T) {
 	tests := []struct {
-		name             string
-		maxSessions      int
-		priorAbsences    int
-		wantCeiling      int
-		configuredLabel  string
-		wantAppliedLabel string
+		name                   string
+		maxConsecutiveAbsences int
+		priorAbsences          int
+		wantCeiling            int
+		configuredLabel        string
+		wantAppliedLabel       string
 	}{
 		{
-			name:             "positive max_sessions is the exact ceiling",
-			maxSessions:      2,
-			priorAbsences:    1,
-			wantCeiling:      2,
-			configuredLabel:  "manual-review",
-			wantAppliedLabel: "manual-review",
+			name:                   "a configured positive value is the exact ceiling",
+			maxConsecutiveAbsences: 2,
+			priorAbsences:          1,
+			wantCeiling:            2,
+			configuredLabel:        "manual-review",
+			wantAppliedLabel:       "manual-review",
 		},
 		{
-			name:             "zero max_sessions derives three total absences",
-			maxSessions:      0,
-			priorAbsences:    2,
-			wantCeiling:      3,
-			configuredLabel:  "",
-			wantAppliedLabel: "needs-human",
+			name:                   "a zero-valued field falls back to three",
+			maxConsecutiveAbsences: 0,
+			priorAbsences:          2,
+			wantCeiling:            3,
+			configuredLabel:        "",
+			wantAppliedLabel:       "needs-human",
 		},
 	}
 
@@ -134,7 +134,7 @@ func TestHandleWorkerExitParksAtHandoffAbsenceCeiling(t *testing.T) {
 			state := exitStateWithIssue(t, issueID, "In Progress")
 			params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
 			params.TrackerAdapter = tracker
-			params.MaxSessions = tt.maxSessions
+			params.MaxConsecutiveAbsences = tt.maxConsecutiveAbsences
 			params.HandoffParkingLabel = tt.configuredLabel
 			var logs bytes.Buffer
 			params.Logger = debugLogger(t, &logs)
@@ -187,6 +187,163 @@ func TestHandleWorkerExitParksAtHandoffAbsenceCeiling(t *testing.T) {
 	}
 }
 
+// TestHandoffAbsenceCeilingDefaultsCannotDrift verifies that the
+// config-layer parse default for agent.max_consecutive_absences and the
+// orchestrator-layer fallback defaultHandoffAbsenceCeiling stay equal.
+// config cannot import orchestrator, so nothing else keeps the two
+// threes in sync; this test fails if either constant moves alone.
+func TestHandoffAbsenceCeilingDefaultsCannotDrift(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewServiceConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+	}
+	if cfg.Agent.MaxConsecutiveAbsences != defaultHandoffAbsenceCeiling {
+		t.Errorf("config.NewServiceConfig({}) Agent.MaxConsecutiveAbsences = %d, want %d (defaultHandoffAbsenceCeiling)",
+			cfg.Agent.MaxConsecutiveAbsences, defaultHandoffAbsenceCeiling)
+	}
+}
+
+// TestParkExhaustedAbsencesZeroValueConfigResolvesDefaultCeiling verifies
+// that a zero-value config.ServiceConfig{} — which never went through
+// buildAgentConfig's parse path — resolves the fallback ceiling of three
+// rather than zero, and that a candidate with zero recorded absences is
+// not parked under that fallback.
+func TestParkExhaustedAbsencesZeroValueConfigResolvesDefaultCeiling(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ABS-ZERO-CFG"
+	issue := candidateIssue(issueID, "PROJ-ZERO", "To Do")
+	cfg := config.ServiceConfig{}
+	store := &stubStore{absenceCounts: map[string]int{issueID: 0}}
+	tracker := newRecordingHandoffTracker()
+	state := NewState(1000, 1, nil, AgentTotals{})
+	orchestrator := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg},
+		Store:           store,
+	})
+
+	orchestrator.parkExhaustedAbsences(context.Background(), cfg, []domain.Issue{issue})
+
+	if _, ok := state.Parked[issueID]; ok {
+		t.Error("a zero-value config parked a candidate with zero recorded absences")
+	}
+}
+
+// TestAbsenceCeilingParkPointStableAcrossMaxSessions verifies that
+// holding agent.max_consecutive_absences fixed while varying
+// agent.max_sessions produces the identical park point on all three
+// ordinary lanes: worker-exit, retry and poll-tick.
+func TestAbsenceCeilingParkPointStableAcrossMaxSessions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("worker-exit lane", func(t *testing.T) {
+		t.Parallel()
+
+		// HandleWorkerExitParams carries no MaxSessions field at all (the
+		// event loop's own construction site reads only
+		// cfg.Agent.MaxConsecutiveAbsences), so the label below documents
+		// which cfg.Agent.MaxSessions value the caller would have supplied
+		// upstream; nothing about it can move the park point on this lane.
+		for _, maxSessions := range []int{1, 3, 20} {
+			t.Run("max_sessions="+strconv.Itoa(maxSessions), func(t *testing.T) {
+				t.Parallel()
+
+				issueID := "STABLE-EXIT-" + strconv.Itoa(maxSessions)
+				dir, baseline := handoffEvidenceGitWorkspace(t)
+				store := &mockExitStore{}
+				seedMockHandoffAbsences(store, issueID, 1)
+				tracker := newRecordingHandoffTracker()
+				state := exitStateWithIssue(t, issueID, "In Progress")
+				params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
+				params.TrackerAdapter = tracker
+				params.MaxConsecutiveAbsences = 2
+
+				HandleWorkerExit(state, WorkerResult{
+					IssueID:                 issueID,
+					Identifier:              "PROJ-STABLE",
+					ExitKind:                WorkerExitNormal,
+					WorkspacePath:           dir,
+					HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+					HandoffEvidenceBaseline: baseline,
+					AgentAdapter:            "mock",
+				}, params)
+				state.TrackerOpsWg.Wait()
+
+				if _, ok := state.Parked[issueID]; !ok {
+					t.Errorf("issue not parked at the two-absence ceiling, want the same park point regardless of max_sessions=%d", maxSessions)
+				}
+			})
+		}
+	})
+
+	t.Run("retry lane", func(t *testing.T) {
+		t.Parallel()
+
+		for _, maxSessions := range []int{1, 3, 20} {
+			t.Run("max_sessions="+strconv.Itoa(maxSessions), func(t *testing.T) {
+				t.Parallel()
+
+				issueID := "STABLE-RETRY-" + strconv.Itoa(maxSessions)
+				store := &mockRetryStore{absenceCounts: map[string]int{issueID: 2}}
+				tracker := &mockRetryTracker{}
+				state := retryState(t, issueID, "PROJ-STABLE", 1)
+				params := defaultRetryParams(t, store, tracker)
+				params.MaxSessions = maxSessions
+				params.MaxConsecutiveAbsences = 2
+
+				HandleRetryTimer(state, issueID, params)
+				state.TrackerOpsWg.Wait()
+
+				entry := state.Parked[issueID]
+				if entry == nil || entry.Reason != parkReasonHandoffAbsence {
+					t.Errorf("Parked[%s] = %+v, want reason %q regardless of max_sessions=%d", issueID, entry, parkReasonHandoffAbsence, maxSessions)
+				}
+			})
+		}
+	})
+
+	t.Run("poll-tick lane", func(t *testing.T) {
+		t.Parallel()
+
+		for _, maxSessions := range []int{1, 3, 20} {
+			t.Run("max_sessions="+strconv.Itoa(maxSessions), func(t *testing.T) {
+				t.Parallel()
+
+				issueID := "STABLE-POLL-" + strconv.Itoa(maxSessions)
+				issue := candidateIssue(issueID, "PROJ-STABLE", "To Do")
+				cfg := config.ServiceConfig{
+					Agent: config.AgentConfig{MaxSessions: maxSessions, MaxConsecutiveAbsences: 2},
+				}
+				store := &stubStore{absenceCounts: map[string]int{issueID: 2}}
+				tracker := newRecordingHandoffTracker()
+				state := NewState(1000, 1, nil, AgentTotals{})
+				orchestrator := NewOrchestrator(OrchestratorParams{
+					State:           state,
+					Logger:          discardLogger(),
+					TrackerAdapter:  tracker,
+					AgentAdapter:    &mockAgentAdapter{},
+					WorkflowManager: &stubWorkflowManager{config: cfg},
+					Store:           store,
+				})
+
+				orchestrator.parkExhaustedAbsences(context.Background(), cfg, []domain.Issue{issue})
+				state.TrackerOpsWg.Wait()
+
+				entry := state.Parked[issueID]
+				if entry == nil || entry.Reason != parkReasonHandoffAbsence {
+					t.Errorf("Parked[%s] = %+v, want reason %q regardless of max_sessions=%d", issueID, entry, parkReasonHandoffAbsence, maxSessions)
+				}
+			})
+		}
+	})
+}
+
 func TestHandleWorkerExitDefaultCeilingAllowsSecondAbsenceRetry(t *testing.T) {
 	const issueID = "ABS-SECOND"
 	dir, baseline := handoffEvidenceGitWorkspace(t)
@@ -196,7 +353,7 @@ func TestHandleWorkerExitDefaultCeilingAllowsSecondAbsenceRetry(t *testing.T) {
 	state := exitStateWithIssue(t, issueID, "In Progress")
 	params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
 	params.TrackerAdapter = tracker
-	params.MaxSessions = 0
+	params.MaxConsecutiveAbsences = 0
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:                 issueID,
@@ -960,8 +1117,8 @@ func TestParkSingleLogRecordPerTrigger(t *testing.T) {
 		if strings.Contains(output, "handoff absence ceiling reached, parking issue") {
 			t.Errorf("retired log message present\nlogs: %s", output)
 		}
-		if strings.Contains(output, "consecutive_absences") || strings.Contains(output, "absence_ceiling") {
-			t.Errorf("blocked-path log carries absence attributes, want neither\nlogs: %s", output)
+		if strings.Contains(output, "consecutive_absences") || strings.Contains(output, "absence_ceiling") || strings.Contains(output, "ceiling_setting") {
+			t.Errorf("blocked-path log carries absence attributes, want none\nlogs: %s", output)
 		}
 		spy.mu.Lock()
 		parks := len(spy.issueParks)
@@ -1004,6 +1161,9 @@ func TestParkSingleLogRecordPerTrigger(t *testing.T) {
 		}
 		if !strings.Contains(output, "consecutive_absences=3") || !strings.Contains(output, "absence_ceiling=3") {
 			t.Errorf("absence-path log missing absence attributes\nlogs: %s", output)
+		}
+		if !strings.Contains(output, "ceiling_setting=agent.max_consecutive_absences") {
+			t.Errorf("absence-path log missing ceiling_setting=agent.max_consecutive_absences\nlogs: %s", output)
 		}
 		spy.mu.Lock()
 		parks := len(spy.issueParks)

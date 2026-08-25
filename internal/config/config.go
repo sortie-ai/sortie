@@ -218,6 +218,17 @@ type AgentConfig struct {
 	// MaxTokens is the cumulative per-issue token ceiling enforced at
 	// dispatch preflight. 0 means unlimited.
 	MaxTokens int
+
+	// MaxConsecutiveAbsences bounds how many runs in a row may be
+	// observed to have produced no evidence of work before the issue
+	// is parked. It is not an effort budget: any run that produces
+	// evidence resets the count to zero. Defaults to 3 when the key
+	// is absent. Unlike MaxSessions and MaxTokens, 0 is rejected
+	// rather than read as unlimited, because an unbounded absence
+	// sequence is the condition this ceiling exists to prevent; a
+	// deployment that wants no absence checking sets
+	// tracker.handoff_evidence to off instead.
+	MaxConsecutiveAbsences int
 }
 
 // AgentAdapterConfig returns the effective pass-through config map for
@@ -802,18 +813,41 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		}
 	}
 
+	// max_consecutive_absences: unlike max_sessions and max_tokens, 0
+	// is rejected rather than read as unlimited, so a presence test
+	// is required to tell an absent key (which defaults to 3) apart
+	// from an explicit 0 (which is rejected).
+	maxConsecutiveAbsences := 3
+	if v, exists := m["max_consecutive_absences"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return AgentConfig{}, &ConfigError{
+				Field:   "agent.max_consecutive_absences",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		maxConsecutiveAbsences = parsed
+	}
+	if maxConsecutiveAbsences <= 0 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.max_consecutive_absences",
+			Message: "must be greater than 0",
+		}
+	}
+
 	return AgentConfig{
-		Kind:                 kind,
-		Command:              command,
-		TurnTimeoutMS:        turnTimeoutMS,
-		ReadTimeoutMS:        readTimeoutMS,
-		StallTimeoutMS:       stallTimeoutMS,
-		MaxConcurrentAgents:  maxConcurrent,
-		MaxTurns:             maxTurns,
-		MaxRetryBackoffMS:    maxRetryBackoff,
-		MaxConcurrentByState: byState,
-		MaxSessions:          maxSessions,
-		MaxTokens:            maxTokens,
+		Kind:                   kind,
+		Command:                command,
+		TurnTimeoutMS:          turnTimeoutMS,
+		ReadTimeoutMS:          readTimeoutMS,
+		StallTimeoutMS:         stallTimeoutMS,
+		MaxConcurrentAgents:    maxConcurrent,
+		MaxTurns:               maxTurns,
+		MaxRetryBackoffMS:      maxRetryBackoff,
+		MaxConcurrentByState:   byState,
+		MaxSessions:            maxSessions,
+		MaxTokens:              maxTokens,
+		MaxConsecutiveAbsences: maxConsecutiveAbsences,
 	}, nil
 }
 

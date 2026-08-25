@@ -542,6 +542,22 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
+		// --- agent.max_consecutive_absences schema registration ---
+		{
+			name:      "agent.max_consecutive_absences known key produces no warning",
+			raw:       map[string]any{"agent": map[string]any{"max_consecutive_absences": 5}},
+			wantCount: 0,
+		},
+		{
+			name: "type mismatch agent.max_consecutive_absences is string abc",
+			raw: map[string]any{
+				"agent": map[string]any{"max_consecutive_absences": "abc"},
+			},
+			wantCount:  1,
+			wantChecks: []string{"type_mismatch"},
+			wantFields: []string{"agent.max_consecutive_absences"},
+		},
+
 		// --- Full valid config: no warnings ---
 		{
 			name: "fully valid config with all known keys produces no warnings",

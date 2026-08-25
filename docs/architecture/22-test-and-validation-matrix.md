@@ -31,6 +31,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `agent.command` is preserved as a whitespace-delimited argument-vector string
 - A non-positive `agent.turn_timeout_ms` is rejected at config parse time; an absent key takes
   the default
+- An absent `agent.max_consecutive_absences` key takes the default of `3`; `0` and negative
+  values are rejected at config parse time; `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES` overrides a
+  file-supplied value and is rejected under the same rule
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - Prompt template renders `issue`, `attempt`, and `run`
 - Prompt rendering fails on unknown variables (strict mode)
@@ -162,12 +165,18 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - The worker-exit absence park records the same tracker state the run's own terminal observation
   resolved, not an unrecorded state, and is releasable by a later state change without an
   intervening backfill tick
+- The consecutive-absence ceiling reads only `agent.max_consecutive_absences` on every lane that
+  evaluates it, including shutdown drain: its value does not move when `agent.max_sessions`
+  moves, and a worker exit processed during shutdown drain resolves the same ceiling a worker
+  exit processed by the ordinary event loop would
 - An issue entering the per-issue budget-exhausted set, on either the poll tick's rebuild or the
-  retry lane, produces exactly one log record naming the issue, the reason, and the used and
-  budgeted numbers
+  retry lane, produces exactly one log record naming the issue, the reason, the used and
+  budgeted numbers, and, where the fired ceiling's governing setting is known, the setting itself
 - The record and its counter increment fire once per hold: repeated ticks over the same held
   issue produce neither, and an issue that leaves the candidate set and returns still held under
   the same reason produces neither either
+- A park carrying a ceiling also names the setting behind it; an `agent_blocked` park, which
+  carries no ceiling, names neither
 - Whichever lane, poll tick or retry timer, discovers a hold is the only one that announces it;
   the other lane's rebuild or block leaves the announcement memory alone
 - The budget-exhausted gauge reports a per-reason level derived from the current set, seeded to

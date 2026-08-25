@@ -419,7 +419,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:                             o.store,
 				MaxRetryBackoffMS:                 cfg.Agent.MaxRetryBackoffMS,
-				MaxSessions:                       cfg.Agent.MaxSessions,
+				MaxConsecutiveAbsences:            cfg.Agent.MaxConsecutiveAbsences,
 				HandoffParkingLabel:               o.handoffParkingLabel,
 				OnRetryFire:                       o.onRetryFire,
 				Ctx:                               ctx,
@@ -448,25 +448,26 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:                 o.store,
-				TrackerAdapter:        o.trackerAdapter,
-				ActiveStates:          cfg.Tracker.ActiveStates,
-				TerminalStates:        cfg.Tracker.TerminalStates,
-				HandoffState:          cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS:     cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:          o.makeWorkerFn,
-				AgentAdapterByKind:    o.agentAdapterByKind,
-				DefaultAgentKind:      cfg.Agent.Kind,
-				OnRetryFire:           o.onRetryFire,
-				Ctx:                   ctx,
-				Logger:                o.logger,
-				MaxSessions:           cfg.Agent.MaxSessions,
-				HandoffParkingLabel:   o.handoffParkingLabel,
-				HandoffEvidencePolicy: cfg.Tracker.HandoffEvidence,
-				MaxTokens:             cfg.Agent.MaxTokens,
-				Metrics:               o.metrics,
-				HostPool:              o.hostPool,
-				WorkflowFile:          o.workflowFile(),
+				Store:                  o.store,
+				TrackerAdapter:         o.trackerAdapter,
+				ActiveStates:           cfg.Tracker.ActiveStates,
+				TerminalStates:         cfg.Tracker.TerminalStates,
+				HandoffState:           cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:      cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:           o.makeWorkerFn,
+				AgentAdapterByKind:     o.agentAdapterByKind,
+				DefaultAgentKind:       cfg.Agent.Kind,
+				OnRetryFire:            o.onRetryFire,
+				Ctx:                    ctx,
+				Logger:                 o.logger,
+				MaxSessions:            cfg.Agent.MaxSessions,
+				MaxConsecutiveAbsences: cfg.Agent.MaxConsecutiveAbsences,
+				HandoffParkingLabel:    o.handoffParkingLabel,
+				HandoffEvidencePolicy:  cfg.Tracker.HandoffEvidence,
+				MaxTokens:              cfg.Agent.MaxTokens,
+				Metrics:                o.metrics,
+				HostPool:               o.hostPool,
+				WorkflowFile:           o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -1066,7 +1067,7 @@ func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.Ser
 		candidateIDs[i] = issue.ID
 	}
 
-	ceiling := handoffAbsenceCeiling(cfg.Agent.MaxSessions)
+	ceiling := handoffAbsenceCeiling(cfg.Agent.MaxConsecutiveAbsences)
 	counts, err := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
 	if err != nil {
 		o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
@@ -1100,6 +1101,16 @@ func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.Ser
 			issueLog,
 		)
 	}
+}
+
+// ceilingSettingByBudgetReason maps a machine-readable budget-hold
+// reason to the dotted configuration path of the setting that governs
+// it, for the "candidate held by budget ceiling" log record. A reason
+// absent from this map emits no ceiling_setting attribute rather than
+// an empty or invented one.
+var ceilingSettingByBudgetReason = map[string]string{
+	budgetReasonSession: "agent.max_sessions",
+	budgetReasonToken:   "agent.max_tokens",
 }
 
 // rebuildBudgetExhausted replaces the BudgetExhausted set once per tick
@@ -1230,6 +1241,9 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				slog.Int64("budget_tokens", entry.BudgetTokens),
 			)
 		}
+		if setting, known := ceilingSettingByBudgetReason[entry.Reason]; known {
+			attrs = append(attrs, slog.String("ceiling_setting", setting))
+		}
 		issueLog.LogAttrs(ctx, slog.LevelWarn, "candidate held by budget ceiling", attrs...)
 		o.metrics.IncBudgetExhaustions(entry.Reason)
 	}
@@ -1279,6 +1293,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:                             o.store,
 				MaxRetryBackoffMS:                 cfg.Agent.MaxRetryBackoffMS,
+				MaxConsecutiveAbsences:            cfg.Agent.MaxConsecutiveAbsences,
 				OnRetryFire:                       func(string) {}, // no-op: prevent retry fire events from reaching the event loop during drain
 				Ctx:                               drainCtx,
 				Logger:                            o.logger,
