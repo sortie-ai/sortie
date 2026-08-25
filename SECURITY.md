@@ -14,11 +14,11 @@ Sortie follows [Semantic Versioning](https://semver.org/). Security fixes are ap
 
 | Version | Supported |
 |---------|-----------|
-| 1.21.x | Yes (1.21.0 recommended) |
-| 1.20.x | Security patches until 20 Nov 2026 |
-| < 1.20 | No |
+| 1.22.x | Yes (1.22.0 recommended) |
+| 1.21.x | Security patches until 25 Nov 2026 |
+| < 1.21 | No |
 
-When a new minor version ships (e.g., 1.21.0), the immediately preceding minor (e.g., 1.20.x) enters a 3-month security-maintenance window. During that window, only critical and high severity patches are backported; all other fixes ship only on the current minor. After the window ends, only the current minor release of the latest major version is supported; all older versions are unsupported.
+When a new minor version ships (e.g., 1.22.0), the immediately preceding minor (e.g., 1.21.x) enters a 3-month security-maintenance window. During that window, only critical and high severity patches are backported; all other fixes ship only on the current minor. After the window ends, only the current minor release of the latest major version is supported; all older versions are unsupported.
 
 ## Reporting a Vulnerability
 
