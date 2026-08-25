@@ -756,6 +756,71 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "agent.max_sessions")
 	})
 
+	t.Run("MaxConsecutiveAbsences/AbsentKeyDefaultsToThree", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxConsecutiveAbsences", 3, cfg.Agent.MaxConsecutiveAbsences)
+	})
+
+	t.Run("MaxConsecutiveAbsences/PositiveInteger", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": 7},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxConsecutiveAbsences", 7, cfg.Agent.MaxConsecutiveAbsences)
+	})
+
+	t.Run("MaxConsecutiveAbsences/StringCoercion", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": "5"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxConsecutiveAbsences", 5, cfg.Agent.MaxConsecutiveAbsences)
+	})
+
+	t.Run("MaxConsecutiveAbsences/ExplicitZeroRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": 0},
+		})
+		assertConfigErrorField(t, err, "agent.max_consecutive_absences")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+		assertStringEqual(t, "err.Error()", "config: agent.max_consecutive_absences: must be greater than 0", err.Error())
+	})
+
+	t.Run("MaxConsecutiveAbsences/NegativeRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": -1},
+		})
+		assertConfigErrorField(t, err, "agent.max_consecutive_absences")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+	})
+
+	t.Run("MaxConsecutiveAbsences/NonIntegerRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": "not-a-number"},
+		})
+		assertConfigErrorField(t, err, "agent.max_consecutive_absences")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "invalid integer value: not-a-number", ce.Message)
+	})
+
 	t.Run("MaxTokens/DefaultIsZero", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{})

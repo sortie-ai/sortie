@@ -112,6 +112,11 @@ type HandleRetryTimerParams struct {
 	// budget. When 0, no budget is enforced.
 	MaxSessions int
 
+	// MaxConsecutiveAbsences is the configured consecutive
+	// handoff-absence ceiling (from
+	// config.Agent.MaxConsecutiveAbsences).
+	MaxConsecutiveAbsences int
+
 	// HandoffParkingLabel is the review-comments escalation label captured
 	// at orchestrator construction. Empty falls back to "needs-human".
 	HandoffParkingLabel string
@@ -251,7 +256,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}
 
 		if params.HandoffEvidencePolicy.Effective() != config.HandoffEvidenceOff {
-			absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+			absenceCeiling := handoffAbsenceCeiling(params.MaxConsecutiveAbsences)
 			absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
 			consecutiveAbsences := absenceCounts[issueID]
 			if absenceErr != nil {

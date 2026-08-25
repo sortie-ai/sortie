@@ -1950,6 +1950,82 @@ func TestHandleRetryTimer_BudgetMetrics(t *testing.T) {
 	})
 }
 
+// TestHandleRetryTimer_AbsenceCeilingIndependentOfMaxSessions verifies
+// that the consecutive-absence ceiling and the effort-budget session
+// ceiling are read from separate fields and fire independently of each
+// other's value, on the retry lane.
+func TestHandleRetryTimer_AbsenceCeilingIndependentOfMaxSessions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a generous absence ceiling leaves the tighter session budget as the block", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "IND-BUDGET-BLOCKS"
+		store := &mockRetryStore{absenceCounts: map[string]int{issueID: 4}, runHistoryCount: 2}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, issueID, "PROJ-IND", 1)
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 2
+		params.MaxConsecutiveAbsences = 5
+
+		HandleRetryTimer(state, issueID, params)
+
+		if _, ok := state.Parked[issueID]; ok {
+			t.Error("issue parked before its own five-absence ceiling was reached")
+		}
+		entry, ok := state.BudgetExhausted[issueID]
+		if !ok || entry.Reason != budgetReasonSession {
+			t.Errorf("BudgetExhausted[%s] = %+v, want reason %q", issueID, entry, budgetReasonSession)
+		}
+	})
+
+	t.Run("absence reaches its own ceiling and parks despite a tighter session budget", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "IND-PARK-TIGHT-BUDGET"
+		store := &mockRetryStore{absenceCounts: map[string]int{issueID: 5}, runHistoryCount: 2}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, issueID, "PROJ-IND", 1)
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 2
+		params.MaxConsecutiveAbsences = 5
+
+		HandleRetryTimer(state, issueID, params)
+		state.TrackerOpsWg.Wait()
+
+		entry := state.Parked[issueID]
+		if entry == nil || entry.Reason != parkReasonHandoffAbsence {
+			t.Errorf("Parked[%s] = %+v, want reason %q", issueID, entry, parkReasonHandoffAbsence)
+		}
+		if _, ok := state.BudgetExhausted[issueID]; ok {
+			t.Error("BudgetExhausted set for an issue the absence ceiling already parked")
+		}
+	})
+
+	t.Run("absence reaches its own tight ceiling and parks despite a generous session budget", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "IND-PARK-LOOSE-BUDGET"
+		store := &mockRetryStore{absenceCounts: map[string]int{issueID: 2}, runHistoryCount: 1}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, issueID, "PROJ-IND", 1)
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 10
+		params.MaxConsecutiveAbsences = 2
+
+		HandleRetryTimer(state, issueID, params)
+		state.TrackerOpsWg.Wait()
+
+		entry := state.Parked[issueID]
+		if entry == nil || entry.Reason != parkReasonHandoffAbsence {
+			t.Errorf("Parked[%s] = %+v, want reason %q", issueID, entry, parkReasonHandoffAbsence)
+		}
+		if _, ok := state.BudgetExhausted[issueID]; ok {
+			t.Error("BudgetExhausted set for an issue the absence ceiling already parked")
+		}
+	})
+}
+
 // TestHandleRetryTimer_SessionBudgetLogLine covers the retry lane's
 // session-exhaustion warning's reason attribute, the counterpart to the
 // token-exhaustion warning [TestHandleRetryTimer_TokenBudgetLogLine]

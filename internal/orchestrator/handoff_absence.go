@@ -14,9 +14,15 @@ const (
 	reviewCommentsConfigKey      = "review_comments"
 )
 
-func handoffAbsenceCeiling(maxSessions int) int {
-	if maxSessions > 0 {
-		return maxSessions
+// handoffAbsenceCeiling resolves the configured consecutive-absence
+// ceiling, falling back to defaultHandoffAbsenceCeiling when configured
+// is not positive. The fallback exists for a configuration value that
+// did not come through the parse path, such as a zero-value
+// config.ServiceConfig{}, which is where zero can still arrive despite
+// the parsed configuration always carrying a positive value.
+func handoffAbsenceCeiling(configured int) int {
+	if configured > 0 {
+		return configured
 	}
 	return defaultHandoffAbsenceCeiling
 }

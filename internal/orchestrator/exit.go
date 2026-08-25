@@ -56,10 +56,10 @@ type HandleWorkerExitParams struct {
 	// delay (from config.Agent.MaxRetryBackoffMS).
 	MaxRetryBackoffMS int
 
-	// MaxSessions supplies the consecutive handoff-absence ceiling when
-	// positive. Zero derives the safety default of three while remaining
-	// unlimited for the ordinary all-session budget.
-	MaxSessions int
+	// MaxConsecutiveAbsences is the configured consecutive
+	// handoff-absence ceiling (from
+	// config.Agent.MaxConsecutiveAbsences).
+	MaxConsecutiveAbsences int
 
 	// HandoffParkingLabel is the review-comments escalation label captured
 	// at orchestrator construction. Empty falls back to "needs-human".
@@ -449,7 +449,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	consecutiveAbsences := 0
-	absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+	absenceCeiling := handoffAbsenceCeiling(params.MaxConsecutiveAbsences)
 	absenceParked := false
 	if evidenceWithheld {
 		counts, countErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{workerResult.IssueID})

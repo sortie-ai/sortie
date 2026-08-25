@@ -489,6 +489,53 @@ func TestApplyEnvOverrides(t *testing.T) {
 		assertEnvOverrideError(t, err, "agent.turn_timeout_ms", "must be greater than 0")
 	})
 
+	t.Run("agent max consecutive absences override reaches config with no YAML key", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES", "7")
+
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.MaxConsecutiveAbsences != 7 {
+			t.Errorf("Agent.MaxConsecutiveAbsences = %d, want 7", cfg.Agent.MaxConsecutiveAbsences)
+		}
+	})
+
+	t.Run("agent max consecutive absences override replaces a file-supplied value", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES", "7")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": 3},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.MaxConsecutiveAbsences != 7 {
+			t.Errorf("Agent.MaxConsecutiveAbsences = %d, want 7 (env overrides the file value)", cfg.Agent.MaxConsecutiveAbsences)
+		}
+	})
+
+	t.Run("agent max consecutive absences override unset leaves file value", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES", "")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_consecutive_absences": 9},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.MaxConsecutiveAbsences != 9 {
+			t.Errorf("Agent.MaxConsecutiveAbsences = %d, want 9 (file value retained when unset)", cfg.Agent.MaxConsecutiveAbsences)
+		}
+	})
+
+	t.Run("agent max consecutive absences override zero fails config construction", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES", "0")
+
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "agent.max_consecutive_absences", "must be greater than 0")
+	})
+
 	t.Run("top-level SORTIE_DB_PATH", func(t *testing.T) {
 		t.Setenv("SORTIE_DB_PATH", "/data/sortie.db")
 
