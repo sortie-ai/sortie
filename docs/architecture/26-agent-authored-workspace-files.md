@@ -27,8 +27,9 @@ Recognized values:
   the self-review phase (Section 7); it remains an immediate exit whether or not self-review is
   configured. Written during a phase turn instead, `blocked` ends the phase and gives the run this
   same disposition, distinguished from the coding-turn read by the phase's own tail work: the
-  review-summary write and the non-`disabled` `SORTIE_SELF_REVIEW_STATUS` value the `after_run`
-  hook then receives (Section 13.8).
+  removal of the status file at the point the phase acts on it, the review-summary write, and the
+  non-`disabled` `SORTIE_SELF_REVIEW_STATUS` value the `after_run` hook then receives
+  (Section 13.8).
 - `needs-human-review`: agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
   `tracker.handoff_state` is configured, the issue is in an active tracker state, and the dispatch

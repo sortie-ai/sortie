@@ -386,8 +386,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - A `needs-human-review` signal read inside self-review is consumed and does not abort the loop
 - A `blocked` signal read inside self-review aborts the phase, and becomes the run's exit reason
   on either admission path into the phase
+- The status file is removed at both in-phase read sites, after a review turn and after a fix
+  turn, when the phase reads `blocked`, on either admission path into the phase
 - A deployment with self-review disabled treats the completion signal exactly as before, ending
   the run without entering the phase
+- A recognized signal read outside the self-review phase, at the read after a coding turn, leaves
+  the status file in place at teardown, for both `blocked` and `needs-human-review`
 - On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author
   matches the operator-configured `bot_usernames` allowlist does not trigger the human
   `review_comments` reaction

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1262,11 +1263,12 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		maxIter    int
-		cancelled  bool
-		newAdapter func(t *testing.T, wsPath string) domain.AgentAdapter
-		wantSignal workspace.StatusSignal
+		name                  string
+		maxIter               int
+		cancelled             bool
+		newAdapter            func(t *testing.T, wsPath string) domain.AgentAdapter
+		wantSignal            workspace.StatusSignal
+		wantStatusFilePresent bool
 	}{
 		{
 			name:    "blocked_after_review_turn",
@@ -1274,7 +1276,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
 				return &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
 			},
-			wantSignal: workspace.StatusBlocked,
+			wantSignal:            workspace.StatusBlocked,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "blocked_after_fix_turn",
@@ -1285,7 +1288,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 					{status: "blocked"},
 				}}
 			},
-			wantSignal: workspace.StatusBlocked,
+			wantSignal:            workspace.StatusBlocked,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "cancelled_context_at_iteration_start",
@@ -1293,8 +1297,9 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
 				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "pass"}}}
 			},
-			cancelled:  true,
-			wantSignal: workspace.StatusNone,
+			cancelled:             true,
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "review_turn_error",
@@ -1302,7 +1307,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
 				return &failOnFirstAdapter{wsPath: wsPath}
 			},
-			wantSignal: workspace.StatusNone,
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "fix_turn_error",
@@ -1313,7 +1319,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 					{err: errors.New("simulated fix turn error")},
 				}}
 			},
-			wantSignal: workspace.StatusNone,
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "passing_verdict",
@@ -1321,7 +1328,8 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
 				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "pass"}}}
 			},
-			wantSignal: workspace.StatusNone,
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: false,
 		},
 		{
 			name:    "reached_cap",
@@ -1329,7 +1337,29 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
 				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "iterate"}}}
 			},
-			wantSignal: workspace.StatusNone,
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: false,
+		},
+		{
+			name:    "unrecognized_after_review_turn",
+			maxIter: 1,
+			newAdapter: func(_ *testing.T, wsPath string) domain.AgentAdapter {
+				return &statusWriterAdapter{wsPath: wsPath, status: "some-unrecognized-token"}
+			},
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: true,
+		},
+		{
+			name:    "unrecognized_after_fix_turn",
+			maxIter: 3,
+			newAdapter: func(t *testing.T, wsPath string) domain.AgentAdapter {
+				return &scriptedReviewAdapter{t: t, wsPath: wsPath, steps: []reviewStep{
+					{verdict: &domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"}},
+					{status: "some-unrecognized-token"},
+				}}
+			},
+			wantSignal:            workspace.StatusNone,
+			wantStatusFilePresent: true,
 		},
 	}
 
@@ -1363,6 +1393,16 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 
 			if signal != tt.wantSignal {
 				t.Errorf("runSelfReviewLoop(...) terminal signal = %q, want %q", signal, tt.wantSignal)
+			}
+
+			statusPath := filepath.Join(wsPath, ".sortie", "status")
+			_, statErr := os.Stat(statusPath)
+			if tt.wantStatusFilePresent {
+				if statErr != nil {
+					t.Errorf("os.Stat(%q) = %v, want file present", statusPath, statErr)
+				}
+			} else if statErr == nil || !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("os.Stat(%q) error = %v, want fs.ErrNotExist", statusPath, statErr)
 			}
 		})
 	}

@@ -288,6 +288,9 @@ The self-review phase reads `.sortie/status` again after each review turn and ea
 `blocked` aborts the phase. The iteration in progress is recorded as aborted, naming the signal,
 and the run proceeds to its exit as if the phase had produced this outcome directly: the run ends
 as a blocked soft stop whichever of the two admissions (Section 2.3.2) brought it into the phase.
+It is consumed at the same point and on the same terms as `needs-human-review`: the file is
+removed before the phase acts on the value, so the abort is not visible to a later reader of the
+file.
 
 `needs-human-review` does not end the phase. It is consumed on the same terms as the value that
 admitted the run: the file is removed, and the iteration continues exactly as if the file had
@@ -400,11 +403,13 @@ exit_normal(pending_reason)    // exit handler differentiates (Section 3.6)
 The **agent** is the sole writer of the `.sortie/status` file.
 
 The **orchestrator** MUST NOT write to or modify the `.sortie/status` file during a worker run.
-The orchestrator's file-system operations on this path are the pre-dispatch cleanup
-(Section 3.4), the post-turn read (Section 3.1), and a removal at the moment the orchestrator
-acts on a recognized value read during a run (Section 3.4). The file therefore states what the
-agent has said since the orchestrator last responded to it, rather than carrying forward a value
-the orchestrator has already acted on.
+The orchestrator's file-system operations on this path are: the pre-dispatch cleanup
+(Section 3.4); the post-turn read after a coding turn (Section 3.1), which removes nothing; the
+admission removal, when a pending reason admits the run to the self-review phase (Section 3.4);
+and the two in-phase removals, after a review turn and after a fix turn (Section 3.4). Inside the
+self-review phase the file therefore states what the agent has said since the phase last acted on
+it. On a run that never enters the phase, the file states the value the run ended on, since
+nothing removes it between the coding-turn read and teardown.
 
 The agent creates the `.sortie/` directory and status file as needed. The write is a simple
 file creation or overwrite:
@@ -474,12 +479,48 @@ function pre_dispatch_cleanup(workspace_path):
         log_warn("status file cleanup failed", workspace_path, err)
 ```
 
-The orchestrator applies this same removal a second time during a run, at the moment it acts on
-a recognized status value that admits the run to the self-review phase (Section 2.3.2): the file
-is removed immediately before the phase's first review turn, so the phase's own first read does
-not observe the value that admitted it. This second removal applies the same `Lstat` symlink
-rejection and the same tolerance of failure as the pre-dispatch removal; a failed removal does
-not prevent the phase from running.
+The orchestrator applies this same removal at three further points during a run. On admission to
+the self-review phase (Section 2.3.2), the file is removed for the recognized status value that
+admitted the run, immediately before the phase's first review turn, so the phase's own first read
+does not observe the value that admitted it. Inside the phase, the file is removed again after
+each review turn and after each fix turn, whenever the value read there is recognized (Section
+2.3.5). Every one of these removals applies the same `Lstat` symlink rejection and the same
+tolerance of failure as the pre-dispatch removal; a failed removal does not prevent the phase from
+running and does not change the run's exit.
+
+The table below states, for each point at which the orchestrator reads or removes the file,
+whether it removes the file for each of the two recognized values and for the unrecognized-or-
+absent case:
+
+| Point | `blocked` | `needs-human-review` | Unrecognized or absent |
+|---|---|---|---|
+| Pre-dispatch cleanup | Removed | Removed | Removed |
+| Read after a coding turn | Not removed | Not removed | Not removed |
+| Admission to the self-review phase | Does not occur: a pending `blocked` reason does not admit | Removed | Does not occur: the turn-budget admission carries no acted-on value |
+| Read after a review turn | Removed | Removed | Not removed |
+| Read after a fix turn | Removed | Removed | Not removed |
+
+The rule behind this table is a property of the point, not of the value read: whether a point
+removes the file MUST NOT depend on which recognized value was read there, only on whether the
+value is recognized at all. The self-review phase's two reads consume because the point reads
+again: a recognized value read after a review turn or a fix turn is, in the general case, followed
+by a further read inside the same phase, and that later read must not re-observe a value the phase
+has already acted on. This reasoning holds for the in-phase `blocked` case too, even though the
+branch that handles `blocked` ends the phase and reads nothing further; the point still consumes,
+because the answer belongs to the point and not to the value the branch happened to receive. The
+read after a coding turn has no later read behind it, except through the admission to the
+self-review phase, and that case is already covered by the admission removal. The pre-dispatch
+cleanup stands outside this reasoning: it precedes every read of the run and exists to stop one
+run's value from reaching the next, rather than to protect a later read within the same run. The
+difference between the phase's reads and the coding-turn read is therefore a deliberate boundary
+stated here, not an artifact of where a removal call happens to appear in the code.
+
+Because the rule is stated over the five points above and over whether a value is recognized,
+rather than over the two values `blocked` and `needs-human-review` themselves, a status value a
+later protocol version adds inherits each point's answer with no further edit to this section:
+consumed at the two in-phase reads, and left in place at the read after a coding turn. What the
+self-review phase does with such a value once it has consumed it is a separate question, settled
+by whichever section defines the value.
 
 ### 3.5 Idempotency
 
@@ -839,8 +880,10 @@ Operators can inspect the current status signal for any workspace:
 cat /path/to/workspace/.sortie/status
 ```
 
-A missing file or empty output indicates no advisory signal (normal operation). The presence
-of `blocked` or `needs-human-review` indicates the agent's last assessment.
+A missing file or empty output means one of two things: the agent has written nothing since the
+file was last removed, or the orchestrator has already consumed a recognized value the agent
+wrote (Section 3.4). The presence of `blocked` or `needs-human-review` indicates the agent's last
+assessment, not yet acted on by the orchestrator.
 
 ## 9. Conformance
 
@@ -852,15 +895,20 @@ An implementation conforms to this specification if it satisfies all of the foll
 2. The orchestrator recognizes `blocked` and `needs-human-review` per Section 2.3.
 3. The orchestrator ignores unrecognized values per Section 2.5.
 4. The orchestrator handles read errors per Section 2.6.
-5. The orchestrator deletes `.sortie/status` before each new dispatch per Section 3.4, and again
-   at the moment it acts on a recognized value that admits the run to the self-review phase per
-   Section 2.3.2 and Section 3.4.
+5. The orchestrator deletes `.sortie/status` at four points: before each new dispatch; at the
+   moment it acts on a recognized value that admits the run to the self-review phase; after each
+   review turn inside the phase, when the value read is recognized; and after each fix turn
+   inside the phase, when the value read is recognized. All four are per Section 3.4.
 6. The orchestrator never writes to `.sortie/status`, and its only removals of the file are the
-   pre-dispatch cleanup and the removal it makes each time it acts on a recognized value read
-   during a run, both per Section 3.2 and Section 3.4.
+   four named in item 5. In particular: the read after a coding turn removes nothing, for either
+   recognized value, on any deployment (Section 3.2, Section 3.4); and a recognized value read at
+   that point, when the run is not admitted to the self-review phase, remains in the file at
+   teardown (Section 8.3).
 7. The status file does not trigger tracker state transitions per Section 3.6.
 8. Symbolic links at any path component are treated as read errors per Section 7.2.
-9. Pre-dispatch cleanup applies the same symlink rejection as reads per Section 3.4.
+9. Every removal named in item 5, not the pre-dispatch cleanup alone, applies the same `Lstat`
+   symlink rejection, and every one tolerates a failed removal without changing the run's control
+   flow, per Section 3.4.
 10. The orchestrator parks the issue on `blocked` where the dispatch drives issue state, and
     holds it out of dispatch until it observes a release per Section 2.3.1 and Section 3.5.
 

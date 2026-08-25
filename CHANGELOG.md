@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An issue that reached a terminal state during a run no longer receives a session-failure comment, a failed run record, or a retry that is then discarded. Sortie now re-checks the issue's tracker state immediately before recording that kind of failure, and stays silent when the issue is already finished.
   ([#887](https://github.com/sortie-ai/sortie/issues/887))
 
+- An `after_run` hook that inspects `.sortie/status` after a run whose self-review phase ended on `blocked` now finds the file absent, the same as it already found for a phase-ending `needs-human-review`. A run that never enters the self-review phase is unchanged.
+  ([#894](https://github.com/sortie-ai/sortie/issues/894))
+
 ### Changed
 
 - The consecutive-absence ceiling no longer follows `agent.max_sessions`. It now reads a new field, `agent.max_consecutive_absences`, which defaults to three and rejects `0` as a configuration error; a deployment that wants no absence checking at all sets `tracker.handoff_evidence: off` instead. `agent.max_sessions` itself is unchanged: it remains the total per-issue session budget. A deployment that set `agent.max_sessions` well above three, paired with a workflow whose runs legitimately leave the workspace untouched, now parks such an issue considerably sooner than before; the park is announced and reversible. An operator who chose a low `agent.max_sessions` to bound a loop should revisit that value, because a workflow advancing one issue through several phases needs a session budget sized to those phases rather than to the runaway guard it was previously also serving.
