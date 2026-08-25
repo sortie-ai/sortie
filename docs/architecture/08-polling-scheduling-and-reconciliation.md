@@ -170,7 +170,11 @@ Per-issue token budget (cost ceiling):
   entries for that axis forward unchanged and keeps the other axis fresh, which is a different
   fail-open mechanism from the retry lane's own skip-and-proceed; dispatch still proceeds for
   every candidate not in the set. The rebuild is skipped entirely when both budgets are
-  disabled.
+  disabled. A hold newly entering the set, on either this rebuild or the retry lane, also
+  posts one plain-text comment on the tracker issue naming the ceiling and the setting that
+  raises it. The comment is durably deduplicated, so it is posted once per hold across restarts
+  rather than once per process lifetime, and its write rate is paced by a wall-clock window
+  shared by both lanes that holds at whatever `polling.interval_ms` the deployment configures.
 - The consecutive handoff-absence ceiling (§14.2), governed by `agent.max_consecutive_absences`,
   is evaluated separately, by the same mechanism that parks a `blocked` soft stop, after the
   release-evaluation step below so a park released this tick is not immediately re-parked. It

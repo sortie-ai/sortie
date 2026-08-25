@@ -35,6 +35,7 @@ type RetryTimerStore interface {
 	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
+	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -389,6 +390,20 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		if !wasTold || told.Reason != held.Reason {
 			state.BudgetAnnounced[issueID] = BudgetAnnouncement{Reason: held.Reason, At: held.ExhaustedAt}
 			metrics.IncBudgetExhaustions(held.Reason)
+		}
+
+		if params.TrackerAdapter != nil &&
+			state.BudgetHoldNoticed[issueID] != held.Reason &&
+			budgetHoldNoticeAllowed(state, time.Now().UTC()) {
+			postBudgetHoldNotice(state, budgetHoldNoticeParams{
+				IssueID:        issueID,
+				Entry:          held,
+				Store:          params.Store,
+				TrackerAdapter: params.TrackerAdapter,
+				Metrics:        metrics,
+				Logger:         log,
+				Ctx:            ctx,
+			})
 		}
 		return
 	}

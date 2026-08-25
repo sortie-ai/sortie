@@ -227,6 +227,8 @@ Fields:
   - `0` disables the budget (unlimited retries).
   - Changes are re-applied at runtime and affect future retry timer evaluations.
   - The separate `max_consecutive_absences` governs the consecutive-absence ceiling.
+  - Reaching the ceiling also posts one comment on the issue naming the session budget and
+    `agent.max_sessions` as the setting that raises it.
 - `max_tokens` (integer)
   - Default: `0` (unlimited; no token budget enforced).
   - Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the
@@ -242,6 +244,8 @@ Fields:
     unmeasured count.
   - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
   - Changes are re-applied at runtime and affect future retry timer evaluations.
+  - Reaching the ceiling also posts one comment on the issue naming the token budget and
+    `agent.max_tokens` as the setting that raises it.
 - `max_consecutive_absences` (integer)
   - Default: `3`.
   - Bounds how many runs in a row may be observed to have produced no evidence of work before

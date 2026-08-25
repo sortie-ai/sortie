@@ -137,8 +137,10 @@ comments and applies escalation labels, none of which carries state semantics: t
 comment (`tracker.comments.on_dispatch`), the worker-exit completion and failure comments
 (`tracker.comments.on_completion`, `tracker.comments.on_failure`), the auto-merge success comment
 (§11C), a reaction escalation label or comment when a reaction's retry budget is exhausted or a
-non-retryable error occurs, and the primary-dispatch parking label applied both when a `blocked`
-soft stop parks an issue and when the consecutive handoff-absence ceiling is reached (§14.2).
+non-retryable error occurs, the primary-dispatch parking label applied both when a `blocked`
+soft stop parks an issue and when the consecutive handoff-absence ceiling is reached (§14.2), and
+a comment posted once per hold on an issue held out of dispatch by a per-issue ceiling
+(`agent.max_sessions` or `agent.max_tokens`).
 None of these is a state transition.
 
 The parking label is a non-state write whose later presence or absence on the issue is read back:

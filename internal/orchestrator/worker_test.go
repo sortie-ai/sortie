@@ -137,7 +137,12 @@ type mockTrackerAdapter struct {
 	transitionIssueFn func(ctx context.Context, issueID, targetState string) error
 	transitionCalls   []transitionIssueCall
 	commentIssueFn    func(ctx context.Context, issueID, text string) error
-	commentCalls      []commentIssueCall
+
+	// commentMu guards commentCalls, which can now be written by more than
+	// one detached budget-hold-notice goroutine (state.TrackerOpsWg)
+	// concurrently within a single tick, one per held issue.
+	commentMu    sync.Mutex
+	commentCalls []commentIssueCall
 
 	// fetchStatesCalls counts every FetchIssueStatesByIDs invocation,
 	// whether it originates from the worker goroutine's per-turn refresh
@@ -195,7 +200,9 @@ type commentIssueCall struct {
 }
 
 func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
+	m.commentMu.Lock()
 	m.commentCalls = append(m.commentCalls, commentIssueCall{IssueID: issueID, Text: text})
+	m.commentMu.Unlock()
 	if m.commentIssueFn != nil {
 		return m.commentIssueFn(ctx, issueID, text)
 	}

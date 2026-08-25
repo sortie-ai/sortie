@@ -186,6 +186,21 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   identifier, reason, and numbers, and the per-issue endpoint answers for a budget-blocked issue
   instead of reporting it unknown
 - The dashboard renders a budget-blocked card and table only when the exhausted set is non-empty
+- A hold entering the budget-exhausted set, on either lane, posts exactly one tracker comment
+  naming the fired ceiling and its governing setting; a tick or retry fire that re-observes the
+  same hold under the same reason posts nothing further
+- A restart does not repeat the comment: a second process loading the same durable notice table
+  posts nothing for a hold already announced before the restart, even though its own in-memory
+  log latch re-announces the hold
+- A hold whose governing ceiling changes posts a second comment naming the new ceiling and
+  replaces the durable notice row rather than adding one
+- Notices are paced by a wall-clock window shared by both lanes rather than by a per-tick count,
+  so the same bound holds at any configured poll interval; a burst of holds larger than the
+  window drains over the following windows with nothing lost or duplicated
+- Releasing a hold deletes its durable notice row and its memory entry, and both budgets disabled
+  clears every row in one statement; re-enabling a ceiling announces the hold that re-forms
+- A tracker write that fails to post the comment is logged and counted but does not retry on the
+  following tick, and leaves the exhausted set, the claim set, and reconciliation unaffected
 - A dispatch that does not drive issue state performs neither the dispatch-time transition nor the
   handoff transition, and enqueues no reaction on its own exit
 - Abnormal worker exit increments retries with 10s-based exponential backoff

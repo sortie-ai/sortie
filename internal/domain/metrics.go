@@ -86,7 +86,8 @@ type Metrics interface {
 	IncDispatchTransitions(result string)
 
 	// IncTrackerComments increments the tracker comment attempt counter.
-	// lifecycle is "dispatch", "completion", or "failure".
+	// lifecycle includes "dispatch", "completion", "failure", and
+	// "budget_hold", among others the project may add.
 	// result is "success" or "error"
 	// (sortie_tracker_comments_total{lifecycle,result} counter).
 	IncTrackerComments(lifecycle string, result string)

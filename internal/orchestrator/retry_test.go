@@ -50,6 +50,9 @@ type mockRetryStore struct {
 	upsertParkedErr  error
 	deleteParkedErr  error
 	absenceResetErr  error
+
+	budgetHoldNotices         []persistence.BudgetHoldNotice
+	upsertBudgetHoldNoticeErr error
 }
 
 var _ RetryTimerStore = (*mockRetryStore)(nil)
@@ -128,6 +131,11 @@ func (m *mockRetryStore) ResetHandoffAbsenceSequence(_ context.Context, issueID 
 	return m.absenceResetErr
 }
 
+func (m *mockRetryStore) UpsertBudgetHoldNotice(_ context.Context, notice persistence.BudgetHoldNotice) error {
+	m.budgetHoldNotices = append(m.budgetHoldNotices, notice)
+	return m.upsertBudgetHoldNoticeErr
+}
+
 // mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
 // FetchIssueByID is the primary entry point; FetchCandidateIssues panics
 // if called — HandleRetryTimer must not invoke it.
@@ -138,6 +146,16 @@ type mockRetryTracker struct {
 	fetchedID    string // records the last issueID arg received by FetchIssueByID
 	addLabelErr  error
 	addedLabels  []string
+
+	commentIssueErr error
+	commentCalls    []mockRetryCommentCall
+}
+
+// mockRetryCommentCall records one CommentIssue invocation the budget hold
+// notice path made from the retry lane's detached goroutine.
+type mockRetryCommentCall struct {
+	IssueID string
+	Text    string
 }
 
 var _ domain.TrackerAdapter = (*mockRetryTracker)(nil)
@@ -172,8 +190,12 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 	panic("TransitionIssue must not be called by HandleRetryTimer")
 }
 
-func (m *mockRetryTracker) CommentIssue(context.Context, string, string) error {
-	panic("CommentIssue must not be called by HandleRetryTimer")
+// CommentIssue records the call. It is reachable only from the budget hold
+// notice path's detached goroutine (state.TrackerOpsWg), never synchronously
+// from HandleRetryTimer itself.
+func (m *mockRetryTracker) CommentIssue(_ context.Context, issueID, text string) error {
+	m.commentCalls = append(m.commentCalls, mockRetryCommentCall{IssueID: issueID, Text: text})
+	return m.commentIssueErr
 }
 
 func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) error {
@@ -1464,6 +1486,7 @@ func TestHandleRetryTimer_TokenBudgetLogLine(t *testing.T) {
 	params.Logger = logger
 
 	HandleRetryTimer(state, "ISS-TOK-LOG", params)
+	state.TrackerOpsWg.Wait()
 
 	output := buf.String()
 	if !strings.Contains(output, "token budget exhausted, blocking re-dispatch") {
@@ -2045,6 +2068,7 @@ func TestHandleRetryTimer_SessionBudgetLogLine(t *testing.T) {
 	params.Logger = logger
 
 	HandleRetryTimer(state, "ISS-SESS-LOG", params)
+	state.TrackerOpsWg.Wait()
 
 	output := buf.String()
 	if !strings.Contains(output, "effort budget exhausted, blocking re-dispatch") {
@@ -3652,6 +3676,128 @@ func TestHandleRetryTimerParkGate(t *testing.T) {
 					t.Errorf("FetchIssueByID calls = %d, want 1: a known reaction kind is exempt from the park gate", tracker.fetchCount)
 				}
 			})
+		}
+	})
+}
+
+// TestHandleRetryTimer_BudgetHoldNotice covers the retry lane's notice
+// posting site: it must post exactly one comment per hold, spend the same
+// wall-clock pacing window the rebuild spends, and stay silent on a repeat
+// fire for a hold already noticed under the same reason.
+func TestHandleRetryTimer_BudgetHoldNotice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a session-gate block posts exactly one comment naming the ceiling and the setting", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "ISS-NOTICE"
+		store := &mockRetryStore{runHistoryCount: 3}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, id, "PROJ-NOTICE", 1)
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		HandleRetryTimer(state, id, params)
+		state.TrackerOpsWg.Wait()
+
+		entry, ok := state.BudgetExhausted[id]
+		if !ok {
+			t.Fatal("BudgetExhausted[ISS-NOTICE] missing, want present after the block")
+		}
+		want := buildBudgetHoldComment(entry)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("commentCalls = %+v, want exactly one comment", tracker.commentCalls)
+		}
+		if tracker.commentCalls[0].IssueID != id {
+			t.Errorf("commentCalls[0].IssueID = %q, want %q", tracker.commentCalls[0].IssueID, id)
+		}
+		if tracker.commentCalls[0].Text != want {
+			t.Errorf("commentCalls[0].Text =\n%q\nwant\n%q", tracker.commentCalls[0].Text, want)
+		}
+		if len(store.budgetHoldNotices) != 1 || store.budgetHoldNotices[0].IssueID != id {
+			t.Errorf("store.budgetHoldNotices = %+v, want exactly one row for %q", store.budgetHoldNotices, id)
+		}
+	})
+
+	t.Run("the retry lane spends the last slot of the pacing window it shares with the rebuild", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "ISS-WINDOW"
+		store := &mockRetryStore{runHistoryCount: 3}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, id, "PROJ-WINDOW", 1)
+		state.BudgetHoldNoticeWindowStart = time.Now().UTC()
+		state.BudgetHoldNoticesInWindow = maxBudgetHoldNoticesPerWindow - 1
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		HandleRetryTimer(state, id, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("commentCalls = %+v, want exactly one comment (the window's last slot)", tracker.commentCalls)
+		}
+		if state.BudgetHoldNoticesInWindow != maxBudgetHoldNoticesPerWindow {
+			t.Errorf("BudgetHoldNoticesInWindow = %d, want %d (the retry lane spent the shared window's last slot)",
+				state.BudgetHoldNoticesInWindow, maxBudgetHoldNoticesPerWindow)
+		}
+	})
+
+	t.Run("the retry lane is refused when the shared window is already spent", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "ISS-SPENT"
+		store := &mockRetryStore{runHistoryCount: 3}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, id, "PROJ-SPENT", 1)
+		state.BudgetHoldNoticeWindowStart = time.Now().UTC()
+		state.BudgetHoldNoticesInWindow = maxBudgetHoldNoticesPerWindow
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		HandleRetryTimer(state, id, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(tracker.commentCalls) != 0 {
+			t.Errorf("commentCalls = %+v, want none (the shared window is already spent)", tracker.commentCalls)
+		}
+		if _, ok := state.BudgetExhausted[id]; !ok {
+			t.Error("BudgetExhausted missing, want present even though the notice was withheld by the window")
+		}
+	})
+
+	t.Run("a second retry-timer fire for the same issue and reason posts nothing", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "ISS-REPEAT"
+		store := &mockRetryStore{runHistoryCount: 3}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, id, "PROJ-REPEAT", 1)
+
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 3
+
+		HandleRetryTimer(state, id, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("commentCalls after the first fire = %+v, want exactly one", tracker.commentCalls)
+		}
+
+		// The first fire consumed the retry entry and the claim; re-seed both
+		// so the second fire reaches the budget gate again.
+		state.RetryAttempts[id] = &RetryEntry{IssueID: id, Identifier: "PROJ-REPEAT", Attempt: 2}
+		state.Claimed[id] = struct{}{}
+
+		HandleRetryTimer(state, id, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(tracker.commentCalls) != 1 {
+			t.Errorf("commentCalls after the second fire = %+v, want still exactly one (same reason already noticed)", tracker.commentCalls)
 		}
 	})
 }

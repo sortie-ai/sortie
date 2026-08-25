@@ -102,6 +102,12 @@ func TestNewState(t *testing.T) {
 			if s.BudgetExhausted == nil {
 				t.Fatal("BudgetExhausted = nil, want non-nil")
 			}
+			if s.BudgetHoldNoticed == nil {
+				t.Fatal("BudgetHoldNoticed = nil, want non-nil")
+			}
+			if len(s.BudgetHoldNoticed) != 0 {
+				t.Errorf("len(BudgetHoldNoticed) = %d, want 0", len(s.BudgetHoldNoticed))
+			}
 
 			if tt.checkAlias {
 				tt.maxConcurrentByState["in progress"] = 3
