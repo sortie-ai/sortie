@@ -2485,11 +2485,12 @@ claude-code:
 
 The `claude-code` block is forwarded to the Claude Code adapter, which runs
 `claude -p --output-format stream-json --verbose` once per turn and maps these fields to
-CLI flags. Values are forwarded unchanged, and the adapter validates none of them. What
-the CLI does with an invalid value differs per flag: `--permission-mode` is rejected at
-launch, `--effort` falls back to the default effort with a warning, and an unknown model
-name reaches the API and fails there. A key whose YAML value has the wrong type is
-ignored and the default applies.
+CLI flags. The adapter validates none of these values and forwards each as written, with
+one exception described below: `mcp_config` is superseded by the generated configuration
+the worker writes. What the CLI does with an invalid value differs per flag:
+`--permission-mode` is rejected at launch, `--effort` falls back to the default effort
+with a warning, and an unknown model name reaches the API and fails there. A key whose
+YAML value has the wrong type is ignored and the default applies.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2503,7 +2504,7 @@ ignored and the default applies.
 | `claude-code.disallowed_tools` | string | _(absent)_ | Forwarded to `--disallowedTools` as a single argument. A comma- or space-separated deny list. A bare tool name removes that tool from the model's context; a scoped rule leaves the tool available and denies only matching calls. |
 | `claude-code.system_prompt` | string | _(absent)_ | Forwarded to `--append-system-prompt`. The text is appended to the default system prompt rather than replacing it. Claude Code's built-in tool instructions stay in effect. |
 | `claude-code.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--mcp-config`, which takes a single configuration path. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. |
-| `claude-code.session_persistence` | boolean | `true` | When `false`, adds `--no-session-persistence` and Claude Code writes no session file to disk. Setting it to `false` is refused before the run starts, because the adapter continues a session by passing `--resume <session_id>` on every turn after the first, and that flag needs the persisted session. |
+| `claude-code.session_persistence` | boolean | `true` | When `false`, adds `--no-session-persistence` and Claude Code writes no session file to disk. Setting it to `false` is refused before the run starts, because the adapter passes `--resume <session_id>` on every turn but the first of a session this run created, which uses `--session-id` instead, and `--resume` needs the persisted session. |
 
 > **Important:** `agent.max_turns` (orchestrator turn-loop limit) and
 > `claude-code.max_turns` (CLI `--max-turns` flag) are distinct values. The orchestrator
