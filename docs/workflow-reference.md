@@ -2520,6 +2520,58 @@ ignored and the default applies.
 > a chain at three models after removing duplicates and ignores the rest. The adapter
 > forwards the configured string unchanged.
 
+**Copilot CLI adapter:**
+
+```yaml
+copilot-cli:
+  model: gpt-5-mini
+  max_autopilot_continues: 100
+  agent: coding-agent
+  allowed_tools: shell
+  denied_tools: write
+  mcp_config: ./mcp-servers.json
+  disable_builtin_mcps: true
+  no_custom_instructions: true
+  experimental: true
+```
+
+The `copilot-cli` block is forwarded to the Copilot CLI adapter, which runs
+`copilot -p --output-format json -s --autopilot --no-ask-user` once per turn and maps
+these fields to CLI flags. The first turn passes neither resume flag. After a turn in
+which the CLI reported a session ID, the adapter adds `--resume <session_id>`; after a
+turn that ended without one, it adds `--continue`, which resumes the most recent
+conversation in the workspace directory. Values are forwarded unchanged, and the
+adapter validates none of them. A key whose YAML value has the wrong type is ignored
+and the default applies.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `copilot-cli.model` | string | _(absent)_ | Forwarded to `--model`. The accepted model identifiers depend on the installed CLI and the account; `copilot --help` lists the set. |
+| `copilot-cli.max_autopilot_continues` | integer | `50` | Forwarded to `--max-autopilot-continues`, the ceiling on autopilot continuation steps inside one turn. The flag is always passed. An absent key, a non-integer value, and any value of zero or less all send `50`. |
+| `copilot-cli.agent` | string | _(absent)_ | Forwarded to `--agent`. Selects a named Copilot agent persona for the turn. |
+| `copilot-cli.allowed_tools` | string | _(absent)_ | Forwarded to `--allow-tool` as a single argument. Names a tool to allow explicitly. See the tool-scoping note below. |
+| `copilot-cli.denied_tools` | string | _(absent)_ | Forwarded to `--deny-tool` as a single argument. Names a tool to deny explicitly. See the tool-scoping note below. |
+| `copilot-cli.available_tools` | string | _(absent)_ | Forwarded to `--available-tools` as a single argument. Names the set of tools the agent may see. See the tool-scoping note below. |
+| `copilot-cli.excluded_tools` | string | _(absent)_ | Forwarded to `--excluded-tools` as a single argument. Names the set of tools withheld from the agent. See the tool-scoping note below. |
+| `copilot-cli.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--additional-mcp-config` prefixed with `@`, which is how the Copilot CLI reads a configuration from a file. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. See the value-handling note below. |
+| `copilot-cli.disable_builtin_mcps` | boolean | `false` | Adds `--disable-builtin-mcps` when `true`, withholding the CLI's built-in MCP servers. |
+| `copilot-cli.no_custom_instructions` | boolean | `false` | Adds `--no-custom-instructions` when `true`, so the CLI skips the custom instruction files it would otherwise read. |
+| `copilot-cli.experimental` | boolean | `false` | Adds `--experimental` when `true`, enabling the CLI's experimental features. |
+
+> **Important:** the four tool-scoping keys act as one switch, not four independent ones.
+> With all of them unset, the adapter passes `--allow-all` and every tool call is
+> auto-approved. Setting any single one of them drops `--allow-all` from every
+> invocation, so a tool that key says nothing about is no longer blanket-approved
+> either; such a call falls to the CLI's own non-interactive policy instead.
+
+> **Important:** the generated MCP configuration file supersedes `copilot-cli.mcp_config`
+> as the value of `--additional-mcp-config`, which is why the operator's servers reach the
+> agent through the merge described above rather than through a second flag. The
+> configured value is forwarded on its own only when no generated file exists. In that
+> case its form decides the argument: a value beginning with `{` is passed as inline JSON,
+> a value already beginning with `@` is passed unchanged, and anything else is read as a
+> file path and prefixed with `@`.
+
 **Codex adapter:**
 
 ```yaml
@@ -2685,12 +2737,8 @@ stating that Sortie's tools will be neither advertised nor callable for it. Both
 warnings and not errors: such a configuration stays valid, the run proceeds, and the
 exit code is unchanged.
 
-`claude-code.mcp_config` is documented in the Claude Code table above. The Copilot CLI
-reads the same key:
-
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `copilot-cli.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--additional-mcp-config` prefixed with `@`, which is how the Copilot CLI reads a configuration from a file. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. |
+`claude-code.mcp_config` and `copilot-cli.mcp_config` are documented in the Claude Code
+and Copilot CLI tables above.
 
 **Custom or future adapters (illustrative example):**
 
