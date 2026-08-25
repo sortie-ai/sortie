@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-08-25
+
 ### Added
 
 - A `sortie_candidate_holds_total` counter reports how many issues the scheduler held back and why, separating an unfinished blocker from a blocker list that could not be read, one the tracker reported as incomplete, and one left unread because the poll had already spent its budget of dependency lookups. `sortie --dry-run` names the same reason for each issue it would not start, so an issue held by a dependency is no longer indistinguishable from one held by a full slot.
@@ -769,7 +771,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.22.0...HEAD
+[1.22.0]: https://github.com/sortie-ai/sortie/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/sortie-ai/sortie/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/sortie-ai/sortie/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/sortie-ai/sortie/compare/v1.18.0...v1.19.0
