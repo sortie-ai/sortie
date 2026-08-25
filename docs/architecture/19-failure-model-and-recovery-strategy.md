@@ -200,6 +200,8 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 - Parked issues are reloaded from SQLite before the event loop starts, so an issue parked before
   a restart stays out of dispatch across it without depending on any tracker read to rediscover
   the park.
+- Budget-hold notice records are reloaded from SQLite before the event loop starts, so a hold
+  announced on the tracker before a restart is not announced again after it.
 - Session metadata from the previous run is available for observability and debugging.
 - Run history is preserved in SQLite for operational review.
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the

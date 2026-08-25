@@ -882,6 +882,32 @@ type State struct {
 	// orchestrator's lifetime.
 	BudgetAnnounced map[string]BudgetAnnouncement
 
+	// BudgetHoldNoticed maps issue ID to the budget-hold reason already
+	// announced on that issue's tracker item. Unlike BudgetAnnounced,
+	// which records what this process has written to its own log and
+	// dies with the process, BudgetHoldNoticed records what has been
+	// written to another system and outlives the process: it mirrors
+	// the budget_hold_notices table, loaded from it once at startup
+	// before the event loop starts. The two maps are keyed alike and
+	// pruned by the same evidence, but MUST NOT be collapsed into one,
+	// because one records a fact about this process and the other a
+	// fact about the tracker. An entry survives until the issue is next
+	// observed as a candidate that is not held, or until both budgets
+	// are disabled; an issue that never returns as a candidate keeps
+	// its entry for the rest of the orchestrator's lifetime.
+	BudgetHoldNoticed map[string]string
+
+	// BudgetHoldNoticeWindowStart and BudgetHoldNoticesInWindow pace the
+	// wall-clock notice-write bound shared by both the poll tick's
+	// rebuild and the retry lane: at most maxBudgetHoldNoticesPerWindow
+	// notices are posted in any budgetHoldNoticeWindow, counted across
+	// both lanes. A window opens afresh, with the count reset, on the
+	// first notice decision taken at or after budgetHoldNoticeWindow
+	// from the current window's start. A restart begins a fresh window.
+	// No dispatch gate and no snapshot reads either field.
+	BudgetHoldNoticeWindowStart time.Time
+	BudgetHoldNoticesInWindow   int
+
 	// Parked maps issue ID to the runtime view of an issue held out of
 	// primary dispatch until the orchestrator observes that a person acted
 	// on it. The durable mirror is the parked_issues table. Owned by the
@@ -999,6 +1025,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		Completed:             make(map[string]struct{}),
 		BudgetExhausted:       make(map[string]*BudgetExhaustedEntry),
 		BudgetAnnounced:       make(map[string]BudgetAnnouncement),
+		BudgetHoldNoticed:     make(map[string]string),
 		Parked:                make(map[string]*ParkedEntry),
 		AgentTotals:           totals,
 		ReactionAttempts:      make(map[string]int),

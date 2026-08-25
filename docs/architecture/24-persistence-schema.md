@@ -225,6 +225,23 @@ tracker fetch by design (§14.2). `label_applied` has exactly one writer: the or
 release-rule observation of the label on a later fetch of the issue, never the outcome of the
 label write itself.
 
+**`budget_hold_notices`**: cross-restart dedup for the tracker comment posted on an issue held by a
+per-issue budget ceiling (migration 015)
+
+| Column       | Type    | Notes                                                       |
+| ------------ | ------- | ------------------------------------------------------------ |
+| `issue_id`   | TEXT PK | Tracker-internal issue ID                                    |
+| `reason`     | TEXT    | `session_budget` or `token_budget`                            |
+| `noticed_at` | TEXT    | ISO-8601 timestamp the posted notice reported                 |
+
+One row per issue whose current budget hold has been announced on the tracker, holding current
+state rather than history: the row is deleted when the hold clears, on the same evidence rule
+that prunes the in-memory announcement latch, or when both budgets are disabled. An issue held by
+a ceiling and then closed, or otherwise never observed as a candidate again, never has its row
+deleted, so the row persists for the rest of the deployment's lifetime. `noticed_at` exists so an
+operator reading the database can align a row with the comment on the issue; no runtime decision
+reads it.
+
 ### 19.3 Migration Strategy
 
 - Migrations are numbered sequentially and applied in order at startup.

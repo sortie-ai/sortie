@@ -3,6 +3,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -57,6 +58,10 @@ type OrchestratorStore interface {
 	DeleteParkedIssue(ctx context.Context, issueID string) error
 	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
 	ListParkedIssues(ctx context.Context) ([]persistence.ParkedIssue, error)
+	UpsertBudgetHoldNotice(ctx context.Context, notice persistence.BudgetHoldNotice) error
+	DeleteBudgetHoldNotice(ctx context.Context, issueID string) error
+	DeleteAllBudgetHoldNotices(ctx context.Context) error
+	ListBudgetHoldNotices(ctx context.Context) ([]persistence.BudgetHoldNotice, error)
 }
 
 var _ OrchestratorStore = (*persistence.Store)(nil)
@@ -1128,6 +1133,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
 		o.state.BudgetExhausted = make(map[string]*BudgetExhaustedEntry)
 		o.state.TokenBudgetIncomplete = make(map[string]struct{})
+		releaseAllBudgetHoldNotices(ctx, o.state, o.store, o.logger)
 		return
 	}
 
@@ -1144,6 +1150,12 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	fresh := make(map[string]*BudgetExhaustedEntry)
 	now := time.Now().UTC()
 
+	// foldedForward tracks issue IDs carried forward from the prior set by
+	// either axis's query-error branch below, so the notice pass can skip
+	// them: a hold whose evidence was not read this tick may already have
+	// cleared, and a comment is not retractable.
+	foldedForward := make(map[string]struct{})
+
 	if cfg.Agent.MaxSessions > 0 {
 		counts, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
 		if qErr != nil {
@@ -1155,6 +1167,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 					continue
 				}
 				fresh[id] = entry
+				foldedForward[id] = struct{}{}
 			}
 		} else {
 			for id, count := range counts {
@@ -1182,6 +1195,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 					continue
 				}
 				fresh[id] = entry
+				foldedForward[id] = struct{}{}
 			}
 		} else {
 			for _, id := range candidateIDs {
@@ -1248,9 +1262,44 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 		o.metrics.IncBudgetExhaustions(entry.Reason)
 	}
 
+	if o.trackerAdapter != nil {
+		noticeIDs := make([]string, 0, len(fresh))
+		for id := range fresh {
+			noticeIDs = append(noticeIDs, id)
+		}
+		slices.SortFunc(noticeIDs, func(a, b string) int {
+			if c := cmp.Compare(fresh[a].Identifier, fresh[b].Identifier); c != 0 {
+				return c
+			}
+			return cmp.Compare(a, b)
+		})
+
+		for _, id := range noticeIDs {
+			if _, folded := foldedForward[id]; folded {
+				continue
+			}
+			if o.state.BudgetHoldNoticed[id] == fresh[id].Reason {
+				continue
+			}
+			if !budgetHoldNoticeAllowed(o.state, now) {
+				break
+			}
+			postBudgetHoldNotice(o.state, budgetHoldNoticeParams{
+				IssueID:        id,
+				Entry:          fresh[id],
+				Store:          o.store,
+				TrackerAdapter: o.trackerAdapter,
+				Metrics:        o.metrics,
+				Logger:         logging.WithIssue(o.logger, id, fresh[id].Identifier),
+				Ctx:            ctx,
+			})
+		}
+	}
+
 	for _, id := range candidateIDs {
 		if _, held := fresh[id]; !held {
 			delete(o.state.BudgetAnnounced, id)
+			releaseBudgetHoldNotice(ctx, o.state, o.store, id, o.logger)
 		}
 	}
 

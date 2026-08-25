@@ -227,9 +227,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are required before launching any worker.
 - Reconciliation runs before dispatch on every tick.
-- Restart recovery uses persisted state from SQLite for retry queues, session metadata, and
-  parked issues, supplemented by tracker polling for current issue states and filesystem
-  inspection for workspace existence.
+- Restart recovery uses persisted state from SQLite for retry queues, session metadata, parked
+  issues, and budget-hold notice records, supplemented by tracker polling for current issue
+  states and filesystem inspection for workspace existence.
 - Startup pending reaction recovery uses `run_history`, tracker state, and `.sortie/scm.json` to
   reconstruct runtime `pending_reactions` for recent handoff-stage runs before the first poll tick.
   The scan is bounded by `PendingReactionRecoveryLookback` and a fixed candidate cap.
@@ -245,12 +245,15 @@ Distinct terminal reasons are important because retry logic and logs differ.
 3. Reconstruct retry timers from persisted `due_at` timestamps.
 4. Load persisted park records from SQLite and reconstruct the runtime park set before the
    event loop starts, so a parked issue stays out of dispatch across the restart.
-5. Map existing workspace directories to issue identifiers, query the tracker for the states of
+5. Load persisted budget-hold notice records from SQLite and reconstruct the runtime notice
+   memory before the event loop starts, so a hold already announced on the tracker before the
+   restart is not announced again after it.
+6. Map existing workspace directories to issue identifiers, query the tracker for the states of
    those specific issues, and clean the ones in terminal states.
-6. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
+7. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
   review pending entries for handoff-stage issues.
-7. Query tracker for active issues and reconcile with persisted state.
-8. Begin normal polling loop.
+8. Query tracker for active issues and reconcile with persisted state.
+9. Begin normal polling loop.
 
 ### 7.5 Retry-Slot Arbitration
 

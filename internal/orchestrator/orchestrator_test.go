@@ -136,6 +136,13 @@ type stubStore struct {
 	labelAppliedIDs    []string
 	listParkedIssues   []persistence.ParkedIssue
 	listParkedIssueErr error
+
+	budgetHoldNotices         []persistence.BudgetHoldNotice
+	upsertBudgetHoldNoticeErr error
+	deletedBudgetHoldIDs      []string
+	deleteAllBudgetHoldCalls  int
+	listBudgetHoldNotices     []persistence.BudgetHoldNotice
+	listBudgetHoldNoticesErr  error
 }
 
 var _ OrchestratorStore = (*stubStore)(nil)
@@ -304,6 +311,41 @@ func (s *stubStore) ListParkedIssues(_ context.Context) ([]persistence.ParkedIss
 	}
 	out := make([]persistence.ParkedIssue, len(s.listParkedIssues))
 	copy(out, s.listParkedIssues)
+	return out, nil
+}
+
+func (s *stubStore) UpsertBudgetHoldNotice(_ context.Context, notice persistence.BudgetHoldNotice) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.upsertBudgetHoldNoticeErr != nil {
+		return s.upsertBudgetHoldNoticeErr
+	}
+	s.budgetHoldNotices = append(s.budgetHoldNotices, notice)
+	return nil
+}
+
+func (s *stubStore) DeleteBudgetHoldNotice(_ context.Context, issueID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deletedBudgetHoldIDs = append(s.deletedBudgetHoldIDs, issueID)
+	return nil
+}
+
+func (s *stubStore) DeleteAllBudgetHoldNotices(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteAllBudgetHoldCalls++
+	return nil
+}
+
+func (s *stubStore) ListBudgetHoldNotices(_ context.Context) ([]persistence.BudgetHoldNotice, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listBudgetHoldNoticesErr != nil {
+		return nil, s.listBudgetHoldNoticesErr
+	}
+	out := make([]persistence.BudgetHoldNotice, len(s.listBudgetHoldNotices))
+	copy(out, s.listBudgetHoldNotices)
 	return out, nil
 }
 
@@ -4467,6 +4509,7 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 		budgetOrchestratorWithLogger(state, wm, store, candidates(issueA), logger).handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		entry, ok := state.BudgetExhausted[issueA.ID]
 		if !ok {
@@ -4536,6 +4579,7 @@ func TestHandleTick_BudgetLogRecord(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
 
 	output := buf.String()
 	if !strings.Contains(output, "candidate held by budget ceiling") {
@@ -4574,6 +4618,7 @@ func TestHandleTick_BudgetLogRecordOnce(t *testing.T) {
 	orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
 	orch.handleTick(context.Background())
 	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
 
 	if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 1 {
 		t.Errorf("record count across two ticks = %d, want 1 (edge-triggered)", got)
@@ -4604,6 +4649,7 @@ func TestHandleTick_BudgetLogRecordCeilingSetting(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		if !strings.Contains(buf.String(), "ceiling_setting=agent.max_sessions") {
 			t.Errorf("log output missing ceiling_setting=agent.max_sessions; log:\n%s", buf.String())
@@ -4625,6 +4671,7 @@ func TestHandleTick_BudgetLogRecordCeilingSetting(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		if !strings.Contains(buf.String(), "ceiling_setting=agent.max_tokens") {
 			t.Errorf("log output missing ceiling_setting=agent.max_tokens; log:\n%s", buf.String())
@@ -4660,6 +4707,7 @@ func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		output := buf.String()
 		if !strings.Contains(output, "candidate held by budget ceiling") {
@@ -4690,6 +4738,7 @@ func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 		budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		output := buf.String()
 		if !strings.Contains(output, "reason=token_budget") {
@@ -4804,6 +4853,7 @@ func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 		store.budgetExhaustedIDs = map[string]int{}
 		store.tokenExhaustedIDs = []string{issue.ID}
 		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 2 {
 			t.Errorf("record count across the reason change = %d, want 2 (re-announced)", got)
@@ -4863,6 +4913,7 @@ func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 		if !entry3.ExhaustedAt.Equal(firstExhaustedAt) {
 			t.Errorf("ExhaustedAt = %v, want %v (unchanged across the candidacy gap)", entry3.ExhaustedAt, firstExhaustedAt)
 		}
+		state.TrackerOpsWg.Wait()
 		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 1 {
 			t.Errorf("record count across three ticks = %d, want 1", got)
 		}
@@ -4901,6 +4952,7 @@ func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
 			t.Fatal("BudgetExhausted missing after re-exhaustion, want present")
 		}
+		state.TrackerOpsWg.Wait()
 		if got := strings.Count(buf.String(), "candidate held by budget ceiling"); got != 2 {
 			t.Errorf("record count across the clearance = %d, want 2 (announced again after a genuine clearance)", got)
 		}
@@ -4982,6 +5034,7 @@ func TestHandleTick_BudgetTickSummary(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	budgetOrchestratorWithLogger(state, wm, store, tracker, logger).handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
 
 	var tickLine string
 	for line := range strings.SplitSeq(buf.String(), "\n") {
@@ -6962,4 +7015,654 @@ func TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer(t *testing.T) {
 			t.Errorf("log carries the budget-skip DEBUG record on a pass that halted before the budget bound: %s", got)
 		}
 	})
+}
+
+// --- Budget Hold Tracker Notice Tests ---
+
+// TestHandleTick_BudgetHoldNoticeOnce fails if the notice repeats on a
+// second tick that re-observes the same hold, rather than posting exactly
+// once across both ticks.
+func TestHandleTick_BudgetHoldNoticeOnce(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-once", Identifier: "PROJ-NOTICE-ONCE", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+
+	orch := budgetOrchestrator(state, wm, store, tracker)
+	orch.handleTick(context.Background())
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	calls := tracker.commentCalls
+	if len(calls) != 1 {
+		t.Fatalf("commentCalls across two ticks = %+v, want exactly one", calls)
+	}
+	if calls[0].IssueID != issue.ID {
+		t.Errorf("commentCalls[0].IssueID = %q, want %q", calls[0].IssueID, issue.ID)
+	}
+
+	entry, ok := state.BudgetExhausted[issue.ID]
+	if !ok {
+		t.Fatal("BudgetExhausted missing after the ticks, want present")
+	}
+	if want := buildBudgetHoldComment(entry); calls[0].Text != want {
+		t.Errorf("commentCalls[0].Text =\n%q\nwant\n%q", calls[0].Text, want)
+	}
+
+	if len(store.budgetHoldNotices) != 1 || store.budgetHoldNotices[0].IssueID != issue.ID {
+		t.Errorf("store.budgetHoldNotices = %+v, want exactly one upsert for %q", store.budgetHoldNotices, issue.ID)
+	}
+}
+
+// TestBudgetHoldNoticeSurvivesRestart fails if the notice repeats after a
+// simulated restart. It drives one tick against a real, file-backed store,
+// closes it to simulate process exit, reopens the same file, loads
+// [State.BudgetHoldNoticed] from the durable rows, and drives a second
+// tick over the same candidate: the row, not the in-memory latch, is the
+// mechanism proven durable here.
+func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BUDGET-RESTART"
+	ctx := context.Background()
+	dbPath := t.TempDir() + "/test.db"
+
+	store1, err := persistence.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("persistence.Open: %v", err)
+	}
+	if err := store1.Migrate(ctx); err != nil {
+		t.Fatalf("store1.Migrate: %v", err)
+	}
+
+	for range 3 {
+		if _, err := store1.AppendRunHistory(ctx, persistence.RunHistory{
+			IssueID:      issueID,
+			Identifier:   "PROJ-RESTART",
+			Attempt:      1,
+			AgentAdapter: "mock",
+			Workspace:    "/tmp/" + issueID,
+			StartedAt:    "2026-08-17T00:00:00Z",
+			CompletedAt:  "2026-08-17T00:01:00Z",
+			Status:       "succeeded",
+		}); err != nil {
+			t.Fatalf("AppendRunHistory: %v", err)
+		}
+	}
+
+	issue := domain.Issue{ID: issueID, Identifier: "PROJ-RESTART", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	regs := passingPreflightRegistries()
+	regs.ReloadWorkflow = func() error { return nil }
+	regs.ConfigFunc = wm.Config
+
+	tracker1 := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	state1 := NewState(60000, 10, nil, AgentTotals{})
+	orch1 := NewOrchestrator(OrchestratorParams{
+		State:           state1,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker1,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store1,
+		PreflightParams: regs,
+	})
+	orch1.handleTick(ctx)
+	state1.TrackerOpsWg.Wait()
+
+	if len(tracker1.commentCalls) != 1 {
+		t.Fatalf("commentCalls before the restart = %+v, want exactly one", tracker1.commentCalls)
+	}
+
+	rows, err := store1.ListBudgetHoldNotices(ctx)
+	if err != nil {
+		t.Fatalf("ListBudgetHoldNotices before the restart: %v", err)
+	}
+	if len(rows) != 1 || rows[0].IssueID != issueID {
+		t.Fatalf("ListBudgetHoldNotices before the restart = %+v, want exactly one row for %q", rows, issueID)
+	}
+
+	if err := store1.Close(); err != nil {
+		t.Fatalf("store1.Close: %v", err)
+	}
+
+	store2, err := persistence.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("persistence.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store2.Close(); err != nil {
+			t.Errorf("store2.Close: %v", err)
+		}
+	})
+
+	rows2, err := store2.ListBudgetHoldNotices(ctx)
+	if err != nil {
+		t.Fatalf("ListBudgetHoldNotices after reopening: %v", err)
+	}
+
+	state2 := NewState(60000, 10, nil, AgentTotals{})
+	PopulateBudgetHoldNotices(state2, rows2, discardLogger())
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	tracker2 := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch2 := NewOrchestrator(OrchestratorParams{
+		State:           state2,
+		Logger:          logger,
+		TrackerAdapter:  tracker2,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store2,
+		PreflightParams: regs,
+	})
+	orch2.handleTick(ctx)
+	state2.TrackerOpsWg.Wait()
+
+	if len(tracker2.commentCalls) != 0 {
+		t.Errorf("commentCalls after the simulated restart = %+v, want none (the durable row deduplicates)", tracker2.commentCalls)
+	}
+	if !strings.Contains(buf.String(), "candidate held by budget ceiling") {
+		t.Error("second orchestrator's log output missing the budget-ceiling record: the in-memory log latch is empty after a restart and must re-announce")
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeTrackerFailureIsolated fails if an
+// always-failing CommentIssue reaches the poll tick's outputs, or if the
+// failed write is retried on a following tick that observes the same,
+// still-unresolved hold.
+func TestHandleTick_BudgetHoldNoticeTrackerFailureIsolated(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-fail", Identifier: "PROJ-NOTICE-FAIL", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{
+			commentIssueFn: func(_ context.Context, _, _ string) error {
+				return fmt.Errorf("tracker unavailable")
+			},
+		},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	spy := &spyMetrics{}
+
+	orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if _, ok := state.BudgetExhausted[issue.ID]; !ok {
+		t.Error("BudgetExhausted missing after a failing tracker write, want present (unaffected by tracker failure)")
+	}
+	if _, running := state.Running[issue.ID]; running {
+		t.Error("Running present for a budget-held issue, want absent")
+	}
+	if !strings.Contains(buf.String(), "budget hold notice failed") {
+		t.Errorf("log output missing the failure record; log:\n%s", buf.String())
+	}
+	found := false
+	for _, call := range spy.trackerComments {
+		if call.lifecycle == "budget_hold" && call.result == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("trackerComments = %+v, want a budget_hold/error entry", spy.trackerComments)
+	}
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if got := len(tracker.commentCalls); got != 1 {
+		t.Errorf("commentCalls across two ticks = %d, want 1 (no retry of a failed write)", got)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeReasonChange fails if a governing-ceiling
+// change from session to token does not post a second comment naming the
+// new ceiling's setting.
+func TestHandleTick_BudgetHoldNoticeReasonChange(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-reason", Identifier: "PROJ-NOTICE-REASON", Title: "title", State: "To Do"}
+	wm := budgetTickConfigTokens(3, 1000)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait() // ordering-load-bearing: the detached CommentIssue goroutines are not otherwise ordered across ticks
+
+	store.budgetExhaustedIDs = map[string]int{}
+	store.tokenExhaustedIDs = []string{issue.ID}
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	calls := tracker.commentCalls
+	if len(calls) != 2 {
+		t.Fatalf("commentCalls = %+v, want 2 (one per governing ceiling)", calls)
+	}
+	if !strings.Contains(calls[1].Text, "agent.max_tokens") {
+		t.Errorf("second comment = %q, want it to name agent.max_tokens", calls[1].Text)
+	}
+	if len(store.budgetHoldNotices) != 2 {
+		t.Fatalf("store.budgetHoldNotices = %+v, want 2 upsert calls (one per notice)", store.budgetHoldNotices)
+	}
+	if store.budgetHoldNotices[1].Reason != budgetReasonToken {
+		t.Errorf("second upsert Reason = %q, want %q", store.budgetHoldNotices[1].Reason, budgetReasonToken)
+	}
+	if state.BudgetHoldNoticed[issue.ID] != budgetReasonToken {
+		t.Errorf("BudgetHoldNoticed[%s] = %q, want %q", issue.ID, state.BudgetHoldNoticed[issue.ID], budgetReasonToken)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeReleaseOnClear fails if a genuine
+// clearance (the issue is still a candidate this tick but no longer
+// held) does not release both the memory entry and the durable row, or if
+// a later re-hold under the same reason does not post a second comment.
+func TestHandleTick_BudgetHoldNoticeReleaseOnClear(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-clear", Identifier: "PROJ-NOTICE-CLEAR", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("commentCalls after the first tick = %+v, want 1", tracker.commentCalls)
+	}
+	if _, noticed := state.BudgetHoldNoticed[issue.ID]; !noticed {
+		t.Fatal("BudgetHoldNoticed missing after the first tick, want present")
+	}
+
+	store.budgetExhaustedIDs = map[string]int{} // the issue is still a candidate; the ceiling clears
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if _, noticed := state.BudgetHoldNoticed[issue.ID]; noticed {
+		t.Error("BudgetHoldNoticed still present after a genuine clearance, want released")
+	}
+	if len(store.deletedBudgetHoldIDs) != 1 || store.deletedBudgetHoldIDs[0] != issue.ID {
+		t.Errorf("store.deletedBudgetHoldIDs = %v, want [%q]", store.deletedBudgetHoldIDs, issue.ID)
+	}
+
+	store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if got := len(tracker.commentCalls); got != 2 {
+		t.Errorf("commentCalls after the third tick = %d, want 2 (released, then re-noticed)", got)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeAbsenceThenReturn fails if a hold that
+// leaves the tracker's candidate set for one or more ticks (as opposed to
+// being observed and found cleared) is treated as released: absence alone
+// must not delete the memory or the row, so a later return under the same
+// reason posts nothing.
+func TestHandleTick_BudgetHoldNoticeAbsenceThenReturn(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-absence", Identifier: "PROJ-NOTICE-ABSENCE", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	present := true
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			if present {
+				return []domain.Issue{issue}, nil
+			}
+			return nil, nil
+		},
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("commentCalls after the first tick = %+v, want 1", tracker.commentCalls)
+	}
+
+	present = false
+	store.budgetExhaustedIDs = map[string]int{} // the rebuild's query is scoped to this tick's candidateIDs
+	orch.handleTick(context.Background())
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if len(store.deletedBudgetHoldIDs) != 0 {
+		t.Errorf("store.deletedBudgetHoldIDs = %v, want none (absence from the candidate set is not evidence the hold cleared)", store.deletedBudgetHoldIDs)
+	}
+	if _, noticed := state.BudgetHoldNoticed[issue.ID]; !noticed {
+		t.Error("BudgetHoldNoticed released during the absent ticks, want retained")
+	}
+
+	present = true
+	store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if got := len(tracker.commentCalls); got != 1 {
+		t.Errorf("commentCalls after the return = %d, want still 1 (same reason already noticed)", got)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeFoldedForward fails if a query error that
+// folds the prior hold forward posts a comment for an entry that is last
+// tick's evidence, not this tick's, or if the following successful tick
+// re-announces a hold the memory already knows about.
+func TestHandleTick_BudgetHoldNoticeFoldedForward(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-fold", Identifier: "PROJ-NOTICE-FOLD", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("commentCalls after the first tick = %+v, want 1", tracker.commentCalls)
+	}
+
+	store.budgetExhaustedErr = fmt.Errorf("db error")
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if got := len(tracker.commentCalls); got != 1 {
+		t.Errorf("commentCalls after the query-error tick = %d, want still 1 (a folded-forward entry is not this tick's evidence)", got)
+	}
+
+	store.budgetExhaustedErr = nil
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if got := len(tracker.commentCalls); got != 1 {
+		t.Errorf("commentCalls after the recovered tick = %d, want still 1 (same reason already noticed)", got)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeDisableReenable fails if disabling both
+// budgets does not clear the memory in one DeleteAllBudgetHoldNotices
+// call, if an idle disabled tick issues a redundant call, or if
+// re-enabling a ceiling does not post a fresh notice for the hold that
+// re-forms.
+func TestHandleTick_BudgetHoldNoticeDisableReenable(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-disable", Identifier: "PROJ-NOTICE-DISABLE", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+	if _, noticed := state.BudgetHoldNoticed[issue.ID]; !noticed {
+		t.Fatal("BudgetHoldNoticed missing after the first tick, want present")
+	}
+
+	wm.config.Agent.MaxSessions = 0
+	wm.config.Agent.MaxTokens = 0
+	orch.handleTick(context.Background())
+
+	if len(state.BudgetHoldNoticed) != 0 {
+		t.Errorf("BudgetHoldNoticed = %v, want empty after both budgets disabled", state.BudgetHoldNoticed)
+	}
+	if store.deleteAllBudgetHoldCalls != 1 {
+		t.Errorf("DeleteAllBudgetHoldNotices calls = %d, want 1", store.deleteAllBudgetHoldCalls)
+	}
+
+	orch.handleTick(context.Background())
+	if store.deleteAllBudgetHoldCalls != 1 {
+		t.Errorf("DeleteAllBudgetHoldNotices calls after a second disabled tick = %d, want still 1 (memory already empty)", store.deleteAllBudgetHoldCalls)
+	}
+
+	wm.config.Agent.MaxSessions = 3
+	store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if got := len(tracker.commentCalls); got != 2 {
+		t.Errorf("commentCalls after re-enabling = %d, want 2 (the re-formed hold is announced again)", got)
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticePacingWindow fails if a rebuild with more
+// newly held candidates than the pacing window allows posts more or fewer
+// than maxBudgetHoldNoticesPerWindow per window, drops or duplicates a
+// candidate across windows, or ignores a short polling.interval_ms and
+// derives its bound per tick instead of per wall-clock window.
+func TestHandleTick_BudgetHoldNoticePacingWindow(t *testing.T) {
+	t.Parallel()
+
+	makeCandidates := func(n int) ([]domain.Issue, map[string]int) {
+		issues := make([]domain.Issue, n)
+		exhausted := make(map[string]int, n)
+		for i := range n {
+			id := fmt.Sprintf("iss-pace-%02d", i)
+			issues[i] = domain.Issue{ID: id, Identifier: fmt.Sprintf("PROJ-PACE-%02d", i), Title: "title", State: "To Do"}
+			exhausted[id] = 5
+		}
+		return issues, exhausted
+	}
+
+	t.Run("25 newly held candidates post 10 per window across three ticks", func(t *testing.T) {
+		t.Parallel()
+
+		issues, exhausted := makeCandidates(25)
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: exhausted}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return issues, nil },
+		}
+		orch := budgetOrchestrator(state, wm, store, tracker)
+
+		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
+		if got := len(tracker.commentCalls); got != maxBudgetHoldNoticesPerWindow {
+			t.Fatalf("commentCalls after the first tick = %d, want %d", got, maxBudgetHoldNoticesPerWindow)
+		}
+
+		state.BudgetHoldNoticeWindowStart = state.BudgetHoldNoticeWindowStart.Add(-budgetHoldNoticeWindow)
+		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
+		if got := len(tracker.commentCalls); got != 2*maxBudgetHoldNoticesPerWindow {
+			t.Fatalf("commentCalls after the second tick = %d, want %d", got, 2*maxBudgetHoldNoticesPerWindow)
+		}
+
+		state.BudgetHoldNoticeWindowStart = state.BudgetHoldNoticeWindowStart.Add(-budgetHoldNoticeWindow)
+		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
+		if got := len(tracker.commentCalls); got != 25 {
+			t.Fatalf("commentCalls after the third tick = %d, want 25", got)
+		}
+
+		seen := make(map[string]int, 25)
+		for _, call := range tracker.commentCalls {
+			seen[call.IssueID]++
+		}
+		if len(seen) != 25 {
+			t.Errorf("distinct issues notified = %d, want 25", len(seen))
+		}
+		for id, count := range seen {
+			if count != 1 {
+				t.Errorf("issue %s received %d comments, want exactly 1", id, count)
+			}
+		}
+
+		firstTickIDs := make(map[string]struct{}, maxBudgetHoldNoticesPerWindow)
+		for _, call := range tracker.commentCalls[:maxBudgetHoldNoticesPerWindow] {
+			firstTickIDs[call.IssueID] = struct{}{}
+		}
+		for i := range maxBudgetHoldNoticesPerWindow {
+			wantID := fmt.Sprintf("iss-pace-%02d", i)
+			if _, ok := firstTickIDs[wantID]; !ok {
+				t.Errorf("first tick's notices = %v, missing %q: the deterministic (Identifier, id) order must land the lexicographically first 10", firstTickIDs, wantID)
+			}
+		}
+	})
+
+	t.Run("the same 10-per-window ceiling holds independent of a short polling interval", func(t *testing.T) {
+		t.Parallel()
+
+		issues, exhausted := makeCandidates(25)
+		wm := budgetTickConfig(3)
+		wm.config.Polling.IntervalMS = 1000
+		store := &stubStore{budgetExhaustedIDs: exhausted}
+		state := NewState(1000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return issues, nil },
+		}
+		orch := budgetOrchestrator(state, wm, store, tracker)
+
+		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
+
+		if got := len(tracker.commentCalls); got != maxBudgetHoldNoticesPerWindow {
+			t.Errorf("commentCalls with a 1000ms poll interval = %d, want %d (the bound is wall-clock, not per-tick)", got, maxBudgetHoldNoticesPerWindow)
+		}
+	})
+}
+
+// TestHandleTick_BudgetHoldNoticeParkedIssue fails if a held issue that is
+// also parked in the same tick has its notice suppressed, or if the two
+// mechanisms do not both fire.
+func TestHandleTick_BudgetHoldNoticeParkedIssue(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-parked", Identifier: "PROJ-NOTICE-PARKED", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{
+		budgetExhaustedIDs: map[string]int{issue.ID: 5},
+		absenceCounts:      map[string]int{issue.ID: 3},
+	}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+
+	budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.commentCalls) != 1 {
+		t.Errorf("commentCalls = %+v, want exactly 1 (a parked issue still receives the budget-hold notice)", tracker.commentCalls)
+	}
+	if _, parked := state.Parked[issue.ID]; !parked {
+		t.Fatal("Parked missing, want the same tick to also park the issue (absence ceiling reached)")
+	}
+	if len(store.parkedIssues) != 1 || store.parkedIssues[0].IssueID != issue.ID {
+		t.Errorf("store.parkedIssues = %+v, want exactly one park record for %q (the parking write)", store.parkedIssues, issue.ID)
+	}
+	if state.BudgetHoldNoticesInWindow != 1 {
+		t.Errorf("BudgetHoldNoticesInWindow = %d, want 1 (the notice's pacing slot consumed exactly once)", state.BudgetHoldNoticesInWindow)
+	}
+}
+
+// TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow fails if
+// [postBudgetHoldNotice] persists a row or records the memory entry when
+// the caller's tracker adapter is nil, its safety net for the case both
+// call sites already guard against before calling.
+func TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	store := &stubStore{}
+	entry := &BudgetExhaustedEntry{
+		Reason: budgetReasonSession, UsedSessions: 4, BudgetSessions: 3, ExhaustedAt: time.Now().UTC(),
+	}
+
+	postBudgetHoldNotice(state, budgetHoldNoticeParams{
+		IssueID:        "ISS-NIL",
+		Entry:          entry,
+		Store:          store,
+		TrackerAdapter: nil,
+		Metrics:        &spyMetrics{},
+		Logger:         discardLogger(),
+		Ctx:            context.Background(),
+	})
+	state.TrackerOpsWg.Wait()
+
+	if len(store.budgetHoldNotices) != 0 {
+		t.Errorf("store.budgetHoldNotices = %+v, want none (a nil tracker adapter writes no row)", store.budgetHoldNotices)
+	}
+	if _, ok := state.BudgetHoldNoticed["ISS-NIL"]; ok {
+		t.Error("BudgetHoldNoticed[ISS-NIL] present, want absent (a nil tracker adapter writes no row)")
+	}
+}
+
+// TestPostBudgetHoldNotice_UpsertFails fails if a failing
+// UpsertBudgetHoldNotice still posts a comment or records the memory
+// entry: the comment must not be re-posted every tick for as long as the
+// store keeps failing.
+func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	state := NewState(5000, 4, nil, AgentTotals{})
+	store := &stubStore{upsertBudgetHoldNoticeErr: fmt.Errorf("disk full")}
+	tracker := &mockTrackerAdapter{}
+	entry := &BudgetExhaustedEntry{
+		Reason: budgetReasonSession, UsedSessions: 4, BudgetSessions: 3, ExhaustedAt: time.Now().UTC(),
+	}
+
+	postBudgetHoldNotice(state, budgetHoldNoticeParams{
+		IssueID:        "ISS-UPSERT-FAIL",
+		Entry:          entry,
+		Store:          store,
+		TrackerAdapter: tracker,
+		Metrics:        &spyMetrics{},
+		Logger:         logger,
+		Ctx:            context.Background(),
+	})
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("commentCalls = %+v, want none (a failed upsert must not post a comment)", tracker.commentCalls)
+	}
+	if _, ok := state.BudgetHoldNoticed["ISS-UPSERT-FAIL"]; ok {
+		t.Error("BudgetHoldNoticed[ISS-UPSERT-FAIL] present, want absent after a failed upsert")
+	}
+	if !strings.Contains(buf.String(), "failed to persist budget hold notice") {
+		t.Errorf("log output missing the persist-failure record; log:\n%s", buf.String())
+	}
 }

@@ -527,6 +527,7 @@ func TestHandleTick_BudgetGaugeRecompute(t *testing.T) {
 		orch := budgetOrchestratorWithMetrics(state, wm, store, tracker, logger, spy)
 
 		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 		if got := lastSessionBudgetGaugeReading(spy); got != 1 {
 			t.Fatalf("session_budget gauge after the first tick = %d, want 1", got)
 		}
@@ -535,6 +536,7 @@ func TestHandleTick_BudgetGaugeRecompute(t *testing.T) {
 		present = false
 		store.budgetExhaustedIDs = map[string]int{}
 		orch.handleTick(context.Background())
+		state.TrackerOpsWg.Wait()
 
 		if got := lastSessionBudgetGaugeReading(spy); got != 0 {
 			t.Errorf("session_budget gauge after the issue left the candidate set = %d, want 0 (derived from the set)", got)

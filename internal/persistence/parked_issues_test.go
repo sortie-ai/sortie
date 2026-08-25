@@ -43,8 +43,8 @@ func TestMigrate_Migration014AppliesFromVersion13(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&versionAfter); err != nil {
 		t.Fatalf("query schema version after Migrate: %v", err)
 	}
-	if versionAfter != 14 {
-		t.Errorf("schema version after Migrate = %d, want 14", versionAfter)
+	if versionAfter != 15 {
+		t.Errorf("schema version after Migrate = %d, want 15", versionAfter)
 	}
 
 	var tableName string
