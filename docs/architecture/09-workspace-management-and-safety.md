@@ -192,16 +192,23 @@ Safety and parsing rules:
 
 #### 9.5.1 `.sortie/status` lifecycle
 
-The orchestrator removes `.sortie/status` at two points in a run's lifetime, both best-effort and
-both subject to the same `Lstat` symlink rejection described for `.sortie/scm.json` above: neither
-removal follows a symbolic link at `.sortie/` or at the file itself, and a rejected or failed
-removal is logged and does not affect the run.
+A run that enters the self-review phase has the file removed at four points in its lifetime, all
+best-effort and all subject to the same `Lstat` symlink rejection described for `.sortie/scm.json`
+above: no removal follows a symbolic link at `.sortie/` or at the file itself, and a rejected or
+failed removal is logged and does not affect the run.
 
 The first removal happens before each new dispatch to a workspace, so a stale value from a
 previous run cannot affect the new one. The second happens during a run, at the moment the
-orchestrator acts on a recognized value read from the file: the removal runs immediately before
-the self-review phase's first review turn, so the file states what the agent has said since the
-orchestrator last responded to it rather than carrying forward a value already acted on.
+orchestrator acts on a recognized value that admits the run to the self-review phase: the removal
+runs immediately before the phase's first review turn, so the phase's own first read does not
+observe the value that admitted it. The third and fourth happen inside the phase itself, after
+each review turn and after each fix turn, whenever the value read there is recognized. Together
+these four removals keep the file stating what the agent has said since the phase last acted on
+it, rather than carrying forward a value already acted on.
+
+The read after each completed coding turn, outside the self-review phase, removes nothing: a
+recognized value read there is left in the file, and a run that never enters the phase carries
+that value through to teardown.
 
 ### 9.6 Safety Invariants
 
