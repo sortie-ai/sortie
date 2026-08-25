@@ -2485,12 +2485,14 @@ claude-code:
 
 The `claude-code` block is forwarded to the Claude Code adapter, which runs
 `claude -p --output-format stream-json --verbose` once per turn and maps these fields to
-CLI flags. The adapter validates none of these values and forwards each as written, with
-one exception described below: `mcp_config` is superseded by the generated configuration
-the worker writes. What the CLI does with an invalid value differs per flag:
-`--permission-mode` is rejected at launch, `--effort` falls back to the default effort
-with a warning, and an unknown model name reaches the API and fails there. A key whose
-YAML value has the wrong type is ignored and the default applies.
+CLI flags. Two keys are checked before a run starts, `permission_mode` and
+`session_persistence`; the preflight refuses a value it cannot support, while the adapter
+itself refuses nothing and would launch on either. Every other value reaches the CLI as
+written, except `mcp_config`, which the generated configuration the worker writes
+supersedes. What the CLI does with an invalid value differs per flag: `--effort` falls
+back to the default effort with a warning, and an unknown model name reaches the API and
+fails there. A key whose YAML value has the wrong type is ignored and the default
+applies.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
