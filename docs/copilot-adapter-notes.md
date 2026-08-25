@@ -16,7 +16,7 @@ Two flags are load-bearing and unconditional. Without the autonomous-continuatio
 
 ## Session identity, and why turn one is different
 
-Unlike some agent CLIs, this one does not accept a caller-assigned session ID. The ID exists only after the runtime creates it and is learned from the terminal event of the turn that created it. So turn one runs with no session flag at all, the finalize hook captures the ID from the terminal event, and later turns resume it explicitly.
+Unlike some agent CLIs, this one does not accept a caller-assigned session ID. The ID exists only after the runtime creates it and is learned from the terminal event of the turn that created it. So the first turn of a session this run created carries no session flag at all, the finalize hook captures the ID from the terminal event, and later turns resume it explicitly. A session the orchestrator hands back after a restart is different: its ID is known before the first turn, and that turn resumes immediately.
 
 When a turn produces no terminal event carrying an ID and none is known from an earlier turn, the adapter falls back to asking the CLI to resume the most recent conversation in the working directory. That is only safe because Sortie isolates one workspace per issue. Do not extend that idea into session discovery: with more than one agent running concurrently, the most recently written session directory is not necessarily this session's. The adapter opens the runtime's session-state tree only by a known ID, and it validates that ID against a path-segment character set before joining it into a path. Both properties are security boundaries, not stylistic choices.
 
