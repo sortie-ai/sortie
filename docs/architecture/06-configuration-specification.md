@@ -252,13 +252,14 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
-- `agent.max_sessions`: non-negative integer, default `0` (unlimited for the existing total
-  per-issue session budget). A positive value is also the ceiling on the **consecutive-absence
-  count**, not a retry count. For that safety ceiling only, `0` derives the
-  finite value `3`: the first observed absence may be followed by two retry dispatches, and the
-  third consecutive absence parks the issue. This does not make the ordinary total-session budget
-  finite. Any run on which work is observed resets the consecutive-absence count to zero
+- `agent.max_sessions`: non-negative integer, default `0` (unlimited); the total per-issue session
+  budget. The separate `agent.max_consecutive_absences` governs the consecutive-absence ceiling
 - `agent.max_tokens`: integer, default `0` (unlimited)
+- `agent.max_consecutive_absences`: positive integer, default `3`; `0` and negative values are
+  rejected as a configuration error. Bounds the count of consecutive observed absences, not
+  lifetime effort: any run that produces evidence of work resets the count to zero. Unreachable
+  under `tracker.handoff_evidence: off`, since no verdict is computed and no absence is ever
+  recorded. The separate `agent.max_sessions` governs the total per-issue session budget
 - `ci_feedback.kind`: string, optional, **deprecated**; identifies the CI status provider adapter;
   presence activates CI feedback; use `reactions.ci_failure` instead
 - `ci_feedback.max_retries`: integer, default `2`; CI-fix continuation attempts before escalation

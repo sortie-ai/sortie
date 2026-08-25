@@ -497,7 +497,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
     sqlite.reset_handoff_absence_sequence(issue_id)
   elif evidence_withheld:
     absences = sqlite.consecutive_handoff_absences(issue_id)
-    ceiling = cfg.agent.max_sessions if cfg.agent.max_sessions > 0 else 3
+    ceiling = cfg.agent.max_consecutive_absences
     log_warn("handoff withheld by evidence policy", evidence.verdict, absences)
     if absences >= ceiling:
       # The sequence stops at the ceiling: parking cancels the retry,

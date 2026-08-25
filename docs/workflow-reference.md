@@ -268,8 +268,8 @@ tracker:
   exponential-backoff failure path rather than the fixed-delay continuation path.
 - Consecutive withheld outcomes are counted per issue, and reaching the ceiling parks the issue
   under a label whose name is taken from `reactions.review_comments.escalation_label`. That
-  ceiling's derivation from `agent.max_sessions`, the reset rule for the count, and the two
-  operator gestures that release a park are specified in
+  ceiling is governed by `agent.max_consecutive_absences`; the reset rule for the count, and the
+  two operator gestures that release a park, are specified in
   [architecture §14.2](architecture/19-failure-model-and-recovery-strategy.md#142-recovery-behavior).
 
 **`in_progress_state` validation rules:**
@@ -761,8 +761,9 @@ agent:
 | `max_turns`                      | integer                           | No                                  | `20`            | Future dispatches                          | Maximum coding-agent turns per worker session. The worker re-checks tracker state after each turn and starts another turn if the issue is still active, up to this limit.        |
 | `max_retry_backoff_ms`           | integer or string integer         | No                                  | `300000` (5m)   | **Yes** — affects future retry scheduling  | Maximum delay cap for exponential backoff on retries.                                                                                                                            |
 | `max_concurrent_agents_by_state` | map of `state → positive integer` | No                                  | `{}` (empty)    | **Yes** — affects subsequent dispatch      | Per-state concurrency limits. State keys are normalized to lowercase for lookup. Non-positive or non-numeric entries are silently ignored.                                       |
-| `max_sessions`                   | integer                           | No                                  | `0` (unlimited) | **Yes** — affects future retry evaluations | Maximum completed worker sessions per issue before the orchestrator stops re-dispatching. Counted from run history. `0` disables the budget (unlimited). Must be non-negative.   |
+| `max_sessions`                   | integer                           | No                                  | `0` (unlimited) | **Yes** — affects future retry evaluations | Maximum completed worker sessions per issue before the orchestrator stops re-dispatching. Counted from run history. `0` disables the budget (unlimited). Must be non-negative. The separate `max_consecutive_absences` governs the consecutive-absence ceiling. |
 | `max_tokens`                     | integer                           | No                                  | `0` (unlimited) | **Yes** — affects future retry evaluations | Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the issue's run history and stops re-dispatching once the sum reaches the limit. A run whose coding agent reported no token usage contributes nothing to the sum, and such a run makes the ceiling report that it could not be fully evaluated (a warning is logged and the dispatch proceeds). `0` disables the budget (unlimited). Must be non-negative. |
+| `max_consecutive_absences`       | integer                           | No                                  | `3`             | **Yes** — affects future retry evaluations | Bounds how many runs in a row may be observed to have produced no evidence of work before the issue is parked. Any run that produces evidence of work resets the count to zero. `0` and negative values are rejected as a configuration error. The separate `max_sessions` governs the total per-issue session budget. |
 
 **Orchestrator vs adapter fields:** The fields above are consumed by the orchestrator
 for scheduling, concurrency, and retry decisions. They are **not** passed through to the
@@ -1784,6 +1785,7 @@ Each variable maps to exactly one config field. The naming convention is
 | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`  | `agent.max_retry_backoff_ms`  | int    |       |
 | `SORTIE_AGENT_MAX_SESSIONS`          | `agent.max_sessions`          | int    |       |
 | `SORTIE_AGENT_MAX_TOKENS`            | `agent.max_tokens`            | int    |       |
+| `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES` | `agent.max_consecutive_absences` | int |    |
 
 #### Top-level
 
@@ -3300,6 +3302,7 @@ re-applies configuration and prompt template without restart.
 | `agent.max_concurrent_agents_by_state` | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
 | `agent.max_tokens`                     | **Immediate** — affects future retry timer evaluations.                                        |
+| `agent.max_consecutive_absences`       | **Immediate** — affects future retry timer evaluations.                                        |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
 | `ci_feedback.kind`                     | **No effect** — requires restart. CI provider is created once at process start.                |
 | `ci_feedback.max_retries`              | Future dispatches.                                                                             |
@@ -3429,6 +3432,8 @@ Each error identifies the offending field path.
 | `config: agent.stall_timeout_ms: invalid integer value: <val>`                  | Same as above.                                                           | Same fix.                                                                                                                            |
 | `config: agent.max_sessions: must be non-negative`                              | Negative value for `max_sessions`.                                       | Use `0` (unlimited) or a positive integer.                                                                                           |
 | `config: agent.max_tokens: must be non-negative`                                | Negative value for `max_tokens`.                                         | Use `0` (unlimited) or a positive integer.                                                                                           |
+| `config: agent.max_consecutive_absences: must be greater than 0`                | `0` or a negative value for `max_consecutive_absences`.                  | Use a positive integer, or remove the key to take the default of `3`.                                                                |
+| `config: agent.max_consecutive_absences: invalid integer value: <val>`          | Non-integer value for `max_consecutive_absences`.                        | Use a plain integer (e.g., `3`) or a quoted string integer (e.g., `"3"`).                                                            |
 | `config: tracker.handoff_state: expected string, got <type>`                    | `handoff_state` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.handoff_state: must not be empty`                              | `handoff_state` is set to an explicit empty string.                      | Provide a valid state name, or omit the field entirely to disable handoff.                                                           |
 | `config: tracker.handoff_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).  | Set the referenced environment variable to a valid state name.                                                                       |
@@ -3525,6 +3530,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
 | `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
 | `agent.max_tokens`                      | integer          | `0`                          | `SORTIE_AGENT_MAX_TOKENS`                | Unlimited; dynamic reload                                                              |
+| `agent.max_consecutive_absences`        | integer          | `3`                          | `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES`  | `0` and negative rejected; dynamic reload                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
 | `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | **Deprecated;** absent = disabled; restart required                                    |
 | `ci_feedback.max_retries`               | integer          | `2`                          | —                                        | **Deprecated;** `0` = escalate immediately; non-negative                               |
