@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -5592,6 +5593,15 @@ func TestRunWorkerAttempt_BlockedSignalSkipsSelfReview(t *testing.T) {
 	if got := tracker.fetchStatesCalls.Load(); got != 0 {
 		t.Errorf("FetchIssueStatesByIDs called %d times, want 0 (no per-turn refresh on a blocked signal)", got)
 	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	data, err := os.ReadFile(statusPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading %q: %v", statusPath, err)
+	}
+	if strings.TrimSpace(string(data)) != "blocked" {
+		t.Errorf("status file content = %q, want %q", strings.TrimSpace(string(data)), "blocked")
+	}
 }
 
 // TestRunWorkerAttempt_SelfReviewDisabledSignalUnchanged is a regression
@@ -5781,6 +5791,11 @@ func TestRunWorkerAttempt_InPhaseBlockedOnReviewTurn(t *testing.T) {
 	if result.ExitKind != WorkerExitNormal {
 		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
 	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("os.Stat(%q) error = %v, want fs.ErrNotExist", statusPath, err)
+	}
 }
 
 // TestRunWorkerAttempt_InPhaseBlockedOnFixTurn verifies that a blocked
@@ -5850,6 +5865,11 @@ func TestRunWorkerAttempt_InPhaseBlockedOnFixTurn(t *testing.T) {
 	if result.ExitKind != WorkerExitNormal {
 		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
 	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("os.Stat(%q) error = %v, want fs.ErrNotExist", statusPath, err)
+	}
 }
 
 // TestRunWorkerAttempt_TurnBudgetInPhaseBlockedOnFixTurn_BecomesSoftStop
@@ -5915,6 +5935,11 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseBlockedOnFixTurn_BecomesSoftStop(t *t
 	}
 	if result.ExitKind != WorkerExitNormal {
 		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("os.Stat(%q) error = %v, want fs.ErrNotExist", statusPath, err)
 	}
 }
 
@@ -6175,6 +6200,75 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_BecomesSoftStop(t *testing.T)
 	last := result.ReviewMetadata.Iterations[len(result.ReviewMetadata.Iterations)-1]
 	if !strings.Contains(last.VerdictParseError, "blocked") {
 		t.Errorf("last iteration VerdictParseError = %q, want to name %q", last.VerdictParseError, "blocked")
+	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("os.Stat(%q) error = %v, want fs.ErrNotExist", statusPath, err)
+	}
+}
+
+// TestRunWorkerAttempt_AfterRunHookObservesConsumedBlockedStatus reproduces
+// the issue's Steps to Reproduce end to end: self-review enabled, the
+// coding turn writes needs-human-review, the review turn writes blocked,
+// and the after_run hook that inspects .sortie/status finds it absent
+// because the in-phase blocked read consumed it.
+func TestRunWorkerAttempt_AfterRunHookObservesConsumedBlockedStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses a shell test")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	issue := workerTestIssue()
+	wsRoot := filepath.Join(tmpDir, issue.Identifier)
+	statusPath := filepath.Join(wsRoot, ".sortie", "status")
+	hookObservedAbsent := filepath.Join(tmpDir, "hook_observed_absent")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.Hooks.AfterRun = fmt.Sprintf("test ! -f %q && touch %q", statusPath, hookObservedAbsent)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "blocked")
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), issue, nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+	}
+	if _, err := os.Stat(hookObservedAbsent); err != nil {
+		t.Errorf("after_run hook did not observe the status file as absent: %v", err)
 	}
 }
 
