@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -31,20 +32,43 @@ func TestParsePassthroughConfig(t *testing.T) {
 		{
 			name: "all fields present",
 			config: map[string]any{
-				"model":               "o4-mini",
-				"effort":              "high",
-				"approval_policy":     "never",
-				"thread_sandbox":      "workspaceWrite",
-				"personality":         "helpful",
-				"turn_sandbox_policy": map[string]any{"networkAccess": true},
+				"model":           "o4-mini",
+				"effort":          "high",
+				"approval_policy": "never",
+				"thread_sandbox":  "workspaceWrite",
+				"personality":     "helpful",
+				"turn_sandbox_policy": map[string]any{
+					"networkAccess": true,
+					"writableRoots": []any{"/workspace/abc", "/tmp"},
+				},
 			},
 			want: passthroughConfig{
-				Model:             "o4-mini",
-				Effort:            "high",
-				ApprovalPolicy:    "never",
-				ThreadSandbox:     "workspaceWrite",
-				Personality:       "helpful",
-				TurnSandboxPolicy: map[string]any{"networkAccess": true},
+				Model:          "o4-mini",
+				Effort:         "high",
+				ApprovalPolicy: "never",
+				ThreadSandbox:  "workspaceWrite",
+				Personality:    "helpful",
+				TurnSandboxPolicy: map[string]any{
+					"networkAccess": true,
+					"writableRoots": []any{"/workspace/abc", "/tmp"},
+				},
+			},
+		},
+		{
+			// turn_sandbox_policy is forwarded verbatim, so a nested
+			// value survives parsing uninterpreted.
+			name: "nested turn_sandbox_policy value passes through",
+			config: map[string]any{
+				"turn_sandbox_policy": map[string]any{
+					"networkAccess": false,
+					"nested":        map[string]any{"inner": "value"},
+				},
+			},
+			want: passthroughConfig{
+				TurnSandboxPolicy: map[string]any{
+					"networkAccess": false,
+					"nested":        map[string]any{"inner": "value"},
+				},
 			},
 		},
 		{
@@ -79,8 +103,11 @@ func TestParsePassthroughConfig(t *testing.T) {
 			if got.Personality != tt.want.Personality {
 				t.Errorf("Personality = %q, want %q", got.Personality, tt.want.Personality)
 			}
-			if len(got.TurnSandboxPolicy) != len(tt.want.TurnSandboxPolicy) {
-				t.Errorf("TurnSandboxPolicy len = %d, want %d", len(got.TurnSandboxPolicy), len(tt.want.TurnSandboxPolicy))
+			// Compared with reflect.DeepEqual rather than maps.Equal:
+			// the values are any, and nested maps and the []any that
+			// YAML sequences decode into are not comparable with ==.
+			if !reflect.DeepEqual(got.TurnSandboxPolicy, tt.want.TurnSandboxPolicy) {
+				t.Errorf("TurnSandboxPolicy = %#v, want %#v", got.TurnSandboxPolicy, tt.want.TurnSandboxPolicy)
 			}
 		})
 	}
