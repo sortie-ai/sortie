@@ -249,7 +249,8 @@ Fields:
   - `0` and negative values are rejected as a configuration error at parse time, so startup,
     `sortie validate`, and the reload fail-safe path all reject them.
   - Overridable through `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES`.
-  - Changes are re-applied at runtime and affect future retry timer evaluations.
+  - Changes are re-applied at runtime and affect every lane that evaluates the ceiling: future
+    worker exits, retry timer evaluations, and the poll tick's park sweep.
   - The separate `max_sessions` governs the total per-issue session budget.
 
 Adapter-specific pass-through config:
