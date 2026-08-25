@@ -1156,12 +1156,21 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	// cleared, and a comment is not retractable.
 	foldedForward := make(map[string]struct{})
 
+	// budgetEvidenceComplete records that every configured axis was read
+	// successfully this tick. When an axis query fails, absence from the
+	// fresh set is not evidence that a hold cleared, so the notice release
+	// below is withheld: releasing it would drop the durable dedup record
+	// and let a later successful read post a second comment for a hold
+	// that never ended.
+	budgetEvidenceComplete := true
+
 	if cfg.Agent.MaxSessions > 0 {
 		counts, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
 		if qErr != nil {
 			o.logger.Warn("budget exhaustion query failed, retaining previous set",
 				slog.Any("error", qErr),
 			)
+			budgetEvidenceComplete = false
 			for id, entry := range prior {
 				if entry.Reason != budgetReasonSession {
 					continue
@@ -1190,6 +1199,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 			o.logger.Warn("token budget exhaustion query failed, retaining previous set",
 				slog.Any("error", qErr),
 			)
+			budgetEvidenceComplete = false
 			for id, entry := range prior {
 				if entry.Reason != budgetReasonToken {
 					continue
@@ -1299,7 +1309,9 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	for _, id := range candidateIDs {
 		if _, held := fresh[id]; !held {
 			delete(o.state.BudgetAnnounced, id)
-			releaseBudgetHoldNotice(ctx, o.state, o.store, id, o.logger)
+			if budgetEvidenceComplete {
+				releaseBudgetHoldNotice(ctx, o.state, o.store, id, o.logger)
+			}
 		}
 	}
 

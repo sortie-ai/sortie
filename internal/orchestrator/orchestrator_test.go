@@ -140,7 +140,9 @@ type stubStore struct {
 	budgetHoldNotices         []persistence.BudgetHoldNotice
 	upsertBudgetHoldNoticeErr error
 	deletedBudgetHoldIDs      []string
+	deleteBudgetHoldNoticeErr error
 	deleteAllBudgetHoldCalls  int
+	deleteAllBudgetHoldErr    error
 	listBudgetHoldNotices     []persistence.BudgetHoldNotice
 	listBudgetHoldNoticesErr  error
 }
@@ -328,14 +330,14 @@ func (s *stubStore) DeleteBudgetHoldNotice(_ context.Context, issueID string) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deletedBudgetHoldIDs = append(s.deletedBudgetHoldIDs, issueID)
-	return nil
+	return s.deleteBudgetHoldNoticeErr
 }
 
 func (s *stubStore) DeleteAllBudgetHoldNotices(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deleteAllBudgetHoldCalls++
-	return nil
+	return s.deleteAllBudgetHoldErr
 }
 
 func (s *stubStore) ListBudgetHoldNotices(_ context.Context) ([]persistence.BudgetHoldNotice, error) {
@@ -7664,5 +7666,50 @@ func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "failed to persist budget hold notice") {
 		t.Errorf("log output missing the persist-failure record; log:\n%s", buf.String())
+	}
+}
+
+// TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease fails if a
+// failed budget query lets the release pass drop a notice. After a
+// restart the prior set is empty, so nothing folds forward and every
+// candidate looks unheld; releasing on that evidence deletes the durable
+// record and lets the next successful tick post a second comment for a
+// hold that never ended.
+func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-notice-withheld", Identifier: "PROJ-NOTICE-WITHHELD", Title: "title", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	// The state a restart leaves behind: the notice memory is reloaded
+	// from the durable rows, while the exhausted set starts empty.
+	PopulateBudgetHoldNotices(state, []persistence.BudgetHoldNotice{
+		{IssueID: issue.ID, Reason: budgetReasonSession, NoticedAt: "2026-08-25T09:14:03Z"},
+	}, discardLogger())
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+	orch := budgetOrchestrator(state, wm, store, tracker)
+
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if len(store.deletedBudgetHoldIDs) != 0 {
+		t.Fatalf("deletedBudgetHoldIDs after the query-error tick = %+v, want none (absence from the fresh set is not evidence the hold cleared)", store.deletedBudgetHoldIDs)
+	}
+	if _, ok := state.BudgetHoldNoticed[issue.ID]; !ok {
+		t.Fatalf("BudgetHoldNoticed lost %q on a tick whose budget evidence was never read", issue.ID)
+	}
+
+	// The query recovers and the hold is confirmed still in force.
+	store.budgetExhaustedErr = nil
+	store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
+	orch.handleTick(context.Background())
+	state.TrackerOpsWg.Wait()
+
+	if got := len(tracker.commentCalls); got != 0 {
+		t.Errorf("commentCalls = %d, want 0 (the surviving notice record suppresses a duplicate comment)", got)
 	}
 }

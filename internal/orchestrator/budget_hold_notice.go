@@ -120,30 +120,36 @@ func postBudgetHoldNotice(state *State, params budgetHoldNoticeParams) {
 	})
 }
 
-// releaseBudgetHoldNotice deletes the memory entry and the durable row for
+// releaseBudgetHoldNotice deletes the durable row and the memory entry for
 // one issue. It returns without a store call when the memory holds no
-// reason for the issue.
+// reason for the issue. The memory entry is dropped only once the durable
+// delete succeeds, so a failed delete leaves the entry in place and the
+// next release pass retries it rather than stranding the row.
 func releaseBudgetHoldNotice(ctx context.Context, state *State, store budgetHoldNoticeReleaseStore, issueID string, log *slog.Logger) {
 	if _, ok := state.BudgetHoldNoticed[issueID]; !ok {
 		return
 	}
-	delete(state.BudgetHoldNoticed, issueID)
 	if err := store.DeleteBudgetHoldNotice(ctx, issueID); err != nil {
 		log.Error("failed to delete budget hold notice", slog.Any("error", err))
+		return
 	}
+	delete(state.BudgetHoldNoticed, issueID)
 }
 
-// releaseAllBudgetHoldNotices empties the memory and deletes every durable
-// row in one statement. It returns without a store call when the memory is
-// already empty.
+// releaseAllBudgetHoldNotices deletes every durable row in one statement
+// and then empties the memory. It returns without a store call when the
+// memory is already empty. The memory is cleared only once the durable
+// delete succeeds, so a failed delete leaves the entries in place and the
+// next release pass retries it rather than stranding the rows.
 func releaseAllBudgetHoldNotices(ctx context.Context, state *State, store budgetHoldNoticeReleaseStore, log *slog.Logger) {
 	if len(state.BudgetHoldNoticed) == 0 {
 		return
 	}
-	state.BudgetHoldNoticed = make(map[string]string)
 	if err := store.DeleteAllBudgetHoldNotices(ctx); err != nil {
 		log.Error("failed to delete budget hold notices", slog.Any("error", err))
+		return
 	}
+	state.BudgetHoldNoticed = make(map[string]string)
 }
 
 // buildBudgetHoldComment renders the plain-text notice body from the

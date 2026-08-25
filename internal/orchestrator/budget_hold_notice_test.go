@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -140,4 +142,62 @@ func TestBudgetHoldNoticeAllowed(t *testing.T) {
 			t.Errorf("BudgetHoldNoticeWindowStart = %v, want unchanged %v", state.BudgetHoldNoticeWindowStart, windowStart)
 		}
 	})
+}
+
+// TestReleaseBudgetHoldNotice_RetainsLatchWhenDeleteFails fails if a
+// failed durable delete drops the memory entry anyway. Dropping it strands
+// the row: the early return would then skip every later delete, and a
+// restart would reload the stale row and suppress a notice for a hold that
+// genuinely re-formed.
+func TestReleaseBudgetHoldNotice_RetainsLatchWhenDeleteFails(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "iss-release-retry"
+	store := &stubStore{deleteBudgetHoldNoticeErr: fmt.Errorf("db error")}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	state.BudgetHoldNoticed[issueID] = budgetReasonSession
+
+	releaseBudgetHoldNotice(context.Background(), state, store, issueID, discardLogger())
+
+	if _, ok := state.BudgetHoldNoticed[issueID]; !ok {
+		t.Fatalf("BudgetHoldNoticed lost %q after a failed delete, want the entry retained so the delete is retried", issueID)
+	}
+
+	store.deleteBudgetHoldNoticeErr = nil
+	releaseBudgetHoldNotice(context.Background(), state, store, issueID, discardLogger())
+
+	if _, ok := state.BudgetHoldNoticed[issueID]; ok {
+		t.Errorf("BudgetHoldNoticed still holds %q after a successful delete", issueID)
+	}
+	if len(store.deletedBudgetHoldIDs) != 2 {
+		t.Errorf("delete attempts = %d, want 2 (the failure is retried on the next release pass)", len(store.deletedBudgetHoldIDs))
+	}
+}
+
+// TestReleaseAllBudgetHoldNotices_RetainsMemoryWhenDeleteFails fails if a
+// failed bulk delete empties the memory anyway, which would strand every
+// row for the same reason the single-issue path must not.
+func TestReleaseAllBudgetHoldNotices_RetainsMemoryWhenDeleteFails(t *testing.T) {
+	t.Parallel()
+
+	store := &stubStore{deleteAllBudgetHoldErr: fmt.Errorf("db error")}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	state.BudgetHoldNoticed["iss-a"] = budgetReasonSession
+	state.BudgetHoldNoticed["iss-b"] = budgetReasonToken
+
+	releaseAllBudgetHoldNotices(context.Background(), state, store, discardLogger())
+
+	if len(state.BudgetHoldNoticed) != 2 {
+		t.Fatalf("BudgetHoldNoticed = %+v after a failed bulk delete, want both entries retained", state.BudgetHoldNoticed)
+	}
+
+	store.deleteAllBudgetHoldErr = nil
+	releaseAllBudgetHoldNotices(context.Background(), state, store, discardLogger())
+
+	if len(state.BudgetHoldNoticed) != 0 {
+		t.Errorf("BudgetHoldNoticed = %+v after a successful bulk delete, want empty", state.BudgetHoldNoticed)
+	}
+	if store.deleteAllBudgetHoldCalls != 2 {
+		t.Errorf("bulk delete calls = %d, want 2 (the failure is retried)", store.deleteAllBudgetHoldCalls)
+	}
 }
