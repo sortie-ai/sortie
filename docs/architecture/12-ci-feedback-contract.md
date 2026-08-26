@@ -302,7 +302,8 @@ the entry's lifetime.
 **Age and the watch window.** The entry's age is measured from `HeadRecordedAt`, the UTC time this
 process last recorded a head, falling back to the entry's creation time before any head has been
 recorded. `reactions.ci_failure.watch_window_ms` bounds that age (default `86400000`, twenty-four
-hours; `0` removes the clock bound). Past the window, the entry and its attempt counter are dropped
+hours; `0` removes the clock bound; a value above `9223372036854` is rejected when the typed
+configuration is built). Past the window, the entry and its attempt counter are dropped
 and a warning is logged; the fingerprint row is left intact. The watch also ends, whatever the clock
 says, on merge, on close, on a missing pull request (`ErrSCMNotFound`), and when the tracker issue
 reaches a `tracker.terminal_states` state.

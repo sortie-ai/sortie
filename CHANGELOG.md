@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `reactions.ci_failure.watch_window_ms` now rejects a value above `9223372036854` (about 292 years) instead of converting it to a window of a fraction of a millisecond or to no bound at all. `0` still means no time limit. A deployment currently carrying a larger value is refused at startup and by `sortie validate` until the value is lowered.
+  ([#956](https://github.com/sortie-ai/sortie/issues/956))
+
 ### Changed
 
 - `reactions.review_comments`, `reactions.bot_review`, `reactions.merge_conflicts`, and `reactions.auto_merge` now bound a pending entry's age with a per-reaction `watch_window_ms` key instead of a hardcoded thirty-minute constant. The default stays `1800000` (thirty minutes), so a deployment that sets nothing behaves exactly as before; setting `0` removes the bound entirely. A workflow with no `auto_merge`, where a person reviews and merges, will normally want a larger value than the default. The four expiry log records changed their message text and renamed their `ttl_ms` attribute to `window_ms`.

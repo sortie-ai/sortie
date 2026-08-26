@@ -986,7 +986,7 @@ Additional fields (via Extra):
 | Field             | Type    | Default      | Dynamic Reload | Description                                                                                                             |
 | ----------------- | ------- | ------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `max_log_lines`   | integer | `50`         | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative.                                   |
-| `watch_window_ms` | integer | `86400000`   | Every tick        | Bounds a pending entry's age, measured from the last recorded head. `0` removes the clock bound. Must be non-negative. |
+| `watch_window_ms` | integer | `86400000`   | Every tick        | Bounds a pending entry's age, measured from the last recorded head. `0` removes the clock bound. Must be non-negative and must not exceed `9223372036854`. |
 
 Example:
 
@@ -1294,8 +1294,7 @@ merged-or-closed drop branch, so setting `watch_window_ms: 0` leaves a `review_c
 until the tracker issue reaches a terminal state, and leaves an `auto_merge` entry polling
 until its own merge attempt returns the already-merged disposition. A quoted numeric value
 (for example `"1800000"`) is rejected for these four keys, although
-`reactions.ci_failure.watch_window_ms` accepts one. These four keys also reject a value
-above `9223372036854`, where `reactions.ci_failure.watch_window_ms` does not.
+`reactions.ci_failure.watch_window_ms` accepts one.
 
 #### Reaction kind: `label_commands`
 
@@ -1503,6 +1502,7 @@ reactions:
   configuration error.
 - `max_retries` must be non-negative for all kinds.
 - `escalation` must be `"label"` or `"comment"` for all kinds.
+- `watch_window_ms` must be non-negative and must not exceed `9223372036854` for `ci_failure`, `review_comments`, `bot_review`, `merge_conflicts`, and `auto_merge`.
 - `poll_interval_ms` must be >= `30000` for `review_comments`.
 - `debounce_ms` must be non-negative for `review_comments`.
 - `max_continuation_turns` must be positive for `review_comments`.
@@ -1523,8 +1523,9 @@ reactions:
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 **Where each rule is enforced:** the rules that the config layer owns (reaction key shape,
-`max_retries`, `escalation`, `escalation_label`, and every `label_commands` rule) run during
-typed config construction, so `sortie validate` reports them offline. For the kind-specific
+`max_retries`, `escalation`, `escalation_label`, every `label_commands` rule, and
+`reactions.ci_failure`'s Extra keys) run during typed config construction, so `sortie validate`
+reports them offline. For the kind-specific
 rules, `sortie validate` runs the `review_comments`, `auto_merge`, `bot_review`,
 `merge_conflicts`, and `merge_completion` builders. These are the same builders used when the
 orchestrator constructs the reactions at startup, so both paths report the same invalid values.
@@ -3551,6 +3552,8 @@ Each error identifies the offending field path.
 | `config: ci_feedback.max_log_lines: invalid integer value: <val>`               | Non-integer value for `max_log_lines`.                                   | Use a plain integer (e.g., `50`).                                                                                                    |
 | `config: ci_feedback.max_log_lines: must be non-negative`                       | Negative value for `max_log_lines`.                                      | Use `0` (disable log fetching) or a positive integer.                                                                                |
 | `config: ci_feedback.escalation: must be "label" or "comment", got "<val>"`     | Invalid escalation strategy.                                             | Use `"label"` or `"comment"`.                                                                                                        |
+| `config: reactions.ci_failure.watch_window_ms: must not exceed 9223372036854 (about 292 years); use 0 for no time limit, got <val>` | `watch_window_ms` exceeds the ceiling. | Lower the value, or use `0` for no time limit. |
+| `config: reactions.ci_failure.watch_window_ms: must be non-negative, got <val>` | Negative value for `watch_window_ms`.                                    | Use `0` (no time limit) or a positive integer.                                                                                       |
 
 ### 9.3 Environment Variable Errors
 
@@ -3636,6 +3639,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`; restart required except for `ci_failure`                     |
 | `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`; restart required except for `ci_failure`       |
 | `reactions.ci_failure.max_log_lines`    | integer          | `50`                         | —                                        | CI log tail lines; `0` disables; non-negative; restart required                        |
+| `reactions.<kind>.watch_window_ms`      | integer          | `86400000` for `ci_failure`, `1800000` for the other four | — | Bounds a pending entry's age; non-negative; not above `9223372036854`; `0` removes the bound; restart required except for `ci_failure` |
 | `reactions.review_comments.poll_interval_ms` | integer     | `120000`                     | —                                        | Review poll interval; min `30000`; restart required                                    |
 | `reactions.review_comments.debounce_ms` | integer          | `60000`                      | —                                        | Debounce after last comment; non-negative; restart required                            |
 | `reactions.review_comments.max_continuation_turns` | integer | `3`                        | —                                        | Review-fix turns before escalation; positive; restart required                         |

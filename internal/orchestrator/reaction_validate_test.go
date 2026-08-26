@@ -115,7 +115,7 @@ func TestValidateReactionConfigs(t *testing.T) {
 			name: "bot_review watch_window_ms above ceiling surfaces a diagnostic",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
-					"bot_review": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+					"bot_review": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1}},
 				},
 			},
 			wantChecks: []string{"reactions.bot_review"},

@@ -278,6 +278,8 @@ This section is intentionally redundant so a coding agent can implement the conf
   `reactions.review_comments.provider`, ignores whether its `escalation` value is `label` or
   `comment`, and never falls through to another reaction kind's label. The primary path always
   parks by label; it borrows only this label name and no other review-reaction behavior
+- `reactions.ci_failure.watch_window_ms`: integer, default `86400000` (24 h); non-negative, not
+  above `9223372036854`; `0` removes the bound; re-read on every tick
 - `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
 - `reactions.review_comments.debounce_ms`: integer, default `60000` (60 sec); non-negative
 - `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive

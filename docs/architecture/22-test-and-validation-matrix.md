@@ -34,6 +34,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - An absent `agent.max_consecutive_absences` key takes the default of `3`; `0` and negative
   values are rejected at config parse time; `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES` overrides a
   file-supplied value and is rejected under the same rule
+- An absent `reactions.ci_failure.watch_window_ms` key takes the default; a negative value and a
+  value above `9223372036854` are rejected at config parse time, naming the field and the value;
+  `9223372036854` itself is accepted
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - Prompt template renders `issue`, `attempt`, and `run`
 - Prompt rendering fails on unknown variables (strict mode)

@@ -392,19 +392,13 @@ const ReactionKindMergeCompletion = "merge-completion"
 // lifetime.
 const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
-// reactionWatchWindowDefaultMS is the default pending-entry watch
-// window, in milliseconds, shared by the four reaction kinds whose
-// configuration carries a watch_window_ms key.
+// reactionWatchWindowDefaultMS is the default pending-entry watch window,
+// in milliseconds, for the four reaction kinds watchWindowMS serves.
 const reactionWatchWindowDefaultMS = 1800000
 
-// maxWatchWindowMS is the largest watch_window_ms value whose conversion to
-// a time.Duration stays positive. Above it the nanosecond product overflows
-// and the sign alternates, so a very large window silently becomes a
-// sub-millisecond one that drops every pending entry on its first pass.
-const maxWatchWindowMS int64 = math.MaxInt64 / int64(time.Millisecond)
-
-// watchWindowMS reads the optional watch_window_ms key shared by every
-// reaction block that carries one, returning def when the key is absent.
+// watchWindowMS reads the optional watch_window_ms key shared by
+// review_comments, bot_review, auto_merge, and merge_conflicts, returning
+// def when the key is absent.
 func watchWindowMS(extra map[string]any, def int) (int, error) {
 	v, ok := extra["watch_window_ms"]
 	if !ok {
@@ -414,11 +408,8 @@ func watchWindowMS(extra map[string]any, def int) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid watch_window_ms: %w", err)
 	}
-	if n < 0 {
-		return 0, fmt.Errorf("watch_window_ms must be non-negative, got %d", n)
-	}
-	if int64(n) > maxWatchWindowMS {
-		return 0, fmt.Errorf("watch_window_ms must not exceed %d (about 292 years); use 0 for no time limit, got %d", maxWatchWindowMS, n)
+	if err := config.ValidateWatchWindowMS(n); err != nil {
+		return 0, fmt.Errorf("watch_window_ms %s", err)
 	}
 	return n, nil
 }

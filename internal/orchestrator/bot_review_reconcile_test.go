@@ -303,7 +303,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 		{
 			name: "watch_window_ms above ceiling errors",
 			rc: config.ReactionConfig{
-				Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1},
+				Extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1},
 			},
 			wantErr: true,
 		},
