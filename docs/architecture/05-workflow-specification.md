@@ -376,7 +376,8 @@ Each reaction kind sub-object shares a common field schema:
   - Identifies the external system adapter for this reaction kind (e.g. `github`). Empty string
     or absent means the reaction kind is disabled.
 - `max_retries` (integer)
-  - Maximum fix continuation dispatches per issue before escalation. Default: `2`.
+  - Maximum fix continuation dispatches per issue before escalation. Default: `2`, except
+    `merge_conflicts`, which defaults to `1`.
   - MUST be non-negative; negative values are rejected with a configuration error.
 - `escalation` (string)
   - Action when `max_retries` is exceeded. Valid values: `label` (default), `comment`.
@@ -460,6 +461,74 @@ reactions:
     delete_branch: true
     poll_interval_ms: 60000
 ```
+
+**Reaction kind: `bot_review`**
+
+Automated review-bot comment routing. When configured, the orchestrator polls for PR comments
+authored by automated review tools on Sortie-created PRs and dispatches continuation turns so the
+agent can address them. This is the complement of `review_comments`, which routes only human
+`CHANGES_REQUESTED` comments and excludes bot-authored ones. See Section 11D for the full contract.
+(Runtime kind value: `bot-review`.)
+
+Extra fields:
+
+- `bot_usernames` (list of strings, via Extra): allowlist of bot logins. A comment is bot-authored
+  when the platform reports a bot user type or when its author login matches an entry here,
+  case-insensitively. Default: empty. A value that is not a list, or a list holding a non-string
+  element, is rejected with a configuration error.
+- `poll_interval_ms` (integer, via Extra): polling interval for bot comments. Default: `60000`
+  (1 minute). Minimum: `30000`.
+- `max_continuation_turns` (integer, via Extra): maximum bot-fix continuation dispatches per issue
+  before escalation. Default: `5`. MUST be positive.
+- `watch_window_ms` (integer, via Extra): bounds a pending bot-review entry's age, measured from
+  the entry's creation. Default: `1800000` (thirty minutes). MUST be non-negative and MUST NOT
+  exceed `9223372036854`. `0` removes the clock bound.
+
+The kind reads no `debounce_ms` field: bot comments arrive in bulk on push and dispatch
+immediately.
+
+**Reaction kind: `merge_conflicts`**
+
+Merge-conflict detection and resolution. When configured, the orchestrator polls mergeability on
+Sortie-created open PRs each reconcile cycle and dispatches one rebase-and-resolve continuation
+turn each time a PR transitions from no-conflict to conflict. See Section 11E for the full
+contract. (Runtime kind value: `merge-conflict`.)
+
+`max_retries` defaults to `1` for this kind rather than the common default of `2`, because
+merge-conflict resolution by a coding agent is less likely to succeed on a second attempt.
+
+Extra fields:
+
+- `poll_interval_ms` (integer, via Extra): polling interval for the conflict-detection state
+  machine. Default: `60000` (1 minute). Minimum: `30000`.
+- `watch_window_ms` (integer, via Extra): bounds a pending merge-conflict entry's age, measured
+  from the entry's creation rather than from the last recorded head. Default: `1800000` (thirty
+  minutes). MUST be non-negative and MUST NOT exceed `9223372036854`. `0` removes the clock bound.
+
+**Reaction kind: `merge_completion`**
+
+Merge-completion detection. When configured, the orchestrator observes the merge state of
+Sortie-managed PRs independently of who performs the merge and transitions the linked issue to a
+single configured terminal state exactly once. See Section 11G for the full contract. (Runtime kind
+value: `merge-completion`.)
+
+The kind constrains two `tracker` fields, both checked when its configuration is constructed:
+`handoff_state` MUST be non-empty, and `terminal_states` MUST be written non-empty in front matter
+rather than left to the tracker adapter's default list.
+
+Extra fields:
+
+- `target_state` (string, via Extra): the single tracker terminal state the linked issue moves to
+  once its pull request merges. Required, no default. MUST NOT equal `tracker.handoff_state`; MUST
+  NOT be a member of `tracker.active_states`, falling back to the tracker adapter's default
+  active-state list when that field is empty; MUST be a member of `tracker.terminal_states` exactly
+  as written in configuration, with no fallback to the adapter's default terminal-state list. All
+  three comparisons are case-insensitive.
+- `poll_interval_ms` (integer, via Extra): polling interval for the merge-observation state
+  machine. Default: `60000` (1 minute). Minimum: `30000`.
+
+The kind carries no `watch_window_ms`: a pull request may remain unmerged for any length of time
+without starting a failure clock.
 
 **Validation rules:**
 
