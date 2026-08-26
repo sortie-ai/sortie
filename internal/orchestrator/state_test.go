@@ -1013,6 +1013,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
 				MaxRetries:      2,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1025,6 +1026,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  60000,
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1037,6 +1039,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  60000,
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1049,6 +1052,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  60000,
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1061,6 +1065,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  60000,
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1073,6 +1078,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  120000,
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1088,6 +1094,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				PollIntervalMS:  60000,
 				Escalation:      "label",
 				EscalationLabel: "auto-merge-failed",
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1101,6 +1108,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				Escalation:      "comment",
 				EscalationLabel: "needs-human",
 				MaxRetries:      5,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1290,6 +1298,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  60000,
 				MaxRetries:      1,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1300,6 +1309,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  60000,
 				MaxRetries:      3,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1310,6 +1320,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  60000,
 				MaxRetries:      0,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1320,6 +1331,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  60000,
 				MaxRetries:      1,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1330,6 +1342,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "conflict-stuck",
 				PollIntervalMS:  60000,
 				MaxRetries:      1,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1340,6 +1353,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  120000,
 				MaxRetries:      1,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -1350,6 +1364,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				EscalationLabel: "needs-human",
 				PollIntervalMS:  30000,
 				MaxRetries:      1,
+				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
 		},
 		{

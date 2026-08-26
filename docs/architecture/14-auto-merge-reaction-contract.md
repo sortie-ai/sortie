@@ -84,10 +84,10 @@ The auto-merge reconcile loop runs as Part G of active run reconciliation (see �
 the algorithm). The loop processes entries from `pending_reactions` whose kind discriminator is
 `"merge"`.
 
-The loop drops an entry whose age exceeds `AutoMergePendingTTL` (TTL backstop) and deletes the
-`merge`-kind attempt counter with it. The TTL is a fixed internal constant of 30 minutes, not
-operator-configurable. The drop logs at WARN and performs no escalation, so an entry that never
-satisfies its preconditions produces no tracker-visible signal.
+The loop drops an entry whose age, measured from the entry's creation, exceeds the configured
+`reactions.auto_merge.watch_window_ms` (default `1800000`, thirty minutes; `0` removes the bound),
+and deletes the `merge`-kind attempt counter with it. The drop logs at WARN and performs no
+escalation, so an entry that never satisfies its preconditions produces no tracker-visible signal.
 
 There is an intentional asymmetry between the YAML configuration key and the runtime kind value.
 The YAML key the operator sets in `WORKFLOW.md` is `reactions.auto_merge`. The runtime and
@@ -135,8 +135,8 @@ the epoch, because a substituted timestamp can let a superseded approval outrank
 changes-requested review that supersedes it. A review that cannot change the verdict, a dismissed
 review or one whose state is not a decision, is not parsed and cannot fail the read. The
 precondition read defers with backoff and never merges on this failure, and the pending entry is
-dropped once its age exceeds the TTL backstop (§11C.4), which escalates nothing and leaves the pull
-request unmerged for the operator to merge manually.
+dropped once its age passes the configured watch window (§11C.4), which escalates nothing and
+leaves the pull request unmerged for the operator to merge manually.
 
 **GitLab auto-merge reads.** The GitLab adapter has no aggregate review-decision field and no
 per-condition mergeability enum, so it composes the first and maps the second from a single string.
@@ -190,7 +190,7 @@ cleanup that follows the action: the `merge`-kind pending entry is deleted from 
 and its `reaction_fingerprints` row is removed, and because the reconcile loop iterates only over
 pending entries, that issue's merge kind is polled no further. The
 `reaction_attempts[issue_id:merge]` counter is left in place, unlike the merge-conflict
-episode-exit cleanup (§11E.5) and unlike this kind's own TTL drop (§11C.4), so a `merge` entry
+episode-exit cleanup (§11E.5) and unlike this kind's own watch-window drop (§11C.4), so a `merge` entry
 re-created for the same issue later in the same process escalates on its first tick whenever
 `MaxRetries > 0`.
 

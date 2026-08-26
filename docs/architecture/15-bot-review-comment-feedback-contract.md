@@ -75,7 +75,9 @@ allowlist instead of `FetchPendingReviews`. The flow:
 2. For each `pending_reactions` entry with kind `bot-review`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
    b. Type-assert the kind data; on mismatch, log and skip without panicking.
-   c. Drop the entry when its age exceeds the pending TTL backstop.
+   c. Drop the entry when its age, measured from the entry's creation, exceeds the configured
+      `reactions.bot_review.watch_window_ms` (default `1800000`, thirty minutes; `0` removes the
+      bound).
    d. Respect the `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
    e. Check the continuation-turn cap: if `reaction_attempts[issue_id:bot-review]` reaches
       `max_continuation_turns`, escalate (§11D.5) and continue.
@@ -174,5 +176,6 @@ Per-issue `bot-review` reaction lifecycle (the `issue_id:bot-review` slot):
 | pending | Reconcile tick, fingerprint unchanged and dispatched | pending | Re-enqueue at `now + poll_interval`. |
 | pending | Reconcile tick, new actionable comments, attempts < cap | dispatched | Schedule continuation, increment attempts, count dispatched. |
 | pending | Reconcile tick, attempts reach cap | escalated | Apply escalation; clear ONLY the `bot-review` slot. MUST NOT release the claim or clear sibling slots (§11D.5). |
+| pending | Reconcile tick, entry age exceeds the configured `watch_window_ms` window | (none) | Delete the attempt counter and log a WARN record. The fingerprint row, the claim, and the retry are left in place. |
 | pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the `bot-review` pending entry and its attempt counter, cancel and delete the issue's retry, and release the claim; `reaction_fingerprints` is left intact. |
 

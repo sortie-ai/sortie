@@ -392,6 +392,37 @@ const ReactionKindMergeCompletion = "merge-completion"
 // lifetime.
 const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
+// reactionWatchWindowDefaultMS is the default pending-entry watch
+// window, in milliseconds, shared by the four reaction kinds whose
+// configuration carries a watch_window_ms key.
+const reactionWatchWindowDefaultMS = 1800000
+
+// maxWatchWindowMS is the largest watch_window_ms value whose conversion to
+// a time.Duration stays positive. Above it the nanosecond product overflows
+// and the sign alternates, so a very large window silently becomes a
+// sub-millisecond one that drops every pending entry on its first pass.
+const maxWatchWindowMS int64 = math.MaxInt64 / int64(time.Millisecond)
+
+// watchWindowMS reads the optional watch_window_ms key shared by every
+// reaction block that carries one, returning def when the key is absent.
+func watchWindowMS(extra map[string]any, def int) (int, error) {
+	v, ok := extra["watch_window_ms"]
+	if !ok {
+		return def, nil
+	}
+	n, err := toInt(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid watch_window_ms: %w", err)
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("watch_window_ms must be non-negative, got %d", n)
+	}
+	if int64(n) > maxWatchWindowMS {
+		return 0, fmt.Errorf("watch_window_ms must not exceed %d (about 292 years); use 0 for no time limit, got %d", maxWatchWindowMS, n)
+	}
+	return n, nil
+}
+
 // reactionKindPins is the single registry of reaction kinds. A kind
 // present in the map is a known kind; its value reports whether a
 // pending entry of that kind pins its workspace against sweep
@@ -572,6 +603,7 @@ type ReviewReactionConfig struct {
 	PollIntervalMS       int
 	DebounceMS           int
 	MaxContinuationTurns int
+	WatchWindowMS        int
 }
 
 // BotReviewReactionData holds bot-review-specific fields for a pending
@@ -607,6 +639,7 @@ type BotReviewReactionConfig struct {
 	PollIntervalMS       int
 	MaxContinuationTurns int
 	BotUsernames         []string
+	WatchWindowMS        int
 }
 
 // AutoMergeReactionData holds auto-merge-specific fields for a pending
@@ -641,6 +674,7 @@ type AutoMergeReactionConfig struct {
 	Escalation      string
 	EscalationLabel string
 	MaxRetries      int
+	WatchWindowMS   int
 }
 
 // MergeConflictReactionData holds merge-conflict-specific fields for a
@@ -679,6 +713,7 @@ type MergeConflictReactionConfig struct {
 	EscalationLabel string
 	PollIntervalMS  int
 	MaxRetries      int
+	WatchWindowMS   int
 }
 
 // LabelReviewReactionData holds the label-review command's per-PR
@@ -1299,6 +1334,7 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 		PollIntervalMS:       120000,
 		DebounceMS:           60000,
 		MaxContinuationTurns: 3,
+		WatchWindowMS:        reactionWatchWindowDefaultMS,
 	}
 
 	if cfg.Escalation == "" {
@@ -1345,6 +1381,12 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 		cfg.MaxContinuationTurns = n
 	}
 
+	window, err := watchWindowMS(rc.Extra, cfg.WatchWindowMS)
+	if err != nil {
+		return ReviewReactionConfig{}, err
+	}
+	cfg.WatchWindowMS = window
+
 	return cfg, nil
 }
 
@@ -1362,6 +1404,7 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 		EscalationLabel:      rc.EscalationLabel,
 		PollIntervalMS:       60000,
 		MaxContinuationTurns: 5,
+		WatchWindowMS:        reactionWatchWindowDefaultMS,
 	}
 
 	if cfg.Escalation == "" {
@@ -1397,6 +1440,12 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 		cfg.MaxContinuationTurns = n
 	}
 
+	window, err := watchWindowMS(rc.Extra, cfg.WatchWindowMS)
+	if err != nil {
+		return BotReviewReactionConfig{}, err
+	}
+	cfg.WatchWindowMS = window
+
 	if v, ok := rc.Extra["bot_usernames"]; ok {
 		list, lok := v.([]any)
 		if !lok {
@@ -1428,6 +1477,7 @@ func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionCo
 		Escalation:      rc.Escalation,
 		EscalationLabel: rc.EscalationLabel,
 		MaxRetries:      rc.MaxRetries,
+		WatchWindowMS:   reactionWatchWindowDefaultMS,
 	}
 
 	if cfg.Escalation == "" {
@@ -1483,6 +1533,12 @@ func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionCo
 		cfg.PollIntervalMS = n
 	}
 
+	window, err := watchWindowMS(rc.Extra, cfg.WatchWindowMS)
+	if err != nil {
+		return AutoMergeReactionConfig{}, err
+	}
+	cfg.WatchWindowMS = window
+
 	return cfg, nil
 }
 
@@ -1499,6 +1555,7 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 		EscalationLabel: rc.EscalationLabel,
 		PollIntervalMS:  60000,
 		MaxRetries:      rc.MaxRetries,
+		WatchWindowMS:   reactionWatchWindowDefaultMS,
 	}
 
 	if cfg.Escalation == "" {
@@ -1522,6 +1579,12 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 		}
 		cfg.PollIntervalMS = n
 	}
+
+	window, err := watchWindowMS(rc.Extra, cfg.WatchWindowMS)
+	if err != nil {
+		return MergeConflictReactionConfig{}, err
+	}
+	cfg.WatchWindowMS = window
 
 	return cfg, nil
 }

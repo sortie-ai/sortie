@@ -332,7 +332,7 @@ func TestReconcileMergeConflict_LiveAPI_E2E(t *testing.T) {
 		SCMAdapter:                      scmAdapter,
 		MergeConflictConfig:             defaultMergeConflictConfig(),
 		MergeConflictReactionConfigured: true,
-		MergeConflictPendingTTL:         mergeConflictPendingDefaultTTL,
+		MergeConflictPendingTTL:         30 * time.Minute,
 		Store:                           store,
 		OnRetryFire:                     noopRetryFire,
 		Ctx:                             ctx,

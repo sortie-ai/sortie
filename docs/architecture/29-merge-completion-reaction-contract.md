@@ -51,11 +51,11 @@ interval, not at a fixed constant.
 
 Unlike five of its seven sibling reaction kinds, a `merge-completion` pending entry carries no
 general expiry. CI, review, bot-review, auto-merge, and merge-conflict each observe something
-transient and bound their pending entries with a fixed TTL so a dropped observation does not poll
-forever. Merge-completion carries no such review-stage TTL, the same posture as the label-review
-and label-fix kinds: a pull request may wait on human review for an unbounded time. That time does
-not count toward the missing-commit bound in §11G.4, and the pending entry's original `CreatedAt`
-MUST NOT be used as that bound's origin.
+transient and bound their pending entries with a per-kind configured watch window so a dropped
+observation does not poll forever. Merge-completion carries no such bound, the same posture as the
+label-review and label-fix kinds: a pull request may wait on human review for an unbounded time.
+That time does not count toward the missing-commit bound in §11G.4, and the pending entry's
+original `CreatedAt` MUST NOT be used as that bound's origin.
 
 Carrying no general expiry also means a pending `merge-completion` entry does not pin its workspace
 against periodic-sweep candidacy (§9.6, Invariant 4a), which is safe here because the pass reads

@@ -234,6 +234,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue
 - `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
 - Review comment reconciliation is skipped when `reactions.review_comments` is not configured
+- A review pending entry younger than the configured `watch_window_ms` survives and re-enqueues;
+  one whose age exactly equals the window still survives; one older than the window is dropped and
+  its own `reaction_attempts` counter is deleted, leaving the claim, the retry, the fingerprint row,
+  and every sibling kind's entry untouched; a configured `0` leaves an entry far older than thirty
+  minutes in place
 - Review comment poll throttle respected (PendingRetryAt in future → skip)
 - Review comment fetch error increments backoff and re-enqueues
 - No actionable review comments re-enqueues with poll interval delay
@@ -249,6 +254,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Worker exit does not overwrite existing pending review entry (preserves debounce state)
 - Bot-review reconciliation is skipped when no SCM adapter is constructed or when bot-review is not
   configured
+- A bot-review pending entry ages the same way the review kind does, against its own configured
+  `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped with only its
+  own attempt counter deleted, and a configured `0` leaves an old entry in place
 - Bot classification is the union of the platform bot marker and the `bot_usernames` allowlist, so
   on a provider that reports no bot marker an empty allowlist selects nothing and the kind never
   dispatches
@@ -274,7 +282,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Only the normalized `dirty` state arms the reaction; `unknown` defers at the poll interval without
   touching the fingerprint or the attempt counter
 - A provider whose mergeability mapping never yields `dirty` leaves the kind inert: every due tick
-  defers and the pending TTL drops the entry without escalating
+  defers and the configured watch window drops the entry without escalating
+- A merge-conflict pending entry ages the same way the review kind does, against its own
+  configured `watch_window_ms`, and an entry with a non-zero `HeadRecordedAt` still ages from
+  `CreatedAt` rather than from `HeadRecordedAt`
 - The mergeability read runs on every due tick with no retry-budget check ahead of it, so the
   not-dirty branch that closes the episode stays reachable
 - The retry-slot guard, the empty head-SHA guard, and the empty base-branch guard all run before the
@@ -298,6 +309,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - A sticky auth-class preflight failure drops every `merge`-kind pending entry on each later tick, a
   transport-class preflight failure schedules exactly one retry before the flag sticks, and absent
   scope information fails open with auto-merge enabled
+- An auto-merge pending entry ages the same way the review kind does, against its own configured
+  `watch_window_ms`: younger survives, exactly-at-window survives, older is dropped with only its
+  own attempt counter deleted, and a configured `0` leaves an old entry in place
 - A draft PR, a mergeability outside `clean` and `unstable`, a review decision other than `APPROVED`
   or `NOT_REQUIRED`, and a CI conclusion other than success while `require_ci` holds each re-enqueue
   at the poll interval instead of merging
@@ -316,6 +330,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   continuations survive
 - The already-merged disposition clears only the `merge`-kind pending entry and fingerprint and
   never transitions the tracker issue
+- The offline validator reports a negative or an out-of-range `watch_window_ms` for each of
+  `review_comments`, `bot_review`, `merge_conflicts`, and `auto_merge` as a `Severity: "error"`
+  diagnostic under that kind's own `Check`, and reports none for a valid value or for a kind whose
+  `provider` is empty
 - Each label-command pass is skipped when no SCM adapter is constructed or its own command is not
   configured, and an absent or empty `provider` means no journal read happens for either command
 - A fix-only configuration, with `review_label` empty and `fix_label` non-empty, activates the block

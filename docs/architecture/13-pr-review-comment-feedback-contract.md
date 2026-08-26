@@ -30,7 +30,7 @@ type SCMAdapter interface {
   implementation excludes an author its platform reports as an automated bot account
   (`user.type == "Bot"` on GitHub); it does not consult the operator's `bot_usernames` allowlist.
   The reaction layer applies that second arm on the returned set, before debounce, fingerprint,
-  and dispatch (§11B.4 step f, §11D.2).
+  and dispatch (§11B.4 step g, §11D.2).
 
 **Gitea adapter.** A Gitea SCM adapter registers under kind `gitea`, at parity with the GitHub
 adapter. It normalizes Gitea's native `REQUEST_CHANGES` review state to the `CHANGES_REQUESTED`
@@ -121,27 +121,31 @@ CI status reconciliation. The flow is:
    constructed).
 2. For each entry in `pending_reactions` with kind `review`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
-   b. Respect `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
-   c. Check continuation turn cap: if `reaction_attempts[issue_id:review]` >=
+   b. Check the configured watch window: if `reactions.review_comments.watch_window_ms` is
+      positive and the entry's age, measured from its creation, exceeds it, delete the entry's
+      `reaction_attempts` counter, log a WARN record, and drop the entry (no re-enqueue). Default
+      `1800000` (thirty minutes); `0` removes the bound.
+   c. Respect `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
+   d. Check continuation turn cap: if `reaction_attempts[issue_id:review]` >=
       `max_continuation_turns`, escalate (Section 11B.6) and continue.
-   d. Call `SCMAdapter.FetchPendingReviews(ctx, pr_number, owner, repo)`.
-   e. On fetch error: increment backoff, set `PendingRetryAt`, re-enqueue, continue.
-   f. Filter outdated comments, then drop any surviving comment whose author matches
+   e. Call `SCMAdapter.FetchPendingReviews(ctx, pr_number, owner, repo)`.
+   f. On fetch error: increment backoff, set `PendingRetryAt`, re-enqueue, continue.
+   g. Filter outdated comments, then drop any surviving comment whose author matches
       `reactions.bot_review.bot_usernames` (§11D.2's allowlist arm). Compute max `submitted_at`
       timestamp over the surviving set for debounce; an excluded comment does not raise
       `LastEventAt`.
-   g. If no actionable comments: re-enqueue with poll interval delay and continue.
-   h. Build fingerprint: `sha256(sorted(comment_id_1, comment_id_2, ...))` of the surviving IDs.
-   i. Upsert fingerprint in `reaction_fingerprints` (kind `review`). If stored fingerprint
+   h. If no actionable comments: re-enqueue with poll interval delay and continue.
+   i. Build fingerprint: `sha256(sorted(comment_id_1, comment_id_2, ...))` of the surviving IDs.
+   j. Upsert fingerprint in `reaction_fingerprints` (kind `review`). If stored fingerprint
       matches and is marked dispatched: skip, re-enqueue with poll interval delay.
-   j. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,
+   k. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,
       re-enqueue.
-   k. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
+   l. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
       re-enqueuing the entry unchanged rather than dispatching.
-   l. On a free slot: schedule review-fix dispatch with
+   m. On a free slot: schedule review-fix dispatch with
       `ContinuationContext{"review_comments": [...]}`.
-   m. Increment `reaction_attempts[issue_id:review]`.
-   n. The fingerprint is marked dispatched in `reaction_fingerprints` later, in
+   n. Increment `reaction_attempts[issue_id:review]`.
+   o. The fingerprint is marked dispatched in `reaction_fingerprints` later, in
       `HandleRetryTimer`, after the scheduled retry fires and dispatch succeeds.
 
 ### 11B.5 Review comment handling

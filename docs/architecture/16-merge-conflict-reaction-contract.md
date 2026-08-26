@@ -47,9 +47,11 @@ the attempt counter, exactly as auto-merge handles it (§11C.5).
 Not every adapter can satisfy the rule. The Gitea adapter's single `mergeable` boolean cannot
 separate a conflict from an in-progress recheck, so it maps a conflicted pull request to
 `MergeabilityUnknown` and never to `MergeabilityDirty` (§11C.5). This reaction therefore never arms
-on that provider: its entry takes the U1 deferral on every tick until the TTL backstop drops it,
-which escalates nothing and leaves no tracker-visible signal. Configuration shape is still valid, so
-neither the offline validator nor construction rejects the pairing.
+on that provider: its entry takes the U1 deferral on every tick until its age passes the
+configured watch window, which escalates nothing and leaves no tracker-visible signal. A
+deployment that sets the window to `0` leaves such an entry polling until the tracker issue
+reaches a terminal state. Configuration shape is still valid, so neither the offline validator nor
+construction rejects the pairing.
 
 ### 11E.3 Reconcile loop integration
 
@@ -68,7 +70,9 @@ Loop body per `ReactionKindMergeConflict` entry in `state.PendingReactions`:
 
 1. Delete the entry from the map (prevents reprocessing within the same tick).
 2. Type-assert `KindData` to `*MergeConflictReactionData`; on mismatch, log and skip.
-3. Drop the entry when its age exceeds `MergeConflictPendingTTL` (TTL backstop).
+3. Drop the entry when its age, measured from the entry's creation rather than from the last
+   recorded head, exceeds the configured `reactions.merge_conflicts.watch_window_ms` (default
+   `1800000`, thirty minutes; `0` removes the bound).
 4. Respect the `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
 5. Call `GetMergeability`. On error, increment the pending-backoff counter, set `PendingRetryAt`,
    re-enqueue, count `sortie_merge_conflict_checks_total{result="error"}`, and continue.
@@ -229,5 +233,6 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 | pending | Reconcile tick, `Mergeability == dirty`, new head this reaction has not dispatched for, attribution `unknown` | pending | Leave the per-episode counter at its prior value; record `HeadRecordedAt`. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; mark dispatched; count dispatched. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts > MaxRetries` | escalated | Increment per-episode counter; apply escalation; delete slot, fingerprint, and per-episode counter. MUST NOT release the claim or clear sibling slots (§11E.5). |
+| pending | Reconcile tick, entry age exceeds the configured `watch_window_ms` window | (none) | Delete the per-episode counter and log a WARN record. The fingerprint row, the claim, and the retry are left in place. |
 | pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the `merge-conflict` pending entry and its per-episode counter, cancel and delete the issue's retry, and release the claim; `reaction_fingerprints` is left intact. |
 
