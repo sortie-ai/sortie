@@ -203,6 +203,7 @@ Configuration fields:
 | `escalation` | `label` | `label` or `comment` |
 | `escalation_label` | `needs-human` | none |
 | `poll_interval_ms` | `60000` | `>= 30000` |
+| `watch_window_ms` | `1800000` | non-negative and at most `9223372036854`; `0` removes the bound |
 
 The `max_retries` default of 1 is lower than other reaction kinds (which default to 2) because
 merge-conflict resolution by a coding agent is less likely to succeed on a second attempt.

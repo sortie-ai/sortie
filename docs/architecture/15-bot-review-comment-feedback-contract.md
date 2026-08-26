@@ -112,6 +112,7 @@ The kind carries its own validated configuration, independent of `review`:
 | `escalation` | `label` | `label` or `comment` |
 | `escalation_label` | `needs-human` | none |
 | `poll_interval_ms` | `60000` | `>= 30000` |
+| `watch_window_ms` | `1800000` | non-negative and at most `9223372036854`; `0` removes the bound |
 | `max_continuation_turns` | `5` | positive |
 | `bot_usernames` | empty | list of strings |
 
