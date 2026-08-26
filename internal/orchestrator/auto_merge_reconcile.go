@@ -21,10 +21,6 @@ const autoMergePendingBackoffBase = 10 * time.Second
 // auto-merge precondition checks.
 const autoMergePendingBackoffCap = 5 * time.Minute
 
-// autoMergePendingDefaultTTL is the default lifetime of an auto-merge
-// PendingReaction entry.
-const autoMergePendingDefaultTTL = 30 * time.Minute
-
 // autoMergeDocsURL is the operator-facing reference for GitHub merge
 // scope and token guidance, surfaced in structured logs.
 const autoMergeDocsURL = "https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request"
@@ -100,8 +96,8 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindAutoMerge))
-			entryLog.Warn("auto_merge pending entry exceeded ttl, dropping",
-				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
+			entryLog.Warn("auto_merge watch window elapsed, dropping",
+				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
 			)
 			continue

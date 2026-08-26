@@ -198,11 +198,11 @@ func retrySlotParams(store ReconcileStore, ci domain.CIStatusProvider, scm domai
 
 		SCMAdapter:       scm,
 		ReviewConfig:     ReviewReactionConfig{Escalation: "label", EscalationLabel: "needs-human", PollIntervalMS: 60_000, DebounceMS: 30_000, MaxContinuationTurns: 3},
-		ReviewPendingTTL: reviewPendingDefaultTTL,
+		ReviewPendingTTL: 30 * time.Minute,
 
 		MergeConflictConfig:             MergeConflictReactionConfig{Escalation: "label", EscalationLabel: "needs-human", PollIntervalMS: 60_000, MaxRetries: 1},
 		MergeConflictReactionConfigured: true,
-		MergeConflictPendingTTL:         mergeConflictPendingDefaultTTL,
+		MergeConflictPendingTTL:         30 * time.Minute,
 
 		LabelReviewConfig:             LabelReviewReactionConfig{Provider: "github", ReviewLabel: "sortie:review", PollIntervalMS: 60_000},
 		LabelReviewReactionConfigured: true,

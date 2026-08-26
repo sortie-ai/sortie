@@ -39,7 +39,10 @@ func writeVerdictFile(t *testing.T, wsPath string, verdict domain.ReviewVerdict)
 // runGit executes a git command inside dir and fails the test on error.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	// A throwaway fixture repository has no reason to sign its commits,
+	// and signing makes the test depend on the developer's GPG agent and
+	// on a usable TTY to enter the passphrase.
+	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

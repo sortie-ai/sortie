@@ -22,10 +22,6 @@ const reviewPendingBackoffBase = 10 * time.Second
 // retries.
 const reviewPendingBackoffCap = 5 * time.Minute
 
-// reviewPendingDefaultTTL is the default lifetime of a review
-// PendingReaction entry.
-const reviewPendingDefaultTTL = 30 * time.Minute
-
 // reconcileReviewComments polls review comments for each review-kind
 // entry in state.PendingReactions. Called from [ReconcileRunningIssues]
 // after [reconcileCIStatus]. Skipped entirely when params.SCMAdapter
@@ -67,8 +63,8 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		// TTL enforcement.
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindReview))
-			entryLog.Warn("review pending entry exceeded ttl, dropping",
-				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
+			entryLog.Warn("review watch window elapsed, dropping",
+				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
 			)
 			continue

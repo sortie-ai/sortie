@@ -410,6 +410,9 @@ Extra fields:
   dispatching. Default: `60000` (60 seconds). MUST be non-negative.
 - `max_continuation_turns` (integer, via Extra): maximum review-fix continuation dispatches per
   issue before escalation. Default: `3`. MUST be positive.
+- `watch_window_ms` (integer, via Extra): bounds a pending review-comments entry's age, measured
+  from the entry's creation. Default: `1800000` (thirty minutes). MUST be non-negative and MUST
+  NOT exceed `9223372036854`. `0` removes the clock bound.
 
 Example:
 
@@ -439,6 +442,9 @@ Extra fields:
   Default: `true`.
 - `poll_interval_ms` (integer, via Extra): polling interval for merge-precondition checks.
   Default: `60000` (1 minute). Minimum: `30000`.
+- `watch_window_ms` (integer, via Extra): bounds a pending auto-merge entry's age, measured from
+  the entry's creation. Default: `1800000` (thirty minutes). MUST be non-negative and MUST NOT
+  exceed `9223372036854`. `0` removes the clock bound.
 
 Example:
 

@@ -281,10 +281,18 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
 - `reactions.review_comments.debounce_ms`: integer, default `60000` (60 sec); non-negative
 - `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive
+- `reactions.review_comments.watch_window_ms`: integer, default `1800000` (30 min); non-negative,
+  not above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
+- `reactions.bot_review.watch_window_ms`: integer, default `1800000` (30 min); non-negative, not
+  above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
+- `reactions.merge_conflicts.watch_window_ms`: integer, default `1800000` (30 min); non-negative,
+  not above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
 - `reactions.auto_merge.strategy`: string, default `squash`; one of `merge`, `squash`, `rebase`
 - `reactions.auto_merge.require_ci`: boolean, default `true`
 - `reactions.auto_merge.delete_branch`: boolean, default `true`
 - `reactions.auto_merge.poll_interval_ms`: integer, default `60000` (1 minute); minimum `30000`
+- `reactions.auto_merge.watch_window_ms`: integer, default `1800000` (30 min); non-negative, not
+  above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
 - `reactions.merge_completion.target_state`: string, required when
   `reactions.merge_completion.provider` is set, no default; the single tracker terminal state the
   linked issue moves to once its managed pull request merges; must not equal

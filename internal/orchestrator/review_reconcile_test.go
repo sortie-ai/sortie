@@ -435,6 +435,112 @@ func TestReconcileReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
 	}
 }
 
+// TestReconcileReviewComments_WatchWindowZeroNeverDrops verifies that a
+// ReviewPendingTTL of 0 (watch_window_ms: 0) never drops an entry on age,
+// however old it is.
+func TestReconcileReviewComments_WatchWindowZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+
+	rkey := ReactionKey("ISS-R-WW0", ReactionKindReview)
+	state := stateWithReviewReaction(t, "ISS-R-WW0", 10)
+	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-365 * 24 * time.Hour)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := reviewParams(store, scm, nil)
+	params.ReviewPendingTTL = 0
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("PendingReactions entry dropped with ReviewPendingTTL=0; want never dropped on age")
+	}
+}
+
+// TestReconcileReviewComments_WatchWindowNonDefaultTakesEffect verifies that
+// a configured window other than the default threshold actually gates the
+// drop, not a hardcoded default: an entry older than the configured window
+// is dropped with its attempt counter released, and one younger survives.
+func TestReconcileReviewComments_WatchWindowNonDefaultTakesEffect(t *testing.T) {
+	t.Parallel()
+
+	t.Run("older than configured window is dropped and counter released", func(t *testing.T) {
+		t.Parallel()
+
+		rkey := ReactionKey("ISS-R-WWN-OLD", ReactionKindReview)
+		state := stateWithReviewReaction(t, "ISS-R-WWN-OLD", 10)
+		state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-6 * time.Minute)
+		state.ReactionAttempts[rkey] = 2
+
+		store := &reviewReconcileStore{}
+		metrics := newReviewMetricsSpy()
+		scm := &mockSCMAdapter{}
+		params := reviewParams(store, scm, nil)
+		params.ReviewPendingTTL = 5 * time.Minute
+
+		reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions entry present past configured 5m window; want dropped")
+		}
+		if _, ok := state.ReactionAttempts[rkey]; ok {
+			t.Error("ReactionAttempts present past configured 5m window; want released")
+		}
+	})
+
+	t.Run("younger than configured window survives", func(t *testing.T) {
+		t.Parallel()
+
+		rkey := ReactionKey("ISS-R-WWN-NEW", ReactionKindReview)
+		state := stateWithReviewReaction(t, "ISS-R-WWN-NEW", 10)
+		state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-4 * time.Minute)
+
+		store := &reviewReconcileStore{}
+		metrics := newReviewMetricsSpy()
+		scm := &mockSCMAdapter{}
+		params := reviewParams(store, scm, nil)
+		params.ReviewPendingTTL = 5 * time.Minute
+
+		reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[rkey]; !ok {
+			t.Error("PendingReactions entry dropped inside configured 5m window; want kept")
+		}
+	})
+}
+
+// TestReconcileReviewComments_WatchWindowElapsedLogsRenamedAttribute pins the
+// drop-on-age log record: message text and the window_ms attribute name
+// (renamed from ttl_ms). A regression that reverts the rename or the wording
+// must fail this test.
+func TestReconcileReviewComments_WatchWindowElapsedLogsRenamedAttribute(t *testing.T) {
+	t.Parallel()
+
+	rkey := ReactionKey("ISS-R-WWLOG", ReactionKindReview)
+	state := stateWithReviewReaction(t, "ISS-R-WWLOG", 10)
+	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := reviewParams(store, scm, nil)
+	params.ReviewPendingTTL = 30 * time.Minute
+	log, buf := logCapture()
+
+	reconcileReviewComments(state, params, log, context.Background(), metrics)
+
+	output := buf.String()
+	const msg = "review watch window elapsed, dropping"
+	assertLogLineHasIntAttr(t, output, msg, "window_ms", int(30*time.Minute/time.Millisecond))
+	if strings.Contains(output, "ttl_ms") {
+		t.Errorf("log output contains stale attribute %q: %s", "ttl_ms", output)
+	}
+	if strings.Contains(output, "exceeded ttl") {
+		t.Errorf("log output contains stale message wording %q: %s", "exceeded ttl", output)
+	}
+}
+
 func TestReconcileReviewComments_SCMFetchError_ReEnqueues(t *testing.T) {
 	t.Parallel()
 
@@ -1090,6 +1196,79 @@ func TestBuildReviewReactionConfig_Defaults(t *testing.T) {
 	}
 	if got.EscalationLabel != "needs-human" {
 		t.Errorf("EscalationLabel = %q, want %q", got.EscalationLabel, "needs-human")
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSDefault(t *testing.T) {
+	t.Parallel()
+
+	got, err := BuildReviewReactionConfig(config.ReactionConfig{})
+	if err != nil {
+		t.Fatalf("BuildReviewReactionConfig: %v", err)
+	}
+	if got.WatchWindowMS != reactionWatchWindowDefaultMS {
+		t.Errorf("WatchWindowMS = %d, want %d (default)", got.WatchWindowMS, reactionWatchWindowDefaultMS)
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSOverride(t *testing.T) {
+	t.Parallel()
+
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": 600000}}
+
+	got, err := BuildReviewReactionConfig(rc)
+	if err != nil {
+		t.Fatalf("BuildReviewReactionConfig: %v", err)
+	}
+	if got.WatchWindowMS != 600000 {
+		t.Errorf("WatchWindowMS = %d, want 600000", got.WatchWindowMS)
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSZeroDisablesBound(t *testing.T) {
+	t.Parallel()
+
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": 0}}
+
+	got, err := BuildReviewReactionConfig(rc)
+	if err != nil {
+		t.Fatalf("BuildReviewReactionConfig: unexpected error for watch_window_ms=0: %v", err)
+	}
+	if got.WatchWindowMS != 0 {
+		t.Errorf("WatchWindowMS = %d, want 0", got.WatchWindowMS)
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSNegative(t *testing.T) {
+	t.Parallel()
+
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": -1}}
+
+	_, err := BuildReviewReactionConfig(rc)
+	if err == nil {
+		t.Fatal("BuildReviewReactionConfig: expected error for negative watch_window_ms, got nil")
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSAboveCeiling(t *testing.T) {
+	t.Parallel()
+
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}}
+
+	_, err := BuildReviewReactionConfig(rc)
+	if err == nil {
+		t.Fatal("BuildReviewReactionConfig: expected error for watch_window_ms above ceiling, got nil")
+	}
+}
+
+func TestBuildReviewReactionConfig_WatchWindowMSNonNumeric(t *testing.T) {
+	t.Parallel()
+
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": "soon"}}
+
+	_, err := BuildReviewReactionConfig(rc)
+	if err == nil {
+		t.Fatal("BuildReviewReactionConfig: expected error for non-numeric watch_window_ms, got nil")
 	}
 }
 

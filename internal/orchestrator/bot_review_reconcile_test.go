@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				PollIntervalMS:       60000,
 				MaxContinuationTurns: 5,
 				BotUsernames:         nil,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -122,6 +124,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       60000,
 				MaxContinuationTurns: 5,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -137,6 +140,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				PollIntervalMS:       60000,
 				MaxContinuationTurns: 5,
 				BotUsernames:         []string{"houndci-bot"},
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -156,6 +160,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       30000,
 				MaxContinuationTurns: 5,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -168,6 +173,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       45000,
 				MaxContinuationTurns: 5,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -180,6 +186,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       90000,
 				MaxContinuationTurns: 5,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -213,6 +220,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       60000,
 				MaxContinuationTurns: 8,
+				WatchWindowMS:        reactionWatchWindowDefaultMS,
 			},
 		},
 		{
@@ -259,6 +267,53 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "watch_window_ms override",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"watch_window_ms": 600000},
+			},
+			want: BotReviewReactionConfig{
+				Escalation:           "label",
+				EscalationLabel:      "needs-human",
+				PollIntervalMS:       60000,
+				MaxContinuationTurns: 5,
+				WatchWindowMS:        600000,
+			},
+		},
+		{
+			name: "watch_window_ms zero disables the bound",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"watch_window_ms": 0},
+			},
+			want: BotReviewReactionConfig{
+				Escalation:           "label",
+				EscalationLabel:      "needs-human",
+				PollIntervalMS:       60000,
+				MaxContinuationTurns: 5,
+				WatchWindowMS:        0,
+			},
+		},
+		{
+			name: "watch_window_ms negative errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"watch_window_ms": -1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "watch_window_ms above ceiling errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "watch_window_ms non-numeric errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"watch_window_ms": "soon"},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -291,6 +346,10 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 			if got.EscalationLabel != tt.want.EscalationLabel {
 				t.Errorf("BuildBotReviewReactionConfig EscalationLabel = %q, want %q",
 					got.EscalationLabel, tt.want.EscalationLabel)
+			}
+			if got.WatchWindowMS != tt.want.WatchWindowMS {
+				t.Errorf("BuildBotReviewReactionConfig WatchWindowMS = %d, want %d",
+					got.WatchWindowMS, tt.want.WatchWindowMS)
 			}
 			if len(got.BotUsernames) != len(tt.want.BotUsernames) {
 				t.Errorf("BuildBotReviewReactionConfig BotUsernames = %v, want %v",
@@ -1102,6 +1161,111 @@ func TestReconcileBotReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
 	}
 	if scm.botCalls != 0 {
 		t.Errorf("FetchBotReviewComments calls = %d, want 0 (TTL drop before fetch)", scm.botCalls)
+	}
+}
+
+// TestReconcileBotReviewComments_WatchWindowZeroNeverDrops verifies that a
+// BotReviewPendingTTL of 0 (watch_window_ms: 0) never drops an entry on age,
+// however old it is.
+func TestReconcileBotReviewComments_WatchWindowZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+
+	rkey := ReactionKey("BOT-WW0", ReactionKindBotReview)
+	state := stateWithBotReviewReaction(t, "BOT-WW0", 10)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewPendingTTL = 0
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(365 * 24 * time.Hour) }
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("PendingReactions entry dropped with BotReviewPendingTTL=0; want never dropped on age")
+	}
+}
+
+// TestReconcileBotReviewComments_WatchWindowNonDefaultTakesEffect verifies
+// that a configured window other than the default threshold actually gates
+// the drop: an entry older than the configured window is dropped with its
+// attempt counter released, and one younger survives.
+func TestReconcileBotReviewComments_WatchWindowNonDefaultTakesEffect(t *testing.T) {
+	t.Parallel()
+
+	t.Run("older than configured window is dropped and counter released", func(t *testing.T) {
+		t.Parallel()
+
+		rkey := ReactionKey("BOT-WWN-OLD", ReactionKindBotReview)
+		state := stateWithBotReviewReaction(t, "BOT-WWN-OLD", 10)
+		state.ReactionAttempts[rkey] = 2
+
+		store := &reviewReconcileStore{}
+		metrics := newBotReviewMetricsSpy()
+		scm := &mockSCMAdapter{}
+		params := botReviewParams(store, scm, nil)
+		params.BotReviewPendingTTL = 5 * time.Minute
+		params.NowFunc = func() time.Time { return botReviewBaseTime.Add(6 * time.Minute) }
+
+		reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions entry present past configured 5m window; want dropped")
+		}
+		if _, ok := state.ReactionAttempts[rkey]; ok {
+			t.Error("ReactionAttempts present past configured 5m window; want released")
+		}
+	})
+
+	t.Run("younger than configured window survives", func(t *testing.T) {
+		t.Parallel()
+
+		rkey := ReactionKey("BOT-WWN-NEW", ReactionKindBotReview)
+		state := stateWithBotReviewReaction(t, "BOT-WWN-NEW", 10)
+
+		store := &reviewReconcileStore{}
+		metrics := newBotReviewMetricsSpy()
+		scm := &mockSCMAdapter{}
+		params := botReviewParams(store, scm, nil)
+		params.BotReviewPendingTTL = 5 * time.Minute
+		params.NowFunc = func() time.Time { return botReviewBaseTime.Add(4 * time.Minute) }
+
+		reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[rkey]; !ok {
+			t.Error("PendingReactions entry dropped inside configured 5m window; want kept")
+		}
+	})
+}
+
+// TestReconcileBotReviewComments_WatchWindowElapsedLogsRenamedAttribute pins
+// the drop-on-age log record: message text and the window_ms attribute name
+// (renamed from ttl_ms). A regression that reverts the rename or the wording
+// must fail this test.
+func TestReconcileBotReviewComments_WatchWindowElapsedLogsRenamedAttribute(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithBotReviewReaction(t, "BOT-WWLOG", 10)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewPendingTTL = 30 * time.Minute
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(31 * time.Minute) }
+	log, buf := logCapture()
+
+	reconcileBotReviewComments(state, params, log, context.Background(), metrics)
+
+	output := buf.String()
+	const msg = "bot review watch window elapsed, dropping"
+	assertLogLineHasIntAttr(t, output, msg, "window_ms", int(30*time.Minute/time.Millisecond))
+	if strings.Contains(output, "ttl_ms") {
+		t.Errorf("log output contains stale attribute %q: %s", "ttl_ms", output)
+	}
+	if strings.Contains(output, "exceeded ttl") {
+		t.Errorf("log output contains stale message wording %q: %s", "exceeded ttl", output)
 	}
 }
 

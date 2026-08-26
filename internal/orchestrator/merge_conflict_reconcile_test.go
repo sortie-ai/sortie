@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -940,6 +941,116 @@ func TestReconcileMergeConflicts_DropOnAgeReleasesCounter(t *testing.T) {
 	if store.upsertCalls != 0 || store.getCalls != 0 || store.deleteCalls != 0 {
 		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
 			store.upsertCalls, store.getCalls, store.deleteCalls)
+	}
+}
+
+// TestReconcileMergeConflicts_WatchWindowZeroNeverDrops verifies that a
+// MergeConflictPendingTTL of 0 (watch_window_ms: 0) never drops an entry on
+// age, however old it is.
+func TestReconcileMergeConflicts_WatchWindowZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MC-WW0"
+	state := stateWithMergeConflict(t, issueID, 30)
+	mcKey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.PendingReactions[mcKey].CreatedAt = mcBaseTime.Add(-365 * 24 * time.Hour)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{}
+	params := mergeConflictParams(store, scm, nil)
+	params.MergeConflictPendingTTL = 0
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[mcKey]; !ok {
+		t.Error("PendingReactions entry dropped with MergeConflictPendingTTL=0; want never dropped on age")
+	}
+}
+
+// TestReconcileMergeConflicts_WatchWindowNonDefaultTakesEffect verifies that
+// a configured window other than the default threshold actually gates the
+// drop: an entry older than the configured window is dropped with its
+// attempt counter released, and one younger survives.
+func TestReconcileMergeConflicts_WatchWindowNonDefaultTakesEffect(t *testing.T) {
+	t.Parallel()
+
+	t.Run("older than configured window is dropped and counter released", func(t *testing.T) {
+		t.Parallel()
+
+		issueID := "MC-WWN-OLD"
+		state := stateWithMergeConflict(t, issueID, 30)
+		mcKey := ReactionKey(issueID, ReactionKindMergeConflict)
+		state.PendingReactions[mcKey].CreatedAt = mcBaseTime.Add(-6 * time.Minute)
+		state.ReactionAttempts[mcKey] = 2
+
+		store := newStatefulFingerprintStore()
+		metrics := newMergeConflictMetricsSpy()
+		scm := &mergeabilitySCM{}
+		params := mergeConflictParams(store, scm, nil)
+		params.MergeConflictPendingTTL = 5 * time.Minute
+
+		reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[mcKey]; ok {
+			t.Error("PendingReactions entry present past configured 5m window; want dropped")
+		}
+		if _, ok := state.ReactionAttempts[mcKey]; ok {
+			t.Error("ReactionAttempts present past configured 5m window; want released")
+		}
+	})
+
+	t.Run("younger than configured window survives", func(t *testing.T) {
+		t.Parallel()
+
+		issueID := "MC-WWN-NEW"
+		state := stateWithMergeConflict(t, issueID, 30)
+		mcKey := ReactionKey(issueID, ReactionKindMergeConflict)
+		state.PendingReactions[mcKey].CreatedAt = mcBaseTime.Add(-4 * time.Minute)
+
+		store := newStatefulFingerprintStore()
+		metrics := newMergeConflictMetricsSpy()
+		scm := &mergeabilitySCM{}
+		params := mergeConflictParams(store, scm, nil)
+		params.MergeConflictPendingTTL = 5 * time.Minute
+
+		reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[mcKey]; !ok {
+			t.Error("PendingReactions entry dropped inside configured 5m window; want kept")
+		}
+	})
+}
+
+// TestReconcileMergeConflicts_WatchWindowElapsedLogsRenamedAttribute pins the
+// drop-on-age log record: message text and the window_ms attribute name
+// (renamed from ttl_ms). A regression that reverts the rename or the wording
+// must fail this test.
+func TestReconcileMergeConflicts_WatchWindowElapsedLogsRenamedAttribute(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MC-WWLOG"
+	state := stateWithMergeConflict(t, issueID, 30)
+	mcKey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.PendingReactions[mcKey].CreatedAt = mcBaseTime.Add(-31 * time.Minute)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{}
+	params := mergeConflictParams(store, scm, nil)
+	params.MergeConflictPendingTTL = 30 * time.Minute
+	log, buf := logCapture()
+
+	reconcileMergeConflicts(state, params, log, context.Background(), metrics)
+
+	output := buf.String()
+	const msg = "merge conflict watch window elapsed, dropping"
+	assertLogLineHasIntAttr(t, output, msg, "window_ms", int(30*time.Minute/time.Millisecond))
+	if strings.Contains(output, "ttl_ms") {
+		t.Errorf("log output contains stale attribute %q: %s", "ttl_ms", output)
+	}
+	if strings.Contains(output, "exceeded ttl") {
+		t.Errorf("log output contains stale message wording %q: %s", "exceeded ttl", output)
 	}
 }
 

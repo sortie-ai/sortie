@@ -272,6 +272,10 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
 - Skip entirely when no SCM adapter is configured (no `reactions.review_comments.provider`).
 - For each entry in `pending_reactions` with kind `review`:
   - Remove entry from the map (prevents reprocessing within the same tick).
+  - Check the configured watch window: if `reactions.review_comments.watch_window_ms` is positive
+    and the entry's age, measured from its creation, exceeds it, delete the entry's
+    `reaction_attempts` counter, log a WARN record, and drop the entry (no re-enqueue). Default
+    `1800000` (thirty minutes); `0` removes the bound.
   - Respect `PendingRetryAt` poll throttle: if not yet due, re-enqueue and continue.
   - Check continuation turn cap (`reactions.review_comments.max_continuation_turns`): if
     exceeded, escalate (Section 11B.4) and continue.
@@ -330,8 +334,9 @@ For each entry in `pending_reactions` with kind `merge`:
 
 1. Remove the entry from the `pending_reactions` map.
 2. Drop with a WARN log when `state.AutoMergePreflightFailed == true`.
-3. Drop when the entry has exceeded the TTL backstop; the TTL is a fixed internal constant
-   (30 minutes), not operator-configurable.
+3. Drop when the entry's age, measured from its creation, exceeds the configured
+   `reactions.auto_merge.watch_window_ms` (default `1800000`, thirty minutes; `0` removes the
+   bound).
 4. Re-enqueue when `now < pending.PendingRetryAt`.
 5. Escalate when `MaxRetries > 0` and `reaction_attempts[issue_id:merge] >= MaxRetries`; a
    configured `MaxRetries` of `0` disables count-based escalation instead of firing it

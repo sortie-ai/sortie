@@ -17,11 +17,6 @@ import (
 // [computeReactionPendingDelay]; this constant only bounds it from below.
 const mergeConflictPendingBackoffBase = 10 * time.Second
 
-// mergeConflictPendingDefaultTTL is the default lifetime of a
-// merge-conflict PendingReaction entry. Entries older than this are
-// dropped on the next reconcile tick.
-const mergeConflictPendingDefaultTTL = 30 * time.Minute
-
 // reconcileMergeConflicts polls mergeability for each merge-conflict-kind
 // entry in state.PendingReactions and dispatches a rebase-and-resolve
 // continuation on each no-conflict-to-conflict transition. Called from
@@ -70,8 +65,8 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
-			entryLog.Warn("merge conflict pending entry exceeded ttl, dropping",
-				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
+			entryLog.Warn("merge conflict watch window elapsed, dropping",
+				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
 			)
 			continue

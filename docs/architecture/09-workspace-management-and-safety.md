@@ -240,7 +240,10 @@ for as long as the entry lives; a kind that polls an external fact for an unboun
 because pinning it would hold the directory for as long as that poll runs. A reaction kind the
 orchestrator does not recognize pins, so an unclassified kind fails toward retention rather than
 removal. A kind that does not pin MUST NOT depend on the workspace directory surviving between its
-own polls.
+own polls. A kind whose pending entry is configured with an unbounded watch window
+(`watch_window_ms: 0`) still pins its workspace for as long as the entry lives; the entry's own
+terminal-state release remains the exit that ends the pin. Pinning stays keyed on kind, not on the
+configured value.
 
 Invariant 5: `workspace.retention_days` cannot be configured below its floor, and that floor in
 days equals the pending-reaction recovery lookback in days. Any workspace the age bound may remove

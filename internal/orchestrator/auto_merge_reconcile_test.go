@@ -1073,6 +1073,142 @@ func TestReconcileAutoMerge_DropOnAgeReleasesCounter(t *testing.T) {
 	}
 }
 
+// dirtyMergeabilitySCM is a controlledSCMAdapter whose PR is reported
+// dirty, so any entry that survives the watch-window check is deferred
+// (re-enqueued) rather than merged and removed. This isolates the
+// watch-window drop path from the unrelated successful-merge removal path
+// in the auto-merge watch-window tests below.
+func dirtyMergeabilitySCM(calls *int) *controlledSCMAdapter {
+	return &controlledSCMAdapter{
+		getMergeabilityFn: func(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+			*calls++
+			return domain.PRMergeStatus{Mergeability: domain.MergeabilityDirty, HeadSHA: "abc123"}, nil
+		},
+	}
+}
+
+// TestReconcileAutoMerge_WatchWindowZeroNeverDrops verifies that an
+// AutoMergePendingTTL of 0 (watch_window_ms: 0) never drops an entry on age,
+// however old it is.
+func TestReconcileAutoMerge_WatchWindowZeroNeverDrops(t *testing.T) {
+	t.Parallel()
+
+	issueID := "AM-WW0"
+	state := stateWithAutoMergePending(t, issueID, 20)
+	mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
+	state.PendingReactions[mergeKey].CreatedAt = autoMergeBaseTime.Add(-365 * 24 * time.Hour)
+
+	store := &reviewReconcileStore{}
+	metrics := newAutoMergeMetricsSpy()
+	var calls int
+	scm := dirtyMergeabilitySCM(&calls)
+	params := autoMergeParams(store, scm, nil)
+	params.AutoMergePendingTTL = 0
+
+	reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[mergeKey]; !ok {
+		t.Error("PendingReactions entry dropped with AutoMergePendingTTL=0; want never dropped on age")
+	}
+	if calls != 1 {
+		t.Errorf("GetMergeability calls = %d, want 1 (entry survived the watch-window check)", calls)
+	}
+}
+
+// TestReconcileAutoMerge_WatchWindowNonDefaultTakesEffect verifies that a
+// configured window other than the default threshold actually gates the
+// drop: an entry older than the configured window is dropped with its
+// attempt counter released, and one younger survives.
+func TestReconcileAutoMerge_WatchWindowNonDefaultTakesEffect(t *testing.T) {
+	t.Parallel()
+
+	t.Run("older than configured window is dropped and counter released", func(t *testing.T) {
+		t.Parallel()
+
+		issueID := "AM-WWN-OLD"
+		state := stateWithAutoMergePending(t, issueID, 20)
+		mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
+		state.PendingReactions[mergeKey].CreatedAt = autoMergeBaseTime.Add(-6 * time.Minute)
+		state.ReactionAttempts[mergeKey] = 2
+
+		store := &reviewReconcileStore{}
+		metrics := newAutoMergeMetricsSpy()
+		var calls int
+		scm := dirtyMergeabilitySCM(&calls)
+		params := autoMergeParams(store, scm, nil)
+		params.AutoMergePendingTTL = 5 * time.Minute
+
+		reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[mergeKey]; ok {
+			t.Error("PendingReactions entry present past configured 5m window; want dropped")
+		}
+		if _, ok := state.ReactionAttempts[mergeKey]; ok {
+			t.Error("ReactionAttempts present past configured 5m window; want released")
+		}
+		if calls != 0 {
+			t.Errorf("GetMergeability calls = %d, want 0 (watch window exceeded before fetch)", calls)
+		}
+	})
+
+	t.Run("younger than configured window survives", func(t *testing.T) {
+		t.Parallel()
+
+		issueID := "AM-WWN-NEW"
+		state := stateWithAutoMergePending(t, issueID, 20)
+		mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
+		state.PendingReactions[mergeKey].CreatedAt = autoMergeBaseTime.Add(-4 * time.Minute)
+
+		store := &reviewReconcileStore{}
+		metrics := newAutoMergeMetricsSpy()
+		var calls int
+		scm := dirtyMergeabilitySCM(&calls)
+		params := autoMergeParams(store, scm, nil)
+		params.AutoMergePendingTTL = 5 * time.Minute
+
+		reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+
+		if _, ok := state.PendingReactions[mergeKey]; !ok {
+			t.Error("PendingReactions entry dropped inside configured 5m window; want kept")
+		}
+		if calls != 1 {
+			t.Errorf("GetMergeability calls = %d, want 1 (entry survived the watch-window check)", calls)
+		}
+	})
+}
+
+// TestReconcileAutoMerge_WatchWindowElapsedLogsRenamedAttribute pins the
+// drop-on-age log record: message text and the window_ms attribute name
+// (renamed from ttl_ms). A regression that reverts the rename or the wording
+// must fail this test.
+func TestReconcileAutoMerge_WatchWindowElapsedLogsRenamedAttribute(t *testing.T) {
+	t.Parallel()
+
+	issueID := "AM-WWLOG"
+	state := stateWithAutoMergePending(t, issueID, 20)
+	mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
+	state.PendingReactions[mergeKey].CreatedAt = autoMergeBaseTime.Add(-31 * time.Minute)
+
+	store := &reviewReconcileStore{}
+	metrics := newAutoMergeMetricsSpy()
+	scm := &controlledSCMAdapter{}
+	params := autoMergeParams(store, scm, nil)
+	params.AutoMergePendingTTL = 30 * time.Minute
+	log, buf := logCapture()
+
+	reconcileAutoMerge(state, params, log, context.Background(), metrics)
+
+	output := buf.String()
+	const msg = "auto_merge watch window elapsed, dropping"
+	assertLogLineHasIntAttr(t, output, msg, "window_ms", int(30*time.Minute/time.Millisecond))
+	if strings.Contains(output, "ttl_ms") {
+		t.Errorf("log output contains stale attribute %q: %s", "ttl_ms", output)
+	}
+	if strings.Contains(output, "exceeded ttl") {
+		t.Errorf("log output contains stale message wording %q: %s", "exceeded ttl", output)
+	}
+}
+
 // --- Pure function tests ---
 
 // TestBuildAutoMergeFingerprint verifies the SHA-256 hex fingerprint builder.

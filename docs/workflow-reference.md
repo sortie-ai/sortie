@@ -1013,6 +1013,7 @@ Additional fields (via Extra):
 | `poll_interval_ms`       | integer | `120000` | Requires restart | Polling interval for review comments. Minimum: `30000` (30 sec).                                           |
 | `debounce_ms`            | integer | `60000`  | Requires restart | Debounce window after the last detected comment before dispatching. Must be non-negative.                  |
 | `max_continuation_turns` | integer | `3`      | Requires restart | Maximum review-fix continuation dispatches per issue before escalation. Must be positive.                  |
+| `watch_window_ms`        | integer | `1800000` | Requires restart | Bounds a pending entry's age, measured from the entry's creation. `0` removes the bound. Must be non-negative and must not exceed `9223372036854`. |
 
 **Activation:** The `reactions.review_comments` block is active when `provider` is present
 and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
@@ -1077,6 +1078,7 @@ Additional fields (via Extra):
 | `require_ci`       | boolean | `true`   | Requires restart | When `true`, the merge waits until every reported check has completed with no failing conclusion; a `skipped` or `neutral` conclusion counts as non-failing. When `false`, CI is advisory only.    |
 | `delete_branch`    | boolean | `true`   | Requires restart | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
 | `poll_interval_ms` | integer | `60000`  | Requires restart | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                           |
+| `watch_window_ms`  | integer | `1800000` | Requires restart | Bounds a pending entry's age, measured from the entry's creation. `0` removes the bound. Must be non-negative and must not exceed `9223372036854`. |
 
 For a GitLab provider, `require_ci` reads the head pipeline the platform reports for the PR
 rather than a fetched check-run list, with one exception. A head pipeline the platform reports
@@ -1163,6 +1165,7 @@ Additional fields (via Extra):
 | ------------------------ | ------------ | ------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
 | `bot_usernames`          | list[string] | _(empty)_ | Requires restart | Allowlist of bot logins. A comment is bot-authored when the platform reports a bot user type OR its author login matches an entry here (case-insensitive). An entry here is also excluded from `review_comments`, so an allowlisted author does not drive both loops. |
 | `poll_interval_ms`       | integer      | `60000` | Requires restart | Polling interval for bot comments. Minimum: `30000` (30 sec). The default is tighter than `review_comments` because bot comments arrive in bulk on push.  |
+| `watch_window_ms`        | integer      | `1800000` | Requires restart | Bounds a pending entry's age, measured from the entry's creation. `0` removes the bound. Must be non-negative and must not exceed `9223372036854`. |
 | `max_continuation_turns` | integer      | `5`     | Requires restart | Maximum bot-fix continuation dispatches per issue before escalation. Must be positive. Higher than `review_comments` because bot fixes are mechanical.    |
 
 **Activation:** The `reactions.bot_review` block is active when `provider` is present
@@ -1237,6 +1240,7 @@ Fields:
 | `escalation`       | string  | `label`       | Requires restart | Escalation action when retries are exhausted. One of `label` or `comment`.                                |
 | `escalation_label` | string  | `needs-human` | Requires restart | Label applied when `escalation` is `label`.                                                               |
 | `poll_interval_ms` | integer | `60000`       | Requires restart | Polling interval for the conflict-detection state machine. Minimum: `30000` (30 sec).                     |
+| `watch_window_ms`  | integer | `1800000`     | Requires restart | Bounds a pending entry's age, measured from the entry's creation rather than from the last recorded head. `0` removes the bound. Must be non-negative and must not exceed `9223372036854`. |
 
 **Activation:** The `reactions.merge_conflicts` block is active when `provider` is present
 and non-empty, on its own, with no other `reactions` block required. Agent-created PRs MUST
@@ -1276,6 +1280,22 @@ reactions:
     escalation_label: needs-human
     poll_interval_ms: 60000
 ```
+
+**`watch_window_ms` across `review_comments`, `bot_review`, `merge_conflicts`, and
+`auto_merge`.** All four default to `1800000` (thirty minutes), the same lifetime these
+kinds carried before the key existed, so an upgrade with nothing set in `WORKFLOW.md`
+changes no behavior. A workflow without `auto_merge`, where a person reviews and merges,
+normally wants a value on the order of `reactions.ci_failure.watch_window_ms`'s default
+(twenty-four hours) rather than the thirty-minute default: raising it costs one additional
+poll call per interval for as long as the entry lives, at the same poll rate the kind
+already uses. Unlike `reactions.ci_failure`, none of these four kinds carries a
+merged-or-closed drop branch, so setting `watch_window_ms: 0` leaves a `review_comments`,
+`bot_review`, or `merge_conflicts` entry polling after a person merges the pull request
+until the tracker issue reaches a terminal state, and leaves an `auto_merge` entry polling
+until its own merge attempt returns the already-merged disposition. A quoted numeric value
+(for example `"1800000"`) is rejected for these four keys, although
+`reactions.ci_failure.watch_window_ms` accepts one. These four keys also reject a value
+above `9223372036854`, where `reactions.ci_failure.watch_window_ms` does not.
 
 #### Reaction kind: `label_commands`
 

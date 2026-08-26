@@ -105,17 +105,18 @@ type ReconcileParams struct {
 	// SCMAdapter is non-nil.
 	ReviewConfig ReviewReactionConfig
 
-	// ReviewPendingTTL is the maximum age of a review PendingReaction
-	// entry before it is dropped. Zero disables TTL enforcement.
+	// ReviewPendingTTL bounds the age of a review PendingReaction entry,
+	// measured from the entry's creation. Zero or negative disables the
+	// bound. Supplied from reactions.review_comments.watch_window_ms.
 	ReviewPendingTTL time.Duration
 
 	// AutoMergeConfig holds auto-merge reaction configuration. Only
 	// read when AutoMergeReactionConfigured is true.
 	AutoMergeConfig AutoMergeReactionConfig
 
-	// AutoMergePendingTTL is the maximum age of an auto-merge
-	// PendingReaction entry before it is dropped. Zero disables TTL
-	// enforcement.
+	// AutoMergePendingTTL bounds the age of an auto-merge PendingReaction
+	// entry, measured from the entry's creation. Zero or negative
+	// disables the bound. Supplied from reactions.auto_merge.watch_window_ms.
 	AutoMergePendingTTL time.Duration
 
 	// AutoMergeReactionConfigured marks whether the auto-merge feature
@@ -127,9 +128,9 @@ type ReconcileParams struct {
 	// when BotReviewConfigured is true.
 	BotReviewConfig BotReviewReactionConfig
 
-	// BotReviewPendingTTL is the maximum age of a bot-review
-	// PendingReaction entry before it is dropped. Zero disables TTL
-	// enforcement.
+	// BotReviewPendingTTL bounds the age of a bot-review PendingReaction
+	// entry, measured from the entry's creation. Zero or negative
+	// disables the bound. Supplied from reactions.bot_review.watch_window_ms.
 	BotReviewPendingTTL time.Duration
 
 	// BotReviewConfigured marks whether the bot-review feature is active
@@ -142,9 +143,10 @@ type ReconcileParams struct {
 	// Only read when MergeConflictReactionConfigured is true.
 	MergeConflictConfig MergeConflictReactionConfig
 
-	// MergeConflictPendingTTL is the maximum age of a merge-conflict
-	// PendingReaction entry before it is dropped. Zero disables TTL
-	// enforcement.
+	// MergeConflictPendingTTL bounds the age of a merge-conflict
+	// PendingReaction entry, measured from the entry's creation. Zero or
+	// negative disables the bound. Supplied from
+	// reactions.merge_conflicts.watch_window_ms.
 	MergeConflictPendingTTL time.Duration
 
 	// MergeConflictReactionConfigured marks whether the merge-conflict

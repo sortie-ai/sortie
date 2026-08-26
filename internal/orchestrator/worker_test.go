@@ -2800,7 +2800,7 @@ func TestRunWorkerAttempt_HandoffEvidenceBaselineBoundary(t *testing.T) {
 		cfg := defaultWorkerConfig(root)
 		cfg.Agent.MaxTurns = 1
 		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-		cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
+		cfg.Hooks.AfterCreate = "git init && git config commit.gpgsign false && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
 		cfg.Hooks.BeforeRun = "echo prepared > hook-output.txt"
 		ec := newExitCapture()
 
@@ -2832,7 +2832,7 @@ func TestRunWorkerAttempt_HandoffEvidenceBaselineBoundary(t *testing.T) {
 		cfg := defaultWorkerConfig(root)
 		cfg.Agent.MaxTurns = 1
 		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-		cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
+		cfg.Hooks.AfterCreate = "git init && git config commit.gpgsign false && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
 		cfg.Hooks.BeforeRun = "echo prepared > hook-output.txt"
 		ec := newExitCapture()
 
@@ -2916,7 +2916,7 @@ func TestRunWorkerAttempt_HandoffEvidencePolicyIsFrozen(t *testing.T) {
 	cfg := defaultWorkerConfig(root)
 	cfg.Agent.MaxTurns = 1
 	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-	cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
+	cfg.Hooks.AfterCreate = "git init && git config commit.gpgsign false && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
 	ec := newExitCapture()
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
