@@ -35,6 +35,12 @@ func turnTimeoutWorkflow(ms int) []byte {
 	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nagent:\n  turn_timeout_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", ms)
 }
 
+// ciWatchWindowWorkflow returns a minimal WORKFLOW.md content with a
+// reactions.ci_failure block carrying the given watch_window_ms value.
+func ciWatchWindowWorkflow(ms int) []byte {
+	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nreactions:\n  ci_failure:\n    provider: github-actions\n    watch_window_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", ms)
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
@@ -298,6 +304,40 @@ func TestManager_ReloadRetainsOnInvalidTurnTimeoutMS(t *testing.T) {
 	}
 	if got := mgr.Config().Agent.TurnTimeoutMS; got != 1800000 {
 		t.Errorf("after failed Reload: Config().Agent.TurnTimeoutMS = %d, want 1800000 (retained)", got)
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+	}
+}
+
+// TestManager_ReloadRetainsOnInvalidCIWatchWindowMS verifies that a reload
+// whose reactions.ci_failure.watch_window_ms exceeds the shared ceiling
+// leaves the previously loaded configuration in force rather than
+// terminating the process.
+func TestManager_ReloadRetainsOnInvalidCIWatchWindowMS(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, ciWatchWindowWorkflow(3600000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := mgr.Config().CIFeedback.WatchWindowMS; got != 3600000 {
+		t.Fatalf("initial Config().CIFeedback.WatchWindowMS = %d, want 3600000", got)
+	}
+
+	// 9223372036855 is one above the shared ceiling.
+	mustWriteFile(t, path, ciWatchWindowWorkflow(9223372036855))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error")
+	}
+	if got := mgr.Config().CIFeedback.WatchWindowMS; got != 3600000 {
+		t.Errorf("after failed Reload: Config().CIFeedback.WatchWindowMS = %d, want 3600000 (retained)", got)
 	}
 	if mgr.LastLoadError() == nil {
 		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
