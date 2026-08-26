@@ -103,6 +103,42 @@ func TestValidateReactionConfigs(t *testing.T) {
 			wantChecks: []string{"reactions.merge_conflicts"},
 		},
 		{
+			name: "review_comments watch_window_ms negative surfaces a diagnostic",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": -1}},
+				},
+			},
+			wantChecks: []string{"reactions.review_comments"},
+		},
+		{
+			name: "bot_review watch_window_ms above ceiling surfaces a diagnostic",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+				},
+			},
+			wantChecks: []string{"reactions.bot_review"},
+		},
+		{
+			name: "auto_merge watch_window_ms non-numeric surfaces a diagnostic",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"auto_merge": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": "soon"}},
+				},
+			},
+			wantChecks: []string{"reactions.auto_merge"},
+		},
+		{
+			name: "merge_conflicts watch_window_ms zero produces no diagnostic",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"merge_conflicts": {Provider: "gitea", Extra: map[string]any{"watch_window_ms": 0}},
+				},
+			},
+			wantChecks: nil,
+		},
+		{
 			// buildReactionsConfig hard-errors on a malformed escalation
 			// before ValidateReactionConfigs ever runs, so this arm is
 			// reachable ONLY through this direct call, never through

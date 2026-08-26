@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -991,6 +992,102 @@ func TestIsKnownReactionKind_AcceptsAutoMerge(t *testing.T) {
 	}
 }
 
+// --- watchWindowMS tests ---
+
+// TestWatchWindowMS covers the shared watch_window_ms parsing helper used by
+// the review, bot-review, auto-merge, and merge-conflict reaction builders:
+// an absent key defaults, 0 is a valid "no time limit" value, negative and
+// above-ceiling values are rejected with their exact operator-facing
+// messages, and non-numeric/fractional values are rejected.
+func TestWatchWindowMS(t *testing.T) {
+	t.Parallel()
+
+	const def = reactionWatchWindowDefaultMS
+
+	tests := []struct {
+		name        string
+		extra       map[string]any
+		want        int
+		wantErr     bool
+		wantErrText string
+	}{
+		{
+			name:  "absent key returns default",
+			extra: map[string]any{},
+			want:  def,
+		},
+		{
+			name:  "nil extra returns default",
+			extra: nil,
+			want:  def,
+		},
+		{
+			name:  "explicit zero means no time limit",
+			extra: map[string]any{"watch_window_ms": 0},
+			want:  0,
+		},
+		{
+			name:  "valid override",
+			extra: map[string]any{"watch_window_ms": 3600000},
+			want:  3600000,
+		},
+		{
+			name:  "value exactly at the ceiling is valid",
+			extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS)},
+			want:  int(maxWatchWindowMS),
+		},
+		{
+			name:        "negative value is rejected with exact message",
+			extra:       map[string]any{"watch_window_ms": -1},
+			wantErr:     true,
+			wantErrText: "watch_window_ms must be non-negative, got -1",
+		},
+		{
+			name:    "value above the ceiling is rejected with exact message",
+			extra:   map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1},
+			wantErr: true,
+			wantErrText: fmt.Sprintf(
+				"watch_window_ms must not exceed %d (about 292 years); use 0 for no time limit, got %d",
+				maxWatchWindowMS, maxWatchWindowMS+1,
+			),
+		},
+		{
+			name:    "non-numeric value is rejected",
+			extra:   map[string]any{"watch_window_ms": "soon"},
+			wantErr: true,
+		},
+		{
+			name:    "fractional value is rejected",
+			extra:   map[string]any{"watch_window_ms": 1.5},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := watchWindowMS(tt.extra, def)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("watchWindowMS(%v, %d) = %d, want error", tt.extra, def, got)
+				}
+				if tt.wantErrText != "" && err.Error() != tt.wantErrText {
+					t.Errorf("watchWindowMS(%v, %d) error = %q, want %q", tt.extra, def, err.Error(), tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("watchWindowMS(%v, %d) unexpected error: %v", tt.extra, def, err)
+			}
+			if got != tt.want {
+				t.Errorf("watchWindowMS(%v, %d) = %d, want %d", tt.extra, def, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- BuildAutoMergeReactionConfig tests ---
 
 func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
@@ -1110,6 +1207,47 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 				MaxRetries:      5,
 				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
+		},
+		{
+			name: "watch_window_ms override",
+			rc:   config.ReactionConfig{Extra: map[string]any{"watch_window_ms": 600000}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+				WatchWindowMS:   600000,
+			},
+		},
+		{
+			name: "watch_window_ms zero disables the bound",
+			rc:   config.ReactionConfig{Extra: map[string]any{"watch_window_ms": 0}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+				WatchWindowMS:   0,
+			},
+		},
+		{
+			name:    "watch_window_ms negative errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": -1}},
+			wantErr: true,
+		},
+		{
+			name:    "watch_window_ms above ceiling errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+			wantErr: true,
+		},
+		{
+			name:    "watch_window_ms non-numeric errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": "soon"}},
+			wantErr: true,
 		},
 		{
 			name:    "invalid strategy",
@@ -1366,6 +1504,43 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 				MaxRetries:      1,
 				WatchWindowMS:   reactionWatchWindowDefaultMS,
 			},
+		},
+		{
+			name: "watch_window_ms override",
+			rc:   config.ReactionConfig{MaxRetries: 1, Extra: map[string]any{"watch_window_ms": 600000}},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      1,
+				WatchWindowMS:   600000,
+			},
+		},
+		{
+			name: "watch_window_ms zero disables the bound",
+			rc:   config.ReactionConfig{MaxRetries: 1, Extra: map[string]any{"watch_window_ms": 0}},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      1,
+				WatchWindowMS:   0,
+			},
+		},
+		{
+			name:    "watch_window_ms negative errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": -1}},
+			wantErr: true,
+		},
+		{
+			name:    "watch_window_ms above ceiling errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+			wantErr: true,
+		},
+		{
+			name:    "watch_window_ms non-numeric errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": "soon"}},
+			wantErr: true,
 		},
 		{
 			name:    "poll_interval_ms below floor errors",
