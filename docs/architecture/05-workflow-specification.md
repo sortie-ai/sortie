@@ -393,8 +393,8 @@ Extra fields:
 
 - `max_log_lines` (integer, via Extra): maximum CI log tail lines. Default: `50`.
 - `watch_window_ms` (integer, via Extra): bounds a pending CI entry's age, measured from the last
-  recorded head. Default: `86400000` (twenty-four hours). Must be non-negative. `0` removes the
-  clock bound.
+  recorded head. Default: `86400000` (twenty-four hours). MUST be non-negative and MUST NOT
+  exceed `9223372036854`. `0` removes the clock bound.
 
 **Reaction kind: `review_comments`**
 

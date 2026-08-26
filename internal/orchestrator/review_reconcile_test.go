@@ -1253,7 +1253,7 @@ func TestBuildReviewReactionConfig_WatchWindowMSNegative(t *testing.T) {
 func TestBuildReviewReactionConfig_WatchWindowMSAboveCeiling(t *testing.T) {
 	t.Parallel()
 
-	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}}
+	rc := config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1}}
 
 	_, err := BuildReviewReactionConfig(rc)
 	if err == nil {

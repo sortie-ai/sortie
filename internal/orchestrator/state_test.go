@@ -1033,8 +1033,8 @@ func TestWatchWindowMS(t *testing.T) {
 		},
 		{
 			name:  "value exactly at the ceiling is valid",
-			extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS)},
-			want:  int(maxWatchWindowMS),
+			extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS)},
+			want:  int(config.MaxWatchWindowMS),
 		},
 		{
 			name:        "negative value is rejected with exact message",
@@ -1044,11 +1044,11 @@ func TestWatchWindowMS(t *testing.T) {
 		},
 		{
 			name:    "value above the ceiling is rejected with exact message",
-			extra:   map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1},
+			extra:   map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1},
 			wantErr: true,
 			wantErrText: fmt.Sprintf(
 				"watch_window_ms must not exceed %d (about 292 years); use 0 for no time limit, got %d",
-				maxWatchWindowMS, maxWatchWindowMS+1,
+				config.MaxWatchWindowMS, config.MaxWatchWindowMS+1,
 			),
 		},
 		{
@@ -1241,7 +1241,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 		},
 		{
 			name:    "watch_window_ms above ceiling errors",
-			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1}},
 			wantErr: true,
 		},
 		{
@@ -1534,7 +1534,7 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 		},
 		{
 			name:    "watch_window_ms above ceiling errors",
-			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(maxWatchWindowMS) + 1}},
+			rc:      config.ReactionConfig{Extra: map[string]any{"watch_window_ms": int(config.MaxWatchWindowMS) + 1}},
 			wantErr: true,
 		},
 		{

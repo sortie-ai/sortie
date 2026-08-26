@@ -958,10 +958,10 @@ func populateCIFeedbackFromReactions(rc ReactionConfig) (CIFeedbackConfig, error
 		}
 		watchWindowMS = parsed
 	}
-	if watchWindowMS < 0 {
+	if err := ValidateWatchWindowMS(watchWindowMS); err != nil {
 		return CIFeedbackConfig{}, &ConfigError{
 			Field:   "reactions.ci_failure.watch_window_ms",
-			Message: "must be non-negative",
+			Message: err.Error(),
 		}
 	}
 
@@ -1442,7 +1442,8 @@ type CIFeedbackConfig struct {
 	// recorded head rather than from the entry's creation, so an
 	// actively worked pull request stays watched and only silence ages
 	// it out. Default 86400000 (twenty-four hours). Zero removes the
-	// clock bound. Must be non-negative.
+	// clock bound. Must be non-negative and must not exceed
+	// [MaxWatchWindowMS].
 	WatchWindowMS int
 }
 

@@ -3401,6 +3401,103 @@ func TestValidateReviewAndMergeConflictReactionConfigs(t *testing.T) {
 	}
 }
 
+// TestValidateWatchWindowMSAcrossKinds covers every reaction kind that
+// carries watch_window_ms with a value above the shared ceiling. The
+// ci_failure kind is rejected during config.NewServiceConfig and surfaces
+// under a "config."-prefixed check produced by mapManagerError, while the
+// other four kinds pass config construction and are rejected by
+// ValidateReactionConfigs under a bare "reactions.<kind>" check, so each
+// row needs its own single-fault fixture: a ci_failure rejection would
+// otherwise fail NewServiceConfig and suppress every later diagnostic.
+func TestValidateWatchWindowMSAcrossKinds(t *testing.T) {
+	t.Parallel()
+
+	const overCeiling = 9223372036855
+
+	tests := []struct {
+		name      string
+		extraYAML string
+		wantCheck string
+	}{
+		{
+			name: "ci_failure",
+			extraYAML: `reactions:
+  ci_failure:
+    provider: github-actions
+    watch_window_ms: 9223372036855
+`,
+			wantCheck: "config.reactions.ci_failure.watch_window_ms",
+		},
+		{
+			name: "review_comments",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitea
+    watch_window_ms: 9223372036855
+`,
+			wantCheck: "reactions.review_comments",
+		},
+		{
+			name: "bot_review",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea
+    watch_window_ms: 9223372036855
+`,
+			wantCheck: "reactions.bot_review",
+		},
+		{
+			name: "merge_conflicts",
+			extraYAML: `reactions:
+  merge_conflicts:
+    provider: gitea
+    watch_window_ms: 9223372036855
+`,
+			wantCheck: "reactions.merge_conflicts",
+		},
+		{
+			name: "auto_merge",
+			extraYAML: `reactions:
+  auto_merge:
+    provider: gitea
+    watch_window_ms: 9223372036855
+`,
+			wantCheck: "reactions.auto_merge",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, forgeFaultWorkflow(tt.extraYAML))
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+
+			d := diagWithCheck(out.Errors, tt.wantCheck)
+			if d == nil {
+				t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+			if want := fmt.Sprintf("%d", overCeiling); !strings.Contains(d.Message, want) {
+				t.Errorf("diagnostic message = %q, want offending value %q", d.Message, want)
+			}
+		})
+	}
+}
+
 // TestValidateGiteaForge exercises the fold point end-to-end through
 // runValidate for a tracker.kind: gitea workflow, varying the reactions
 // and ci_feedback blocks to isolate one forge fault per case.

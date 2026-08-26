@@ -2128,11 +2128,12 @@ func TestPopulateCIFeedbackFromReactions(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		rc        ReactionConfig
-		want      CIFeedbackConfig
-		wantErr   bool
-		wantField string
+		name          string
+		rc            ReactionConfig
+		want          CIFeedbackConfig
+		wantErr       bool
+		wantField     string
+		wantMsgSubstr string
 	}{
 		{
 			name: "ProviderMapsToKind",
@@ -2253,6 +2254,55 @@ func TestPopulateCIFeedbackFromReactions(t *testing.T) {
 			wantField: "reactions.ci_failure.watch_window_ms",
 		},
 		{
+			name: "WatchWindowMSCeilingAccepted",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"watch_window_ms": 9223372036854},
+			},
+			want: CIFeedbackConfig{
+				Kind:          "github-actions",
+				MaxLogLines:   50,
+				WatchWindowMS: 9223372036854,
+			},
+		},
+		{
+			name: "WatchWindowMSAboveCeiling",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"watch_window_ms": 9223372036855},
+			},
+			wantErr:       true,
+			wantField:     "reactions.ci_failure.watch_window_ms",
+			wantMsgSubstr: "must not exceed",
+		},
+		{
+			name: "WatchWindowMSWrapFixtureOne",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"watch_window_ms": 18446744073710},
+			},
+			wantErr:   true,
+			wantField: "reactions.ci_failure.watch_window_ms",
+		},
+		{
+			name: "WatchWindowMSWrapFixtureTwo",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"watch_window_ms": 18446744073709},
+			},
+			wantErr:   true,
+			wantField: "reactions.ci_failure.watch_window_ms",
+		},
+		{
+			name: "WatchWindowMSWrapFixtureThree",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"watch_window_ms": 99999999999999},
+			},
+			wantErr:   true,
+			wantField: "reactions.ci_failure.watch_window_ms",
+		},
+		{
 			name: "EscalationAndLabelPassThrough",
 			rc: ReactionConfig{
 				Provider:        "circle-ci",
@@ -2279,6 +2329,12 @@ func TestPopulateCIFeedbackFromReactions(t *testing.T) {
 
 			if tt.wantErr {
 				assertConfigErrorField(t, err, tt.wantField)
+				if tt.wantMsgSubstr != "" {
+					var ce *ConfigError
+					if errors.As(err, &ce) && !strings.Contains(ce.Message, tt.wantMsgSubstr) {
+						t.Errorf("ConfigError.Message = %q, want substring %q", ce.Message, tt.wantMsgSubstr)
+					}
+				}
 				return
 			}
 			if err != nil {
