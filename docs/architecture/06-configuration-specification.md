@@ -271,7 +271,8 @@ This section is intentionally redundant so a coding agent can implement the conf
   escalation
 - `reactions.<kind>.provider`: string, optional; adapter identifier; absent = disabled
 - `reactions.<kind>.max_retries`: integer, default `2`, except `merge_conflicts`, which defaults to
-  `1`; fix continuation attempts before escalation
+  `1`; fix continuation attempts before escalation. Not consumed by `review_comments` or
+  `bot_review`, each of which bounds its dispatches with its own `max_continuation_turns`
 - `reactions.<kind>.escalation`: string, default `label`; `label` or `comment`
 - `reactions.<kind>.escalation_label`: string, default `needs-human`. Primary-dispatch parking uses
   the resolved non-empty `reactions.review_comments.escalation_label`; when that block or value is

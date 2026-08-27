@@ -379,8 +379,12 @@ Each reaction kind sub-object shares a common field schema:
   - Maximum fix continuation dispatches per issue before escalation. Default: `2`, except
     `merge_conflicts`, which defaults to `1`.
   - MUST be non-negative; negative values are rejected with a configuration error.
+  - `review_comments` and `bot_review` do not consume this field. Each bounds its dispatches with
+    its own `max_continuation_turns` instead, and a value set here has no effect on those two
+    kinds.
 - `escalation` (string)
-  - Action when `max_retries` is exceeded. Valid values: `label` (default), `comment`.
+  - Action when the kind's dispatch budget is exhausted, whether that budget is `max_retries` or
+    `max_continuation_turns`. Valid values: `label` (default), `comment`.
 - `escalation_label` (string)
   - Label applied when `escalation` is `label`. Default: `needs-human`.
 
@@ -490,9 +494,11 @@ immediately.
 **Reaction kind: `merge_conflicts`**
 
 Merge-conflict detection and resolution. When configured, the orchestrator polls mergeability on
-Sortie-created open PRs each reconcile cycle and dispatches one rebase-and-resolve continuation
-turn each time a PR transitions from no-conflict to conflict. See Section 11E for the full
-contract. (Runtime kind value: `merge-conflict`.)
+Sortie-created open PRs each reconcile cycle. Mergeability is evaluated on every due tick, and
+while a PR remains conflicted the orchestrator dispatches one rebase-and-resolve continuation turn
+per distinct conflicting head commit, subject to the retry budget; re-observing the same head
+dispatches nothing further. A return to no-conflict is not required between attempts. See
+Section 11E for the full contract. (Runtime kind value: `merge-conflict`.)
 
 `max_retries` defaults to `1` for this kind rather than the common default of `2`, because
 merge-conflict resolution by a coding agent is less likely to succeed on a second attempt.
