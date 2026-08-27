@@ -35,6 +35,7 @@ func trackerConfigMap(tc config.TrackerConfig) map[string]any {
 		"query_filter":      tc.QueryFilter,
 		"handoff_state":     tc.HandoffState,
 		"handoff_evidence":  string(tc.HandoffEvidence.Effective()),
+		"no_change_state":   tc.NoChangeState,
 		"in_progress_state": tc.InProgressState,
 		"api_version":       tc.APIVersion,
 		"comments": map[string]any{

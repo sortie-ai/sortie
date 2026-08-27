@@ -43,6 +43,9 @@
      transition
    - Evidence not determinable under the `strict` policy, which deliberately treats that verdict as
      an absence
+   - A run whose declaration that the requested outcome already held stood through the self-review
+     phase where that phase ran produces neither: it is tested ahead of the workspace inspection
+     and always yields a work-observed verdict, so this failure class never applies to it.
 
 ### 14.2 Recovery Behavior
 
@@ -55,21 +58,35 @@
   - Convert to retries with exponential backoff.
 
 - Recognized `.sortie/status` signal:
-  - Both values keep their existing dispositions. A `blocked` soft stop suppresses the handoff
-    transition and the continuation retry, and, where the dispatch drives issue state, parks the
-    issue instead of merely releasing the claim: it records a durable park and applies the
-    parking label, sharing both the mechanism and the release rule the consecutive-absence
+  - All three values keep their existing dispositions. A `blocked` soft stop suppresses the
+    handoff transition and the continuation retry, and, where the dispatch drives issue state,
+    parks the issue instead of merely releasing the claim: it records a durable park and applies
+    the parking label, sharing both the mechanism and the release rule the consecutive-absence
     ceiling uses below. A completion signal (`needs-human-review`) suppresses
     the continuation retry and takes the ordered handoff disposition (§7.3) unchanged: the
     transition fires only where a handoff state is configured, the issue is still active, the
     dispatch drives issue state, no terminal observation suppresses it, and the evidence verdict
     permits the write. A verdict that withholds the write routes this exit to the withheld-handoff
-    recovery below, exactly as it routes any other exit that reaches it.
-  - Where self-review is enabled and its gate admits the exit, the completion signal now runs the
-    self-review phase before that disposition is computed. The phase runs while the session is
-    live and before session teardown; the disposition itself is unchanged.
-    A `blocked` value read during a phase turn instead gives the run the blocked disposition
-    above, on either admission path into the phase.
+    recovery below, exactly as it routes any other exit that reaches it. A declaration
+    (`no-change-needed`) that stands suppresses the continuation retry and takes the same ordered
+    handoff disposition, except that its evidence verdict is always work observed: it never
+    reaches the withheld-handoff recovery below, and its transition target is
+    `tracker.no_change_state` where that field is configured, `tracker.handoff_state` otherwise.
+  - Where self-review is enabled and its gate admits the exit, the completion signal and the
+    declaration both run the self-review phase before that disposition is computed. The phase runs
+    while the session is live and before session teardown; the disposition itself is unchanged for
+    a completion signal. For a declaration, the phase's outcome decides whether the disposition
+    above applies at all: the phase's verification commands and review turn are what can falsify
+    the declaration, and any outcome other than exactly one recorded iteration ending on a `pass`
+    verdict with no failing verification result retracts it, returning the run to the disposition
+    it would have taken had it exhausted its turn budget with no status file written. A `blocked`
+    value read during a phase turn instead gives the run the blocked disposition above, on any
+    admission path into the phase.
+  - A declaration that stands resets the consecutive-absence count and releases a park held for
+    any reason, on the same terms as any other work-observed verdict (below): the release rule
+    reads no reason from the park record. Under `tracker.handoff_evidence: off`, no verdict is
+    computed for a declaration, so neither the reset nor the release occurs; the declaration's
+    only effect there is the transition target.
 
 - Withheld handoff evidence:
   - Immediately before recording an absence failure, re-read the issue's tracker state once, gated

@@ -334,7 +334,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       fail_worker(exit_kind_for_err(worker_ctx), turn_err)
 
     status = read_sortie_status(workspace.path)
-    if status in ["blocked", "needs-human-review"]:
+    if status in ["blocked", "needs-human-review", "no-change-needed"]:
       pending_reason = status
       break  // leaves the loop; the phase and teardown below run regardless of which value this is
 
@@ -357,16 +357,17 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 
   // Self-review phase (between turn loop exit and session teardown). The gate
   // that already admits an exhausted turn budget also admits pending_reason
-  // when it is empty or names the completion signal; a pending "blocked"
-  // reason skips the phase. A "blocked" signal the phase itself reports
-  // becomes the run's soft-stop reason whichever admission the gate granted.
+  // when it is empty or names the completion signal or the no-change
+  // declaration; a pending "blocked" reason skips the phase. A "blocked"
+  // signal the phase itself reports becomes the run's soft-stop reason
+  // whichever admission the gate granted.
   review_metadata = null
   phase_err = null
   cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms (R-9)
-  signal_admits = pending_reason == "" OR pending_reason == "needs-human-review"
+  signal_admits = pending_reason == "" OR pending_reason == "needs-human-review" OR pending_reason == "no-change-needed"
   if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND deps.Posture.DrivesIssueState() AND signal_admits:
     if pending_reason != "":
-      log_info("agent signaled completion, entering self-review", issue.id, pending_reason)
+      log_info("agent signaled a status admitting self-review, entering the phase", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
     review_metadata, phase_signal, phase_err = run_self_review_loop(
       session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
@@ -374,6 +375,17 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
     )
     if phase_signal == "blocked":
       pending_reason = "blocked"
+    // The phase's own verification commands and review turn are what can
+    // falsify a no-change declaration. It stands only where the phase
+    // recorded exactly one iteration ending on a "pass" verdict with no
+    // failing verification result; any other outcome retracts it.
+    if pending_reason == "no-change-needed" AND review_metadata != null:
+      if any result in review_metadata.iterations[*].verification_results has exit_code != 0 OR timed_out:
+        log_info("no-change declaration retracted", cause="verification", command, exit_code, timed_out)
+        pending_reason = ""
+      else if review_metadata.total_iterations != 1 OR review_metadata.final_verdict != "pass":
+        log_info("no-change declaration retracted", cause="phase_unconfirmed", iterations=review_metadata.total_iterations, final_verdict=review_metadata.final_verdict)
+        pending_reason = ""
   else if pending_reason != "":
     log_info("agent signaled status, exiting worker", issue.id, pending_reason)
 
@@ -450,6 +462,10 @@ on_worker_exit(issue_id, reason, worker_result, state):
     # and the four-condition decision stands.
     policy = worker_result.handoff_evidence_policy  # frozen at dispatch
     if handoff_path and not terminal and policy != "off":
+      # evaluate_handoff_evidence tests a stood no-change declaration first,
+      # ahead of any workspace inspection: a declared run always yields
+      # "work observed" here, under every policy value this branch reaches,
+      # and runs no Git subprocess to get there.
       evidence = evaluate_handoff_evidence(worker_result)
       absence = evidence.verdict == "absence of work observed"
       undeterminable = evidence.verdict == "evidence not determinable"
@@ -560,7 +576,12 @@ on_worker_exit(issue_id, reason, worker_result, state):
         })
 
     elif handoff_path:
-      result = perform_handoff_transition(issue_id, cfg.tracker.handoff_state)
+      # The target is resolved once, ahead of the write and every log record
+      # this arm emits: a stood declaration selects cfg.tracker.no_change_state
+      # where that field is configured, and cfg.tracker.handoff_state otherwise.
+      declared = worker_result.soft_stop and worker_result.soft_stop_reason == "no-change-needed"
+      target = cfg.tracker.no_change_state if (declared and cfg.tracker.no_change_state) else cfg.tracker.handoff_state
+      result = perform_handoff_transition(issue_id, target)
       if result.ok:
         if retry_slot_incumbent(state, issue_id) is nil:
           state.claimed.remove(issue_id)

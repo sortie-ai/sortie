@@ -8601,3 +8601,724 @@ func TestHandleWorkerExit_CompletionSignalAfterSelfReview(t *testing.T) {
 		t.Error("RunHistory.ReviewMetadata = nil, want the marshaled review metadata")
 	}
 }
+
+// --- no-change-needed declaration: exit disposition ---
+
+// TestResolveExitTarget covers the target-resolution helper directly: an
+// undeclared run and a declared run whose no_change_state is unset both
+// fall back to handoff_state; a declared run with no_change_state set
+// resolves to it; a different soft-stop reason is never treated as a
+// declaration.
+func TestResolveExitTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		params       HandleWorkerExitParams
+		result       WorkerResult
+		wantTarget   string
+		wantDeclared bool
+	}{
+		{
+			name:       "undeclared run falls back to handoff_state",
+			params:     HandleWorkerExitParams{HandoffState: "Human Review", NoChangeState: "Done"},
+			result:     WorkerResult{},
+			wantTarget: "Human Review",
+		},
+		{
+			name:         "declared run with no_change_state set resolves to it",
+			params:       HandleWorkerExitParams{HandoffState: "Human Review", NoChangeState: "Done"},
+			result:       WorkerResult{SoftStop: true, SoftStopReason: "no-change-needed"},
+			wantTarget:   "Done",
+			wantDeclared: true,
+		},
+		{
+			name:         "declared run with no_change_state unset falls back to handoff_state",
+			params:       HandleWorkerExitParams{HandoffState: "Human Review"},
+			result:       WorkerResult{SoftStop: true, SoftStopReason: "no-change-needed"},
+			wantTarget:   "Human Review",
+			wantDeclared: true,
+		},
+		{
+			name:       "a different soft-stop reason is not a declaration",
+			params:     HandleWorkerExitParams{HandoffState: "Human Review", NoChangeState: "Done"},
+			result:     WorkerResult{SoftStop: true, SoftStopReason: "needs-human-review"},
+			wantTarget: "Human Review",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			target, declared := resolveExitTarget(tt.params, tt.result)
+			if target != tt.wantTarget {
+				t.Errorf("resolveExitTarget() target = %q, want %q", target, tt.wantTarget)
+			}
+			if declared != tt.wantDeclared {
+				t.Errorf("resolveExitTarget() declared = %v, want %v", declared, tt.wantDeclared)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_DeclaredRunReachesConfiguredNoChangeState verifies
+// that a declared run advances the issue to the configured
+// no_change_state, records a successful run, and leaves the absence
+// count where it stood.
+func TestHandleWorkerExit_DeclaredRunReachesConfiguredNoChangeState(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "NC-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.NoChangeState = "Done"
+	params.ActiveStates = []string{"In Progress"}
+	params.TerminalStates = []string{"Done"}
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "NC-1",
+		Identifier:     "NC-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "no-change-needed",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 || tracker.transitionCalls[0].TargetState != "Done" {
+		t.Fatalf("TransitionIssue calls = %+v, want one transition to %q", tracker.transitionCalls, "Done")
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory calls = %d, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want %q", got, "succeeded")
+	}
+	if store.runHistories[0].Error != nil {
+		t.Errorf("RunHistory.Error = %v, want nil", store.runHistories[0].Error)
+	}
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("QueryConsecutiveHandoffAbsenceCounts issue IDs = %v, want none", store.absenceCountedIssueIDs)
+	}
+	if _, ok := state.RetryAttempts["NC-1"]; ok {
+		t.Error("RetryAttempts entry present, want none (no retry scheduled)")
+	}
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry calls = %d, want 0", len(store.retryEntries))
+	}
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue calls = %+v, want 0 (no comment configured)", tracker.commentCalls)
+	}
+	if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSuccess {
+		t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSuccess)
+	}
+}
+
+// TestHandleWorkerExit_DeclaredRunCompletionComment verifies that the
+// soft-stop completion comment is built for a declared run where
+// tracker.comments.on_completion is enabled, and built for nothing where
+// it is not.
+func TestHandleWorkerExit_DeclaredRunCompletionComment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("on_completion enabled posts the comment", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "NC-CMT-ON", "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.NoChangeState = "Done"
+		params.ActiveStates = []string{"In Progress"}
+		params.CommentsConfig.OnCompletion = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "NC-CMT-ON",
+			Identifier:     "ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "no-change-needed",
+		}, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue calls = %d, want 1", len(tracker.commentCalls))
+		}
+		if !strings.Contains(tracker.commentCalls[0].Text, "no-change-needed") {
+			t.Errorf("comment text = %q, want it to name the declaration", tracker.commentCalls[0].Text)
+		}
+	})
+
+	t.Run("on_completion disabled posts nothing", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "NC-CMT-OFF", "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.NoChangeState = "Done"
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "NC-CMT-OFF",
+			Identifier:     "ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "no-change-needed",
+		}, params)
+
+		if len(tracker.commentCalls) != 0 {
+			t.Errorf("CommentIssue calls = %+v, want 0", tracker.commentCalls)
+		}
+	})
+}
+
+// TestHandleWorkerExit_NoChangeStateUnsetMatchesPriorBehavior verifies that
+// with tracker.no_change_state unset and no declaration, the permitted,
+// withheld, and terminal-suppressed dispositions are unchanged.
+func TestHandleWorkerExit_NoChangeStateUnsetMatchesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	t.Run("permitted handoff unaffected", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "PRE-PERMIT", "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "PRE-PERMIT",
+			Identifier:   "ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		if len(tracker.transitionCalls) != 1 || tracker.transitionCalls[0].TargetState != "Human Review" {
+			t.Errorf("TransitionIssue calls = %+v, want one transition to %q", tracker.transitionCalls, "Human Review")
+		}
+	})
+
+	t.Run("withheld absence unaffected", func(t *testing.T) {
+		t.Parallel()
+		dir, baseline := handoffEvidenceGitWorkspace(t)
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "PRE-WITHHOLD", "In Progress")
+		params := handoffEvidenceExitParams(t, store, tracker, &spyMetrics{})
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:                 "PRE-WITHHOLD",
+			Identifier:              "ident",
+			ExitKind:                WorkerExitNormal,
+			AgentAdapter:            "mock",
+			WorkspacePath:           dir,
+			HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+			HandoffEvidenceBaseline: baseline,
+		}, params)
+		t.Cleanup(func() { CancelRetry(state, "PRE-WITHHOLD") })
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue calls = %d, want 0", len(tracker.transitionCalls))
+		}
+		if store.runHistories[0].Status != "failed" {
+			t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "failed")
+		}
+	})
+
+	t.Run("terminal observation unaffected", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, "PRE-TERM", "Done")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.TerminalStates = []string{"Done"}
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "PRE-TERM",
+			Identifier:   "ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue calls = %d, want 0", len(tracker.transitionCalls))
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSkipped {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSkipped)
+		}
+	})
+}
+
+// TestHandleWorkerExit_DeclaredRunReleasesAbsencePark verifies that a
+// declared run releases a park held for consecutive absences under a
+// policy that computes a verdict, and does
+// not under tracker.handoff_evidence: off.
+func TestHandleWorkerExit_DeclaredRunReleasesAbsencePark(t *testing.T) {
+	t.Parallel()
+
+	t.Run("observed releases the park and resets the sequence", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "NC-PARK-OBS", "In Progress")
+		state.Parked["NC-PARK-OBS"] = &ParkedEntry{Reason: parkReasonHandoffAbsence, Identifier: "NC-PARK-OBS-ident"}
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:               "NC-PARK-OBS",
+			Identifier:            "NC-PARK-OBS-ident",
+			ExitKind:              WorkerExitNormal,
+			AgentAdapter:          "mock",
+			SoftStop:              true,
+			SoftStopReason:        "no-change-needed",
+			HandoffEvidencePolicy: config.HandoffEvidenceObserved,
+		}, params)
+
+		if _, ok := state.Parked["NC-PARK-OBS"]; ok {
+			t.Error("issue still parked after a declared run under observed, want released")
+		}
+		if len(store.deletedParkedIDs) != 1 {
+			t.Errorf("DeleteParkedIssue calls = %v, want one call", store.deletedParkedIDs)
+		}
+		// Once from unparkIssue and once from the general work-observed
+		// reset below the run-history write; both name this issue.
+		if len(store.absenceResetOf) != 2 {
+			t.Errorf("ResetHandoffAbsenceSequence calls = %v, want two calls naming %q", store.absenceResetOf, "NC-PARK-OBS")
+		}
+	})
+
+	t.Run("off leaves the park untouched", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "NC-PARK-OFF", "In Progress")
+		state.Parked["NC-PARK-OFF"] = &ParkedEntry{Reason: parkReasonHandoffAbsence, Identifier: "NC-PARK-OFF-ident"}
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:               "NC-PARK-OFF",
+			Identifier:            "NC-PARK-OFF-ident",
+			ExitKind:              WorkerExitNormal,
+			AgentAdapter:          "mock",
+			SoftStop:              true,
+			SoftStopReason:        "no-change-needed",
+			HandoffEvidencePolicy: config.HandoffEvidenceOff,
+		}, params)
+
+		if _, ok := state.Parked["NC-PARK-OFF"]; !ok {
+			t.Error("park released under off, want it to remain (no verdict is computed)")
+		}
+		if len(store.deletedParkedIDs) != 0 {
+			t.Errorf("DeleteParkedIssue calls = %v, want none under off", store.deletedParkedIDs)
+		}
+	})
+}
+
+// TestHandleWorkerExit_DeclaredRunTargetAcrossPolicies is the six-case
+// matrix: tracker.no_change_state set and unset, crossed with
+// observed, strict, and off, asserting the state actually passed to
+// TransitionIssue in each.
+func TestHandleWorkerExit_DeclaredRunTargetAcrossPolicies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		noChangeState string
+		policy        config.HandoffEvidencePolicy
+		wantTarget    string
+	}{
+		{"set observed", "Done", config.HandoffEvidenceObserved, "Done"},
+		{"set strict", "Done", config.HandoffEvidenceStrict, "Done"},
+		{"set off", "Done", config.HandoffEvidenceOff, "Done"},
+		{"unset observed", "", config.HandoffEvidenceObserved, "Human Review"},
+		{"unset strict", "", config.HandoffEvidenceStrict, "Human Review"},
+		{"unset off", "", config.HandoffEvidenceOff, "Human Review"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "MATRIX"
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{}
+			state := exitStateWithIssue(t, issueID, "In Progress")
+			params := defaultExitParams(t, store)
+			params.TrackerAdapter = tracker
+			params.HandoffState = "Human Review"
+			params.NoChangeState = tt.noChangeState
+			params.ActiveStates = []string{"In Progress"}
+			params.TerminalStates = []string{"Done"}
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:               issueID,
+				Identifier:            "ident",
+				ExitKind:              WorkerExitNormal,
+				AgentAdapter:          "mock",
+				SoftStop:              true,
+				SoftStopReason:        "no-change-needed",
+				HandoffEvidencePolicy: tt.policy,
+			}, params)
+
+			if len(tracker.transitionCalls) != 1 || tracker.transitionCalls[0].TargetState != tt.wantTarget {
+				t.Errorf("TransitionIssue calls = %+v, want one transition to %q", tracker.transitionCalls, tt.wantTarget)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_DeclaredRunUndeterminableEvidenceProceedsUnderStrict
+// covers the case where a declared run whose workspace evidence would be
+// undeterminable proceeds under strict rather than being withheld,
+// because the declaration test in evaluateHandoffEvidence runs before any
+// baseline comparison.
+func TestHandleWorkerExit_DeclaredRunUndeterminableEvidenceProceedsUnderStrict(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "NC-STRICT-UNDET", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                      "NC-STRICT-UNDET",
+		Identifier:                   "ident",
+		ExitKind:                     WorkerExitNormal,
+		AgentAdapter:                 "mock",
+		SoftStop:                     true,
+		SoftStopReason:               "no-change-needed",
+		HandoffEvidencePolicy:        config.HandoffEvidenceStrict,
+		HandoffEvidenceBaselineError: errors.New("simulated undeterminable baseline"),
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue calls = %d, want 1 (a declared run proceeds under strict)", len(tracker.transitionCalls))
+	}
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("QueryConsecutiveHandoffAbsenceCounts issue IDs = %v, want none", store.absenceCountedIssueIDs)
+	}
+	if store.runHistories[0].Status != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "succeeded")
+	}
+}
+
+// TestHandleWorkerExit_TerminalObservationSuppressesRegardlessOfDeclaration
+// covers the case where a terminal state observed at exit suppresses the
+// handoff and releases the claim on the same terms with and without a
+// declaration, reaching no new state.
+func TestHandleWorkerExit_TerminalObservationSuppressesRegardlessOfDeclaration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		softStop       bool
+		softStopReason string
+	}{
+		{"undeclared", false, ""},
+		{"declared", true, "no-change-needed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueID := "TERM-" + tt.name
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{}
+			spy := &spyMetrics{}
+			state := exitStateWithIssue(t, issueID, "Done")
+			params := defaultExitParams(t, store)
+			params.TrackerAdapter = tracker
+			params.HandoffState = "Human Review"
+			params.TerminalStates = []string{"Done"}
+			params.Metrics = spy
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:        issueID,
+				Identifier:     "ident",
+				ExitKind:       WorkerExitNormal,
+				AgentAdapter:   "mock",
+				SoftStop:       tt.softStop,
+				SoftStopReason: tt.softStopReason,
+			}, params)
+
+			if len(tracker.transitionCalls) != 0 {
+				t.Errorf("TransitionIssue calls = %d, want 0", len(tracker.transitionCalls))
+			}
+			if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSkipped {
+				t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSkipped)
+			}
+			if _, ok := state.Claimed[issueID]; ok {
+				t.Error("claim remains after a terminal observation, want released")
+			}
+		})
+	}
+}
+
+// TestDrainRunningWorkers_NoChangeState covers the case where the shutdown
+// drain lane's HandleWorkerExitParams construction site resolves a
+// declared exit's target the same way the event-loop lane does.
+func TestDrainRunningWorkers_NoChangeState(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "DRAIN-NC"
+	state := NewState(60000, 1, nil, AgentTotals{})
+	state.Running[issueID] = &RunningEntry{
+		Identifier: "PROJ-DRAIN-NC",
+		Issue:      domain.Issue{ID: issueID, Identifier: "PROJ-DRAIN-NC", State: "In Progress"},
+		StartedAt:  time.Now().UTC(),
+		CancelFunc: func() {},
+	}
+	store := &stubStore{}
+	wm := budgetTickConfig(0)
+	wm.config.Tracker.ActiveStates = []string{"In Progress"}
+	wm.config.Tracker.TerminalStates = []string{"Done"}
+	wm.config.Tracker.HandoffState = "Human Review"
+	wm.config.Tracker.NoChangeState = "Done"
+	tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+	o := budgetOrchestrator(state, wm, store, tracker)
+	o.drainTimeout = 5 * time.Second
+
+	done := make(chan struct{})
+	go func() {
+		o.drainRunningWorkers()
+		close(done)
+	}()
+
+	o.workerExitCh <- WorkerResult{
+		IssueID:        issueID,
+		Identifier:     "PROJ-DRAIN-NC",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "no-change-needed",
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("drainRunningWorkers did not return within 10 seconds")
+	}
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.transitionCalls) != 1 || tracker.transitionCalls[0].TargetState != "Done" {
+		t.Errorf("TransitionIssue calls = %+v, want one transition to %q", tracker.transitionCalls, "Done")
+	}
+}
+
+// TestHandleWorkerExit_NoChangeStateLiveReload covers the case where a live
+// reload that changes tracker.no_change_state between one exit and the
+// next is reflected at exit time, on the same terms HandoffState already
+// relies on (params sourced fresh from config.ServiceConfig at each
+// worker-exit event, per internal/orchestrator/orchestrator.go).
+func TestHandleWorkerExit_NoChangeStateLiveReload(t *testing.T) {
+	t.Parallel()
+
+	cfg := lifecycleConfig(t.TempDir())
+	cfg.Tracker.HandoffState = "Human Review"
+	cfg.Tracker.ActiveStates = []string{"In Progress"}
+	cfg.Tracker.TerminalStates = []string{"Done"}
+	wm := &stubWorkflowManager{config: cfg}
+
+	store := &mockExitStore{}
+
+	exitWithLiveConfig := func(issueID string, tracker *mockTrackerAdapter) {
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = wm.Config().Tracker.HandoffState
+		params.NoChangeState = wm.Config().Tracker.NoChangeState
+		params.ActiveStates = wm.Config().Tracker.ActiveStates
+		params.TerminalStates = wm.Config().Tracker.TerminalStates
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        issueID,
+			Identifier:     issueID + "-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "no-change-needed",
+		}, params)
+	}
+
+	trackerBefore := &mockTrackerAdapter{}
+	exitWithLiveConfig("NC-RELOAD-1", trackerBefore)
+	if len(trackerBefore.transitionCalls) != 1 || trackerBefore.transitionCalls[0].TargetState != "Human Review" {
+		t.Fatalf("first exit TransitionIssue calls = %+v, want one transition to %q (no_change_state unset)", trackerBefore.transitionCalls, "Human Review")
+	}
+
+	cfg.Tracker.NoChangeState = "Done"
+	wm.setConfig(cfg)
+
+	trackerAfter := &mockTrackerAdapter{}
+	exitWithLiveConfig("NC-RELOAD-2", trackerAfter)
+	if len(trackerAfter.transitionCalls) != 1 || trackerAfter.transitionCalls[0].TargetState != "Done" {
+		t.Errorf("second exit TransitionIssue calls = %+v, want one transition to %q (the reload took effect with no restart)", trackerAfter.transitionCalls, "Done")
+	}
+}
+
+// TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs covers spec
+// A-25: the handoff arm's log record carries target_state and
+// no_change_declared on both a declared and an ordinary handoff.
+func TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		softStop       bool
+		softStopReason string
+		noChangeState  string
+		wantTarget     string
+		wantDeclared   string
+	}{
+		{"ordinary handoff", false, "", "", `target_state="Human Review"`, "no_change_declared=false"},
+		{"declared handoff", true, "no-change-needed", "Done", "target_state=Done", "no_change_declared=true"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueID := "LOGATTR-" + tt.name
+			store := &mockExitStore{}
+			tracker := &mockTrackerAdapter{}
+			state := exitStateWithIssue(t, issueID, "In Progress")
+			params := defaultExitParams(t, store)
+			params.TrackerAdapter = tracker
+			params.HandoffState = "Human Review"
+			params.NoChangeState = tt.noChangeState
+			params.ActiveStates = []string{"In Progress"}
+			var logs bytes.Buffer
+			params.Logger = debugLogger(t, &logs)
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:        issueID,
+				Identifier:     "ident",
+				ExitKind:       WorkerExitNormal,
+				AgentAdapter:   "mock",
+				SoftStop:       tt.softStop,
+				SoftStopReason: tt.softStopReason,
+			}, params)
+
+			output := logs.String()
+			if !strings.Contains(output, tt.wantTarget) {
+				t.Errorf("log output missing %s\ngot: %s", tt.wantTarget, output)
+			}
+			if !strings.Contains(output, tt.wantDeclared) {
+				t.Errorf("log output missing %s\ngot: %s", tt.wantDeclared, output)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_DeclaredRunLabelReviewPostureNoWarning covers spec
+// A-26: a declared run on a label-review posture releases the claim
+// without a transition, without a retry, and without an "unrecognized
+// soft-stop reason" record, because the catch-all guard is silenced
+// for the declared value.
+func TestHandleWorkerExit_DeclaredRunLabelReviewPostureNoWarning(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "LR-NC", "In Progress")
+	state.Running["LR-NC"].ReactionKind = ReactionKindLabelReview
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "LR-NC",
+		Identifier:     "ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "no-change-needed",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue calls = %d, want 0 (label-review does not drive issue state)", len(tracker.transitionCalls))
+	}
+	if _, ok := state.RetryAttempts["LR-NC"]; ok {
+		t.Error("retry scheduled for a declared run on a label-review posture, want none")
+	}
+	if _, ok := state.Claimed["LR-NC"]; ok {
+		t.Error("claim retained after a declared run on a label-review posture, want released")
+	}
+	if strings.Contains(logs.String(), "unrecognized soft-stop reason") {
+		t.Errorf("log output contains the unrecognized-reason warning for a value the orchestrator itself instructs the agent to write\ngot: %s", logs.String())
+	}
+}
+
+// TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile
+// covers the case where a declared run whose workspace carries pull-request
+// metadata still seeds its pending reaction entries even when the target
+// state is terminal, and the next reconcile tick over a terminal issue
+// releases them through releaseTerminalIssueState, so no reaction ever
+// runs for a pull request the run left behind.
+func TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "NC-SEED"
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 77, "corp", "api", "feature/NC-SEED", "c0ffee")
+
+	store := &mockExitStore{}
+	state := exitState(t, issueID, nil)
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = &mockTrackerAdapter{}
+	params.HandoffState = "Human Review"
+	params.NoChangeState = "Done"
+	params.TerminalStates = []string{"Done"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.AutoMergeReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        issueID,
+		Identifier:     issueID + "-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "no-change-needed",
+		WorkspacePath:  wsPath,
+	}, params)
+
+	rkey := ReactionKey(issueID, ReactionKindAutoMerge)
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Fatal("PendingReactions missing after a declared run with PR metadata reaching a terminal target")
+	}
+
+	releaseStore := &mockReconcileStore{}
+	releaseTerminalIssueState(context.Background(), state, releaseStore, issueID, discardLogger())
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions present after the terminal-issue release, want removed")
+	}
+}

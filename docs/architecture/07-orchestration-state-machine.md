@@ -50,12 +50,18 @@ A run attempt transitions through these phases:
 4. `InitializingSession`
 5. `StreamingTurn`
 6. `SelfReviewing`, entered only when `self_review.enabled` is true and the coding turn
-   loop completed successfully (not on turn failure). The loop leaves that state in two ways
-   this phase admits: exhausting the configured turn budget, and the agent writing the
-   completion signal to the status file. Read after a coding turn, a `blocked` signal never
-   admits the run to this state; it remains an immediate exit regardless of configuration. A
-   `blocked` signal the agent writes during a phase turn instead ends the phase and gives the
-   run the blocked disposition of Section 7.3, on either of the two admissions above.
+   loop completed successfully (not on turn failure). The loop leaves that state in three ways
+   this phase admits: exhausting the configured turn budget, the agent writing the completion
+   signal to the status file, and the agent declaring that the requested outcome already held
+   and nothing needed changing. Read after a coding turn, a `blocked` signal never admits the
+   run to this state; it remains an immediate exit regardless of configuration. A `blocked`
+   signal the agent writes during a phase turn instead ends the phase and gives the run the
+   blocked disposition of Section 7.3, on any of the three admissions above. A declared run's
+   admission does not by itself confirm the declaration: the phase's own verification commands
+   and review turn are what can falsify it, and any outcome other than exactly one recorded
+   iteration ending on a `pass` verdict with no failing verification result retracts the
+   declaration and returns the run to the disposition it would have taken had it exhausted its
+   turn budget with no status file written.
 7. `Finishing`
 8. `Succeeded`
 9. `Failed`
@@ -118,6 +124,14 @@ Distinct terminal reasons are important because retry logic and logs differ.
        - `Evidence not determinable` permits the handoff under `observed` and withholds it under
          `strict`, where it is treated as an absence for the failure disposition and consecutive
          count. The verdict is recorded in either policy.
+       - A run that declared the requested outcome already held, and whose declaration stood
+         through the self-review phase where that phase ran, is tested ahead of the four branches
+         above and always yields `work observed`, under every policy value including
+         `off`: it runs no workspace inspection and cannot be withheld or classified as
+         undeterminable. Under `off`, where no verdict is otherwise computed, the declaration
+         still selects the transition target. The transition target for a declared run is
+         `tracker.no_change_state` where that field is configured, and `tracker.handoff_state`
+         otherwise; an undeclared run always targets `tracker.handoff_state`.
 
        A verdict that permits the write performs the handoff transition (Section 11.5). On a
        successful transition, release the claim, unless the retry slot (Section 7.5) is occupied by

@@ -15,19 +15,25 @@ const DefaultContinuationPrompt = "Continue working on this task. Review the cur
 
 // RuntimeStatusSuffix is a fixed instruction string appended to the agent
 // prompt on the first turn of each worker run. It informs the agent of
-// the A2O status-signaling protocol for reporting blocked or
-// needs-human-review status via the .sortie/status file.
+// the A2O status-signaling protocol for reporting blocked,
+// needs-human-review, or no-change-needed status via the .sortie/status
+// file.
 //
 // Continuation turns omit this suffix because the instruction persists
 // in the agent's conversation history from turn 1.
 const RuntimeStatusSuffix = `If you determine that you cannot make further progress on this task without human
-intervention, or if your work is complete and requires human review, signal the
-orchestrator by running:
+intervention, or if your work is complete and requires human review, or if you
+determine that the requested outcome already held and you changed nothing, signal
+the orchestrator by running the following, replacing STATUS with exactly one of
+the three values below:
 
-    mkdir -p .sortie && echo "blocked" > .sortie/status
+    mkdir -p .sortie && echo "STATUS" > .sortie/status
 
 Use "blocked" when you cannot proceed. Use "needs-human-review" when your work is
-complete and awaiting review. Do not write this file during normal productive work.`
+complete and awaiting review. Use "no-change-needed" when the requested outcome
+already held before you started and you made no change to reach it. Do not write
+"no-change-needed" if you performed any work. Do not write this file during normal
+productive work.`
 
 // BuildTurnPrompt returns the rendered prompt for a single turn within a
 // worker session. turnNumber 1 is the initial turn; turnNumber 2 and above

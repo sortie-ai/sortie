@@ -55,6 +55,7 @@ var envOverrides = []envOverride{
 	{"SORTIE_TRACKER_TERMINAL_STATES", "tracker", "terminal_states", coerceCSVList},
 	{"SORTIE_TRACKER_QUERY_FILTER", "tracker", "query_filter", coerceString},
 	{"SORTIE_TRACKER_HANDOFF_STATE", "tracker", "handoff_state", coerceString},
+	{"SORTIE_TRACKER_NO_CHANGE_STATE", "tracker", "no_change_state", coerceString},
 	{"SORTIE_TRACKER_IN_PROGRESS_STATE", "tracker", "in_progress_state", coerceString},
 
 	// Tracker comments

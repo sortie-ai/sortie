@@ -412,7 +412,23 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - A deployment with self-review disabled treats the completion signal exactly as before, ending
   the run without entering the phase
 - A recognized signal read outside the self-review phase, at the read after a coding turn, leaves
-  the status file in place at teardown, for both `blocked` and `needs-human-review`
+  the status file in place at teardown, for `blocked`, `needs-human-review`, and
+  `no-change-needed`
+- `IsRecognized` returns true for `no-change-needed`, and `ReadStatusFile` maps the literal
+  `no-change-needed` to the third status value while `No-Change-Needed`, `no_change_needed`, and
+  `nochangeneeded` fall through to unrecognized
+- Self-review is admitted from a `no-change-needed` declaration on the same terms as
+  `needs-human-review`, run once per admitting value over the same five gate conditions, with
+  identical admission and skip outcomes
+- A `no-change-needed` declaration stands only where the phase recorded exactly one iteration
+  ending on a `pass` verdict with no failing verification result; a non-zero exit, a timeout, a
+  command that could not start, a second recorded iteration, or a non-`pass` final verdict each
+  retract it, and a phase that did not run leaves it standing
+- A declaration written during an in-phase read is consumed and ignored, on the same terms as the
+  completion signal, and does not convert a turn-budget admission into a declared run
+- `tracker.no_change_state` set with `tracker.handoff_state` unset is rejected offline, and a value
+  that is neither `handoff_state` nor a member of the `terminal_states` written in front matter is
+  rejected offline, both with no tracker call
 - On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author
   matches the operator-configured `bot_usernames` allowlist does not trigger the human
   `review_comments` reaction

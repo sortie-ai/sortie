@@ -47,6 +47,19 @@ Recognized values:
   self-review is enabled and the phase's other gate conditions hold, this value first admits the
   run to the self-review phase (Section 7); the handoff transition and claim release described
   above happen once that phase ends, rather than at the read.
+- `no-change-needed`: agent signals that the requested outcome already held before it began work
+  and that it made no change to reach that outcome. Like `needs-human-review`, this value suppresses
+  continuation retries, is admitted to the self-review phase on the same terms, and, once the phase
+  ends, releases the issue claim. Unlike `needs-human-review`, the phase's own verification commands
+  and review turn are what can falsify the declaration: it stands only where the phase recorded
+  exactly one iteration ending on a `pass` verdict with no failing verification result, and any
+  other outcome retracts it, returning the run to the disposition it would have taken had it
+  exhausted its turn budget with no status file written. A stood declaration is treated as positive
+  evidence: no absence verdict is computed, the run is recorded as `succeeded`, the consecutive
+  absence count is not advanced and is instead reset, and a park held for consecutive absences is
+  released. The transition target is `tracker.no_change_state` where that field is configured, and
+  `tracker.handoff_state` otherwise; where no handoff path applies, the declaration changes no
+  issue state.
 
 If the file is absent or contains an unrecognized value, it is ignored.
 

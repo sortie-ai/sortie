@@ -507,14 +507,17 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_self_review_verification_duration_seconds{command}` | Histogram | Per-command verification duration during self-review; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). The `command` label is truncated to the first 64 characters. |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
 
-### 13.8 Self-Review Observability on the Completion Signal
+### 13.8 Self-Review Observability on an Admitting Status Signal
 
-A run that ends on the `needs-human-review` status signal and passes through the self-review
-phase records review metadata on `run_history` exactly as a run that reached the phase by
-exhausting the turn budget does: the JSON document under `review_metadata`, described in
-Section 19, carries a value rather than null for this population.
+A run that ends on the `needs-human-review` status signal, or on a `no-change-needed` declaration,
+and passes through the self-review phase records review metadata on `run_history` exactly as a run
+that reached the phase by exhausting the turn budget does: the JSON document under
+`review_metadata`, described in Section 19, carries a value rather than null for this population.
 
 The `after_run` hook on that path receives the run's real `SORTIE_SELF_REVIEW_STATUS` value
 (`passed`, `cap_reached`, or `error`) instead of the `disabled` value it receives when self-review
 is not configured or the run did not reach the phase. `SORTIE_SELF_REVIEW_SUMMARY_PATH` is
-populated on the same terms as on any other path that ran the phase.
+populated on the same terms as on any other path that ran the phase. A declared run supplies both
+values on these same terms whether the phase confirms the declaration or retracts it: the
+retraction is a separate outcome recorded in the run's own log, not a change to what this section
+populates.

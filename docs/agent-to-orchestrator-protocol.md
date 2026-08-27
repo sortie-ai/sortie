@@ -168,7 +168,7 @@ The status token is case-sensitive. Implementations MUST NOT normalize case.
 
 ### 2.3 Recognized values (version 1)
 
-Version 1 defines two status tokens:
+Version 1 defines three status tokens:
 
 #### 2.3.1 `blocked`
 
@@ -239,13 +239,16 @@ Section 2.3.3 describes, with no phase entered.
 
 #### 2.3.3 Common orchestrator response
 
-For both recognized values, the orchestrator:
+For all three recognized values, the orchestrator:
 
 1. Completes the current turn normally (does not abort mid-turn).
 2. Breaks the turn loop (no further continuation turns in this worker run).
-3. Where `needs-human-review` admits the run to the self-review phase (Section 2.3.2), runs the
-   phase: verification commands and at least one review turn, with further fix turns as the
-   verdict directs, up to `self_review.max_iterations`.
+3. Where `needs-human-review` or `no-change-needed` admits the run to the self-review phase
+   (Section 2.3.2), runs the phase: verification commands and at least one review turn, with
+   further fix turns as the verdict directs, up to `self_review.max_iterations`. For
+   `no-change-needed`, the phase's outcome also decides whether the declaration stands or is
+   retracted (Section 2.3.6); a retraction removes the value from step 9 onward and the run
+   continues as if it had exhausted its turn budget with no status file written.
 4. Stops the agent session.
 5. Runs the `after_run` hook.
 6. Exits the worker run with a normal exit status.
@@ -253,23 +256,29 @@ For both recognized values, the orchestrator:
 8. Releases the issue claim.
 9. Logs the status token value at `info` level with the issue identifier.
 
-Additionally, for `needs-human-review` only: when `tracker.handoff_state` is configured and the
-issue is in an active tracker state, the orchestrator attempts the handoff transition between
-steps 6 and 8. See Section 2.3.2 for failure handling.
+Additionally, for `needs-human-review` and a stood `no-change-needed` declaration: when the
+relevant target state is configured (`tracker.handoff_state` for `needs-human-review`;
+`tracker.no_change_state`, or `tracker.handoff_state` where that field is unset, for
+`no-change-needed`) and the issue is in an active tracker state, the orchestrator attempts the
+handoff transition between steps 6 and 8. See Section 2.3.2 for failure handling and Section 2.3.6
+for the declared run's target resolution.
 
-Steps 7 and 8 carry one exception, also for `needs-human-review` only. Where the run's
+Steps 7 and 8 carry one exception, for `needs-human-review` only. Where the run's
 `tracker.handoff_evidence` verdict withholds that transition and the verification read described in
 Section 2.3.2 does not find the issue in a terminal state, the orchestrator keeps the issue claim
 and schedules a retry on the exponential-backoff failure path. That retry is a failure-path retry
 rather than a continuation retry, so step 2 still holds and the run takes no further turns. Where
-that read does find the issue terminal, steps 7 and 8 apply as written.
+that read does find the issue terminal, steps 7 and 8 apply as written. A stood `no-change-needed`
+declaration is always treated as positive evidence (Section 2.3.6), so this exception never applies
+to it; steps 7 and 8 always hold as written for a stood declaration.
 
-For `needs-human-review`, after the orchestrator releases the claim, the issue becomes eligible
-for re-dispatch on a subsequent tracker poll if it still satisfies normal dispatch rules (active
-state, not claimed, not budget-exhausted, not parked). For `blocked`, where the dispatch drove
-issue state, the orchestrator parks the issue instead (Section 2.3.1): the issue is held out of
-dispatch until the orchestrator observes a tracker state change or the removal of a confirmed
-parking label, not merely until it satisfies the ordinary rules again.
+For `needs-human-review` and a stood `no-change-needed` declaration, after the orchestrator
+releases the claim, the issue becomes eligible for re-dispatch on a subsequent tracker poll if it
+still satisfies normal dispatch rules (active state, not claimed, not budget-exhausted, not
+parked). For `blocked`, where the dispatch drove issue state, the orchestrator parks the issue
+instead (Section 2.3.1): the issue is held out of dispatch until the orchestrator observes a
+tracker state change or the removal of a confirmed parking label, not merely until it satisfies the
+ordinary rules again.
 
 #### 2.3.4 Last-state-wins semantics
 
@@ -280,17 +289,17 @@ the orchestrator sees the final state (absent or empty) and proceeds with defaul
 Conversely, if the agent writes `blocked` as its last action in the turn, that value is what the
 orchestrator reads.
 
-#### 2.3.5 In-phase meaning of the two values
+#### 2.3.5 In-phase meaning of the three values
 
 The self-review phase reads `.sortie/status` again after each review turn and each fix turn
-(Section 3.1). Inside the phase the two values diverge from their meaning outside it.
+(Section 3.1). Inside the phase the three values diverge from their meaning outside it.
 
 `blocked` aborts the phase. The iteration in progress is recorded as aborted, naming the signal,
 and the run proceeds to its exit as if the phase had produced this outcome directly: the run ends
-as a blocked soft stop whichever of the two admissions (Section 2.3.2) brought it into the phase.
-It is consumed at the same point and on the same terms as `needs-human-review`: the file is
-removed before the phase acts on the value, so the abort is not visible to a later reader of the
-file.
+as a blocked soft stop whichever of the admissions (Section 2.3.2, Section 2.3.6) brought it into
+the phase. It is consumed at the same point and on the same terms as `needs-human-review` and
+`no-change-needed`: the file is removed before the phase acts on the value, so the abort is not
+visible to a later reader of the file.
 
 `needs-human-review` does not end the phase. It is consumed on the same terms as the value that
 admitted the run: the file is removed, and the iteration continues exactly as if the file had
@@ -299,6 +308,44 @@ the iteration does next. Written during a fix turn, the loop proceeds to re-veri
 the next verification commands and review turn decide whether the fix holds. An agent that
 restates `needs-human-review` on every fix turn does not extend the phase past
 `self_review.max_iterations`; the cap still bounds it.
+
+`no-change-needed` is consumed and ignored, on the same terms as `needs-human-review`: written
+during a review turn or a fix turn, the file is removed and the iteration continues exactly as if
+the file had been absent. Writing it in-phase does not end the phase, does not become the run's
+soft-stop reason, and does not convert a turn-budget admission into a declared run. Whether the
+declaration made at the coding-turn read stands or is retracted is decided once, after the phase
+returns, by the rule in Section 2.3.6, not by an in-phase read of this value.
+
+#### 2.3.6 `no-change-needed`
+
+The agent has determined that the requested outcome already held before it began work and that it
+made no change to reach that outcome. Typical causes include: the described bug does not reproduce,
+the requested behavior is already present, or a prior run already completed the task.
+
+**Orchestrator behavior:** This value is admitted to the self-review phase on the same terms as
+`needs-human-review` (Section 2.3.2): where `self_review.enabled` is set and the phase's other gate
+conditions hold, the value does not end the run at the read but admits it to the phase, and the run
+ends after the phase with the same exit kind and disposition it would have taken at the read. Where
+self-review is off, or where any gate condition fails, the value ends the run exactly as Section
+2.3.3 describes, with no phase entered.
+
+The self-review phase's verification commands and review turn are what can falsify this
+declaration. The declaration stands only where the phase confirms it: exactly one recorded
+iteration, ending on a `pass` verdict, with no verification result failing. A phase that ran no
+verification command still confirms, because `self_review.verification_commands` is optional and
+an absent check is not a falsification. Any other phase outcome, including a fix turn that produced
+a second iteration, retracts the declaration: the orchestrator clears it to the empty string and
+the run continues on the ordinary path, exactly as if the run had exhausted its turn budget with no
+status file written.
+
+Where the declaration stands, it is treated as positive evidence under `tracker.handoff_evidence`: no
+absence verdict is computed, the run is recorded as `succeeded`, no session-failure comment is
+written, no continuation retry is scheduled, the consecutive-absence count is not advanced, that
+count is reset, and a park held for consecutive absences is released. The transition target is
+`tracker.no_change_state` where that field is configured, and `tracker.handoff_state` otherwise;
+where no handoff path applies (Section 3.6), the declaration changes no issue state. A terminal
+tracker state observed at exit keeps its own meaning and is not affected by this value (Section
+2.3.2).
 
 ### 2.4 Absent file
 
@@ -382,7 +429,7 @@ while true:
 
     // --- STATUS FILE READ POINT ---
     status = read_sortie_status(workspace.path)
-    if status in ["blocked", "needs-human-review"]:
+    if status in ["blocked", "needs-human-review", "no-change-needed"]:
         pending_reason = status
         break    // leaves the turn loop; the phase and teardown follow below
     // --- END STATUS FILE READ ---
@@ -390,7 +437,7 @@ while true:
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
     ...
 
-// --- LOOP LEFT: pending_reason may be "", "blocked", or "needs-human-review" ---
+// --- LOOP LEFT: pending_reason may be "", "blocked", "needs-human-review", or "no-change-needed" ---
 // See architecture Section 16.5 for the self-review admission gate and the
 // consumption of .sortie/status on entry (Section 3.4).
 stop_session()
@@ -489,16 +536,16 @@ tolerance of failure as the pre-dispatch removal; a failed removal does not prev
 running and does not change the run's exit.
 
 The table below states, for each point at which the orchestrator reads or removes the file,
-whether it removes the file for each of the two recognized values and for the unrecognized-or-
+whether it removes the file for each of the three recognized values and for the unrecognized-or-
 absent case:
 
-| Point | `blocked` | `needs-human-review` | Unrecognized or absent |
-|---|---|---|---|
-| Pre-dispatch cleanup | Removed | Removed | Removed |
-| Read after a coding turn | Not removed | Not removed | Not removed |
-| Admission to the self-review phase | Does not occur: a pending `blocked` reason does not admit | Removed | Does not occur: the turn-budget admission carries no acted-on value |
-| Read after a review turn | Removed | Removed | Not removed |
-| Read after a fix turn | Removed | Removed | Not removed |
+| Point | `blocked` | `needs-human-review` | `no-change-needed` | Unrecognized or absent |
+|---|---|---|---|---|
+| Pre-dispatch cleanup | Removed | Removed | Removed | Removed |
+| Read after a coding turn | Not removed | Not removed | Not removed | Not removed |
+| Admission to the self-review phase | Does not occur: a pending `blocked` reason does not admit | Removed | Removed | Does not occur: the turn-budget admission carries no acted-on value |
+| Read after a review turn | Removed | Removed | Removed | Not removed |
+| Read after a fix turn | Removed | Removed | Removed | Not removed |
 
 The rule behind this table is a property of the point, not of the value read: whether a point
 removes the file MUST NOT depend on which recognized value was read there, only on whether the
@@ -516,8 +563,9 @@ difference between the phase's reads and the coding-turn read is therefore a del
 stated here, not an artifact of where a removal call happens to appear in the code.
 
 Because the rule is stated over the five points above and over whether a value is recognized,
-rather than over the two values `blocked` and `needs-human-review` themselves, a status value a
-later protocol version adds inherits each point's answer with no further edit to this section:
+rather than over the values `blocked`, `needs-human-review`, and `no-change-needed` themselves, a
+status value a later protocol version adds inherits each point's answer with no further edit to
+this section:
 consumed at the two in-phase reads, and left in place at the read after a coding turn. What the
 self-review phase does with such a value once it has consumed it is a separate question, settled
 by whichever section defines the value.
@@ -560,6 +608,7 @@ exit phase. The status file value determines whether the handoff transition fire
 | `.sortie/status` value | Worker exit | Handoff transition | Continuation retry |
 |---|---|---|---|
 | `needs-human-review` | Normal | Performed (if configured, issue is active, and the dispatch drives issue state) | Suppressed |
+| `no-change-needed`, stood | Normal | Performed to `tracker.no_change_state`, or `tracker.handoff_state` where that field is unset (if configured, issue is active, and the dispatch drives issue state) | Suppressed |
 | `blocked` | Normal | Skipped; issue parked instead where the dispatch drives issue state | Suppressed |
 | absent or unrecognized | Normal | Performed (if configured, issue is active, and the dispatch drives issue state) | Depends on handoff result |
 | (any) | Error | Skipped | Standard error retry |
@@ -568,21 +617,25 @@ The parking label the orchestrator applies on a `blocked` park is a non-state wr
 issue without transitioning it, the same way the handoff transition moves the issue's state
 without touching any label.
 
-Every row that performs the handoff is additionally subject to the run's
-`tracker.handoff_evidence` verdict
+The `needs-human-review` row is additionally subject to the run's `tracker.handoff_evidence`
+verdict
 ([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
 Where the verdict withholds the transition, the orchestrator re-reads the issue's tracker state
 once before recording the outcome. When that read does not find the issue terminal, the issue
 keeps its active state and its claim, the run is recorded as failed with the verdict as its
 reason, and the exit takes the exponential-backoff failure path rather than the row's stated
 retry outcome. When that read does find the issue terminal, the exit releases the claim and
-records `succeeded` instead.
+records `succeeded` instead. A stood `no-change-needed` declaration is tested first and always
+resolves that verdict to work observed (Section 2.3.6), so its row never takes this withheld
+path under any policy value.
 
 The semantic distinction drives the difference: `blocked` means the agent cannot proceed, so
 there is no completed work to hand off. `needs-human-review` means the agent completed its work
-and the issue should move to a review state in the tracker.
+and the issue should move to a review state in the tracker. `no-change-needed` means the requested
+outcome already held and the agent changed nothing, so the issue moves to whichever state the
+operator configured for that conclusion.
 
-Both values suppress continuation retries and release the issue claim.
+All three values suppress continuation retries and release the issue claim.
 
 When a `handoff_state` is configured and the agent writes `blocked`, the orchestrator skips the
 handoff transition entirely. The issue remains in its current tracker state. This is correct:
@@ -593,10 +646,19 @@ attempts the handoff transition. On success, the issue moves to the configured h
 failure (network error, permission denied, nil adapter), the orchestrator logs a warning and
 releases the claim without scheduling a retry.
 
-Where the self-review phase runs (Section 2.3.2), it runs before this disposition is computed:
-the phase does not change which row a run takes, but for `needs-human-review` on an enabled
-deployment the phase's verification commands and review turn complete first, and an in-phase
-`blocked` replaces the row the run takes with the `blocked` row.
+When a `handoff_state` is configured and a `no-change-needed` declaration stands, the orchestrator
+attempts the handoff transition to `tracker.no_change_state`, or to `tracker.handoff_state` where
+that field is unset. Failure handling is identical to `needs-human-review`'s. Where no
+`handoff_state` is configured, the declaration changes no issue state, whether or not
+`tracker.no_change_state` is set.
+
+Where the self-review phase runs (Section 2.3.2, Section 2.3.6), it runs before this disposition
+is computed: the phase does not change which row a run takes, but for `needs-human-review` and
+`no-change-needed` on an enabled deployment the phase's verification commands and review turn
+complete first, and an in-phase `blocked` replaces the row the run takes with the `blocked` row.
+For `no-change-needed`, the phase's outcome also decides whether the run keeps that row at all: a
+retraction (Section 2.3.6) moves the run to whichever row an undeclared run with the same
+workspace evidence would take.
 
 ## 4. Prompt integration
 
@@ -629,13 +691,18 @@ Example injection text:
 
 ```
 If you determine that you cannot make further progress on this task without human
-intervention, or if your work is complete and requires human review, signal the
-orchestrator by running:
+intervention, or if your work is complete and requires human review, or if you
+determine that the requested outcome already held and you changed nothing, signal
+the orchestrator by running the following, replacing STATUS with exactly one of
+the three values below:
 
-    mkdir -p .sortie && echo "blocked" > .sortie/status
+    mkdir -p .sortie && echo "STATUS" > .sortie/status
 
 Use "blocked" when you cannot proceed. Use "needs-human-review" when your work is
-complete and awaiting review. Do not write this file during normal productive work.
+complete and awaiting review. Use "no-change-needed" when the requested outcome
+already held before you started and you made no change to reach it. Do not write
+"no-change-needed" if you performed any work. Do not write this file during normal
+productive work.
 ```
 
 ### 4.2 Prompt injection safety
@@ -761,10 +828,11 @@ The following rules govern protocol evolution:
 1. **New values MAY be added** in future versions. Each new value must be accompanied by a
    specification of the orchestrator's behavioral response.
 
-2. **Existing values MUST NOT change meaning.** The semantics of `blocked` and
-   `needs-human-review` as defined in Section 2.3 are permanent. This permanence covers what each
+2. **Existing values MUST NOT change meaning.** The semantics of `blocked`, `needs-human-review`,
+   and `no-change-needed` as defined in Section 2.3 are permanent. This permanence covers what each
    value states about the agent's assessment of the work; it does not fix the orchestrator's
-   scheduling response to a value, which Section 2.3.2 documents as configuration-dependent.
+   scheduling response to a value, which Section 2.3.2 and Section 2.3.6 document as
+   configuration-dependent.
 
 3. **Values MUST NOT be removed.** An orchestrator must recognize all values from all previous
    protocol versions.
@@ -882,8 +950,8 @@ cat /path/to/workspace/.sortie/status
 
 A missing file or empty output means one of two things: the agent has written nothing since the
 file was last removed, or the orchestrator has already consumed a recognized value the agent
-wrote (Section 3.4). The presence of `blocked` or `needs-human-review` indicates the agent's last
-assessment, not yet acted on by the orchestrator.
+wrote (Section 3.4). The presence of `blocked`, `needs-human-review`, or `no-change-needed`
+indicates the agent's last assessment, not yet acted on by the orchestrator.
 
 ## 9. Conformance
 
@@ -892,7 +960,8 @@ An implementation conforms to this specification if it satisfies all of the foll
 1. The orchestrator reads `.sortie/status` after each completed turn, before the retry decision,
    and again after each review turn and each fix turn inside the self-review phase per
    Section 2.3.5.
-2. The orchestrator recognizes `blocked` and `needs-human-review` per Section 2.3.
+2. The orchestrator recognizes `blocked`, `needs-human-review`, and `no-change-needed` per
+   Section 2.3.
 3. The orchestrator ignores unrecognized values per Section 2.5.
 4. The orchestrator handles read errors per Section 2.6.
 5. The orchestrator deletes `.sortie/status` at four points: before each new dispatch; at the
@@ -900,7 +969,7 @@ An implementation conforms to this specification if it satisfies all of the foll
    review turn inside the phase, when the value read is recognized; and after each fix turn
    inside the phase, when the value read is recognized. All four are per Section 3.4.
 6. The orchestrator never writes to `.sortie/status`, and its only removals of the file are the
-   four named in item 5. In particular: the read after a coding turn removes nothing, for either
+   four named in item 5. In particular: the read after a coding turn removes nothing, for any
    recognized value, on any deployment (Section 3.2, Section 3.4); and a recognized value read at
    that point, when the run is not admitted to the self-review phase, remains in the file at
    teardown (Section 8.3).

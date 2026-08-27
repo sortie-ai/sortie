@@ -11,6 +11,38 @@ import (
 // short continuation line on subsequent turns.
 const branchingTemplate = `{{ if .run.is_continuation }}Continue turn {{ .run.turn_number }} cont=true{{ else }}Task: {{ .issue.title }} cont=false{{ end }}`
 
+// TestRuntimeStatusSuffixContent asserts the content requirements the
+// three-value suffix must satisfy: each recognized token appears as an
+// exact substring, and the suffix carries a single .sortie/status write
+// example rather than one command block per value.
+func TestRuntimeStatusSuffixContent(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{"blocked", "needs-human-review", "no-change-needed"} {
+		if !strings.Contains(RuntimeStatusSuffix, want) {
+			t.Errorf("RuntimeStatusSuffix missing substring %q:\n%s", want, RuntimeStatusSuffix)
+		}
+	}
+
+	if got := strings.Count(RuntimeStatusSuffix, ".sortie/status"); got != 1 {
+		t.Errorf("RuntimeStatusSuffix contains %d .sortie/status references, want 1 (a single write example)", got)
+	}
+
+	// The write example must not hardcode a recognized value. An agent that
+	// copies the command verbatim would signal that value rather than the one
+	// its run actually reached, and a hardcoded "blocked" parks the issue.
+	for line := range strings.SplitSeq(RuntimeStatusSuffix, "\n") {
+		if !strings.Contains(line, ".sortie/status") {
+			continue
+		}
+		for _, v := range []string{"blocked", "needs-human-review", "no-change-needed"} {
+			if strings.Contains(line, v) {
+				t.Errorf("write example %q hardcodes recognized status %q, want a placeholder", strings.TrimSpace(line), v)
+			}
+		}
+	}
+}
+
 func TestBuildTurnPrompt(t *testing.T) {
 	t.Parallel()
 

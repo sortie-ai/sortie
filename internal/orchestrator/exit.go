@@ -99,6 +99,10 @@ type HandleWorkerExitParams struct {
 	// means no handoff transition; the existing continuation retry fires.
 	HandoffState string
 
+	// NoChangeState is the target tracker state for a run that declared
+	// no change was needed. Empty falls back to HandoffState.
+	NoChangeState string
+
 	// ActiveStates is the current list of configured active issue states
 	// (from config.Tracker.ActiveStates). Used to determine whether the
 	// issue is still in an active state at worker exit time. The check is
@@ -180,6 +184,20 @@ func resolveTerminalObservation(entry *RunningEntry, result WorkerResult) (state
 		return result.ObservedIssueState, "worker"
 	}
 	return entry.Issue.State, "snapshot"
+}
+
+// resolveExitTarget returns the tracker state the handoff arm transitions
+// the issue to, and whether the run declared no change was needed. A
+// declared run moves to params.NoChangeState when that field is set;
+// every other run, and a declared run whose NoChangeState is empty, moves
+// to params.HandoffState. The resolution reads no workspace state and
+// leaves the handoffPath predicate untouched.
+func resolveExitTarget(params HandleWorkerExitParams, workerResult WorkerResult) (target string, declared bool) {
+	declared = workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusNoChangeNeeded)
+	if declared && params.NoChangeState != "" {
+		return params.NoChangeState, declared
+	}
+	return params.HandoffState, declared
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -651,6 +669,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 		case handoffPath:
 			// Handoff: issue is active and handoff_state is configured.
+			// The target is resolved once, ahead of every record and the
+			// transition call this arm makes, so a declared run's target
+			// state and its provenance are visible without reading
+			// workspace state or changing the handoffPath predicate above.
+			resolvedTarget, noChangeDeclared := resolveExitTarget(params, workerResult)
+
 			// Guard against nil TrackerAdapter (misconfiguration or test
 			// that sets HandoffState without providing an adapter).
 			if params.TrackerAdapter == nil {
@@ -658,6 +682,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				if workerResult.SoftStop {
 					log.Warn("handoff configured but tracker adapter is nil, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
+						slog.String("target_state", resolvedTarget),
+						slog.Bool("no_change_declared", noChangeDeclared),
 					)
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
@@ -667,6 +693,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				} else {
 					log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
 						slog.String("handoff_state", params.HandoffState),
+						slog.String("target_state", resolvedTarget),
+						slog.Bool("no_change_declared", noChangeDeclared),
 					)
 					ScheduleRetry(state, ScheduleRetryParams{
 						IssueID:     workerResult.IssueID,
@@ -699,12 +727,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						log.Warn("handoff verification read failed, proceeding with handoff",
 							slog.Any("error", verifyErr),
 							slog.String("state_source", observationSource),
+							slog.String("target_state", resolvedTarget),
+							slog.Bool("no_change_declared", noChangeDeclared),
 						)
 					} else if verifiedState, ok := verified[workerResult.IssueID]; ok && isTerminalState(verifiedState, params.TerminalStates) {
 						log.Info("handoff suppressed for terminal issue",
 							slog.String("state", verifiedState),
 							slog.String("state_source", "verified"),
 							slog.String("handoff_state", params.HandoffState),
+							slog.String("target_state", resolvedTarget),
+							slog.Bool("no_change_declared", noChangeDeclared),
 						)
 						if params.HandoffState != "" {
 							metrics.IncHandoffTransitions(handoffSkipped)
@@ -717,11 +749,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				if verifiedTerminal {
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
-				} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
+				} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, resolvedTarget); err != nil {
 					metrics.IncHandoffTransitions(handoffError)
 					if workerResult.SoftStop {
 						log.Warn("handoff transition failed, releasing claim",
 							slog.String("handoff_state", params.HandoffState),
+							slog.String("target_state", resolvedTarget),
+							slog.Bool("no_change_declared", noChangeDeclared),
 							slog.Any("error", err),
 						)
 						CancelRetry(state, workerResult.IssueID)
@@ -732,6 +766,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					} else {
 						log.Warn("handoff transition failed, scheduling continuation retry",
 							slog.String("handoff_state", params.HandoffState),
+							slog.String("target_state", resolvedTarget),
+							slog.Bool("no_change_declared", noChangeDeclared),
 							slog.Any("error", err),
 						)
 						ScheduleRetry(state, ScheduleRetryParams{
@@ -760,12 +796,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					metrics.IncHandoffTransitions(handoffSuccess)
 					log.Info("handoff transition succeeded, incumbent preserved",
 						slog.String("handoff_state", params.HandoffState),
+						slog.String("target_state", resolvedTarget),
+						slog.Bool("no_change_declared", noChangeDeclared),
 					)
 					retryDeferred = true
 					claimRetainedForIncumbent = true
 				} else {
 					log.Info("handoff transition succeeded, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
+						slog.String("target_state", resolvedTarget),
+						slog.Bool("no_change_declared", noChangeDeclared),
 					)
 					metrics.IncHandoffTransitions(handoffSuccess)
 					CancelRetry(state, workerResult.IssueID)
@@ -778,7 +818,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			// needs-human-review without handoff configured, or any
 			// future/unrecognized reason). Release the claim without retry.
 			if workerResult.SoftStopReason != string(workspace.StatusBlocked) &&
-				workerResult.SoftStopReason != string(workspace.StatusNeedsHumanReview) {
+				workerResult.SoftStopReason != string(workspace.StatusNeedsHumanReview) &&
+				workerResult.SoftStopReason != string(workspace.StatusNoChangeNeeded) {
 				log.Warn("unrecognized soft-stop reason",
 					slog.String("reason", workerResult.SoftStopReason),
 				)

@@ -139,6 +139,7 @@ type TrackerConfig struct {
 	QueryFilter     string
 	HandoffState    string
 	HandoffEvidence HandoffEvidencePolicy
+	NoChangeState   string
 	InProgressState string
 	APIVersion      string
 	Comments        TrackerCommentsConfig
@@ -399,6 +400,33 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	// Validate no_change_state: enforce string type, reject explicit empty
+	// values, and detect env var indirection that resolved to empty.
+	if rawVal, ok := rawTracker["no_change_state"]; ok && rawVal != nil {
+		s, isStr := rawVal.(string)
+		if !isStr {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.no_change_state",
+				Message: fmt.Sprintf("expected string, got %T", rawVal),
+			}
+		}
+		if s == "" {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.no_change_state",
+				Message: "must not be empty",
+			}
+		}
+		if tracker.NoChangeState == "" {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.no_change_state",
+				Message: "resolved to empty (check environment variable)",
+			}
+		}
+	}
+	if err := validateNoChangeState(tracker.NoChangeState, tracker.HandoffState, tracker.TerminalStates); err != nil {
+		return ServiceConfig{}, err
+	}
+
 	// Validate in_progress_state: enforce string type, reject explicit empty
 	// values, and detect env var indirection that resolved to empty.
 	if rawVal, ok := rawTracker["in_progress_state"]; ok && rawVal != nil {
@@ -562,6 +590,11 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 		handoffState = resolveEnvRef(handoffState)
 	}
 
+	noChangeState := extractString(m, "no_change_state")
+	if !envKeys["tracker.no_change_state"] {
+		noChangeState = resolveEnvRef(noChangeState)
+	}
+
 	inProgressState := extractString(m, "in_progress_state")
 	if !envKeys["tracker.in_progress_state"] {
 		inProgressState = resolveEnvRef(inProgressState)
@@ -590,6 +623,7 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 		TerminalStates:  extractStringSlice(mapVal(m, "terminal_states")),
 		QueryFilter:     queryFilter,
 		HandoffState:    handoffState,
+		NoChangeState:   noChangeState,
 		InProgressState: inProgressState,
 		APIVersion:      apiVersion,
 		Comments: TrackerCommentsConfig{
@@ -1155,6 +1189,37 @@ func ValidateInProgressState(inProgressState string, activeStates, terminalState
 		}
 	}
 	return nil
+}
+
+// validateNoChangeState reports a [*ConfigError] when a non-empty
+// noChangeState requires an unset handoffState, or names a value that is
+// neither handoffState nor a member of terminalStates. Comparison against
+// handoffState and terminalStates is case-insensitive, and terminalStates
+// is the list exactly as written in front matter, with no adapter default
+// applied. An empty noChangeState is always valid.
+func validateNoChangeState(noChangeState, handoffState string, terminalStates []string) error {
+	if noChangeState == "" {
+		return nil
+	}
+	if handoffState == "" {
+		return &ConfigError{
+			Field:   "tracker.no_change_state",
+			Message: "requires tracker.handoff_state; a declared run performs no transition where no handoff path applies",
+		}
+	}
+	lower := strings.ToLower(noChangeState)
+	if lower == strings.ToLower(handoffState) {
+		return nil
+	}
+	for _, s := range terminalStates {
+		if strings.ToLower(s) == lower {
+			return nil
+		}
+	}
+	return &ConfigError{
+		Field:   "tracker.no_change_state",
+		Message: fmt.Sprintf("%q must equal tracker.handoff_state or name a member of tracker.terminal_states", noChangeState),
+	}
 }
 
 // resolveExtensionEnvRefs walks the extensions subtree and resolves

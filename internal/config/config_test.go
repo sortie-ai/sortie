@@ -656,6 +656,155 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "tracker.handoff_state")
 	})
 
+	// --- NoChangeState subtests ---
+
+	t.Run("NoChangeState/Absent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"kind": "jira",
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.NoChangeState", "", cfg.Tracker.NoChangeState)
+	})
+
+	t.Run("NoChangeState/TypeMismatch", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"no_change_state": 123,
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.no_change_state")
+	})
+
+	t.Run("NoChangeState/ExplicitEmptyString", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"no_change_state": "",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.no_change_state")
+	})
+
+	t.Run("NoChangeState/UnsetEnvVar", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"no_change_state": "$SORTIE_UNSET_VAR_NOCHANGE_XYZ",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.no_change_state")
+	})
+
+	t.Run("NoChangeState/EnvVarResolvesToHandoffState", func(t *testing.T) {
+		t.Setenv("TEST_NO_CHANGE_STATE", "Human Review")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state":   "Human Review",
+				"no_change_state": "$TEST_NO_CHANGE_STATE",
+				"active_states":   []any{"To Do"},
+				"terminal_states": []any{"Done"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.NoChangeState", "Human Review", cfg.Tracker.NoChangeState)
+	})
+
+	t.Run("NoChangeState/ValueRule", func(t *testing.T) {
+		tests := []struct {
+			name          string
+			tracker       map[string]any
+			wantErr       bool
+			wantMsgSubstr string
+		}{
+			{
+				name: "equal to handoff_state accepted",
+				tracker: map[string]any{
+					"handoff_state":   "Human Review",
+					"no_change_state": "Human Review",
+					"active_states":   []any{"To Do"},
+					"terminal_states": []any{"Done"},
+				},
+			},
+			{
+				name: "member of terminal_states accepted case-insensitively",
+				tracker: map[string]any{
+					"handoff_state":   "Human Review",
+					"no_change_state": "done",
+					"active_states":   []any{"To Do"},
+					"terminal_states": []any{"Done"},
+				},
+			},
+			{
+				name: "active state rejected",
+				tracker: map[string]any{
+					"handoff_state":   "Human Review",
+					"no_change_state": "To Do",
+					"active_states":   []any{"To Do"},
+					"terminal_states": []any{"Done"},
+				},
+				wantErr:       true,
+				wantMsgSubstr: "must equal tracker.handoff_state or name a member of tracker.terminal_states",
+			},
+			{
+				name: "unrelated state rejected",
+				tracker: map[string]any{
+					"handoff_state":   "Human Review",
+					"no_change_state": "Somewhere Else",
+					"active_states":   []any{"To Do"},
+					"terminal_states": []any{"Done"},
+				},
+				wantErr:       true,
+				wantMsgSubstr: "must equal tracker.handoff_state or name a member of tracker.terminal_states",
+			},
+			{
+				name: "terminal state rejected when terminal_states empty in front matter",
+				tracker: map[string]any{
+					"handoff_state":   "Human Review",
+					"no_change_state": "Done",
+					"active_states":   []any{"To Do"},
+				},
+				wantErr:       true,
+				wantMsgSubstr: "must equal tracker.handoff_state or name a member of tracker.terminal_states",
+			},
+			{
+				name: "handoff_state unset rejected regardless of value",
+				tracker: map[string]any{
+					"no_change_state": "Done",
+					"active_states":   []any{"To Do"},
+					"terminal_states": []any{"Done"},
+				},
+				wantErr:       true,
+				wantMsgSubstr: "requires tracker.handoff_state",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				_, err := NewServiceConfig(map[string]any{"tracker": tt.tracker})
+				if tt.wantErr {
+					assertConfigErrorField(t, err, "tracker.no_change_state")
+					var ce *ConfigError
+					if errors.As(err, &ce) && !strings.Contains(ce.Message, tt.wantMsgSubstr) {
+						t.Errorf("ConfigError.Message = %q, want substring %q", ce.Message, tt.wantMsgSubstr)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+		}
+	})
+
 	// --- HandoffEvidence subtests ---
 
 	t.Run("HandoffEvidence/DefaultsToObserved", func(t *testing.T) {

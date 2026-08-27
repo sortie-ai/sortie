@@ -6355,7 +6355,7 @@ func TestRunWorkerAttempt_StatusSignalLogLines(t *testing.T) {
 		t.Parallel()
 		output := runWithSignal(t, "needs-human-review", true)
 
-		if !strings.Contains(output, "agent signaled completion, entering self-review") {
+		if !strings.Contains(output, "agent signaled a status admitting self-review, entering the phase") {
 			t.Errorf("log output missing the admission line; got: %s", output)
 		}
 		if strings.Contains(output, "agent signaled status, exiting worker") {
@@ -6934,5 +6934,514 @@ func TestRunBoundedTurn_ExpiryWithNilAdapterError(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want the deadline substituted as the wrapped cause", err)
+	}
+}
+
+// --- no-change-needed admission, retraction, and consumption ---
+
+// TestRunWorkerAttempt_AdmissionParity verifies that a no-change-needed
+// signal is admitted to the self-review phase, and skipped, on the same
+// terms as the completion signal, across the gate conditions that decide
+// admission: self_review.enabled, an active issue state, and a posture
+// that drives issue state.
+func TestRunWorkerAttempt_AdmissionParity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		modify       func(cfg *config.ServiceConfig, deps *WorkerDeps)
+		wantAdmitted bool
+	}{
+		{
+			name:         "enabled, active state, driving posture admits",
+			modify:       func(_ *config.ServiceConfig, _ *WorkerDeps) {},
+			wantAdmitted: true,
+		},
+		{
+			name: "self_review disabled skips",
+			modify: func(cfg *config.ServiceConfig, _ *WorkerDeps) {
+				cfg.SelfReview.Enabled = false
+			},
+			wantAdmitted: false,
+		},
+		{
+			name: "inactive issue state skips",
+			modify: func(cfg *config.ServiceConfig, _ *WorkerDeps) {
+				cfg.Tracker.ActiveStates = []string{"Somewhere Else"}
+			},
+			wantAdmitted: false,
+		},
+		{
+			name: "posture that does not drive issue state skips",
+			modify: func(_ *config.ServiceConfig, deps *WorkerDeps) {
+				deps.Posture = PostureReview
+			},
+			wantAdmitted: false,
+		},
+	}
+
+	for _, signal := range []string{"needs-human-review", "no-change-needed"} {
+		for _, tc := range cases {
+			t.Run(signal+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				tmpDir := t.TempDir()
+				cfg := defaultWorkerConfig(tmpDir)
+				cfg.Agent.MaxTurns = 10
+				cfg.SelfReview = config.SelfReviewConfig{
+					Enabled:               true,
+					MaxIterations:         1,
+					VerificationCommands:  []string{"echo ok"},
+					VerificationTimeoutMS: 5000,
+				}
+
+				startFn, wsPath := captureWorkspacePath()
+				ec := newExitCapture()
+
+				deps := WorkerDeps{
+					TrackerAdapter: &mockTrackerAdapter{},
+					AgentAdapter: &mockAgentAdapter{
+						startSessionFn: startFn,
+						runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+							switch {
+							case isSelfReviewTurnPrompt(params.Prompt):
+								writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+							case !isSelfReviewFixPrompt(params.Prompt):
+								writeStatusFile(t, wsPath(), signal)
+							}
+							return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+						},
+					},
+					ConfigFunc:             func() config.ServiceConfig { return cfg },
+					PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+					OnEvent:                func(_ string, _ domain.AgentEvent) {},
+					OnExit:                 ec.onExit,
+					Logger:                 discardLogger(),
+				}
+				tc.modify(&cfg, &deps)
+
+				RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+				result := ec.waitResult(t)
+
+				statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+				if tc.wantAdmitted {
+					if result.ReviewMetadata == nil {
+						t.Fatal("ReviewMetadata = nil, want non-nil (the phase must have run)")
+					}
+					if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+						t.Errorf("status file still present after admission to the phase, want removed: err=%v", err)
+					}
+					return
+				}
+				if result.ReviewMetadata != nil {
+					t.Error("ReviewMetadata != nil, want nil (the phase must not have run)")
+				}
+				if result.SoftStopReason != signal {
+					t.Errorf("SoftStopReason = %q, want %q (unadmitted run keeps the signal as its soft-stop reason)", result.SoftStopReason, signal)
+				}
+				if data, err := os.ReadFile(statusPath); err != nil || strings.TrimSpace(string(data)) != signal { //nolint:gosec // test-controlled path
+					t.Errorf("status file content = (err=%v) %q, want %q (present at teardown for a run that did not enter the phase)", err, data, signal)
+				}
+			})
+		}
+	}
+}
+
+// TestRunWorkerAttempt_AdmissionLogRecord verifies that the phase-admission
+// log record carries the status attribute naming the admitting value and
+// claims no completion, for both the completion signal and the
+// no-change-needed declaration.
+func TestRunWorkerAttempt_AdmissionLogRecord(t *testing.T) {
+	t.Parallel()
+
+	for _, signal := range []string{"needs-human-review", "no-change-needed"} {
+		t.Run(signal, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			cfg := defaultWorkerConfig(tmpDir)
+			cfg.Agent.MaxTurns = 10
+			cfg.SelfReview = config.SelfReviewConfig{
+				Enabled:               true,
+				MaxIterations:         1,
+				VerificationCommands:  []string{"echo ok"},
+				VerificationTimeoutMS: 5000,
+			}
+
+			startFn, wsPath := captureWorkspacePath()
+			ec := newExitCapture()
+			var logs bytes.Buffer
+
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &mockAgentAdapter{
+					startSessionFn: startFn,
+					runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+						switch {
+						case isSelfReviewTurnPrompt(params.Prompt):
+							writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+						case !isSelfReviewFixPrompt(params.Prompt):
+							writeStatusFile(t, wsPath(), signal)
+						}
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					},
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+			ec.waitResult(t)
+
+			output := logs.String()
+			if !strings.Contains(output, "agent signaled a status admitting self-review, entering the phase") {
+				t.Errorf("log output missing the admission record\ngot: %s", output)
+			}
+			if !strings.Contains(output, "status="+signal) {
+				t.Errorf("log output missing status=%s\ngot: %s", signal, output)
+			}
+			if strings.Contains(output, "signaled completion") {
+				t.Errorf("log output asserts completion for a run that may not have completed\ngot: %s", output)
+			}
+		})
+	}
+}
+
+// TestRetractUnconfirmedNoChangeDeclaration covers the retraction predicate
+// directly: every arm of the verification and phase-unconfirmed tests, and
+// the two pass-through cases (a different pending reason, and a phase
+// that never ran).
+func TestRetractUnconfirmedNoChangeDeclaration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		pending    string
+		reviewMeta *domain.ReviewMetadata
+		want       string
+		wantLog    string
+	}{
+		{
+			name:    "different pending reason passes through unchanged",
+			pending: "blocked",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 5, FinalVerdict: "iterate",
+			},
+			want: "blocked",
+		},
+		{
+			name:       "phase did not run passes through unchanged",
+			pending:    "no-change-needed",
+			reviewMeta: nil,
+			want:       "no-change-needed",
+		},
+		{
+			name:    "one iteration, pass, no verification commands stands",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "pass",
+				Iterations:      []domain.ReviewIterationRecord{{Iteration: 1, Verdict: "pass"}},
+			},
+			want: "no-change-needed",
+		},
+		{
+			name:    "one iteration, pass, one command exits zero stands",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "pass",
+				Iterations: []domain.ReviewIterationRecord{{
+					Iteration:           1,
+					Verdict:             "pass",
+					VerificationResults: []domain.VerificationResult{{Command: "go test ./...", ExitCode: 0}},
+				}},
+			},
+			want: "no-change-needed",
+		},
+		{
+			name:    "one command exits non-zero retracts",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "pass",
+				Iterations: []domain.ReviewIterationRecord{{
+					Iteration:           1,
+					Verdict:             "pass",
+					VerificationResults: []domain.VerificationResult{{Command: "go test ./...", ExitCode: 1}},
+				}},
+			},
+			want:    "",
+			wantLog: `cause=verification command="go test ./..." exit_code=1 timed_out=false`,
+		},
+		{
+			name:    "one command times out retracts",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "pass",
+				Iterations: []domain.ReviewIterationRecord{{
+					Iteration:           1,
+					Verdict:             "pass",
+					VerificationResults: []domain.VerificationResult{{Command: "go test ./...", ExitCode: -1, TimedOut: true}},
+				}},
+			},
+			want:    "",
+			wantLog: `cause=verification command="go test ./..." exit_code=-1 timed_out=true`,
+		},
+		{
+			name:    "one command cannot start retracts",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "pass",
+				Iterations: []domain.ReviewIterationRecord{{
+					Iteration: 1,
+					Verdict:   "pass",
+					VerificationResults: []domain.VerificationResult{{
+						Command: "nonexistent-binary", ExitCode: -1, TimedOut: false, ExecutionError: "exec: not found",
+					}},
+				}},
+			},
+			want:    "",
+			wantLog: `cause=verification command=nonexistent-binary exit_code=-1 timed_out=false`,
+		},
+		{
+			name:    "two recorded iterations with every command passing retracts (fix-turn case)",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 2,
+				FinalVerdict:    "pass",
+				Iterations: []domain.ReviewIterationRecord{
+					{Iteration: 1, Verdict: "iterate"},
+					{Iteration: 2, Verdict: "pass"},
+				},
+			},
+			want:    "",
+			wantLog: `cause=phase_unconfirmed iterations=2 final_verdict=pass`,
+		},
+		{
+			name:    "one iteration ending iterate retracts",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "iterate",
+				Iterations:      []domain.ReviewIterationRecord{{Iteration: 1, Verdict: "iterate"}},
+			},
+			want:    "",
+			wantLog: `cause=phase_unconfirmed iterations=1 final_verdict=iterate`,
+		},
+		{
+			name:    "one iteration with no verdict retracts",
+			pending: "no-change-needed",
+			reviewMeta: &domain.ReviewMetadata{
+				TotalIterations: 1,
+				FinalVerdict:    "",
+				Iterations:      []domain.ReviewIterationRecord{{Iteration: 1, Verdict: ""}},
+			},
+			want:    "",
+			wantLog: `cause=phase_unconfirmed iterations=1 final_verdict=""`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+			got := retractUnconfirmedNoChangeDeclaration(tt.pending, tt.reviewMeta, logger)
+
+			if got != tt.want {
+				t.Errorf("retractUnconfirmedNoChangeDeclaration(%q, %+v) = %q, want %q", tt.pending, tt.reviewMeta, got, tt.want)
+			}
+			if tt.wantLog != "" && !strings.Contains(logs.String(), tt.wantLog) {
+				t.Errorf("log output missing %q\ngot: %s", tt.wantLog, logs.String())
+			}
+			if tt.wantLog == "" && strings.Contains(logs.String(), "no-change declaration retracted") {
+				t.Errorf("log output unexpectedly retracted a standing declaration\ngot: %s", logs.String())
+			}
+		})
+	}
+}
+
+// TestRunWorkerAttempt_NoChangeSignalRetractedOnFailingVerification is an
+// end-to-end confirmation that a failing verification command retracts a
+// no-change-needed declaration read after the coding turn: the run's
+// SoftStopReason ends empty, and it takes the ordinary disposition rather
+// than the declared one.
+func TestRunWorkerAttempt_NoChangeSignalRetractedOnFailingVerification(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"exit 1"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				case !isSelfReviewFixPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "no-change-needed")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (a failing verification command retracts the declaration)")
+	}
+	if result.SoftStopReason != "" {
+		t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil (the phase must have run)")
+	}
+}
+
+// TestRunWorkerAttempt_NoChangeSignalRetractionYieldsToBlocked verifies the
+// ordering the retraction predicate depends on: a blocked signal read
+// in-phase overwrites pendingSoftStopReason before retraction runs, so a
+// run that declared no change and then blocks during self-review ends
+// blocked, never silently retracted to empty.
+func TestRunWorkerAttempt_NoChangeSignalRetractionYieldsToBlocked(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "blocked")
+				case !isSelfReviewFixPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "no-change-needed")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q (blocked wins over a declaration read earlier in the phase)", result.SoftStopReason, "blocked")
+	}
+}
+
+// TestRunWorkerAttempt_TurnBudgetInPhaseNoChangeNeeded verifies that a
+// no-change-needed declaration written during a fix turn, on a run
+// agent.max_turns admitted with no pending reason, is consumed at the
+// in-phase read and ignored: the status file is removed, the phase
+// continues to its own verdict, and the worker result carries an empty
+// SoftStopReason.
+func TestRunWorkerAttempt_TurnBudgetInPhaseNoChangeNeeded(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2 // exhausted without any coding-turn signal
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         2, // room for a fix turn before the cap
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var reviewTurnCalls int
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewFixPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "no-change-needed")
+				case isSelfReviewTurnPrompt(params.Prompt):
+					reviewTurnCalls++
+					if reviewTurnCalls == 1 {
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
+					} else {
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+					}
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (an in-phase declaration is consumed and ignored, not promoted to the run's reason)")
+	}
+	if result.SoftStopReason != "" {
+		t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil (the phase must have continued to a verdict)")
+	}
+	if result.ReviewMetadata.FinalVerdict != "pass" {
+		t.Errorf("FinalVerdict = %q, want %q (the in-phase declaration must not have aborted the phase)", result.ReviewMetadata.FinalVerdict, "pass")
+	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+		t.Errorf("status file still present after an in-phase no-change-needed declaration, want removed: err=%v", err)
 	}
 }
