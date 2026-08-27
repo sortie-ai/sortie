@@ -270,7 +270,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `ci_feedback.escalation_label`: string, default `needs-human`; label applied during `label`
   escalation
 - `reactions.<kind>.provider`: string, optional; adapter identifier; absent = disabled
-- `reactions.<kind>.max_retries`: integer, default `2`; fix continuation attempts before escalation
+- `reactions.<kind>.max_retries`: integer, default `2`, except `merge_conflicts`, which defaults to
+  `1`; fix continuation attempts before escalation. Not consumed by `review_comments` or
+  `bot_review`, each of which bounds its dispatches with its own `max_continuation_turns`
 - `reactions.<kind>.escalation`: string, default `label`; `label` or `comment`
 - `reactions.<kind>.escalation_label`: string, default `needs-human`. Primary-dispatch parking uses
   the resolved non-empty `reactions.review_comments.escalation_label`; when that block or value is
@@ -278,6 +280,9 @@ This section is intentionally redundant so a coding agent can implement the conf
   `reactions.review_comments.provider`, ignores whether its `escalation` value is `label` or
   `comment`, and never falls through to another reaction kind's label. The primary path always
   parks by label; it borrows only this label name and no other review-reaction behavior
+- `reactions.ci_failure.max_log_lines`: integer, default `50`; non-negative; `0` fetches no log
+  excerpt; the CI provider is constructed once with this value, so a change takes effect only
+  after a restart
 - `reactions.ci_failure.watch_window_ms`: integer, default `86400000` (24 h); non-negative, not
   above `9223372036854`; `0` removes the bound; re-read on every tick
 - `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
@@ -285,8 +290,17 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive
 - `reactions.review_comments.watch_window_ms`: integer, default `1800000` (30 min); non-negative,
   not above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
+- `reactions.bot_review.poll_interval_ms`: integer, default `60000` (1 minute); minimum `30000`;
+  not rebuilt on `WORKFLOW.md` reload
+- `reactions.bot_review.max_continuation_turns`: integer, default `5`; positive; not rebuilt on
+  `WORKFLOW.md` reload
+- `reactions.bot_review.bot_usernames`: list of strings, default empty; allowlist of bot logins,
+  matched case-insensitively; a value that is not a list, or a list holding a non-string element,
+  is rejected; not rebuilt on `WORKFLOW.md` reload
 - `reactions.bot_review.watch_window_ms`: integer, default `1800000` (30 min); non-negative, not
   above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
+- `reactions.merge_conflicts.poll_interval_ms`: integer, default `60000` (1 minute); minimum
+  `30000`; not rebuilt on `WORKFLOW.md` reload
 - `reactions.merge_conflicts.watch_window_ms`: integer, default `1800000` (30 min); non-negative,
   not above `9223372036854`; `0` removes the bound; not rebuilt on `WORKFLOW.md` reload
 - `reactions.auto_merge.strategy`: string, default `squash`; one of `merge`, `squash`, `rebase`
@@ -305,6 +319,18 @@ This section is intentionally redundant so a coding agent can implement the conf
   list; not rebuilt on `WORKFLOW.md` reload; see §11G
 - `reactions.merge_completion.poll_interval_ms`: integer, default `60000` (1 minute); minimum
   `30000`
+- `reactions.label_commands.provider`: string, optional; SCM adapter identifier; absent or empty
+  makes the block inert and leaves its other fields unvalidated. The block parses through its own
+  path rather than the generic per-kind schema, so it carries no `max_retries`, `escalation`, or
+  `escalation_label`; not rebuilt on `WORKFLOW.md` reload; see §11F
+- `reactions.label_commands.review_label`: string, default `sortie:review`; an explicit empty
+  string disables the read-only review command; not rebuilt on `WORKFLOW.md` reload
+- `reactions.label_commands.fix_label`: string, default `sortie:fix`; an explicit empty string
+  disables the fix command; not rebuilt on `WORKFLOW.md` reload. An active provider with both
+  command labels empty is rejected as a configuration error
+- `reactions.label_commands.poll_interval_ms`: integer, default `60000` (1 minute); a value below
+  `30000` is clamped up to that floor with a warning rather than rejected; not rebuilt on
+  `WORKFLOW.md` reload
 - `dispatch.rules`: list of rule objects, optional; first-match-wins routing; see §5.3.10
 - `dispatch.default.agent`: string, optional; default agent kind when no rule matches; falls through to top-level `agent.kind`
 - `dispatch.default.template`: path, optional; default template when no rule matches; falls through to the Markdown body
