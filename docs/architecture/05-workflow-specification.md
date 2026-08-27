@@ -425,7 +425,6 @@ Example:
 reactions:
   review_comments:
     provider: github
-    max_retries: 2
     escalation: label
     escalation_label: needs-human
     poll_interval_ms: 120000
