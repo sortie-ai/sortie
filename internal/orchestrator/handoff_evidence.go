@@ -39,6 +39,13 @@ type handoffEvidenceResult struct {
 }
 
 func evaluateHandoffEvidence(ctx context.Context, result WorkerResult, log *slog.Logger) handoffEvidenceResult {
+	if result.SoftStop && result.SoftStopReason == string(workspace.StatusNoChangeNeeded) {
+		return handoffEvidenceResult{
+			Verdict: handoffWorkObserved,
+			Reason:  "agent declared no change was needed",
+		}
+	}
+
 	if result.WorkspacePath != "" {
 		scm := workspace.ReadSCMMetadata(result.WorkspacePath, log)
 		if scm.SHA != "" || scm.PRNumber > 0 {

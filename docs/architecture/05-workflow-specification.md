@@ -105,6 +105,21 @@ Fields:
   - Must not appear in `terminal_states` (handoff is not terminal; the issue may return
     to active).
   - Changes take effect for future worker exits, not in-flight sessions.
+- `no_change_state` (string, optional)
+  - Target tracker state for a worker run whose agent declared, through `.sortie/status`, that the
+    requested outcome already held and nothing needed changing (see ADR-0028).
+  - Supports `$VAR` environment indirection.
+  - Supports the `SORTIE_TRACKER_NO_CHANGE_STATE` environment override.
+  - When absent, a declared run targets `handoff_state` instead; a deployment that does not set
+    this field sees no change in where its issues land.
+  - Empty values, including `$VAR` references that resolve to empty, are treated as configuration
+    errors.
+  - Requires `handoff_state` to be non-empty: a declared run performs no transition where no
+    handoff path applies.
+  - Must equal `handoff_state` (case-insensitive) or name a member of `terminal_states` exactly as
+    written in front matter (case-insensitive); no other value is permitted, and no tracker
+    adapter's default terminal-state list is consulted.
+  - Changes take effect for future worker exits, not in-flight sessions.
 - `in_progress_state` (string, optional)
   - Target tracker state for dispatch-time transitions. When configured, the worker calls
     `TransitionIssue` as the first step of each attempt, before workspace preparation.

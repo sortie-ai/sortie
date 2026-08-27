@@ -127,6 +127,14 @@ itself observed:
   immediately before the write. A terminal result from either the observation or the verification
   read suppresses the write. With no terminal states configured no value can classify as terminal,
   so the verification read is skipped.
+
+  This write point has two possible target states. A run whose declaration that the requested
+  outcome already held stood through the self-review phase where that phase ran selects
+  `tracker.no_change_state`, when that field is configured; every other run at this point,
+  including a declared run whose `no_change_state` is unset, selects `tracker.handoff_state`.
+  `tracker.no_change_state` is the one target-state field this point permits to name a terminal
+  state, where every sibling target-state field at this point is rejected on such a collision.
+
 - The merge-completion target state (`reactions.merge_completion.target_state`), when a
   Sortie-managed pull request merges while the linked issue is still parked in
   `tracker.handoff_state`, independently of who or what performed the merge. Active only when

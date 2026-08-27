@@ -75,6 +75,44 @@ func TestReadStatusFile(t *testing.T) {
 			want: StatusNeedsHumanReview,
 		},
 		{
+			name: "no-change-needed with newline",
+			setup: func(t *testing.T, wsPath string) {
+				writeStatusFile(t, wsPath, []byte("no-change-needed\n"))
+			},
+			want: StatusNoChangeNeeded,
+		},
+		{
+			name: "no-change-needed no trailing newline",
+			setup: func(t *testing.T, wsPath string) {
+				writeStatusFile(t, wsPath, []byte("no-change-needed"))
+			},
+			want: StatusNoChangeNeeded,
+		},
+		{
+			name: "wrong case No-Change-Needed",
+			setup: func(t *testing.T, wsPath string) {
+				writeStatusFile(t, wsPath, []byte("No-Change-Needed\n"))
+			},
+			want:    StatusNone,
+			wantLog: "unrecognized",
+		},
+		{
+			name: "underscore separator no_change_needed",
+			setup: func(t *testing.T, wsPath string) {
+				writeStatusFile(t, wsPath, []byte("no_change_needed\n"))
+			},
+			want:    StatusNone,
+			wantLog: "unrecognized",
+		},
+		{
+			name: "no separator nochangeneeded",
+			setup: func(t *testing.T, wsPath string) {
+				writeStatusFile(t, wsPath, []byte("nochangeneeded\n"))
+			},
+			want:    StatusNone,
+			wantLog: "unrecognized",
+		},
+		{
 			name: "blocked no trailing newline",
 			setup: func(t *testing.T, wsPath string) {
 				writeStatusFile(t, wsPath, []byte("blocked"))
@@ -346,6 +384,7 @@ func TestStatusSignal_IsRecognized(t *testing.T) {
 		{StatusNone, false},
 		{StatusBlocked, true},
 		{StatusNeedsHumanReview, true},
+		{StatusNoChangeNeeded, true},
 		{StatusSignal("anything-else"), false},
 	}
 

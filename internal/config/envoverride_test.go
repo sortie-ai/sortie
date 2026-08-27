@@ -321,6 +321,29 @@ func TestApplyEnvOverrides(t *testing.T) {
 		}
 	})
 
+	t.Run("string override SORTIE_TRACKER_NO_CHANGE_STATE", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_NO_CHANGE_STATE", "Human Review")
+
+		raw := map[string]any{
+			"tracker": map[string]any{"no_change_state": "Done"},
+		}
+		envKeys, err := applyEnvOverrides(raw)
+		if err != nil {
+			t.Fatalf("applyEnvOverrides: unexpected error: %v", err)
+		}
+
+		if !envKeys["tracker.no_change_state"] {
+			t.Error("envKeys[\"tracker.no_change_state\"] = false, want true")
+		}
+		trackerMap, ok := raw["tracker"].(map[string]any)
+		if !ok {
+			t.Fatalf("raw[\"tracker\"] = %T, want map[string]any", raw["tracker"])
+		}
+		if got, _ := trackerMap["no_change_state"].(string); got != "Human Review" {
+			t.Errorf("raw[\"tracker\"][\"no_change_state\"] = %q, want %q (env replaces front-matter value)", got, "Human Review")
+		}
+	})
+
 	t.Run("CSV override SORTIE_TRACKER_ACTIVE_STATES", func(t *testing.T) {
 		t.Setenv("SORTIE_TRACKER_ACTIVE_STATES", "Open,Working")
 
@@ -656,4 +679,28 @@ func TestApplyEnvOverrides(t *testing.T) {
 			t.Errorf("error = %q, want it to contain %q", err.Error(), "missing '='")
 		}
 	})
+}
+
+// TestNewServiceConfig_NoChangeStateEnvOverrideValidated verifies that a
+// SORTIE_TRACKER_NO_CHANGE_STATE value naming neither tracker.handoff_state
+// nor a member of tracker.terminal_states is rejected with the same
+// *ConfigError a front-matter value would produce: the override replaces
+// the raw map value before NewServiceConfig validates it, so no separate
+// validation path exists for the environment source.
+func TestNewServiceConfig_NoChangeStateEnvOverrideValidated(t *testing.T) {
+	t.Setenv("SORTIE_TRACKER_NO_CHANGE_STATE", "Some Unrelated State")
+
+	_, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{
+			"handoff_state":   "Human Review",
+			"active_states":   []any{"To Do"},
+			"terminal_states": []any{"Done"},
+		},
+	})
+
+	assertConfigErrorField(t, err, "tracker.no_change_state")
+	var ce *ConfigError
+	if errors.As(err, &ce) && !strings.Contains(ce.Message, "must equal tracker.handoff_state or name a member of tracker.terminal_states") {
+		t.Errorf("ConfigError.Message = %q, want the R-12 rejection message", ce.Message)
+	}
 }

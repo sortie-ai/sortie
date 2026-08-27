@@ -11,6 +11,24 @@ import (
 // short continuation line on subsequent turns.
 const branchingTemplate = `{{ if .run.is_continuation }}Continue turn {{ .run.turn_number }} cont=true{{ else }}Task: {{ .issue.title }} cont=false{{ end }}`
 
+// TestRuntimeStatusSuffixContent asserts the content requirements the
+// three-value suffix must satisfy: each recognized token appears as an
+// exact substring, and the suffix carries a single .sortie/status write
+// example rather than one command block per value.
+func TestRuntimeStatusSuffixContent(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{"blocked", "needs-human-review", "no-change-needed"} {
+		if !strings.Contains(RuntimeStatusSuffix, want) {
+			t.Errorf("RuntimeStatusSuffix missing substring %q:\n%s", want, RuntimeStatusSuffix)
+		}
+	}
+
+	if got := strings.Count(RuntimeStatusSuffix, ".sortie/status"); got != 1 {
+		t.Errorf("RuntimeStatusSuffix contains %d .sortie/status references, want 1 (a single write example)", got)
+	}
+}
+
 func TestBuildTurnPrompt(t *testing.T) {
 	t.Parallel()
 

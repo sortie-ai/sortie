@@ -201,6 +201,7 @@ tracker:
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). For GitLab: a URL query fragment for the project issue-list route, key-checked against an allowlist and merged into candidate polling only (see the GitLab note below). |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed. The transition is suppressed when the issue has already reached a terminal state, and withheld when the run's frozen `handoff_evidence` policy does not permit the write ([architecture §11.5](architecture/11-issue-tracker-integration-contract.md#115-tracker-writes-important-boundary)). |
 | `handoff_evidence` | string         | No                        | `observed`      | Future worker attempts             | Policy governing the evidence condition on an otherwise-eligible handoff. `observed` withholds only when absence of work is positively observed and allows an undeterminable verdict; `strict` also withholds an undeterminable verdict; `off` restores the prior four-condition decision and performs no baseline capture, exit-time workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are rejected as a closed set while configuration is parsed, without contacting the tracker, so startup, reload, and `sortie validate` all reject the same value. See [architecture §6.4](architecture/06-configuration-specification.md#64-config-fields-summary-cheat-sheet) for the verdict's derivation. |
+| `no_change_state` | string          | No                        | `handoff_state` | Future worker exits                | Target tracker state for a worker run whose agent declared, through `.sortie/status`, that the requested outcome already held and nothing needed changing. When absent, a declared run targets `handoff_state` instead, so a deployment that does not set this field sees no change in where its issues land. Is the one target-state field permitted to name a terminal state. |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
 
@@ -271,6 +272,40 @@ tracker:
   ceiling is governed by `agent.max_consecutive_absences`; the reset rule for the count, and the
   two operator gestures that release a park, are specified in
   [architecture §14.2](architecture/19-failure-model-and-recovery-strategy.md#142-recovery-behavior).
+
+**`no_change_state` validation rules:**
+
+- Supports `$VAR` environment indirection and the `SORTIE_TRACKER_NO_CHANGE_STATE` environment
+  override.
+- When set, must be a non-empty string after `$VAR` resolution. Empty resolution is a
+  configuration error.
+- Requires `handoff_state` to be non-empty. A declared run performs no transition where no
+  handoff path applies, so a `no_change_state` set with `handoff_state` unset is a configuration
+  error rather than a silently inert field.
+- Must equal `handoff_state` (case-insensitive) or name a member of `terminal_states` exactly as
+  written in front matter (case-insensitive). Unlike `handoff_state` and `in_progress_state`, this
+  check never falls back to the tracker adapter's default terminal-state list, so the check is
+  entirely offline and confined to the two values written in configuration.
+- This is the one target-state field permitted to equal a value that is also a member of
+  `terminal_states`; every sibling target-state field is rejected on that collision.
+
+**`no_change_state` runtime behavior:**
+
+- The declaration is the agent's own assertion. It is checked only by the self-review phase,
+  through its `pass` verdict and its verification commands (Section 2.9); on a deployment with
+  self-review disabled, the declaration is taken on the agent's word with no check at all.
+- Under `tracker.handoff_evidence: observed` or `strict`, a run whose declaration stands is always
+  treated as positive evidence: no absence verdict is computed, the run is recorded as `succeeded`,
+  the consecutive-absence count is reset rather than advanced, and a park held for consecutive
+  absences is released, on the same terms as any other work-observed verdict.
+- Under `tracker.handoff_evidence: off`, no verdict is computed for a declared run, so neither the
+  count reset nor the park release occurs; the declaration's only effect there is the transition
+  target.
+- A terminal `no_change_state` ends the issue with no reaction running for a pull request the run
+  left behind: no CI feedback, no review comments, no bot review, no auto-merge, no
+  merge-conflict handling, and no merge completion. This is the same residue any handoff to a
+  terminal state carries, made the ordinary outcome rather than an operator's own terminal action
+  once this field names a terminal state.
 
 **`in_progress_state` validation rules:**
 
@@ -1774,6 +1809,7 @@ Each variable maps to exactly one config field. The naming convention is
 | `SORTIE_TRACKER_TERMINAL_STATES`           | `tracker.terminal_states`        | csv    | Comma-separated list           |
 | `SORTIE_TRACKER_QUERY_FILTER`              | `tracker.query_filter`           | string |                                |
 | `SORTIE_TRACKER_HANDOFF_STATE`             | `tracker.handoff_state`          | string |                                |
+| `SORTIE_TRACKER_NO_CHANGE_STATE`           | `tracker.no_change_state`        | string |                                |
 | `SORTIE_TRACKER_IN_PROGRESS_STATE`         | `tracker.in_progress_state`      | string |                                |
 | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`      | `tracker.comments.on_dispatch`   | bool   | `true`/`false`/`1`/`0`        |
 | `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`    | `tracker.comments.on_completion` | bool   | `true`/`false`/`1`/`0`        |
@@ -3379,6 +3415,7 @@ re-applies configuration and prompt template without restart.
 | `tracker.terminal_states`              | Future dispatch and reconciliation.                                                            |
 | `tracker.query_filter`                 | Future dispatches.                                                                             |
 | `tracker.handoff_state`                | Future worker exits, not in-flight sessions.                                                   |
+| `tracker.no_change_state`              | Future worker exits, not in-flight sessions.                                                   |
 | `tracker.in_progress_state`            | Future dispatches, not in-flight sessions.                                                     |
 | `tracker.handoff_evidence`             | Future worker attempts, not in-flight sessions.                                                |
 | `polling.interval_ms`                  | **Immediate** — affects future tick scheduling.                                                |
@@ -3463,6 +3500,8 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
 | `tracker.handoff_state` and `tracker.in_progress_state` free of collisions against the effective state lists | The state collides with the effective `active_states` or `terminal_states`, where an empty workflow list takes the tracker adapter's own fallback list. |
+| `tracker.no_change_state` requires `tracker.handoff_state` | `no_change_state` is set while `handoff_state` is empty. Checked entirely offline, with no tracker call and no adapter fallback. |
+| `tracker.no_change_state` names a permitted value | `no_change_state` is neither equal to `handoff_state` nor a member of `terminal_states` exactly as written in front matter. Checked entirely offline, with no tracker call and no adapter fallback. |
 
 **Advisory warnings vs. configuration errors:** An unknown key placed directly
 under `dispatch` (alongside `rules` and `default`) produces an `unknown_sub_key`
@@ -3534,6 +3573,11 @@ Each error identifies the offending field path.
 | `config: tracker.handoff_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).  | Set the referenced environment variable to a valid state name.                                                                       |
 | `config: tracker.handoff_state: "<val>" collides with active state "<state>"`   | `handoff_state` matches one of the `active_states` (case-insensitive).   | Use a state that is not in `active_states`. The handoff state must be distinct from active and terminal states.                      |
 | `config: tracker.handoff_state: "<val>" collides with terminal state "<state>"` | `handoff_state` matches one of the `terminal_states` (case-insensitive). | Use a state that is not in `terminal_states`.                                                                                        |
+| `config: tracker.no_change_state: expected string, got <type>`                  | `no_change_state` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.no_change_state: must not be empty`                           | `no_change_state` is set to an explicit empty string.                    | Provide a valid state name, or omit the field entirely to fall back to `handoff_state`.                                              |
+| `config: tracker.no_change_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty). | Set the referenced environment variable to a valid state name.                                                                       |
+| `config: tracker.no_change_state: requires tracker.handoff_state; a declared run performs no transition where no handoff path applies` | `no_change_state` is set while `handoff_state` is empty.                | Set `tracker.handoff_state`, or remove `no_change_state`.                                                                            |
+| `config: tracker.no_change_state: "<val>" must equal tracker.handoff_state or name a member of tracker.terminal_states` | `no_change_state` is neither `handoff_state` nor a member of the `terminal_states` written in front matter. | Set `no_change_state` to the same value as `handoff_state`, or to one of the states listed in `terminal_states`.                     |
 | `config: tracker.handoff_evidence: expected string, got <type>`                 | `handoff_evidence` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.handoff_evidence: must be one of observed, strict, or off`     | `handoff_evidence` is set to a value outside the closed set.             | Use `observed`, `strict`, or `off`. Omit the field to keep the default `observed`.                                                   |
 | `config: tracker.in_progress_state: expected string, got <type>`                    | `in_progress_state` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
@@ -3602,6 +3646,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_TERMINAL_STATES`         | CSV; at least one of active/terminal required                                          |
 | `tracker.query_filter`                  | string           | `""`                         | `SORTIE_TRACKER_QUERY_FILTER`            | Adapter-interpreted                                                                    |
 | `tracker.handoff_state`                 | string           | _(absent)_                   | `SORTIE_TRACKER_HANDOFF_STATE`           | Must not collide with active/terminal                                                  |
+| `tracker.no_change_state`               | string           | `handoff_state`               | `SORTIE_TRACKER_NO_CHANGE_STATE`         | Must equal `handoff_state` or name a member of `terminal_states`; requires `handoff_state` |
 | `tracker.handoff_evidence`              | string           | `observed`                   | —                                        | `observed`, `strict`, or `off`; closed set                                             |
 | `tracker.in_progress_state`             | string           | _(absent)_                   | `SORTIE_TRACKER_IN_PROGRESS_STATE`       | Must be in active; must not collide with terminal/handoff                              |
 | `tracker.api_version`                   | string           | `"3"`                        | —                                        | Jira only; `"3"` (Cloud) or `"2"` (Server/DC); `$VAR` supported; quote the value       |

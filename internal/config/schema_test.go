@@ -406,6 +406,22 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"tracker.comments.on_dispatch"},
 		},
 		{
+			name: "tracker.no_change_state string value produces no warning",
+			raw: map[string]any{
+				"tracker": map[string]any{"no_change_state": "Human Review"},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "type mismatch tracker.no_change_state is integer",
+			raw: map[string]any{
+				"tracker": map[string]any{"no_change_state": 123},
+			},
+			wantCount:  1,
+			wantChecks: []string{"type_mismatch"},
+			wantFields: []string{"tracker.no_change_state"},
+		},
+		{
 			name: "type mismatch polling.interval_ms is non-numeric string",
 			raw: map[string]any{
 				"polling": map[string]any{"interval_ms": "not-a-number"},

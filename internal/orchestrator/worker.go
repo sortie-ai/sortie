@@ -1216,12 +1216,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var reviewMeta *domain.ReviewMetadata
 	var phaseErr error
 
-	signalAdmits := pendingSoftStopReason == "" || pendingSoftStopReason == string(workspace.StatusNeedsHumanReview)
+	signalAdmits := pendingSoftStopReason == "" ||
+		pendingSoftStopReason == string(workspace.StatusNeedsHumanReview) ||
+		pendingSoftStopReason == string(workspace.StatusNoChangeNeeded)
 	selfReviewGate := reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() && signalAdmits
 
 	if selfReviewGate {
 		if pendingSoftStopReason != "" {
-			logger.Info("agent signaled completion, entering self-review",
+			logger.Info("agent signaled a status admitting self-review, entering the phase",
 				slog.String("status", pendingSoftStopReason),
 				slog.Int("turns_completed", turnsCompleted),
 			)
@@ -1246,6 +1248,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if phaseSignal == workspace.StatusBlocked {
 			pendingSoftStopReason = string(workspace.StatusBlocked)
 		}
+		pendingSoftStopReason = retractUnconfirmedNoChangeDeclaration(pendingSoftStopReason, reviewMeta, logger)
 	} else if pendingSoftStopReason != "" {
 		logger.Info("agent signaled status, exiting worker",
 			slog.String("status", pendingSoftStopReason),
@@ -1357,6 +1360,47 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		Usage:                        localUsage,
 		UsageMeasured:                localMeasured,
 	})
+}
+
+// retractUnconfirmedNoChangeDeclaration clears pendingSoftStopReason when it
+// declares no change was needed and the self-review phase did not confirm
+// that declaration. The phase confirms the declaration only when it
+// recorded exactly one iteration, that iteration ended on a "pass"
+// verdict, and no verification result failed; a phase that ran no
+// verification command still confirms.
+//
+// reviewMeta is nil when the self-review gate did not admit the run, in
+// which case the declaration is left unchanged. Any other reason, and a
+// nil reviewMeta, pass through unchanged.
+func retractUnconfirmedNoChangeDeclaration(pendingSoftStopReason string, reviewMeta *domain.ReviewMetadata, logger *slog.Logger) string {
+	if pendingSoftStopReason != string(workspace.StatusNoChangeNeeded) {
+		return pendingSoftStopReason
+	}
+	if reviewMeta == nil {
+		return pendingSoftStopReason
+	}
+	for _, iteration := range reviewMeta.Iterations {
+		for _, result := range iteration.VerificationResults {
+			if result.ExitCode != 0 || result.TimedOut {
+				logger.Info("no-change declaration retracted",
+					slog.String("cause", "verification"),
+					slog.String("command", result.Command),
+					slog.Int("exit_code", result.ExitCode),
+					slog.Bool("timed_out", result.TimedOut),
+				)
+				return ""
+			}
+		}
+	}
+	if reviewMeta.TotalIterations != 1 || reviewMeta.FinalVerdict != "pass" {
+		logger.Info("no-change declaration retracted",
+			slog.String("cause", "phase_unconfirmed"),
+			slog.Int("iterations", reviewMeta.TotalIterations),
+			slog.String("final_verdict", reviewMeta.FinalVerdict),
+		)
+		return ""
+	}
+	return pendingSoftStopReason
 }
 
 // buildToolAdvertisement formats a Markdown section documenting the

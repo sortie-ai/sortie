@@ -29,12 +29,16 @@ const (
 	// StatusNeedsHumanReview indicates the agent determined that human
 	// review is required before further automated work can proceed.
 	StatusNeedsHumanReview StatusSignal = "needs-human-review"
+
+	// StatusNoChangeNeeded indicates the agent determined that the
+	// requested outcome already held and nothing needed changing.
+	StatusNoChangeNeeded StatusSignal = "no-change-needed"
 )
 
 // IsRecognized reports whether s is a recognized A2O status signal
 // that triggers a soft stop.
 func (s StatusSignal) IsRecognized() bool {
-	return s == StatusBlocked || s == StatusNeedsHumanReview
+	return s == StatusBlocked || s == StatusNeedsHumanReview || s == StatusNoChangeNeeded
 }
 
 // statusFileMaxBytes is the maximum number of bytes read from the
@@ -149,6 +153,8 @@ func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 		return StatusBlocked
 	case "needs-human-review":
 		return StatusNeedsHumanReview
+	case "no-change-needed":
+		return StatusNoChangeNeeded
 	default:
 		logger.Warn("unrecognized .sortie/status value",
 			slog.String("workspace", workspacePath),

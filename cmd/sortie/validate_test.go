@@ -4216,3 +4216,83 @@ func TestValidateHandoffStateDefaultParityEveryTrackerKind(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateNoChangeStateRejectionsAreOffline verifies that every
+// tracker.no_change_state value rule is reported by sortie validate with
+// no tracker call: the file tracker kind never talks to a network, so a
+// diagnostic surfacing here proves the check ran before any adapter
+// construction that could reach one.
+func TestValidateNoChangeStateRejectionsAreOffline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		trackerYAM string
+		wantCheck  string
+		wantMsg    string
+	}{
+		{
+			name: "requires handoff_state",
+			trackerYAM: "tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+				"  no_change_state: Done\n",
+			wantCheck: "config.tracker.no_change_state",
+			wantMsg:   "requires tracker.handoff_state",
+		},
+		{
+			name: "neither handoff_state nor a terminal state",
+			trackerYAM: "tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+				"  handoff_state: Human Review\n  no_change_state: Somewhere Else\n",
+			wantCheck: "config.tracker.no_change_state",
+			wantMsg:   "must equal tracker.handoff_state or name a member of tracker.terminal_states",
+		},
+		{
+			name: "explicit empty string",
+			trackerYAM: "tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+				"  handoff_state: Human Review\n  no_change_state: \"\"\n",
+			wantCheck: "config.tracker.no_change_state",
+			wantMsg:   "must not be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content := []byte("---\n" +
+				"polling:\n  interval_ms: 30000\n" +
+				tt.trackerYAM +
+				"agent:\n  kind: mock\n" +
+				"file:\n  path: issues.json\n" +
+				"---\nDo {{ .issue.title }}.\n")
+			wfPath := writeCustomWorkflowFile(t, t.TempDir(), content)
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+
+			found := false
+			for _, d := range out.Errors {
+				if d.Check == tt.wantCheck {
+					found = true
+					if !strings.Contains(d.Message, tt.wantMsg) {
+						t.Errorf("diagnostic.Message = %q, want substring %q", d.Message, tt.wantMsg)
+					}
+					break
+				}
+			}
+			if !found {
+				t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+		})
+	}
+}

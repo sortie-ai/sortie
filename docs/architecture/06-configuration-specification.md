@@ -100,6 +100,12 @@ Validation checks:
   state lists. An empty `tracker.active_states` or `tracker.terminal_states` takes the tracker
   adapter's declared fallback list, so a collision the config layer cannot see (because it rules
   on the lists as written) is reported here.
+- `tracker.no_change_state`, unlike the two fields above, is validated entirely when configuration
+  is parsed (Section 5.3.1) and is not re-checked here: it must equal `tracker.handoff_state` or
+  name a member of `tracker.terminal_states` exactly as written in front matter, with no fallback
+  to the tracker adapter's declared default state lists. This keeps `sortie validate` offline for
+  this field, at the cost of not catching a collision that only the adapter's fallback list would
+  expose.
 - `tracker.handoff_evidence` is validated while configuration is parsed as the closed set
   `observed`, `strict`, and `off`. This is a shape check and never contacts the tracker, so the same
   invalid value is rejected by startup, reload, and `sortie validate`.
@@ -206,6 +212,13 @@ This section is intentionally redundant so a coding agent can implement the conf
   workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are
   rejected offline. The policy is frozen for each run before its baseline decision, so a reload
   applies to future run launches and does not change an in-flight run's evidence contract
+- `tracker.no_change_state`: string, optional, default `tracker.handoff_state`; target state for a
+  worker run whose agent declared, through `.sortie/status`, that the requested outcome already
+  held and nothing needed changing; requires `tracker.handoff_state` to be non-empty; must equal
+  `tracker.handoff_state` (case-insensitive) or name a member of `tracker.terminal_states` exactly
+  as written in front matter (case-insensitive), with no fallback to the adapter's default
+  terminal-state list; supports `$VAR` and the `SORTIE_TRACKER_NO_CHANGE_STATE` environment
+  override; changes take effect for future worker exits, not in-flight sessions
 - `tracker.in_progress_state`: string, optional, default absent; target state for
   dispatch-time transition at the start of each worker attempt; must be in `active_states`,
   must not collide with `terminal_states` or `handoff_state`, and the `terminal_states` rule is
