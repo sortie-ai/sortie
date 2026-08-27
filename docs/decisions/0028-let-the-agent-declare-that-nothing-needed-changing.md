@@ -50,7 +50,7 @@ The declaration is monotone: it may move an absence verdict or an undeterminable
 
 A new field, `tracker.no_change_state`, names the state a declared run moves the issue to. Unset, it is `tracker.handoff_state`, so existing configurations see no change in where issues land. An operator may name a value from `tracker.terminal_states` instead, the case that earns the field: a handoff with no pull request and no diff puts an issue before a person with nothing to look at. It is therefore the one target-state field allowed to name a terminal state, the case it serves, where the sibling fields are rejected on such a collision. Where no handoff path applies, the declaration changes no issue state.
 
-A terminal state is not the default. The orchestrator's own terminal writes are confined to the opt-in `merge_completion` reaction, on ADR-0017's reasoning that a write closing an issue on the operator's board must be asked for. A default would extend self-closing to deployments that never asked for it.
+A terminal state is not the default. The orchestrator's own terminal writes were confined to the opt-in `merge_completion` reaction, on ADR-0017's reasoning that a write closing an issue on the operator's board must be asked for. A default here would extend self-closing to every deployment; naming such a state stays a deployment's own opt-in, on the same reasoning.
 
 ### What the declaration does not do
 
