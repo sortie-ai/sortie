@@ -125,8 +125,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
          `strict`, where it is treated as an absence for the failure disposition and consecutive
          count. The verdict is recorded in either policy.
        - A run that declared the requested outcome already held, and whose declaration stood
-         through the self-review phase where that phase ran, is tested ahead of every other
-         condition above and always yields `work observed`, under every policy value including
+         through the self-review phase where that phase ran, is tested ahead of the four branches
+         above and always yields `work observed`, under every policy value including
          `off`: it runs no workspace inspection and cannot be withheld or classified as
          undeterminable. Under `off`, where no verdict is otherwise computed, the declaration
          still selects the transition target. The transition target for a declared run is

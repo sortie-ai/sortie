@@ -8936,7 +8936,7 @@ func TestHandleWorkerExit_DeclaredRunReleasesAbsencePark(t *testing.T) {
 }
 
 // TestHandleWorkerExit_DeclaredRunTargetAcrossPolicies is the six-case
-// matrix (spec A-12): tracker.no_change_state set and unset, crossed with
+// matrix: tracker.no_change_state set and unset, crossed with
 // observed, strict, and off, asserting the state actually passed to
 // TransitionIssue in each.
 func TestHandleWorkerExit_DeclaredRunTargetAcrossPolicies(t *testing.T) {
@@ -8989,7 +8989,7 @@ func TestHandleWorkerExit_DeclaredRunTargetAcrossPolicies(t *testing.T) {
 }
 
 // TestHandleWorkerExit_DeclaredRunUndeterminableEvidenceProceedsUnderStrict
-// covers spec A-13: a declared run whose workspace evidence would be
+// covers the case where a declared run whose workspace evidence would be
 // undeterminable proceeds under strict rather than being withheld,
 // because the declaration test in evaluateHandoffEvidence runs before any
 // baseline comparison.
@@ -9027,7 +9027,7 @@ func TestHandleWorkerExit_DeclaredRunUndeterminableEvidenceProceedsUnderStrict(t
 }
 
 // TestHandleWorkerExit_TerminalObservationSuppressesRegardlessOfDeclaration
-// covers spec A-14: a terminal state observed at exit suppresses the
+// covers the case where a terminal state observed at exit suppresses the
 // handoff and releases the claim on the same terms with and without a
 // declaration, reaching no new state.
 func TestHandleWorkerExit_TerminalObservationSuppressesRegardlessOfDeclaration(t *testing.T) {
@@ -9079,7 +9079,7 @@ func TestHandleWorkerExit_TerminalObservationSuppressesRegardlessOfDeclaration(t
 	}
 }
 
-// TestDrainRunningWorkers_NoChangeState covers spec A-15: the shutdown
+// TestDrainRunningWorkers_NoChangeState covers the case where the shutdown
 // drain lane's HandleWorkerExitParams construction site resolves a
 // declared exit's target the same way the event-loop lane does.
 func TestDrainRunningWorkers_NoChangeState(t *testing.T) {
@@ -9130,7 +9130,7 @@ func TestDrainRunningWorkers_NoChangeState(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerExit_NoChangeStateLiveReload covers spec A-24: a live
+// TestHandleWorkerExit_NoChangeStateLiveReload covers the case where a live
 // reload that changes tracker.no_change_state between one exit and the
 // next is reflected at exit time, on the same terms HandoffState already
 // relies on (params sourced fresh from config.ServiceConfig at each
@@ -9278,7 +9278,7 @@ func TestHandleWorkerExit_DeclaredRunLabelReviewPostureNoWarning(t *testing.T) {
 }
 
 // TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile
-// covers spec A-16: a declared run whose workspace carries pull-request
+// covers the case where a declared run whose workspace carries pull-request
 // metadata still seeds its pending reaction entries even when the target
 // state is terminal, and the next reconcile tick over a terminal issue
 // releases them through releaseTerminalIssueState, so no reaction ever

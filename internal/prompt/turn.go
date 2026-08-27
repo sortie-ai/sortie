@@ -24,9 +24,10 @@ const DefaultContinuationPrompt = "Continue working on this task. Review the cur
 const RuntimeStatusSuffix = `If you determine that you cannot make further progress on this task without human
 intervention, or if your work is complete and requires human review, or if you
 determine that the requested outcome already held and you changed nothing, signal
-the orchestrator by running:
+the orchestrator by running the following, replacing STATUS with exactly one of
+the three values below:
 
-    mkdir -p .sortie && echo "blocked" > .sortie/status
+    mkdir -p .sortie && echo "STATUS" > .sortie/status
 
 Use "blocked" when you cannot proceed. Use "needs-human-review" when your work is
 complete and awaiting review. Use "no-change-needed" when the requested outcome
