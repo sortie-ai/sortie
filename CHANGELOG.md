@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `reactions.ci_failure.watch_window_ms` now rejects a value above `9223372036854` (about 292 years) instead of converting it to a window of a fraction of a millisecond or to no bound at all. `0` still means no time limit. A deployment currently carrying a larger value is refused at startup and by `sortie validate` until the value is lowered.
   ([#956](https://github.com/sortie-ai/sortie/issues/956))
 
-- On Windows, a hook's background child can no longer outlive the timeout's process-tree kill and hold the workspace directory open. The hook subprocess is now created suspended and only allowed to run after it has been placed in the Job Object that the timeout kills, closing a window in which a child started before that assignment survived termination and kept the directory locked.
+- On Windows, a hook's background child no longer escapes the timeout's process-tree kill by starting before the hook process joined the Job Object that the kill targets. The hook subprocess is now created suspended and only allowed to run once it is a member, closing the window in which such a child survived termination and kept the workspace directory locked. A hook whose Job Object cannot be created still runs, as it did before, and the failure is logged.
   ([#883](https://github.com/sortie-ai/sortie/issues/883))
 
 ### Changed
