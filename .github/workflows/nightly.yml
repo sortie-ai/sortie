@@ -377,3 +377,22 @@ jobs:
         run: |
           echo "::error::Integration check failed for ${ADAPTER}"
           exit 1
+
+  hook-stress:
+    name: Windows hook stress
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run the hook stress harness
+        env:
+          SORTIE_HOOKSTRESS_TEST: "1"
+        run: go test -v -count=1 -timeout 15m ./internal/workspace/...

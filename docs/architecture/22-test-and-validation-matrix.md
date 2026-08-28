@@ -71,6 +71,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   that pass
 - One sweep summary record is emitted per pass that produced a candidate set, including a pass
   that removed nothing, and its outcome counters sum to the candidate count
+- On Windows, the hook subprocess is a Job Object member before it executes whenever the Job
+  Object was created; a creation failure is reported and the hook runs without one
+- On Windows, a hook process that cannot be resumed after job assignment is reported as a start
+  failure rather than a timeout, unless a context error was already pending when resume was
+  attempted
 
 ### 17.3 Issue Tracker Client
 
