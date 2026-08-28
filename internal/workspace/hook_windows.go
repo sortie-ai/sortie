@@ -56,6 +56,8 @@ type hookTeardown struct {
 	RootProbeErr     error // non-nil when the root probe itself failed
 	Survivors        []hookSurvivor
 	SurvivorScanErr  error // non-nil when the scan itself failed
+	JobListErr       error // non-nil when reading the job's PID list failed
+	DrainQueryErr    error // non-nil when a drain accounting query failed
 }
 
 // hookSurvivor names one process descended from the hook root that was
@@ -199,7 +201,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 
 	var jobPIDs []uint32
 	if job != 0 {
-		jobPIDs, _ = jobMemberPIDs(job)
+		jobPIDs, teardown.JobListErr = jobMemberPIDs(job)
 	}
 	teardown.JobMemberPIDs = jobPIDs
 
@@ -321,8 +323,21 @@ func logHookTeardown(params HookParams, teardown hookTeardown) {
 	if teardown.SurvivorScanErr != nil {
 		args = append(args, slog.Any("survivor_scan_err", teardown.SurvivorScanErr))
 	}
+	if teardown.JobListErr != nil {
+		args = append(args, slog.Any("job_list_err", teardown.JobListErr))
+	}
+	if teardown.DrainQueryErr != nil {
+		args = append(args, slog.Any("drain_query_err", teardown.DrainQueryErr))
+	}
 
-	unsettled := len(teardown.Survivors) > 0 || teardown.ActiveLast > 0 || teardown.SurvivorScanErr != nil
+	// An observation that failed is not an observation of a clean
+	// teardown: it says nothing either way, so it raises the record
+	// rather than letting a default zero value read as settled.
+	unsettled := len(teardown.Survivors) > 0 ||
+		teardown.ActiveLast > 0 ||
+		teardown.SurvivorScanErr != nil ||
+		teardown.JobListErr != nil ||
+		teardown.DrainQueryErr != nil
 	if unsettled {
 		slog.Warn("hook process tree did not settle", args...)
 		return
@@ -470,6 +485,14 @@ func resumeHookProcess(pid uint32) (resumedThreads int, err error) {
 		}
 	}
 
+	if unresolvedErr == nil && resumedThreads == 0 {
+		// The snapshot held no thread owned by the hook process, so
+		// nothing was resumed and the process is still suspended.
+		// Reporting success here would leave it to block until the
+		// context expires and be misreported as a script timeout.
+		unresolvedErr = fmt.Errorf("no thread owned by process %d appeared in the thread snapshot", pid)
+	}
+
 	return resumedThreads, unresolvedErr
 }
 
@@ -528,6 +551,9 @@ func scanSurvivors(rootPID uint32, jobPIDs []uint32) ([]hookSurvivor, error) {
 	var entry windows.ProcessEntry32
 	entry.Size = uint32(unsafe.Sizeof(entry))
 	walkErr := windows.Process32First(snapshot, &entry)
+	if walkErr != nil {
+		return nil, fmt.Errorf("Process32First: %w", walkErr)
+	}
 	for walkErr == nil {
 		entries = append(entries, procInfo{
 			pid:    entry.ProcessID,
@@ -652,6 +678,7 @@ func waitJobDrained(job windows.Handle, teardown *hookTeardown) {
 		)
 		teardown.DrainPolls++
 		if err != nil {
+			teardown.DrainQueryErr = err
 			slog.Warn("hook job accounting query failed; drain skipped",
 				slog.Any("error", err))
 			return
