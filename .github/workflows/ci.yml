@@ -177,6 +177,9 @@ jobs:
       - name: Run tests
         run: go test -count=1 ./...
 
+      - name: Run workspace tests verbosely
+        run: go test -v -count=1 ./internal/workspace/...
+
   build:
     name: Build
     runs-on: ubuntu-latest
