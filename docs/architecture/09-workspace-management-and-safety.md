@@ -87,9 +87,11 @@ Execution contract:
   `cwd`.
 - On POSIX systems, `sh -c <script>` is the conforming default; `bash -lc <script>` may be used
   when a login shell environment is required.
-- On Windows, `cmd.exe /C <script>` is the conforming default. The hook subprocess is assigned to
-  a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so that timeout-triggered termination
-  kills the entire process tree, not just the direct child.
+- On Windows, `cmd.exe /C <script>` is the conforming default. The hook subprocess is created
+  suspended and assigned to a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it is
+  resumed, so no unsupervised execution window exists in which a spawned descendant could start
+  before the job assignment takes effect. Timeout-triggered termination therefore kills the
+  entire process tree, not just the direct child.
 - Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
 - Log hook start, failures, and timeouts. A failure or timeout record carries the hook's captured
   combined stdout and stderr under `hook_output`; a hook that succeeds with output emits it in a
