@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -90,12 +91,34 @@ const (
 	contractOrchestratorPath  = "github.com/sortie-ai/sortie/internal/orchestrator"
 )
 
+// The two remaining family roots that hold kind packages, and the
+// module-internal prefix the permit-map guard strips to reach a
+// directory.
+const (
+	contractAgentFamilyPath  = "github.com/sortie-ai/sortie/internal/agent"
+	contractNotifyFamilyPath = "github.com/sortie-ai/sortie/internal/notify"
+	contractInternalPrefix   = "github.com/sortie-ai/sortie/internal/"
+)
+
+// contractFamilyRoots is the ban surface both the adapter-to-adapter arm
+// of contractImportBanReason and the core-import rule match an import
+// path against.
+var contractFamilyRoots = []string{
+	contractTrackerFamilyPath,
+	contractSCMFamilyPath,
+	contractAgentFamilyPath,
+	contractNotifyFamilyPath,
+}
+
 // contractSharedFamilyPackages names each package under a family root that
-// holds no adapter, so any package under either root may import it, and
-// states why. A package under a family root that is absent from this map
-// may be imported only by itself and by packages under its own path.
+// holds no adapter, so it may be imported by a package under a family
+// root and by the orchestrator, and states why. Keys are matched exactly,
+// so a subpackage of a permitted package needs its own entry. A package
+// under a family root that is absent from this map may be imported only
+// by itself and by packages under its own path.
 var contractSharedFamilyPackages = map[string]string{
-	"github.com/sortie-ai/sortie/internal/scm/scmcore": "shared forge decision core; registers no kind and holds no adapter",
+	"github.com/sortie-ai/sortie/internal/scm/scmcore":    "shared forge decision core; registers no kind and holds no adapter",
+	"github.com/sortie-ai/sortie/internal/agent/procutil": "shared subprocess group handling; registers no kind and holds no adapter",
 }
 
 // contractPackageBannedImports maps one package's import path to the
@@ -120,11 +143,26 @@ var contractAllowlist = map[string]map[contractRule]string{
 	},
 }
 
+// The two outcomes checkContractCoreImports renders as
+// "imports " + path + "; " + reason.
+const (
+	contractCoreRegistryReason     = "the orchestrator resolves an adapter kind through the registry rather than importing its package"
+	contractCoreRegistrationReason = "cmd/sortie owns the blank imports that trigger kind registration"
+)
+
 // contractViolation describes one place a file or package breaks the
 // adapter contract.
 type contractViolation struct {
 	pos  token.Position
 	text string
+}
+
+// contractWalkedPackage pairs a package the walk found with the directory
+// path it was found at. contractPackage carries only the directory's
+// base name, which cannot order packages across roots.
+type contractWalkedPackage struct {
+	dir string
+	pkg contractPackage
 }
 
 // contractPackage carries one package's identity and its parsed files.
@@ -280,6 +318,71 @@ func contractRegistrationFacts(fset *token.FileSet, files []*ast.File) (register
 	return registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, pos
 }
 
+// contractPackageRegistersKind reports whether any file in files calls
+// Register or RegisterWithMeta on any selector of the registry package
+// qualifier, resolving the qualifier per file through
+// resolveContractImportName so an aliased import cannot evade it. It
+// generalizes contractRegistrationFacts by dropping that function's
+// constraint that the middle selector be literally Trackers.
+func contractPackageRegistersKind(files []*ast.File) bool {
+	for _, file := range files {
+		registryIdent := resolveContractImportName(file, contractRegistryImportPath)
+		if registryIdent == "" {
+			continue
+		}
+
+		registers := false
+		ast.Inspect(file, func(n ast.Node) bool {
+			if registers {
+				return false
+			}
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			outer, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			inner, ok := outer.X.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := inner.X.(*ast.Ident)
+			if !ok || ident.Name != registryIdent {
+				return true
+			}
+			if outer.Sel.Name == "Register" || outer.Sel.Name == "RegisterWithMeta" {
+				registers = true
+				return false
+			}
+			return true
+		})
+		if registers {
+			return true
+		}
+	}
+	return false
+}
+
+// contractSharedPackageDirError explains why contractSharedPackageDir
+// could not resolve a permit-map key to a directory.
+type contractSharedPackageDirError string
+
+func (e contractSharedPackageDirError) Error() string { return string(e) }
+
+// contractSharedPackageDir maps a contractSharedFamilyPackages key to the
+// directory it names, relative to this package, joining path segments
+// exclusively with filepath.Join so the result carries the platform
+// separator throughout.
+func contractSharedPackageDir(importPath string) (string, error) {
+	if !strings.HasPrefix(importPath, contractInternalPrefix) {
+		return "", contractSharedPackageDirError("permit-map key " + importPath + " does not start with " + contractInternalPrefix)
+	}
+	segments := strings.Split(strings.TrimPrefix(importPath, contractInternalPrefix), "/")
+	return filepath.Join(append([]string{".."}, segments...)...), nil
+}
+
 // checkContractBan reports a violation for every top-level function
 // declaration in file whose name is a contractBanTable entry.
 func checkContractBan(fset *token.FileSet, file *ast.File) []contractViolation {
@@ -405,12 +508,17 @@ func contractImportBanReason(importPath string, pkg contractPackage) string {
 		return "an adapter package must not import the orchestrator"
 	}
 
-	underTrackerFamily := contractPathIsUnder(importPath, contractTrackerFamilyPath)
-	underSCMFamily := contractPathIsUnder(importPath, contractSCMFamilyPath)
-	if underTrackerFamily || underSCMFamily {
+	underFamilyRoot := false
+	for _, root := range contractFamilyRoots {
+		if contractPathIsUnder(importPath, root) {
+			underFamilyRoot = true
+			break
+		}
+	}
+	if underFamilyRoot {
 		if !contractPathIsUnder(importPath, pkg.importPath) {
 			if _, shared := contractSharedFamilyPackages[importPath]; !shared {
-				return "an adapter package must not import a sibling adapter package"
+				return "an adapter package must not import another adapter package"
 			}
 		}
 	}
@@ -422,6 +530,73 @@ func contractImportBanReason(importPath string, pkg contractPackage) string {
 	}
 
 	return ""
+}
+
+// contractCoreImportBanReason returns the reason importPath is banned for
+// a core file, or the empty string when it is allowed. Conditions are
+// evaluated in order and the function returns on the first match, so one
+// import yields at most one reason.
+func contractCoreImportBanReason(importPath string, blankImport, inTestFile bool) string {
+	underFamilyRoot := false
+	for _, root := range contractFamilyRoots {
+		if contractPathIsUnder(importPath, root) {
+			underFamilyRoot = true
+			break
+		}
+	}
+	if !underFamilyRoot {
+		return ""
+	}
+
+	if _, shared := contractSharedFamilyPackages[importPath]; shared {
+		return ""
+	}
+
+	if blankImport && inTestFile {
+		return ""
+	}
+	if blankImport {
+		return contractCoreRegistrationReason
+	}
+	return contractCoreRegistryReason
+}
+
+// checkContractCoreImports reports a violation for every import
+// declaration in file that contractCoreImportBanReason rejects.
+func checkContractCoreImports(fset *token.FileSet, file *ast.File, inTestFile bool) []contractViolation {
+	var violations []contractViolation
+	for _, imp := range file.Imports {
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		blankImport := imp.Name != nil && imp.Name.Name == "_"
+		reason := contractCoreImportBanReason(importPath, blankImport, inTestFile)
+		if reason == "" {
+			continue
+		}
+		violations = append(violations, contractViolation{
+			pos:  fset.Position(imp.Pos()),
+			text: "imports " + importPath + "; " + reason,
+		})
+	}
+	return violations
+}
+
+// checkCoreContractPackage applies the core-import rule to pkg.files with
+// inTestFile false and to pkg.testFiles with inTestFile true. It applies
+// no other rule and consults contractAllowlist for nothing, because the
+// orchestrator root holds exactly one package and any exemption would
+// disable the rule outright.
+func checkCoreContractPackage(fset *token.FileSet, pkg contractPackage) []contractViolation {
+	var violations []contractViolation
+	for _, file := range pkg.files {
+		violations = append(violations, checkContractCoreImports(fset, file, false)...)
+	}
+	for _, file := range pkg.testFiles {
+		violations = append(violations, checkContractCoreImports(fset, file, true)...)
+	}
+	return violations
 }
 
 // checkContractImports reports a violation for every import declaration
@@ -520,6 +695,84 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	return violations
 }
 
+// contractWalkRoot walks the Go files under dir, excluding testdata,
+// grouping them into packages keyed by directory, and returns those
+// packages ordered ascending by directory path, plus whether any parsed
+// file under dir imports the registry package. Both returns are scoped to
+// this one root; a caller that walks more than one root merges them
+// itself.
+func contractWalkRoot(t *testing.T, fset *token.FileSet, dir, importPath string) ([]contractWalkedPackage, bool) {
+	t.Helper()
+
+	packages := map[string]*contractPackage{}
+	var dirOrder []string
+	registryImported := false
+	parsed := 0
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+
+		fileDir := filepath.Dir(path)
+		pkg, seen := packages[fileDir]
+		if !seen {
+			pkg = &contractPackage{
+				dirName:    filepath.Base(fileDir),
+				importPath: contractPackageImportPath(dir, importPath, fileDir),
+			}
+			packages[fileDir] = pkg
+			dirOrder = append(dirOrder, fileDir)
+		}
+
+		isTestFile := strings.HasSuffix(path, "_test.go")
+		mode := parser.SkipObjectResolution
+		if isTestFile {
+			mode |= parser.ImportsOnly
+		}
+		file, parseErr := parser.ParseFile(fset, path, nil, mode)
+		if parseErr != nil {
+			t.Errorf("parse %s: %v", path, parseErr)
+			return nil
+		}
+
+		if isTestFile {
+			pkg.testFiles = append(pkg.testFiles, file)
+		} else {
+			pkg.files = append(pkg.files, file)
+		}
+		parsed++
+
+		if !registryImported && resolveContractImportName(file, contractRegistryImportPath) != "" {
+			registryImported = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+	if parsed == 0 {
+		t.Fatalf("root %s yielded no parsed Go files, want at least one", dir)
+	}
+
+	walked := make([]contractWalkedPackage, 0, len(dirOrder))
+	for _, dirPath := range dirOrder {
+		walked = append(walked, contractWalkedPackage{dir: dirPath, pkg: *packages[dirPath]})
+	}
+	sort.Slice(walked, func(i, j int) bool { return walked[i].dir < walked[j].dir })
+
+	return walked, registryImported
+}
+
 // TestCheckAdapterContract walks the Go files under internal/tracker and
 // internal/scm, excluding testdata, and fails when any package breaks the
 // shared-decision invariant this work establishes: a re-declared
@@ -529,9 +782,6 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 // config validation hook, or an import rule IMPORT rejects.
 func TestCheckAdapterContract(t *testing.T) {
 	fset := token.NewFileSet()
-	packages := map[string]*contractPackage{}
-	var dirOrder []string
-	registryImported := false
 
 	roots := []struct {
 		dir        string
@@ -541,71 +791,55 @@ func TestCheckAdapterContract(t *testing.T) {
 		{filepath.Join("..", "scm"), contractSCMFamilyPath},
 	}
 
+	var walked []contractWalkedPackage
+	registryImported := false
 	for _, root := range roots {
-		parsed := 0
-		err := filepath.WalkDir(root.dir, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if d.IsDir() {
-				if d.Name() == "testdata" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") {
-				return nil
-			}
-
-			dir := filepath.Dir(path)
-			pkg, seen := packages[dir]
-			if !seen {
-				pkg = &contractPackage{
-					dirName:    filepath.Base(dir),
-					importPath: contractPackageImportPath(root.dir, root.importPath, dir),
-				}
-				packages[dir] = pkg
-				dirOrder = append(dirOrder, dir)
-			}
-
-			isTestFile := strings.HasSuffix(path, "_test.go")
-			mode := parser.SkipObjectResolution
-			if isTestFile {
-				mode |= parser.ImportsOnly
-			}
-			file, parseErr := parser.ParseFile(fset, path, nil, mode)
-			if parseErr != nil {
-				t.Errorf("parse %s: %v", path, parseErr)
-				return nil
-			}
-
-			if isTestFile {
-				pkg.testFiles = append(pkg.testFiles, file)
-			} else {
-				pkg.files = append(pkg.files, file)
-			}
-			parsed++
-
-			if !registryImported && resolveContractImportName(file, contractRegistryImportPath) != "" {
-				registryImported = true
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("walk %s: %v", root.dir, err)
-		}
-		if parsed == 0 {
-			t.Fatalf("root %s yielded no parsed Go files, want at least one", root.dir)
-		}
+		rootWalked, rootRegistryImported := contractWalkRoot(t, fset, root.dir, root.importPath)
+		walked = append(walked, rootWalked...)
+		registryImported = registryImported || rootRegistryImported
 	}
 
 	if !registryImported {
 		t.Fatalf("no parsed file under either root imports %s, want at least one", contractRegistryImportPath)
 	}
 
-	sort.Strings(dirOrder)
-	for _, dir := range dirOrder {
-		for _, v := range checkAdapterContractPackage(fset, *packages[dir]) {
+	sort.Slice(walked, func(i, j int) bool { return walked[i].dir < walked[j].dir })
+	for _, w := range walked {
+		for _, v := range checkAdapterContractPackage(fset, w.pkg) {
+			t.Errorf("%s: %s", v.pos, v.text)
+		}
+	}
+}
+
+// TestCheckOrchestratorContract walks the Go files under internal/orchestrator,
+// excluding testdata, and fails when a file imports a package under an
+// adapter family root that the core-import rule rejects: an ordinary
+// import must resolve the adapter kind through the registry instead, and
+// a blank import outside a test file belongs in cmd/sortie, not here.
+func TestCheckOrchestratorContract(t *testing.T) {
+	fset := token.NewFileSet()
+
+	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "orchestrator"), contractOrchestratorPath)
+
+	hasNonTestFile := false
+	hasTestFile := false
+	for _, w := range walked {
+		if len(w.pkg.files) > 0 {
+			hasNonTestFile = true
+		}
+		if len(w.pkg.testFiles) > 0 {
+			hasTestFile = true
+		}
+	}
+	if !hasNonTestFile {
+		t.Fatalf("root %s yielded no non-test Go file, want at least one", contractOrchestratorPath)
+	}
+	if !hasTestFile {
+		t.Fatalf("root %s yielded no test Go file, want at least one", contractOrchestratorPath)
+	}
+
+	for _, w := range walked {
+		for _, v := range checkCoreContractPackage(fset, w.pkg) {
 			t.Errorf("%s: %s", v.pos, v.text)
 		}
 	}
@@ -977,5 +1211,358 @@ var _ = r.Trackers
 	gotAbsent := resolveContractImportName(file, contractTrackermetricsImportPath)
 	if gotAbsent != "" {
 		t.Errorf("resolveContractImportName() for an unimported path = %q, want empty", gotAbsent)
+	}
+}
+
+// TestContractSharedFamilyPackages_RegisterNoKind guards
+// contractSharedFamilyPackages against going stale: it fails when an
+// entry carries an empty reason, names a key contractSharedPackageDir
+// cannot resolve, names a directory with no parsable non-test Go file,
+// or names a package that contractPackageRegistersKind now reports true
+// for. It enumerates each named directory with os.ReadDir alone, never
+// descending into a subdirectory, so a permitted package's verdict never
+// depends on a subpackage the map does not name.
+func TestContractSharedFamilyPackages_RegisterNoKind(t *testing.T) {
+	t.Parallel()
+
+	for importPath, reason := range contractSharedFamilyPackages {
+		if reason == "" {
+			t.Errorf("contractSharedFamilyPackages[%q] carries an empty reason", importPath)
+		}
+
+		dir, err := contractSharedPackageDir(importPath)
+		if err != nil {
+			t.Errorf("contractSharedPackageDir(%q): %v", importPath, err)
+			continue
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Errorf("os.ReadDir(%q) for %q: %v", dir, importPath, err)
+			continue
+		}
+
+		fset := token.NewFileSet()
+		var files []*ast.File
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			if parseErr != nil {
+				t.Errorf("parse %s: %v", path, parseErr)
+				continue
+			}
+			files = append(files, file)
+		}
+		if len(files) == 0 {
+			t.Errorf("%q names directory %s, which yielded no parsable non-test Go file", importPath, dir)
+			continue
+		}
+
+		if contractPackageRegistersKind(files) {
+			t.Errorf("%q is a permitted shared package but registers a kind", importPath)
+		}
+	}
+}
+
+// TestCheckOrchestratorContract_DetectsViolations pins the core-import
+// decision table against inline source fixtures, independent of the
+// current state of internal/orchestrator, so a regression in the rule is
+// caught even when every real file happens to comply. Each fixture is
+// parsed as the single file of a one-file package.
+func TestCheckOrchestratorContract_DetectsViolations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		dirName    string
+		importPath string
+		src        string
+		inTestFile bool
+		wantCount  int
+		wantReason string
+	}{
+		{
+			name:       "a named import of a kind package is rejected with the registry reason",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/github"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a blank import of a kind package outside a test file is rejected with the registration reason",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import _ "github.com/sortie-ai/sortie/internal/scm/github"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistrationReason,
+		},
+		{
+			name:       "a blank import of a kind package inside a test file is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import _ "github.com/sortie-ai/sortie/internal/scm/github"
+`,
+			inTestFile: true,
+			wantCount:  0,
+		},
+		{
+			name:       "a named import of a kind package inside a test file is still rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/github"
+`,
+			inTestFile: true,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a blank import of the agent mock kind package inside a test file is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import _ "github.com/sortie-ai/sortie/internal/agent/mock"
+`,
+			inTestFile: true,
+			wantCount:  0,
+		},
+		{
+			name:       "a named import of the permitted scmcore package is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/scmcore"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a named import of the permitted procutil package is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/procutil"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a named import of an agent kind package is rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/claude"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a named import of a notify kind package is rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/notify/slack"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a named import of a tracker kind package is rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/tracker/jira"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "imports outside every family root are accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a standard-library import is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "net/http"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a named import of a family root itself is rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a subpath of a permitted package is rejected, because the permit map matches exactly",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/scmcore/inner"
+`,
+			wantCount:  1,
+			wantReason: contractCoreRegistryReason,
+		},
+		{
+			name:       "a path that merely shares a prefix segment with a family root is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scmwatch"
+`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			pkg := contractPackage{dirName: tt.dirName, importPath: tt.importPath}
+			if tt.inTestFile {
+				pkg.testFiles = []*ast.File{file}
+			} else {
+				pkg.files = []*ast.File{file}
+			}
+			got := checkCoreContractPackage(fset, pkg)
+			if len(got) != tt.wantCount {
+				t.Fatalf("checkCoreContractPackage() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+			if !strings.HasSuffix(got[0].text, tt.wantReason) {
+				t.Errorf("checkCoreContractPackage() violation text = %q, want suffix %q", got[0].text, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestContractPackageRegistersKind pins the generalized registration
+// predicate against inline fixtures, so it stays true for every registry
+// namespace and for a qualifier resolved through an import alias, not
+// only the literal identifier "registry".
+func TestContractPackageRegistersKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{
+			name: "a package registering through registry.Agents.Register",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.Register("fixture", newFixtureAgent)
+}
+`,
+			want: true,
+		},
+		{
+			name: "a package registering through registry.Notifiers.RegisterWithMeta",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Notifiers.RegisterWithMeta("fixture", newFixtureNotifier, struct{}{})
+}
+`,
+			want: true,
+		},
+		{
+			name: "a package registering through an aliased registry import",
+			src: `package fixture
+
+import reg "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	reg.SCMAdapters.Register("fixture", newFixtureSCMAdapter)
+}
+`,
+			want: true,
+		},
+		{
+			name: "a package that imports the registry and calls neither method",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+var _ = registry.TrackerMeta{}
+`,
+			want: false,
+		},
+		{
+			name: "a package that does not import the registry at all",
+			src: `package fixture
+
+func doWork() {}
+`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			got := contractPackageRegistersKind([]*ast.File{file})
+			if got != tt.want {
+				t.Errorf("contractPackageRegistersKind() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
