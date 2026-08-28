@@ -87,6 +87,53 @@ func TestActiveSCMReactionKinds(t *testing.T) {
 			t.Errorf("activeSCMReactionKinds(cfg) ci_failure.provider = %q, want %q (CIFeedback.Kind, not the reactions map entry)", last.provider, "github")
 		}
 	})
+
+	labelCommandsBothLabelsSetEmptyProviderConfig := config.ServiceConfig{
+		LabelCommands: config.LabelCommandsConfig{ReviewLabel: "sortie:review", FixLabel: "sortie:fix"},
+	}
+
+	t.Run("label_commands with both labels set but no provider stays inactive", func(t *testing.T) {
+		t.Parallel()
+
+		got := activeSCMReactionKinds(labelCommandsBothLabelsSetEmptyProviderConfig)
+		var labelCommands scmReactionKind
+		for _, e := range got {
+			if e.name == "label_commands" {
+				labelCommands = e
+			}
+		}
+		if labelCommands.active {
+			t.Errorf("activeSCMReactionKinds(cfg) label_commands.active = true, want false (provider empty despite both command labels set)")
+		}
+	})
+
+	t.Run("no active entry carries an empty provider", func(t *testing.T) {
+		t.Parallel()
+
+		allActiveCfg := config.ServiceConfig{
+			Reactions: map[string]config.ReactionConfig{
+				"review_comments":  {Provider: "gitea"},
+				"auto_merge":       {Provider: "gitea"},
+				"bot_review":       {Provider: "gitea"},
+				"merge_conflicts":  {Provider: "gitea"},
+				"merge_completion": {Provider: "gitea"},
+			},
+			LabelCommands: config.LabelCommandsConfig{Provider: "gitea", ReviewLabel: "sortie:review"},
+			CIFeedback:    config.CIFeedbackConfig{Kind: "gitea"},
+		}
+
+		for _, cfg := range []config.ServiceConfig{
+			allActiveCfg,
+			{},
+			labelCommandsBothLabelsSetEmptyProviderConfig,
+		} {
+			for _, e := range activeSCMReactionKinds(cfg) {
+				if e.active && e.provider == "" {
+					t.Errorf("activeSCMReactionKinds(cfg) entry %q = %+v, want !(active && provider == \"\")", e.name, e)
+				}
+			}
+		}
+	})
 }
 
 func TestScmProviderConflict(t *testing.T) {
