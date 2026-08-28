@@ -10,7 +10,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -131,6 +130,20 @@ type scmReactionKind struct {
 	provider string
 }
 
+// Kind identifiers shared by the roster, the wiring switches, and the
+// provider-conflict diagnostic. Their values are operator-facing, appearing
+// in the conflict log and in the sortie validate diagnostic, and MUST NOT
+// change.
+const (
+	scmKindReviewComments  = "review_comments"
+	scmKindAutoMerge       = "auto_merge"
+	scmKindBotReview       = "bot_review"
+	scmKindMergeConflicts  = "merge_conflicts"
+	scmKindLabelCommands   = "label_commands"
+	scmKindMergeCompletion = "merge_completion"
+	scmKindCIFailure       = "ci_failure"
+)
+
 // scmProviderConflict reports the active SCM reaction kinds and their
 // distinct providers. A single SCMAdapter is shared by all active SCM
 // reaction reconcile passes, so every active kind must name the same
@@ -158,29 +171,52 @@ func scmProviderConflict(kinds []scmReactionKind) (activeKinds, distinctProvider
 // the shared-provider check both the startup path and sortie validate
 // consume. A single SCMAdapter is shared by all active SCM reaction
 // reconcile passes, so every active kind in the roster must name the same
-// provider.
+// provider. The startup path also uses this result to decide whether an
+// SCM adapter is constructed at all and, when one is, which provider it is
+// constructed from.
 //
 // The returned slice always has seven entries, active or not; the caller
-// filters by the active field. activeSCMReactionKinds performs no registry
-// lookup, no adapter construction, and no I/O.
+// filters by the active field. Every entry with active == true carries a
+// non-empty provider. This invariant, combined with scmProviderConflict
+// recording a provider only for an entry it has accepted as active, makes
+// it safe for a caller to read the first value scmProviderConflict returns
+// as the selected provider once it has confirmed at least one kind is
+// active: that value belongs to an active reaction and is never empty.
+// activeSCMReactionKinds performs no registry lookup, no adapter
+// construction, and no I/O.
 func activeSCMReactionKinds(cfg config.ServiceConfig) []scmReactionKind {
-	reviewRC := cfg.Reactions["review_comments"]
-	autoMergeRC := cfg.Reactions["auto_merge"]
-	botReviewRC := cfg.Reactions["bot_review"]
-	mergeConflictRC := cfg.Reactions["merge_conflicts"]
-	mergeCompletionRC := cfg.Reactions["merge_completion"]
-	labelReviewActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != ""
-	labelFixActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != ""
+	reviewRC := cfg.Reactions[scmKindReviewComments]
+	autoMergeRC := cfg.Reactions[scmKindAutoMerge]
+	botReviewRC := cfg.Reactions[scmKindBotReview]
+	mergeConflictRC := cfg.Reactions[scmKindMergeConflicts]
+	mergeCompletionRC := cfg.Reactions[scmKindMergeCompletion]
+	labelReviewActive := labelReviewCommandActive(cfg)
+	labelFixActive := labelFixCommandActive(cfg)
 
 	return []scmReactionKind{
-		{name: "review_comments", active: reviewRC.Provider != "", provider: reviewRC.Provider},
-		{name: "auto_merge", active: autoMergeRC.Provider != "", provider: autoMergeRC.Provider},
-		{name: "bot_review", active: botReviewRC.Provider != "", provider: botReviewRC.Provider},
-		{name: "merge_conflicts", active: mergeConflictRC.Provider != "", provider: mergeConflictRC.Provider},
-		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: cfg.LabelCommands.Provider},
-		{name: "merge_completion", active: mergeCompletionRC.Provider != "", provider: mergeCompletionRC.Provider},
-		{name: "ci_failure", active: cfg.CIFeedback.Kind != "", provider: cfg.CIFeedback.Kind},
+		{name: scmKindReviewComments, active: reviewRC.Provider != "", provider: reviewRC.Provider},
+		{name: scmKindAutoMerge, active: autoMergeRC.Provider != "", provider: autoMergeRC.Provider},
+		{name: scmKindBotReview, active: botReviewRC.Provider != "", provider: botReviewRC.Provider},
+		{name: scmKindMergeConflicts, active: mergeConflictRC.Provider != "", provider: mergeConflictRC.Provider},
+		{name: scmKindLabelCommands, active: labelReviewActive || labelFixActive, provider: cfg.LabelCommands.Provider},
+		{name: scmKindMergeCompletion, active: mergeCompletionRC.Provider != "", provider: mergeCompletionRC.Provider},
+		{name: scmKindCIFailure, active: cfg.CIFeedback.Kind != "", provider: cfg.CIFeedback.Kind},
 	}
+}
+
+// labelReviewCommandActive reports whether the review label command is
+// active. label_commands parses through its own dedicated field, never the
+// Reactions map; it activates when a provider and a review label are set.
+func labelReviewCommandActive(cfg config.ServiceConfig) bool {
+	return cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != ""
+}
+
+// labelFixCommandActive reports whether the fix label command is active.
+// The fix command activates independently when a provider and a fix label
+// are set; a fix-only configuration is valid and still constructs the SCM
+// adapter and joins the provider-conflict check.
+func labelFixCommandActive(cfg config.ServiceConfig) bool {
+	return cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != ""
 }
 
 func main() {
@@ -422,33 +458,20 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var mergeCompletionConfig orchestrator.MergeCompletionReactionConfig
 	var mergeCompletionConfigured bool
 
-	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
-	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
-	botReviewRC, hasBotReview := br.cfg.Reactions["bot_review"]
-	mergeConflictRC, hasMergeConflict := br.cfg.Reactions["merge_conflicts"]
-	mergeCompletionRC, hasMergeCompletion := br.cfg.Reactions["merge_completion"]
-	reviewActive := hasReview && reviewRC.Provider != ""
-	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
-	botReviewActive := hasBotReview && botReviewRC.Provider != ""
-	mergeConflictActive := hasMergeConflict && mergeConflictRC.Provider != ""
-	mergeCompletionActive := hasMergeCompletion && mergeCompletionRC.Provider != ""
-	// label_commands parses through its own dedicated field, never the
-	// Reactions map; it activates when a provider and a review label are set.
-	labelReviewActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.ReviewLabel != ""
-	// The fix command activates independently when a provider and a fix
-	// label are set; a fix-only configuration is valid and still
-	// constructs the SCM adapter and joins the provider-conflict check.
-	labelFixActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.FixLabel != ""
-
-	ciFeedbackActive := br.cfg.CIFeedback.Kind != ""
+	reviewRC := br.cfg.Reactions[scmKindReviewComments]
+	autoMergeRC := br.cfg.Reactions[scmKindAutoMerge]
+	botReviewRC := br.cfg.Reactions[scmKindBotReview]
+	mergeConflictRC := br.cfg.Reactions[scmKindMergeConflicts]
+	mergeCompletionRC := br.cfg.Reactions[scmKindMergeCompletion]
 
 	activeSCMKinds := activeSCMReactionKinds(br.cfg)
-	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
+	activeKindNames, activeProviders := scmProviderConflict(activeSCMKinds)
+	if len(activeProviders) > 1 {
 		conflictAttrs := []any{
-			slog.String("kinds", strings.Join(conflictKinds, ", ")),
-			slog.String("providers", strings.Join(conflictProviders, ", ")),
+			slog.String("kinds", strings.Join(activeKindNames, ", ")),
+			slog.String("providers", strings.Join(activeProviders, ", ")),
 		}
-		if slices.Contains(conflictKinds, "ci_failure") {
+		if slices.Contains(activeKindNames, scmKindCIFailure) {
 			conflictAttrs = append(conflictAttrs, slog.String("reason",
 				"reactions.ci_failure now resolves the pull request's head through the SCM provider, so its provider must be the same forge as every other active SCM-backed reaction"))
 		}
@@ -456,8 +479,16 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive || mergeCompletionActive || ciFeedbackActive {
-		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider, mergeCompletionRC.Provider, br.cfg.CIFeedback.Kind)
+	reviewActive := slices.Contains(activeKindNames, scmKindReviewComments)
+	autoMergeActive := slices.Contains(activeKindNames, scmKindAutoMerge)
+	botReviewActive := slices.Contains(activeKindNames, scmKindBotReview)
+	mergeConflictActive := slices.Contains(activeKindNames, scmKindMergeConflicts)
+	mergeCompletionActive := slices.Contains(activeKindNames, scmKindMergeCompletion)
+	labelReviewActive := labelReviewCommandActive(br.cfg)
+	labelFixActive := labelFixCommandActive(br.cfg)
+
+	if len(activeKindNames) > 0 {
+		provider := activeProviders[0]
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",

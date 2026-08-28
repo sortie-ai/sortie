@@ -1929,3 +1929,191 @@ func TestLabelFixInactive_NothingFires(t *testing.T) {
 		})
 	}
 }
+
+// --- Roster-gate consolidation coverage ---
+
+// labelCommandsBothLabelsEmptyRunWorkflow returns a WORKFLOW.md with a
+// reactions.label_commands block naming a provider while both command
+// labels are written as explicit empty strings, the one shape
+// buildLabelCommandsConfig rejects at parse time.
+func labelCommandsBothLabelsEmptyRunWorkflow(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  label_commands:
+    provider: github
+    review_label: ""
+    fix_label: ""
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// TestRunLabelCommandsBothLabelsEmpty_ConfigRejected verifies that a
+// reactions.label_commands block naming a provider with both command
+// labels written as explicit empty strings is refused by config parsing
+// before run() reaches the SCM construction gate, and that no per-kind
+// enablement record or gate diagnostic appears on stderr.
+// No t.Parallel: calls t.Chdir.
+func TestRunLabelCommandsBothLabelsEmpty_ConfigRejected(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, labelCommandsBothLabelsEmptyRunWorkflow(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (label_commands both labels empty); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	const wantErr = "config: reactions.label_commands: an active provider requires at least one non-empty command label"
+	if !strings.Contains(logs, wantErr) {
+		t.Errorf("expected %q in stderr, got:\n%s", wantErr, logs)
+	}
+	if strings.Contains(logs, "unknown SCM adapter kind") {
+		t.Errorf("run reached the SCM construction gate despite the config-layer rejection; stderr:\n%s", logs)
+	}
+	for _, record := range []string{
+		"review comment routing enabled",
+		"auto_merge reaction enabled",
+		"bot review routing enabled",
+		"merge conflict reaction enabled",
+		"label review reaction enabled",
+		"label fix reaction enabled",
+		"merge completion reaction enabled",
+	} {
+		if strings.Contains(logs, record) {
+			t.Errorf("run logged %q despite the config-layer rejection; stderr:\n%s", record, logs)
+		}
+	}
+}
+
+// fiveKindsWiringWorkflow returns a WORKFLOW.md activating
+// reactions.review_comments, reactions.bot_review,
+// reactions.merge_conflicts, reactions.merge_completion, and a
+// review-only reactions.label_commands block (fix_label disabled), all
+// on the registered "github" provider, with no reactions.auto_merge
+// block, so none of the case's five reactions reaches an outbound scope
+// preflight.
+func fiveKindsWiringWorkflow(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Handoff
+  terminal_states:
+    - "Done"
+    - "Rejected"
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+github:
+  api_key: "unused"
+  project: "acme/widgets"
+
+reactions:
+  review_comments:
+    provider: github
+  bot_review:
+    provider: github
+  merge_conflicts:
+    provider: github
+  merge_completion:
+    provider: github
+    target_state: Done
+  label_commands:
+    provider: github
+    review_label: "sortie:review"
+    fix_label: ""
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// TestRunFiveKindsWiring_AllEnablementRecordsLogged verifies that
+// review_comments, bot_review, merge_conflicts, merge_completion, and a
+// review-only label_commands block, all naming the same registered
+// provider, each construct their reaction config and log their
+// enablement record, and that startup exits 0. auto_merge and the
+// label-fix command are excluded: their startup preflights reach the
+// forge over HTTP and no in-repo fixture serves that call.
+// No t.Parallel: calls t.Chdir.
+func TestRunFiveKindsWiring_AllEnablementRecordsLogged(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, fiveKindsWiringWorkflow(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	for _, record := range []string{
+		"review comment routing enabled",
+		"bot review routing enabled",
+		"merge conflict reaction enabled",
+		"merge completion reaction enabled",
+		"label review reaction enabled",
+	} {
+		if !strings.Contains(logs, record) {
+			t.Errorf("expected %q in log, got:\n%s", record, logs)
+		}
+	}
+}
