@@ -169,6 +169,15 @@ func TestWindowsSuspendedProcessResumesViaThreadSnapshot(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
+	// A failure between here and cmd.Wait would otherwise strand a
+	// suspended cmd.exe, which never exits on its own.
+	t.Cleanup(func() {
+		if cmd.ProcessState != nil {
+			return
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
 	pid := uint32(cmd.Process.Pid) //nolint:gosec // G115: a Windows PID never exceeds uint32 range
 
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
@@ -294,12 +303,16 @@ func installWindowsLogSpy(t *testing.T) *windowsLogSpy {
 
 // latestTeardownRecord returns the most recent hook-teardown record
 // (either message [logHookTeardown] emits) captured at index from or
-// later, so a caller can isolate the record produced by one RunHook
-// invocation from records any earlier invocation left behind.
-func latestTeardownRecord(spy *windowsLogSpy, from int) (windowsLogRecord, bool) {
+// later whose dir attribute is dir. Matching on the directory as well
+// as the index is what keeps a concurrent invocation's record from
+// being read as this one's, since every invocation shares one spy.
+func latestTeardownRecord(spy *windowsLogSpy, from int, dir string) (windowsLogRecord, bool) {
 	records := spy.snapshot()
 	for i := len(records) - 1; i >= from; i-- {
-		if records[i].Msg == "hook process tree did not settle" || records[i].Msg == "hook process tree settled" {
+		if records[i].Msg != "hook process tree did not settle" && records[i].Msg != "hook process tree settled" {
+			continue
+		}
+		if recordDir, ok := records[i].Attrs["dir"]; ok && recordDir.String() == dir {
 			return records[i], true
 		}
 	}
@@ -312,16 +325,17 @@ func latestTeardownRecord(spy *windowsLogSpy, from int) (windowsLogRecord, bool)
 func TestRunHook_TeardownRecordShape(t *testing.T) {
 	spy := installWindowsLogSpy(t)
 
+	dir := t.TempDir()
 	before := len(spy.snapshot())
 	_, err := RunHook(context.Background(), HookParams{
 		Script:    hookProcessTreeKillScript,
-		Dir:       t.TempDir(),
+		Dir:       dir,
 		Env:       map[string]string{},
 		TimeoutMS: 300,
 	})
 	_ = requireHookError(t, err)
 
-	record, ok := latestTeardownRecord(spy, before)
+	record, ok := latestTeardownRecord(spy, before, dir)
 	if !ok {
 		t.Fatalf("no teardown record captured")
 	}
@@ -342,16 +356,17 @@ func TestRunHook_TeardownRecordShape(t *testing.T) {
 // teardown record.
 func runHookScenarioTotalProcesses(t *testing.T, spy *windowsLogSpy) int64 {
 	t.Helper()
+	dir := t.TempDir()
 	before := len(spy.snapshot())
 	_, err := RunHook(context.Background(), HookParams{
 		Script:    hookProcessTreeKillScript,
-		Dir:       t.TempDir(),
+		Dir:       dir,
 		Env:       map[string]string{},
 		TimeoutMS: 300,
 	})
 	_ = requireHookError(t, err)
 
-	record, ok := latestTeardownRecord(spy, before)
+	record, ok := latestTeardownRecord(spy, before, dir)
 	if !ok {
 		t.Fatalf("no teardown record captured for this invocation")
 	}
@@ -508,7 +523,7 @@ func TestRunHook_ProcessTreeKill(t *testing.T) {
 		t.Errorf("RunHook took %v after timeout; expected prompt return (< 5s)", elapsed)
 	}
 
-	backgroundRecord, ok := latestTeardownRecord(spy, before)
+	backgroundRecord, ok := latestTeardownRecord(spy, before, dir)
 	if !ok {
 		t.Fatalf("no teardown record captured for the background-child scenario")
 	}
@@ -555,7 +570,7 @@ func TestRunHook_ProcessTreeKill(t *testing.T) {
 		TimeoutMS: 300,
 	})
 	_ = requireHookError(t, noChildErr)
-	noChildRecord, ok := latestTeardownRecord(spy, beforeNoChild)
+	noChildRecord, ok := latestTeardownRecord(spy, beforeNoChild, noChildDir)
 	if !ok {
 		t.Fatalf("no teardown record captured for the no-background-child scenario")
 	}
@@ -619,13 +634,19 @@ func runHookStressIteration(t *testing.T, spy *windowsLogSpy) hookStressIteratio
 	controlDir := t.TempDir()
 
 	before := len(spy.snapshot())
-	_, _ = RunHook(context.Background(), HookParams{
+	_, runErr := RunHook(context.Background(), HookParams{
 		Script:    hookProcessTreeKillScript,
 		Dir:       dir,
 		Env:       map[string]string{},
 		TimeoutMS: 300,
 	})
-	record, _ := latestTeardownRecord(spy, before)
+	if he := requireHookError(t, runErr); he.Op != "timeout" {
+		t.Fatalf("HookError.Op = %q, want %q", he.Op, "timeout")
+	}
+	record, ok := latestTeardownRecord(spy, before, dir)
+	if !ok {
+		t.Fatalf("no teardown record captured for the iteration in %s", dir)
+	}
 
 	var it hookStressIteration
 	if total, ok := record.Attrs["total_processes"]; ok {
@@ -738,21 +759,37 @@ func TestRunHook_Stress(t *testing.T) {
 			continue
 		}
 
-		var wg sync.WaitGroup
+		var (
+			loadMu   sync.Mutex
+			loadErrs []error
+			wg       sync.WaitGroup
+		)
 		for range 4 {
 			wg.Go(func() {
 				loadDir := t.TempDir()
-				_, _ = RunHook(context.Background(), HookParams{
+				_, loadErr := RunHook(context.Background(), HookParams{
 					Script:    hookProcessTreeKillScript,
 					Dir:       loadDir,
 					Env:       map[string]string{},
 					TimeoutMS: 300,
 				})
+				var he *HookError
+				if !errors.As(loadErr, &he) || he.Op != "timeout" {
+					loadMu.Lock()
+					loadErrs = append(loadErrs, loadErr)
+					loadMu.Unlock()
+				}
+				// A load directory that will not release is the very
+				// condition under measurement, so its removal error is
+				// not a test failure; t.TempDir still cleans it up.
 				_ = os.RemoveAll(loadDir)
 			})
 		}
 		it := runHookStressIteration(t, spy)
 		wg.Wait()
+		for _, loadErr := range loadErrs {
+			t.Errorf("concurrent load invocation did not time out as expected: %v", loadErr)
+		}
 		concurrent = append(concurrent, it)
 	}
 
