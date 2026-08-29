@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -1501,46 +1502,68 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 
 // --- Fix-turn deadline expiry ---
 
-// expiringFixTurnAdapter writes an optional verdict on its first RunTurn
-// call and then blocks until the context is done on every later call,
-// modeling an agent whose fix turn keeps running until the turn deadline
-// cancels it. Returning ctx.Err() mirrors what the subprocess-backed
-// adapters report once their context is cancelled.
-type expiringFixTurnAdapter struct {
+// selfReviewTurnBoundMS is the turn bound the fix-turn annotation test
+// configures. Nothing in that test waits for it to expire.
+const selfReviewTurnBoundMS = 60000
+
+// observedTurnBound records what one RunTurn call saw of the deadline
+// the caller placed on the context it was handed.
+type observedTurnBound struct {
+	hasDeadline bool
+	remaining   time.Duration
+}
+
+// fixTurnTimeoutAdapter writes an optional verdict on its first RunTurn
+// call and, on every later call, returns the fix-turn expiry directly
+// instead of waiting for the deadline to elapse. Those later calls stand
+// in for the classification runBoundedTurn performs, not for anything a
+// real agent adapter reports.
+type fixTurnTimeoutAdapter struct {
 	t          *testing.T
 	wsPath     string
 	verdict    *domain.ReviewVerdict
 	rawVerdict string
 	callIdx    int
+	observed   []observedTurnBound
 }
 
-var _ domain.AgentAdapter = (*expiringFixTurnAdapter)(nil)
+var _ domain.AgentAdapter = (*fixTurnTimeoutAdapter)(nil)
 
-func (e *expiringFixTurnAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+func (a *fixTurnTimeoutAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
 	return domain.Session{ID: "expiring-sess"}, nil
 }
-func (e *expiringFixTurnAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
-func (e *expiringFixTurnAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
-func (e *expiringFixTurnAdapter) RunTurn(ctx context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
-	idx := e.callIdx
-	e.callIdx++
+func (a *fixTurnTimeoutAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
+func (a *fixTurnTimeoutAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
+func (a *fixTurnTimeoutAdapter) RunTurn(ctx context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	idx := a.callIdx
+	a.callIdx++
+
+	bound := observedTurnBound{}
+	if deadline, ok := ctx.Deadline(); ok {
+		bound.hasDeadline = true
+		bound.remaining = time.Until(deadline)
+	}
+	a.observed = append(a.observed, bound)
 
 	if idx > 0 {
-		<-ctx.Done()
-		return domain.TurnResult{}, ctx.Err()
+		return domain.TurnResult{}, &domain.AgentError{
+			Kind:    domain.ErrTurnTimeout,
+			Message: "fixTurnTimeoutAdapter reports this call as expired without waiting for a deadline",
+			Err:     context.DeadlineExceeded,
+		}
 	}
 
-	if e.verdict != nil {
-		writeVerdictFile(e.t, e.wsPath, *e.verdict)
+	if a.verdict != nil {
+		writeVerdictFile(a.t, a.wsPath, *a.verdict)
 	}
-	if e.rawVerdict != "" {
-		dir := filepath.Join(e.wsPath, ".sortie")
+	if a.rawVerdict != "" {
+		dir := filepath.Join(a.wsPath, ".sortie")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			e.t.Fatalf("MkdirAll(.sortie): %v", err)
+			a.t.Fatalf("MkdirAll(.sortie): %v", err)
 		}
 		path := filepath.Join(dir, "review_verdict.json")
-		if err := os.WriteFile(path, []byte(e.rawVerdict), 0o600); err != nil {
-			e.t.Fatalf("WriteFile(review_verdict.json): %v", err)
+		if err := os.WriteFile(path, []byte(a.rawVerdict), 0o600); err != nil {
+			a.t.Fatalf("WriteFile(review_verdict.json): %v", err)
 		}
 	}
 	if params.OnEvent != nil {
@@ -1586,25 +1609,24 @@ func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
 			turns := 0
 			cfg := selfReviewCfg()
 			cfg.MaxIterations = 2
+			adapter := &fixTurnTimeoutAdapter{t: t, wsPath: wsPath, verdict: tt.verdict, rawVerdict: tt.rawVerdict}
 
 			meta, _, phaseErr := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 				Session:        domain.Session{ID: "sess"},
 				Issue:          selfReviewIssue(),
 				WorkspacePath:  wsPath,
 				Config:         cfg,
-				AgentAdapter:   &expiringFixTurnAdapter{t: t, wsPath: wsPath, verdict: tt.verdict, rawVerdict: tt.rawVerdict},
+				AgentAdapter:   adapter,
 				OnEvent:        func(_ string, _ domain.AgentEvent) {},
 				Logger:         discardLogger(),
 				Metrics:        &domain.NoopMetrics{},
 				TurnsCompleted: &turns,
-				// The bound has to clear the review turn's own work,
-				// which writes the verdict file to disk, or that turn
-				// expires instead of the fix turn and the arm under test
-				// never runs. The fix turn's expiry stays deterministic
-				// at any bound because it waits for the deadline rather
-				// than racing it, so the headroom costs only wall time.
-				TurnTimeoutMS: 2000,
+				TurnTimeoutMS:  selfReviewTurnBoundMS,
 			})
+
+			if len(adapter.observed) != 2 {
+				t.Fatalf("len(adapter.observed) = %d, want 2 (the review turn did not complete inside its bound, so the fix turn never ran)", len(adapter.observed))
+			}
 
 			var agentErr *domain.AgentError
 			if !errors.As(phaseErr, &agentErr) {
@@ -1625,13 +1647,23 @@ func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
 				if !strings.HasPrefix(got, "turn timeout: ") {
 					t.Errorf("VerdictParseError = %q, want prefix %q", got, "turn timeout: ")
 				}
-				return
+			} else {
+				if !strings.HasPrefix(got, tt.wantPrior) {
+					t.Errorf("VerdictParseError = %q, want the prior diagnostic %q preserved at the start", got, tt.wantPrior)
+				}
+				if !strings.Contains(got, "; turn timeout: ") {
+					t.Errorf("VerdictParseError = %q, want the expiry note appended after the prior diagnostic", got)
+				}
 			}
-			if !strings.HasPrefix(got, tt.wantPrior) {
-				t.Errorf("VerdictParseError = %q, want the prior diagnostic %q preserved at the start", got, tt.wantPrior)
-			}
-			if !strings.Contains(got, "; turn timeout: ") {
-				t.Errorf("VerdictParseError = %q, want the expiry note appended after the prior diagnostic", got)
+
+			for i, ob := range adapter.observed {
+				if !ob.hasDeadline {
+					t.Errorf("turn %d: no deadline observed, want a deadline present", i)
+					continue
+				}
+				if ob.remaining > selfReviewTurnBoundMS*time.Millisecond {
+					t.Errorf("turn %d remaining budget = %s, want <= the configured %d ms bound", i, ob.remaining, selfReviewTurnBoundMS)
+				}
 			}
 		})
 	}
