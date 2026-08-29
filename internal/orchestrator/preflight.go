@@ -18,7 +18,7 @@ type PreflightError struct {
 	// "tracker.project", "tracker_adapter", "tracker.handoff_state",
 	// "tracker.in_progress_state", "agent.kind", "agent.command",
 	// "agent_adapter", "workspace.root_writable",
-	// "agent.kind.session_resume".
+	// "agent.kind.session_resume", "dispatch.agent.missing_block".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -215,9 +215,30 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// this configuration can reach. A registered kind the configuration
 	// never references is skipped, because that would report a fault in
 	// a block no run reads.
-	for _, kind := range orderedUniqueAgentKinds(cfg) {
-		agentMeta, registered := params.AgentRegistry.Meta(kind)
-		settings := config.ResolveAgentSettings(cfg, kind, "")
+	for _, ref := range orderedUniqueAgentKinds(cfg) {
+		agentMeta, registered := params.AgentRegistry.Meta(ref.Kind)
+		settings := config.ResolveAgentSettings(cfg, ref.Kind, "")
+
+		// A kind the dispatch block introduces, rather than the
+		// workflow-wide default, must carry its own settings block.
+		// First-occurrence deduplication in orderedUniqueAgentKinds
+		// already resolves the "differs from cfg.Agent.Kind"
+		// comparison into the origin, so no second kind comparison
+		// belongs here.
+		if registered && ref.Origin != agentKindOriginDefault {
+			switch settings.BlockPresence {
+			case config.ExtensionBlockAbsent:
+				errs = append(errs, PreflightError{
+					Check:   "dispatch.agent.missing_block",
+					Message: missingBlockAbsentMessage(ref),
+				})
+			case config.ExtensionBlockNotAMapping:
+				errs = append(errs, PreflightError{
+					Check:   "dispatch.agent.missing_block",
+					Message: missingBlockNotAMappingMessage(ref, settings.BlockDescription),
+				})
+			}
+		}
 
 		// A kind whose adapter never hands the generated MCP config
 		// path to the agent process cannot make use of an mcp_config
@@ -228,7 +249,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		if registered && agentMeta.MCPInjection == registry.MCPInjectionUnsupported && settings.MCPConfigPath != "" {
 			warns = append(warns, PreflightWarning{
 				Check:   "agent.mcp_config",
-				Message: "mcp_config in the " + strconv.Quote(kind) + " block cannot reach the agent: this agent kind receives no MCP configuration",
+				Message: "mcp_config in the " + strconv.Quote(ref.Kind) + " block cannot reach the agent: this agent kind receives no MCP configuration",
 			})
 		}
 
@@ -238,7 +259,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		if registered && !agentMeta.MCPInjection.DeliversTools(false) {
 			warns = append(warns, PreflightWarning{
 				Check:   "agent.kind.no_tool_channel",
-				Message: "agent kind " + strconv.Quote(kind) + " has no tool execution channel: Sortie's tools are neither advertised nor callable for it",
+				Message: "agent kind " + strconv.Quote(ref.Kind) + " has no tool execution channel: Sortie's tools are neither advertised nor callable for it",
 			})
 		}
 
@@ -250,9 +271,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			if key := agentMeta.SessionResumeBlockedBy(settings.Passthrough); key != "" {
 				errs = append(errs, PreflightError{
 					Check: "agent.kind.session_resume",
-					Message: kind + "." + key + " stops this agent kind from resuming a session across separate agent launches, " +
+					Message: ref.Kind + "." + key + " stops this agent kind from resuming a session across separate agent launches, " +
 						"but Sortie re-dispatches an issue with its earlier session after a retry, a continuation, a stall, or a restart, " +
-						"and every such turn fails. Change " + kind + "." + key + ", or use an agent kind that can resume a session.",
+						"and every such turn fails. Change " + ref.Kind + "." + key + ", or use an agent kind that can resume a session.",
 				})
 			}
 		}
@@ -261,7 +282,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			continue
 		}
 		fields := registry.AgentConfigFields{
-			Kind:        kind,
+			Kind:        ref.Kind,
 			Passthrough: settings.Passthrough,
 		}
 		for _, d := range agentMeta.ValidateAgentConfig(fields) {
@@ -287,31 +308,97 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	return PreflightResult{Errors: errs, Warnings: warns}
 }
 
+// agentKindOrigin identifies the front-matter field that first
+// introduced an agentKindRef's kind, under the first-occurrence
+// deduplication orderedUniqueAgentKinds applies.
+type agentKindOrigin int
+
+const (
+	agentKindOriginDefault         agentKindOrigin = iota // cfg.Agent.Kind
+	agentKindOriginDispatchDefault                        // cfg.Dispatch.Default.AgentKind
+	agentKindOriginRule                                   // cfg.Dispatch.Rules[i].Selection.AgentKind
+)
+
+// agentKindRef is one entry of orderedUniqueAgentKinds's enumeration,
+// carrying the front-matter field that first introduced Kind.
+// RuleIndex and RuleName are meaningful only when Origin is
+// agentKindOriginRule.
+type agentKindRef struct {
+	Kind      string
+	Origin    agentKindOrigin
+	RuleIndex int
+	RuleName  string
+}
+
 // orderedUniqueAgentKinds returns the agent kinds cfg can reach, in
 // deterministic order: the default cfg.Agent.Kind first, then
 // cfg.Dispatch.Default.AgentKind, then each
 // cfg.Dispatch.Rules[i].Selection.AgentKind in rule order. Empty
 // strings are skipped and duplicates are removed, keeping each kind's
-// first occurrence.
-func orderedUniqueAgentKinds(cfg config.ServiceConfig) []string {
+// first occurrence, so a kind that is both the workflow default and
+// later named by a rule carries agentKindOriginDefault.
+func orderedUniqueAgentKinds(cfg config.ServiceConfig) []agentKindRef {
 	seen := make(map[string]bool)
-	var kinds []string
+	var refs []agentKindRef
 
-	add := func(kind string) {
+	add := func(kind string, origin agentKindOrigin, ruleIndex int, ruleName string) {
 		if kind == "" || seen[kind] {
 			return
 		}
 		seen[kind] = true
-		kinds = append(kinds, kind)
+		refs = append(refs, agentKindRef{Kind: kind, Origin: origin, RuleIndex: ruleIndex, RuleName: ruleName})
 	}
 
-	add(cfg.Agent.Kind)
-	add(cfg.Dispatch.Default.AgentKind)
-	for _, rule := range cfg.Dispatch.Rules {
-		add(rule.Selection.AgentKind)
+	add(cfg.Agent.Kind, agentKindOriginDefault, 0, "")
+	add(cfg.Dispatch.Default.AgentKind, agentKindOriginDispatchDefault, 0, "")
+	for i, rule := range cfg.Dispatch.Rules {
+		add(rule.Selection.AgentKind, agentKindOriginRule, i, rule.Name)
 	}
 
-	return kinds
+	return refs
+}
+
+// agentKindOriginPrefix names the front-matter field that introduced
+// ref.Kind, in the wording the dispatch.agent.missing_block messages
+// use to point the operator at the exact selector. Returns "" for
+// agentKindOriginDefault, which never reaches a message: that origin
+// is excluded from the covered set before either message function is
+// called.
+func agentKindOriginPrefix(ref agentKindRef) string {
+	switch ref.Origin {
+	case agentKindOriginRule:
+		field := "dispatch.rules[" + strconv.Itoa(ref.RuleIndex) + "].agent"
+		if ref.RuleName != "" {
+			return "dispatch rule " + strconv.Quote(ref.RuleName) + " (" + field + ")"
+		}
+		return field
+	case agentKindOriginDispatchDefault:
+		return "dispatch.default.agent"
+	default:
+		return ""
+	}
+}
+
+// missingBlockAbsentMessage renders the dispatch.agent.missing_block
+// message for a covered kind whose settings block is absent from the
+// workflow front matter.
+func missingBlockAbsentMessage(ref agentKindRef) string {
+	kind := strconv.Quote(ref.Kind)
+	return agentKindOriginPrefix(ref) + " selects agent kind " + kind +
+		", but the workflow front matter carries no " + kind + " settings block; " +
+		"add a top-level " + strconv.Quote(ref.Kind+":") + " block for that kind, or write " + strconv.Quote(ref.Kind+": {}")
+}
+
+// missingBlockNotAMappingMessage renders the dispatch.agent.missing_block
+// message for a covered kind whose settings block is present but is
+// not a YAML mapping. found names the found value's shape, in the
+// fixed vocabulary [config.AgentSettings.BlockDescription] carries.
+func missingBlockNotAMappingMessage(ref agentKindRef, found string) string {
+	kind := strconv.Quote(ref.Kind)
+	return agentKindOriginPrefix(ref) + " selects agent kind " + kind +
+		", but the " + kind + " key in the workflow front matter holds " + found +
+		" where a block of settings was expected; write the kind's settings as keys under " + strconv.Quote(ref.Kind+":") +
+		", or write " + strconv.Quote(ref.Kind+": {}")
 }
 
 // validateDefaultedTrackerStates reports the state collisions that

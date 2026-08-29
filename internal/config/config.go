@@ -232,6 +232,28 @@ type AgentConfig struct {
 	MaxConsecutiveAbsences int
 }
 
+// ExtensionBlockPresence reports what the front matter carries under a
+// top-level key named for an adapter kind. The zero value is
+// [ExtensionBlockPresent] so that a value nothing computed draws no
+// diagnostic: a consumer that treats this as an error condition must
+// fail open on an unset field.
+type ExtensionBlockPresence int
+
+const (
+	// ExtensionBlockPresent means the key is present and its value is
+	// a YAML mapping, possibly empty, or YAML null. It is the zero
+	// value.
+	ExtensionBlockPresent ExtensionBlockPresence = iota
+
+	// ExtensionBlockAbsent means no top-level key equal to the kind is
+	// present in the front matter.
+	ExtensionBlockAbsent
+
+	// ExtensionBlockNotAMapping means the key is present and its value
+	// is neither a mapping nor null: a scalar or a sequence.
+	ExtensionBlockNotAMapping
+)
+
 // AgentAdapterConfig returns the effective pass-through config map for
 // the agent adapter kind, the single producer both the offline
 // preflight validator and the adapter constructor read, so the two can
@@ -250,15 +272,27 @@ type AgentConfig struct {
 // merged in without overwriting any of the five keys above. The
 // returned map is freshly allocated on every call.
 func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
-	m := map[string]any{
+	m, _, _ := agentAdapterConfig(cfg, kind)
+	return m
+}
+
+// agentAdapterConfig builds the pass-through config map [AgentAdapterConfig]
+// returns and reports what the front matter carried under kind, so
+// [ResolveAgentSettings] can expose that value without a second,
+// unsanctioned read of the extensions field. description is empty
+// unless presence is [ExtensionBlockNotAMapping], in which case it
+// names the found value's shape in fixed, operator-facing vocabulary
+// that never includes a Go type name.
+func agentAdapterConfig(cfg ServiceConfig, kind string) (m map[string]any, presence ExtensionBlockPresence, description string) {
+	m = map[string]any{
 		"kind":             kind,
 		"command":          cfg.Agent.Command,
 		"turn_timeout_ms":  cfg.Agent.TurnTimeoutMS,
 		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
 		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
 	}
-	mergeExtensionSection(m, cfg.extensions, kind)
-	return m
+	presence, description = mergeExtensionSection(m, cfg.extensions, kind)
+	return m, presence, description
 }
 
 // AgentSettings is the resolved answer to what one agent kind
@@ -276,6 +310,18 @@ type AgentSettings struct {
 	// block, the block carries no mcp_config, or its value is not a
 	// non-empty string.
 	MCPConfigPath string
+
+	// BlockPresence reports what the front matter carries under the
+	// top-level key named Kind. Passthrough is never empty and cannot
+	// answer this: AgentAdapterConfig seeds five keys before any
+	// merge.
+	BlockPresence ExtensionBlockPresence
+
+	// BlockDescription names, in fixed operator-facing vocabulary, the
+	// shape of the value found under the top-level key named Kind. Set
+	// only when BlockPresence is [ExtensionBlockNotAMapping]; empty
+	// otherwise. Never a Go type name.
+	BlockDescription string
 }
 
 // ResolveAgentSettings resolves kind to the settings a session running
@@ -292,7 +338,7 @@ type AgentSettings struct {
 // no environment variable and touches no file, and is safe for
 // concurrent use.
 func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) AgentSettings {
-	passthrough := AgentAdapterConfig(cfg, kind)
+	passthrough, presence, description := agentAdapterConfig(cfg, kind)
 
 	var mcpConfigPath string
 	if v, ok := passthrough["mcp_config"].(string); ok {
@@ -303,9 +349,11 @@ func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) Ag
 	}
 
 	return AgentSettings{
-		Kind:          kind,
-		Passthrough:   passthrough,
-		MCPConfigPath: mcpConfigPath,
+		Kind:             kind,
+		Passthrough:      passthrough,
+		MCPConfigPath:    mcpConfigPath,
+		BlockPresence:    presence,
+		BlockDescription: description,
 	}
 }
 
@@ -319,16 +367,47 @@ func MergeAdapterExtensions(dst map[string]any, cfg ServiceConfig, kind string) 
 }
 
 // mergeExtensionSection copies the kind-named sub-object from
-// extensions into dst without overwriting an existing key.
-func mergeExtensionSection(dst map[string]any, extensions map[string]any, kind string) {
-	sub, ok := extensions[kind].(map[string]any)
+// extensions into dst without overwriting an existing key, and reports
+// what it found under kind: absent, present as a mapping (or YAML
+// null), or present as a non-mapping scalar or sequence. description
+// is empty except in the non-mapping case, where it names the found
+// value's shape via [describeExtensionValue].
+func mergeExtensionSection(dst map[string]any, extensions map[string]any, kind string) (presence ExtensionBlockPresence, description string) {
+	v, ok := extensions[kind]
 	if !ok {
-		return
+		return ExtensionBlockAbsent, ""
 	}
-	for k, v := range sub {
+	if v == nil {
+		return ExtensionBlockPresent, ""
+	}
+	sub, ok := v.(map[string]any)
+	if !ok {
+		return ExtensionBlockNotAMapping, describeExtensionValue(v)
+	}
+	for k, val := range sub {
 		if _, exists := dst[k]; !exists {
-			dst[k] = v
+			dst[k] = val
 		}
+	}
+	return ExtensionBlockPresent, ""
+}
+
+// describeExtensionValue maps a parsed front-matter value that failed
+// [mergeExtensionSection]'s mapping assertion to fixed, operator-facing
+// vocabulary. It never names a Go type: that detail is internal and an
+// operator writing YAML cannot act on it.
+func describeExtensionValue(v any) string {
+	switch v.(type) {
+	case string:
+		return "a text value"
+	case bool:
+		return "a true/false value"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return "a number"
+	case []any:
+		return "a list"
+	default:
+		return "a value of an unexpected type"
 	}
 }
 

@@ -3121,6 +3121,133 @@ func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
 	}
 }
 
+// --- ExtensionBlockPresence tests ---
+
+// TestExtensionBlockPresence_ZeroValue asserts that a declared-but-unset
+// ExtensionBlockPresence equals ExtensionBlockPresent, so a value nothing
+// computed draws no diagnostic from a consumer that fails open on it.
+func TestExtensionBlockPresence_ZeroValue(t *testing.T) {
+	t.Parallel()
+
+	var presence ExtensionBlockPresence
+
+	if presence != ExtensionBlockPresent {
+		t.Errorf("zero-value ExtensionBlockPresence = %v, want ExtensionBlockPresent", presence)
+	}
+}
+
+// TestAgentAdapterConfig_BlockPresenceAbsent asserts that a kind key
+// absent from extensions yields ExtensionBlockAbsent and no description.
+func TestAgentAdapterConfig_BlockPresenceAbsent(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{Agent: AgentConfig{Kind: "claude-code"}}
+
+	_, presence, description := agentAdapterConfig(cfg, "codex")
+
+	if presence != ExtensionBlockAbsent {
+		t.Errorf("agentAdapterConfig(cfg, %q) presence = %v, want ExtensionBlockAbsent", "codex", presence)
+	}
+	if description != "" {
+		t.Errorf("agentAdapterConfig(cfg, %q) description = %q, want empty", "codex", description)
+	}
+}
+
+// TestAgentAdapterConfig_BlockPresenceEmptyMapping asserts that an empty
+// mapping under the kind key yields ExtensionBlockPresent.
+func TestAgentAdapterConfig_BlockPresenceEmptyMapping(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{}
+	cfg.SetExtensionSection("codex", map[string]any{})
+
+	_, presence, description := agentAdapterConfig(cfg, "codex")
+
+	if presence != ExtensionBlockPresent {
+		t.Errorf("agentAdapterConfig(cfg, %q) presence = %v, want ExtensionBlockPresent", "codex", presence)
+	}
+	if description != "" {
+		t.Errorf("agentAdapterConfig(cfg, %q) description = %q, want empty", "codex", description)
+	}
+}
+
+// TestAgentAdapterConfig_BlockPresenceYAMLNull asserts that an untyped
+// YAML null under the kind key yields ExtensionBlockPresent. The fixture
+// is built through NewServiceConfig from a raw map holding an untyped
+// nil, never SetExtensionSection(kind, nil): the latter stores a typed
+// map[string]any(nil), whose two-result type assertion succeeds and
+// would report ExtensionBlockPresent for the wrong reason.
+func TestAgentAdapterConfig_BlockPresenceYAMLNull(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewServiceConfig(map[string]any{"codex": nil})
+	if err != nil {
+		t.Fatalf("NewServiceConfig: %v", err)
+	}
+
+	_, presence, description := agentAdapterConfig(cfg, "codex")
+
+	if presence != ExtensionBlockPresent {
+		t.Errorf("agentAdapterConfig(cfg, %q) presence = %v, want ExtensionBlockPresent", "codex", presence)
+	}
+	if description != "" {
+		t.Errorf("agentAdapterConfig(cfg, %q) description = %q, want empty", "codex", description)
+	}
+}
+
+// TestAgentAdapterConfig_BlockPresenceNotAMapping asserts that a scalar
+// or sequence value under the kind key yields ExtensionBlockNotAMapping
+// with a non-empty description.
+func TestAgentAdapterConfig_BlockPresenceNotAMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"string value", "o3"},
+		{"sequence value", []any{"a", "b"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := ServiceConfig{extensions: map[string]any{"codex": tt.value}}
+
+			_, presence, description := agentAdapterConfig(cfg, "codex")
+
+			if presence != ExtensionBlockNotAMapping {
+				t.Errorf("agentAdapterConfig(cfg, %q) presence = %v, want ExtensionBlockNotAMapping", "codex", presence)
+			}
+			if description == "" {
+				t.Errorf("agentAdapterConfig(cfg, %q) description = %q, want non-empty", "codex", description)
+			}
+		})
+	}
+}
+
+// TestResolveAgentSettings_BlockPresenceMatchesAgentAdapterConfig asserts
+// that ResolveAgentSettings.BlockPresence and .BlockDescription carry the
+// same values agentAdapterConfig's second and third return values carry
+// for the same kind, so the field-population path in ResolveAgentSettings
+// itself is covered, not only agentAdapterConfig.
+func TestResolveAgentSettings_BlockPresenceMatchesAgentAdapterConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{extensions: map[string]any{"codex": "o3"}}
+
+	_, wantPresence, wantDescription := agentAdapterConfig(cfg, "codex")
+	got := ResolveAgentSettings(cfg, "codex", "")
+
+	if got.BlockPresence != wantPresence {
+		t.Errorf("ResolveAgentSettings().BlockPresence = %v, want %v", got.BlockPresence, wantPresence)
+	}
+	if got.BlockDescription != wantDescription {
+		t.Errorf("ResolveAgentSettings().BlockDescription = %q, want %q", got.BlockDescription, wantDescription)
+	}
+}
+
 // --- ResolveAgentSettings tests ---
 
 // TestResolveAgentSettings_MCPConfigPath covers every row of the

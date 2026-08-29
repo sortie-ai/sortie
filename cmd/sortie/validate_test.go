@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -4294,5 +4295,116 @@ func TestValidateNoChangeStateRejectionsAreOffline(t *testing.T) {
 				t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
 			}
 		})
+	}
+}
+
+// nonEmptyLines splits s on newlines and drops empty lines, so a
+// trailing newline in captured output does not inflate the count.
+func nonEmptyLines(s string) []string {
+	var lines []string
+	for line := range strings.SplitSeq(s, "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// TestValidateDispatch_MissingAgentBlock exercises the CLI surface of
+// the "dispatch.agent.missing_block" check end to end: a workflow whose
+// only fault is a dispatch-routed kind carrying no settings block must
+// fail validate with exactly that one diagnostic, in both output
+// formats.
+func TestValidateDispatch_MissingAgentBlock(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+		"agent:\n  kind: claude-code\n  command: /usr/bin/claude\n" +
+		"claude-code: {}\n" +
+		"file:\n  path: issues.json\n" +
+		"dispatch:\n  rules:\n    - agent: codex\n" +
+		"---\nDo {{ .issue.title }}.\n")
+	wfPath := writeCustomWorkflowFile(t, dir, content)
+
+	t.Run("text format", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		lines := nonEmptyLines(stderr.String())
+		if len(lines) != 1 {
+			t.Fatalf("stderr lines = %v, want exactly 1", lines)
+		}
+		if !strings.Contains(lines[0], "dispatch.agent.missing_block") {
+			t.Errorf("stderr line = %q, want it to mention dispatch.agent.missing_block", lines[0])
+		}
+	})
+
+	t.Run("json format", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		if out.Valid {
+			t.Errorf("validateOutput.Valid = true, want false")
+		}
+		if len(out.Errors) != 1 {
+			t.Fatalf("validateOutput.Errors = %v, want exactly 1", out.Errors)
+		}
+		if out.Errors[0].Check != "dispatch.agent.missing_block" {
+			t.Errorf("validateOutput.Errors[0].Check = %q, want %q", out.Errors[0].Check, "dispatch.agent.missing_block")
+		}
+	})
+}
+
+// TestAgentRegistryKindsDisjointFromOtherFamilies asserts that no agent
+// kind name collides with a tracker, SCM, CI-provider, or notifier kind
+// name, so a future name collision fails a test rather than reaching an
+// operator. cmd/sortie is the only package whose blank imports populate
+// every one of these registries; the same assertion in
+// internal/orchestrator would read empty rosters and pass vacuously.
+func TestAgentRegistryKindsDisjointFromOtherFamilies(t *testing.T) {
+	t.Parallel()
+
+	families := map[string][]string{
+		"registry.Trackers":    registry.Trackers.Kinds(),
+		"registry.SCMAdapters": registry.SCMAdapters.Kinds(),
+		"registry.CIProviders": registry.CIProviders.Kinds(),
+		"registry.Notifiers":   registry.Notifiers.Kinds(),
+	}
+	agentKinds := registry.Agents.Kinds()
+
+	if len(agentKinds) == 0 {
+		t.Fatal("registry.Agents.Kinds() is empty; the disjointness assertion below would assert nothing")
+	}
+	for name, kinds := range families {
+		if len(kinds) == 0 {
+			t.Fatalf("%s.Kinds() is empty; the disjointness assertion below would assert nothing", name)
+		}
+	}
+
+	for _, agentKind := range agentKinds {
+		for familyName, kinds := range families {
+			if slices.Contains(kinds, agentKind) {
+				t.Errorf("agent kind %q also registered in %s; kind names must be disjoint across families", agentKind, familyName)
+			}
+		}
 	}
 }

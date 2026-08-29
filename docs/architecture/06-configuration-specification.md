@@ -92,6 +92,13 @@ Validation checks:
 - `agent.kind.session_resume`: for every agent kind the effective configuration can reach, the
   adapter's declared blocking key is evaluated against that kind's resolved pass-through, and
   the configuration is refused when the key is non-empty.
+- `dispatch.agent.missing_block`: for every registered agent kind named by `dispatch.default.agent`
+  or by `dispatch.rules[*].agent` that differs from the top-level `agent.kind`, the workflow front
+  matter must carry a top-level settings block for that kind. `agent.kind` itself is never covered:
+  a top-level `agent.kind` with no matching block is the ordinary minimal workflow. The check is
+  skipped for a kind the agent registry reports unregistered, since that is already reported as an
+  unrecognized kind when the workflow loads. A block present but empty, or present as a bare key
+  with nothing following, satisfies the requirement; a block present as a scalar or a list does not.
 - Rule-set validation: `dispatch.rules` parses; every referenced `agent` kind is registered;
   every referenced per-rule template path resolves and parses; no rule name is duplicated;
   no non-final rule is a catch-all; every match key is recognized; every glob pattern is

@@ -3447,6 +3447,67 @@ do {{ .issue.identifier }}
 	}
 }
 
+// TestReloadPromotesConfigWithMissingBlockFault asserts that a workflow
+// whose only fault is a dispatch-routed kind with no settings block
+// still loads and promotes through Manager.Reload() without error, and
+// that ValidateDispatchConfig over the promoted config reports the
+// dispatch.agent.missing_block error. This pins the fail-safe reload
+// invariant: the fault surfaces at tick preflight, never at reload, so
+// Reload() itself must never fail on it.
+func TestReloadPromotesConfigWithMissingBlockFault(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+	content := `---
+tracker:
+  kind: mock
+  active_states:
+    - In Progress
+  terminal_states:
+    - Done
+workspace:
+  root: ` + tmpDir + `
+agent:
+  kind: mock
+  command: /usr/bin/agent
+dispatch:
+  rules:
+    - agent: codex
+---
+do {{ .issue.identifier }}
+`
+	if err := os.WriteFile(workflowPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing WORKFLOW.md: %v", err)
+	}
+
+	wm, err := workflow.NewManager(workflowPath, discardLogger(),
+		workflow.WithValidateFunc(ValidateConfigForPromotion))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	if err := wm.Reload(); err != nil {
+		t.Fatalf("Reload() = %v, want nil: a missing settings block must not block promotion", err)
+	}
+
+	cfg := wm.Config()
+	if cfg.Agent.Kind != "mock" {
+		t.Fatalf("Config().Agent.Kind = %q, want %q: the promoted config must reflect the reloaded file", cfg.Agent.Kind, "mock")
+	}
+
+	regs := passingPreflightRegistries()
+	result := ValidateDispatchConfig(PreflightParams{
+		ReloadWorkflow:  func() error { return nil },
+		ConfigFunc:      func() config.ServiceConfig { return cfg },
+		TrackerRegistry: regs.TrackerRegistry,
+		AgentRegistry:   regs.AgentRegistry,
+	})
+
+	requireCheck(t, result, "dispatch.agent.missing_block")
+}
+
 // --- TestGracefulShutdown ---
 
 func TestGracefulShutdown(t *testing.T) {

@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
@@ -766,6 +768,57 @@ func TestShippedWorkflowsProduceNoTemplateWarnings(t *testing.T) {
 					t.Errorf("AnalyzeTemplate warning: kind=%v node=%q message=%q", w.Kind, w.Node, w.Message)
 				}
 				t.Fatalf("prompt.AnalyzeTemplate returned %d warnings, want 0", len(warnings))
+			}
+		})
+	}
+}
+
+// TestShippedWorkflowsProduceNoMissingBlockDiagnostic verifies that
+// ValidateDispatchConfig reports no dispatch.agent.missing_block
+// diagnostic for any workflow the repository ships, so the check draws
+// no false positive on a shipped example. It does not assert exit 0, an empty
+// error list, or PreflightResult.OK(): the shipped fixtures leave $VAR
+// indirection unresolved on purpose, so tracker.* errors are expected,
+// for the same reason TestSampleWorkflowConfigLoads and
+// TestShippedWorkflowsProduceNoTemplateWarnings avoid the validate CLI.
+func TestShippedWorkflowsProduceNoMissingBlockDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range shippedWorkflowPaths(t) {
+		name, err := filepath.Rel(repoRoot(t), path)
+		if err != nil {
+			name = filepath.Base(path)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wf, err := workflow.Load(path)
+			if err != nil {
+				t.Fatalf("workflow.Load: %v", err)
+			}
+			cfg, err := config.NewServiceConfig(wf.Config)
+			if err != nil {
+				t.Fatalf("config.NewServiceConfig: %v", err)
+			}
+
+			// checkWorkspaceRootWritable would otherwise create
+			// directories under the operator's home for an example's
+			// literal workspace.root; preflight skips the probe on an
+			// empty root, and this check does not read that field.
+			cfg.Workspace.Root = ""
+
+			result := orchestrator.ValidateDispatchConfig(orchestrator.PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      func() config.ServiceConfig { return cfg },
+				TrackerRegistry: registry.Trackers,
+				AgentRegistry:   registry.Agents,
+			})
+
+			for _, e := range result.Errors {
+				if e.Check == "dispatch.agent.missing_block" {
+					t.Errorf("ValidateDispatchConfig() reported dispatch.agent.missing_block: %s", e.Message)
+				}
 			}
 		})
 	}
