@@ -6,12 +6,17 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// TestValidateConfig covers copilot-cli's tool-scoping diagnostic: absent
-// tool scoping draws no diagnostic, and each of the four keys that
-// displace --allow-all (allowed_tools, denied_tools, available_tools,
-// excluded_tools) draws a warning-severity diagnostic on its own, since
-// the CLI's own non-interactive permission policy denies and continues
-// past a scoped-out tool call rather than stalling.
+// wantAllowedToolsDiagMessage is the exact diagnostic message
+// validateConfig returns when allowed_tools replaces the blanket grant.
+const wantAllowedToolsDiagMessage = "copilot-cli.allowed_tools replaces the --allow-all grant, so only a call the list matches " +
+	"is approved; every other permissioned call is denied without a prompt, the turn continues, " +
+	"and a turn whose calls were all denied still reports success"
+
+// TestValidateConfig covers copilot-cli's allowed_tools diagnostic: only a
+// non-whitespace allowed_tools value draws a warning, because that
+// allow-list replaces the blanket grant the runtime otherwise passes.
+// denied_tools, available_tools, and excluded_tools compose with the grant
+// and draw no diagnostic, alone or together, with or without allowed_tools.
 func TestValidateConfig(t *testing.T) {
 	t.Parallel()
 
@@ -21,29 +26,58 @@ func TestValidateConfig(t *testing.T) {
 		wantDiagCount int
 	}{
 		{
-			name:          "no tool scoping draws no diagnostic",
+			name:          "empty passthrough draws no diagnostic",
 			passthrough:   map[string]any{},
 			wantDiagCount: 0,
 		},
 		{
-			name:          "allowed_tools draws a warning",
-			passthrough:   map[string]any{"allowed_tools": "bash"},
+			name:          "denied_tools alone draws no diagnostic",
+			passthrough:   map[string]any{"denied_tools": "write"},
+			wantDiagCount: 0,
+		},
+		{
+			name:          "available_tools alone draws no diagnostic",
+			passthrough:   map[string]any{"available_tools": "shell"},
+			wantDiagCount: 0,
+		},
+		{
+			name:          "excluded_tools alone draws no diagnostic",
+			passthrough:   map[string]any{"excluded_tools": "web_fetch"},
+			wantDiagCount: 0,
+		},
+		{
+			name: "denied_tools, available_tools, and excluded_tools together draw no diagnostic",
+			passthrough: map[string]any{
+				"denied_tools":    "write",
+				"available_tools": "shell",
+				"excluded_tools":  "web_fetch",
+			},
+			wantDiagCount: 0,
+		},
+		{
+			name:          "allowed_tools alone draws a warning",
+			passthrough:   map[string]any{"allowed_tools": "shell"},
 			wantDiagCount: 1,
 		},
 		{
-			name:          "denied_tools draws a warning",
-			passthrough:   map[string]any{"denied_tools": "bash"},
+			name:          "allowed_tools with denied_tools draws a warning",
+			passthrough:   map[string]any{"allowed_tools": "shell", "denied_tools": "write"},
 			wantDiagCount: 1,
 		},
 		{
-			name:          "available_tools draws a warning",
-			passthrough:   map[string]any{"available_tools": "bash"},
+			name:          "allowed_tools with available_tools draws a warning",
+			passthrough:   map[string]any{"allowed_tools": "shell", "available_tools": "shell"},
 			wantDiagCount: 1,
 		},
 		{
-			name:          "excluded_tools draws a warning",
-			passthrough:   map[string]any{"excluded_tools": "bash"},
+			name:          "allowed_tools with excluded_tools draws a warning",
+			passthrough:   map[string]any{"allowed_tools": "shell", "excluded_tools": "web_fetch"},
 			wantDiagCount: 1,
+		},
+		{
+			name:          "allowed_tools whitespace-only draws no diagnostic",
+			passthrough:   map[string]any{"allowed_tools": "   "},
+			wantDiagCount: 0,
 		},
 	}
 
@@ -62,11 +96,11 @@ func TestValidateConfig(t *testing.T) {
 			if got[0].Severity != "warning" {
 				t.Errorf("validateConfig(%v)[0].Severity = %q, want %q", tt.passthrough, got[0].Severity, "warning")
 			}
-			if got[0].Check != "copilot-cli.tool_scoping.interactive" {
-				t.Errorf("validateConfig(%v)[0].Check = %q, want %q", tt.passthrough, got[0].Check, "copilot-cli.tool_scoping.interactive")
+			if got[0].Check != "copilot-cli.allowed_tools.auto_deny" {
+				t.Errorf("validateConfig(%v)[0].Check = %q, want %q", tt.passthrough, got[0].Check, "copilot-cli.allowed_tools.auto_deny")
 			}
-			if got[0].Message == "" {
-				t.Errorf("validateConfig(%v)[0].Message = \"\", want non-empty", tt.passthrough)
+			if got[0].Message != wantAllowedToolsDiagMessage {
+				t.Errorf("validateConfig(%v)[0].Message = %q, want %q", tt.passthrough, got[0].Message, wantAllowedToolsDiagMessage)
 			}
 		})
 	}

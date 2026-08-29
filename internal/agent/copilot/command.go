@@ -77,11 +77,12 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 		args = append(args, "--agent", pt.Agent)
 	}
 
-	// Tool scoping: use --allow-all only when no explicit tool scoping
-	// flags are configured. --allow-all overrides scoped flags.
-	hasToolScoping := pt.AllowedTools != "" || pt.DeniedTools != "" ||
-		pt.AvailableTools != "" || pt.ExcludedTools != ""
-	if !hasToolScoping {
+	// Tool scoping: the blanket grant covers a call no scoping rule
+	// mentions, so a deny rule still outranks it and a visibility filter
+	// is a different mechanism that keeps its own effect beside it.
+	// An approval allow-list is the one exception: it is a subset of the
+	// grant, so the grant would subsume and defeat it if both were sent.
+	if blanketGrantApplies(pt.AllowedTools) {
 		args = append(args, "--allow-all")
 	}
 	if pt.AllowedTools != "" {
@@ -112,6 +113,14 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 	}
 
 	return args
+}
+
+// blanketGrantApplies reports whether the launch should carry --allow-all.
+// The grant is a superset of an approval allow-list, so it is withheld
+// when allowedTools holds a non-whitespace value; a deny rule and the two
+// visibility filters are different mechanisms and never withhold it.
+func blanketGrantApplies(allowedTools string) bool {
+	return strings.TrimSpace(allowedTools) == ""
 }
 
 // formatMCPConfigValue prepares an operator-provided MCP config value
