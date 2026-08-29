@@ -30,7 +30,7 @@ Resume is a soft path. When resuming a thread fails, the adapter logs a warning 
 
 A Sortie turn is one turn request and the events that follow it until the runtime reports completion. On cancellation the adapter writes a single best-effort interrupt straight to the runtime's stdin, deliberately not through the cancelled context, and then keeps reading only until the runtime's own completion arrives, stdout closes, or the read timeout elapses. Past that bound it returns cancelled rather than waiting forever for an acknowledgement that may never come. The runtime acknowledges no client response at all, which is why that bound exists and why it is also the backstop for every refusal described below.
 
-One distinction is deliberate and worth preserving. A turn the runtime reports as interrupted when *we* cancelled it is a cancellation. The same status when our context was still live is a failure, because from the orchestrator's side an interruption nobody asked for must not release the claim in place of a retry.
+One distinction is deliberate and worth preserving. Any status the runtime reports in a `turn/completed` notification after *we* already cancelled the turn is reported as a cancellation, whatever word the runtime used. The same `interrupted` status when our context was still live stays a failure, because from the orchestrator's side an interruption nobody asked for must not release the claim in place of a retry.
 
 ## Approvals and requests only a person can answer
 

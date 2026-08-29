@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, a hook's background child no longer escapes the timeout's process-tree kill by starting before the hook process joined the Job Object that the kill targets. The hook subprocess is now created suspended and only allowed to run once it is a member, closing the window in which such a child survived termination and kept the workspace directory locked. A hook whose Job Object cannot be created still runs, as it did before, and the failure is logged.
   ([#883](https://github.com/sortie-ai/sortie/issues/883))
 
+- A `codex` turn that Sortie already cancelled is now recorded as cancelled, not as a success, when the runtime's completion notification for that turn arrives afterward, whatever status the runtime reports. The turn no longer counts toward the run's completed turns.
+  ([#916](https://github.com/sortie-ai/sortie/issues/916))
+
 ### Changed
 
 - `reactions.review_comments`, `reactions.bot_review`, `reactions.merge_conflicts`, and `reactions.auto_merge` now bound a pending entry's age with a per-reaction `watch_window_ms` key instead of a hardcoded thirty-minute constant. The default stays `1800000` (thirty minutes), so a deployment that sets nothing behaves exactly as before; setting `0` removes the bound entirely. A workflow with no `auto_merge`, where a person reviews and merges, will normally want a larger value than the default. The four expiry log records changed their message text and renamed their `ttl_ms` attribute to `window_ms`.

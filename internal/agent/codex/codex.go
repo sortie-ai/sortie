@@ -638,10 +638,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				ev := agentcore.TurnEvidence{Work: agentcore.WorkUnobservable}
 
 				switch {
+				case ctx.Err() != nil:
+					ev.Terminal = agentcore.TerminalCancelled
+					ev.TerminalMessage = cancelledMessage(tc.Turn.Status, tc.Turn.Error)
 				case tc.Turn.Status == "completed":
 					ev.Terminal = agentcore.TerminalSuccess
-				case tc.Turn.Status == "interrupted" && ctx.Err() != nil:
-					ev.Terminal = agentcore.TerminalCancelled
 				case tc.Turn.Status == "interrupted":
 					// An interrupt sortie did not request is a failure,
 					// not a cancellation, from the orchestrator's side:
@@ -839,6 +840,23 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			}
 		}
 	}
+}
+
+// cancelledMessage composes the terminal message for a turn/completed
+// notification that arrives after the orchestrator has already cancelled
+// the turn. It names the runtime's reported status and, when the payload
+// carried one, appends the runtime's own error text.
+func cancelledMessage(status string, turnErr *turnError) string {
+	var message string
+	if status == "" {
+		message = "turn cancelled after the runtime reported no status"
+	} else {
+		message = "turn cancelled after the runtime reported status " + status
+	}
+	if turnErr != nil && turnErr.Message != "" {
+		message += ": " + turnErr.Message
+	}
+	return message
 }
 
 // StopSession terminates the persistent app-server subprocess.
