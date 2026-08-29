@@ -1274,6 +1274,394 @@ func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
 	})
 }
 
+// assertMissingBlockMessage fails the test unless result carries exactly
+// one dispatch.agent.missing_block error whose message equals want
+// verbatim, and asserts that message never names a workflow filename.
+func assertMissingBlockMessage(t *testing.T, result PreflightResult, want string) {
+	t.Helper()
+
+	var got []string
+	for _, e := range result.Errors {
+		if e.Check == "dispatch.agent.missing_block" {
+			got = append(got, e.Message)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("dispatch.agent.missing_block messages = %v, want exactly 1", got)
+	}
+	if got[0] != want {
+		t.Errorf("dispatch.agent.missing_block message = %q, want %q", got[0], want)
+	}
+	if strings.Contains(got[0], "WORKFLOW.md") {
+		t.Errorf("dispatch.agent.missing_block message = %q, must not name a workflow filename", got[0])
+	}
+}
+
+// TestValidateDispatchConfig_MissingBlock covers the covered-set
+// predicate for the "dispatch.agent.missing_block" check: which
+// enumeration sources draw the diagnostic and which do not.
+func TestValidateDispatchConfig_MissingBlock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a rule-routed kind with no block produces exactly one error, never a warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "codex"}},
+					},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var got []PreflightError
+		for _, e := range result.Errors {
+			if e.Check == "dispatch.agent.missing_block" {
+				got = append(got, e)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("ValidateDispatchConfig() dispatch.agent.missing_block errors = %v, want exactly 1", got)
+		}
+		if result.OK() {
+			t.Error("ValidateDispatchConfig().OK() = true, want false: a missing block must fail preflight")
+		}
+		for _, w := range result.Warnings {
+			if w.Check == "dispatch.agent.missing_block" {
+				t.Errorf("ValidateDispatchConfig() emitted dispatch.agent.missing_block as a warning: %v", w)
+			}
+		}
+	})
+
+	t.Run("agent.kind with no block and no dispatch block draws no new error", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "mock", Command: "/usr/bin/agent"},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoCheck(t, result, "dispatch.agent.missing_block")
+	})
+
+	t.Run("a rule naming the same kind as agent.kind, with no block, draws no new error", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "claude-code"}},
+					},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoCheck(t, result, "dispatch.agent.missing_block")
+	})
+
+	t.Run("a kind the registry reports unregistered draws no diagnostic", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "codex"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "codex" {
+					return registry.AgentMeta{}, false
+				}
+				return registry.AgentMeta{}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoCheck(t, result, "dispatch.agent.missing_block")
+	})
+}
+
+// TestValidateDispatchConfig_MissingBlockMessage pins the exact rendered
+// message for all three origins, the WORKFLOW.md-free wording, the
+// vocabulary reserved for probeAgentKind's own diagnostic, and the
+// ordering and no-suppression guarantee for a kind with several faults.
+func TestValidateDispatchConfig_MissingBlockMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("named rule", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Name: "docs-update", Selection: config.DispatchSelection{AgentKind: "codex"}},
+					},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		want := `dispatch rule "docs-update" (dispatch.rules[0].agent) selects agent kind "codex", but the workflow front matter carries no "codex" settings block; add a top-level "codex:" block for that kind, or write "codex: {}"`
+		assertMissingBlockMessage(t, result, want)
+	})
+
+	t.Run("unnamed rule", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "codex"}},
+					},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		want := `dispatch.rules[0].agent selects agent kind "codex", but the workflow front matter carries no "codex" settings block; add a top-level "codex:" block for that kind, or write "codex: {}"`
+		assertMissingBlockMessage(t, result, want)
+	})
+
+	t.Run("dispatch.default.agent", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Default: config.DispatchSelection{AgentKind: "codex"},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		want := `dispatch.default.agent selects agent kind "codex", but the workflow front matter carries no "codex" settings block; add a top-level "codex:" block for that kind, or write "codex: {}"`
+		assertMissingBlockMessage(t, result, want)
+	})
+
+	t.Run("no message contains the vocabulary probeAgentKind reserves for an unregistered kind", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Default: config.DispatchSelection{AgentKind: "codex"},
+				},
+			}
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var checked int
+		for _, e := range result.Errors {
+			if e.Check != "dispatch.agent.missing_block" {
+				continue
+			}
+			checked++
+			for _, forbidden := range []string{"unknown adapter", "unknown agent kind", "unregistered"} {
+				if strings.Contains(e.Message, forbidden) {
+					t.Errorf("dispatch.agent.missing_block message %q contains forbidden substring %q", e.Message, forbidden)
+				}
+			}
+		}
+		if checked == 0 {
+			t.Fatal("no dispatch.agent.missing_block error found; the assertion above would check nothing")
+		}
+	})
+
+	t.Run("a kind with several faults orders missing_block first and suppresses nothing", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+				Dispatch: config.DispatchConfig{
+					Rules: []config.DispatchRule{
+						{Selection: config.DispatchSelection{AgentKind: "kiro"}},
+					},
+				},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: func(kind string) (registry.AgentMeta, bool) {
+				if kind == "kiro" {
+					return registry.AgentMeta{
+						MCPInjection: registry.MCPInjectionUnsupported,
+						ValidateAgentConfig: func(fields registry.AgentConfigFields) []registry.ValidationDiag {
+							return []registry.ValidationDiag{{Severity: "error", Check: "kiro.check", Message: "kiro-specific fault"}}
+						},
+					}, true
+				}
+				return registry.AgentMeta{MCPInjection: registry.MCPInjectionSupported}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		var kiroErrors []PreflightError
+		for _, e := range result.Errors {
+			if e.Check == "dispatch.agent.missing_block" || e.Check == "kiro.check" {
+				kiroErrors = append(kiroErrors, e)
+			}
+		}
+		want := []string{"dispatch.agent.missing_block", "kiro.check"}
+		if len(kiroErrors) != len(want) {
+			t.Fatalf("ValidateDispatchConfig() kiro errors = %v, want checks %v in order", kiroErrors, want)
+		}
+		for i, wantCheck := range want {
+			if kiroErrors[i].Check != wantCheck {
+				t.Errorf("kiroErrors[%d].Check = %q, want %q", i, kiroErrors[i].Check, wantCheck)
+			}
+		}
+
+		var warnCount int
+		for _, w := range result.Warnings {
+			if w.Check == "agent.kind.no_tool_channel" {
+				warnCount++
+			}
+		}
+		if warnCount != 1 {
+			t.Errorf("ValidateDispatchConfig() agent.kind.no_tool_channel warnings = %d, want exactly 1", warnCount)
+		}
+	})
+}
+
+// TestValidateDispatchConfig_MissingBlockFrontMatterShapes covers every
+// row of the front-matter-shape table for a rule-routed kind: key
+// absent, an empty mapping, a bare key holding YAML null, and a scalar
+// value. The YAML-null case is built through config.NewServiceConfig
+// from a raw map holding an untyped nil, matching the same constraint
+// the config-layer fixture in internal/config/config_test.go follows.
+func TestValidateDispatchConfig_MissingBlockFrontMatterShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		codexKeySet    bool
+		codexValue     any
+		wantDiagnostic bool
+		wantSubstring  string
+	}{
+		{
+			name:           "key absent",
+			codexKeySet:    false,
+			wantDiagnostic: true,
+			wantSubstring:  `carries no "codex" settings block`,
+		},
+		{
+			name:           "empty mapping",
+			codexKeySet:    true,
+			codexValue:     map[string]any{},
+			wantDiagnostic: false,
+		},
+		{
+			name:           "bare key, YAML null",
+			codexKeySet:    true,
+			codexValue:     nil,
+			wantDiagnostic: false,
+		},
+		{
+			name:           "scalar value",
+			codexKeySet:    true,
+			codexValue:     "o3",
+			wantDiagnostic: true,
+			wantSubstring:  `the "codex" key in the workflow front matter holds a text value`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := map[string]any{
+				"tracker": map[string]any{"kind": "test-tracker", "api_key": "secret"},
+				"agent":   map[string]any{"kind": "claude-code", "command": "/usr/bin/agent"},
+			}
+			if tt.codexKeySet {
+				raw["codex"] = tt.codexValue
+			}
+
+			cfg, err := config.NewServiceConfig(raw)
+			if err != nil {
+				t.Fatalf("NewServiceConfig: %v", err)
+			}
+			cfg.SetDispatch(config.DispatchConfig{
+				Rules: []config.DispatchRule{
+					{Selection: config.DispatchSelection{AgentKind: "codex"}},
+				},
+			})
+
+			params := validPreflightParams()
+			params.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+			result := ValidateDispatchConfig(params)
+
+			var messages []string
+			for _, e := range result.Errors {
+				if e.Check == "dispatch.agent.missing_block" {
+					messages = append(messages, e.Message)
+				}
+			}
+			if tt.wantDiagnostic {
+				if len(messages) != 1 {
+					t.Fatalf("dispatch.agent.missing_block messages = %v, want exactly 1", messages)
+				}
+				if !strings.Contains(messages[0], tt.wantSubstring) {
+					t.Errorf("dispatch.agent.missing_block message = %q, want substring %q", messages[0], tt.wantSubstring)
+				}
+			} else if len(messages) != 0 {
+				t.Errorf("dispatch.agent.missing_block messages = %v, want none", messages)
+			}
+		})
+	}
+}
+
 // TestValidateDispatchConfig_DefaultedTrackerStates covers the collision
 // rules re-run against the effective state lists, the ones a tracker
 // adapter fills from its own fallback when the workflow list is empty.

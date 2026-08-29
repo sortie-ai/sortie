@@ -1658,6 +1658,8 @@ omitted independently. Missing fields fall through in order:
 When no rule matches and `dispatch.default` supplies an agent or template, the default is
 applied with the same fallback chain for any unset field.
 
+A kind an `agent` selector introduces here, rather than falling through to the top-level `agent.kind`, must carry its own top-level settings block; see [Section 4.5](#45-adapter-specific-pass-through-config) for the requirement and the `dispatch.agent.missing_block` check that enforces it.
+
 #### Freeze-on-dispatch
 
 The resolved `(agent_kind, template_id, rule_name)` is recorded at the initial dispatch
@@ -2819,6 +2821,8 @@ fires for any agent kind whose disposition delivers no channel on a local launch
 stating that Sortie's tools will be neither advertised nor callable for it. Both are
 warnings and not errors: such a configuration stays valid, the run proceeds, and the
 exit code is unchanged.
+
+A kind named by `dispatch.default.agent` or by `dispatch.rules[*].agent` that differs from the top-level `agent.kind` must carry its own top-level settings block; `agent.kind` itself never requires one. An empty mapping (`codex: {}`) or a bare key with nothing following (`codex:`) satisfies the requirement; a scalar or a list value does not. `sortie validate` reports a missing or malformed block as an error under the check `dispatch.agent.missing_block`, naming the selector that introduced the kind and the block it expects. `agent.command` is workflow-wide, and a routed kind's own settings block cannot override it ([architecture §5.3.5](architecture/05-workflow-specification.md#535-agent-object)); adding the block satisfies this check without making the route launch the routed kind's own binary.
 
 `claude-code.mcp_config`, `copilot-cli.mcp_config`, and `codex.mcp_config` are
 documented in the Claude Code, Copilot CLI, and Codex tables above.
