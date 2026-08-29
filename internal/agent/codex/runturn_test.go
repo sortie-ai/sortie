@@ -618,6 +618,95 @@ func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
 	}
 }
 
+// TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus drives
+// the same cancel-then-interrupt sequence as
+// TestRunTurn_CancelledMainLoopWaitsForCompletion, but the app-server's
+// turn/completed notification, delivered after cancellation, reports status
+// completed rather than interrupted. The disposition must still be a
+// cancellation, and no turn_completed event may reach the stream.
+func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *testing.T) {
+	t.Parallel()
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &countingDoneContext{Context: parentCtx}
+
+	state := newInterruptedStatusState()
+	close(state.readerDone)
+	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
+	state.stdin = stdin
+
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
+	finished := make(chan struct{})
+
+	var events []domain.AgentEvent
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	go func() {
+		defer close(finished)
+		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+			Prompt:  "go",
+			OnEvent: collectEvents(&events),
+		})
+		outcomeCh <- outcome{result: result, err: err}
+	}()
+
+	t.Cleanup(func() {
+		select {
+		case <-finished:
+			return
+		default:
+		}
+		close(state.msgCh)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+		}
+	})
+
+	// The unbuffered sends return only after RunTurn has received each
+	// message. The second message therefore proves that its main event loop,
+	// rather than the turn/start response loop, is running before cancellation.
+	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+
+	cancel()
+	select {
+	case <-stdin.interrupts:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not send turn/interrupt after cancellation")
+	}
+	if got := stdin.count.Load(); got != 1 {
+		t.Errorf("turn/interrupt request count = %d, want 1", got)
+	}
+
+	select {
+	case state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`)):
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not wait for turn/completed after cancellation")
+	}
+
+	select {
+	case got := <-outcomeCh:
+		if got.result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+		}
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not return after turn/completed")
+	}
+
+	if got := filterEventsOfType(events, domain.EventTurnCancelled); len(got) != 1 {
+		t.Errorf("turn_cancelled event count = %d, want 1", len(got))
+	}
+	if got := filterEventsOfType(events, domain.EventTurnCompleted); len(got) != 0 {
+		t.Errorf("turn_completed event count = %d, want 0", len(got))
+	}
+}
+
 func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 	t.Parallel()
 

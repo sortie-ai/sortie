@@ -314,7 +314,7 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 			contextIsLive: false,
 			wantEvidence: agentcore.TurnEvidence{
 				Terminal:        agentcore.TerminalCancelled,
-				TerminalMessage: "turn interrupted",
+				TerminalMessage: "turn cancelled after the runtime reported status interrupted",
 				Work:            agentcore.WorkUnobservable,
 			},
 		},
@@ -363,6 +363,95 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 			result, err := got.result, got.err
 
 			dispositiontest.AssertDispositionContract(t, tt.wantEvidence, result, err)
+		})
+	}
+}
+
+// TestRunTurn_CompletedNotificationUnderCancelledContext pins the
+// cancelled-context mapping table: whatever status word (or absence of
+// one) the runtime reports in a turn/completed notification once the
+// orchestrator has already cancelled the turn, the disposition is a
+// cancellation carrying a message that names both facts.
+func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		params      string
+		wantMessage string
+	}{
+		{
+			name:        "completed status with no error object",
+			params:      `{"turn":{"id":"turn-001","status":"completed"}}`,
+			wantMessage: "turn cancelled after the runtime reported status completed",
+		},
+		{
+			name:        "interrupted status with no error object",
+			params:      `{"turn":{"id":"turn-001","status":"interrupted"}}`,
+			wantMessage: "turn cancelled after the runtime reported status interrupted",
+		},
+		{
+			name:        "failed status carrying a turn.error object",
+			params:      `{"turn":{"id":"turn-001","status":"failed","error":{"message":"context window exceeded","codexErrorInfo":"ContextWindowExceeded"}}}`,
+			wantMessage: "turn cancelled after the runtime reported status failed: context window exceeded",
+		},
+		{
+			name:        "unrecognized status",
+			params:      `{"turn":{"id":"turn-001","status":"queued_for_review"}}`,
+			wantMessage: "turn cancelled after the runtime reported status queued_for_review",
+		},
+		{
+			name:        "payload with no status member",
+			params:      `{"turn":{"id":"turn-001"}}`,
+			wantMessage: "turn cancelled after the runtime reported no status",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := newInterruptedStatusState()
+			close(state.readerDone)
+
+			var cancelled atomic.Bool
+			ctx := atomicErrContext{Context: context.Background(), cancelled: &cancelled}
+
+			type outcome struct {
+				result domain.TurnResult
+				err    error
+			}
+			outcomeCh := make(chan outcome, 1)
+
+			adapter, _ := NewCodexAdapter(map[string]any{})
+			go func() {
+				result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+					Prompt:  "go",
+					OnEvent: func(domain.AgentEvent) {},
+				})
+				outcomeCh <- outcome{result, err}
+			}()
+
+			// This send returns only once RunTurn's response-wait loop has
+			// received it, which happens strictly after the ctx.Err()
+			// fast-path check, so cancelled is still guaranteed false here.
+			state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+
+			cancelled.Store(true)
+
+			// This send returns only once RunTurn's main loop is ready to
+			// receive again, which happens strictly after the turn/start
+			// response above has been fully processed.
+			state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":` + tt.params + `}`))
+
+			got := <-outcomeCh
+			result, err := got.result, got.err
+
+			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+				Terminal:        agentcore.TerminalCancelled,
+				TerminalMessage: tt.wantMessage,
+				Work:            agentcore.WorkUnobservable,
+			}, result, err)
 		})
 	}
 }

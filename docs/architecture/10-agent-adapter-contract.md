@@ -626,6 +626,9 @@ so that a new adapter inherits it rather than re-deriving it.
 The rule is evaluated as an ordered table. The first matching row decides the turn:
 
 1. The runtime reported the turn cancelled (an orchestrator-initiated cancellation): `turn_cancelled`.
+   This row matches on the orchestrator's own cancellation rather than on the word the runtime
+   uses: a runtime report that the turn completed, arriving after the orchestrator cancelled the
+   turn, does not displace this row.
 2. The adapter recognized a request only a person could answer that the turn cannot continue
    past: `turn_input_required`. It outranks every failure row below, so such a request is
    never reported as a generic turn failure, and it ranks under cancellation, so a shutdown
