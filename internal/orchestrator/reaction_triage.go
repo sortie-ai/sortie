@@ -649,18 +649,22 @@ func logTriageDiscarded(ctx context.Context, log *slog.Logger, run *ReactionTria
 	log.LogAttrs(ctx, level, "reaction triage discarded: subject changed", attrs...)
 }
 
-// cancelReactionTriage terminates an entry's in-flight triage run. It is
-// called by every path that removes a pending entry without re-inserting
-// it, so no subprocess outlives the entry it was started for. A nil
-// entry, a nil handle, and a finished run are all no-ops.
+// cancelReactionTriage detaches an entry's triage run, terminating it
+// first when it is still in flight. It is called by every path that ends
+// the episode the run was started for, whether that path drops the
+// pending entry or re-enqueues it, so no subprocess outlives its episode
+// and no finished verdict is carried into the next one. Detaching a
+// finished run matters as much as cancelling a live one: a retained
+// verdict is replayed by the gate whenever the next episode recomputes
+// an identical fingerprint. A nil entry and a nil handle are no-ops.
 func cancelReactionTriage(pending *PendingReaction) {
-	if pending == nil || pending.Triage == nil || pending.Triage.Cancel == nil {
+	if pending == nil || pending.Triage == nil {
 		return
 	}
-	if triageRunFinished(pending.Triage) {
-		return
+	if !triageRunFinished(pending.Triage) && pending.Triage.Cancel != nil {
+		pending.Triage.Cancel()
 	}
-	pending.Triage.Cancel()
+	pending.Triage = nil
 }
 
 // ReactionEscalationTrigger names why an escalation fired. It selects
