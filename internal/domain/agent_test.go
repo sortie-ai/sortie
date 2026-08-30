@@ -77,6 +77,7 @@ func TestAgentErrorKind_Values(t *testing.T) {
 		{ErrTurnFailed, "turn_failed"},
 		{ErrTurnCancelled, "turn_cancelled"},
 		{ErrTurnInputRequired, "turn_input_required"},
+		{ErrTurnIncomplete, "turn_incomplete"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -86,8 +87,8 @@ func TestAgentErrorKind_Values(t *testing.T) {
 			}
 		})
 	}
-	if len(tests) != 9 {
-		t.Errorf("expected 9 error kinds, got %d", len(tests))
+	if len(tests) != 10 {
+		t.Errorf("expected 10 error kinds, got %d", len(tests))
 	}
 }
 
@@ -244,10 +245,11 @@ func TestAgentErrorKind_RetryClassification(t *testing.T) {
 		{"turn_failed", ErrTurnFailed, true, BackoffExponential},
 		{"turn_cancelled", ErrTurnCancelled, false, BackoffNone},
 		{"turn_input_required", ErrTurnInputRequired, false, BackoffNone},
+		{"turn_incomplete", ErrTurnIncomplete, true, BackoffExponential},
 	}
 
-	if len(tests) != 9 {
-		t.Errorf("expected 9 agent error kinds, got %d", len(tests))
+	if len(tests) != 10 {
+		t.Errorf("expected 10 agent error kinds, got %d", len(tests))
 	}
 
 	for _, tt := range tests {

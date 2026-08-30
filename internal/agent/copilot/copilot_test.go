@@ -787,6 +787,7 @@ func TestRunTurn_ToolDeniedContinuesTurn(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	const deniedJSONL = `{"type":"tool.execution_complete","data":{"toolCallId":"tc-1","toolName":"bash","success":false,"error":{"code":"denied","message":"denied by policy"}}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
 {"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"dd112233-4455-6677-8899-aabbccddeeff","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
 
 	adapter, session := newTestSession(t, t.TempDir())
@@ -1089,7 +1090,8 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 		t.Fatalf("writing stderr file: %v", err)
 	}
 	outFile := filepath.Join(dir, "out.txt")
-	const successJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"no-warn-success-sess","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
+	const successJSONL = `{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"no-warn-success-sess","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
 	if err := os.WriteFile(outFile, []byte(successJSONL+"\n"), 0o644); err != nil {
 		t.Fatalf("writing stdout file: %v", err)
 	}
@@ -1243,6 +1245,7 @@ func TestRunTurn_UsageMeasured_OutputTokenField(t *testing.T) {
 		t.Setenv("COPILOT_HOME", t.TempDir())
 
 		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello","outputTokens":0}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
 {"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"zero-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
 `
 		adapter, session := newTestSession(t, t.TempDir())
@@ -1276,6 +1279,7 @@ func TestRunTurn_UsageMeasured_OutputTokenField(t *testing.T) {
 		t.Setenv("COPILOT_HOME", t.TempDir())
 
 		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello"}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
 {"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"no-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
 `
 		adapter, session := newTestSession(t, t.TempDir())
@@ -1324,6 +1328,7 @@ func TestRunTurn_UsageMeasured_OutputTokenField(t *testing.T) {
 		t.Setenv("COPILOT_HOME", t.TempDir())
 
 		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello"}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
 {"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"ssh-no-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
 `
 		adapter, session := newTestSession(t, t.TempDir())
@@ -1521,7 +1526,8 @@ func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
-	const successJSONL = `{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"zero-output-success-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}`
+	const successJSONL = `{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"zero-output-success-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}`
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
@@ -1633,7 +1639,8 @@ func TestRunTurn_PremiumRequestsLoggedOnce(t *testing.T) {
 	spy := agenttest.InstallLogSpy(t)
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
-	const successJSONL = `{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"premium-session","exitCode":0,"usage":{"premiumRequests":3,"totalApiDurationMs":10}}`
+	const successJSONL = `{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"premium-session","exitCode":0,"usage":{"premiumRequests":3,"totalApiDurationMs":10}}`
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
@@ -1654,5 +1661,163 @@ func TestRunTurn_PremiumRequestsLoggedOnce(t *testing.T) {
 	}
 	if premiumCount != 1 {
 		t.Errorf("premium_requests Info line count = %d, want 1", premiumCount)
+	}
+}
+
+// TestRunTurn_CompleteVersusIncompleteDisposition drives the two endings
+// the autopilot continuation ceiling makes indistinguishable at the exit
+// code and process-exit level: a stream that reports session.task_complete
+// before its terminal result, and a stream that reaches the same
+// exitCode:0 result without ever reporting it. Both pin their disposition
+// against agentcore.DecideTurn, and the test additionally asserts the two
+// ExitReason values differ, since a discriminator that both endings
+// satisfy would defeat the point of the fix.
+func TestRunTurn_CompleteVersusIncompleteDisposition(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	completeAdapter, completeSession := newTestSession(t, t.TempDir())
+	completeState := completeSession.Internal.(*sessionState)
+	completeState.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+	completeResult, completeErr := completeAdapter.RunTurn(context.Background(), completeSession, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if completeErr != nil {
+		t.Fatalf("RunTurn(complete) error = %v", completeErr)
+	}
+	if completeResult.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("RunTurn(complete).ExitReason = %q, want %q", completeResult.ExitReason, domain.EventTurnCompleted)
+	}
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:     agentcore.TerminalSuccess,
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, completeResult, completeErr)
+
+	incompleteAdapter, incompleteSession := newTestSession(t, t.TempDir())
+	incompleteState := incompleteSession.Internal.(*sessionState)
+	incompleteState.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "autopilot_no_report.jsonl"), 0)
+
+	incompleteResult, incompleteErr := incompleteAdapter.RunTurn(context.Background(), incompleteSession, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if incompleteResult.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(incomplete).ExitReason = %q, want %q", incompleteResult.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, incompleteErr, domain.ErrTurnIncomplete)
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalIncomplete,
+		TerminalMessage: "raise copilot-cli.max_autopilot_continues if the turn needs more steps",
+	}, incompleteResult, incompleteErr)
+
+	if completeResult.ExitReason == incompleteResult.ExitReason {
+		t.Errorf("ExitReason for the complete and incomplete endings both = %q, want them to differ", completeResult.ExitReason)
+	}
+}
+
+// TestRunTurn_TaskCompleteSuccessFalse pins the session.task_complete
+// "success: false" ending: it surfaces as a domain.ErrTurnFailed carrying
+// completionFailureMessage's rendering of the report's own summary, not
+// the generic zero-work or non-zero-exit message.
+func TestRunTurn_TaskCompleteSuccessFalse(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const summary = "ran into a blocker"
+	stream := fmt.Sprintf(`{"type":"session.task_complete","data":{"summary":%q,"success":false}}
+{"type":"result","timestamp":"2026-04-08T00:00:04Z","sessionId":"success-false-sess","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0}}`, summary)
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, stream, 0)
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn().ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   completionFailureMessage(summary),
+	}, result, err)
+}
+
+// TestRunTurn_TaskCompleteSuccessKeyAbsent pins the adapter-level ending
+// for a session.task_complete report whose payload carries no success key
+// at all: the turn completes, since the parsed *bool stays nil and the
+// adapter's default success posture applies.
+func TestRunTurn_TaskCompleteSuccessKeyAbsent(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const stream = `{"type":"session.task_complete","data":{"summary":"all set"}}
+{"type":"result","timestamp":"2026-04-08T00:00:05Z","sessionId":"absent-flag-sess","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, stream, 0)
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("RunTurn().ExitReason = %q, want %q (absent success key defaults to success)", result.ExitReason, domain.EventTurnCompleted)
+	}
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{Terminal: agentcore.TerminalSuccess}, result, err)
+}
+
+// TestRunTurn_IncompleteEndingLogsContinuationCounts pins the diagnostic
+// attributes on the adapter's own "copilot turn ended without a
+// task-completion report" warning: autopilot_continuations_observed
+// counts the isAutopilotContinuation lines this turn actually saw, and
+// max_autopilot_continues reports the session's effective ceiling.
+//
+// agenttest.LogSpy only extracts the "line" attribute it was built for
+// (see TestLogSpy_Handle_OtherAttrsIgnored in that package) and has no
+// way to report other attributes' values, so this test installs its own
+// buffer-backed slog.TextHandler as the default logger instead, the
+// pattern this project's own testing guidance documents for asserting on
+// structured log output.
+func TestRunTurn_IncompleteEndingLogsContinuationCounts(t *testing.T) {
+	// No t.Parallel() at the top level: installs a global slog default;
+	// t.Setenv is also incompatible with t.Parallel.
+	var logOutput bytes.Buffer
+	previousDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousDefault) })
+
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "autopilot_no_report.jsonl"), 0)
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Fatalf("RunTurn().ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnIncomplete)
+
+	got := logOutput.String()
+	if !strings.Contains(got, `msg="copilot turn ended without a task-completion report"`) {
+		t.Errorf("log output missing the expected warn message; got:\n%s", got)
+	}
+	if !strings.Contains(got, "autopilot_continuations_observed=1") {
+		t.Errorf("log output missing autopilot_continuations_observed=1 (the fixture carries exactly one isAutopilotContinuation line); got:\n%s", got)
+	}
+	if !strings.Contains(got, "max_autopilot_continues=50") {
+		t.Errorf("log output missing max_autopilot_continues=50 (the unconfigured default); got:\n%s", got)
 	}
 }

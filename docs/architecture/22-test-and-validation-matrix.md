@@ -476,6 +476,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - the tool is scoped to the configured project
 - Unsupported tool names return a JSON-RPC error rather than a result over the MCP execution
   channel, not at the adapter level, without stalling the session
+- An adapter whose runtime publishes a task-completion report carries a test driving both a turn
+  the agent declared complete and a turn the runtime ended without that report through the
+  adapter, asserting the two dispositions differ
 
 ### 17.6 Observability
 

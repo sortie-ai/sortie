@@ -17,6 +17,11 @@ const zeroWorkMessageStem = "agent exited without producing output"
 // string across the whole agent family.
 const turnInputRequiredMessageStem = "agent asked for a decision only a person can make"
 
+// incompleteMessageStem is the shared diagnostic stem every adapter's
+// incomplete-turn row uses, so an operator can grep one string across the
+// whole agent family.
+const incompleteMessageStem = "agent stopped without reporting the task complete"
+
 // TerminalReport is the adapter-normalized end-of-turn report for one turn:
 // what the runtime said about the outcome, or what the adapter determined
 // when it aborted the turn itself.
@@ -45,6 +50,12 @@ const (
 	// An adapter reports it after classifying the request; it never
 	// decides the consequence itself.
 	TerminalHumanInputRequired
+
+	// TerminalIncomplete means the runtime ended the turn without the
+	// task-completion report its own protocol defines, so the turn
+	// stopped short of the work it was given. An adapter whose runtime
+	// publishes no such report MUST NOT report this value.
+	TerminalIncomplete
 )
 
 // WorkReport is the adapter-normalized evidence that the model produced
@@ -75,7 +86,9 @@ type TurnEvidence struct {
 	// determination when it aborted the turn. An adapter MUST NOT report
 	// TerminalSuccess or TerminalFailure for a turn whose runtime produced
 	// no end-of-turn report and whose process exited 0; that combination
-	// belongs to the rows keyed on ExitObserved, ExitCode, and Work.
+	// belongs to the rows keyed on ExitObserved, ExitCode, and Work. An
+	// adapter MUST report TerminalIncomplete only when its runtime
+	// publishes a task-completion report and the turn ended without one.
 	Terminal TerminalReport
 
 	// TerminalErrorKind classifies a TerminalFailure. Ignored for every
@@ -87,11 +100,12 @@ type TurnEvidence struct {
 	// the emitted event and the returned error for a cancelled, failed,
 	// successful, or human-input-required terminal report. May be empty.
 	//
-	// On the human-input-required report alone, the field is appended
-	// after the shared message stem rather than used as the whole
-	// message, and it MUST be a compile-time constant string that never
-	// interpolates stderr, stdout, a file path, or any other runtime
-	// value, for the same reason WorkDetail must be.
+	// On the human-input-required report and the incomplete report
+	// alone, the field is appended after the shared message stem rather
+	// than used as the whole message, and it MUST be a compile-time
+	// constant string that never interpolates stderr, stdout, a file
+	// path, or any other runtime value, for the same reason WorkDetail
+	// must be.
 	TerminalMessage string
 
 	// Cause is the underlying Go error the adapter recovered, copied onto
@@ -157,6 +171,10 @@ const (
 	// RowHumanInputRequired is the row selected when Terminal is
 	// TerminalHumanInputRequired.
 	RowHumanInputRequired
+
+	// RowTerminalIncomplete is the row selected when Terminal is
+	// TerminalIncomplete.
+	RowTerminalIncomplete
 )
 
 // TurnDisposition is the normalized outcome of one turn.
@@ -200,7 +218,7 @@ type TurnMeta struct {
 
 // DecideTurn returns the normalized disposition for one agent turn. It is
 // pure: no I/O, no logging, no emission, no state. Every TurnEvidence value
-// maps to exactly one of eight rows, evaluated in order and returned on the
+// maps to exactly one of nine rows, evaluated in order and returned on the
 // first match.
 //
 // A positive terminal report is authoritative: when Terminal is
@@ -246,6 +264,18 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 			Row:          RowTerminalFailure,
 			ExitReason:   domain.EventTurnFailed,
 			ErrorKind:    kind,
+			EventMessage: message,
+			ErrorMessage: message,
+		}
+	case TerminalIncomplete:
+		message := incompleteMessageStem
+		if ev.TerminalMessage != "" {
+			message += ": " + ev.TerminalMessage
+		}
+		return TurnDisposition{
+			Row:          RowTerminalIncomplete,
+			ExitReason:   domain.EventTurnFailed,
+			ErrorKind:    domain.ErrTurnIncomplete,
 			EventMessage: message,
 			ErrorMessage: message,
 		}
@@ -298,10 +328,10 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 }
 
 // FinalizeTurn applies DecideTurn to ev, emits the matching terminal event
-// through emit, logs a warn message when the decision selects RowZeroWork
-// or RowHumanInputRequired, and returns the paired TurnResult and error.
-// The returned *domain.AgentError is nil if and only if the disposition is
-// domain.EventTurnCompleted.
+// through emit, logs a warn message when the decision selects RowZeroWork,
+// RowHumanInputRequired, or RowTerminalIncomplete, and returns the paired
+// TurnResult and error. The returned *domain.AgentError is nil if and only
+// if the disposition is domain.EventTurnCompleted.
 //
 // FinalizeTurn panics when emit is nil. It substitutes slog.Default() when
 // logger is nil. It is not idempotent, because it emits; callers MUST call
@@ -337,6 +367,9 @@ func FinalizeTurn(
 	}
 	if disposition.Row == RowHumanInputRequired {
 		logger.Warn("agent asked for a decision only a person can make, ending the attempt")
+	}
+	if disposition.Row == RowTerminalIncomplete {
+		logger.Warn("agent stopped without reporting the task complete, treating as failure")
 	}
 
 	result := domain.TurnResult{

@@ -2615,12 +2615,14 @@ with no session ID, on a session where none was known already, is followed by
 The adapter validates none of these values and forwards each as written, except in the
 two cases described below: a non-positive `max_autopilot_continues` is replaced by `50`,
 and `mcp_config` is reformatted before it reaches `--additional-mcp-config`. A key whose
-YAML value has the wrong type is ignored and the default applies.
+YAML value has the wrong type is ignored and the default applies. The adapter reads the
+runtime's own task-completion report as the turn's outcome, not solely the terminal
+event's exit code.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `copilot-cli.model` | string | _(absent)_ | Forwarded to `--model`. The accepted model identifiers depend on the installed CLI and the account; `copilot --help` lists the set. |
-| `copilot-cli.max_autopilot_continues` | integer | `50` | Forwarded to `--max-autopilot-continues`, the ceiling on autopilot continuation steps inside one turn. The flag is always passed. An absent key, a non-integer value, and any value of zero or less all send `50`. |
+| `copilot-cli.max_autopilot_continues` | integer | `50` | Forwarded to `--max-autopilot-continues`, the ceiling on autopilot continuation steps inside one turn. The flag is always passed. An absent key, a non-integer value, and any value of zero or less all send `50`. Reaching the ceiling ends the turn without the runtime's task-completion report, which the adapter reports as a failed turn with error kind `turn_incomplete`: the attempt ends there and the scheduled retry resumes the same session with a fresh ceiling. |
 | `copilot-cli.agent` | string | _(absent)_ | Forwarded to `--agent`. Selects a named Copilot agent persona for the turn. |
 | `copilot-cli.allowed_tools` | string | _(absent)_ | Forwarded to `--allow-tool` as a single argument. A non-whitespace value replaces `--allow-all`, so it changes what the launch approves. See the tool-scoping note below. Each rule takes the form `kind(argument)`, with the argument optional, so a bare kind names the whole kind; for example `write` or `shell(git:*)`. |
 | `copilot-cli.denied_tools` | string | _(absent)_ | Forwarded to `--deny-tool` as a single argument. It composes with `--allow-all` rather than replacing it, so it does not change what the launch approves elsewhere. See the tool-scoping note below. Takes the same `kind(argument)` form as `copilot-cli.allowed_tools`. |

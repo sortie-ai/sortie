@@ -87,9 +87,18 @@ type sessionWarningData struct {
 	Message     string `json:"message,omitempty"`
 }
 
+// sessionTaskCompleteData is the data payload of a session.task_complete
+// event. Success is a pointer so a payload whose success field is absent
+// from the wire payload is distinguishable from one reporting an explicit
+// false, the same idiom rawEvent.ExitCode already uses.
 type sessionTaskCompleteData struct {
 	Summary string `json:"summary,omitempty"`
-	Success bool   `json:"success"`
+	Success *bool  `json:"success,omitempty"`
+}
+
+// userMessageData is the data payload of a user.message event.
+type userMessageData struct {
+	IsAutopilotContinuation bool `json:"isAutopilotContinuation,omitempty"`
 }
 
 // shutdownEvent is one line of the copilot session-state events journal
@@ -176,6 +185,25 @@ func parseSessionTaskCompleteData(data json.RawMessage) (sessionTaskCompleteData
 		return sessionTaskCompleteData{}, fmt.Errorf("parse session task complete data: %w", err)
 	}
 	return d, nil
+}
+
+func parseUserMessageData(data json.RawMessage) (userMessageData, error) {
+	var d userMessageData
+	if err := json.Unmarshal(data, &d); err != nil {
+		return userMessageData{}, fmt.Errorf("parse user message data: %w", err)
+	}
+	return d, nil
+}
+
+// completionFailureMessage builds the failure message for a
+// session.task_complete report that explicitly declares success: false.
+// It returns a fixed message when summary is empty, since an empty
+// summary is not itself evidence of anything.
+func completionFailureMessage(summary string) string {
+	if summary == "" {
+		return "agent reported the task complete without success"
+	}
+	return typeutil.TruncateRunes(summary, 500)
 }
 
 // summarizeAssistantMessage produces a human-readable summary from an

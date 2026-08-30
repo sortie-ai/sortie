@@ -120,6 +120,25 @@ type sessionState struct {
 	// to forkSession.
 	turnOutputTokens int64
 	inFlight         *agentcore.ToolTracker
+
+	// turnCompletionSeen is true once a session.task_complete event has
+	// arrived this turn.
+	turnCompletionSeen bool
+
+	// turnCompletionSuccess is false only when a session.task_complete
+	// payload parsed this turn and its success field was explicitly
+	// false.
+	turnCompletionSuccess bool
+
+	// turnCompletionSummary is the session.task_complete report's
+	// summary, empty when the report never arrived or its payload was
+	// unreadable.
+	turnCompletionSummary string
+
+	// turnContinuations counts the user.message events this turn whose
+	// payload marked them as autopilot continuations. Diagnostic only;
+	// never consulted by the turn disposition.
+	turnContinuations int
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -371,17 +390,34 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				agentcore.EmitNotification(emit, msg)
 
 			case "session.task_complete":
+				state.turnCompletionSeen = true
+				state.turnCompletionSuccess = true
 				msg := "task complete"
 				if len(event.Data) > 0 {
 					taskData, dataErr := parseSessionTaskCompleteData(event.Data)
-					if dataErr == nil && taskData.Summary != "" {
-						msg = taskData.Summary
+					if dataErr == nil {
+						state.turnCompletionSummary = taskData.Summary
+						if taskData.Success != nil {
+							state.turnCompletionSuccess = *taskData.Success
+						}
+						if taskData.Summary != "" {
+							msg = taskData.Summary
+						}
 					}
 				}
 				agentcore.EmitNotification(emit, msg)
 
 			case "session.mcp_server_status_changed", "session.mcp_servers_loaded",
-				"session.tools_updated", "user.message":
+				"session.tools_updated":
+				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
+
+			case "user.message":
+				if len(event.Data) > 0 {
+					msgData, dataErr := parseUserMessageData(event.Data)
+					if dataErr == nil && msgData.IsAutopilotContinuation {
+						state.turnContinuations++
+					}
+				}
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
 			case "result":
@@ -436,11 +472,22 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 						slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
 				}
 
-				if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
-					ev.Terminal = agentcore.TerminalSuccess
-				} else {
+				switch {
+				case lastResult.ExitCode == nil || *lastResult.ExitCode != 0:
 					ev.Terminal = agentcore.TerminalFailure
 					ev.TerminalMessage = "non-zero exit in result event"
+				case !state.turnCompletionSeen:
+					ev.Terminal = agentcore.TerminalIncomplete
+					ev.TerminalMessage = "raise copilot-cli.max_autopilot_continues if the turn needs more steps"
+					state.logger().Warn("copilot turn ended without a task-completion report",
+						slog.Int("autopilot_continuations_observed", state.turnContinuations),
+						slog.Int("max_autopilot_continues", effectiveMaxAutopilotContinues(a.passthrough)))
+				case !state.turnCompletionSuccess:
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalErrorKind = domain.ErrTurnFailed
+					ev.TerminalMessage = completionFailureMessage(state.turnCompletionSummary)
+				default:
+					ev.Terminal = agentcore.TerminalSuccess
 				}
 			}
 
@@ -516,6 +563,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	// snapshot across turns, so it is not reset here.
 	state.turnOutputTokens = 0
 	state.inFlight = agentcore.NewToolTracker()
+	state.turnCompletionSeen = false
+	state.turnCompletionSuccess = false
+	state.turnCompletionSummary = ""
+	state.turnContinuations = 0
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }

@@ -598,6 +598,52 @@ func TestRunTurn_InputRequired_MatchesSharedLayer(t *testing.T) {
 	}
 }
 
+// TestRunTurn_Incomplete_MatchesSharedLayer asserts that the "incomplete"
+// outcome's emitted event and returned *domain.AgentError are exactly the
+// values agentcore.FinalizeTurn would produce for any other adapter
+// reporting agentcore.TerminalIncomplete with the same message: same
+// ExitReason, same ErrorKind, and a message built from the shared stem,
+// not a value the mock constructs on its own.
+func TestRunTurn_Incomplete_MatchesSharedLayer(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{
+		"turn_outcomes": []any{"incomplete"},
+	})
+	sess := domain.Session{ID: "s"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	result, err := adapter.RunTurn(context.Background(), sess, params)
+
+	wantDisposition := agentcore.DecideTurn(agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalIncomplete,
+		TerminalMessage: "mock turn incomplete",
+	})
+
+	var ae *domain.AgentError
+	if !errors.As(err, &ae) {
+		t.Fatalf("expected *AgentError, got %T: %v", err, err)
+	}
+	if ae.Kind != wantDisposition.ErrorKind {
+		t.Errorf("AgentError.Kind = %q, want %q (agentcore.DecideTurn's ErrorKind)", ae.Kind, wantDisposition.ErrorKind)
+	}
+	if ae.Message != wantDisposition.ErrorMessage {
+		t.Errorf("AgentError.Message = %q, want %q (agentcore.DecideTurn's ErrorMessage)", ae.Message, wantDisposition.ErrorMessage)
+	}
+	if result.ExitReason != wantDisposition.ExitReason {
+		t.Errorf("TurnResult.ExitReason = %q, want %q (agentcore.DecideTurn's ExitReason)", result.ExitReason, wantDisposition.ExitReason)
+	}
+
+	last := (*events)[len(*events)-1]
+	if last.Type != wantDisposition.ExitReason {
+		t.Errorf("last event Type = %q, want %q", last.Type, wantDisposition.ExitReason)
+	}
+	if last.Message != wantDisposition.EventMessage {
+		t.Errorf("last event Message = %q, want %q (agentcore.DecideTurn's EventMessage)", last.Message, wantDisposition.EventMessage)
+	}
+}
+
 func TestRunTurn_ErrorOutcome(t *testing.T) {
 	t.Parallel()
 
