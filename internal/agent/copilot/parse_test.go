@@ -26,6 +26,10 @@ func scanFixtureLines(t *testing.T, name string) [][]byte {
 
 	var lines [][]byte
 	scanner := bufio.NewScanner(f)
+	// A captured model.messages_snapshot line can run past bufio's default
+	// 64 KB token limit; raise it to the same ceiling the production
+	// stdout scanner uses.
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		b := scanner.Bytes()
 		if len(b) == 0 {
@@ -414,6 +418,77 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 	}
 	if result.Usage.TotalAPIDurMS != 6866 {
 		t.Errorf("result.Usage.TotalAPIDurMS = %d, want 6866", result.Usage.TotalAPIDurMS)
+	}
+}
+
+func TestParseFixture_ModelMessageSession(t *testing.T) {
+	t.Parallel()
+
+	lines := scanFixtureLines(t, "model_message_session.jsonl")
+	if len(lines) != 14 {
+		t.Fatalf("model_message_session.jsonl: got %d lines, want 14", len(lines))
+	}
+
+	wantTypes := []string{
+		"model.message",
+		"assistant.message",
+		"model.message",
+		"model.message",
+		"assistant.message",
+		"model.message",
+		"assistant.message",
+		"model.message",
+		"assistant.message",
+		"model.message",
+		"assistant.message",
+		"session.task_complete",
+		"model.messages_snapshot",
+		"result",
+	}
+
+	events := make([]rawEvent, len(lines))
+	for i, line := range lines {
+		ev, err := parseEvent(line)
+		if err != nil {
+			t.Fatalf("parseEvent(line %d): %v", i+1, err)
+		}
+		events[i] = ev
+	}
+
+	for i, want := range wantTypes {
+		if events[i].Type != want {
+			t.Errorf("event[%d].Type = %q, want %q", i, events[i].Type, want)
+		}
+	}
+
+	// The assistant-role model.message records carry the five
+	// output-token values in observed order; the tool-role record
+	// carries none.
+	wantOutputTokens := []int64{119, 107, 84, 68, 70}
+	var gotOutputTokens []int64
+	for i, ev := range events {
+		if ev.Type != "model.message" {
+			continue
+		}
+		payload, err := parseModelMessageData(ev.Data)
+		if err != nil {
+			t.Fatalf("parseModelMessageData(event[%d]): %v", i, err)
+		}
+		if payload.Message.Role != "assistant" {
+			continue
+		}
+		if payload.Message.OutputTokens == nil {
+			t.Fatalf("event[%d] model.message.outputTokens is nil, want a value", i)
+		}
+		gotOutputTokens = append(gotOutputTokens, *payload.Message.OutputTokens)
+	}
+	if len(gotOutputTokens) != len(wantOutputTokens) {
+		t.Fatalf("assistant-role model.message count = %d, want %d", len(gotOutputTokens), len(wantOutputTokens))
+	}
+	for i, want := range wantOutputTokens {
+		if gotOutputTokens[i] != want {
+			t.Errorf("outputTokens[%d] = %d, want %d", i, gotOutputTokens[i], want)
+		}
 	}
 }
 

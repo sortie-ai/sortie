@@ -80,6 +80,14 @@ type sessionState struct {
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
 
+	// admittedAPICalls holds the API call identifiers whose output-token
+	// measurement this run has already admitted. Run-scoped: allocated
+	// once in StartSession and never reset between turns, because the
+	// CLI resumes a disk-persisted session and a later turn's stream can
+	// replay an earlier turn's records, so a run-scoped set suppresses
+	// only a genuine repeat.
+	admittedAPICalls map[string]struct{}
+
 	// runCreatedSession is true when this run started a new session
 	// (StartSessionParams.ResumeSessionID was empty), as opposed to
 	// resuming one from a prior worker attempt. Recorded once in
@@ -110,9 +118,9 @@ type sessionState struct {
 	// Warn on every turn of a run whose session id never becomes valid.
 	sessionIDRejectionLogged bool
 
-	// assistantFieldSeen is true once at least one assistant.message
-	// event of this run has carried a present outputTokens field.
-	// Monotone: set true once and never cleared.
+	// assistantFieldSeen is true once an admitted output-token
+	// measurement of either wire shape has been observed. Monotone: set
+	// true once and never cleared.
 	assistantFieldSeen bool
 
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
@@ -152,6 +160,37 @@ func (s *sessionState) refreshForkLogger() {
 	if s.forkSession != nil {
 		s.forkSession.SetLogger(s.logger())
 	}
+}
+
+// admitOutputTokens applies the single admission rule shared by both
+// wire shapes that carry a per-message output-token count. It reports
+// false without mutating any state when tokens is nil or when id is
+// non-empty and already admitted this run; a non-empty id is recorded
+// so a repeat sighting is not admitted again, while an empty id is
+// never recorded, so every measurement lacking one is admitted. On
+// admission it updates the turn's output-token total, takes a
+// provisional run-cumulative snapshot, and emits one
+// [domain.EventTokenUsage] event.
+func (s *sessionState) admitOutputTokens(id string, tokens *int64, emit func(domain.AgentEvent), now time.Time) (admitted bool) { //nolint:unparam // both call sites in ParseLine ignore the result today; the rule reports it so a future caller can branch on admission without changing this signature
+	if tokens == nil {
+		return false
+	}
+	if id != "" {
+		if _, seen := s.admittedAPICalls[id]; seen {
+			return false
+		}
+		s.admittedAPICalls[id] = struct{}{}
+	}
+
+	s.assistantFieldSeen = true
+	s.turnOutputTokens += *tokens
+	snapshot := s.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: s.turnOutputTokens})
+	emit(domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: now,
+		Usage:     snapshot,
+	})
+	return true
 }
 
 // recoverUsage attempts to recover this run's authoritative token usage
@@ -288,6 +327,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		mcpConfigPath:     params.MCPConfigPath,
 		runCreatedSession: params.ResumeSessionID == "",
 		acc:               agentcore.NewRunUsage(),
+		admittedAPICalls:  make(map[string]struct{}),
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -311,22 +351,32 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					msgData, dataErr := parseAssistantMessageData(event.Data)
 					if dataErr == nil {
-						if msgData.OutputTokens != nil {
-							state.assistantFieldSeen = true
-							state.turnOutputTokens += *msgData.OutputTokens
-							snapshot := state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: state.turnOutputTokens})
-							emit(domain.AgentEvent{
-								Type:      domain.EventTokenUsage,
-								Timestamp: now,
-								Usage:     snapshot,
-							})
-						}
+						state.admitOutputTokens(msgData.APICallID, msgData.OutputTokens, emit, now)
 						agentcore.EmitNotification(emit, summarizeAssistantMessage(msgData))
 					} else {
 						state.logger().Debug("failed to parse assistant.message data", slog.Any("error", dataErr))
 						agentcore.EmitNotification(emit, "assistant message")
 					}
 				}
+
+			case "model.message":
+				if len(event.Data) == 0 {
+					state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
+					break
+				}
+				payload, dataErr := parseModelMessageData(event.Data)
+				if dataErr != nil {
+					state.logger().Debug("failed to parse model.message data", slog.Any("error", dataErr))
+					break
+				}
+				if payload.Message.Role != "assistant" {
+					state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
+					break
+				}
+				state.admitOutputTokens(payload.Message.APICallID, payload.Message.OutputTokens, emit, now)
+
+			case "model.messages_snapshot":
+				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
 			case "assistant.turn_start", "assistant.turn_end":
 				agentcore.EmitNotification(emit, event.Type)
