@@ -1810,3 +1810,79 @@ func TestReconcileReviewComments_Triage_RepeatedHandled_StillAgesOut(t *testing.
 		t.Error("PendingReactions entry survived past the TTL despite a handled verdict, want dropped")
 	}
 }
+
+// TestReconcileReviewComments_Triage_EpisodeCloseClearsHandledForNextEpisode
+// pins cancelReactionTriage's detach-on-close contract: a memoized
+// handled verdict from one episode must not survive into the next.
+// Without it, a later episode that recomputes the identical
+// actionable-comment fingerprint (the same comment reappearing after
+// the thread went quiet) would replay the stale handled outcome from
+// memory instead of running the newly configured command, silently
+// suppressing the real verdict.
+func TestReconcileReviewComments_Triage_EpisodeCloseClearsHandledForNextEpisode(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-EPISODE-CLOSE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, tracker, root, handledScript)
+
+	// Episode 1: one actionable comment; the command answers handled,
+	// memoizing the verdict on pending.Triage rather than re-running it
+	// on the next pass over the same comment set.
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if entry.Triage == nil {
+		t.Fatal("PendingReaction.Triage cleared inside its own episode, want the memoized handle retained")
+	}
+	entry.PendingRetryAt = time.Time{}
+
+	// The episode closes: the comment set goes empty, taking the
+	// no-actionable-comments branch that must cancel the retained
+	// handle before re-enqueueing.
+	scm.comments = nil
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok = state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped when the episode closed, want re-enqueued")
+	}
+	if entry.Triage != nil {
+		t.Fatal("PendingReaction.Triage survived the episode close, want detached so a later identical comment set cannot replay it")
+	}
+	entry.PendingRetryAt = time.Time{}
+
+	// Episode 2: the same comment reappears, recomputing the identical
+	// fingerprint. The command now answers escalate; a cleared handle
+	// must run it fresh rather than replay episode 1's memoized handled
+	// verdict.
+	scm.comments = oldEnoughReviewComments()
+	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (the replayed handled verdict from episode 1 must not suppress the fresh escalate)", tracker.addLabelCalled)
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a triage escalation, want dropped (the replayed handled verdict from episode 1 must not suppress it)")
+	}
+	if store.markDispatchedCalls != 2 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 2 (one real verdict per episode: handled, then escalate)", store.markDispatchedCalls)
+	}
+}

@@ -116,6 +116,11 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 
 		// No actionable comments — re-enqueue with poll interval delay.
 		if len(actionable) == 0 {
+			// The episode closes while the entry keeps watching, so the
+			// comment set a run answered for no longer describes
+			// anything. A retained verdict would otherwise be replayed
+			// against the next episode that recomputes the same set.
+			cancelReactionTriage(pending)
 			pending.PendingRetryAt = now.Add(pollInterval)
 			state.PendingReactions[key] = pending
 			continue

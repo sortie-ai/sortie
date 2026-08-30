@@ -246,6 +246,12 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		switch result.Status {
 		case domain.CIStatusPassing:
+			// The episode closes while the entry keeps watching, so the
+			// head an in-flight or finished run answered for no longer
+			// describes anything. A retained verdict would otherwise be
+			// replayed against the next episode that recomputes the same
+			// head.
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, rkey)
 			pending.PendingAttempts++
 			delay := computeCIPendingDelay(base, pending.PendingAttempts)

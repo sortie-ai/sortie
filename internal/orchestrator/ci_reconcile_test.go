@@ -2950,3 +2950,82 @@ func TestReconcileCIStatus_Triage_UnboundedAcrossSuccessiveHeads(t *testing.T) {
 		t.Error("entry dropped even though the watch window is measured from the last recorded head, not the first")
 	}
 }
+
+// TestReconcileCIStatus_Triage_EpisodeCloseClearsHandledForNextEpisode
+// pins cancelReactionTriage's detach-on-close contract: a memoized
+// handled verdict from one episode must not survive into the next.
+// Without it, a later episode that recomputes the identical head
+// fingerprint (a revert back to a head this process already watched)
+// would replay the stale handled outcome from memory instead of
+// running the newly configured command, silently suppressing the real
+// verdict.
+func TestReconcileCIStatus_Triage_EpisodeCloseClearsHandledForNextEpisode(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-EPISODE-CLOSE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/episode-close", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "sha-repeat"}}
+	params := ciTriageParams(t, store, ci, tracker, scm, root, handledScript)
+
+	// Episode 1: head sha-repeat fails CI; the command answers handled,
+	// memoizing the verdict on pending.Triage rather than re-running it
+	// on the next pass over the same head.
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if entry.Triage == nil {
+		t.Fatal("PendingReaction.Triage cleared inside its own episode, want the memoized handle retained")
+	}
+	entry.PendingRetryAt = time.Time{}
+
+	// The episode closes: a new head arrives and CI passes on it,
+	// taking the CIStatusPassing branch that must cancel the retained
+	// handle before re-enqueueing.
+	scm.result = domain.PRMergeStatus{HeadSHA: "sha-other"}
+	ci.result = domain.CIResult{Status: domain.CIStatusPassing}
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok = state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped when the episode closed, want re-enqueued")
+	}
+	if entry.Triage != nil {
+		t.Fatal("PendingReaction.Triage survived the episode close, want detached so a later identical head cannot replay it")
+	}
+	entry.PendingRetryAt = time.Time{}
+
+	// Episode 2: the head reverts to sha-repeat, recomputing the
+	// identical fingerprint, and CI fails again. The command now
+	// answers escalate; a cleared handle must run it fresh rather than
+	// replay episode 1's memoized handled verdict.
+	scm.result = domain.PRMergeStatus{HeadSHA: "sha-repeat"}
+	ci.result = domain.CIResult{Status: domain.CIStatusFailing}
+	params.CITriage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (the replayed handled verdict from episode 1 must not suppress the fresh escalate)", tracker.addLabelCalled)
+	}
+	if _, claimed := state.Claimed[issueID]; claimed {
+		t.Error("claim not released after a triage escalation, want released")
+	}
+	if store.markDispatchedCalls != 2 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 2 (one real verdict per episode: handled, then escalate)", store.markDispatchedCalls)
+	}
+}
