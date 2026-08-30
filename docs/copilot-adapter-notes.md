@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's GitHub Copilot CLI adapter in `internal/agent/copilot`: the decisions behind it, where its session and cost model collide with ours, and the failures that are hard to diagnose from a log.
 
-Last updated: 2026-08-23
+Last updated: 2026-08-30
 
 ## Where to get the volatile facts
 
@@ -44,9 +44,9 @@ A denial is recognized on the tool-completion event by its error code, distinct 
 
 ## Deciding how a turn ended
 
-The terminal event is authoritative when present: its own exit code decides success or failure regardless of what the process did. With no terminal event the decision falls to the process exit and to work evidence, and the shared `agentcore.FinalizeTurn` owns the mapping.
+The runtime's own task-completion report is the turn's outcome, not the terminal event's exit code alone: a non-zero exit still decides a failure, and on a zero exit the report's absence, once the terminal event proves the stream ran to its end, is the autopilot continuation ceiling's ending rather than a success. That absence is meaningful only once the terminal event has arrived; without one, the decision falls to the process exit and to work evidence instead. The CLI publishes no stop reason of its own, and its session-state journal writes the same routine shutdown word whether the session finished or was cut off at the ceiling, so the task-completion report is the only signal that distinguishes the two. The shared `agentcore.FinalizeTurn` owns the mapping from that evidence to a disposition.
 
-Work evidence is this turn's own output tokens, never the run-cumulative figure, which is non-zero on every turn after the first. Get that wrong and the safety row that turns "exited cleanly, produced nothing" into a failure stops firing for the rest of the run. That row exists because this CLI has more than one way to exit zero having done nothing at all, including a configuration file it could not parse.
+Work evidence is this turn's own output tokens, never the run-cumulative figure, which is non-zero on every turn after the first. Get that wrong and the safety row that turns "exited cleanly, produced nothing" into a failure stops firing for the rest of the run. That row exists because this CLI has more than one way to exit zero having done nothing at all, including a configuration file it could not parse. It fires only when no terminal event arrives at all, since a stream that reaches its terminal event is decided by the exit code and the task-completion report instead.
 
 The adapter enforces no read deadline and no turn deadline of its own; both are orchestrator-side. Combined with the disabled ask-the-user tool, that makes the response-timeout and input-required outcomes unreachable here by construction.
 

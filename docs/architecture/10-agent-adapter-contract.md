@@ -32,7 +32,7 @@ Built-in adapter summary:
 | Kind | Session model | Event surface | Resume and identity | Notable differences |
 |---|---|---|---|---|
 | `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from the terminal `result` event's per-model usage, aggregated across models and added to the run total per turn. |
-| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes --allow-all unless copilot-cli.allowed_tools is set, in which case that allow-list replaces it, while copilot-cli.denied_tools, copilot-cli.available_tools, and copilot-cli.excluded_tools leave it in place; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. A run whose session-state journal cannot be read, which includes SSH mode, is reported measured on the stream's output-token figures alone: it carries no input or cache-read component, so its recorded total is output-only. It is reported unmeasured only when no assistant message carried the output-token field either. |
+| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The turn's outcome comes from the runtime's own task-completion report rather than from the terminal event's exit code alone; a turn that ends without that report is reported as an incomplete turn with error kind `turn_incomplete`. The adapter always includes `--max-autopilot-continues` and includes --allow-all unless copilot-cli.allowed_tools is set, in which case that allow-list replaces it, while copilot-cli.denied_tools, copilot-cli.available_tools, and copilot-cli.excluded_tools leave it in place; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. A run whose session-state journal cannot be read, which includes SSH mode, is reported measured on the stream's output-token figures alone: it carries no input or cache-read component, so its recorded total is output-only. It is reported unmeasured only when no assistant message carried the output-token field either. |
 | `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool handling is the MCP sidecar the runtime spawns from configuration overrides the adapter supplies on the app-server command line, on a local launch only; approval handling is unchanged and stays part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
 | `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_failed` with error kind `response_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. Tool handling is the same MCP sidecar, delivered through the runtime's inline configuration environment variable, on a local launch only. |
 | `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply; `agent.turn_timeout_ms` is the wall-clock budget bound, and a silent turn is caught first by `agent.stall_timeout_ms`. Every run is reported unmeasured, because the headless runtime reports no token counts. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and, only in local mode and once per session, runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight forecloses and which stall detection, not the turn timeout, would otherwise end. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
@@ -549,6 +549,7 @@ Error mapping (recommended normalized categories):
 - `port_exit`
 - `response_error`
 - `turn_failed`
+- `turn_incomplete`
 - `turn_cancelled`
 - `turn_input_required`
 
@@ -638,14 +639,15 @@ The rule is evaluated as an ordered table. The first matching row decides the tu
    failure): `turn_failed`, with the error kind the runtime or the adapter supplied.
 4. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
    authoritative and is never second-guessed by counting output.
-5. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
+5. The runtime ended the turn without the task-completion report its protocol defines: `turn_failed`.
+6. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
    persistent session with no per-turn exit): `turn_failed`.
-6. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
+7. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
    `turn_failed`.
-7. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
+8. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
    model produced anything this turn: `turn_failed`. Exit code zero is never by itself a success
    signal; an adapter with nothing positive to offer reports a failed turn.
-8. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
+9. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
    model produced something this turn: `turn_completed`.
 
 Extracting the runtime's own report and the per-turn work evidence from a vendor's wire format is
@@ -661,7 +663,7 @@ and diverge from the rule's letter while obeying its intent:
   currency: the credits trailer on stderr is the positive success signal, and its absence with a
   zero exit code is the adapter's only evidence of nothing produced.
 - Codex's persistent per-session subprocess has no per-turn process exit to observe, so the rule's
-  zero-work row (row 7 above) is structurally unreachable for it: an absent turn-completion report
+  zero-work row (row 8 above) is structurally unreachable for it: an absent turn-completion report
   is already a failure on its own terms.
 
 `turn_ended_with_error` remains a documented normalized event type (Section 10.3), reserved for a

@@ -242,8 +242,53 @@ func TestParseEvent(t *testing.T) {
 				if data.Summary != "task done" {
 					t.Errorf("Summary = %q, want %q", data.Summary, "task done")
 				}
-				if !data.Success {
-					t.Error("Success = false, want true")
+				if data.Success == nil || !*data.Success {
+					t.Error("Success = nil or false, want true")
+				}
+			},
+		},
+		{
+			name:     "session.task_complete with absent success key",
+			line:     `{"type":"session.task_complete","id":"e11","timestamp":"2026-01-01T00:00:00Z","data":{"summary":"task done"}}`,
+			wantType: "session.task_complete",
+			check: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				data, err := parseSessionTaskCompleteData(ev.Data)
+				if err != nil {
+					t.Fatalf("parseSessionTaskCompleteData: %v", err)
+				}
+				if data.Success != nil {
+					t.Errorf("Success = %v, want nil", *data.Success)
+				}
+			},
+		},
+		{
+			name:     "user.message with isAutopilotContinuation true",
+			line:     `{"type":"user.message","id":"e12","timestamp":"2026-01-01T00:00:00Z","data":{"isAutopilotContinuation":true}}`,
+			wantType: "user.message",
+			check: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				data, err := parseUserMessageData(ev.Data)
+				if err != nil {
+					t.Fatalf("parseUserMessageData: %v", err)
+				}
+				if !data.IsAutopilotContinuation {
+					t.Error("IsAutopilotContinuation = false, want true")
+				}
+			},
+		},
+		{
+			name:     "user.message with absent isAutopilotContinuation key",
+			line:     `{"type":"user.message","id":"e13","timestamp":"2026-01-01T00:00:00Z","data":{"content":"hello"}}`,
+			wantType: "user.message",
+			check: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				data, err := parseUserMessageData(ev.Data)
+				if err != nil {
+					t.Fatalf("parseUserMessageData: %v", err)
+				}
+				if data.IsAutopilotContinuation {
+					t.Error("IsAutopilotContinuation = true, want false")
 				}
 			},
 		},
@@ -309,8 +354,8 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 	t.Parallel()
 
 	lines := scanFixtureLines(t, "simple_session.jsonl")
-	if len(lines) != 8 {
-		t.Fatalf("simple_session.jsonl: got %d lines, want 8", len(lines))
+	if len(lines) != 9 {
+		t.Fatalf("simple_session.jsonl: got %d lines, want 9", len(lines))
 	}
 
 	wantTypes := []string{
@@ -321,6 +366,7 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 		"assistant.message_delta",
 		"assistant.message",
 		"assistant.turn_end",
+		"session.task_complete",
 		"result",
 	}
 
@@ -349,7 +395,7 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 	}
 
 	// Verify the result event carries the session ID and exit code.
-	result := events[7]
+	result := events[8]
 	const wantSessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
 	if result.SessionID != wantSessionID {
 		t.Errorf("result.SessionID = %q, want %q", result.SessionID, wantSessionID)
@@ -450,8 +496,8 @@ func TestParseFixture_ToolUseSession(t *testing.T) {
 	if taskData.Summary != "Read and summarized main.go" {
 		t.Errorf("session.task_complete.summary = %q, want %q", taskData.Summary, "Read and summarized main.go")
 	}
-	if !taskData.Success {
-		t.Error("session.task_complete.success = false, want true")
+	if taskData.Success == nil || !*taskData.Success {
+		t.Error("session.task_complete.success = nil or false, want true")
 	}
 
 	// Verify the result event carries the session ID.

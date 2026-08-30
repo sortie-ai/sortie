@@ -130,6 +130,10 @@ const (
 	// ErrTurnInputRequired indicates the agent requested user input,
 	// which is a hard failure per policy.
 	ErrTurnInputRequired AgentErrorKind = "turn_input_required"
+
+	// ErrTurnIncomplete indicates the agent runtime ended the turn
+	// without reporting the task complete, so the work stopped short.
+	ErrTurnIncomplete AgentErrorKind = "turn_incomplete"
 )
 
 // AgentError is a structured error returned by [AgentAdapter]
@@ -222,7 +226,7 @@ func (k AgentErrorKind) RetryClassification() RetryClassification {
 		return RetryClassification{Backoff: BackoffNone}
 	case ErrTurnInputRequired:
 		return RetryClassification{Backoff: BackoffNone}
-	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed:
+	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
 	default:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}

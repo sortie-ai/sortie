@@ -55,12 +55,7 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 		"--no-ask-user",
 	}
 
-	// Autopilot limit: safe default of 50 when not configured.
-	maxContinues := pt.MaxAutopilotContinues
-	if maxContinues <= 0 {
-		maxContinues = 50
-	}
-	args = append(args, "--max-autopilot-continues", strconv.Itoa(maxContinues))
+	args = append(args, "--max-autopilot-continues", strconv.Itoa(effectiveMaxAutopilotContinues(pt)))
 
 	// Session resume: fallback to --continue when session ID was
 	// never captured, or use --resume with the known session ID.
@@ -113,6 +108,16 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 	}
 
 	return args
+}
+
+// effectiveMaxAutopilotContinues resolves the autopilot continuation
+// ceiling: pt.MaxAutopilotContinues when positive, or a safe default of 50
+// otherwise. It is the only place the default is resolved.
+func effectiveMaxAutopilotContinues(pt passthroughConfig) int {
+	if pt.MaxAutopilotContinues > 0 {
+		return pt.MaxAutopilotContinues
+	}
+	return 50
 }
 
 // blanketGrantApplies reports whether the launch should carry --allow-all.

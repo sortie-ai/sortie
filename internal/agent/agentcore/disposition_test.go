@@ -1,8 +1,13 @@
 package agentcore
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"log/slog"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -83,6 +88,15 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorKind:    "",
 			wantEventMessage: "",
 			wantErrorMessage: "",
+		},
+		{
+			name:             "terminal incomplete with message",
+			ev:               TurnEvidence{Terminal: TerminalIncomplete, TerminalMessage: "some detail"},
+			wantRow:          RowTerminalIncomplete,
+			wantExitReason:   domain.EventTurnFailed,
+			wantErrorKind:    domain.ErrTurnIncomplete,
+			wantEventMessage: incompleteMessageStem + ": some detail",
+			wantErrorMessage: incompleteMessageStem + ": some detail",
 		},
 	}
 
@@ -302,13 +316,160 @@ func TestDecideTurn_HumanInputRequiredRow(t *testing.T) {
 	})
 }
 
+// TestDecideTurn_IncompleteRowMessageSuffix pins that the incomplete
+// stem carries a ": "-prefixed TerminalMessage suffix only when
+// TerminalMessage is non-empty, and both messages carry the same
+// suffixed text.
+func TestDecideTurn_IncompleteRowMessageSuffix(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty detail produces the bare stem", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{Terminal: TerminalIncomplete})
+
+		if got.EventMessage != incompleteMessageStem {
+			t.Errorf("EventMessage = %q, want %q", got.EventMessage, incompleteMessageStem)
+		}
+		if got.ErrorMessage != incompleteMessageStem {
+			t.Errorf("ErrorMessage = %q, want %q", got.ErrorMessage, incompleteMessageStem)
+		}
+	})
+
+	t.Run("non-empty detail is appended with a colon-space separator", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{
+			Terminal:        TerminalIncomplete,
+			TerminalMessage: "raise copilot-cli.max_autopilot_continues if the turn needs more steps",
+		})
+
+		const want = incompleteMessageStem + ": raise copilot-cli.max_autopilot_continues if the turn needs more steps"
+		if got.EventMessage != want {
+			t.Errorf("EventMessage = %q, want %q", got.EventMessage, want)
+		}
+		if got.ErrorMessage != want {
+			t.Errorf("ErrorMessage = %q, want %q", got.ErrorMessage, want)
+		}
+	})
+}
+
+// TestDecideTurn_IncompleteRowFieldsIndependent pins that
+// TerminalErrorKind, ExitCode, and Work never move a TerminalIncomplete
+// evidence value away from RowTerminalIncomplete: DecideTurn does not
+// consult them once Terminal carries an authoritative report.
+func TestDecideTurn_IncompleteRowFieldsIndependent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ev   TurnEvidence
+	}{
+		{
+			name: "TerminalErrorKind set",
+			ev:   TurnEvidence{Terminal: TerminalIncomplete, TerminalErrorKind: domain.ErrResponseError},
+		},
+		{
+			name: "ExitCode non-zero",
+			ev:   TurnEvidence{Terminal: TerminalIncomplete, ExitObserved: true, ExitCode: 7},
+		},
+		{
+			name: "Work present",
+			ev:   TurnEvidence{Terminal: TerminalIncomplete, Work: WorkPresent},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := DecideTurn(tt.ev)
+
+			if got.Row != RowTerminalIncomplete {
+				t.Errorf("DecideTurn(%+v).Row = %v, want %v", tt.ev, got.Row, RowTerminalIncomplete)
+			}
+		})
+	}
+}
+
+// TestFinalizeTurn_TerminalIncompleteLogsWarn pins the exact warn line
+// FinalizeTurn emits for RowTerminalIncomplete, and that it carries no
+// attributes.
+func TestFinalizeTurn_TerminalIncompleteLogsWarn(t *testing.T) {
+	// No t.Parallel(): installs a global slog default, matching every
+	// other test in this package that installs the log spy.
+	spy := agenttest.InstallLogSpy(t)
+
+	_, _ = FinalizeTurn(func(domain.AgentEvent) {}, nil, TurnEvidence{Terminal: TerminalIncomplete}, TurnMeta{})
+
+	const want = "agent stopped without reporting the task complete, treating as failure"
+
+	var warnEntries []agenttest.LogSpyEntry
+	for _, e := range spy.Entries() {
+		if e.Level == slog.LevelWarn {
+			warnEntries = append(warnEntries, e)
+		}
+	}
+	if len(warnEntries) != 1 {
+		t.Fatalf("FinalizeTurn() logged %d WARN lines, want 1: %+v", len(warnEntries), warnEntries)
+	}
+	if warnEntries[0].Msg != want {
+		t.Errorf("FinalizeTurn() warn message = %q, want %q", warnEntries[0].Msg, want)
+	}
+	if warnEntries[0].Line != "" {
+		t.Errorf("FinalizeTurn() warn carries a %q attribute, want no attributes", warnEntries[0].Line)
+	}
+}
+
+// terminalReportValues parses disposition.go's own source and returns
+// every value declared in the TerminalReport const block that starts at
+// TerminalAbsent. Every value in that block is required to be an
+// appended, contiguous iota, so counting the block's ValueSpecs is
+// sufficient to enumerate it: declaring a further TerminalReport value
+// there makes it appear here without editing this test. It fails loudly
+// when the block cannot be located, so a rename breaks this test rather
+// than silently covering nothing.
+func terminalReportValues(t *testing.T) []TerminalReport {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "disposition.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing disposition.go: %v", err)
+	}
+
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.CONST {
+			continue
+		}
+		first, ok := genDecl.Specs[0].(*ast.ValueSpec)
+		if !ok || len(first.Names) != 1 || first.Names[0].Name != "TerminalAbsent" {
+			continue
+		}
+		ident, ok := first.Type.(*ast.Ident)
+		if !ok || ident.Name != "TerminalReport" {
+			continue
+		}
+
+		values := make([]TerminalReport, len(genDecl.Specs))
+		for i := range genDecl.Specs {
+			values[i] = TerminalReport(i)
+		}
+		return values
+	}
+
+	t.Fatal("disposition.go: could not locate the TerminalReport const block starting at TerminalAbsent")
+	return nil
+}
+
 // TestDecideTurn_Total pins that DecideTurn is total over TurnEvidence:
 // every distinct combination of the fields the table consults maps to
 // exactly one non-zero Row.
 func TestDecideTurn_Total(t *testing.T) {
 	t.Parallel()
 
-	terminals := []TerminalReport{TerminalAbsent, TerminalSuccess, TerminalFailure, TerminalCancelled}
+	terminals := terminalReportValues(t)
 	exitCodes := []int{0, 1}
 	works := []WorkReport{WorkUnobservable, WorkAbsent, WorkPresent}
 

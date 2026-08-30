@@ -271,6 +271,19 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta)
 	}
 
+	if outcome == "incomplete" {
+		ev := agentcore.TurnEvidence{
+			Terminal:        agentcore.TerminalIncomplete,
+			TerminalMessage: "mock turn incomplete",
+		}
+		meta := agentcore.TurnMeta{
+			SessionID:     session.ID,
+			Usage:         usage,
+			UsageMeasured: m.reportTokenUsage,
+		}
+		return agentcore.FinalizeTurn(params.OnEvent, nil, ev, meta)
+	}
+
 	exitReason, errKind, isError := outcomeToEvent(outcome)
 	params.OnEvent(domain.AgentEvent{
 		Type:      exitReason,
