@@ -136,6 +136,7 @@ state refresh. The flow is:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
    b. Check the watch window (Section 11A.9): past `watch_window_ms` from the last recorded head,
       drop the entry and its attempt counter.
+   b1. If the entry holds a triage run that has not finished (Section 5.3.9), re-enqueue it ready for the next tick and continue. No provider call is made and the pending attempt count is untouched.
    c. Resolve the pull request's current head via `SCMAdapter.GetMergeability`, passing the pull
       request number, owner, and repo carried in the entry's data. This runs on every due pass; the
       ref is never a value captured once at worker exit.
@@ -207,7 +208,15 @@ increments, and escalation is not evaluated. The retry-slot deferral and the fin
 head's prior pass, and the retry-slot deferral on this pass, so a continuation already queued for
 the issue cannot spend a second attempt.
 
-On a free slot:
+On a free slot the pass runs the triage gate before anything below, because step 1 writes a durable row that a resuming pass would write twice. The gate is inert when `reactions.ci_failure.triage` is absent, and otherwise resolves as follows.
+
+- The first pass to reach it with a new head starts the triage run and re-enqueues the entry. No run-history row is appended, no counter increments, and no continuation is scheduled.
+- A later pass reading `dispatch-agent`, which is also the fallback for every failure mode, falls through to the steps below unchanged.
+- A later pass reading `handled` marks the fingerprint dispatched and re-enqueues the entry with the delay the already-dispatched branch of Section 11A.5 applies. `reaction_attempts` is untouched, no run-history row is appended, and no continuation is scheduled, so a handled head and a dispatched one are indistinguishable from the next pass onward.
+- A later pass reading `escalate` marks the fingerprint dispatched and escalates (Section 11A.7) with the un-incremented value of `reaction_attempts[issue_id:ci]`.
+- The outcome is retained on the entry, so repeated passes over the same head re-apply the stored answer rather than starting a second run. A memoized `escalate` re-applies as `handled`, so a stored answer cannot post a second escalation. A new head discards the retained handle, cancelling the run when it is still in flight, and starts a fresh one.
+
+On a free slot with the gate proceeding:
 
 1. Persist a CI-failure run history entry (`status: ci_failed`).
 2. Increment `reaction_attempts[issue_id:ci]`.
@@ -223,7 +232,9 @@ exponential backoff.
 
 ### 11A.7 Escalation behavior
 
-When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
+Two conditions reach the escalation: `reaction_attempts[issue_id:ci]` exceeding `ci_feedback.max_retries`, and a triage command answering `escalate` (Section 11A.6). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and, on the `comment` action, the posted text differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
+
+In either case:
 
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
   issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second

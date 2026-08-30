@@ -152,6 +152,28 @@ The `after_run` contract itself is unchanged. Its failure remains logged and ign
 status has no vote in the handoff disposition. Any files, commits, pushes, or SCM metadata the hook
 produces are visible only through the same workspace evidence rules as other run output.
 
+#### 9.4.2 Reaction triage command
+
+The reaction triage command is a fifth operator-owned script that runs in a per-issue workspace, distinct from the four hooks above. A reaction kind that carries a `triage` block runs it once the reconcile pass has found a new subject and before it dispatches an agent continuation, so deterministic work is resolved without spending an agent session. Four reaction kinds offer the block; Section 5.3.9 names them and Section 2.10 of the workflow reference gives the field, input, and result contracts.
+
+It executes through the same machinery as the hooks: a local shell with the workspace directory as `cwd`, the same restricted environment, the same process-group termination on timeout, and the same 8 KiB captured output tail. Three differences are load-bearing.
+
+- It runs on its own goroutine rather than on the poll loop, and its timeout is `reactions.<kind>.triage.timeout_ms` rather than `hooks.timeout_ms`. A reconcile pass never blocks on it: the pass that starts a run re-enqueues the entry, and a later pass reads the answer.
+- It never creates the workspace directory. A missing directory ends the run before a subprocess starts, and the reaction dispatches the agent as it would have without the block. Creating the directory would make the next dispatch see an already-existing workspace, skip `after_create`, and run `before_run` in an empty tree.
+- Every failure is non-fatal. A missing workspace, a failed start, a timeout, a non-zero exit, a missing, oversized, or malformed result file, and an unrecognized disposition each produce one warning record naming the reason and each fall back to `dispatch-agent`, so a broken script costs one log record and one agent turn rather than a stranded reaction.
+
+Environment variables, in addition to the four every hook receives and the `SORTIE_SSH_HOST` value hooks receive when a host preference is set:
+
+- `SORTIE_REACTION_KIND`: the runtime reaction discriminator.
+- `SORTIE_REACTION_INPUT`: absolute path to a readable JSON document describing the subject. Externally authored text, including review comment bodies, CI check names, and branch names, reaches the command only through this file, never through an environment variable or a shell word.
+- `SORTIE_REACTION_RESULT`: absolute path the command writes its one-object JSON answer to. The file does not exist when the command starts.
+
+Both paths sit in a fresh temporary directory created per run and removed when the run returns. The directory is outside the workspace, so no stale result file from an earlier run can be read as this run's answer and no externally authored text lands where the agent reads.
+
+Triage runs in flight at one time are capped at `max(agent.max_concurrent_agents, 1)` across every issue and kind. An entry that finds the cap reached starts nothing and is reconsidered on the next tick. The cap adds to agent concurrency rather than sharing it: triage runs are not subtracted from agent slots, so a host configured for N agents reaches a worst case of N agent processes and N triage subprocesses at the same time. An operator sizing a host accounts for both. Deriving the cap from the free agent slots instead would drive it to zero exactly when every slot is busy, which is when a triage run that resolves a subject without an agent is worth the most.
+
+Shutdown drains in-flight triage runs. Cancellation reaches the subprocess through the same process-group termination the hooks use, so a script MUST tolerate being killed at any instruction: the same kill also fires on timeout and whenever a pass computes a different fingerprint for the subject.
+
 ### 9.5 Workspace SCM metadata (`.sortie/scm.json`)
 
 The `.sortie/scm.json` file is a workspace-level file that carries SCM metadata written by the

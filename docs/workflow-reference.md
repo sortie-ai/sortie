@@ -961,7 +961,7 @@ under `reactions` identifies a reaction kind.
 | ------------------ | ------- | --------------------- | ------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `provider`         | string  | **Yes** (to activate) | _(absent)_    | Requires restart | Adapter identifier (e.g. `github`). When absent or empty, the reaction kind is disabled.         |
 | `max_retries`      | integer | No                    | `2`           | Requires restart | Maximum fix continuation dispatches per issue before escalation. Must be non-negative.           |
-| `escalation`       | string  | No                    | `label`       | Requires restart | Action when retries are exhausted. Valid: `"label"`, `"comment"`.                                |
+| `escalation`       | string  | No                    | `label`       | Requires restart | Action taken when the kind hands the subject to a person, either because retries are exhausted or because a `triage` command answered `escalate`. Valid: `"label"`, `"comment"`. |
 | `escalation_label` | string  | No                    | `needs-human` | Requires restart | Label applied when `escalation` is `"label"`.                                                    |
 
 **Reload behavior:** every field of every reaction kind is read once when the orchestrator
@@ -969,18 +969,25 @@ is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes e
 on the next restart. `reactions.ci_failure` is the single exception: the orchestrator folds
 it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`,
 `escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its
-`max_log_lines` still requires a restart, because the CI provider is constructed once at
-process start.
+`max_log_lines` and its `triage` block still require a restart: the CI provider is constructed
+once at process start, and the triage configuration is frozen at construction for every kind that
+offers it, so a script or timeout changed mid-run cannot apply one configuration's timeout to
+another configuration's script.
 
 **Escalation recurrence:** `escalation: label` is idempotent (re-applying a
 present label is a no-op); `escalation: comment` posts a new comment each time
-it fires. For kinds whose escalation releases the issue claim (`ci_failure`,
-`review_comments`), escalation fires once and the reaction stops. For kinds
-whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the
-reaction re-arms if its condition recurs and escalates again, so on a long-lived
-PR `escalation: comment` can accumulate repeated comments while `escalation:
-label` stays a single mark. Prefer `label` for kinds that may escalate
-repeatedly.
+it fires. Two conditions fire it: the kind's own budget is exhausted, or a
+`triage` command answers `escalate`. Recurrence depends on the kind rather than
+on which condition fired. For kinds whose escalation releases the issue claim
+(`ci_failure`, `review_comments`), escalation fires once and the reaction stops.
+For kinds whose escalation is scoped and keeps the claim (`auto_merge`,
+`bot_review`), the reaction re-arms if its condition recurs and escalates again,
+so on a long-lived PR `escalation: comment` can accumulate repeated comments
+while `escalation: label` stays a single mark. Prefer `label` for kinds that may
+escalate repeatedly. A triage escalation is not re-posted for a subject already
+escalated: the answer is retained for as long as the subject's fingerprint
+stands, and a retained `escalate` re-applies without invoking the escalation a
+second time.
 
 **Release on terminal state:** each reconcile pass reads tracker state for every running
 issue and for every issue holding a pending reaction entry, whether or not a worker is
@@ -1007,6 +1014,81 @@ GitLab SCM adapter ignores `project` and takes the owner and repository from the
 metadata on every call, while the GitLab CI provider requires `project`, so a GitLab `ci_failure`
 reaction paired with a non-GitLab tracker MUST set it in the `gitlab:` block. Every active
 SCM reaction in one workflow MUST name the same provider.
+
+#### Triage command (`triage`)
+
+An optional operator-owned command that runs in the issue workspace once the reaction has found a new subject and is about to dispatch an agent continuation. The command answers `handled`, `dispatch-agent`, or `escalate`, so deterministic work is resolved without spending an agent session, a continuation attempt, or a token budget.
+
+The block is recognized under exactly four reaction kinds: `ci_failure`, `review_comments`, `bot_review`, and `merge_conflicts`. `label_commands`, `auto_merge`, and `merge_completion` do not offer it, and a `triage` block under any of them, or under any other key of `reactions`, is a configuration error that `sortie validate` reports offline. `auto_merge` and `merge_completion` never dispatch an agent, so a pre-dispatch gate has nothing to gate there; the label commands carry no `escalation` field, so one of the three dispositions would be undefined for them.
+
+| Field        | Type    | Required | Default | Dynamic Reload   | Description                                                                                                                              |
+| ------------ | ------- | -------- | ------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `script`     | string  | **Yes**  | _(none)_ | Requires restart | Shell script body, run the same way a workspace hook is. Must be a non-blank string.                                                     |
+| `timeout_ms` | integer | No       | `60000` | Requires restart | Bounds one triage run. Must lie in the closed range `1` to `600000`. The ceiling sits below the smallest default `watch_window_ms`, so an entry whose triage run hangs still ages out. |
+
+```yaml
+reactions:
+  merge_conflicts:
+    provider: github
+    max_retries: 1
+    escalation: label
+    escalation_label: needs-human
+    triage:
+      script: |
+        ./scripts/merge-conflict-triage.sh
+      timeout_ms: 120000
+```
+
+**Execution environment.** The command runs with the per-issue workspace directory as its working directory, through the same machinery as `hooks.before_run`: the same restricted environment, the same process-group kill on timeout, and the same 8 KiB captured output tail. It receives the four variables every hook receives (`SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`, `SORTIE_WORKSPACE`, `SORTIE_ATTEMPT`), `SORTIE_SSH_HOST` when a host preference is set, and three of its own:
+
+| Variable                | Value                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| `SORTIE_REACTION_KIND`  | The runtime kind discriminator: `ci`, `review`, `bot-review`, or `merge-conflict`.                        |
+| `SORTIE_REACTION_INPUT` | Absolute path to a readable JSON document describing the subject.                                        |
+| `SORTIE_REACTION_RESULT` | Absolute path the command writes its answer to. The file does not exist when the command starts.         |
+
+The command never creates the workspace directory. A workspace that does not exist ends the run before a subprocess starts, and the reaction dispatches the agent exactly as it would have without the block.
+
+**Input document.** Both paths sit in a fresh temporary directory created for the run and removed when it returns. Externally authored text, including review comment bodies, CI check names, and branch names, reaches the command only inside the input file, never through an environment variable or a shell word.
+
+```json
+{
+  "schema_version": 1,
+  "reaction_kind": "merge-conflict",
+  "issue": { "id": "10432", "identifier": "MT-649", "display_id": "MT-649" },
+  "attempt": 3,
+  "workspace": "/var/sortie/workspaces/MT-649",
+  "fingerprint": "9f2c...",
+  "attempts_used": 0,
+  "max_attempts": 1,
+  "subject": { "pr_number": 128, "branch": "sortie/MT-649",
+               "head_sha": "abc123", "base": "main" }
+}
+```
+
+`subject` is the same value the continuation prompt template receives for that kind, so the command sees what the agent would have seen. For `review` and `bot-review` it is a JSON array of comment objects rather than a single object. `attempts_used` is the kind's continuation counter at the moment the run starts, and `max_attempts` is `max_continuation_turns` for `review` and `bot_review` and `max_retries` for `ci_failure` and `merge_conflicts`.
+
+**Result document.** The command writes one JSON object to the path in `SORTIE_REACTION_RESULT`. Unknown keys are ignored, so a later extension can add fields without breaking an existing script.
+
+```json
+{ "disposition": "handled" }
+```
+
+| Disposition      | Meaning                                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `handled`        | The command resolved the subject. The orchestrator marks the reaction fingerprint dispatched and keeps watching, spending no attempt, scheduling no continuation, and writing nothing to the tracker. |
+| `dispatch-agent` | The command wants the agent turn the reaction would have scheduled anyway. Every counter, fingerprint, and entry is left exactly as it would have been with no `triage` block. |
+| `escalate`       | The command wants a person. The orchestrator marks the fingerprint dispatched and applies the kind's configured `escalation`, with copy stating that a triage command asked for a person rather than that a budget was exhausted. |
+
+Exit code 0 together with a well-formed result file naming one of the three values is the only path to an answer other than `dispatch-agent`. Every other outcome logs one warning record naming the reason and falls back to `dispatch-agent`: a missing or non-directory workspace, a failed start, a timeout, a non-zero exit, a missing, oversized (over 64 KiB), unreadable, or malformed result file, and an unrecognized `disposition` value. A non-zero exit is never honored, even when the result file holds a valid answer. A broken script therefore costs one log record and one agent turn, never a stranded reaction.
+
+**Timing and concurrency.** The command runs asynchronously: the pass that starts it re-enqueues its entry and makes no further provider call for it, and a later pass reads the answer. Worst-case latency from the command returning to the answer being applied is one poll interval (`polling.interval_ms`, default 30 seconds). Runs in flight are capped at `max(agent.max_concurrent_agents, 1)` across every issue and kind; an entry that finds the cap reached starts nothing and is reconsidered on the next tick. The cap adds to agent concurrency rather than sharing it, so a host configured for N agents can run N agent processes and N triage subprocesses at the same time.
+
+**Three obligations on the script.** Each is load-bearing. A script written without them works in the common case and produces an incident in the uncommon one.
+
+1. **It MUST tolerate being killed at any instruction.** The orchestrator kills the script and its process group when `timeout_ms` elapses, when shutdown drains in-flight runs, and whenever a pass computes a different fingerprint for the subject. A script that force-pushes, rewrites history, or leaves a repository mid-rebase when killed turns a routine cancellation into an operator incident.
+2. **It MUST be idempotent for a given subject.** A cancelled run, a run whose outcome is discarded because the fingerprint moved, and every run in flight or finished at restart are each followed by a fresh run for the same subject. A restart is the ordinary case: triage state is runtime-only, so a subject whose durable deduplication row never landed is triaged again from scratch.
+3. **`handled` is a terminal claim about that subject, not a hint.** Nothing re-checks it. A script that answers `handled` without resolving the subject suppresses both the agent continuation and the escalation for that fingerprint until the fingerprint moves or the kind's watch window elapses, which is 24 hours by default for `ci_failure` and 30 minutes for the other three. The watch window bounds the claim only while the fingerprint stands, and on `ci_failure` the two clauses are not independent: that kind's window is measured from the last recorded head, and every head change records a new one, so a script that pushes restarts the window its own answer would otherwise age out against. A `ci_failure` script that answers `handled` on each of a succession of heads it pushed itself is bounded by nothing: it spends no agent turn, fires no escalation, and the entry never ages out.
 
 #### Reaction kind: `ci_failure`
 
@@ -3458,6 +3540,7 @@ re-applies configuration and prompt template without restart.
 | `reactions.ci_failure.escalation`               | Future dispatches.                                                                             |
 | `reactions.ci_failure.escalation_label`         | Future dispatches.                                                                             |
 | `reactions.ci_failure.max_log_lines`            | **No effect.** Requires restart. CI provider is created once at process start.                 |
+| `reactions.ci_failure.triage.*`                 | **No effect.** Requires restart. The triage configuration is frozen at construction.           |
 | `reactions.review_comments.*`                   | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.auto_merge.*`                        | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.bot_review.*`                        | **No effect.** Requires restart. The reaction config is built once at construction.            |

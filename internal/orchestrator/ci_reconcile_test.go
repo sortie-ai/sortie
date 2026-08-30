@@ -2526,3 +2526,413 @@ func TestReconcileCIStatus_UpsertFailure_DefersEpochTransition(t *testing.T) {
 		t.Errorf("FetchCIStatus called %d times after a failed upsert; want 0 (the pass ends before the status read)", ci.calls)
 	}
 }
+
+// --- Triage gate integration ---
+
+// escalateTriageScript and dispatchAgentTriageScript answer "escalate"
+// and "dispatch-agent" respectively; handledScript (defined in
+// reaction_triage_test.go) answers "handled".
+const escalateTriageScript = `echo '{"disposition":"escalate"}' > "$SORTIE_REACTION_RESULT"`
+const dispatchAgentTriageScript = `echo '{"disposition":"dispatch-agent"}' > "$SORTIE_REACTION_RESULT"`
+
+// ciTriageParams returns ciParams wired with a real workspace and the
+// given triage script, so reactionTriageGate actually starts a
+// subprocess for the pass's failing entry.
+func ciTriageParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusProvider, tracker domain.TrackerAdapter, scm domain.SCMAdapter, workspaceRoot, script string) ReconcileParams {
+	t.Helper()
+	params := ciParams(t, store, ci, tracker, scm)
+	params.WorkspaceRoot = workspaceRoot
+	params.CITriage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	return params
+}
+
+// runCITriageToCompletion drives a pass that starts a triage run for
+// issueID, waits for the subprocess to finish, then resets the entry's
+// PendingRetryAt to the past so the next pass is immediately due.
+func runCITriageToCompletion(t *testing.T, state *State, params ReconcileParams, rkey string, metrics domain.Metrics) {
+	t.Helper()
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry.Triage == nil {
+		t.Fatalf("PendingReactions[%s] = %+v, want a started triage run", rkey, entry)
+	}
+	waitTriageRunDone(t, entry.Triage)
+	entry.PendingRetryAt = time.Time{}
+}
+
+// TestReconcileCIStatus_Triage_NoConfig_BehavesAsPinned verifies that a
+// ci_failure reaction with no triage block dispatches exactly as the
+// pinned revision, with no extra provider call, no subprocess, and no
+// change to any counter or entry.
+func TestReconcileCIStatus_Triage_NoConfig_BehavesAsPinned(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-OFF"
+	state := stateWithPendingReaction(t, issueID, "feature/off", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, nil, defaultCISCM())
+	// WorkspaceRoot and CITriage are left at their zero values.
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	// handleCIFailure's under-budget branch schedules a continuation and
+	// does not re-insert the entry: this is the pinned behavior a
+	// disabled triage gate must reproduce exactly.
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a scheduled continuation, want dropped (pinned behavior)")
+	}
+	if len(store.runHistories) != 1 {
+		t.Errorf("AppendRunHistory calls = %d, want 1 (handleCIFailure's normal dispatch path)", len(store.runHistories))
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0", store.markDispatchedCalls)
+	}
+	if _, scheduled := state.RetryAttempts[issueID]; !scheduled {
+		t.Error("no retry scheduled, want the normal CI-fix continuation")
+	}
+}
+
+// TestReconcileCIStatus_Triage_WaitsWithoutProviderCall verifies that
+// while a triage run is in flight, the pass re-enqueues without making
+// a provider call and without incrementing PendingAttempts.
+func TestReconcileCIStatus_Triage_WaitsWithoutProviderCall(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-WAIT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/wait", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("sha-wait", func() {})
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, nil, scm, root, handledScript)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability calls = %d, want 0 while a triage run is in flight", scm.calls)
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus calls = %d, want 0 while a triage run is in flight", ci.calls)
+	}
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped while waiting on triage, want re-enqueued")
+	}
+	if entry.PendingAttempts != 0 {
+		t.Errorf("PendingAttempts = %d, want 0 (waiting is not a fetch error)", entry.PendingAttempts)
+	}
+}
+
+// TestReconcileCIStatus_Triage_Handled verifies that a handled
+// disposition marks the fingerprint dispatched and re-enqueues the
+// entry with the already-dispatched branch's delay, without
+// incrementing ReactionAttempts, calling ScheduleRetry, or appending a
+// run_history row.
+func TestReconcileCIStatus_Triage_Handled(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-HANDLED"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/handled", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, nil, scm, root, handledScript)
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingAttempts = %d, want 1 (the already-dispatched branch's delay)", entry.PendingAttempts)
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a handled verdict must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if len(store.runHistories) != 0 {
+		t.Errorf("AppendRunHistory calls = %d, want 0", len(store.runHistories))
+	}
+	if _, scheduled := state.RetryAttempts[issueID]; scheduled {
+		t.Error("a retry was scheduled for a handled verdict, want none")
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileCIStatus_Triage_Handled_NoSecondRunHistoryOnReplay extends
+// the handled scenario across a third pass over the same unchanged
+// fingerprint, verifying the memoized outcome is re-applied rather than
+// re-run, and that run_history stays empty.
+func TestReconcileCIStatus_Triage_Handled_NoSecondRunHistoryOnReplay(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-REPLAY"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/replay", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, nil, scm, root, handledScript)
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics) // applies: triageHandled
+
+	for range 2 {
+		if entry, ok := state.PendingReactions[rkey]; ok {
+			entry.PendingRetryAt = time.Time{}
+		}
+		reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics) // memoized replays
+	}
+
+	if len(store.runHistories) != 0 {
+		t.Errorf("AppendRunHistory calls = %d, want 0 across repeated passes over one fingerprint", len(store.runHistories))
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1 (the retained handle is re-applied from memory)", store.markDispatchedCalls)
+	}
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped across replays, want re-enqueued")
+	}
+	if entry.Triage == nil {
+		t.Fatal("PendingReaction.Triage cleared across replays, want the memoized handle retained")
+	}
+}
+
+// TestReconcileCIStatus_Triage_Escalate verifies that an escalate
+// disposition marks the fingerprint dispatched and invokes
+// escalateCIFailure with EscalationTriggerTriage and the un-incremented
+// attempt count, without spending a continuation.
+func TestReconcileCIStatus_Triage_Escalate(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-ESCALATE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/escalate", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, tracker, scm, root, escalateTriageScript)
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (triage escalation uses the kind's own escalation action)", tracker.addLabelCalled)
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a triage escalation must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("claim not released after a triage escalation, want released")
+	}
+}
+
+// TestReconcileCIStatus_Triage_Escalate_CommentTextNamesTriage verifies
+// that on the comment escalation action, a triage-triggered
+// escalation's posted text states that a triage command requested it
+// and does not claim a budget was exhausted.
+func TestReconcileCIStatus_Triage_Escalate_CommentTextNamesTriage(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-COMMENT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/comment", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, tracker, scm, root, escalateTriageScript)
+	params.CIFeedback.Escalation = "comment"
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.commentIssueCalls != 1 {
+		t.Fatalf("CommentIssue calls = %d, want 1", tracker.commentIssueCalls)
+	}
+	if !strings.Contains(tracker.lastComment, "triage") {
+		t.Errorf("comment = %q, want it to name the triage command", tracker.lastComment)
+	}
+	if strings.Contains(tracker.lastComment, "retries exhausted") || strings.Contains(tracker.lastComment, "retry budget") {
+		t.Errorf("comment = %q, want no claim that a budget was exhausted", tracker.lastComment)
+	}
+}
+
+// TestReconcileCIStatus_Triage_DispatchAgent_ProceedsNormally verifies
+// that a dispatch-agent disposition leaves every counter, fingerprint,
+// and entry exactly as the pass would with no triage configured,
+// falling through to the existing dispatch block.
+func TestReconcileCIStatus_Triage_DispatchAgent_ProceedsNormally(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-DISPATCH"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/dispatch", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := defaultCISCM()
+	params := ciTriageParams(t, store, ci, nil, scm, root, dispatchAgentTriageScript)
+
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if len(store.runHistories) != 1 {
+		t.Errorf("AppendRunHistory calls = %d, want 1 (falls through to handleCIFailure)", len(store.runHistories))
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 for dispatch-agent", store.markDispatchedCalls)
+	}
+	if _, scheduled := state.RetryAttempts[issueID]; !scheduled {
+		t.Error("no retry scheduled for a dispatch-agent verdict, want the normal CI-fix continuation")
+	}
+}
+
+// TestReconcileCIStatus_Triage_CancelOnWatchWindowDrop verifies that an
+// in-flight triage run is cancelled before the entry is dropped on
+// watch-window elapse.
+func TestReconcileCIStatus_Triage_CancelOnWatchWindowDrop(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-DROP"
+	state := stateWithPendingReaction(t, issueID, "feature/drop", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	spy := &triageCancelSpy{}
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("sha-drop", spy.cancel)
+	// ciBaseTime is the fixed clock ciParams' NowFunc reports; the age
+	// basis must be measured against it, not the real wall clock.
+	state.PendingReactions[rkey].HeadRecordedAt = ciBaseTime.Add(-48 * time.Hour)
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil, defaultCISCM())
+	params.CIWatchWindow = time.Hour
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if spy.calls() != 1 {
+		t.Errorf("Cancel called %d times, want 1 (the in-flight run must not outlive the dropped entry)", spy.calls())
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the watch window, want dropped")
+	}
+}
+
+// TestReconcileCIStatus_Triage_UnboundedAcrossSuccessiveHeads pins the
+// accepted risk that ci carries and its siblings do not: the watch
+// window is measured from the last recorded head, so a handled verdict
+// on each of two successive heads leaves the entry present past the
+// window measured from the first head.
+func TestReconcileCIStatus_Triage_UnboundedAcrossSuccessiveHeads(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TRIAGE-UNBOUNDED"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithPendingReaction(t, issueID, "feature/unbounded", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+
+	const window = time.Second
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// The entry's age is measured from CreatedAt until a head is
+	// recorded; align it with the mocked clock so the watch window
+	// check has a meaningful reference point from the first tick.
+	state.PendingReactions[rkey].CreatedAt = base
+	now := base
+	nowFunc := func() time.Time { return now }
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "sha-head-1"}}
+	params := ciTriageParams(t, store, ci, nil, scm, root, handledScript)
+	params.NowFunc = nowFunc
+	params.CIWatchWindow = window
+
+	// First head: the epoch transition records HeadRecordedAt at "now".
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+	// Applies the handled verdict for the first head.
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if got := state.PendingReactions[rkey].HeadRecordedAt; !got.Equal(base) {
+		t.Fatalf("HeadRecordedAt after the first head = %v, want %v", got, base)
+	}
+
+	// A second head arrives, comfortably inside the window measured from
+	// the first head, and moves HeadRecordedAt forward.
+	now = base.Add(window / 2)
+	scm.result = domain.PRMergeStatus{HeadSHA: "sha-head-2"}
+	runCITriageToCompletion(t, state, params, rkey, metrics)
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	secondHeadRecordedAt := state.PendingReactions[rkey].HeadRecordedAt
+	if !secondHeadRecordedAt.Equal(now) {
+		t.Fatalf("HeadRecordedAt after the second head = %v, want %v", secondHeadRecordedAt, now)
+	}
+
+	// Advance past the window measured from the FIRST head, but still
+	// inside the window measured from the SECOND (latest) head.
+	now = base.Add(window + window/5)
+	if elapsed := now.Sub(base); elapsed <= window {
+		t.Fatalf("test setup error: elapsed from the first head = %v, want > %v", elapsed, window)
+	}
+	if elapsed := now.Sub(secondHeadRecordedAt); elapsed >= window {
+		t.Fatalf("test setup error: elapsed from the second head = %v, want < %v", elapsed, window)
+	}
+	state.PendingReactions[rkey].PendingRetryAt = time.Time{}
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("entry dropped even though the watch window is measured from the last recorded head, not the first")
+	}
+}

@@ -1085,6 +1085,7 @@ func populateCIFeedbackFromReactions(rc ReactionConfig) (CIFeedbackConfig, error
 		Escalation:      rc.Escalation,
 		EscalationLabel: rc.EscalationLabel,
 		WatchWindowMS:   watchWindowMS,
+		Triage:          rc.Triage,
 	}, nil
 }
 
@@ -1589,6 +1590,14 @@ type CIFeedbackConfig struct {
 	// clock bound. Must be non-negative and must not exceed
 	// [MaxWatchWindowMS].
 	WatchWindowMS int
+
+	// Triage is the parsed triage block for the ci_failure reaction,
+	// copied verbatim from that kind's [ReactionConfig]. This field is
+	// the parse target only: the orchestrator rebuilds CIFeedbackConfig
+	// from the reloaded configuration on every tick, so the value the CI
+	// reconcile pass reads is a copy frozen at construction rather than
+	// this one.
+	Triage ReactionTriageConfig
 }
 
 // ReactionConfig holds per-kind configuration for a single reaction type.
@@ -1613,7 +1622,50 @@ type ReactionConfig struct {
 
 	// Extra holds kind-specific fields not covered by the common schema.
 	Extra map[string]any
+
+	// Triage is the parsed triage block. Zero when the block is absent.
+	// Parsed for every reaction key so the validator can reject the
+	// block on a kind that does not run it.
+	Triage ReactionTriageConfig
 }
+
+// ReactionTriageConfig is the parsed reactions.<kind>.triage block. A
+// zero value means the kind runs no triage command.
+type ReactionTriageConfig struct {
+	// Script is the shell script body executed before an agent
+	// continuation is scheduled. Empty means triage is off.
+	Script string
+
+	// TimeoutMS bounds a single triage run. Default 60000.
+	TimeoutMS int
+}
+
+// Enabled reports whether a triage command is configured.
+func (c ReactionTriageConfig) Enabled() bool {
+	return strings.TrimSpace(c.Script) != ""
+}
+
+// TriageSupportedReactionKeys is the one home for the set of reactions
+// keys that may carry a triage block. [buildReactionsConfig] accepts the
+// block under a member and rejects it under every other key;
+// buildLabelCommandsConfig rejects it because label_commands is not a
+// member. No second copy of this set exists in this package.
+var TriageSupportedReactionKeys = map[string]bool{
+	"ci_failure":      true,
+	"review_comments": true,
+	"bot_review":      true,
+	"merge_conflicts": true,
+}
+
+// triageTimeoutDefaultMS is the triage timeout applied when the block
+// omits timeout_ms. It matches the workspace hook default.
+const triageTimeoutDefaultMS = 60000
+
+// triageTimeoutMaxMS is the largest accepted triage timeout. It sits
+// below the smallest default reaction watch window so a pending entry
+// whose triage run hangs still ages out rather than being pinned by a
+// subprocess.
+const triageTimeoutMaxMS = 600000
 
 // reactionKeyPattern matches valid reaction kind identifiers: a lowercase
 // letter followed by zero or more lowercase letters, digits, underscores,
@@ -1627,6 +1679,7 @@ var knownReactionFields = map[string]bool{
 	"max_retries":      true,
 	"escalation":       true,
 	"escalation_label": true,
+	"triage":           true,
 }
 
 func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
@@ -1702,6 +1755,21 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 			escalationLabel = s
 		}
 
+		var triage ReactionTriageConfig
+		if raw, exists := vm["triage"]; exists {
+			if !TriageSupportedReactionKeys[k] {
+				return nil, &ConfigError{
+					Field:   "reactions." + k + ".triage",
+					Message: triageUnsupportedKindMessage,
+				}
+			}
+			parsed, triageErr := buildReactionTriageConfig(raw, "reactions."+k)
+			if triageErr != nil {
+				return nil, triageErr
+			}
+			triage = parsed
+		}
+
 		extra := make(map[string]any)
 		for ek, ev := range vm {
 			if !knownReactionFields[ek] {
@@ -1720,9 +1788,62 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 			Escalation:      escalation,
 			EscalationLabel: escalationLabel,
 			Extra:           extra,
+			Triage:          triage,
 		}
 	}
 	return result, nil
+}
+
+// triageUnsupportedKindMessage is the rejection message for a triage
+// block under a reactions key that runs no triage command.
+const triageUnsupportedKindMessage = "triage is not supported for this reaction kind: " +
+	"it is recognized only under ci_failure, review_comments, bot_review, and merge_conflicts"
+
+// buildReactionTriageConfig parses and validates one reactions.<kind>.triage
+// sub-block. fieldPrefix is the dotted configuration path of the enclosing
+// reaction key, for example "reactions.ci_failure". Returns a [*ConfigError]
+// when the block is not a map, when script is absent, not a string, or blank
+// after trimming, or when timeout_ms is not an integer inside the accepted
+// range.
+func buildReactionTriageConfig(raw any, fieldPrefix string) (ReactionTriageConfig, error) {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return ReactionTriageConfig{}, &ConfigError{
+			Field:   fieldPrefix + ".triage",
+			Message: fmt.Sprintf("expected map, got %T", raw),
+		}
+	}
+
+	script, _, err := requireStringField(m, "script", fieldPrefix+".triage.script")
+	if err != nil {
+		return ReactionTriageConfig{}, err
+	}
+	if strings.TrimSpace(script) == "" {
+		return ReactionTriageConfig{}, &ConfigError{
+			Field:   fieldPrefix + ".triage.script",
+			Message: "must be a non-blank shell script",
+		}
+	}
+
+	timeoutMS := triageTimeoutDefaultMS
+	if v, exists := m["timeout_ms"]; exists && v != nil {
+		n, coerceErr := coerceInt(v)
+		if coerceErr != nil {
+			return ReactionTriageConfig{}, &ConfigError{
+				Field:   fieldPrefix + ".triage.timeout_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		timeoutMS = n
+	}
+	if timeoutMS < 1 || timeoutMS > triageTimeoutMaxMS {
+		return ReactionTriageConfig{}, &ConfigError{
+			Field:   fieldPrefix + ".triage.timeout_ms",
+			Message: fmt.Sprintf("must be between 1 and %d, got %d", triageTimeoutMaxMS, timeoutMS),
+		}
+	}
+
+	return ReactionTriageConfig{Script: script, TimeoutMS: timeoutMS}, nil
 }
 
 // LabelCommandsConfig is the parsed reactions.label_commands block.
@@ -1754,6 +1875,16 @@ type LabelCommandsConfig struct {
 func buildLabelCommandsConfig(m map[string]any) (LabelCommandsConfig, error) {
 	if len(m) == 0 {
 		return LabelCommandsConfig{}, nil
+	}
+
+	// The block is rejected wholesale rather than ignored, because
+	// label commands have no escalation to invoke and so could not
+	// honor one of the three dispositions.
+	if _, exists := m["triage"]; exists {
+		return LabelCommandsConfig{}, &ConfigError{
+			Field:   "reactions.label_commands.triage",
+			Message: triageUnsupportedKindMessage,
+		}
 	}
 
 	provider, _, err := requireStringField(m, "provider", "reactions.label_commands.provider")

@@ -4409,3 +4409,146 @@ func TestAgentRegistryKindsDisjointFromOtherFamilies(t *testing.T) {
 		}
 	}
 }
+
+// --- reactions.<kind>.triage validate tests ---
+
+// triageUnsupportedKeyWorkflow embeds a triage block under auto_merge, a
+// reaction kind config.TriageSupportedReactionKeys does not include.
+func triageUnsupportedKeyWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  auto_merge:
+    provider: github
+    triage:
+      script: "./triage.sh"
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// triageBlankScriptWorkflow embeds a triage block whose script is blank
+// after whitespace trimming, under a reaction kind that does support
+// the block.
+func triageBlankScriptWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  merge_conflicts:
+    provider: github
+    triage:
+      script: "   "
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// triageTimeoutOutOfRangeWorkflow embeds a triage block whose
+// timeout_ms exceeds the 600000 ceiling.
+func triageTimeoutOutOfRangeWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  merge_conflicts:
+    provider: github
+    triage:
+      script: "./triage.sh"
+      timeout_ms: 700000
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateTriageConfigErrors verifies that sortie validate reports
+// every triage configuration error offline, using only the file
+// tracker and the mock agent kind, neither of which
+// makes a network call or requires credentials. Because
+// buildReactionsConfig raises these errors during WORKFLOW.md parsing,
+// before any adapter is constructed, no request-scoped double is
+// needed to prove the offline property; the fixture's tracker and
+// agent kinds are already the ones the project's other offline
+// validate tests use for exactly that reason.
+func TestValidateTriageConfigErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		workflow  []byte
+		wantCheck string
+	}{
+		{"unsupported_key", triageUnsupportedKeyWorkflow(), "config.reactions.auto_merge.triage"},
+		{"blank_script", triageBlankScriptWorkflow(), "config.reactions.merge_conflicts.triage.script"},
+		{"timeout_out_of_range", triageTimeoutOutOfRangeWorkflow(), "config.reactions.merge_conflicts.triage.timeout_ms"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeIssuesFixture(t, dir)
+			wfPath := writeCustomWorkflowFile(t, dir, tt.workflow)
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("run(validate) = %d, want 1; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			if out.Valid {
+				t.Error("validateOutput.Valid = true, want false")
+			}
+
+			found := false
+			for _, d := range out.Errors {
+				if d.Check == tt.wantCheck {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+		})
+	}
+}

@@ -79,6 +79,7 @@ allowlist instead of `FetchPendingReviews`. The flow:
       `reactions.bot_review.watch_window_ms` (default `1800000`, thirty minutes; `0` removes the
       bound).
    d. Respect the `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
+   d1. If the entry holds a triage run that has not finished (Section 5.3.9), re-enqueue it ready for the next tick and continue. No provider call is made and the pending attempt count is untouched.
    e. Check the continuation-turn cap: if `reaction_attempts[issue_id:bot-review]` reaches
       `max_continuation_turns`, escalate (§11D.5) and continue.
    f. Call `FetchBotReviewComments`. On error, increment backoff, set `PendingRetryAt`, re-enqueue,
@@ -88,7 +89,8 @@ allowlist instead of `FetchPendingReviews`. The flow:
       marked dispatched, re-enqueue with the poll-interval delay.
    i. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
       re-enqueuing the entry unchanged rather than dispatching.
-   j. On a free slot, dispatch immediately, with no debounce window: count
+   i1. On a free slot, run the triage gate when `reactions.bot_review.triage` is configured, above the dispatch counter so no pass that dispatches nothing is counted as one. The first pass to reach it with a new fingerprint starts the run and re-enqueues the entry on the poll interval, incrementing no counter. A later pass reading `dispatch-agent`, which is also the fallback for every failure mode, continues to the next step. A later pass reading `handled` marks the fingerprint dispatched and re-enqueues on the poll interval, leaving `reaction_attempts` and the dispatch counter untouched. A later pass reading `escalate` marks the fingerprint dispatched and escalates (§11D.5) with the un-incremented turn count. The outcome is retained on the entry, so repeated passes over the same fingerprint re-apply the stored answer rather than starting a second run, and a memoized `escalate` re-applies as `handled` so no second escalation is posted. A changed fingerprint discards the retained handle, cancelling the run when it is still in flight, and starts a fresh one.
+   j. On a free slot with the gate proceeding, dispatch immediately, with no debounce window: count
       `sortie_bot_review_checks_total{result="dispatched"}`, schedule a continuation dispatch
       carrying the bot comments under the prompt key `bot_review_comments`, and increment
       `reaction_attempts[issue_id:bot-review]`.
@@ -123,8 +125,7 @@ element, is a startup configuration error.
 
 ### 11D.5 Escalation and ownership
 
-When `reaction_attempts[issue_id:bot-review]` reaches `max_continuation_turns`, the orchestrator
-escalates. Escalation follows the auto-merge cross-kind isolation contract in §11C.10, not the
+Two conditions reach the escalation: `reaction_attempts[issue_id:bot-review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (§11D.3). The action, the metric label, and the slot-scoped cleanup are the same for both; only the log message and, on the `comment` action, the posted text differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted. Escalation follows the auto-merge cross-kind isolation contract in §11C.10, not the
 `review` escalation path:
 
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker issue

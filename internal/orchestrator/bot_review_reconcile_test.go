@@ -799,7 +799,7 @@ func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	// bot-review slot deleted.
@@ -856,7 +856,7 @@ func TestEscalateBotReviewFailure_LabelAction(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.addLabelCalled != 1 {
@@ -897,7 +897,7 @@ func TestEscalateBotReviewFailure_CommentAction(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.commentIssueCalls != 1 {
@@ -938,7 +938,7 @@ func TestEscalateBotReviewFailure_EmptyEscalation(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.commentIssueCalls != 1 {
@@ -975,7 +975,7 @@ func TestEscalateBotReviewFailure_NilTrackerAdapter(t *testing.T) {
 	botData := botPending.KindData.(*BotReviewReactionData)
 
 	// Must not panic with nil TrackerAdapter.
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	// bot-review slot still removed.
@@ -1379,7 +1379,7 @@ func TestEscalateBotReviewFailure_LabelDefaultsWhenEmpty(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.addLabelCalls != 1 {
@@ -1421,7 +1421,7 @@ func TestEscalateBotReviewFailure_LabelActionError(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.addLabelCalls != 1 {
@@ -1465,7 +1465,7 @@ func TestEscalateBotReviewFailure_CommentActionError(t *testing.T) {
 	}
 
 	botData := botPending.KindData.(*BotReviewReactionData)
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if tracker.commentCalls != 1 {
@@ -1510,7 +1510,7 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 	botData := botPending.KindData.(*BotReviewReactionData)
 
 	// Must not panic despite the delete error.
-	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
 	if store.deleteFingerprintCalls != 1 {
@@ -1642,5 +1642,270 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 
 	if _, ok := state.Claimed[issueID]; !ok {
 		t.Error("state.Claimed[issueID] cleared during deferral; want preserved")
+	}
+}
+
+// --- Triage gate integration ---
+
+// botReviewTriageParams returns botReviewParams wired with a real
+// workspace and the given triage script, so reactionTriageGate actually
+// starts a subprocess for the pass's actionable comment set.
+func botReviewTriageParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	params := botReviewParams(store, scm, tracker)
+	params.WorkspaceRoot = workspaceRoot
+	params.BotReviewConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	return params
+}
+
+// actionableBotReviewComments returns one non-outdated bot comment.
+func actionableBotReviewComments() []domain.ReviewComment {
+	return []domain.ReviewComment{{ID: "bc-1", Body: "fix this"}}
+}
+
+// runBotReviewTriageToCompletion drives a pass that starts a triage run
+// for issueID, waits for the subprocess to finish, then resets the
+// entry's PendingRetryAt to the past so the next pass is immediately
+// due.
+func runBotReviewTriageToCompletion(t *testing.T, state *State, params ReconcileParams, rkey string, metrics domain.Metrics) {
+	t.Helper()
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry.Triage == nil {
+		t.Fatalf("PendingReactions[%s] = %+v, want a started triage run", rkey, entry)
+	}
+	waitTriageRunDone(t, entry.Triage)
+	entry.PendingRetryAt = time.Time{}
+}
+
+// TestReconcileBotReviewComments_Triage_NoConfig_BehavesAsPinned
+// verifies that a bot-review reaction with no triage block dispatches
+// exactly as the pinned revision.
+func TestReconcileBotReviewComments_Triage_NoConfig_BehavesAsPinned(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-OFF"
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewParams(store, scm, nil)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a scheduled continuation, want dropped (pinned behavior)")
+	}
+	if metrics.botReviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, metrics.botReviewChecks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_WaitsWithoutProviderCall
+// verifies that while a triage run is in flight, the pass re-enqueues
+// without making a provider call and without incrementing
+// PendingAttempts.
+func TestReconcileBotReviewComments_Triage_WaitsWithoutProviderCall(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-WAIT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-wait", func() {})
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.botCalls != 0 {
+		t.Errorf("FetchBotReviewComments calls = %d, want 0 while a triage run is in flight", scm.botCalls)
+	}
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped while waiting on triage, want re-enqueued")
+	}
+	if entry.PendingAttempts != 0 {
+		t.Errorf("PendingAttempts = %d, want 0 (waiting is not a fetch error)", entry.PendingAttempts)
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_Handled verifies that a handled
+// disposition marks the fingerprint dispatched and re-enqueues the
+// entry with the poll interval, without spending a continuation or
+// incrementing IncBotReviewChecks("dispatched").
+func TestReconcileBotReviewComments_Triage_Handled(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-HANDLED"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+
+	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if !entry.PendingRetryAt.After(botReviewBaseTime) {
+		t.Errorf("PendingRetryAt = %v, want after %v (re-enqueued with the poll interval)", entry.PendingRetryAt, botReviewBaseTime)
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a handled verdict must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if metrics.botReviewChecks["dispatched"] != 0 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 0 on a handled pass`, metrics.botReviewChecks["dispatched"])
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_Escalate verifies that an
+// escalate disposition invokes escalateBotReviewFailure with
+// EscalationTriggerTriage.
+func TestReconcileBotReviewComments_Triage_Escalate(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-ESCALATE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	tracker := &ciTrackerStub{}
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewTriageParams(store, scm, tracker, root, escalateTriageScript)
+
+	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (triage escalation uses the kind's own escalation action)", tracker.addLabelCalled)
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a triage escalation, want dropped (matches a budget escalation)")
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_DispatchAgent_ProceedsNormally
+// verifies that a dispatch-agent disposition falls through to the
+// existing dispatch block, incrementing IncBotReviewChecks("dispatched").
+func TestReconcileBotReviewComments_Triage_DispatchAgent_ProceedsNormally(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-DISPATCH"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+
+	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if metrics.botReviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, metrics.botReviewChecks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 for dispatch-agent", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_CancelOnTTLDrop verifies that an
+// in-flight triage run is cancelled before the entry is dropped on TTL
+// elapse.
+func TestReconcileBotReviewComments_Triage_CancelOnTTLDrop(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-DROP"
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+	spy := &triageCancelSpy{}
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-drop", spy.cancel)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewPendingTTL = 1 * time.Minute
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(2 * time.Minute) }
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if spy.calls() != 1 {
+		t.Errorf("Cancel called %d times, want 1 (the in-flight run must not outlive the dropped entry)", spy.calls())
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the TTL, want dropped")
+	}
+}
+
+// TestReconcileBotReviewComments_Triage_RepeatedHandled_StillAgesOut
+// pins the bound bot-review carries and ci does not: the TTL is
+// measured from the entry's creation, so a succession of handled
+// answers still ages the entry out once that TTL elapses.
+func TestReconcileBotReviewComments_Triage_RepeatedHandled_StillAgesOut(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "BOT-TRIAGE-AGESOUT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindBotReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+	params.BotReviewPendingTTL = 1 * time.Minute
+
+	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics) // applies: handled
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Fatal("PendingReactions entry dropped right after a handled verdict, want retained until TTL")
+	}
+
+	// Advance past the TTL and confirm it still drops despite the
+	// retained handled outcome.
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(2 * time.Minute) }
+	state.PendingReactions[rkey].PendingRetryAt = time.Time{}
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the TTL despite a handled verdict, want dropped")
 	}
 }

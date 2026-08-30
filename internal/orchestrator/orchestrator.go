@@ -264,6 +264,13 @@ type Orchestrator struct {
 	mergeCompletionReactionConfigured bool
 	handoffParkingLabel               string
 
+	// ciTriage is the frozen ci_failure triage configuration.
+	// NewOrchestrator captures it once from the workflow configuration.
+	// Every other CI feedback field reaches the reconcile pass from the
+	// reloaded configuration on each tick; this one does not, so a
+	// script or timeout changed mid-run takes effect only on restart.
+	ciTriage config.ReactionTriageConfig
+
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
 	// tick/reload; read by makeWorkerFn at dispatch time.
@@ -340,8 +347,10 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	}
 
 	handoffParkingLabel := defaultHandoffParkingLabel
+	var ciTriage config.ReactionTriageConfig
 	if params.WorkflowManager != nil {
 		handoffParkingLabel = resolveHandoffParkingLabel(params.WorkflowManager.Config().Reactions)
+		ciTriage = params.WorkflowManager.Config().CIFeedback.Triage
 	}
 
 	o := &Orchestrator{
@@ -383,6 +392,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		mergeCompletionConfig:             params.MergeCompletionConfig,
 		mergeCompletionReactionConfigured: params.MergeCompletionReactionConfigured,
 		handoffParkingLabel:               handoffParkingLabel,
+		ciTriage:                          ciTriage,
 		blockerResolver:                   params.BlockerResolver,
 	}
 	// Startup preflight must have passed for the orchestrator to be
@@ -411,6 +421,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			o.draining.Store(true)
 			tickTimer.Stop()
 			o.drainRunningWorkers()
+			o.drainTriageRuns()
 			o.drainTrackerOps()
 			o.cancelRetryTimers()
 			return
@@ -612,6 +623,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		LabelFixReactionConfigured:        o.labelFixReactionConfigured,
 		MergeCompletionConfig:             o.mergeCompletionConfig,
 		MergeCompletionReactionConfigured: o.mergeCompletionReactionConfigured,
+		WorkspaceRoot:                     cfg.Workspace.Root,
+		CITriage:                          o.ciTriage,
 	})
 
 	// Sweep workspaces periodically to catch issues that transitioned
@@ -1423,6 +1436,26 @@ func (o *Orchestrator) drainTrackerOps() {
 	case <-done:
 	case <-time.After(trackerOpsDrainTimeout):
 		o.logger.Warn("tracker ops drain timeout exceeded, abandoning in-flight calls")
+	}
+}
+
+// drainTriageRuns waits for all in-flight reaction triage goroutines to
+// complete. Context cancellation has already reached the subprocesses
+// through the hook runner, which kills each process group, so the wait
+// terminates promptly in practice. The wait is bounded so an operator
+// script that ignores its kill cannot block process exit indefinitely.
+// Called from Run after drainRunningWorkers and before drainTrackerOps.
+func (o *Orchestrator) drainTriageRuns() {
+	done := make(chan struct{})
+	go func() {
+		o.state.TriageWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(trackerOpsDrainTimeout):
+		o.logger.Warn("reaction triage drain timeout exceeded, abandoning in-flight runs")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
@@ -1512,5 +1513,270 @@ func TestHandleMergeConflictDirty_SameHeadDedupPrecedesAttributionQuery(t *testi
 	}
 	if store.countCalls != 0 {
 		t.Errorf("CountWorkerRunsCompletedSince calls = %d, want 0 (dedup precedes the attribution query)", store.countCalls)
+	}
+}
+
+// --- Triage gate integration ---
+
+// mergeConflictTriageParams returns mergeConflictParams wired with a
+// real workspace and the given triage script, so reactionTriageGate
+// actually starts a subprocess for the pass's dirty head.
+func mergeConflictTriageParams(store ReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	params := mergeConflictParams(store, scm, tracker)
+	params.WorkspaceRoot = workspaceRoot
+	params.MergeConflictConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	return params
+}
+
+// runMergeConflictTriageToCompletion drives a pass that starts a triage
+// run for issueID, waits for the subprocess to finish, then resets the
+// entry's PendingRetryAt to the past so the next pass is immediately
+// due.
+func runMergeConflictTriageToCompletion(t *testing.T, state *State, params ReconcileParams, rkey string, metrics domain.Metrics) {
+	t.Helper()
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry.Triage == nil {
+		t.Fatalf("PendingReactions[%s] = %+v, want a started triage run", rkey, entry)
+	}
+	waitTriageRunDone(t, entry.Triage)
+	entry.PendingRetryAt = time.Time{}
+}
+
+// TestReconcileMergeConflicts_Triage_NoConfig_BehavesAsPinned verifies
+// that a merge-conflict reaction with no triage block dispatches
+// exactly as the pinned revision.
+func TestReconcileMergeConflicts_Triage_NoConfig_BehavesAsPinned(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-OFF"
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("sha-off", "main"), nil
+	}}
+	params := mergeConflictParams(store, scm, nil)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a scheduled continuation, want dropped (pinned behavior)")
+	}
+	if metrics.checks["dispatched"] != 1 {
+		t.Errorf(`IncMergeConflictChecks("dispatched") = %d, want 1`, metrics.checks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1 (the normal dispatch path marks it)", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileMergeConflicts_Triage_WaitsWithoutProviderCall verifies
+// that while a triage run is in flight, the pass re-enqueues without
+// making a provider call and without incrementing PendingAttempts.
+func TestReconcileMergeConflicts_Triage_WaitsWithoutProviderCall(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-WAIT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-wait", func() {})
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("sha-wait", "main"), nil
+	}}
+	params := mergeConflictTriageParams(store, scm, nil, root, handledScript)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability calls = %d, want 0 while a triage run is in flight", scm.calls)
+	}
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped while waiting on triage, want re-enqueued")
+	}
+	if entry.PendingAttempts != 0 {
+		t.Errorf("PendingAttempts = %d, want 0 (waiting is not a fetch error)", entry.PendingAttempts)
+	}
+}
+
+// TestReconcileMergeConflicts_Triage_Handled verifies that a handled
+// disposition marks the fingerprint dispatched and re-enqueues the
+// entry with the poll interval, without spending a continuation,
+// dispatching a rebase, or incrementing IncMergeConflictChecks("dispatched").
+func TestReconcileMergeConflicts_Triage_Handled(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-HANDLED"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("sha-handled", "main"), nil
+	}}
+	params := mergeConflictTriageParams(store, scm, nil, root, handledScript)
+
+	runMergeConflictTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if !entry.PendingRetryAt.After(mcBaseTime) {
+		t.Errorf("PendingRetryAt = %v, want after %v (re-enqueued with the poll interval)", entry.PendingRetryAt, mcBaseTime)
+	}
+	if !entry.HeadRecordedAt.IsZero() {
+		t.Error("HeadRecordedAt set on a handled pass, want zero (the head-change block never ran)")
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a handled verdict must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if metrics.checks["dispatched"] != 0 {
+		t.Errorf(`IncMergeConflictChecks("dispatched") = %d, want 0 on a handled pass`, metrics.checks["dispatched"])
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileMergeConflicts_Triage_Escalate verifies that an escalate
+// disposition invokes escalateMergeConflictFailure with
+// EscalationTriggerTriage and the un-incremented attempt count.
+func TestReconcileMergeConflicts_Triage_Escalate(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-ESCALATE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	tracker := &ciTrackerStub{}
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("sha-escalate", "main"), nil
+	}}
+	params := mergeConflictTriageParams(store, scm, tracker, root, escalateTriageScript)
+
+	runMergeConflictTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (triage escalation uses the kind's own escalation action)", tracker.addLabelCalled)
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a triage escalation must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a triage escalation, want dropped (matches a budget escalation)")
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileMergeConflicts_Triage_DispatchAgent_HeadChangeBlockRunsOnce
+// verifies two things together: a dispatch-agent disposition falls
+// through to the existing dispatch block, and classifyHeadChange's
+// HeadRecordedAt write runs exactly once across the starting pass
+// (which never reaches it) and the resuming pass (which does).
+func TestReconcileMergeConflicts_Triage_DispatchAgent_HeadChangeBlockRunsOnce(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-DISPATCH"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("sha-dispatch", "main"), nil
+	}}
+	params := mergeConflictTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+
+	// Starting pass: the gate returns triageWait above the head-change
+	// block, so HeadRecordedAt must still be zero.
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry.Triage == nil {
+		t.Fatalf("PendingReactions[%s] = %+v, want a started triage run", rkey, entry)
+	}
+	if !entry.HeadRecordedAt.IsZero() {
+		t.Fatal("HeadRecordedAt set on the starting pass, want zero (the head-change block must not run before the gate resolves)")
+	}
+	waitTriageRunDone(t, entry.Triage)
+	entry.PendingRetryAt = time.Time{}
+
+	// Resuming pass: dispatch-agent falls through, so the head-change
+	// block runs exactly this once.
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if metrics.checks["dispatched"] != 1 {
+		t.Errorf(`IncMergeConflictChecks("dispatched") = %d, want 1`, metrics.checks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1 (the per-episode increment ran exactly once)", rkey, state.ReactionAttempts[rkey])
+	}
+	// dispatchMergeConflictContinuation itself calls MarkReactionDispatched
+	// as part of its pre-existing dispatch path, independent of triage; the
+	// gate's own markTriageDispatched runs only on handled or escalate.
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1 (from the normal dispatch path)", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileMergeConflicts_Triage_CancelOnTTLDrop verifies that an
+// in-flight triage run is cancelled before the entry is dropped on
+// watch-window elapse. The TTL check runs ahead of the early
+// wait-on-triage short-circuit, so it is the one drop path reachable
+// while a run is genuinely still in flight; every other drop path
+// (episode close, KindData mismatch) is reached only after the early
+// short-circuit has already let a finished run through.
+func TestReconcileMergeConflicts_Triage_CancelOnTTLDrop(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-TRIAGE-DROP"
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	spy := &triageCancelSpy{}
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-drop", spy.cancel)
+	state.PendingReactions[rkey].CreatedAt = mcBaseTime.Add(-2 * time.Hour)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{}
+	params := mergeConflictParams(store, scm, nil)
+	params.MergeConflictPendingTTL = time.Hour
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if spy.calls() != 1 {
+		t.Errorf("Cancel called %d times, want 1 (the in-flight run must not outlive the dropped entry)", spy.calls())
+	}
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability calls = %d, want 0 (the TTL drop precedes the mergeability read)", scm.calls)
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the watch window, want dropped")
 	}
 }

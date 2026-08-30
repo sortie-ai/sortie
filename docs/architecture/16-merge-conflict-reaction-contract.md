@@ -74,13 +74,14 @@ Loop body per `ReactionKindMergeConflict` entry in `state.PendingReactions`:
    recorded head, exceeds the configured `reactions.merge_conflicts.watch_window_ms` (default
    `1800000`, thirty minutes; `0` removes the bound).
 4. Respect the `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
-5. Call `GetMergeability`. On error, increment the pending-backoff counter, set `PendingRetryAt`,
+5. If the entry holds a triage run that has not finished (Section 5.3.9), re-enqueue it ready for the next tick and continue. `GetMergeability` is not called and the pending-backoff counter is untouched.
+6. Call `GetMergeability`. On error, increment the pending-backoff counter, set `PendingRetryAt`,
    re-enqueue, count `sortie_merge_conflict_checks_total{result="error"}`, and continue.
-6. Switch on `status.Mergeability`:
+7. Switch on `status.Mergeability`:
    - `MergeabilityUnknown` (U1): re-enqueue at `now + poll_interval`; count `"unknown"`; do not
      touch the fingerprint or the attempt counter.
    - `MergeabilityDirty` (D1): apply the dirty-branch logic described in §11E.4 and §11E.5.
-   - All other values (`clean`, `unstable`, `blocked`) (N1): delete the fingerprint row; delete the
+   - All other values (`clean`, `unstable`, `blocked`) (N1): cancel any in-flight triage run, whose fingerprint this branch is about to erase; delete the fingerprint row; delete the
      per-episode attempt counter (`delete(state.ReactionAttempts, rkey)`); re-enqueue at
      `now + poll_interval`; count `"clear"`. This closes the episode.
 
@@ -114,7 +115,9 @@ finds `dispatched = 0` and dispatches.
 
 ### 11E.5 Escalation and episode exits
 
-When the fingerprint dedup passes, the per-episode counter increments and the strict over-limit cap
+When the fingerprint dedup passes and `reactions.merge_conflicts.triage` is configured, the triage gate runs before the head-change block, so that block runs once per conflicting head rather than once per pass: replaying it would narrow the attribution window. The first pass to reach the gate with a new head starts the run and re-enqueues the entry at `now + poll_interval`, touching neither the counter nor the attribution boundary. A later pass reading `dispatch-agent`, which is also the fallback for every failure mode, continues to the sequence below. A later pass reading `handled` marks the fingerprint dispatched and re-enqueues at `now + poll_interval`, leaving the per-episode counter untouched and dispatching nothing. A later pass reading `escalate` marks the fingerprint dispatched and invokes `escalateMergeConflictFailure` with the un-incremented counter, which is the previous episode's count when the head is new. The outcome is retained on the entry, so repeated passes over the same head re-apply the stored answer rather than starting a second run, and a memoized `escalate` re-applies as `handled` so no second escalation is posted. A new head discards the retained handle, cancelling the run when it is still in flight, and starts a fresh one.
+
+When the gate proceeds, or when no `triage` block is configured, the per-episode counter increments and the strict over-limit cap
 is checked:
 
 - `state.ReactionAttempts[rkey]++`; `attempts = state.ReactionAttempts[rkey]`
@@ -122,7 +125,7 @@ is checked:
 - Otherwise: invoke `dispatchMergeConflictContinuation`.
 
 `escalateMergeConflictFailure` applies the configured escalation action (label or comment) in a
-detached `TrackerOpsWg` goroutine with a 30-second timeout, then performs the episode-exit cleanup:
+detached `TrackerOpsWg` goroutine with a 30-second timeout, then performs the episode-exit cleanup. Its action, metric label, and cleanup are the same whether the budget or a triage command reached it; only the log message and, on the `comment` action, the posted text differ, and a triage escalation states that the command asked for a person rather than claiming a budget was exhausted.
 
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
   issue via `TrackerAdapter.AddLabel`.

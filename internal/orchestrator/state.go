@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
@@ -530,6 +531,11 @@ type PendingReaction struct {
 	// continuation renders the same template as the original
 	// dispatch.
 	TemplateID string
+
+	// Triage is the in-flight or finished triage run for the subject
+	// this entry currently describes. Nil when no run has started, and
+	// cleared whenever the subject's fingerprint moves. Runtime-only.
+	Triage *ReactionTriageRun
 }
 
 // CIReactionData holds CI-specific fields for a pending CI reaction.
@@ -595,6 +601,10 @@ type ReviewReactionConfig struct {
 	DebounceMS           int
 	MaxContinuationTurns int
 	WatchWindowMS        int
+
+	// Triage is the frozen triage configuration for this kind, copied
+	// verbatim from the parsed reaction block at construction.
+	Triage config.ReactionTriageConfig
 }
 
 // BotReviewReactionData holds bot-review-specific fields for a pending
@@ -631,6 +641,10 @@ type BotReviewReactionConfig struct {
 	MaxContinuationTurns int
 	BotUsernames         []string
 	WatchWindowMS        int
+
+	// Triage is the frozen triage configuration for this kind, copied
+	// verbatim from the parsed reaction block at construction.
+	Triage config.ReactionTriageConfig
 }
 
 // AutoMergeReactionData holds auto-merge-specific fields for a pending
@@ -705,6 +719,10 @@ type MergeConflictReactionConfig struct {
 	PollIntervalMS  int
 	MaxRetries      int
 	WatchWindowMS   int
+
+	// Triage is the frozen triage configuration for this kind, copied
+	// verbatim from the parsed reaction block at construction.
+	Triage config.ReactionTriageConfig
 }
 
 // LabelReviewReactionData holds the label-review command's per-PR
@@ -854,6 +872,17 @@ type State struct {
 	// worker shutdown completes so these goroutines are not orphaned
 	// on process exit.
 	TrackerOpsWg sync.WaitGroup
+
+	// TriageWg tracks in-flight reaction triage goroutines so shutdown
+	// can drain them rather than orphan them.
+	TriageWg sync.WaitGroup
+
+	// TriageInFlight counts triage subprocesses currently running. The
+	// event loop increments it when it starts a run; the runner
+	// goroutine decrements it on return, so the count stays true even
+	// when no pass ever consumes the outcome. Atomic because its two
+	// writers are different goroutines.
+	TriageInFlight atomic.Int64
 
 	// PollIntervalMS is the current effective poll interval from config.
 	PollIntervalMS int
@@ -1326,6 +1355,7 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 		DebounceMS:           60000,
 		MaxContinuationTurns: 3,
 		WatchWindowMS:        reactionWatchWindowDefaultMS,
+		Triage:               rc.Triage,
 	}
 
 	if cfg.Escalation == "" {
@@ -1396,6 +1426,7 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 		PollIntervalMS:       60000,
 		MaxContinuationTurns: 5,
 		WatchWindowMS:        reactionWatchWindowDefaultMS,
+		Triage:               rc.Triage,
 	}
 
 	if cfg.Escalation == "" {
@@ -1547,6 +1578,7 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 		PollIntervalMS:  60000,
 		MaxRetries:      rc.MaxRetries,
 		WatchWindowMS:   reactionWatchWindowDefaultMS,
+		Triage:          rc.Triage,
 	}
 
 	if cfg.Escalation == "" {

@@ -126,6 +126,7 @@ CI status reconciliation. The flow is:
       `reaction_attempts` counter, log a WARN record, and drop the entry (no re-enqueue). Default
       `1800000` (thirty minutes); `0` removes the bound.
    c. Respect `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
+   c1. If the entry holds a triage run that has not finished (Section 5.3.9), re-enqueue it ready for the next tick and continue. No provider call is made and the pending attempt count is untouched.
    d. Check continuation turn cap: if `reaction_attempts[issue_id:review]` >=
       `max_continuation_turns`, escalate (Section 11B.6) and continue.
    e. Call `SCMAdapter.FetchPendingReviews(ctx, pr_number, owner, repo)`.
@@ -142,6 +143,7 @@ CI status reconciliation. The flow is:
       re-enqueue.
    l. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
       re-enqueuing the entry unchanged rather than dispatching.
+   l1. On a free slot, run the triage gate (Section 11B.5) before the dispatch counter is incremented, so no pass that dispatches nothing is counted as one. Only a `dispatch-agent` answer, and the absence of a `triage` block, continue to the next step.
    m. On a free slot: schedule review-fix dispatch with
       `ContinuationContext{"review_comments": [...]}`.
    n. Increment `reaction_attempts[issue_id:review]`.
@@ -155,16 +157,19 @@ When actionable review comments are detected and debounce has elapsed:
 1. Build a template map from actionable comments (Section 12.1).
 2. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers instead of
    dispatching, leaving the incumbent untouched.
-3. On a free slot: schedule a review-fix dispatch carrying the review comment context via
-   `ContinuationContext`.
-4. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
+3. On a free slot, run the triage gate when `reactions.review_comments.triage` is configured. The first pass to reach it with a new fingerprint starts the run and re-enqueues the entry on the poll interval, incrementing no counter and counting no dispatch. A later pass reading `dispatch-agent`, which is also the fallback for every failure mode, continues to the next step. A later pass reading `handled` marks the fingerprint dispatched and re-enqueues on the poll interval, leaving `reaction_attempts` and the dispatch counter untouched. A later pass reading `escalate` marks the fingerprint dispatched and escalates (Section 11B.6) with the un-incremented turn count. The outcome is retained on the entry, so repeated passes over the same fingerprint re-apply the stored answer rather than starting a second run, and a memoized `escalate` re-applies as `handled` so no second escalation is posted. A changed fingerprint discards the retained handle, cancelling the run when it is still in flight, and starts a fresh one.
+4. On a free slot with the gate proceeding: schedule a review-fix dispatch carrying the review
+   comment context via `ContinuationContext`.
+5. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
 
 Review-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
 exponential backoff.
 
 ### 11B.6 Escalation behavior
 
-When `reaction_attempts[issue_id:review]` reaches `max_continuation_turns`:
+Two conditions reach the escalation: `reaction_attempts[issue_id:review]` reaching `max_continuation_turns`, and a triage command answering `escalate` (Section 11B.5). The action, the metric label, the claim release, and the entry, counter, and fingerprint post-conditions are the same for both. Only the log message and, on the `comment` action, the posted text differ: a triage escalation states that the command asked for a person and does not claim a budget was exhausted.
+
+In either case:
 
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
   issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second

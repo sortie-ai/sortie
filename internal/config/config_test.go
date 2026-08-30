@@ -1334,6 +1334,257 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 }
 
+// --- reactions.<kind>.triage tests ---
+
+// TestReactionsTriage covers requirements 2, 3, and the parse half of 23:
+// triage is accepted on exactly the four members of
+// TriageSupportedReactionKeys and rejected elsewhere, timeout_ms defaults
+// and clamps to its documented range, and script must be a non-blank
+// string.
+func TestReactionsTriage(t *testing.T) {
+	t.Run("AcceptedOnSupportedKinds", func(t *testing.T) {
+		t.Parallel()
+
+		for kind := range TriageSupportedReactionKeys {
+			t.Run(kind, func(t *testing.T) {
+				t.Parallel()
+
+				cfg, err := NewServiceConfig(map[string]any{
+					"reactions": map[string]any{
+						kind: map[string]any{
+							// ci_failure only folds into CIFeedbackConfig
+							// when it carries a provider; a provider is
+							// harmless on every other kind.
+							"provider": "github",
+							"triage": map[string]any{
+								"script":     "./triage.sh",
+								"timeout_ms": 5000,
+							},
+						},
+					},
+				})
+				if err != nil {
+					t.Fatalf("NewServiceConfig() unexpected error: %v", err)
+				}
+
+				// ci_failure is folded into CIFeedback and removed from
+				// the Reactions map, so its Triage block is read back
+				// from a different field than every other kind.
+				triage := cfg.Reactions[kind].Triage
+				if kind == "ci_failure" {
+					if _, stillPresent := cfg.Reactions[kind]; stillPresent {
+						t.Fatalf("Reactions[%s] still present, want it folded into CIFeedback", kind)
+					}
+					triage = cfg.CIFeedback.Triage
+				}
+				assertStringEqual(t, "Triage.Script for "+kind, "./triage.sh", triage.Script)
+				assertIntEqual(t, "Triage.TimeoutMS for "+kind, 5000, triage.TimeoutMS)
+				if !triage.Enabled() {
+					t.Errorf("Triage.Enabled() for %s = false, want true", kind)
+				}
+			})
+		}
+	})
+
+	t.Run("RejectedOnUnsupportedKey", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name string
+			key  string
+		}{
+			{"auto_merge", "auto_merge"},
+			{"merge_completion", "merge_completion"},
+			{"unrecognized_future_key", "some_future_reaction"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, err := NewServiceConfig(map[string]any{
+					"reactions": map[string]any{
+						tt.key: map[string]any{
+							"provider": "github",
+							"triage": map[string]any{
+								"script": "./triage.sh",
+							},
+						},
+					},
+				})
+				assertConfigErrorField(t, err, "reactions."+tt.key+".triage")
+			})
+		}
+	})
+
+	t.Run("RejectedOnLabelCommands", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"label_commands": map[string]any{
+					"provider": "github",
+					"triage": map[string]any{
+						"script": "./triage.sh",
+					},
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.label_commands.triage")
+	})
+
+	t.Run("TimeoutMSDefault", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"merge_conflicts": map[string]any{
+					"triage": map[string]any{
+						"script": "./triage.sh",
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Reactions[merge_conflicts].Triage.TimeoutMS", 60000, cfg.Reactions["merge_conflicts"].Triage.TimeoutMS)
+	})
+
+	t.Run("TimeoutMSBoundaries", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name      string
+			timeoutMS int
+			wantErr   bool
+		}{
+			{"zero_rejected", 0, true},
+			{"one_accepted", 1, false},
+			{"ceiling_accepted", 600000, false},
+			{"above_ceiling_rejected", 600001, true},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				cfg, err := NewServiceConfig(map[string]any{
+					"reactions": map[string]any{
+						"merge_conflicts": map[string]any{
+							"triage": map[string]any{
+								"script":     "./triage.sh",
+								"timeout_ms": tt.timeoutMS,
+							},
+						},
+					},
+				})
+
+				if tt.wantErr {
+					assertConfigErrorField(t, err, "reactions.merge_conflicts.triage.timeout_ms")
+					return
+				}
+				if err != nil {
+					t.Fatalf("NewServiceConfig() unexpected error: %v", err)
+				}
+				assertIntEqual(t, "Reactions[merge_conflicts].Triage.TimeoutMS", tt.timeoutMS, cfg.Reactions["merge_conflicts"].Triage.TimeoutMS)
+			})
+		}
+	})
+
+	t.Run("ScriptBlankRejected", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			script any
+		}{
+			{"empty_string", ""},
+			{"whitespace_only", "   \n\t"},
+			{"absent", nil},
+			{"non_string", 42},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				triage := map[string]any{}
+				if tt.script != nil {
+					triage["script"] = tt.script
+				}
+
+				_, err := NewServiceConfig(map[string]any{
+					"reactions": map[string]any{
+						"ci_failure": map[string]any{
+							"triage": triage,
+						},
+					},
+				})
+				assertConfigErrorField(t, err, "reactions.ci_failure.triage.script")
+			})
+		}
+	})
+
+	t.Run("EnabledReportsWhitespaceTrimmedEmptiness", func(t *testing.T) {
+		t.Parallel()
+
+		var zero ReactionTriageConfig
+		if zero.Enabled() {
+			t.Error("ReactionTriageConfig{}.Enabled() = true, want false")
+		}
+		whitespace := ReactionTriageConfig{Script: "   "}
+		if whitespace.Enabled() {
+			t.Error("ReactionTriageConfig{Script: \"   \"}.Enabled() = true, want false")
+		}
+		nonBlank := ReactionTriageConfig{Script: "./triage.sh"}
+		if !nonBlank.Enabled() {
+			t.Error("ReactionTriageConfig{Script: \"./triage.sh\"}.Enabled() = false, want true")
+		}
+	})
+
+	t.Run("NotFoldedIntoExtra", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"merge_conflicts": map[string]any{
+					"triage": map[string]any{
+						"script": "./triage.sh",
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() unexpected error: %v", err)
+		}
+		if _, exists := cfg.Reactions["merge_conflicts"].Extra["triage"]; exists {
+			t.Error(`Reactions[merge_conflicts].Extra["triage"] exists, want triage consumed explicitly and absent from Extra`)
+		}
+	})
+
+	t.Run("PopulatedOnCIFeedbackConfig", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": "github",
+					"triage": map[string]any{
+						"script":     "./ci-triage.sh",
+						"timeout_ms": 30000,
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() unexpected error: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Triage.Script", "./ci-triage.sh", cfg.CIFeedback.Triage.Script)
+		assertIntEqual(t, "CIFeedback.Triage.TimeoutMS", 30000, cfg.CIFeedback.Triage.TimeoutMS)
+	})
+}
+
 // --- buildLabelCommandsConfig tests ---
 
 func TestBuildLabelCommandsConfig_Defaults(t *testing.T) {

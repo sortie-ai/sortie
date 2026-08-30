@@ -1540,3 +1540,273 @@ func TestReconcileReviewComments_ForeignIncumbentDefers(t *testing.T) {
 		t.Errorf(`IncReviewChecks("dispatched") = %d, want 0 (no dispatch on a defer)`, metrics.reviewChecks["dispatched"])
 	}
 }
+
+// --- Triage gate integration ---
+
+// reviewTriageParams returns reviewParams wired with a real workspace
+// and the given triage script, so reactionTriageGate actually starts a
+// subprocess for the pass's actionable comment set.
+func reviewTriageParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	params := reviewParams(store, scm, tracker)
+	params.WorkspaceRoot = workspaceRoot
+	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	return params
+}
+
+// oldEnoughReviewComments returns one actionable comment submitted well
+// outside the default debounce window.
+func oldEnoughReviewComments() []domain.ReviewComment {
+	return []domain.ReviewComment{
+		{ID: "rc-1", Body: "fix this", SubmittedAt: reviewBaseTime.Add(-time.Hour)},
+	}
+}
+
+// runReviewTriageToCompletion drives a pass that starts a triage run for
+// issueID, waits for the subprocess to finish, then resets the entry's
+// PendingRetryAt to the past so the next pass is immediately due.
+func runReviewTriageToCompletion(t *testing.T, state *State, params ReconcileParams, rkey string, metrics domain.Metrics) {
+	t.Helper()
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry.Triage == nil {
+		t.Fatalf("PendingReactions[%s] = %+v, want a started triage run", rkey, entry)
+	}
+	waitTriageRunDone(t, entry.Triage)
+	entry.PendingRetryAt = time.Time{}
+}
+
+// TestReconcileReviewComments_Triage_NoConfig_BehavesAsPinned verifies
+// that a review reaction with no triage block dispatches exactly as the
+// pinned revision.
+func TestReconcileReviewComments_Triage_NoConfig_BehavesAsPinned(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-OFF"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewParams(store, scm, nil)
+	// WorkspaceRoot and ReviewConfig.Triage are left at their zero values.
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a scheduled continuation, want dropped (pinned behavior)")
+	}
+	if metrics.reviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, metrics.reviewChecks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileReviewComments_Triage_WaitsWithoutProviderCall verifies
+// that while a triage run is in flight, the pass re-enqueues without
+// making a provider call and without incrementing PendingAttempts.
+func TestReconcileReviewComments_Triage_WaitsWithoutProviderCall(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-WAIT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-wait", func() {})
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, nil, root, handledScript)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.calls != 0 {
+		t.Errorf("FetchPendingReviews calls = %d, want 0 while a triage run is in flight", scm.calls)
+	}
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped while waiting on triage, want re-enqueued")
+	}
+	if entry.PendingAttempts != 0 {
+		t.Errorf("PendingAttempts = %d, want 0 (waiting is not a fetch error)", entry.PendingAttempts)
+	}
+}
+
+// TestReconcileReviewComments_Triage_Handled verifies that a handled
+// disposition marks the fingerprint dispatched and re-enqueues the
+// entry with the poll interval, without incrementing ReactionAttempts
+// or IncReviewChecks("dispatched").
+func TestReconcileReviewComments_Triage_Handled(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-HANDLED"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, nil, root, handledScript)
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a handled verdict, want re-enqueued")
+	}
+	if !entry.PendingRetryAt.After(reviewBaseTime) {
+		t.Errorf("PendingRetryAt = %v, want after %v (re-enqueued with the poll interval)", entry.PendingRetryAt, reviewBaseTime)
+	}
+	if state.ReactionAttempts[rkey] != 0 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 0 (a handled verdict must not spend a continuation)", rkey, state.ReactionAttempts[rkey])
+	}
+	if metrics.reviewChecks["dispatched"] != 0 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 0 on a handled pass`, metrics.reviewChecks["dispatched"])
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileReviewComments_Triage_Escalate verifies that an escalate
+// disposition invokes escalateReviewFailure with EscalationTriggerTriage
+// and the un-incremented turn count.
+func TestReconcileReviewComments_Triage_Escalate(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-ESCALATE"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, tracker, root, escalateTriageScript)
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalled != 1 {
+		t.Errorf("AddLabel calls = %d, want 1 (triage escalation uses the kind's own escalation action)", tracker.addLabelCalled)
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived a triage escalation, want dropped (matches a budget escalation)")
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileReviewComments_Triage_DispatchAgent_ProceedsNormally
+// verifies that a dispatch-agent disposition falls through to the
+// existing dispatch block, incrementing IncReviewChecks("dispatched").
+func TestReconcileReviewComments_Triage_DispatchAgent_ProceedsNormally(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-DISPATCH"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if metrics.reviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, metrics.reviewChecks["dispatched"])
+	}
+	if state.ReactionAttempts[rkey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 for dispatch-agent", store.markDispatchedCalls)
+	}
+}
+
+// TestReconcileReviewComments_Triage_CancelOnTTLDrop verifies that an
+// in-flight triage run is cancelled before the entry is dropped on TTL
+// elapse.
+func TestReconcileReviewComments_Triage_CancelOnTTLDrop(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-DROP"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	spy := &triageCancelSpy{}
+	state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-drop", spy.cancel)
+	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := reviewParams(store, scm, nil)
+	params.ReviewPendingTTL = 30 * time.Minute
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if spy.calls() != 1 {
+		t.Errorf("Cancel called %d times, want 1 (the in-flight run must not outlive the dropped entry)", spy.calls())
+	}
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the TTL, want dropped")
+	}
+}
+
+// TestReconcileReviewComments_Triage_RepeatedHandled_StillAgesOut pins
+// the bound review carries and ci does not: the TTL is measured from
+// the entry's creation, so a succession of handled answers still ages
+// the entry out once that TTL elapses.
+func TestReconcileReviewComments_Triage_RepeatedHandled_StillAgesOut(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-TRIAGE-AGESOUT"
+	identifier := issueID + "-ident"
+	root := mustTriageWorkspace(t, identifier)
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+	params := reviewTriageParams(store, scm, nil, root, handledScript)
+
+	runReviewTriageToCompletion(t, state, params, rkey, metrics)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics) // applies: handled
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Fatal("PendingReactions entry dropped right after a handled verdict, want retained until TTL")
+	}
+
+	// Age the entry's creation time past the TTL and confirm it still
+	// drops despite the retained handled outcome.
+	state.PendingReactions[rkey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+	state.PendingReactions[rkey].PendingRetryAt = time.Time{}
+	params.ReviewPendingTTL = 30 * time.Minute
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived past the TTL despite a handled verdict, want dropped")
+	}
+}

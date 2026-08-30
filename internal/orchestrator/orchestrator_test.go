@@ -3044,6 +3044,64 @@ do {{ .issue.identifier }}
 			t.Error("PendingReactions entry kept after the watch window was reloaded to 5ms; want dropped without a restart")
 		}
 	})
+
+	// Test Case H: the ci_failure triage block is frozen at construction,
+	// unlike every other ci_failure field, which the tick above already
+	// shows takes effect live.
+	t.Run("ci_triage_frozen_at_construction", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := lifecycleConfig(t.TempDir())
+		cfg.CIFeedback = config.CIFeedbackConfig{
+			Kind:       "github",
+			MaxRetries: 5,
+			Triage:     config.ReactionTriageConfig{Script: "script-A", TimeoutMS: 1000},
+		}
+
+		wm := &stubWorkflowManager{config: cfg}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		if o.ciTriage.Script != "script-A" {
+			t.Fatalf("ciTriage.Script at construction = %q, want %q", o.ciTriage.Script, "script-A")
+		}
+
+		o.handleTick(context.Background())
+
+		if o.ciTriage.Script != "script-A" {
+			t.Errorf("ciTriage.Script after the first tick = %q, want %q", o.ciTriage.Script, "script-A")
+		}
+
+		// A sibling ci_failure field changes in the same reload as the
+		// triage script.
+		cfg.CIFeedback.Triage.Script = "script-B"
+		cfg.CIFeedback.MaxRetries = 2
+		wm.setConfig(cfg)
+
+		o.handleTick(context.Background())
+
+		if o.ciTriage.Script != "script-A" {
+			t.Errorf("ciTriage.Script after reload = %q, want %q (frozen at construction, never re-read)", o.ciTriage.Script, "script-A")
+		}
+		if got := wm.Config().CIFeedback.MaxRetries; got != 2 {
+			t.Errorf("workflowManager.Config().CIFeedback.MaxRetries after reload = %d, want 2 (a sibling field the reload does refresh)", got)
+		}
+	})
 }
 
 // --- TestOrchestratorDynamicConfigReloadWithFileWatcher ---
@@ -3792,6 +3850,63 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Errorf("retryTimerCh received %q after shutdown, want no late fires", id)
 		default:
 			// No message — timer was stopped correctly.
+		}
+	})
+
+	t.Run("drains_in_flight_triage_run", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+
+		const runDuration = 150 * time.Millisecond
+		start := time.Now()
+		finished := make(chan struct{})
+		state.TriageInFlight.Add(1)
+		state.TriageWg.Go(func() {
+			time.Sleep(runDuration)
+			state.TriageInFlight.Add(-1)
+			close(finished)
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		runReturned := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(runReturned)
+		}()
+
+		// Let Run enter its steady-state select before cancelling, so the
+		// cancellation is observed on the ctx.Done() arm rather than
+		// racing the initial immediate tick.
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+
+		select {
+		case <-runReturned:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Run did not return after context cancellation")
+		}
+		elapsed := time.Since(start)
+
+		select {
+		case <-finished:
+		default:
+			t.Error("Run returned before the in-flight triage goroutine finished")
+		}
+		if elapsed < runDuration {
+			t.Errorf("Run returned after %v, want at least %v (shutdown must wait for the in-flight triage run)", elapsed, runDuration)
 		}
 	})
 }
@@ -7773,4 +7888,114 @@ func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
 	if got := len(tracker.commentCalls); got != 0 {
 		t.Errorf("commentCalls = %d, want 0 (the surviving notice record suppresses a duplicate comment)", got)
 	}
+}
+
+// TestReconcilePasses_DoNotBlockOnInFlightTriage seeds each of the four
+// triage-gated reconcile passes with a pending entry carrying an
+// in-flight (not-done) triage run and asserts that a full pass over
+// state.PendingReactions returns without waiting for the subprocess.
+// Each pass's own provider double would block forever if called, so a
+// pass that returns promptly and never calls it proves the early
+// short-circuit runs ahead of every provider call.
+func TestReconcilePasses_DoNotBlockOnInFlightTriage(t *testing.T) {
+	t.Parallel()
+
+	const nonBlockingBound = 200 * time.Millisecond
+
+	t.Run("ci", func(t *testing.T) {
+		t.Parallel()
+
+		state := stateWithPendingReaction(t, "ISS-NB-CI", "feature/nb", 1)
+		rkey := ReactionKey("ISS-NB-CI", ReactionKindCI)
+		state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-nb", func() {})
+		scm := defaultCISCM()
+		ci := &mockCIProvider{}
+		params := ciParams(t, &ciReconcileStore{}, ci, nil, scm)
+
+		done := make(chan struct{})
+		go func() {
+			reconcileCIStatus(state, params, discardLogger(), context.Background(), newCIMetricsSpy())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(nonBlockingBound):
+			t.Fatal("reconcileCIStatus blocked on an in-flight triage run")
+		}
+		if scm.calls != 0 || ci.calls != 0 {
+			t.Errorf("provider calls (scm=%d, ci=%d), want 0 while a triage run is in flight", scm.calls, ci.calls)
+		}
+	})
+
+	t.Run("review", func(t *testing.T) {
+		t.Parallel()
+
+		state := stateWithReviewReaction(t, "ISS-NB-REVIEW", 10)
+		rkey := ReactionKey("ISS-NB-REVIEW", ReactionKindReview)
+		state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-nb", func() {})
+		scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
+		params := reviewParams(&reviewReconcileStore{}, scm, nil)
+
+		done := make(chan struct{})
+		go func() {
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(nonBlockingBound):
+			t.Fatal("reconcileReviewComments blocked on an in-flight triage run")
+		}
+		if scm.calls != 0 {
+			t.Errorf("FetchPendingReviews calls = %d, want 0 while a triage run is in flight", scm.calls)
+		}
+	})
+
+	t.Run("bot-review", func(t *testing.T) {
+		t.Parallel()
+
+		state := stateWithBotReviewReaction(t, "ISS-NB-BOT", 10)
+		rkey := ReactionKey("ISS-NB-BOT", ReactionKindBotReview)
+		state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-nb", func() {})
+		scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
+		params := botReviewParams(&reviewReconcileStore{}, scm, nil)
+
+		done := make(chan struct{})
+		go func() {
+			reconcileBotReviewComments(state, params, discardLogger(), context.Background(), newBotReviewMetricsSpy())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(nonBlockingBound):
+			t.Fatal("reconcileBotReviewComments blocked on an in-flight triage run")
+		}
+		if scm.botCalls != 0 {
+			t.Errorf("FetchBotReviewComments calls = %d, want 0 while a triage run is in flight", scm.botCalls)
+		}
+	})
+
+	t.Run("merge-conflict", func(t *testing.T) {
+		t.Parallel()
+
+		state := stateWithMergeConflict(t, "ISS-NB-MC", 10)
+		rkey := ReactionKey("ISS-NB-MC", ReactionKindMergeConflict)
+		state.PendingReactions[rkey].Triage = inFlightTriageRun("fp-nb", func() {})
+		scm := &mergeabilitySCM{}
+		params := mergeConflictParams(newStatefulFingerprintStore(), scm, nil)
+
+		done := make(chan struct{})
+		go func() {
+			reconcileMergeConflicts(state, params, discardLogger(), context.Background(), newMergeConflictMetricsSpy())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(nonBlockingBound):
+			t.Fatal("reconcileMergeConflicts blocked on an in-flight triage run")
+		}
+		if scm.calls != 0 {
+			t.Errorf("GetMergeability calls = %d, want 0 while a triage run is in flight", scm.calls)
+		}
+	})
 }
