@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `copilot-cli` turn that the CLI ends without reporting the task complete, which is what reaching `copilot-cli.max_autopilot_continues` produces, is now recorded as a failed turn with the new `turn_incomplete` error kind instead of as a success. The attempt ends there and the scheduled retry resumes the same session, so the work continues rather than being lost. The turn no longer counts toward the run's completed turns.
   ([#935](https://github.com/sortie-ai/sortie/issues/935))
 
+- `copilot-cli` runs record token counts and API-request counts again. A newer CLI release moved the per-message output-token count to a different place in its output, so the count was silently going unread and every such run reported zero spend and, in some cases, a turn that succeeded as failed for producing no measurable output.
+
 ### Changed
 
 - `reactions.review_comments`, `reactions.bot_review`, `reactions.merge_conflicts`, and `reactions.auto_merge` now bound a pending entry's age with a per-reaction `watch_window_ms` key instead of a hardcoded thirty-minute constant. The default stays `1800000` (thirty minutes), so a deployment that sets nothing behaves exactly as before; setting `0` removes the bound entirely. A workflow with no `auto_merge`, where a person reviews and merges, will normally want a larger value than the default. The four expiry log records changed their message text and renamed their `ttl_ms` attribute to `window_ms`.

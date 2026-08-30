@@ -1821,3 +1821,208 @@ func TestRunTurn_IncompleteEndingLogsContinuationCounts(t *testing.T) {
 		t.Errorf("log output missing max_autopilot_continues=50 (the unconfigured default); got:\n%s", got)
 	}
 }
+
+// dropLastFixtureLine returns content with its final non-empty line
+// removed, preserving a trailing newline on what remains.
+func dropLastFixtureLine(t *testing.T, content string) string {
+	t.Helper()
+	trimmed := strings.TrimRight(content, "\n")
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("dropLastFixtureLine: content has too few lines (%d) to drop one", len(lines))
+	}
+	return strings.Join(lines[:len(lines)-1], "\n") + "\n"
+}
+
+func TestRunTurn_ModelMessageRelocation(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	t.Run("five model.message measurements sum to the captured total", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "model_message_session.jsonl"), 0)
+
+		var events []domain.AgentEvent
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		tokenUsageEvents := 0
+		for _, e := range events {
+			if e.Type == domain.EventTokenUsage {
+				tokenUsageEvents++
+			}
+			if e.Type == domain.EventOtherMessage && (e.Message == "model.message" || e.Message == "model.messages_snapshot") {
+				t.Errorf("event carries EventOtherMessage for %q, want it never routed to the default arm", e.Message)
+			}
+		}
+		if tokenUsageEvents != 5 {
+			t.Errorf("token_usage event count = %d, want 5", tokenUsageEvents)
+		}
+
+		const wantOutputTokens int64 = 448
+		if result.Usage.OutputTokens != wantOutputTokens {
+			t.Errorf("result.Usage.OutputTokens = %d, want %d", result.Usage.OutputTokens, wantOutputTokens)
+		}
+		if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
+			t.Errorf("result.Usage.TotalTokens = %d, want InputTokens+OutputTokens = %d",
+				result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
+		}
+		if !result.UsageMeasured {
+			t.Error("result.UsageMeasured = false, want true")
+		}
+		if result.ExitReason != domain.EventTurnCompleted {
+			t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+		}
+
+		agenttest.AssertUsageContract(t, events)
+	})
+
+	t.Run("work evidence holds with the terminal result line removed", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		content := dropLastFixtureLine(t, loadTestFixture(t, "model_message_session.jsonl"))
+		state.target.Command = fakeCopilotBinaryWithOutput(t, content, 0)
+
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+		if result.ExitReason != domain.EventTurnCompleted {
+			t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+		}
+	})
+}
+
+func TestRunTurn_ModelMessageNoOutputTokens(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	t.Setenv("COPILOT_HOME", t.TempDir())
+
+	const jsonl = `{"type":"model.message","timestamp":"2026-04-08T00:00:00Z","data":{"kind":"message","turn":0,"message":{"role":"assistant","apiCallId":"no-output-call"}}}
+{"type":"model.message","timestamp":"2026-04-08T00:00:00Z","data":{"kind":"message","turn":0,"message":{"role":"tool","tool_call_id":"tool-1"}}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"model-message-no-tokens-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "say hello",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertMeasurementAbsent(t, events, result)
+}
+
+// TestRunTurn_DedupeAcrossShapes drives a stream carrying both wire
+// shapes for one apiCallId. No measured Copilot CLI version emits both
+// shapes for the same call; this stream is synthetic, built to exercise
+// the dedupe guard rather than to represent captured evidence.
+func TestRunTurn_DedupeAcrossShapes(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	t.Setenv("COPILOT_HOME", t.TempDir())
+
+	const jsonl = `{"type":"model.message","timestamp":"2026-04-08T00:00:00Z","data":{"kind":"message","turn":0,"message":{"role":"assistant","apiCallId":"dedupe-call-1","outputTokens":50}}}
+{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"apiCallId":"dedupe-call-1","content":"hello","outputTokens":99}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"dedupe-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "say hello",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := 0
+	var lastUsage domain.TokenUsage
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageEvents++
+			lastUsage = e.Usage
+		}
+	}
+	if tokenUsageEvents != 1 {
+		t.Fatalf("token_usage event count = %d, want 1", tokenUsageEvents)
+	}
+
+	const wantOutputTokens int64 = 50
+	if lastUsage.OutputTokens != wantOutputTokens {
+		t.Errorf("token_usage event Usage.OutputTokens = %d, want %d (the first-sighted model.message value)", lastUsage.OutputTokens, wantOutputTokens)
+	}
+	if result.Usage.OutputTokens != wantOutputTokens {
+		t.Errorf("result.Usage.OutputTokens = %d, want %d (the first-sighted model.message value)", result.Usage.OutputTokens, wantOutputTokens)
+	}
+}
+
+// TestRunTurn_ReplaySnapshotExcluded drives a stream carrying a
+// model.messages_snapshot whose replayed assistant record names an
+// apiCallId no live record of the stream carried. No measured Copilot
+// CLI version emits a replay snapshot with an identifier absent from
+// its own stream; this stream is synthetic, built to exercise
+// exclusion of the replay event rather than to represent captured
+// evidence.
+func TestRunTurn_ReplaySnapshotExcluded(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	t.Setenv("COPILOT_HOME", t.TempDir())
+
+	const jsonl = `{"type":"model.message","timestamp":"2026-04-08T00:00:00Z","data":{"kind":"message","turn":0,"message":{"role":"assistant","apiCallId":"live-call-1","outputTokens":30}}}
+{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"apiCallId":"live-call-1","content":"hello"}}
+{"type":"session.task_complete","data":{"summary":"done","success":true}}
+{"type":"model.messages_snapshot","timestamp":"2026-04-08T00:00:01Z","data":{"kind":"messages_snapshot","messages":[{"role":"assistant","apiCallId":"replay-only-call","outputTokens":999}]}}
+{"type":"result","timestamp":"2026-04-08T00:00:02Z","sessionId":"replay-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "say hello",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := 0
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageEvents++
+		}
+	}
+	if tokenUsageEvents != 1 {
+		t.Errorf("token_usage event count = %d, want 1 (the snapshot must contribute none)", tokenUsageEvents)
+	}
+
+	const wantOutputTokens int64 = 30
+	if result.Usage.OutputTokens != wantOutputTokens {
+		t.Errorf("result.Usage.OutputTokens = %d, want %d (the run-cumulative total excludes the snapshot-only identifier)", result.Usage.OutputTokens, wantOutputTokens)
+	}
+}

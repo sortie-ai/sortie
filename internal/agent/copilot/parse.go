@@ -44,9 +44,27 @@ type rawCodeChange struct {
 // reporting a measured zero.
 type assistantMessageData struct {
 	MessageID    string           `json:"messageId"`
+	APICallID    string           `json:"apiCallId"`
 	Content      string           `json:"content"`
 	ToolRequests []rawToolRequest `json:"toolRequests"`
 	OutputTokens *int64           `json:"outputTokens"`
+}
+
+// modelMessageData is the data payload of a model.message event, the
+// post-relocation carrier of the per-message output-token count.
+type modelMessageData struct {
+	Message modelMessage `json:"message"`
+}
+
+// modelMessage is the message payload of a model.message event. Role
+// selects the assistant-authored records, the only ones that carry a
+// count. OutputTokens is a pointer for the same reason it is one on
+// assistantMessageData: an absent field is distinguishable from a
+// measured zero.
+type modelMessage struct {
+	Role         string `json:"role"`
+	APICallID    string `json:"apiCallId"`
+	OutputTokens *int64 `json:"outputTokens"`
 }
 
 type rawToolRequest struct {
@@ -151,6 +169,14 @@ func parseAssistantMessageData(data json.RawMessage) (assistantMessageData, erro
 	var d assistantMessageData
 	if err := json.Unmarshal(data, &d); err != nil {
 		return assistantMessageData{}, fmt.Errorf("parse assistant message data: %w", err)
+	}
+	return d, nil
+}
+
+func parseModelMessageData(data json.RawMessage) (modelMessageData, error) {
+	var d modelMessageData
+	if err := json.Unmarshal(data, &d); err != nil {
+		return modelMessageData{}, fmt.Errorf("parse model message data: %w", err)
 	}
 	return d, nil
 }
