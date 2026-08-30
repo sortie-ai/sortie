@@ -418,8 +418,10 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 
 // TestBuildArgs_LaunchPosture asserts the launch posture the refusal path
 // assumes: --no-ask-user closes the human-question path on every
-// invocation, and --allow-all is present only when no tool-scoping key is
-// configured, since any of the four tool-scoping keys displaces it.
+// invocation, and --allow-all is present unless allowed_tools holds a
+// non-whitespace value, in which case that allow-list replaces it. The
+// other three tool-scoping keys compose with the grant instead of
+// displacing it.
 func TestBuildArgs_LaunchPosture(t *testing.T) {
 	t.Parallel()
 
@@ -429,10 +431,22 @@ func TestBuildArgs_LaunchPosture(t *testing.T) {
 		wantAllowAll bool
 	}{
 		{name: "no tool scoping configured", pt: passthroughConfig{}, wantAllowAll: true},
-		{name: "allowed_tools configured", pt: passthroughConfig{AllowedTools: "bash"}, wantAllowAll: false},
-		{name: "denied_tools configured", pt: passthroughConfig{DeniedTools: "bash"}, wantAllowAll: false},
-		{name: "available_tools configured", pt: passthroughConfig{AvailableTools: "bash"}, wantAllowAll: false},
-		{name: "excluded_tools configured", pt: passthroughConfig{ExcludedTools: "bash"}, wantAllowAll: false},
+		{name: "allowed_tools alone", pt: passthroughConfig{AllowedTools: "shell"}, wantAllowAll: false},
+		{name: "denied_tools alone", pt: passthroughConfig{DeniedTools: "write"}, wantAllowAll: true},
+		{name: "available_tools alone", pt: passthroughConfig{AvailableTools: "shell"}, wantAllowAll: true},
+		{name: "excluded_tools alone", pt: passthroughConfig{ExcludedTools: "web_fetch"}, wantAllowAll: true},
+		{
+			name: "all four configured together",
+			pt: passthroughConfig{
+				AllowedTools:   "shell",
+				DeniedTools:    "write",
+				AvailableTools: "shell",
+				ExcludedTools:  "web_fetch",
+			},
+			wantAllowAll: false,
+		},
+		{name: "allowed_tools whitespace-only", pt: passthroughConfig{AllowedTools: "   "}, wantAllowAll: true},
+		{name: "denied_tools whitespace-only", pt: passthroughConfig{DeniedTools: "   "}, wantAllowAll: true},
 	}
 
 	for _, tt := range tests {
@@ -446,6 +460,19 @@ func TestBuildArgs_LaunchPosture(t *testing.T) {
 				assertHasFlag(t, got, "--allow-all")
 			} else {
 				assertNoFlag(t, got, "--allow-all")
+			}
+
+			if tt.pt.AllowedTools != "" {
+				assertHasArgPair(t, got, "--allow-tool", tt.pt.AllowedTools)
+			}
+			if tt.pt.DeniedTools != "" {
+				assertHasArgPair(t, got, "--deny-tool", tt.pt.DeniedTools)
+			}
+			if tt.pt.AvailableTools != "" {
+				assertHasArgPair(t, got, "--available-tools", tt.pt.AvailableTools)
+			}
+			if tt.pt.ExcludedTools != "" {
+				assertHasArgPair(t, got, "--excluded-tools", tt.pt.ExcludedTools)
 			}
 		})
 	}

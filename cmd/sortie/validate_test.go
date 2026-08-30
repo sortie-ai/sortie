@@ -1642,9 +1642,10 @@ Do {{ .issue.title }}.
 
 // TestValidateAgentConfigOfflineVerdict_CopilotToolScoping drives the
 // offline sortie validate path against a workflow whose copilot-cli
-// configuration displaces --allow-all, asserting valid: true (a warning
-// does not fail validation), exit code 0, and the check name
-// copilot-cli.tool_scoping.interactive, without constructing any adapter
+// configuration sets allowed_tools, the one key that displaces
+// --allow-all, asserting valid: true (a warning does not fail
+// validation), exit code 0, and the check name
+// copilot-cli.allowed_tools.auto_deny, without constructing any adapter
 // (the offline path never calls a constructor). This exercises the same
 // verdict channel already established for codex, following the pattern
 // this project's validators report through: a warning-severity check
@@ -1674,13 +1675,13 @@ func TestValidateAgentConfigOfflineVerdict_CopilotToolScoping(t *testing.T) {
 
 	foundWarn := false
 	for _, w := range out.Warnings {
-		if w.Check == "copilot-cli.tool_scoping.interactive" {
+		if w.Check == "copilot-cli.allowed_tools.auto_deny" {
 			foundWarn = true
 			break
 		}
 	}
 	if !foundWarn {
-		t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "copilot-cli.tool_scoping.interactive")
+		t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "copilot-cli.allowed_tools.auto_deny")
 	}
 }
 

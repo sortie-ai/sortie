@@ -2622,20 +2622,26 @@ YAML value has the wrong type is ignored and the default applies.
 | `copilot-cli.model` | string | _(absent)_ | Forwarded to `--model`. The accepted model identifiers depend on the installed CLI and the account; `copilot --help` lists the set. |
 | `copilot-cli.max_autopilot_continues` | integer | `50` | Forwarded to `--max-autopilot-continues`, the ceiling on autopilot continuation steps inside one turn. The flag is always passed. An absent key, a non-integer value, and any value of zero or less all send `50`. |
 | `copilot-cli.agent` | string | _(absent)_ | Forwarded to `--agent`. Selects a named Copilot agent persona for the turn. |
-| `copilot-cli.allowed_tools` | string | _(absent)_ | Forwarded to `--allow-tool` as a single argument. Names a tool to allow explicitly. See the tool-scoping note below. |
-| `copilot-cli.denied_tools` | string | _(absent)_ | Forwarded to `--deny-tool` as a single argument. Names a tool to deny explicitly. See the tool-scoping note below. |
-| `copilot-cli.available_tools` | string | _(absent)_ | Forwarded to `--available-tools` as a single argument. Names the set of tools the agent may see. See the tool-scoping note below. |
-| `copilot-cli.excluded_tools` | string | _(absent)_ | Forwarded to `--excluded-tools` as a single argument. Names the set of tools withheld from the agent. See the tool-scoping note below. |
+| `copilot-cli.allowed_tools` | string | _(absent)_ | Forwarded to `--allow-tool` as a single argument. A non-whitespace value replaces `--allow-all`, so it changes what the launch approves. See the tool-scoping note below. Each rule takes the form `kind(argument)`, with the argument optional, so a bare kind names the whole kind; for example `write` or `shell(git:*)`. |
+| `copilot-cli.denied_tools` | string | _(absent)_ | Forwarded to `--deny-tool` as a single argument. It composes with `--allow-all` rather than replacing it, so it does not change what the launch approves elsewhere. See the tool-scoping note below. Takes the same `kind(argument)` form as `copilot-cli.allowed_tools`. |
+| `copilot-cli.available_tools` | string | _(absent)_ | Forwarded to `--available-tools` as a single argument. Names the set of tools the agent may see; it composes with `--allow-all` rather than replacing it, so it does not change what the launch approves. See the tool-scoping note below. |
+| `copilot-cli.excluded_tools` | string | _(absent)_ | Forwarded to `--excluded-tools` as a single argument. Names the set of tools withheld from the agent; it composes with `--allow-all` rather than replacing it, so it does not change what the launch approves. See the tool-scoping note below. |
 | `copilot-cli.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute. The worker reads that file, merges its own `sortie-tools` server into a generated copy under the workspace, and passes the copy to `--additional-mcp-config` prefixed with `@`, which is how the Copilot CLI reads a configuration from a file. The operator's file is never modified. A file that already declares a `sortie-tools` server fails the attempt. See the value-handling note below. |
 | `copilot-cli.disable_builtin_mcps` | boolean | `false` | Adds `--disable-builtin-mcps` when `true`, withholding the CLI's built-in MCP servers. |
 | `copilot-cli.no_custom_instructions` | boolean | `false` | Adds `--no-custom-instructions` when `true`, so the CLI skips the custom instruction files it would otherwise read. |
 | `copilot-cli.experimental` | boolean | `false` | Adds `--experimental` when `true`, enabling the CLI's experimental features. |
 
-> **Important:** the four tool-scoping keys act as one switch, not four independent ones.
-> With all of them unset, the adapter passes `--allow-all` and every tool call is
-> auto-approved. Setting any one of them to a non-empty value drops `--allow-all` from
-> every invocation, so a tool that no key mentions is no longer blanket-approved; such a
-> call falls to the CLI's own non-interactive policy instead.
+> **Important:** `allowed_tools` is the only one of the four tool-scoping keys that
+> changes what the launch approves. With it unset, the adapter passes `--allow-all` and
+> `denied_tools`, `available_tools`, and `excluded_tools` keep their own effect beside
+> that grant. Setting `allowed_tools` to a non-whitespace value replaces `--allow-all`
+> with the list, so a call the list does not match is denied without a prompt, the turn
+> continues, and a fully denied turn can still finish reporting success. `--allow-all`
+> bundles tool approval, file-path verification, and URL access, so replacing it also
+> restores the runtime's default confinement of file access to the working directory.
+> `sortie validate` reports that one configuration as a warning under check
+> `copilot-cli.allowed_tools.auto_deny` and blocks nothing. The example block above sets
+> `allowed_tools`, so it is the narrowed configuration and the one that draws the warning.
 
 > **Important:** the generated MCP configuration file supersedes `copilot-cli.mcp_config`
 > as the value of `--additional-mcp-config`, which is why the operator's servers reach the
