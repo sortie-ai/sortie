@@ -1521,10 +1521,11 @@ func TestHandleMergeConflictDirty_SameHeadDedupPrecedesAttributionQuery(t *testi
 // mergeConflictTriageParams returns mergeConflictParams wired with a
 // real workspace and the given triage script, so reactionTriageGate
 // actually starts a subprocess for the pass's dirty head.
-func mergeConflictTriageParams(store ReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+func mergeConflictTriageParams(t *testing.T, store ReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	t.Helper()
 	params := mergeConflictParams(store, scm, tracker)
 	params.WorkspaceRoot = workspaceRoot
-	params.MergeConflictConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	params.MergeConflictConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: 5000}
 	return params
 }
 
@@ -1593,7 +1594,7 @@ func TestReconcileMergeConflicts_Triage_WaitsWithoutProviderCall(t *testing.T) {
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-wait", "main"), nil
 	}}
-	params := mergeConflictTriageParams(store, scm, nil, root, handledScript)
+	params := mergeConflictTriageParams(t, store, scm, nil, root, handledScript)
 
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 
@@ -1627,7 +1628,7 @@ func TestReconcileMergeConflicts_Triage_Handled(t *testing.T) {
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-handled", "main"), nil
 	}}
-	params := mergeConflictTriageParams(store, scm, nil, root, handledScript)
+	params := mergeConflictTriageParams(t, store, scm, nil, root, handledScript)
 
 	runMergeConflictTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1672,7 +1673,7 @@ func TestReconcileMergeConflicts_Triage_Escalate(t *testing.T) {
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-escalate", "main"), nil
 	}}
-	params := mergeConflictTriageParams(store, scm, tracker, root, escalateTriageScript)
+	params := mergeConflictTriageParams(t, store, scm, tracker, root, escalateTriageScript)
 
 	runMergeConflictTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1714,7 +1715,7 @@ func TestReconcileMergeConflicts_Triage_EpisodeCloseClearsHandledForNextEpisode(
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-repeat", "main"), nil
 	}}
-	params := mergeConflictTriageParams(store, scm, nil, root, handledScript)
+	params := mergeConflictTriageParams(t, store, scm, nil, root, handledScript)
 
 	// Episode 1: the PR is dirty at sha-repeat; the command answers
 	// handled, so the verdict is memoized on pending.Triage rather than
@@ -1754,7 +1755,7 @@ func TestReconcileMergeConflicts_Triage_EpisodeCloseClearsHandledForNextEpisode(
 	scm.fn = func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-repeat", "main"), nil
 	}
-	params.MergeConflictConfig.Triage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+	params.MergeConflictConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, escalateTriageScript), TimeoutMS: 5000}
 
 	runMergeConflictTriageToCompletion(t, state, params, rkey, metrics)
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
@@ -1786,7 +1787,7 @@ func TestReconcileMergeConflicts_Triage_DispatchAgent_HeadChangeBlockRunsOnce(t 
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
 		return dirtyStatus("sha-dispatch", "main"), nil
 	}}
-	params := mergeConflictTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+	params := mergeConflictTriageParams(t, store, scm, nil, root, dispatchAgentTriageScript)
 
 	// Starting pass: the gate returns triageWait above the head-change
 	// block, so HeadRecordedAt must still be zero.

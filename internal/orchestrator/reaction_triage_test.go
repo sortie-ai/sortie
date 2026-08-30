@@ -94,11 +94,42 @@ func triageDumpEnvScript(name string) string {
 // handledScript is a minimal triage command that answers "handled".
 var handledScript = triageVerdictScript("handled")
 
+// writeHookScript returns the value a [config.ReactionTriageConfig]'s
+// Script field must carry for body to reach the hook's interpreter
+// byte-for-byte.
+//
+// On unix it returns body unchanged: RunHook passes it as a single
+// argv element to "sh -c", and os/exec's unix argv path applies no
+// escaping, so the interpreter reads body verbatim. On windows,
+// RunHook instead passes params.Script to "cmd.exe /C", and Go's
+// windows argv escaping backslash-escapes any embedded double quote
+// before re-quoting the whole argument; cmd.exe's own escape
+// character is "^", not "\", so a script built by triageVerdictScript
+// (which redirects into a quoted %SORTIE_REACTION_RESULT%) is
+// corrupted before cmd.exe ever sees it. Writing body verbatim to a
+// .cmd file under t.TempDir() and returning that path instead sends a
+// bare path through argv escaping - no quote, space, or tab, since
+// t.Name() maps subtest-name spaces to underscores before they reach
+// the temp directory pattern - which Go's escaper passes through
+// unmodified; cmd.exe then reads the file's bytes directly off disk.
+func writeHookScript(t *testing.T, body string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return body
+	}
+	path := filepath.Join(t.TempDir(), "script.cmd")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("writing hook script: %v", err)
+	}
+	return path
+}
+
 // probeTriageConfig returns a triage configuration whose script always
 // answers "handled" quickly, used by tests that only need the gate to
 // start and finish a real run without caring about the disposition.
-func probeTriageConfig() config.ReactionTriageConfig {
-	return config.ReactionTriageConfig{Script: handledScript, TimeoutMS: 5000}
+func probeTriageConfig(t *testing.T) config.ReactionTriageConfig {
+	t.Helper()
+	return config.ReactionTriageConfig{Script: writeHookScript(t, handledScript), TimeoutMS: 5000}
 }
 
 // triageTestRunTimeout bounds how long a test waits for a real triage
@@ -368,7 +399,7 @@ func TestRunReactionTriage(t *testing.T) {
 				if runtime.GOOS == "windows" && tt.winScript != "" {
 					script = tt.winScript
 				}
-				cfg := config.ReactionTriageConfig{Script: script, TimeoutMS: timeoutMS}
+				cfg := config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: timeoutMS}
 
 				outcome := RunReactionTriage(context.Background(), cfg, req, discardLogger())
 
@@ -392,7 +423,7 @@ func TestRunReactionTriage(t *testing.T) {
 			Identifier:    "ISS-RT-NILLOG",
 			Fingerprint:   "fp",
 		}
-		cfg := config.ReactionTriageConfig{Script: handledScript, TimeoutMS: 5000}
+		cfg := config.ReactionTriageConfig{Script: writeHookScript(t, handledScript), TimeoutMS: 5000}
 
 		outcome := RunReactionTriage(context.Background(), cfg, req, nil)
 		if outcome.Disposition != TriageHandled {
@@ -491,7 +522,7 @@ func TestRunReactionTriage_InputDocumentShape(t *testing.T) {
 		},
 	}
 	cfg := config.ReactionTriageConfig{
-		Script:    triageChain(triageCopyInputScript("captured_input.json"), handledScript),
+		Script:    writeHookScript(t, triageChain(triageCopyInputScript("captured_input.json"), handledScript)),
 		TimeoutMS: 5000,
 	}
 
@@ -570,11 +601,11 @@ func TestRunReactionTriage_SubjectTextNeverInEnvironment(t *testing.T) {
 		},
 	}
 	cfg := config.ReactionTriageConfig{
-		Script: triageChain(
+		Script: writeHookScript(t, triageChain(
 			triageDumpEnvScript("captured_env.txt"),
 			triageCopyInputScript("captured_input.json"),
 			triageVerdictScript("dispatch-agent"),
-		),
+		)),
 		TimeoutMS: 5000,
 	}
 
@@ -617,7 +648,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-1"}
 		req := gateRequest(params.WorkspaceRoot, "ISS-1", "fp")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageProceed {
 			t.Errorf("reactionTriageGate() = %v, want triageProceed", verdict)
@@ -657,7 +688,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: identifier}
 		req := gateRequest(params.WorkspaceRoot, identifier, "fp-3")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageWait {
 			t.Fatalf("reactionTriageGate() = %v, want triageWait", verdict)
@@ -682,7 +713,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-4", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-4", "fp-4")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageWait {
 			t.Errorf("reactionTriageGate() = %v, want triageWait", verdict)
@@ -707,7 +738,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: identifier, Triage: oldRun}
 		req := gateRequest(params.WorkspaceRoot, identifier, "fp-new")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageWait {
 			t.Errorf("reactionTriageGate() = %v, want triageWait", verdict)
@@ -736,7 +767,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: identifier, Triage: oldRun}
 		req := gateRequest(params.WorkspaceRoot, identifier, "fp-new-2")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageWait {
 			t.Errorf("reactionTriageGate() = %v, want triageWait", verdict)
@@ -760,7 +791,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-7", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-7", "fp-7")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageProceed {
 			t.Errorf("reactionTriageGate() = %v, want triageProceed", verdict)
@@ -782,7 +813,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-8", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-8", "fp-8")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageHandled {
 			t.Errorf("reactionTriageGate() = %v, want triageHandled", verdict)
@@ -807,7 +838,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-9", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-9", "fp-9")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageEscalate {
 			t.Errorf("reactionTriageGate() = %v, want triageEscalate", verdict)
@@ -829,7 +860,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-10", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-10", "fp-10")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageProceed {
 			t.Errorf("reactionTriageGate() = %v, want triageProceed", verdict)
@@ -848,7 +879,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-11", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-11", "fp-11")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageHandled {
 			t.Errorf("reactionTriageGate() = %v, want triageHandled", verdict)
@@ -870,7 +901,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: "ISS-12", Triage: run}
 		req := gateRequest(params.WorkspaceRoot, "ISS-12", "fp-12")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageHandled {
 			t.Errorf("reactionTriageGate() = %v, want triageHandled", verdict)
@@ -892,7 +923,7 @@ func TestReactionTriageGate(t *testing.T) {
 		pending := &PendingReaction{IssueID: identifier}
 		req := gateRequest(params.WorkspaceRoot, identifier, "fp-cap")
 
-		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
+		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(t), req, discardLogger(), context.Background())
 
 		if verdict != triageWait {
 			t.Errorf("reactionTriageGate() = %v, want triageWait", verdict)
@@ -908,7 +939,7 @@ func TestReactionTriageGate(t *testing.T) {
 		// Each run's script sleeps so the first two are still in flight
 		// when the next fingerprint arrives, driving the not-done rows
 		// rather than the done rows.
-		slowCfg := config.ReactionTriageConfig{Script: triageSleepScript(5), TimeoutMS: 5000}
+		slowCfg := config.ReactionTriageConfig{Script: writeHookScript(t, triageSleepScript(5)), TimeoutMS: 5000}
 		identifier := "ISS-SEQ"
 		root := mustTriageWorkspace(t, identifier)
 		store := &triageGateStore{}
@@ -984,7 +1015,7 @@ func TestStartReactionTriage_UnconsumedRun_StillLogsCompletion(t *testing.T) {
 	}
 	req.WorkspaceRoot = root
 
-	run := startReactionTriage(state, context.Background(), probeTriageConfig(), req, logger)
+	run := startReactionTriage(state, context.Background(), probeTriageConfig(t), req, logger)
 	if run == nil {
 		t.Fatal("startReactionTriage() = nil, want a started run")
 	}
@@ -1033,7 +1064,7 @@ func probeCITriageGate(t *testing.T) bool {
 	scm := defaultCISCM()
 	params := ciParams(t, store, ci, nil, scm)
 	params.WorkspaceRoot = root
-	params.CITriage = probeTriageConfig()
+	params.CITriage = probeTriageConfig(t)
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), newCIMetricsSpy())
 
@@ -1057,7 +1088,7 @@ func probeReviewTriageGate(t *testing.T) bool {
 	store := &reviewReconcileStore{}
 	params := reviewParams(store, scm, nil)
 	params.WorkspaceRoot = root
-	params.ReviewConfig.Triage = probeTriageConfig()
+	params.ReviewConfig.Triage = probeTriageConfig(t)
 
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
 
@@ -1079,7 +1110,7 @@ func probeBotReviewTriageGate(t *testing.T) bool {
 	store := &reviewReconcileStore{}
 	params := botReviewParams(store, scm, nil)
 	params.WorkspaceRoot = root
-	params.BotReviewConfig.Triage = probeTriageConfig()
+	params.BotReviewConfig.Triage = probeTriageConfig(t)
 
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), newBotReviewMetricsSpy())
 
@@ -1103,7 +1134,7 @@ func probeMergeConflictTriageGate(t *testing.T) bool {
 	store := newStatefulFingerprintStore()
 	params := mergeConflictParams(store, scm, nil)
 	params.WorkspaceRoot = root
-	params.MergeConflictConfig.Triage = probeTriageConfig()
+	params.MergeConflictConfig.Triage = probeTriageConfig(t)
 
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), newMergeConflictMetricsSpy())
 

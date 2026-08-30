@@ -2556,7 +2556,7 @@ func ciTriageParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusPro
 	t.Helper()
 	params := ciParams(t, store, ci, tracker, scm)
 	params.WorkspaceRoot = workspaceRoot
-	params.CITriage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	params.CITriage = config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: 5000}
 	return params
 }
 
@@ -3013,7 +3013,7 @@ func TestReconcileCIStatus_Triage_EpisodeCloseClearsHandledForNextEpisode(t *tes
 	// replay episode 1's memoized handled verdict.
 	scm.result = domain.PRMergeStatus{HeadSHA: "sha-repeat"}
 	ci.result = domain.CIResult{Status: domain.CIStatusFailing}
-	params.CITriage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+	params.CITriage = config.ReactionTriageConfig{Script: writeHookScript(t, escalateTriageScript), TimeoutMS: 5000}
 
 	runCITriageToCompletion(t, state, params, rkey, metrics)
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)

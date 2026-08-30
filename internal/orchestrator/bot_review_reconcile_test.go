@@ -1650,10 +1650,11 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 // botReviewTriageParams returns botReviewParams wired with a real
 // workspace and the given triage script, so reactionTriageGate actually
 // starts a subprocess for the pass's actionable comment set.
-func botReviewTriageParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+func botReviewTriageParams(t *testing.T, store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	t.Helper()
 	params := botReviewParams(store, scm, tracker)
 	params.WorkspaceRoot = workspaceRoot
-	params.BotReviewConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	params.BotReviewConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: 5000}
 	return params
 }
 
@@ -1721,7 +1722,7 @@ func TestReconcileBotReviewComments_Triage_WaitsWithoutProviderCall(t *testing.T
 	store := &reviewReconcileStore{}
 	metrics := newBotReviewMetricsSpy()
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+	params := botReviewTriageParams(t, store, scm, nil, root, handledScript)
 
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
@@ -1753,7 +1754,7 @@ func TestReconcileBotReviewComments_Triage_Handled(t *testing.T) {
 	store := &reviewReconcileStore{}
 	metrics := newBotReviewMetricsSpy()
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+	params := botReviewTriageParams(t, store, scm, nil, root, handledScript)
 
 	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1793,7 +1794,7 @@ func TestReconcileBotReviewComments_Triage_Escalate(t *testing.T) {
 	metrics := newBotReviewMetricsSpy()
 	tracker := &ciTrackerStub{}
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, tracker, root, escalateTriageScript)
+	params := botReviewTriageParams(t, store, scm, tracker, root, escalateTriageScript)
 
 	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1826,7 +1827,7 @@ func TestReconcileBotReviewComments_Triage_DispatchAgent_ProceedsNormally(t *tes
 	store := &reviewReconcileStore{}
 	metrics := newBotReviewMetricsSpy()
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+	params := botReviewTriageParams(t, store, scm, nil, root, dispatchAgentTriageScript)
 
 	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1888,7 +1889,7 @@ func TestReconcileBotReviewComments_Triage_RepeatedHandled_StillAgesOut(t *testi
 	store := &reviewReconcileStore{}
 	metrics := newBotReviewMetricsSpy()
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, nil, root, handledScript)
+	params := botReviewTriageParams(t, store, scm, nil, root, handledScript)
 	params.BotReviewPendingTTL = 1 * time.Minute
 
 	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
@@ -1931,7 +1932,7 @@ func TestReconcileBotReviewComments_Triage_EpisodeCloseClearsHandledForNextEpiso
 	metrics := newBotReviewMetricsSpy()
 	tracker := &ciTrackerStub{}
 	scm := &mockSCMAdapter{botComments: actionableBotReviewComments()}
-	params := botReviewTriageParams(store, scm, tracker, root, handledScript)
+	params := botReviewTriageParams(t, store, scm, tracker, root, handledScript)
 
 	// Episode 1: one actionable bot comment; the command answers
 	// handled, memoizing the verdict on pending.Triage rather than
@@ -1969,7 +1970,7 @@ func TestReconcileBotReviewComments_Triage_EpisodeCloseClearsHandledForNextEpiso
 	// cleared handle must run it fresh rather than replay episode 1's
 	// memoized handled verdict.
 	scm.botComments = actionableBotReviewComments()
-	params.BotReviewConfig.Triage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+	params.BotReviewConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, escalateTriageScript), TimeoutMS: 5000}
 
 	runBotReviewTriageToCompletion(t, state, params, rkey, metrics)
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)

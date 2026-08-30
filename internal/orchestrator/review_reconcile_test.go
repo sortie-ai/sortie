@@ -1546,10 +1546,11 @@ func TestReconcileReviewComments_ForeignIncumbentDefers(t *testing.T) {
 // reviewTriageParams returns reviewParams wired with a real workspace
 // and the given triage script, so reactionTriageGate actually starts a
 // subprocess for the pass's actionable comment set.
-func reviewTriageParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+func reviewTriageParams(t *testing.T, store *reviewReconcileStore, scm domain.SCMAdapter, tracker domain.TrackerAdapter, workspaceRoot, script string) ReconcileParams {
+	t.Helper()
 	params := reviewParams(store, scm, tracker)
 	params.WorkspaceRoot = workspaceRoot
-	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: script, TimeoutMS: 5000}
+	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: 5000}
 	return params
 }
 
@@ -1622,7 +1623,7 @@ func TestReconcileReviewComments_Triage_WaitsWithoutProviderCall(t *testing.T) {
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, nil, root, handledScript)
+	params := reviewTriageParams(t, store, scm, nil, root, handledScript)
 
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
@@ -1654,7 +1655,7 @@ func TestReconcileReviewComments_Triage_Handled(t *testing.T) {
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, nil, root, handledScript)
+	params := reviewTriageParams(t, store, scm, nil, root, handledScript)
 
 	runReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1694,7 +1695,7 @@ func TestReconcileReviewComments_Triage_Escalate(t *testing.T) {
 	metrics := newReviewMetricsSpy()
 	tracker := &reviewTrackerStub{}
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, tracker, root, escalateTriageScript)
+	params := reviewTriageParams(t, store, scm, tracker, root, escalateTriageScript)
 
 	runReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1727,7 +1728,7 @@ func TestReconcileReviewComments_Triage_DispatchAgent_ProceedsNormally(t *testin
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, nil, root, dispatchAgentTriageScript)
+	params := reviewTriageParams(t, store, scm, nil, root, dispatchAgentTriageScript)
 
 	runReviewTriageToCompletion(t, state, params, rkey, metrics)
 
@@ -1789,7 +1790,7 @@ func TestReconcileReviewComments_Triage_RepeatedHandled_StillAgesOut(t *testing.
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, nil, root, handledScript)
+	params := reviewTriageParams(t, store, scm, nil, root, handledScript)
 
 	runReviewTriageToCompletion(t, state, params, rkey, metrics)
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics) // applies: handled
@@ -1832,7 +1833,7 @@ func TestReconcileReviewComments_Triage_EpisodeCloseClearsHandledForNextEpisode(
 	metrics := newReviewMetricsSpy()
 	tracker := &reviewTrackerStub{}
 	scm := &mockSCMAdapter{comments: oldEnoughReviewComments()}
-	params := reviewTriageParams(store, scm, tracker, root, handledScript)
+	params := reviewTriageParams(t, store, scm, tracker, root, handledScript)
 
 	// Episode 1: one actionable comment; the command answers handled,
 	// memoizing the verdict on pending.Triage rather than re-running it
@@ -1870,7 +1871,7 @@ func TestReconcileReviewComments_Triage_EpisodeCloseClearsHandledForNextEpisode(
 	// must run it fresh rather than replay episode 1's memoized handled
 	// verdict.
 	scm.comments = oldEnoughReviewComments()
-	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: escalateTriageScript, TimeoutMS: 5000}
+	params.ReviewConfig.Triage = config.ReactionTriageConfig{Script: writeHookScript(t, escalateTriageScript), TimeoutMS: 5000}
 
 	runReviewTriageToCompletion(t, state, params, rkey, metrics)
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
