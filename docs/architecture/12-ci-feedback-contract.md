@@ -216,6 +216,8 @@ On a free slot the pass runs the triage gate before anything below, because step
 - A later pass reading `escalate` marks the fingerprint dispatched and escalates (Section 11A.7) with the un-incremented value of `reaction_attempts[issue_id:ci]`.
 - The outcome is retained on the entry, so repeated passes over the same head re-apply the stored answer rather than starting a second run. A memoized `escalate` re-applies as `handled`, so a stored answer cannot post a second escalation. A new head discards the retained handle, cancelling the run when it is still in flight, and starts a fresh one.
 
+Nothing re-checks a `handled` answer, and on this kind nothing ages one out either once the script pushes. The watch window is measured from the last recorded head, and a push records a new one, so a script that answers `handled` on each of a succession of heads it pushed itself restarts the window its own answer would otherwise expire against. Such an entry spends no attempt, appends no run-history row, fires no escalation, and never expires, so a failing build stays neither fixed nor reported. The bound is the operator's to supply in the script; the orchestrator imposes none.
+
 On a free slot with the gate proceeding:
 
 1. Persist a CI-failure run history entry (`status: ci_failed`).
