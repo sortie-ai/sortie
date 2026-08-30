@@ -2532,8 +2532,22 @@ func TestReconcileCIStatus_UpsertFailure_DefersEpochTransition(t *testing.T) {
 // escalateTriageScript and dispatchAgentTriageScript answer "escalate"
 // and "dispatch-agent" respectively; handledScript (defined in
 // reaction_triage_test.go) answers "handled".
-const escalateTriageScript = `echo '{"disposition":"escalate"}' > "$SORTIE_REACTION_RESULT"`
-const dispatchAgentTriageScript = `echo '{"disposition":"dispatch-agent"}' > "$SORTIE_REACTION_RESULT"`
+var (
+	escalateTriageScript      = triageVerdictScript("escalate")
+	dispatchAgentTriageScript = triageVerdictScript("dispatch-agent")
+)
+
+// mustPendingReaction returns state.PendingReactions[rkey], failing the
+// test immediately rather than letting a caller dereference a nil
+// pointer when a reconcile pass consumed or never created the entry.
+func mustPendingReaction(t *testing.T, state *State, rkey string) *PendingReaction {
+	t.Helper()
+	entry, ok := state.PendingReactions[rkey]
+	if !ok || entry == nil {
+		t.Fatalf("PendingReactions[%s] = nil, want a retained entry", rkey)
+	}
+	return entry
+}
 
 // ciTriageParams returns ciParams wired with a real workspace and the
 // given triage script, so reactionTriageGate actually starts a
@@ -2903,7 +2917,7 @@ func TestReconcileCIStatus_Triage_UnboundedAcrossSuccessiveHeads(t *testing.T) {
 	// Applies the handled verdict for the first head.
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	if got := state.PendingReactions[rkey].HeadRecordedAt; !got.Equal(base) {
+	if got := mustPendingReaction(t, state, rkey).HeadRecordedAt; !got.Equal(base) {
 		t.Fatalf("HeadRecordedAt after the first head = %v, want %v", got, base)
 	}
 
@@ -2914,7 +2928,7 @@ func TestReconcileCIStatus_Triage_UnboundedAcrossSuccessiveHeads(t *testing.T) {
 	runCITriageToCompletion(t, state, params, rkey, metrics)
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	secondHeadRecordedAt := state.PendingReactions[rkey].HeadRecordedAt
+	secondHeadRecordedAt := mustPendingReaction(t, state, rkey).HeadRecordedAt
 	if !secondHeadRecordedAt.Equal(now) {
 		t.Fatalf("HeadRecordedAt after the second head = %v, want %v", secondHeadRecordedAt, now)
 	}

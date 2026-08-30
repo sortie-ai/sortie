@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
@@ -34,8 +35,64 @@ func mustTriageWorkspace(t *testing.T, identifier string) string {
 	return root
 }
 
+// triageVerdictScript returns a hook script that writes a result
+// document naming disposition, built for the shell RunHook actually
+// invokes on this platform: POSIX sh on unix, cmd.exe on windows. Test
+// code that needs a script driving a specific disposition should go
+// through this rather than hand-writing shell syntax, so the whole
+// suite runs the real command on every platform CI covers instead of
+// falling back to a defaulted disposition through a syntax mismatch.
+func triageVerdictScript(disposition string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`echo {"disposition":"%s"} > "%%SORTIE_REACTION_RESULT%%"`, disposition)
+	}
+	return fmt.Sprintf(`echo '{"disposition":"%s"}' > "$SORTIE_REACTION_RESULT"`, disposition)
+}
+
+// triageSleepScript returns a hook script that blocks for roughly
+// seconds. cmd.exe has no sleep builtin, so the windows form pings the
+// loopback address instead, one echo request per second.
+func triageSleepScript(seconds int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("ping -n %d 127.0.0.1 >NUL", seconds+1)
+	}
+	return fmt.Sprintf("sleep %d", seconds)
+}
+
+// triageChain joins hook script steps into a single script for the
+// shell RunHook invokes on this platform. cmd.exe does not reliably
+// treat an embedded newline within a -C command line as a statement
+// separator, so the windows form chains with "&" instead.
+func triageChain(steps ...string) string {
+	sep := "\n"
+	if runtime.GOOS == "windows" {
+		sep = " & "
+	}
+	return strings.Join(steps, sep)
+}
+
+// triageCopyInputScript returns the platform command for copying the
+// input document RunReactionTriage wrote into name, relative to the
+// workspace directory the hook runs in.
+func triageCopyInputScript(name string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`copy "%%SORTIE_REACTION_INPUT%%" "%%CD%%\%s"`, name)
+	}
+	return fmt.Sprintf(`cp "$SORTIE_REACTION_INPUT" "$PWD/%s"`, name)
+}
+
+// triageDumpEnvScript returns the platform command for dumping the
+// hook's environment into name, relative to the workspace directory the
+// hook runs in.
+func triageDumpEnvScript(name string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`set > "%%CD%%\%s"`, name)
+	}
+	return fmt.Sprintf(`env > "$PWD/%s"`, name)
+}
+
 // handledScript is a minimal triage command that answers "handled".
-const handledScript = `echo '{"disposition":"handled"}' > "$SORTIE_REACTION_RESULT"`
+var handledScript = triageVerdictScript("handled")
 
 // probeTriageConfig returns a triage configuration whose script always
 // answers "handled" quickly, used by tests that only need the gate to
@@ -169,12 +226,17 @@ func gateParams(t *testing.T, store *triageGateStore, workspaceRoot string) (*St
 	return state, params
 }
 
-// gateRequest returns a ReactionTriageRequest addressed at the workspace
-// mustTriageWorkspace created for identifier.
-func gateRequest(identifier, fingerprint string) ReactionTriageRequest {
+// gateRequest returns a ReactionTriageRequest addressed at the
+// workspace mustTriageWorkspace created for identifier. root must be
+// the same workspace root the caller's params carries: RunReactionTriage
+// resolves the workspace path from the request, not from params, so a
+// request pointed at a different root (or none) never reaches the
+// configured script and instead reports the workspace_path_invalid
+// fallback before starting anything.
+func gateRequest(root, identifier, fingerprint string) ReactionTriageRequest {
 	return ReactionTriageRequest{
 		Kind:          "ci",
-		WorkspaceRoot: "", // filled by the caller from the workspace root
+		WorkspaceRoot: root,
 		Identifier:    identifier,
 		IssueID:       "ISS-GATE",
 		Fingerprint:   fingerprint,
@@ -193,6 +255,7 @@ func TestRunReactionTriage(t *testing.T) {
 		tests := []struct {
 			name             string
 			script           string
+			winScript        string // overrides script on windows when non-empty
 			timeoutMS        int
 			workspaceMissing bool
 			emptyRoot        bool
@@ -201,52 +264,56 @@ func TestRunReactionTriage(t *testing.T) {
 		}{
 			{
 				name:            "handled",
-				script:          `echo '{"disposition":"handled"}' > "$SORTIE_REACTION_RESULT"`,
+				script:          triageVerdictScript("handled"),
 				wantDisposition: TriageHandled,
 			},
 			{
 				name:            "dispatch-agent explicit",
-				script:          `echo '{"disposition":"dispatch-agent"}' > "$SORTIE_REACTION_RESULT"`,
+				script:          triageVerdictScript("dispatch-agent"),
 				wantDisposition: TriageDispatchAgent,
 			},
 			{
 				name:            "escalate",
-				script:          `echo '{"disposition":"escalate"}' > "$SORTIE_REACTION_RESULT"`,
+				script:          triageVerdictScript("escalate"),
 				wantDisposition: TriageEscalate,
 			},
 			{
 				name:            "no result file",
 				script:          `true`,
+				winScript:       `exit 0`,
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackNoResult,
 			},
 			{
 				name:            "result too large",
 				script:          `awk 'BEGIN{for (n=0;n<70000;n++) printf "a"}' > "$SORTIE_REACTION_RESULT"`,
+				winScript:       `for /L %i in (1,1,700) do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789>>"%SORTIE_REACTION_RESULT%"`,
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackResultTooLarge,
 			},
 			{
 				name:            "malformed result",
 				script:          `printf 'not json' > "$SORTIE_REACTION_RESULT"`,
+				winScript:       `echo not json > "%SORTIE_REACTION_RESULT%"`,
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackMalformedResult,
 			},
 			{
 				name:            "unknown disposition",
-				script:          `echo '{"disposition":"nope"}' > "$SORTIE_REACTION_RESULT"`,
+				script:          triageVerdictScript("nope"),
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackUnknownDisposition,
 			},
 			{
 				name:            "non-zero exit ignores a valid result",
-				script:          `echo '{"disposition":"handled"}' > "$SORTIE_REACTION_RESULT"; exit 3`,
+				script:          triageVerdictScript("handled") + "; exit 3",
+				winScript:       triageVerdictScript("handled") + " & exit 3",
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackExitStatus,
 			},
 			{
 				name:            "timeout",
-				script:          `sleep 5`,
+				script:          triageSleepScript(5),
 				timeoutMS:       200,
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackTimeout,
@@ -254,14 +321,14 @@ func TestRunReactionTriage(t *testing.T) {
 			{
 				name:             "workspace missing",
 				workspaceMissing: true,
-				script:           `echo '{"disposition":"handled"}' > "$SORTIE_REACTION_RESULT"`,
+				script:           triageVerdictScript("handled"),
 				wantDisposition:  TriageDispatchAgent,
 				wantFallback:     triageFallbackWorkspaceMissing,
 			},
 			{
 				name:            "workspace path invalid",
 				emptyRoot:       true,
-				script:          `echo '{"disposition":"handled"}' > "$SORTIE_REACTION_RESULT"`,
+				script:          triageVerdictScript("handled"),
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackWorkspacePathInvalid,
 			},
@@ -297,7 +364,11 @@ func TestRunReactionTriage(t *testing.T) {
 					req.WorkspaceRoot = ""
 				}
 
-				cfg := config.ReactionTriageConfig{Script: tt.script, TimeoutMS: timeoutMS}
+				script := tt.script
+				if runtime.GOOS == "windows" && tt.winScript != "" {
+					script = tt.winScript
+				}
+				cfg := config.ReactionTriageConfig{Script: script, TimeoutMS: timeoutMS}
 
 				outcome := RunReactionTriage(context.Background(), cfg, req, discardLogger())
 
@@ -420,8 +491,7 @@ func TestRunReactionTriage_InputDocumentShape(t *testing.T) {
 		},
 	}
 	cfg := config.ReactionTriageConfig{
-		Script: `cp "$SORTIE_REACTION_INPUT" "$PWD/captured_input.json"
-` + handledScript,
+		Script:    triageChain(triageCopyInputScript("captured_input.json"), handledScript),
 		TimeoutMS: 5000,
 	}
 
@@ -500,9 +570,11 @@ func TestRunReactionTriage_SubjectTextNeverInEnvironment(t *testing.T) {
 		},
 	}
 	cfg := config.ReactionTriageConfig{
-		Script: `env > "$PWD/captured_env.txt"
-cp "$SORTIE_REACTION_INPUT" "$PWD/captured_input.json"
-echo '{"disposition":"dispatch-agent"}' > "$SORTIE_REACTION_RESULT"`,
+		Script: triageChain(
+			triageDumpEnvScript("captured_env.txt"),
+			triageCopyInputScript("captured_input.json"),
+			triageVerdictScript("dispatch-agent"),
+		),
 		TimeoutMS: 5000,
 	}
 
@@ -543,7 +615,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, "")
 		pending := &PendingReaction{IssueID: "ISS-1"}
-		req := gateRequest("ISS-1", "fp")
+		req := gateRequest(params.WorkspaceRoot, "ISS-1", "fp")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -563,7 +635,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, root)
 		pending := &PendingReaction{IssueID: identifier}
-		req := gateRequest(identifier, "fp")
+		req := gateRequest(params.WorkspaceRoot, identifier, "fp")
 
 		verdict := reactionTriageGate(state, params, pending, config.ReactionTriageConfig{}, req, discardLogger(), context.Background())
 
@@ -583,7 +655,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, root)
 		pending := &PendingReaction{IssueID: identifier}
-		req := gateRequest(identifier, "fp-3")
+		req := gateRequest(params.WorkspaceRoot, identifier, "fp-3")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -608,7 +680,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-4"))
 		pending := &PendingReaction{IssueID: "ISS-4", Triage: run}
-		req := gateRequest("ISS-4", "fp-4")
+		req := gateRequest(params.WorkspaceRoot, "ISS-4", "fp-4")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -633,7 +705,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, root)
 		pending := &PendingReaction{IssueID: identifier, Triage: oldRun}
-		req := gateRequest(identifier, "fp-new")
+		req := gateRequest(params.WorkspaceRoot, identifier, "fp-new")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -662,7 +734,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, root)
 		pending := &PendingReaction{IssueID: identifier, Triage: oldRun}
-		req := gateRequest(identifier, "fp-new-2")
+		req := gateRequest(params.WorkspaceRoot, identifier, "fp-new-2")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -686,7 +758,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-7"))
 		pending := &PendingReaction{IssueID: "ISS-7", Triage: run}
-		req := gateRequest("ISS-7", "fp-7")
+		req := gateRequest(params.WorkspaceRoot, "ISS-7", "fp-7")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -708,7 +780,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-8"))
 		pending := &PendingReaction{IssueID: "ISS-8", Triage: run}
-		req := gateRequest("ISS-8", "fp-8")
+		req := gateRequest(params.WorkspaceRoot, "ISS-8", "fp-8")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -733,7 +805,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-9"))
 		pending := &PendingReaction{IssueID: "ISS-9", Triage: run}
-		req := gateRequest("ISS-9", "fp-9")
+		req := gateRequest(params.WorkspaceRoot, "ISS-9", "fp-9")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -755,7 +827,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-10"))
 		pending := &PendingReaction{IssueID: "ISS-10", Triage: run}
-		req := gateRequest("ISS-10", "fp-10")
+		req := gateRequest(params.WorkspaceRoot, "ISS-10", "fp-10")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -774,7 +846,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-11"))
 		pending := &PendingReaction{IssueID: "ISS-11", Triage: run}
-		req := gateRequest("ISS-11", "fp-11")
+		req := gateRequest(params.WorkspaceRoot, "ISS-11", "fp-11")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -796,7 +868,7 @@ func TestReactionTriageGate(t *testing.T) {
 		store := &triageGateStore{}
 		state, params := gateParams(t, store, mustTriageWorkspace(t, "ISS-12"))
 		pending := &PendingReaction{IssueID: "ISS-12", Triage: run}
-		req := gateRequest("ISS-12", "fp-12")
+		req := gateRequest(params.WorkspaceRoot, "ISS-12", "fp-12")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -818,7 +890,7 @@ func TestReactionTriageGate(t *testing.T) {
 		state.TriageInFlight.Add(1) // saturate the cap of max(MaxConcurrentAgents, 1) == 1
 		params := ReconcileParams{Store: store, WorkspaceRoot: root}
 		pending := &PendingReaction{IssueID: identifier}
-		req := gateRequest(identifier, "fp-cap")
+		req := gateRequest(params.WorkspaceRoot, identifier, "fp-cap")
 
 		verdict := reactionTriageGate(state, params, pending, probeTriageConfig(), req, discardLogger(), context.Background())
 
@@ -836,7 +908,7 @@ func TestReactionTriageGate(t *testing.T) {
 		// Each run's script sleeps so the first two are still in flight
 		// when the next fingerprint arrives, driving the not-done rows
 		// rather than the done rows.
-		slowCfg := config.ReactionTriageConfig{Script: "sleep 5", TimeoutMS: 5000}
+		slowCfg := config.ReactionTriageConfig{Script: triageSleepScript(5), TimeoutMS: 5000}
 		identifier := "ISS-SEQ"
 		root := mustTriageWorkspace(t, identifier)
 		store := &triageGateStore{}
@@ -844,19 +916,19 @@ func TestReactionTriageGate(t *testing.T) {
 		state.MaxConcurrentAgents = 5 // headroom: up to three runs may overlap briefly
 		pending := &PendingReaction{IssueID: identifier}
 
-		reactionTriageGate(state, params, pending, slowCfg, gateRequest(identifier, "F1"), discardLogger(), context.Background())
+		reactionTriageGate(state, params, pending, slowCfg, gateRequest(params.WorkspaceRoot, identifier, "F1"), discardLogger(), context.Background())
 		run1 := pending.Triage
 		if run1 == nil {
 			t.Fatal("run1 = nil, want a started run for F1")
 		}
 
-		reactionTriageGate(state, params, pending, slowCfg, gateRequest(identifier, "F2"), discardLogger(), context.Background())
+		reactionTriageGate(state, params, pending, slowCfg, gateRequest(params.WorkspaceRoot, identifier, "F2"), discardLogger(), context.Background())
 		run2 := pending.Triage
 		if run2 == nil || run2 == run1 {
 			t.Fatalf("run2 = %p, want a new run distinct from run1 (%p)", run2, run1)
 		}
 
-		reactionTriageGate(state, params, pending, slowCfg, gateRequest(identifier, "F1"), discardLogger(), context.Background())
+		reactionTriageGate(state, params, pending, slowCfg, gateRequest(params.WorkspaceRoot, identifier, "F1"), discardLogger(), context.Background())
 		run3 := pending.Triage
 		if run3 == nil || run3 == run2 {
 			t.Fatalf("run3 = %p, want a new run distinct from run2 (%p)", run3, run2)
