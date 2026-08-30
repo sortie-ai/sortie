@@ -191,6 +191,17 @@ type ReconcileParams struct {
 	// merge-completion feature is active for the current process.
 	// Reconcile, enqueue, and recovery paths gate on this flag.
 	MergeCompletionReactionConfigured bool
+
+	// WorkspaceRoot is the configured workspace root, used to derive a
+	// pending reaction's workspace path through [workspace.ComputePath].
+	// Empty disables every triage command.
+	WorkspaceRoot string
+
+	// CITriage is the frozen ci_failure triage configuration, copied
+	// from the orchestrator's construction-time capture. The CI pass
+	// reads this field and never CIFeedback.Triage, which the poll
+	// tick refreshes from the reloaded configuration.
+	CITriage config.ReactionTriageConfig
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -484,11 +495,15 @@ func releaseTerminalIssueState(ctx context.Context, state *State, store Reconcil
 	prefix := issueID + ":"
 
 	var counts terminalReleaseCounts
-	for key := range state.PendingReactions {
-		if strings.HasPrefix(key, prefix) {
-			delete(state.PendingReactions, key)
-			counts.PendingReleased++
+	for key, entry := range state.PendingReactions {
+		if !strings.HasPrefix(key, prefix) {
+			continue
 		}
+		// An entry that leaves without being re-inserted takes its
+		// triage subprocess with it rather than orphaning it.
+		cancelReactionTriage(entry)
+		delete(state.PendingReactions, key)
+		counts.PendingReleased++
 	}
 	for key := range state.ReactionAttempts {
 		if strings.HasPrefix(key, prefix) {

@@ -46,6 +46,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 
 		botReviewData, ok := pending.KindData.(*BotReviewReactionData)
 		if !ok {
+			cancelReactionTriage(pending)
 			log.ErrorContext(ctx, "unexpected KindData type for bot-review reaction",
 				slog.String("issue_id", pending.IssueID),
 				slog.String("type", fmt.Sprintf("%T", pending.KindData)),
@@ -57,6 +58,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 
 		// TTL enforcement.
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindBotReview))
 			entryLog.Warn("bot review watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
@@ -71,11 +73,20 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
+		// A run in flight makes this pass's fetch redundant, so the
+		// entry waits one tick instead. The backoff counter is
+		// untouched: waiting is not a fetch error.
+		if pending.Triage != nil && !triageRunFinished(pending.Triage) {
+			pending.PendingRetryAt = now
+			state.PendingReactions[key] = pending
+			continue
+		}
+
 		// Continuation turn cap check.
 		rkey := ReactionKey(pending.IssueID, ReactionKindBotReview)
 		turnCount := state.ReactionAttempts[rkey]
 		if turnCount >= params.BotReviewConfig.MaxContinuationTurns {
-			escalateBotReviewFailure(state, params, pending, turnCount, botReviewData, entryLog, ctx, metrics)
+			escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerBudget, botReviewData, entryLog, ctx, metrics)
 			continue
 		}
 
@@ -105,6 +116,11 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 
 		// No actionable comments — re-enqueue with poll interval delay.
 		if len(actionable) == 0 {
+			// The episode closes while the entry keeps watching, so the
+			// comment set a run answered for no longer describes
+			// anything. A retained verdict would otherwise be replayed
+			// against the next episode that recomputes the same set.
+			cancelReactionTriage(pending)
 			pending.PendingRetryAt = now.Add(pollInterval)
 			state.PendingReactions[key] = pending
 			continue
@@ -140,10 +156,36 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
+		botContext := buildReviewTemplateMap(actionable)
+
+		// The gate sits above the dispatch counter so no pass that
+		// dispatches nothing is counted as one.
+		triageVerdict := reactionTriageGate(state, params, pending, params.BotReviewConfig.Triage, ReactionTriageRequest{
+			Kind:          ReactionKindBotReview,
+			WorkspaceRoot: params.WorkspaceRoot,
+			IssueID:       pending.IssueID,
+			Identifier:    pending.Identifier,
+			DisplayID:     pending.DisplayID,
+			Attempt:       pending.Attempt,
+			SSHHost:       pending.LastSSHHost,
+			Fingerprint:   fingerprint,
+			AttemptsUsed:  turnCount,
+			MaxAttempts:   params.BotReviewConfig.MaxContinuationTurns,
+			Subject:       botContext,
+		}, entryLog, ctx)
+
+		switch triageVerdict {
+		case triageWait, triageHandled:
+			pending.PendingRetryAt = now.Add(pollInterval)
+			state.PendingReactions[key] = pending
+			continue
+		case triageEscalate:
+			escalateBotReviewFailure(state, params, pending, turnCount, EscalationTriggerTriage, botReviewData, entryLog, ctx, metrics)
+			continue
+		}
+
 		// Dispatch immediately: bot comments are not debounced.
 		metrics.IncBotReviewChecks("dispatched")
-
-		botContext := buildReviewTemplateMap(actionable)
 
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:     pending.IssueID,
@@ -184,16 +226,25 @@ func escalateBotReviewFailure(
 	params ReconcileParams,
 	pending *PendingReaction,
 	turnCount int,
+	trigger ReactionEscalationTrigger,
 	botReviewData *BotReviewReactionData,
 	log *slog.Logger,
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
-	log.Warn("bot review continuation turns exhausted, escalating",
-		slog.Int("turn_count", turnCount),
-		slog.Int("max_continuation_turns", params.BotReviewConfig.MaxContinuationTurns),
-		slog.Int("pr_number", botReviewData.PRNumber),
-	)
+	if trigger == EscalationTriggerTriage {
+		log.Warn("bot review triage requested escalation",
+			slog.Int("turn_count", turnCount),
+			slog.Int("max_continuation_turns", params.BotReviewConfig.MaxContinuationTurns),
+			slog.Int("pr_number", botReviewData.PRNumber),
+		)
+	} else {
+		log.Warn("bot review continuation turns exhausted, escalating",
+			slog.Int("turn_count", turnCount),
+			slog.Int("max_continuation_turns", params.BotReviewConfig.MaxContinuationTurns),
+			slog.Int("pr_number", botReviewData.PRNumber),
+		)
+	}
 
 	switch params.BotReviewConfig.Escalation {
 	case "label":
@@ -225,6 +276,9 @@ func escalateBotReviewFailure(
 
 	case "comment", "":
 		commentText := buildBotReviewEscalationComment(botReviewData, turnCount)
+		if trigger == EscalationTriggerTriage {
+			commentText = buildTriageEscalationComment("bot-review", fmt.Sprintf("PR #%d", botReviewData.PRNumber))
+		}
 		if params.TrackerAdapter != nil {
 			issueID := pending.IssueID
 			tracker := params.TrackerAdapter

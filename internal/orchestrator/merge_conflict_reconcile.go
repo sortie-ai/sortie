@@ -54,6 +54,7 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 
 		data, ok := pending.KindData.(*MergeConflictReactionData)
 		if !ok {
+			cancelReactionTriage(pending)
 			log.ErrorContext(ctx, "unexpected KindData type for merge-conflict reaction",
 				slog.String("issue_id", pending.IssueID),
 				slog.String("type", fmt.Sprintf("%T", pending.KindData)),
@@ -64,6 +65,7 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
 			entryLog.Warn("merge conflict watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(ttl/time.Millisecond)),
@@ -73,6 +75,15 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		}
 
 		if now.Before(pending.PendingRetryAt) {
+			state.PendingReactions[key] = pending
+			continue
+		}
+
+		// A run in flight makes this pass's mergeability read
+		// redundant, so the entry waits one tick instead. The backoff
+		// counter is untouched: waiting is not a fetch error.
+		if pending.Triage != nil && !triageRunFinished(pending.Triage) {
+			pending.PendingRetryAt = now
 			state.PendingReactions[key] = pending
 			continue
 		}
@@ -113,6 +124,9 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 			// Clean, unstable, or blocked: the episode closes. Clear the
 			// dedup fingerprint, reset the per-episode counter, and
 			// re-enqueue. Mirrors the CIStatusPassing branch.
+			// The episode closes, so the fingerprint an in-flight run was
+			// started for no longer describes anything.
+			cancelReactionTriage(pending)
 			if delErr := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindMergeConflict); delErr != nil {
 				entryLog.Warn("failed to delete merge conflict reaction fingerprint",
 					slog.Any("error", delErr),
@@ -213,6 +227,34 @@ func handleMergeConflictDirty(
 		return
 	}
 
+	// The gate sits above the head-change block so that block runs
+	// once per fingerprint rather than once per pass: replaying it
+	// would narrow the attribution window.
+	triageVerdict := reactionTriageGate(state, params, pending, params.MergeConflictConfig.Triage, ReactionTriageRequest{
+		Kind:          ReactionKindMergeConflict,
+		WorkspaceRoot: params.WorkspaceRoot,
+		IssueID:       pending.IssueID,
+		Identifier:    pending.Identifier,
+		DisplayID:     pending.DisplayID,
+		Attempt:       pending.Attempt,
+		SSHHost:       pending.LastSSHHost,
+		Fingerprint:   fingerprint,
+		AttemptsUsed:  state.ReactionAttempts[rkey],
+		MaxAttempts:   params.MergeConflictConfig.MaxRetries,
+		Subject:       buildMergeConflictTemplateMap(data, status),
+	}, log, ctx)
+
+	switch triageVerdict {
+	case triageWait, triageHandled:
+		pending.PendingRetryAt = now.Add(pollInterval)
+		state.PendingReactions[key] = pending
+		return
+	case triageEscalate:
+		escalateMergeConflictFailure(state, params, pending, state.ReactionAttempts[rkey],
+			EscalationTriggerTriage, data, log, ctx, metrics)
+		return
+	}
+
 	// A new conflicting head this reaction has not dispatched for.
 	// Reset the per-episode counter first when the change is positively
 	// not the orchestrator's own work, so a person's push yields
@@ -230,7 +272,7 @@ func handleMergeConflictDirty(
 	state.ReactionAttempts[rkey]++
 	attempts := state.ReactionAttempts[rkey]
 	if attempts > params.MergeConflictConfig.MaxRetries {
-		escalateMergeConflictFailure(state, params, pending, attempts, data, log, ctx, metrics)
+		escalateMergeConflictFailure(state, params, pending, attempts, EscalationTriggerBudget, data, log, ctx, metrics)
 		return
 	}
 
@@ -328,16 +370,25 @@ func escalateMergeConflictFailure(
 	params ReconcileParams,
 	pending *PendingReaction,
 	attempts int,
+	trigger ReactionEscalationTrigger,
 	data *MergeConflictReactionData,
 	log *slog.Logger,
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
-	log.Warn("merge conflict resolution attempts exhausted, escalating",
-		slog.Int("attempts", attempts),
-		slog.Int("max_retries", params.MergeConflictConfig.MaxRetries),
-		slog.Int("pr_number", data.PRNumber),
-	)
+	if trigger == EscalationTriggerTriage {
+		log.Warn("merge conflict triage requested escalation",
+			slog.Int("attempts", attempts),
+			slog.Int("max_retries", params.MergeConflictConfig.MaxRetries),
+			slog.Int("pr_number", data.PRNumber),
+		)
+	} else {
+		log.Warn("merge conflict resolution attempts exhausted, escalating",
+			slog.Int("attempts", attempts),
+			slog.Int("max_retries", params.MergeConflictConfig.MaxRetries),
+			slog.Int("pr_number", data.PRNumber),
+		)
+	}
 
 	switch params.MergeConflictConfig.Escalation {
 	case "label":
@@ -369,6 +420,9 @@ func escalateMergeConflictFailure(
 
 	case "comment", "":
 		commentText := buildMergeConflictEscalationComment(data, attempts)
+		if trigger == EscalationTriggerTriage {
+			commentText = buildTriageEscalationComment("merge-conflict", fmt.Sprintf("PR #%d", data.PRNumber))
+		}
 		if params.TrackerAdapter != nil {
 			issueID := pending.IssueID
 			tracker := params.TrackerAdapter

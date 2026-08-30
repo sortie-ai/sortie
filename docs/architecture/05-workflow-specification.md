@@ -398,10 +398,15 @@ Each reaction kind sub-object shares a common field schema:
     its own `max_continuation_turns` instead, and a value set here has no effect on those two
     kinds.
 - `escalation` (string)
-  - Action when the kind's dispatch budget is exhausted, whether that budget is `max_retries` or
-    `max_continuation_turns`. Valid values: `label` (default), `comment`.
+  - Action taken when the kind stops dispatching continuations and hands the subject to a person. Two conditions reach it: the kind's dispatch budget is exhausted, whether that budget is `max_retries` or `max_continuation_turns`, or a `triage` command answers `escalate`. Valid values: `label` (default), `comment`.
 - `escalation_label` (string)
   - Label applied when `escalation` is `label`. Default: `needs-human`.
+- `triage` (object)
+  - Operator-owned command that runs in the issue workspace once the reaction has found a new subject and is about to dispatch an agent continuation. The command answers `handled`, `dispatch-agent`, or `escalate`, so deterministic work is resolved without spending an agent session, a continuation attempt, or a token budget. See Section 9.4 for the execution contract.
+  - Recognized under exactly four reaction kinds: `ci_failure`, `review_comments`, `bot_review`, and `merge_conflicts`. Under any other key of `reactions`, including `auto_merge`, `merge_completion`, and `label_commands`, the block is rejected with a configuration error.
+  - `triage.script` (string): the shell script body, executed through the same machinery as the workspace hooks. Required when the block is present. MUST be a string and MUST NOT be blank after whitespace trimming.
+  - `triage.timeout_ms` (integer): bounds one triage run. Default: `60000`. MUST lie in the closed range `1` to `600000`. The ceiling sits below the smallest default reaction watch window, so a pending entry whose triage run hangs still ages out of that window.
+  - Every field of the block is read once when the orchestrator is constructed, so a change takes effect on the next restart rather than on the next configuration reload.
 
 Remaining keys within a kind sub-object are collected into an `Extra` map for kind-specific
 consumption.
@@ -557,6 +562,7 @@ without starting a failure clock.
 - Per-kind common fields follow the same validation as the deprecated `ci_feedback` equivalents.
 - Extra fields are kind-specific; the orchestrator validates them when constructing the
   kind-specific config (e.g. `BuildReviewReactionConfig`).
+- A `triage` block under any reaction key other than `ci_failure`, `review_comments`, `bot_review`, or `merge_conflicts` is rejected with a configuration error, as is a block whose `script` is absent, not a string, or blank, and one whose `timeout_ms` falls outside the closed range `1` to `600000`.
 
 #### 5.3.10 `dispatch` (object, optional)
 

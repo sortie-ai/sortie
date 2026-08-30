@@ -75,6 +75,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		ciData, ok := pending.KindData.(*CIReactionData)
 		if !ok {
+			cancelReactionTriage(pending)
 			log.ErrorContext(ctx, "unexpected KindData type for CI reaction",
 				slog.String("issue_id", pending.IssueID),
 				slog.String("type", fmt.Sprintf("%T", pending.KindData)),
@@ -90,6 +91,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			ageBasis = pending.HeadRecordedAt
 		}
 		if params.CIWatchWindow > 0 && now.Sub(ageBasis) > params.CIWatchWindow {
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, rkey)
 			entryLog.Warn("ci watch window elapsed, dropping",
 				slog.Int64("window_ms", int64(params.CIWatchWindow/time.Millisecond)),
@@ -103,10 +105,20 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			continue
 		}
 
+		// A run in flight makes every provider call this pass would
+		// make redundant, so the entry waits one tick instead. The
+		// backoff counter is untouched: waiting is not a fetch error.
+		if pending.Triage != nil && !triageRunFinished(pending.Triage) {
+			pending.PendingRetryAt = now
+			state.PendingReactions[key] = pending
+			continue
+		}
+
 		status, mergeErr := params.SCMAdapter.GetMergeability(ctx, ciData.PRNumber, ciData.Owner, ciData.Repo)
 		if mergeErr != nil {
 			var scmErr *domain.SCMError
 			if errors.As(mergeErr, &scmErr) && scmErr.Kind == domain.ErrSCMNotFound {
+				cancelReactionTriage(pending)
 				delete(state.ReactionAttempts, rkey)
 				entryLog.Warn("ci watch pull request not found, dropping",
 					slog.Int("pr_number", ciData.PRNumber),
@@ -130,6 +142,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		// through the merged branch and logs the merge rather than a
 		// close.
 		if status.Merged {
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, rkey)
 			entryLog.Info("ci watch ended: pull request merged",
 				slog.String("head_sha", status.HeadSHA),
@@ -137,6 +150,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			continue
 		}
 		if status.Closed {
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, rkey)
 			entryLog.Info("ci watch ended: pull request closed without merging",
 				slog.Int("pr_number", ciData.PRNumber),
@@ -232,6 +246,12 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		switch result.Status {
 		case domain.CIStatusPassing:
+			// The episode closes while the entry keeps watching, so the
+			// head an in-flight or finished run answered for no longer
+			// describes anything. A retained verdict would otherwise be
+			// replayed against the next episode that recomputes the same
+			// head.
+			cancelReactionTriage(pending)
 			delete(state.ReactionAttempts, rkey)
 			pending.PendingAttempts++
 			delay := computeCIPendingDelay(base, pending.PendingAttempts)
@@ -259,7 +279,44 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 				delay := computeCIPendingDelay(base, pending.PendingAttempts)
 				pending.PendingRetryAt = now.Add(delay)
 				state.PendingReactions[key] = pending
-			} else {
+				continue
+			}
+
+			// The gate sits above handleCIFailure because that function
+			// appends a run history row as its first act, which the
+			// resuming pass would append a second time.
+			triageVerdict := reactionTriageGate(state, params, pending, params.CITriage, ReactionTriageRequest{
+				Kind:          ReactionKindCI,
+				WorkspaceRoot: params.WorkspaceRoot,
+				IssueID:       pending.IssueID,
+				Identifier:    pending.Identifier,
+				DisplayID:     pending.DisplayID,
+				Attempt:       pending.Attempt,
+				SSHHost:       pending.LastSSHHost,
+				Fingerprint:   status.HeadSHA,
+				AttemptsUsed:  state.ReactionAttempts[rkey],
+				MaxAttempts:   params.CIFeedback.MaxRetries,
+				Subject:       result.ToTemplateMap(),
+			}, entryLog, ctx)
+
+			switch triageVerdict {
+			case triageWait:
+				pending.PendingRetryAt = now.Add(computeCIPendingDelay(base, pending.PendingAttempts))
+				state.PendingReactions[key] = pending
+
+			case triageHandled:
+				// Re-enqueued exactly as the already-dispatched branch
+				// upstream does, so a handled head and a dispatched one are
+				// indistinguishable from the next pass onward.
+				pending.PendingAttempts++
+				pending.PendingRetryAt = now.Add(computeCIPendingDelay(base, pending.PendingAttempts))
+				state.PendingReactions[key] = pending
+
+			case triageEscalate:
+				escalateCIFailure(state, params, pending, result, status.HeadSHA, state.ReactionAttempts[rkey],
+					EscalationTriggerTriage, now, base, entryLog, ctx, metrics)
+
+			default:
 				handleCIFailure(state, params, pending, result, status.HeadSHA, now, base, entryLog, ctx, metrics)
 			}
 
@@ -357,7 +414,7 @@ func handleCIFailure(
 	maxRetries := params.CIFeedback.MaxRetries
 
 	if attempts > maxRetries {
-		escalateCIFailure(state, params, pending, result, ref, attempts, now, base, log, ctx, metrics)
+		escalateCIFailure(state, params, pending, result, ref, attempts, EscalationTriggerBudget, now, base, log, ctx, metrics)
 		return
 	}
 
@@ -410,6 +467,7 @@ func escalateCIFailure(
 	result domain.CIResult,
 	ref string,
 	attempts int,
+	trigger ReactionEscalationTrigger,
 	now time.Time,
 	base time.Duration,
 	log *slog.Logger,
@@ -417,11 +475,19 @@ func escalateCIFailure(
 	metrics domain.Metrics,
 ) {
 	if !pending.EscalatedForCurrentHead {
-		log.Warn("CI fix retries exhausted, escalating",
-			slog.String("ref", ref),
-			slog.Int("attempts", attempts),
-			slog.Int("max_retries", params.CIFeedback.MaxRetries),
-		)
+		if trigger == EscalationTriggerTriage {
+			log.Warn("CI triage requested escalation",
+				slog.String("ref", ref),
+				slog.Int("attempts", attempts),
+				slog.Int("max_retries", params.CIFeedback.MaxRetries),
+			)
+		} else {
+			log.Warn("CI fix retries exhausted, escalating",
+				slog.String("ref", ref),
+				slog.Int("attempts", attempts),
+				slog.Int("max_retries", params.CIFeedback.MaxRetries),
+			)
+		}
 
 		switch params.CIFeedback.Escalation {
 		case "label":
@@ -454,6 +520,9 @@ func escalateCIFailure(
 
 		case "comment", "":
 			commentText := buildCIEscalationComment(result, ref, attempts)
+			if trigger == EscalationTriggerTriage {
+				commentText = buildTriageEscalationComment("ci", "ref "+ref)
+			}
 			if params.TrackerAdapter != nil {
 				issueID := pending.IssueID
 				tracker := params.TrackerAdapter

@@ -242,6 +242,7 @@ Part B: Tracker state refresh
 Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
+  - If the entry holds a triage run that has not finished, re-enqueue it ready for the next tick and continue to the next entry. The pass makes no provider call and leaves the pending attempt count untouched, because waiting on a triage run is not a fetch error.
   - Resolve the pull request's current head via `SCMAdapter.GetMergeability` before deduplicating:
     the fingerprint compares against this pass's live head, not a ref captured at worker exit
     (§11A.4, §11A.5).
@@ -265,6 +266,7 @@ Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failu
   - If status is `pending`: re-enqueue with the same exponential backoff as the fetch-error path.
   - If status is `failing`: consult the retry slot before handling as a CI failure; a non-nil
     incumbent defers instead of dispatching (Section 7.5, Section 7.3 "CI Status Failing").
+  - If status is `failing` and the retry slot is free, run the triage gate before handling the failure, above the run-history append so a resuming pass cannot append a second row. `dispatch-agent` falls through to the existing CI-failure handling unchanged; `handled` marks the fingerprint dispatched and re-enqueues with the delay the already-dispatched branch applies, spending no attempt; `escalate` marks the fingerprint dispatched and applies the configured escalation with the un-incremented attempt count. The gate is inert when `reactions.ci_failure.triage` is absent.
   - Every branch that does not end the watch re-enqueues the entry.
 
 Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
@@ -277,6 +279,7 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
     `reaction_attempts` counter, log a WARN record, and drop the entry (no re-enqueue). Default
     `1800000` (thirty minutes); `0` removes the bound.
   - Respect `PendingRetryAt` poll throttle: if not yet due, re-enqueue and continue.
+  - If the entry holds a triage run that has not finished, re-enqueue it ready for the next tick and continue to the next entry, making no provider call and leaving the pending attempt count untouched.
   - Check continuation turn cap (`reactions.review_comments.max_continuation_turns`): if
     exceeded, escalate (Section 11B.4) and continue.
   - Call `SCMAdapter.FetchPendingReviews` with the PR number, owner, and repo from
@@ -297,6 +300,7 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
     dispatch with review comment context and increments `reaction_attempts`. The fingerprint is
     marked dispatched later, when the scheduled retry fires and dispatch succeeds, not during
     this pass.
+  - With the slot free, the triage gate runs before the dispatch counter is incremented, so no pass that dispatches nothing is counted as one. `dispatch-agent` proceeds to the dispatch above; `handled` marks the fingerprint dispatched and re-enqueues on the poll interval without touching `reaction_attempts` or the dispatch counter; `escalate` marks the fingerprint dispatched and escalates (Section 11B.4) with the un-incremented turn count. The gate is inert when `reactions.review_comments.triage` is absent.
 
 Part E: Bot review comment reconciliation (when `reactions.bot_review` is configured)
 
@@ -308,6 +312,7 @@ Part E: Bot review comment reconciliation (when `reactions.bot_review` is config
   comments arrive in bulk on push rather than trickling in from a human reviewer.
 - Consults the retry slot before dispatching, exactly as Part D: a non-nil incumbent defers
   instead (Section 7.5).
+- Waits and skips exactly as Part D when the entry holds an unfinished triage run, and runs the triage gate after slot arbitration and before the dispatch counter is incremented, with the same three dispositions. The gate is inert when `reactions.bot_review.triage` is absent.
 - See Section 11D for the full contract.
 
 Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured)
@@ -319,6 +324,9 @@ Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured
   the episode and clears its fingerprint and attempt counter.
 - The dirty branch consults the retry slot before its other guards (Section 7.5); a non-nil
   incumbent defers the whole branch, re-enqueuing the entry unchanged.
+- An entry holding an unfinished triage run is re-enqueued ready for the next tick before the mergeability read, so the pass makes no provider call and leaves the pending attempt count untouched.
+- Inside the dirty branch the triage gate runs after the head-SHA dedup check and above the head-change block, so that block runs once per conflicting head rather than once per pass. `dispatch-agent` falls through to the existing attribution, increment, and dispatch-or-escalate sequence; `handled` marks the fingerprint dispatched and re-enqueues on the poll interval without touching the per-episode counter; `escalate` marks the fingerprint dispatched and applies the configured escalation with the un-incremented counter, which is the previous episode's count when the head is new. The gate is inert when `reactions.merge_conflicts.triage` is absent.
+- Closing the episode clears the fingerprint an in-flight triage run was started for, so that run is cancelled on the same pass.
 - See Section 11E for the full contract.
 
 Part G: Auto-merge reconciliation (when `reactions.auto_merge` is configured)
