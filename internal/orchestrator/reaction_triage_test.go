@@ -35,6 +35,30 @@ func mustTriageWorkspace(t *testing.T, identifier string) string {
 	return root
 }
 
+// sameDir reports whether a and b name the same directory on disk,
+// regardless of path spelling. workspace.ComputePath resolves symlinks
+// via filepath.EvalSymlinks for path-containment safety, and on
+// windows that walk canonicalizes any 8.3 short-name path segment
+// (e.g. "RUNNER~1", the form GitHub Actions' windows runners give
+// t.TempDir() through %TEMP%) to its long form (e.g. "runneradmin"),
+// so a path this test builds independently from the same root can
+// differ from the one the production path carries while still naming
+// one directory. os.SameFile compares by the OS's file identity
+// rather than by string, so the comparison holds regardless of which
+// alias form either side used.
+func sameDir(t *testing.T, a, b string) bool {
+	t.Helper()
+	fa, err := os.Stat(a)
+	if err != nil {
+		t.Fatalf("stat %q: %v", a, err)
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		t.Fatalf("stat %q: %v", b, err)
+	}
+	return os.SameFile(fa, fb)
+}
+
 // triageVerdictScript returns a hook script that writes a result
 // document naming disposition, built for the shell RunHook actually
 // invokes on this platform: POSIX sh on unix, cmd.exe on windows. Test
@@ -89,6 +113,33 @@ func triageDumpEnvScript(name string) string {
 		return fmt.Sprintf(`set > "%%CD%%\%s"`, name)
 	}
 	return fmt.Sprintf(`env > "$PWD/%s"`, name)
+}
+
+// triageCopyResultScript returns the platform command for copying the
+// fixture at path into the file named by SORTIE_REACTION_RESULT. Tests
+// driving an oversized result use this instead of a shell loop: cmd.exe
+// applies batch-file percent-doubling rules ("%%i", not "%i") to a FOR
+// loop variable once the script is a file on disk rather than a
+// -C command-line string, which is what [writeHookScript] now always
+// makes it on windows, so a loop written for command-line syntax exits
+// non-zero instead of producing the file.
+func triageCopyResultScript(path string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(`copy "%s" "%%SORTIE_REACTION_RESULT%%"`, path)
+	}
+	return fmt.Sprintf(`cp "%s" "$SORTIE_REACTION_RESULT"`, path)
+}
+
+// mustOversizedResultFixture creates a file larger than
+// triageMaxResultBytes under t.TempDir() and returns its path.
+func mustOversizedResultFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "oversized_result.json")
+	body := bytes.Repeat([]byte("a"), triageMaxResultBytes+1)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatalf("writing oversized result fixture: %v", err)
+	}
+	return path
 }
 
 // handledScript is a minimal triage command that answers "handled".
@@ -290,6 +341,7 @@ func TestRunReactionTriage(t *testing.T) {
 			timeoutMS        int
 			workspaceMissing bool
 			emptyRoot        bool
+			oversizedResult  bool // script copies a >triageMaxResultBytes fixture into place
 			wantDisposition  ReactionTriageDisposition
 			wantFallback     string
 		}{
@@ -317,8 +369,7 @@ func TestRunReactionTriage(t *testing.T) {
 			},
 			{
 				name:            "result too large",
-				script:          `awk 'BEGIN{for (n=0;n<70000;n++) printf "a"}' > "$SORTIE_REACTION_RESULT"`,
-				winScript:       `for /L %i in (1,1,700) do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789>>"%SORTIE_REACTION_RESULT%"`,
+				oversizedResult: true,
 				wantDisposition: TriageDispatchAgent,
 				wantFallback:    triageFallbackResultTooLarge,
 			},
@@ -398,6 +449,9 @@ func TestRunReactionTriage(t *testing.T) {
 				script := tt.script
 				if runtime.GOOS == "windows" && tt.winScript != "" {
 					script = tt.winScript
+				}
+				if tt.oversizedResult {
+					script = triageCopyResultScript(mustOversizedResultFixture(t))
 				}
 				cfg := config.ReactionTriageConfig{Script: writeHookScript(t, script), TimeoutMS: timeoutMS}
 
@@ -566,8 +620,12 @@ func TestRunReactionTriage_InputDocumentShape(t *testing.T) {
 	if got := doc["max_attempts"]; got != float64(1) {
 		t.Errorf("max_attempts = %v, want 1", got)
 	}
-	if got := doc["workspace"]; got != wsPath {
-		t.Errorf("workspace = %v, want %q", got, wsPath)
+	gotWorkspace, ok := doc["workspace"].(string)
+	if !ok {
+		t.Fatalf("workspace field = %T, want string", doc["workspace"])
+	}
+	if !sameDir(t, gotWorkspace, wsPath) {
+		t.Errorf("workspace = %q, want a path naming the same directory as %q", gotWorkspace, wsPath)
 	}
 	subject, ok := doc["subject"].(map[string]any)
 	if !ok {
