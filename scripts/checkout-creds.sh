@@ -28,7 +28,9 @@ close_anchor() {
 	with_indent=-1
 }
 
-# A step region spans from an actions/checkout line to the next sequence
+# An anchor is a uses: key naming actions/checkout@; a mention inside a
+# comment or a run: body is not one. A step region spans from that anchor
+# to the next sequence
 # item at or above its indentation, the next non-blank line below it, or
 # EOF. Blank lines never end a region. Only a persist-credentials under
 # the step's own with: mapping is an actions/checkout input; under env:
@@ -65,7 +67,7 @@ scan_file() {
 		fi
 
 		case "$LT" in
-		*uses:*actions/checkout*)
+		uses:*actions/checkout@* | -\ uses:*actions/checkout@*)
 			close_anchor
 			checked=$((checked + 1))
 			anchor_line=$lineno
