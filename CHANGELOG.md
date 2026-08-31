@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-08-31
+
 ### Added
 
 - An agent can now write `no-change-needed` to `.sortie/status` to declare that the requested outcome already held and it changed nothing. Such a run is recorded as a success rather than a failure, schedules no retry, and does not count toward `agent.max_consecutive_absences`, so an issue that repeatedly needs no change is no longer parked for it. A new `tracker.no_change_state`, also settable as `SORTIE_TRACKER_NO_CHANGE_STATE`, names the state the issue moves to; unset, it is `tracker.handoff_state`. It is the one state field allowed to name a member of `tracker.terminal_states`, for a board where a handoff carrying no pull request and no diff would put nothing in front of a reviewer. Where self-review runs, the declaration stands only where that phase confirms it: a failing verification command, or a run that needed a fix turn, withdraws the declaration and the run continues on the ordinary path. A run that produces nothing and declares nothing is still an absence of work and keeps every outcome it had.
@@ -806,7 +808,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.22.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.23.0...HEAD
+[1.23.0]: https://github.com/sortie-ai/sortie/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/sortie-ai/sortie/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/sortie-ai/sortie/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/sortie-ai/sortie/compare/v1.19.0...v1.20.0
