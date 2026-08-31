@@ -4,7 +4,7 @@ An agent orchestrator that ships as one statically-linked binary with no runtime
 
 ## Commands
 
-Read the Makefile to discover available targets before running any Go toolchain command directly.
+`make help` lists the build, test, and lint targets; they carry the flags CI uses, so prefer one when it fits. Calling the Go toolchain directly is fine when no target does what you need.
 
 ## Gotchas
 
