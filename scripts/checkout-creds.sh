@@ -26,10 +26,12 @@ close_anchor() {
 	anchor_indent=0
 	anchor_compliant=0
 	with_indent=-1
+	with_child=-1
 }
 
 # An anchor is a uses: key naming actions/checkout@; a mention inside a
-# comment or a run: body is not one. A step region spans from that anchor
+# comment or a run: body is not one. The key counts only as a direct
+# child of the step's with: mapping, never nested deeper. A step region spans from that anchor
 # to the next sequence
 # item at or above its indentation, the next non-blank line below it, or
 # EOF. Blank lines never end a region. Only a persist-credentials under
@@ -41,6 +43,7 @@ scan_file() {
 	anchor_indent=0
 	anchor_compliant=0
 	with_indent=-1
+	with_child=-1
 	lineno=0
 
 	while IFS= read -r raw || [ -n "$raw" ]; do
@@ -64,6 +67,11 @@ scan_file() {
 
 		if [ "$with_indent" -ge 0 ] && [ -n "$LT" ] && [ "$IND" -le "$with_indent" ]; then
 			with_indent=-1
+			with_child=-1
+		fi
+
+		if [ "$with_indent" -ge 0 ] && [ "$with_child" -lt 0 ] && [ -n "$LT" ]; then
+			with_child=$IND
 		fi
 
 		case "$LT" in
@@ -79,7 +87,7 @@ scan_file() {
 			fi
 			;;
 		persist-credentials:*)
-			if [ "$with_indent" -ge 0 ] && [ "$IND" -gt "$with_indent" ]; then
+			if [ "$with_child" -ge 0 ] && [ "$IND" -eq "$with_child" ]; then
 				_val=${LT#persist-credentials:}
 				_val=${_val%% #*}
 				_val=$(printf '%s' "$_val" | tr -d ' 	')
