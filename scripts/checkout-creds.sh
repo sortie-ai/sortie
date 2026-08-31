@@ -25,16 +25,20 @@ close_anchor() {
 	anchor_line=""
 	anchor_indent=0
 	anchor_compliant=0
+	with_indent=-1
 }
 
 # A step region spans from an actions/checkout line to the next sequence
 # item at or above its indentation, the next non-blank line below it, or
-# EOF. Blank lines never end a region.
+# EOF. Blank lines never end a region. Only a persist-credentials under
+# the step's own with: mapping is an actions/checkout input; under env:
+# it is an unrelated variable and the input keeps its default.
 scan_file() {
 	file=$1
 	anchor_line=""
 	anchor_indent=0
 	anchor_compliant=0
+	with_indent=-1
 	lineno=0
 
 	while IFS= read -r raw || [ -n "$raw" ]; do
@@ -56,6 +60,10 @@ scan_file() {
 			esac
 		fi
 
+		if [ "$with_indent" -ge 0 ] && [ -n "$LT" ] && [ "$IND" -le "$with_indent" ]; then
+			with_indent=-1
+		fi
+
 		case "$LT" in
 		*uses:*actions/checkout*)
 			close_anchor
@@ -63,16 +71,22 @@ scan_file() {
 			anchor_line=$lineno
 			anchor_indent=$IND
 			;;
+		with:*)
+			if [ -n "$anchor_line" ] && [ "$IND" -ge "$anchor_indent" ]; then
+				with_indent=$IND
+			fi
+			;;
 		persist-credentials:*)
-			[ -n "$anchor_line" ] || continue
-			_val=${LT#persist-credentials:}
-			_val=${_val%% #*}
-			_val=$(printf '%s' "$_val" | tr -d ' 	')
-			case "$_val" in
-			true | false)
-				anchor_compliant=1
-				;;
-			esac
+			if [ "$with_indent" -ge 0 ] && [ "$IND" -gt "$with_indent" ]; then
+				_val=${LT#persist-credentials:}
+				_val=${_val%% #*}
+				_val=$(printf '%s' "$_val" | tr -d ' 	')
+				case "$_val" in
+				true | false)
+					anchor_compliant=1
+					;;
+				esac
+			fi
 			;;
 		esac
 	done <"$file"
