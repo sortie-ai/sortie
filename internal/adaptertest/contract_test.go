@@ -23,12 +23,13 @@ const contractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registr
 // Track is caught regardless of the local import alias.
 const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/trackermetrics"
 
-// contractBanTable maps a reimplementation this work extracted to the
-// shared owner a package under any family root must call instead. A
-// top-level function re-declaring one of these names is a violation. The
-// owner named for an entry was extracted from a tracker or source-control
-// package and is not guaranteed to be the correct owner for a package in
-// another family.
+// contractBanTable maps a name this work extracted into a shared package
+// to the owner that received it. A top-level function re-declaring one of
+// these names is a violation; the banned name is the rule. The owner
+// records where the extraction landed rather than naming a universal
+// requirement: every entry came from a tracker or source-control package,
+// so a package in another family may satisfy the rule by choosing a
+// different name instead of calling an owner whose contract does not fit.
 var contractBanTable = map[string]string{
 	"classifyTransportError": "httpkit.ClassifyTransport",
 	"withRetry":              "httpkit.RetryWithBackoff",
