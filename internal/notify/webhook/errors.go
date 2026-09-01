@@ -43,12 +43,12 @@ func classifyHTTPError(resp *http.Response, _, _ string) error {
 	}
 }
 
-// classifyTransportError maps a request, network, or body-read failure
+// classifyTransport maps a request, network, or body-read failure
 // to a [sendError] with a transport category. The underlying error is
 // wrapped for chain inspection but is never rendered into the category,
 // so the host and URL it embeds stay out of logs and agent-visible
 // results.
-func classifyTransportError(err error, _, _ string) error {
+func classifyTransport(err error, _, _ string) error {
 	return &sendError{Category: transportCategory(err), Err: err}
 }
 

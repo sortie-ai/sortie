@@ -56,7 +56,7 @@ func newNotifier(config map[string]any) (domain.Notifier, error) {
 		BaseURL:           endpoint,
 		Timeout:           sendTimeout,
 		ClassifyError:     classifyHTTPError,
-		ClassifyTransport: classifyTransportError,
+		ClassifyTransport: classifyTransport,
 	})
 	return &notifier{client: client}, nil
 }

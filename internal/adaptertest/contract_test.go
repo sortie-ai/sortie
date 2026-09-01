@@ -24,8 +24,11 @@ const contractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registr
 const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/trackermetrics"
 
 // contractBanTable maps a reimplementation this work extracted to the
-// shared owner a tracker or source-control package must call instead. A
-// top-level function re-declaring one of these names is a violation.
+// shared owner a package under any family root must call instead. A
+// top-level function re-declaring one of these names is a violation. The
+// owner named for an entry was extracted from a tracker or source-control
+// package and is not guaranteed to be the correct owner for a package in
+// another family.
 var contractBanTable = map[string]string{
 	"classifyTransportError": "httpkit.ClassifyTransport",
 	"withRetry":              "httpkit.RetryWithBackoff",
@@ -93,7 +96,7 @@ const (
 	contractOrchestratorPath  = "github.com/sortie-ai/sortie/internal/orchestrator"
 )
 
-// The two remaining family roots that hold kind packages, and the
+// The agent and notify family roots that hold kind packages, and the
 // module-internal prefix the permit-map guard strips to reach a
 // directory.
 const (
@@ -112,15 +115,32 @@ var contractFamilyRoots = []string{
 	contractNotifyFamilyPath,
 }
 
+// contractSharedPackage records why a package under a family root holds
+// no adapter, and whether the orchestrator's production code may import
+// it. Rule IMPORT consults presence alone; the core-import rule consults
+// coreImportable as well.
+type contractSharedPackage struct {
+	reason         string
+	coreImportable bool
+}
+
 // contractSharedFamilyPackages names each package under a family root that
 // holds no adapter, so it may be imported by a package under a family
-// root and by the orchestrator, and states why. Keys are matched exactly,
-// so a subpackage of a permitted package needs its own entry. A package
-// under a family root that is absent from this map may be imported only
-// by itself and by packages under its own path.
-var contractSharedFamilyPackages = map[string]string{
-	"github.com/sortie-ai/sortie/internal/scm/scmcore":    "shared forge decision core; registers no kind and holds no adapter",
-	"github.com/sortie-ai/sortie/internal/agent/procutil": "shared subprocess group handling; registers no kind and holds no adapter",
+// root, and states why. Keys are matched exactly, so a subpackage of a
+// permitted package needs its own entry. A package under a family root
+// that is absent from this map may be imported only by itself and by
+// packages under its own path. Whether the orchestrator may import an
+// entry too is a per-entry property: an entry whose coreImportable is
+// false stays importable by packages under a family root but not by the
+// orchestrator's production code.
+var contractSharedFamilyPackages = map[string]contractSharedPackage{
+	"github.com/sortie-ai/sortie/internal/scm/scmcore":                     {reason: "shared forge decision core; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/procutil":                  {reason: "shared subprocess group handling; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/sshutil":                   {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest":                 {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 }
 
 // contractPackageBannedImports maps one package's import path to the
@@ -145,11 +165,12 @@ var contractAllowlist = map[string]map[contractRule]string{
 	},
 }
 
-// The two outcomes checkContractCoreImports renders as
+// The three outcomes checkContractCoreImports renders as
 // "imports " + path + "; " + reason.
 const (
 	contractCoreRegistryReason     = "the orchestrator resolves an adapter kind through the registry rather than importing its package"
 	contractCoreRegistrationReason = "cmd/sortie owns the blank imports that trigger kind registration"
+	contractCoreTestSupportReason  = "the orchestrator's production code must not import a test-support package"
 )
 
 // contractViolation describes one place a file or package breaks the
@@ -550,8 +571,14 @@ func contractCoreImportBanReason(importPath string, blankImport, inTestFile bool
 		return ""
 	}
 
-	if _, shared := contractSharedFamilyPackages[importPath]; shared {
-		return ""
+	if shared, ok := contractSharedFamilyPackages[importPath]; ok {
+		if shared.coreImportable {
+			return ""
+		}
+		if inTestFile {
+			return ""
+		}
+		return contractCoreTestSupportReason
 	}
 
 	if blankImport && inTestFile {
@@ -775,13 +802,14 @@ func contractWalkRoot(t *testing.T, fset *token.FileSet, dir, importPath string)
 	return walked, registryImported
 }
 
-// TestCheckAdapterContract walks the Go files under internal/tracker and
-// internal/scm, excluding testdata, and fails when any package breaks the
-// shared-decision invariant this work establishes: a re-declared
-// reimplementation of a name the ban table names, a domain.TrackerAdapter
-// method that does not record through trackermetrics.Track, a direct
-// call to IncTrackerRequests, a tracker-registering package supplying no
-// config validation hook, or an import rule IMPORT rejects.
+// TestCheckAdapterContract walks the Go files under internal/tracker,
+// internal/scm, internal/agent, and internal/notify, excluding testdata,
+// and fails when any package breaks the shared-decision invariant this
+// work establishes: a re-declared reimplementation of a name the ban
+// table names, a domain.TrackerAdapter method that does not record
+// through trackermetrics.Track, a direct call to IncTrackerRequests, a
+// tracker-registering package supplying no config validation hook, or an
+// import rule IMPORT rejects.
 func TestCheckAdapterContract(t *testing.T) {
 	fset := token.NewFileSet()
 
@@ -791,18 +819,17 @@ func TestCheckAdapterContract(t *testing.T) {
 	}{
 		{filepath.Join("..", "tracker"), contractTrackerFamilyPath},
 		{filepath.Join("..", "scm"), contractSCMFamilyPath},
+		{filepath.Join("..", "agent"), contractAgentFamilyPath},
+		{filepath.Join("..", "notify"), contractNotifyFamilyPath},
 	}
 
 	var walked []contractWalkedPackage
-	registryImported := false
 	for _, root := range roots {
 		rootWalked, rootRegistryImported := contractWalkRoot(t, fset, root.dir, root.importPath)
+		if !rootRegistryImported {
+			t.Fatalf("no parsed file under %s imports %s, want at least one", root.importPath, contractRegistryImportPath)
+		}
 		walked = append(walked, rootWalked...)
-		registryImported = registryImported || rootRegistryImported
-	}
-
-	if !registryImported {
-		t.Fatalf("no parsed file under either root imports %s, want at least one", contractRegistryImportPath)
 	}
 
 	sort.Slice(walked, func(i, j int) bool { return walked[i].dir < walked[j].dir })
@@ -1148,6 +1175,51 @@ func markUnresolved(issue *domain.Issue) {
 `,
 			wantCount: 0,
 		},
+		{
+			name:       "a notifier backend importing a sibling notifier backend is rejected",
+			dirName:    "slack",
+			importPath: "github.com/sortie-ai/sortie/internal/notify/slack",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/notify/webhook"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "a notifier backend importing the orchestrator is rejected",
+			dirName:    "webhook",
+			importPath: "github.com/sortie-ai/sortie/internal/notify/webhook",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/orchestrator"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "an agent kind package importing a sibling agent kind package is rejected",
+			dirName:    "codex",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/codex",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/claude"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "an agent kind package importing the permitted shared packages is accepted",
+			dirName:    "codex",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/codex",
+			src: `package fixture
+
+import (
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+)
+`,
+			inTestFile: true,
+			wantCount:  0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1220,15 +1292,16 @@ var _ = r.Trackers
 // contractSharedFamilyPackages against going stale: it fails when an
 // entry carries an empty reason, names a key contractSharedPackageDir
 // cannot resolve, names a directory with no parsable non-test Go file,
-// or names a package that contractPackageRegistersKind now reports true
-// for. It enumerates each named directory with os.ReadDir alone, never
-// descending into a subdirectory, so a permitted package's verdict never
-// depends on a subpackage the map does not name.
+// names a package that contractPackageRegistersKind now reports true
+// for, or carries coreImportable true for a directory whose non-test
+// files import testing. It enumerates each named directory with
+// os.ReadDir alone, never descending into a subdirectory, so a permitted
+// package's verdict never depends on a subpackage the map does not name.
 func TestContractSharedFamilyPackages_RegisterNoKind(t *testing.T) {
 	t.Parallel()
 
-	for importPath, reason := range contractSharedFamilyPackages {
-		if reason == "" {
+	for importPath, pkg := range contractSharedFamilyPackages {
+		if pkg.reason == "" {
 			t.Errorf("contractSharedFamilyPackages[%q] carries an empty reason", importPath)
 		}
 
@@ -1266,6 +1339,16 @@ func TestContractSharedFamilyPackages_RegisterNoKind(t *testing.T) {
 
 		if contractPackageRegistersKind(files) {
 			t.Errorf("%q is a permitted shared package but registers a kind", importPath)
+		}
+
+		if !pkg.coreImportable {
+			continue
+		}
+		for _, file := range files {
+			if resolveContractImportName(file, "testing") == "" {
+				continue
+			}
+			t.Errorf("%q carries coreImportable true but %s imports testing", importPath, fset.Position(file.Pos()).Filename)
 		}
 	}
 }
@@ -1448,6 +1531,38 @@ import "github.com/sortie-ai/sortie/internal/scm/scmcore/inner"
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/scmwatch"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a non-test orchestrator file importing the shared agent test-support package is rejected",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/agenttest"
+`,
+			wantCount:  1,
+			wantReason: contractCoreTestSupportReason,
+		},
+		{
+			name:       "an orchestrator test file importing the shared agent test-support package by name is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/agenttest"
+`,
+			inTestFile: true,
+			wantCount:  0,
+		},
+		{
+			name:       "a non-test orchestrator file importing the permitted agentcore package is accepted",
+			dirName:    "orchestrator",
+			importPath: contractOrchestratorPath,
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/agentcore"
 `,
 			wantCount: 0,
 		},
