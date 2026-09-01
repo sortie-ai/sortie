@@ -74,6 +74,48 @@ func TestNewLinearAdapter(t *testing.T) {
 	}
 }
 
+// TestNewLinearAdapter_TypeFaultVsAbsentKey covers the distinction between
+// a wrong-typed api_key and an absent one: the type fault reports
+// domain.ErrTrackerPayload with the typed-fault message, while the absent
+// key keeps its existing domain.ErrMissingTrackerAPIKey kind and message.
+func TestNewLinearAdapter_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("api_key wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewLinearAdapter(map[string]any{"api_key": 4242, "project": "SOR"})
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "api_key: expected string, got integer" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "api_key: expected string, got integer")
+		}
+	})
+
+	t.Run("api_key absent", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewLinearAdapter(map[string]any{"project": "SOR"})
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrMissingTrackerAPIKey {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrMissingTrackerAPIKey)
+		}
+		if te.Message != "missing required config key: api_key" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "missing required config key: api_key")
+		}
+	})
+}
+
 // endpointGuardConfig builds a config map for [TestNewLinearAdapterEndpointGuard].
 // api_key is deliberately never set: every case in that test isolates the
 // endpoint gate by relying on the next required-field check to fire only

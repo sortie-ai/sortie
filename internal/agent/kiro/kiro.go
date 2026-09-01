@@ -102,8 +102,11 @@ func (s *sessionState) logger() *slog.Logger {
 // trust_all_tools and a non-empty trust_tools list. Command resolution is
 // deferred to [KiroAdapter.StartSession].
 func NewKiroAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt, err := parsePassthroughConfig(config)
-	if err != nil {
+	pt, fault := parsePassthroughConfig(config)
+	if fault != nil {
+		return nil, fault
+	}
+	if err := checkCrossField(pt); err != nil {
 		return nil, err
 	}
 	return &KiroAdapter{passthrough: pt}, nil

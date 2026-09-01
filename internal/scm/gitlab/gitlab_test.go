@@ -346,6 +346,10 @@ func TestNewGitLabAdapter(t *testing.T) {
 			{"malformed endpoint scheme", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "ftp://example.com"}, domain.ErrTrackerPayload, ""},
 			{"malformed endpoint no host", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "http://"}, domain.ErrTrackerPayload, ""},
 
+			{"api_key wrong type", map[string]any{"api_key": 4242, "project": testProject, "endpoint": unreachable}, domain.ErrTrackerPayload, "api_key: expected string, got integer"},
+			{"project wrong type", map[string]any{"api_key": "tok", "project": true, "endpoint": unreachable}, domain.ErrTrackerPayload, "project: expected string, got boolean"},
+			{"query_filter wrong type", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": 4242}, domain.ErrTrackerPayload, "query_filter: expected string, got integer"},
+
 			{"query_filter malformed percent-encoding", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=%zz"}, domain.ErrTrackerPayload, ""},
 			{"query_filter semicolon separator", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "a=1;b=2"}, domain.ErrTrackerPayload, ""},
 

@@ -83,7 +83,10 @@ type LinearAdapter struct {
 // an unknown team, or a configured state name absent from the team returns a
 // [*domain.TrackerError] and blocks construction.
 func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	endpointRaw, _ := config["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(config, "endpoint")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
 	if !endpointOK {
 		return nil, &domain.TrackerError{
@@ -92,7 +95,10 @@ func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	apiKey, _ := config["api_key"].(string)
+	apiKey, fault := typeutil.StringField(config, "api_key")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerAPIKey,
@@ -100,7 +106,10 @@ func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	project, _ := config["project"].(string)
+	project, fault := typeutil.StringField(config, "project")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerProject,
@@ -116,15 +125,24 @@ func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	if len(terminalStates) == 0 {
 		terminalStates = defaultTerminalStates
 	}
-	handoffState, _ := config["handoff_state"].(string)
+	handoffState, fault := typeutil.StringField(config, "handoff_state")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 
-	rawQueryFilter, _ := config["query_filter"].(string)
+	rawQueryFilter, fault := typeutil.StringField(config, "query_filter")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	queryFilter, err := parseQueryFilter(rawQueryFilter)
 	if err != nil {
 		return nil, err
 	}
 
-	userAgent, _ := config["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(config, "user_agent")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

@@ -41,6 +41,13 @@ func ciWatchWindowWorkflow(ms int) []byte {
 	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nreactions:\n  ci_failure:\n    provider: github-actions\n    watch_window_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", ms)
 }
 
+// trackerEndpointWorkflow returns a minimal WORKFLOW.md content with the
+// given tracker.endpoint value spliced in unquoted, so a numeric literal
+// decodes as a YAML integer rather than a string.
+func trackerEndpointWorkflow(endpoint string) []byte {
+	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\ntracker:\n  kind: jira\n  endpoint: %s\n---\nDo the task for {{ .issue.title }}.\n", endpoint)
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
@@ -240,6 +247,60 @@ func TestManager_ReloadRetainsOnError(t *testing.T) {
 	}
 	if mgr.LastLoadError() == nil {
 		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+	}
+}
+
+// TestManager_ReloadRetainsOnConfigTypeFault covers the reload fail-safe
+// path for a config-layer type fault: a reload whose new WORKFLOW.md
+// carries a mistyped tracker.endpoint leaves Manager.Config() returning
+// the previously loaded configuration and LastLoadError() reporting the
+// fault, exercising the existing fail-safe path with no new call site
+// inside Manager.Reload.
+func TestManager_ReloadRetainsOnConfigTypeFault(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, trackerEndpointWorkflow("https://jira.example.com"))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := mgr.Config().Tracker.Endpoint; got != "https://jira.example.com" {
+		t.Fatalf("initial Config().Tracker.Endpoint = %q, want %q", got, "https://jira.example.com")
+	}
+
+	// A bare, unquoted number decodes as a YAML integer, not a string.
+	mustWriteFile(t, path, trackerEndpointWorkflow("123"))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error")
+	}
+	var ce *config.ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Reload() error type = %T, want *config.ConfigError", err)
+	}
+	if ce.Field != "tracker.endpoint" {
+		t.Errorf("Reload() ConfigError.Field = %q, want %q", ce.Field, "tracker.endpoint")
+	}
+	if ce.Message != "expected string, got integer" {
+		t.Errorf("Reload() ConfigError.Message = %q, want %q", ce.Message, "expected string, got integer")
+	}
+
+	if got := mgr.Config().Tracker.Endpoint; got != "https://jira.example.com" {
+		t.Errorf("after failed Reload: Config().Tracker.Endpoint = %q, want %q (retained)", got, "https://jira.example.com")
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+	}
+	var lastCe *config.ConfigError
+	if !errors.As(mgr.LastLoadError(), &lastCe) {
+		t.Fatalf("LastLoadError() type = %T, want *config.ConfigError", mgr.LastLoadError())
+	}
+	if lastCe.Field != "tracker.endpoint" {
+		t.Errorf("LastLoadError() ConfigError.Field = %q, want %q", lastCe.Field, "tracker.endpoint")
 	}
 }
 

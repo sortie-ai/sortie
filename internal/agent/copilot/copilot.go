@@ -282,7 +282,10 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) (usage domain.TokenUsag
 // "copilot-cli" sub-object in WORKFLOW.md. Command resolution is
 // deferred to [CopilotAdapter.StartSession].
 func NewCopilotAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt := parsePassthroughConfig(config)
+	pt, fault := parsePassthroughConfig(config)
+	if fault != nil {
+		return nil, fault
+	}
 	return &CopilotAdapter{passthrough: pt}, nil
 }
 

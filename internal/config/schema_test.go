@@ -309,6 +309,22 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"tracker.jira"},
 		},
 		{
+			// tracker.kind is an integer, so the adapter-kind lookup faults
+			// and adapterKind stays "": the exemption cannot apply, since a
+			// non-string value cannot name a block. Both the sub-key and
+			// the kind's own type mismatch are reported.
+			name: "adapter passthrough sub-key not exempt when kind is mistyped",
+			raw: map[string]any{
+				"tracker": map[string]any{
+					"kind": 123,
+					"jira": map[string]any{"foo": "bar"},
+				},
+			},
+			wantCount:  2,
+			wantChecks: []string{"unknown_sub_key", "type_mismatch"},
+			wantFields: []string{"tracker.jira", "tracker.kind"},
+		},
+		{
 			name: "unknown nested sub-key in tracker.comments",
 			raw: map[string]any{
 				"tracker": map[string]any{

@@ -15,6 +15,28 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// TestParsePassthroughConfig_TypeFault covers the funnel's fault path for
+// a wrong-typed string field: it returns the zero passthroughConfig and a
+// fault whose rendering names the key and the type found.
+func TestParsePassthroughConfig_TypeFault(t *testing.T) {
+	t.Parallel()
+
+	pt, fault := parsePassthroughConfig(map[string]any{"approval_policy": 123})
+
+	if fault == nil {
+		t.Fatal("parsePassthroughConfig(approval_policy=123) fault = nil, want non-nil")
+	}
+	if fault.Key != "approval_policy" {
+		t.Errorf("parsePassthroughConfig(approval_policy=123) fault.Key = %q, want %q", fault.Key, "approval_policy")
+	}
+	if fault.Error() != "approval_policy: expected string, got integer" {
+		t.Errorf("parsePassthroughConfig(approval_policy=123) fault.Error() = %q, want %q", fault.Error(), "approval_policy: expected string, got integer")
+	}
+	if pt.Model != "" || pt.Effort != "" || pt.ApprovalPolicy != "" || pt.ThreadSandbox != "" || pt.Personality != "" || pt.TurnSandboxPolicy != nil {
+		t.Errorf("parsePassthroughConfig(approval_policy=123) passthroughConfig = %+v, want zero value", pt)
+	}
+}
+
 // TestMCPInjectionConformance proves codex's real launch surface
 // matches its declared disposition, on both a local and a remote
 // launch. codex renders the generated MCP config as override

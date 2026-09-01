@@ -30,28 +30,40 @@ type passthroughConfig struct {
 }
 
 // parsePassthroughConfig extracts Kiro-specific settings from the raw
-// config map. Missing or wrong-typed keys use zero-value defaults, except
+// config map. A missing key uses its zero-value default, except
 // TrustAllTools, which [resolveTrustPosture] defaults to true rather than
-// false when the config sets neither trust key.
-//
-// It returns a non-nil error when both trust_all_tools is true and
-// trust_tools is non-empty, because the two trust modes are mutually
-// exclusive.
-func parsePassthroughConfig(config map[string]any) (passthroughConfig, error) {
+// false when the config sets neither trust key. A key present with a
+// non-string value for a string field reports a fault rather than
+// defaulting; [checkCrossField] holds the trust_all_tools and
+// trust_tools conflict check.
+func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
+	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	agent, fault := typeutil.StringField(config, "agent")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+
 	trustAllTools, trustTools := resolveTrustPosture(config)
 
-	pt := passthroughConfig{
-		Model:         typeutil.StringFrom(config, "model"),
+	return passthroughConfig{
+		Model:         model,
 		TrustAllTools: trustAllTools,
 		TrustTools:    trustTools,
-		Agent:         typeutil.StringFrom(config, "agent"),
-	}
+		Agent:         agent,
+	}, nil
+}
 
+// checkCrossField rejects a passthrough carrying both trust_all_tools and
+// a non-empty trust_tools, because the two trust modes are mutually
+// exclusive.
+func checkCrossField(pt passthroughConfig) error {
 	if pt.TrustAllTools && len(pt.TrustTools) > 0 {
-		return passthroughConfig{}, fmt.Errorf("%s", trustToolsConflictMessage)
+		return fmt.Errorf("%s", trustToolsConflictMessage)
 	}
-
-	return pt, nil
+	return nil
 }
 
 // resolveTrustPosture computes the effective trust_all_tools value and the

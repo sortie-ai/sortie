@@ -102,11 +102,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 			want:   passthroughConfig{},
 		},
 		{
-			name:   "wrong type for string field produces empty string",
-			config: map[string]any{"model": 42},
-			want:   passthroughConfig{},
-		},
-		{
 			name:   "wrong type for bool field produces false",
 			config: map[string]any{"experimental": "yes"},
 			want:   passthroughConfig{},
@@ -121,12 +116,26 @@ func TestParsePassthroughConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := parsePassthroughConfig(tt.config)
+			got, fault := parsePassthroughConfig(tt.config)
+			if fault != nil {
+				t.Fatalf("parsePassthroughConfig: %v", fault)
+			}
 			if got != tt.want {
 				t.Errorf("parsePassthroughConfig() =\n  %+v\nwant\n  %+v", got, tt.want)
 			}
 		})
 	}
+
+	t.Run("wrong type for string field reports a fault", func(t *testing.T) {
+		t.Parallel()
+		_, fault := parsePassthroughConfig(map[string]any{"model": 42})
+		if fault == nil {
+			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
+		}
+		if fault.Key != "model" {
+			t.Errorf("fault.Key = %q, want %q", fault.Key, "model")
+		}
+	})
 }
 
 // TestMCPInjectionConformance proves copilot-cli's real buildArgs

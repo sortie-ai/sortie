@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -55,7 +56,10 @@ type GiteaSCMAdapter struct {
 // travels only in the Authorization header set by the shared client and is
 // never logged.
 func NewGiteaSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error) {
-	apiKey, _ := adapterConfig["api_key"].(string)
+	apiKey, fault := typeutil.StringField(adapterConfig, "api_key")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMAuth,
@@ -63,7 +67,10 @@ func NewGiteaSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error)
 		}
 	}
 
-	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(adapterConfig, "endpoint")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	if endpointRaw == "" {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMPayload,
@@ -82,12 +89,18 @@ func NewGiteaSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error)
 		endpoint += "/api/v1"
 	}
 
-	userAgent, _ := adapterConfig["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(adapterConfig, "user_agent")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}
 
-	project, _ := adapterConfig["project"].(string)
+	project, fault := typeutil.StringField(adapterConfig, "project")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	preflightOwner, preflightRepo, ok := strings.Cut(project, "/")
 	if !ok || preflightOwner == "" || preflightRepo == "" || strings.Contains(preflightRepo, "/") {
 		preflightOwner, preflightRepo = "", ""

@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -58,7 +59,10 @@ type GiteaCIProvider struct {
 // project is a string parse. The token travels only in the Authorization header
 // set by the shared client and is never logged.
 func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error) {
-	apiKey, _ := adapterConfig["api_key"].(string)
+	apiKey, fault := typeutil.StringField(adapterConfig, "api_key")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIAuth,
@@ -66,7 +70,10 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 		}
 	}
 
-	project, _ := adapterConfig["project"].(string)
+	project, fault := typeutil.StringField(adapterConfig, "project")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIPayload,
@@ -82,7 +89,10 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 		}
 	}
 
-	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(adapterConfig, "endpoint")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if endpointRaw == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIPayload,
@@ -101,7 +111,10 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 		endpoint += "/api/v1"
 	}
 
-	userAgent, _ := adapterConfig["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(adapterConfig, "user_agent")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

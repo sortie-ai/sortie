@@ -174,6 +174,11 @@ func TestNewGiteaAdapter(t *testing.T) {
 			{"project with empty repo", map[string]any{"api_key": "tok", "project": "acme/", "endpoint": "http://localhost"}, domain.ErrTrackerPayload},
 			{"missing endpoint", map[string]any{"api_key": "tok", "project": "acme/widgets"}, domain.ErrTrackerPayload},
 			{"empty endpoint", map[string]any{"api_key": "tok", "project": "acme/widgets", "endpoint": ""}, domain.ErrTrackerPayload},
+			{"api_key wrong type", map[string]any{"api_key": 4242, "project": "acme/widgets", "endpoint": "http://localhost"}, domain.ErrTrackerPayload},
+			{"project wrong type", map[string]any{"api_key": "tok", "project": true, "endpoint": "http://localhost"}, domain.ErrTrackerPayload},
+			{"endpoint wrong type", map[string]any{"api_key": "tok", "project": "acme/widgets", "endpoint": 4242}, domain.ErrTrackerPayload},
+			{"handoff_state wrong type", map[string]any{"api_key": "tok", "project": "acme/widgets", "endpoint": "http://localhost", "handoff_state": 4242}, domain.ErrTrackerPayload},
+			{"user_agent wrong type", map[string]any{"api_key": "tok", "project": "acme/widgets", "endpoint": "http://localhost", "user_agent": 4242}, domain.ErrTrackerPayload},
 		}
 
 		for _, tt := range tests {
@@ -186,6 +191,70 @@ func TestNewGiteaAdapter(t *testing.T) {
 					t.Error("adapter should be nil on error")
 				}
 			})
+		}
+	})
+
+	// endpoint's wrong-type and absent-key faults share domain.ErrTrackerPayload,
+	// unlike api_key and project (which get a distinct kind for the absent
+	// case), so the two are distinguished here by message instead of kind.
+	t.Run("endpoint wrong type vs absent produce distinct messages", func(t *testing.T) {
+		t.Parallel()
+
+		wrongType, err := NewGiteaAdapter(map[string]any{"api_key": "tok", "project": "acme/widgets", "endpoint": 4242})
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("wrong-type endpoint: error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Message != "endpoint: expected string, got integer" {
+			t.Errorf("wrong-type endpoint: TrackerError.Message = %q, want %q", te.Message, "endpoint: expected string, got integer")
+		}
+		if wrongType != nil {
+			t.Error("adapter should be nil on error")
+		}
+
+		absent, err := NewGiteaAdapter(map[string]any{"api_key": "tok", "project": "acme/widgets"})
+		if !errors.As(err, &te) {
+			t.Fatalf("absent endpoint: error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Message != "tracker.endpoint is required for gitea" {
+			t.Errorf("absent endpoint: TrackerError.Message = %q, want %q", te.Message, "tracker.endpoint is required for gitea")
+		}
+		if absent != nil {
+			t.Error("adapter should be nil on error")
+		}
+	})
+
+	// query_filter is read ahead of the network preflight, so a mistyped
+	// value must be reported without any request reaching the server: the
+	// mux here registers no routes at all, and any request fails the test.
+	t.Run("query_filter wrong type is reported without a preflight call", func(t *testing.T) {
+		t.Parallel()
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("unexpected request: %s %s (query_filter fault must short-circuit before preflight)", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = 4242
+
+		a, err := NewGiteaAdapter(cfg)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "query_filter: expected string, got integer" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "query_filter: expected string, got integer")
+		}
+		if a != nil {
+			t.Error("adapter should be nil on error")
 		}
 	})
 

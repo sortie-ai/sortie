@@ -88,6 +88,40 @@ func TestWebhook_NewNotifier_MissingURL(t *testing.T) {
 	}
 }
 
+// TestWebhook_NewNotifier_WrongTypeVsAbsentURL covers the distinction
+// between a wrong-typed url and an absent one: the type fault carries the
+// typed-fault message, while the absent key keeps its existing "url is
+// required" message.
+func TestWebhook_NewNotifier_WrongTypeVsAbsentURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("url wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := newNotifier(map[string]any{"url": 4242})
+
+		if err == nil {
+			t.Fatal("newNotifier(url=4242) error = nil, want error")
+		}
+		if err.Error() != "webhook notifier: url: expected string, got integer" {
+			t.Errorf("newNotifier(url=4242) error = %q, want %q", err.Error(), "webhook notifier: url: expected string, got integer")
+		}
+	})
+
+	t.Run("url absent", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := newNotifier(map[string]any{})
+
+		if err == nil {
+			t.Fatal("newNotifier({}) error = nil, want error")
+		}
+		if err.Error() != "webhook notifier: url is required" {
+			t.Errorf("newNotifier({}) error = %q, want %q", err.Error(), "webhook notifier: url is required")
+		}
+	})
+}
+
 func TestWebhook_NewNotifier_ValidURL(t *testing.T) {
 	t.Parallel()
 

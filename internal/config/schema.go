@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/maputil"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // FieldType classifies the expected YAML type for a config field.
@@ -255,10 +256,14 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			knownNames[f.Name] = true
 		}
 
-		// Determine adapter kind for pass-through exemption.
+		// Determine adapter kind for pass-through exemption. A wrong-typed
+		// kind leaves adapterKind at its zero value, so the exemption is
+		// not applied: a non-string value cannot name a block.
 		var adapterKind string
 		if schema.AllowAdapterPassthrough {
-			adapterKind = extractString(sectionMap, "kind")
+			if kind, fault := typeutil.StringField(sectionMap, "kind"); fault == nil {
+				adapterKind = kind
+			}
 		}
 
 		// Flag sub-keys not recognized by the section schema.

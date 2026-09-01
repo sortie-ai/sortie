@@ -160,11 +160,6 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 			want:   passthroughConfig{Model: "claude-opus-4.7", TrustAllTools: true},
 		},
 		{
-			name:   "wrong-typed model takes zero-value default",
-			config: map[string]any{"model": 42},
-			want:   passthroughConfig{TrustAllTools: true},
-		},
-		{
 			name:   "wrong-typed trust_all_tools takes false default",
 			config: map[string]any{"trust_all_tools": "yes"},
 			want:   passthroughConfig{},
@@ -179,20 +174,15 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 			config: map[string]any{"trust_tools": []any{"read", 7, "grep"}},
 			want:   passthroughConfig{TrustTools: []string{"read", "grep"}},
 		},
-		{
-			name:   "wrong-typed agent takes zero-value default",
-			config: map[string]any{"agent": true},
-			want:   passthroughConfig{TrustAllTools: true},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := parsePassthroughConfig(tt.config)
-			if err != nil {
-				t.Fatalf("parsePassthroughConfig(%v) error = %v, want nil", tt.config, err)
+			got, fault := parsePassthroughConfig(tt.config)
+			if fault != nil {
+				t.Fatalf("parsePassthroughConfig(%v) fault = %v, want nil", tt.config, fault)
 			}
 
 			if got.Model != tt.want.Model {
@@ -209,6 +199,28 @@ func TestParsePassthroughConfig_Fields(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("wrong-typed model reports a fault", func(t *testing.T) {
+		t.Parallel()
+		_, fault := parsePassthroughConfig(map[string]any{"model": 42})
+		if fault == nil {
+			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
+		}
+		if fault.Key != "model" {
+			t.Errorf("fault.Key = %q, want %q", fault.Key, "model")
+		}
+	})
+
+	t.Run("wrong-typed agent reports a fault", func(t *testing.T) {
+		t.Parallel()
+		_, fault := parsePassthroughConfig(map[string]any{"agent": true})
+		if fault == nil {
+			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
+		}
+		if fault.Key != "agent" {
+			t.Errorf("fault.Key = %q, want %q", fault.Key, "agent")
+		}
+	})
 }
 
 // TestParsePassthroughConfig_ClonesTrustTools verifies the parsed slice does

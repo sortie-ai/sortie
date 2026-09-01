@@ -147,6 +147,18 @@ func TestNewGitHubAdapter(t *testing.T) {
 			wantErr:  true,
 			wantKind: domain.ErrTrackerPayload,
 		},
+		{
+			name:     "api_key wrong type",
+			config:   map[string]any{"api_key": 4242, "project": "owner/repo"},
+			wantErr:  true,
+			wantKind: domain.ErrTrackerPayload,
+		},
+		{
+			name:     "project wrong type",
+			config:   map[string]any{"api_key": "tok", "project": true},
+			wantErr:  true,
+			wantKind: domain.ErrTrackerPayload,
+		},
 	}
 
 	for _, tt := range tests {
@@ -169,6 +181,96 @@ func TestNewGitHubAdapter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNewGitHubAdapter_TypeFaultVsAbsentKey covers the distinction between
+// a wrong-typed config key and an absent one for api_key and project: the
+// type fault reports domain.ErrTrackerPayload with the typed-fault
+// message, distinct from the absent key's own kind
+// (domain.ErrMissingTrackerAPIKey / domain.ErrMissingTrackerProject) and
+// message.
+func TestNewGitHubAdapter_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("api_key wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://api.github.com")
+		config["api_key"] = 4242
+
+		_, err := NewGitHubAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "api_key: expected string, got integer" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "api_key: expected string, got integer")
+		}
+	})
+
+	t.Run("api_key absent", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://api.github.com")
+		delete(config, "api_key")
+
+		_, err := NewGitHubAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrMissingTrackerAPIKey {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrMissingTrackerAPIKey)
+		}
+		if te.Message != "missing required config key: api_key" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "missing required config key: api_key")
+		}
+	})
+
+	t.Run("project wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://api.github.com")
+		config["project"] = true
+
+		_, err := NewGitHubAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "project: expected string, got boolean" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "project: expected string, got boolean")
+		}
+	})
+
+	t.Run("project absent", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://api.github.com")
+		delete(config, "project")
+
+		_, err := NewGitHubAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrMissingTrackerProject {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrMissingTrackerProject)
+		}
+		if te.Message != "missing required config key: project" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "missing required config key: project")
+		}
+	})
 }
 
 func TestNewGitHubAdapter_Defaults(t *testing.T) {

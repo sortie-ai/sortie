@@ -20,8 +20,16 @@ var nonAskingPermissionModes = map[string]bool{
 // and returns diagnostics for the sortie validate pipeline. It does not
 // construct an adapter instance or launch a subprocess.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
-	mode := typeutil.StringFrom(fields.Passthrough, "permission_mode")
-	if mode == "" || nonAskingPermissionModes[mode] {
+	pt, fault := parsePassthroughConfig(fields.Passthrough)
+	if fault != nil {
+		return []registry.ValidationDiag{{
+			Severity: "error",
+			Check:    "claude-code." + fault.Key + ".wrong_type",
+			Message:  fault.Error(),
+		}}
+	}
+
+	if pt.PermissionMode == "" || nonAskingPermissionModes[pt.PermissionMode] {
 		return nil
 	}
 

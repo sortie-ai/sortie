@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +69,26 @@ func TestNewGitHubSCMAdapter_MissingAPIKey(t *testing.T) {
 
 	_, err := NewGitHubSCMAdapter(map[string]any{})
 	assertSCMErrorKind(t, err, domain.ErrSCMAuth)
+}
+
+// TestNewGitHubSCMAdapter_TypeFaultVsAbsentKey covers the distinction
+// between a wrong-typed api_key and an absent one: the type fault reports
+// domain.ErrSCMPayload, distinct from the absent key's domain.ErrSCMAuth.
+func TestNewGitHubSCMAdapter_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGitHubSCMAdapter(map[string]any{"api_key": 4242})
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	if se.Kind != domain.ErrSCMPayload {
+		t.Errorf("SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMPayload)
+	}
+	if se.Message != "api_key: expected string, got integer" {
+		t.Errorf("SCMError.Message = %q, want %q", se.Message, "api_key: expected string, got integer")
+	}
 }
 
 func TestNewGitHubSCMAdapter_Valid(t *testing.T) {

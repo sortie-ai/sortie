@@ -115,6 +115,23 @@ func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAuth)
 	})
 
+	t.Run("api_key wrong type returns ErrSCMPayload distinct from the absent-key ErrSCMAuth", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewGitLabSCMAdapter(map[string]any{"api_key": 4242, "endpoint": "http://gitlab.invalid"})
+
+		var se *domain.SCMError
+		if !errors.As(err, &se) {
+			t.Fatalf("error type = %T, want *domain.SCMError", err)
+		}
+		if se.Kind != domain.ErrSCMPayload {
+			t.Errorf("SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMPayload)
+		}
+		if se.Message != "api_key: expected string, got integer" {
+			t.Errorf("SCMError.Message = %q, want %q", se.Message, "api_key: expected string, got integer")
+		}
+	})
+
 	t.Run("malformed endpoint returns ErrSCMPayload", func(t *testing.T) {
 		t.Parallel()
 

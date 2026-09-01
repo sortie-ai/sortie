@@ -84,7 +84,10 @@ type JiraAdapter struct {
 // malformed api_key, or a Cloud endpoint combined with api_version "2"
 // returns a [*domain.TrackerError] and blocks construction.
 func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	endpoint, _ := config["endpoint"].(string)
+	endpoint, fault := typeutil.StringField(config, "endpoint")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if endpoint == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
@@ -108,7 +111,10 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		return nil, err
 	}
 
-	apiKey, _ := config["api_key"].(string)
+	apiKey, fault := typeutil.StringField(config, "api_key")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerAPIKey,
@@ -121,7 +127,10 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		return nil, err
 	}
 
-	project, _ := config["project"].(string)
+	project, fault := typeutil.StringField(config, "project")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerProject,
@@ -134,9 +143,15 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		activeStates = defaultActiveStates
 	}
 
-	queryFilter, _ := config["query_filter"].(string)
+	queryFilter, fault := typeutil.StringField(config, "query_filter")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 
-	userAgent, _ := config["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(config, "user_agent")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

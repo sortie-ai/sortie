@@ -2632,8 +2632,8 @@ itself refuses nothing and would launch on either. Every other value reaches the
 written, except `mcp_config`, which the generated configuration the worker writes
 supersedes. What the CLI does with an invalid value differs per flag: `--effort` falls
 back to the default effort with a warning, and an unknown model name reaches the API and
-fails there. A key whose YAML value has the wrong type is ignored and the default
-applies.
+fails there. A string key whose YAML value carries another type fails construction and,
+offline, is reported by `sortie validate` under the check `claude-code.<key>.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2696,8 +2696,9 @@ with no session ID, on a session where none was known already, is followed by
 `--continue`, which resumes the most recent conversation in the workspace directory.
 The adapter validates none of these values and forwards each as written, except in the
 two cases described below: a non-positive `max_autopilot_continues` is replaced by `50`,
-and `mcp_config` is reformatted before it reaches `--additional-mcp-config`. A key whose
-YAML value has the wrong type is ignored and the default applies. The adapter reads the
+and `mcp_config` is reformatted before it reaches `--additional-mcp-config`. A string key
+whose YAML value carries another type fails construction and, offline, is reported by
+`sortie validate` under the check `copilot-cli.<key>.wrong_type`. The adapter reads the
 runtime's own task-completion report as the turn's outcome, not solely the terminal
 event's exit code.
 
@@ -2753,8 +2754,9 @@ The `codex` block is forwarded to the Codex adapter, which launches `codex app-s
 once per session and sends these fields on the `thread/start` and `turn/start`
 JSON-RPC requests as the session starts and as each turn runs. One key is checked
 before a run starts, `approval_policy`; the preflight refuses any value other than
-`never`, while the adapter itself refuses nothing further once a run starts. A key
-whose YAML value has the wrong type is ignored and the default applies.
+`never`, while the adapter itself refuses nothing further once a run starts. A string
+key whose YAML value carries another type fails construction and, offline, is reported
+by `sortie validate` under the check `codex.<key>.wrong_type`.
 
 The Codex adapter uses a persistent subprocess model: the app-server is launched
 once in `StartSession` and kept alive across turns, unlike the per-turn subprocess
@@ -3663,6 +3665,15 @@ Each error identifies the offending field path.
 | `config: agent.max_tokens: must be non-negative`                                | Negative value for `max_tokens`.                                         | Use `0` (unlimited) or a positive integer.                                                                                           |
 | `config: agent.max_consecutive_absences: must be greater than 0`                | `0` or a negative value for `max_consecutive_absences`.                  | Use a positive integer, or remove the key to take the default of `3`.                                                                |
 | `config: agent.max_consecutive_absences: invalid integer value: <val>`          | Non-integer value for `max_consecutive_absences`.                        | Use a plain integer (e.g., `3`) or a quoted string integer (e.g., `"3"`).                                                            |
+| `config: agent.kind: expected string, got <type>`                               | `agent.kind` is not a string (e.g., integer, boolean, list).             | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: agent.command: expected string, got <type>`                            | `agent.command` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.kind: expected string, got <type>`                             | `tracker.kind` is not a string (e.g., integer, boolean, list).           | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.endpoint: expected string, got <type>`                         | `tracker.endpoint` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.api_key: expected string, got <type>`                          | `tracker.api_key` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.project: expected string, got <type>`                          | `tracker.project` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.query_filter: expected string, got <type>`                     | `tracker.query_filter` is not a string (e.g., integer, boolean, list).   | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.api_version: expected string, got <type>`                      | `tracker.api_version` is a type other than string and other than a whole number (e.g., boolean, list). A bare whole number (e.g., `2`) is coerced to its decimal string instead of raising this error. | Ensure the value is a string or a whole number, quoted if necessary. |
+| `config: <field>: expected string, got timestamp`                               | An unquoted date (e.g., `2026-01-01`) decodes to a YAML timestamp rather than a string. | Quote the value (e.g., `"2026-01-01"`) so it decodes as a string.                                                        |
 | `config: tracker.handoff_state: expected string, got <type>`                    | `handoff_state` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.handoff_state: must not be empty`                              | `handoff_state` is set to an explicit empty string.                      | Provide a valid state name, or omit the field entirely to disable handoff.                                                           |
 | `config: tracker.handoff_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).  | Set the referenced environment variable to a valid state name.                                                                       |
@@ -3686,6 +3697,7 @@ Each error identifies the offending field path.
 | `config: workspace.retention_days: must be 0 to disable or at least 30 days`    | `retention_days` is between `1` and `29` inclusive.                       | Use `0` to disable the bound, or a value of `30` or greater.                                                                         |
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
+| `config: ci_feedback.kind: expected string, got <type>`                         | `ci_feedback.kind` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: ci_feedback.max_retries: invalid integer value: <val>`                 | Non-integer value for `max_retries`.                                     | Use a plain integer (e.g., `2`).                                                                                                     |
 | `config: ci_feedback.max_retries: must be non-negative`                         | Negative value for `max_retries`.                                        | Use `0` (escalate immediately) or a positive integer.                                                                                |
 | `config: ci_feedback.max_log_lines: invalid integer value: <val>`               | Non-integer value for `max_log_lines`.                                   | Use a plain integer (e.g., `50`).                                                                                                    |
@@ -3693,6 +3705,7 @@ Each error identifies the offending field path.
 | `config: ci_feedback.escalation: must be "label" or "comment", got "<val>"`     | Invalid escalation strategy.                                             | Use `"label"` or `"comment"`.                                                                                                        |
 | `config: reactions.ci_failure.watch_window_ms: must not exceed 9223372036854 (about 292 years); use 0 for no time limit, got <val>` | `watch_window_ms` exceeds the ceiling. | Lower the value, or use `0` for no time limit. |
 | `config: reactions.ci_failure.watch_window_ms: must be non-negative, got <val>` | Negative value for `watch_window_ms`.                                    | Use `0` (no time limit) or a positive integer.                                                                                       |
+| `config: notifications[N].kind: expected string, got <type>`                   | The `kind` of the `N`th `notifications` entry is not a string (e.g., integer, boolean, list). | Ensure the value is a string, quoted if necessary.                                                                 |
 
 ### 9.3 Environment Variable Errors
 

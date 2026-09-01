@@ -88,7 +88,8 @@ Recommended error categories:
 - `tracker_transport_error` (transport failures)
 - `tracker_auth_error` (authentication/authorization failures)
 - `tracker_api_error` (non-200 HTTP or API-level error)
-- `tracker_payload_error` (malformed or unexpected response structure)
+- `tracker_payload_error` (malformed or unexpected response structure, or an adapter
+  configuration value whose YAML type does not match what the reader requires)
 - `tracker_missing_end_cursor` (pagination integrity error)
 
 Each adapter maps its native errors to these categories.

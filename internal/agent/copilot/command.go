@@ -24,23 +24,53 @@ type passthroughConfig struct {
 	Experimental          bool
 }
 
-// parsePassthroughConfig extracts Copilot CLI-specific settings from
-// the raw config map. Missing or wrong-typed keys use zero-value
-// defaults.
-func parsePassthroughConfig(config map[string]any) passthroughConfig {
+// parsePassthroughConfig extracts Copilot CLI-specific settings from the
+// raw config map. A missing key uses its zero-value default. A key
+// present with a non-string value for a string field reports a fault
+// rather than defaulting.
+func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
+	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	agent, fault := typeutil.StringField(config, "agent")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	allowedTools, fault := typeutil.StringField(config, "allowed_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	deniedTools, fault := typeutil.StringField(config, "denied_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	availableTools, fault := typeutil.StringField(config, "available_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	excludedTools, fault := typeutil.StringField(config, "excluded_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	mcpConfig, fault := typeutil.StringField(config, "mcp_config")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+
 	return passthroughConfig{
-		Model:                 typeutil.StringFrom(config, "model"),
+		Model:                 model,
 		MaxAutopilotContinues: typeutil.IntFrom(config, "max_autopilot_continues", 0),
-		Agent:                 typeutil.StringFrom(config, "agent"),
-		AllowedTools:          typeutil.StringFrom(config, "allowed_tools"),
-		DeniedTools:           typeutil.StringFrom(config, "denied_tools"),
-		AvailableTools:        typeutil.StringFrom(config, "available_tools"),
-		ExcludedTools:         typeutil.StringFrom(config, "excluded_tools"),
-		MCPConfig:             typeutil.StringFrom(config, "mcp_config"),
+		Agent:                 agent,
+		AllowedTools:          allowedTools,
+		DeniedTools:           deniedTools,
+		AvailableTools:        availableTools,
+		ExcludedTools:         excludedTools,
+		MCPConfig:             mcpConfig,
 		DisableBuiltinMCPs:    typeutil.BoolFrom(config, "disable_builtin_mcps", false),
 		NoCustomInstructions:  typeutil.BoolFrom(config, "no_custom_instructions", false),
 		Experimental:          typeutil.BoolFrom(config, "experimental", false),
-	}
+	}, nil
 }
 
 // buildArgs constructs the CLI argument slice for a Copilot CLI

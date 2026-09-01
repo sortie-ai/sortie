@@ -104,7 +104,10 @@ type sessionState struct {
 // WORKFLOW.md. Command resolution is deferred to
 // [CodexAdapter.StartSession].
 func NewCodexAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt := parsePassthroughConfig(config)
+	pt, fault := parsePassthroughConfig(config)
+	if fault != nil {
+		return nil, fault
+	}
 	adapter := &CodexAdapter{passthrough: pt}
 
 	return adapter, nil

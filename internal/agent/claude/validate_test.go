@@ -6,6 +6,38 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// wrong-typed value for a key the constructor reads fails
+// NewClaudeCodeAdapter with a plain error carrying the fault message, and
+// validateConfig reports the identical fault text under a
+// "claude-code.<key>.wrong_type" check for the same input, so the two
+// surfaces cannot diverge on what counts as a type fault.
+func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{"model": 123}
+
+	_, constructErr := NewClaudeCodeAdapter(config)
+	if constructErr == nil {
+		t.Fatal("NewClaudeCodeAdapter(model=123) error = nil, want non-nil")
+	}
+	if constructErr.Error() != "model: expected string, got integer" {
+		t.Errorf("NewClaudeCodeAdapter(model=123) error = %q, want %q", constructErr.Error(), "model: expected string, got integer")
+	}
+
+	diags := validateConfig(registry.AgentConfigFields{Kind: "claude-code", Passthrough: config})
+
+	if len(diags) != 1 {
+		t.Fatalf("validateConfig(model=123) returned %d diagnostics, want 1: %+v", len(diags), diags)
+	}
+	if diags[0].Check != "claude-code.model.wrong_type" {
+		t.Errorf("validateConfig(model=123)[0].Check = %q, want %q", diags[0].Check, "claude-code.model.wrong_type")
+	}
+	if diags[0].Message != constructErr.Error() {
+		t.Errorf("validateConfig(model=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	}
+}
+
 // TestValidateConfig covers claude-code.permission_mode: absent or
 // "bypassPermissions" draws no diagnostic, and every other named mode plus
 // an arbitrary unrecognized string draws an error-severity diagnostic,

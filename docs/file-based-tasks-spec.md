@@ -231,7 +231,7 @@ tracker:
 
 ### 8.3 Configuration Errors
 
-If `path` is missing or empty, the adapter constructor returns a `TrackerError` with kind `tracker_payload_error` and the message `"missing required config key: path"`.
+If `path` is missing or empty, the adapter constructor returns a `TrackerError` with kind `tracker_payload_error` and the message `"missing required config key: path"`. If `path` is present with a non-string YAML value, the constructor returns a `TrackerError` with kind `tracker_payload_error` and the message `"path: expected string, got <type>"`.
 
 ## 9. Adapter Operations
 
@@ -289,6 +289,7 @@ Error conditions:
 | File contains invalid JSON                       | `"failed to parse file: <path>"`      |
 | Issue not found by ID                            | `"issue not found: <id>"`             |
 | Missing `path` config key                        | `"missing required config key: path"` |
+| `path` config key holds a non-string YAML value  | `"path: expected string, got <type>"` |
 
 ## 11. Validation Checklist
 

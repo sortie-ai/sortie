@@ -6,6 +6,38 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// wrong-typed value for a key the constructor reads fails NewCodexAdapter
+// with a plain error carrying the fault message, and validateConfig
+// reports the identical fault text under a "codex.<key>.wrong_type" check
+// for the same input, so the two surfaces cannot diverge on what counts
+// as a type fault.
+func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{"approval_policy": 123}
+
+	_, constructErr := NewCodexAdapter(config)
+	if constructErr == nil {
+		t.Fatal("NewCodexAdapter(approval_policy=123) error = nil, want non-nil")
+	}
+	if constructErr.Error() != "approval_policy: expected string, got integer" {
+		t.Errorf("NewCodexAdapter(approval_policy=123) error = %q, want %q", constructErr.Error(), "approval_policy: expected string, got integer")
+	}
+
+	diags := validateConfig(registry.AgentConfigFields{Kind: "codex", Passthrough: config})
+
+	if len(diags) != 1 {
+		t.Fatalf("validateConfig(approval_policy=123) returned %d diagnostics, want 1: %+v", len(diags), diags)
+	}
+	if diags[0].Check != "codex.approval_policy.wrong_type" {
+		t.Errorf("validateConfig(approval_policy=123)[0].Check = %q, want %q", diags[0].Check, "codex.approval_policy.wrong_type")
+	}
+	if diags[0].Message != constructErr.Error() {
+		t.Errorf("validateConfig(approval_policy=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	}
+}
+
 // TestValidateConfig covers codex.approval_policy: absent or "never"
 // draws no diagnostic, and any other value draws an error-severity
 // diagnostic checked "codex.approval_policy.interactive".

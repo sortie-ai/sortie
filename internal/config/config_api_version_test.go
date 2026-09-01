@@ -8,13 +8,19 @@ import "testing"
 func TestBuildTrackerConfig_APIVersion(t *testing.T) {
 	t.Run("string value", func(t *testing.T) {
 		t.Parallel()
-		tc := buildTrackerConfig(map[string]any{"api_version": "2"}, nil)
+		tc, err := buildTrackerConfig(map[string]any{"api_version": "2"}, nil)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
 	})
 
 	t.Run("absent yields empty", func(t *testing.T) {
 		t.Parallel()
-		tc := buildTrackerConfig(map[string]any{}, nil)
+		tc, err := buildTrackerConfig(map[string]any{}, nil)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "", tc.APIVersion)
 	})
 
@@ -22,19 +28,28 @@ func TestBuildTrackerConfig_APIVersion(t *testing.T) {
 		t.Parallel()
 		// A bare YAML integer (api_version: 2) is coerced to its decimal
 		// string form so a Server/DC config is not silently defaulted to v3.
-		tc := buildTrackerConfig(map[string]any{"api_version": 2}, nil)
+		tc, err := buildTrackerConfig(map[string]any{"api_version": 2}, nil)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
 	})
 
 	t.Run("bare whole float coerced to string", func(t *testing.T) {
 		t.Parallel()
-		tc := buildTrackerConfig(map[string]any{"api_version": float64(2)}, nil)
+		tc, err := buildTrackerConfig(map[string]any{"api_version": float64(2)}, nil)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
 	})
 
 	t.Run("VAR indirection resolved", func(t *testing.T) {
 		t.Setenv("TEST_API_VERSION", "2")
-		tc := buildTrackerConfig(map[string]any{"api_version": "$TEST_API_VERSION"}, nil)
+		tc, err := buildTrackerConfig(map[string]any{"api_version": "$TEST_API_VERSION"}, nil)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
 	})
 
@@ -43,10 +58,13 @@ func TestBuildTrackerConfig_APIVersion(t *testing.T) {
 		// When the SORTIE_* override path already populated the value, the
 		// $VAR guard must leave the literal untouched, exactly as the other
 		// tracker string fields behave.
-		tc := buildTrackerConfig(
+		tc, err := buildTrackerConfig(
 			map[string]any{"api_version": "$TEST_API_VERSION"},
 			map[string]bool{"tracker.api_version": true},
 		)
+		if err != nil {
+			t.Fatalf("buildTrackerConfig: %v", err)
+		}
 		assertStringEqual(t, "TrackerConfig.APIVersion", "$TEST_API_VERSION", tc.APIVersion)
 	})
 }

@@ -2,7 +2,6 @@ package copilot
 
 import (
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // validateConfig checks copilot-cli-specific configuration constraints and
@@ -16,8 +15,16 @@ import (
 // warning rather than an error because the configuration is honored
 // exactly as written and no turn stalls waiting on it.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
-	allowed := typeutil.StringFrom(fields.Passthrough, "allowed_tools")
-	if blanketGrantApplies(allowed) {
+	pt, fault := parsePassthroughConfig(fields.Passthrough)
+	if fault != nil {
+		return []registry.ValidationDiag{{
+			Severity: "error",
+			Check:    "copilot-cli." + fault.Key + ".wrong_type",
+			Message:  fault.Error(),
+		}}
+	}
+
+	if blanketGrantApplies(pt.AllowedTools) {
 		return nil
 	}
 

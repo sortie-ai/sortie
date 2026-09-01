@@ -39,6 +39,28 @@ func newFirstTurnState(mcpConfigPath string) *sessionState {
 	}
 }
 
+// TestParsePassthroughConfig_TypeFault covers the funnel's fault path for
+// a wrong-typed string field: it returns the zero passthroughConfig and a
+// fault whose rendering names the key and the type found.
+func TestParsePassthroughConfig_TypeFault(t *testing.T) {
+	t.Parallel()
+
+	pt, fault := parsePassthroughConfig(map[string]any{"model": 123})
+
+	if fault == nil {
+		t.Fatal("parsePassthroughConfig(model=123) fault = nil, want non-nil")
+	}
+	if fault.Key != "model" {
+		t.Errorf("parsePassthroughConfig(model=123) fault.Key = %q, want %q", fault.Key, "model")
+	}
+	if fault.Error() != "model: expected string, got integer" {
+		t.Errorf("parsePassthroughConfig(model=123) fault.Error() = %q, want %q", fault.Error(), "model: expected string, got integer")
+	}
+	if pt != (passthroughConfig{}) {
+		t.Errorf("parsePassthroughConfig(model=123) passthroughConfig = %+v, want zero value", pt)
+	}
+}
+
 // TestMCPInjectionConformance proves claude-code's real buildArgs
 // output carries the generated MCP config path, matching its declared
 // disposition.

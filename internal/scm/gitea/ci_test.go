@@ -840,6 +840,77 @@ func TestNewGiteaCIProvider(t *testing.T) {
 	})
 }
 
+// TestNewGiteaCIProvider_TypeFaultVsAbsentKey covers the distinction
+// between a wrong-typed config key and an absent one for the two keys
+// whose absent-key checks precede the endpoint check: api_key (a
+// different kind, ErrCIAuth vs ErrCIPayload) and project (the same kind,
+// distinguished by message).
+func TestNewGiteaCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("api_key wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewGiteaCIProvider(0, map[string]any{
+			"api_key":  4242,
+			"project":  testOwner + "/" + testRepo,
+			"endpoint": "http://gitea.invalid",
+		})
+
+		var ce *domain.CIError
+		if !errors.As(err, &ce) {
+			t.Fatalf("error type = %T, want *domain.CIError", err)
+		}
+		if ce.Kind != domain.ErrCIPayload {
+			t.Errorf("CIError.Kind = %q, want %q", ce.Kind, domain.ErrCIPayload)
+		}
+		if ce.Message != "api_key: expected string, got integer" {
+			t.Errorf("CIError.Message = %q, want %q", ce.Message, "api_key: expected string, got integer")
+		}
+	})
+
+	t.Run("project wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewGiteaCIProvider(0, map[string]any{
+			"api_key":  "test-token",
+			"project":  4242,
+			"endpoint": "http://gitea.invalid",
+		})
+
+		var ce *domain.CIError
+		if !errors.As(err, &ce) {
+			t.Fatalf("error type = %T, want *domain.CIError", err)
+		}
+		if ce.Kind != domain.ErrCIPayload {
+			t.Errorf("CIError.Kind = %q, want %q", ce.Kind, domain.ErrCIPayload)
+		}
+		if ce.Message != "project: expected string, got integer" {
+			t.Errorf("CIError.Message = %q, want %q", ce.Message, "project: expected string, got integer")
+		}
+	})
+
+	t.Run("project absent has the distinct existing message", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewGiteaCIProvider(0, map[string]any{
+			"api_key":  "test-token",
+			"endpoint": "http://gitea.invalid",
+		})
+
+		var ce *domain.CIError
+		if !errors.As(err, &ce) {
+			t.Fatalf("error type = %T, want *domain.CIError", err)
+		}
+		if ce.Kind != domain.ErrCIPayload {
+			t.Errorf("CIError.Kind = %q, want %q", ce.Kind, domain.ErrCIPayload)
+		}
+		if ce.Message != "missing required config key: project" {
+			t.Errorf("CIError.Message = %q, want %q", ce.Message, "missing required config key: project")
+		}
+	})
+}
+
 // TestNewGiteaCIProvider_RejectsInvalidEndpoint proves the endpoint values
 // in endpointRejectionCases fail construction with ErrCIPayload; none of
 // the config maps here register a server, since construction performs no

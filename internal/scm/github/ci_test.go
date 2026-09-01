@@ -271,6 +271,29 @@ func TestNewGitHubCIProvider_MissingProject(t *testing.T) {
 	assertCIErrorKind(t, err, domain.ErrCIPayload)
 }
 
+// TestNewGitHubCIProvider_TypeFaultVsAbsentKey covers the distinction
+// between a wrong-typed api_key and an absent one: the type fault reports
+// domain.ErrCIPayload, distinct from the absent key's domain.ErrCIAuth.
+func TestNewGitHubCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGitHubCIProvider(0, map[string]any{
+		"api_key": 4242,
+		"project": "org/repo",
+	})
+
+	var ce *domain.CIError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error type = %T, want *domain.CIError", err)
+	}
+	if ce.Kind != domain.ErrCIPayload {
+		t.Errorf("CIError.Kind = %q, want %q", ce.Kind, domain.ErrCIPayload)
+	}
+	if ce.Message != "api_key: expected string, got integer" {
+		t.Errorf("CIError.Message = %q, want %q", ce.Message, "api_key: expected string, got integer")
+	}
+}
+
 func TestNewGitHubCIProvider_MalformedProject(t *testing.T) {
 	t.Parallel()
 

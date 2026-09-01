@@ -21,6 +21,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 var _ domain.Notifier = (*notifier)(nil)
@@ -43,7 +44,10 @@ type notifier struct {
 // value (including a secret reference that resolved to the empty string)
 // is rejected.
 func newNotifier(config map[string]any) (domain.Notifier, error) {
-	rawURL, _ := config["url"].(string)
+	rawURL, fault := typeutil.StringField(config, "url")
+	if fault != nil {
+		return nil, fmt.Errorf("webhook notifier: %w", fault)
+	}
 	endpoint := strings.TrimSpace(rawURL)
 	if endpoint == "" {
 		return nil, fmt.Errorf("webhook notifier: url is required")

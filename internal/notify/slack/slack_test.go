@@ -88,6 +88,40 @@ func TestSlack_NewNotifier_MissingWebhookURL(t *testing.T) {
 	}
 }
 
+// TestSlack_NewNotifier_WrongTypeVsAbsentWebhookURL covers the distinction
+// between a wrong-typed webhook_url and an absent one: the type fault
+// carries the typed-fault message, while the absent key keeps its
+// existing "webhook_url is required" message.
+func TestSlack_NewNotifier_WrongTypeVsAbsentWebhookURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("webhook_url wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := newNotifier(map[string]any{"webhook_url": 4242})
+
+		if err == nil {
+			t.Fatal("newNotifier(webhook_url=4242) error = nil, want error")
+		}
+		if err.Error() != "slack notifier: webhook_url: expected string, got integer" {
+			t.Errorf("newNotifier(webhook_url=4242) error = %q, want %q", err.Error(), "slack notifier: webhook_url: expected string, got integer")
+		}
+	})
+
+	t.Run("webhook_url absent", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := newNotifier(map[string]any{})
+
+		if err == nil {
+			t.Fatal("newNotifier({}) error = nil, want error")
+		}
+		if err.Error() != "slack notifier: webhook_url is required" {
+			t.Errorf("newNotifier({}) error = %q, want %q", err.Error(), "slack notifier: webhook_url is required")
+		}
+	})
+}
+
 func TestSlack_NewNotifier_ValidWebhookURL(t *testing.T) {
 	t.Parallel()
 

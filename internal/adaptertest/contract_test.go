@@ -52,6 +52,8 @@ var contractBanTable = map[string]string{
 	"findCurrentStateLabel":  "issuekit.CurrentLabelState",
 	"paginatePages":          "httpkit.NewPagePaginator",
 	"parseUTC":               "scmcore.ParseTimestamp or scmcore.ParseTimestampOrZero",
+	"stringFrom":             "typeutil.StringField",
+	"StringFrom":             "typeutil.StringField",
 }
 
 // contractTrackerAdapterMethods are the tracker operation method names
