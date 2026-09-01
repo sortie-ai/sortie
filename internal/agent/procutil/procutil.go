@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"sync"
+	"time"
 )
 
 const (
@@ -24,6 +26,16 @@ const (
 	// DefaultMaxBytes is the total byte budget for retained stderr
 	// lines across head and tail combined.
 	DefaultMaxBytes = 5 * 1024 * 1024
+
+	// DefaultDrainGrace is the time an adapter waits for a stderr drain
+	// to finish before it reaps the subprocess without it, and again
+	// before it gives up on the drain and reads the collector anyway.
+	DefaultDrainGrace = 5 * time.Second
+
+	// AbandonedMarker replaces the collected lines of a collector whose
+	// drain was abandoned. It is exported so an adapter that classifies
+	// stderr can pin, in its own tests, that the marker is not evidence.
+	AbandonedMarker = "... (agent stderr not collected: the output handle stayed open) ..."
 
 	droppedMarkerFmt = "... (%d lines discarded) ..."
 )
@@ -109,6 +121,13 @@ type StderrCollector struct {
 	scannerMax int
 	done       chan struct{}
 	logger     *slog.Logger
+
+	// abandonOnce guards the single transition into the abandoned state.
+	abandonOnce sync.Once
+
+	// abandoned closes when Abandon gives up on the drain goroutine.
+	// Readers select on it alongside done.
+	abandoned chan struct{}
 }
 
 // NewStderrCollector starts a goroutine that drains r line by line,
@@ -150,6 +169,7 @@ func NewStderrCollector(r io.Reader, logger *slog.Logger, opts ...CollectorOptio
 		scannerMax: cfg.scannerMax,
 		done:       make(chan struct{}),
 		logger:     logger,
+		abandoned:  make(chan struct{}),
 	}
 	go c.drain(r)
 	return c
@@ -204,21 +224,93 @@ func (c *StderrCollector) drain(r io.Reader) {
 // collected lines are available.
 //
 // A caller that owns the underlying [*exec.Cmd] and created the reader
-// via [exec.Cmd.StderrPipe] must wait on Done before calling
+// via [exec.Cmd.StderrPipe] waits for the drain before calling
 // [exec.Cmd.Wait]: Wait reaps the process and then closes the pipe's
 // read end, which races with a concurrent read in the drain goroutine
 // and can make it return early, silently discarding stderr lines that
-// were still buffered in the pipe.
+// were still buffered in the pipe. [StderrCollector.WaitDone] bounds
+// that wait; a caller that gives up on it reaps the process anyway and
+// falls back to [StderrCollector.Abandon] so a later reader does not
+// block.
 func (c *StderrCollector) Done() <-chan struct{} {
 	return c.done
 }
 
-// Lines blocks until the drain goroutine finishes and returns all
-// collected stderr lines in chronological order. When lines were
-// discarded, a synthetic marker line is inserted between the head and
-// tail sections. Safe to call after the subprocess has exited.
+// WaitDone waits up to d for the drain goroutine to finish and reports
+// whether it finished. It has no side effect: a false return leaves the
+// collector exactly as it was.
+//
+// A non-positive d polls once rather than waiting unboundedly.
+func (c *StderrCollector) WaitDone(d time.Duration) bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+	}
+	if d <= 0 {
+		return false
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+		return true
+	case <-timer.C:
+		select {
+		case <-c.done:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// Abandon gives up on a drain that a bounded wait did not finish, so
+// that Lines, Dropped, and WarnLines stop blocking on it. bound is the
+// wait that elapsed, reported with the warning Abandon logs.
+//
+// Abandon is a one-shot latch: only the first call across the
+// collector's lifetime has any effect, whatever the number of
+// concurrent or repeated calls. It returns without blocking, and does
+// nothing when the drain has already finished, so a drain that ends
+// between the caller's bounded wait and its Abandon call produces no
+// warning about output that was in fact collected.
+func (c *StderrCollector) Abandon(bound time.Duration) {
+	c.abandonOnce.Do(func() {
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+		c.logger.Warn("agent stderr was not fully collected before the process was reaped",
+			slog.Duration("drain_bound", bound))
+		close(c.abandoned)
+	})
+}
+
+// Lines blocks until the drain goroutine finishes or the collector is
+// abandoned, whichever comes first, and returns all collected stderr
+// lines in chronological order. When lines were discarded, a synthetic
+// marker line is inserted between the head and tail sections. Safe to
+// call after the subprocess has exited.
+//
+// When the collector was abandoned before the drain finished, Lines
+// returns a single-element slice containing [AbandonedMarker] instead
+// of blocking. A drain that finishes after abandonment still wins: a
+// later call, or one already blocked when abandonment happened, reports
+// the real lines rather than the marker.
 func (c *StderrCollector) Lines() []string {
-	<-c.done
+	select {
+	case <-c.done:
+	case <-c.abandoned:
+	}
+
+	select {
+	case <-c.done:
+	default:
+		return []string{AbandonedMarker}
+	}
 
 	hasTail := c.tailFull || c.tailPos > 0
 	if len(c.head) == 0 && !hasTail {
@@ -245,23 +337,40 @@ func (c *StderrCollector) Lines() []string {
 	return result
 }
 
-// Dropped blocks until the drain goroutine finishes and returns the
-// number of stderr lines discarded due to the line cap or byte budget.
+// Dropped blocks until the drain goroutine finishes or the collector is
+// abandoned, whichever comes first, and returns the number of stderr
+// lines discarded due to the line cap or byte budget.
+//
+// When the collector was abandoned before the drain finished, Dropped
+// returns 0. That zero reports an unknown count rather than an empty
+// one: an abandoned collector cannot know what the drain discarded.
 func (c *StderrCollector) Dropped() int {
-	<-c.done
-	return c.dropped
+	select {
+	case <-c.done:
+	case <-c.abandoned:
+	}
+
+	select {
+	case <-c.done:
+		return c.dropped
+	default:
+		return 0
+	}
 }
 
-// WarnLines blocks until the drain goroutine finishes, then re-emits
-// each collected line at WARN level using logger. Intended for
-// surfacing agent subprocess diagnostics (e.g., startup rejections)
-// without requiring DEBUG logging.
+// WarnLines blocks until the drain goroutine finishes or the collector
+// is abandoned, then re-emits each collected line at WARN level using
+// logger. Intended for surfacing agent subprocess diagnostics (e.g.,
+// startup rejections) without requiring DEBUG logging.
 //
-// Callers that manage an [*exec.Cmd] MUST call [StderrCollector.Lines]
-// before calling [exec.Cmd.Wait]; [exec.Cmd.Wait] closes the pipe read
-// end, which can prevent the drain goroutine from reading buffered data.
-// Use [EmitWarnLines] with the result of [StderrCollector.Lines] to log
-// pre-collected lines after [exec.Cmd.Wait] returns.
+// A caller that manages an [*exec.Cmd] and cannot use
+// [StderrCollector.WaitDone] still has the option of draining with
+// [StderrCollector.Lines] before calling [exec.Cmd.Wait]; [exec.Cmd.Wait]
+// closes the pipe read end, which can prevent the drain goroutine from
+// reading buffered data. A caller that can adopt the bounded wait
+// should prefer it instead, and use [EmitWarnLines] with the result of
+// [StderrCollector.Lines] to log pre-collected lines after
+// [exec.Cmd.Wait] returns.
 //
 // If logger is nil, WarnLines uses [slog.Default].
 func (c *StderrCollector) WarnLines(logger *slog.Logger) {

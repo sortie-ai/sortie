@@ -148,6 +148,11 @@ type ForkPerTurnSession struct {
 	mu     sync.Mutex
 	proc   *os.Process
 	waitCh chan struct{}
+
+	// drainGrace bounds the wait for the stderr drain before each
+	// cmd.Wait call. Set by NewForkPerTurnSession; overridden only by
+	// tests in this package.
+	drainGrace time.Duration
 }
 
 // NewForkPerTurnSession constructs a ForkPerTurnSession. target must be a
@@ -181,9 +186,10 @@ func NewForkPerTurnSession(
 		panic("agentcore: ForkPerTurnSession logger must be non-nil")
 	}
 	return &ForkPerTurnSession{
-		target: target,
-		hooks:  hooks,
-		logger: logger,
+		target:     target,
+		hooks:      hooks,
+		logger:     logger,
+		drainGrace: procutil.DefaultDrainGrace,
 	}
 }
 
@@ -326,9 +332,9 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancelCmd()
-		stderrLines := stderrCollector.Lines()     // drain before cmd.Wait() closes the pipe
-		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+		drained := stderrCollector.WaitDone(s.drainGrace) // bound the wait before cmd.Wait() closes the pipe
+		cmd.Wait()                                        //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
+		procutil.KillProcessGroup(cmd.Process.Pid)        //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 		procutil.CleanupProcess(cmd.Process.Pid)
 		close(localWaitCh)
 		s.mu.Lock()
@@ -353,6 +359,13 @@ func (s *ForkPerTurnSession) RunTurn(
 			}
 		}
 
+		if !drained {
+			if !stderrCollector.WaitDone(s.drainGrace) {
+				stderrCollector.Abandon(s.drainGrace)
+			}
+		}
+		stderrLines := stderrCollector.Lines()
+
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		usage := s.hooks.GetUsage()
 		EmitTurnFailed(emit, "stdout read error: "+scanErr.Error(), 0, usage)
@@ -368,10 +381,11 @@ func (s *ForkPerTurnSession) RunTurn(
 		}
 	}
 
-	// Drain stderr before cmd.Wait() to avoid losing buffered data:
-	// cmd.Wait() closes the pipe read end, which can prevent the drain
-	// goroutine from reading data that the process already wrote.
-	stderrLines := stderrCollector.Lines()
+	// Bound the wait for stderr before cmd.Wait() to avoid losing
+	// buffered data: cmd.Wait() closes the pipe read end, which can
+	// prevent the drain goroutine from reading data that the process
+	// already wrote.
+	drained := stderrCollector.WaitDone(s.drainGrace)
 	waitErr := cmd.Wait()
 	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 	procutil.CleanupProcess(cmd.Process.Pid)
@@ -395,6 +409,13 @@ func (s *ForkPerTurnSession) RunTurn(
 			Err:     ctx.Err(),
 		}
 	}
+
+	if !drained {
+		if !stderrCollector.WaitDone(s.drainGrace) {
+			stderrCollector.Abandon(s.drainGrace)
+		}
+	}
+	stderrLines := stderrCollector.Lines()
 
 	exitCode := procutil.ExtractExitCode(waitErr)
 
