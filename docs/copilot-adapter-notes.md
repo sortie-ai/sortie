@@ -62,6 +62,8 @@ A configuration the CLI cannot parse can end the process with a zero exit and an
 
 An authentication problem can also produce a process that fails with nothing on stdout. The symptom is identical to the case above; the distinguishing evidence is again stderr.
 
+Stderr can also be missing outright. When it carries a single marker line saying it was not collected, a descendant process held the handle open past the direct child, the diagnostics were never read, and the wait for them was cut short so the turn could still be reaped and reported. That marker is the finding, not a truncated log.
+
 Two failures worth recognizing come from outside our code entirely, and both are worth checking before you go looking for a bug in the adapter. A resume that comes back with no conversation history, on a session whose journal is present on disk, points at the journal itself rather than at our resume logic: the journal is line-delimited JSON and a raw character sequence that breaks a line-oriented parse takes the whole history with it. And a subprocess that starts, prints nothing, and never exits has been seen under environment managers that wrap the shell and rearrange its file descriptors; there is nothing on our side to fix, and stall reconciliation is what ends such a turn. If either reproduces, confirm it against the current release before treating it as known.
 
 Session state accumulates under the user's home directory, outside the workspace, so removing a workspace does not reclaim it.

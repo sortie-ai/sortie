@@ -614,6 +614,19 @@ Graceful shutdown sequence:
 - After `cmd.Wait()` returns, a best-effort force kill is sent to the process group to reap any
   children that survived the graceful signal.
 
+Standard-error drain before reap:
+
+- The adapter waits for its subprocess's standard-error reader to finish before reaping the
+  process, because reaping closes the pipe's read end and races a reader still consuming
+  buffered output. That wait is bounded, so a descendant that inherits the standard-error
+  handle and outlives the direct child cannot withhold the reap, the process-group termination,
+  or the publication of the turn's outcome.
+- Reaping the process and terminating its group are what release such a reader in the ordinary
+  case, so the turn keeps the standard-error output the reader had already collected.
+- When neither release ends the wait, the turn's collected standard-error output is replaced by
+  a marker, and an adapter whose success evidence lives on standard error reports the turn
+  failed rather than succeeded.
+
 Recommended additional process settings:
 
 - Max line size: 10 MB (for safe buffering)

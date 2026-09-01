@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.
   ([#911](https://github.com/sortie-ai/sortie/issues/911))
 
+- A turn whose output handle is held open by a surviving descendant process no longer leaks its process group and no longer withholds its outcome: the wait for that output is now bounded, and the turn's reap, process-group cleanup, and result publication all still run once that bound expires. On `kiro`, such a turn is reported as a failure, because its success evidence lives on that output and could not be read.
+  ([#918](https://github.com/sortie-ai/sortie/issues/918))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

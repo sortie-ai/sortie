@@ -20,7 +20,7 @@ Stall detection does still reach these turns. Each non-empty stripped stdout lin
 
 ## Exit zero does not mean the turn succeeded
 
-The cost trailer on stderr is the only positive proof that a turn actually ran. A turn that never ran because the credential was rejected also exits zero, with empty stdout and an authentication line on stderr and no trailer.
+The cost trailer on stderr is the only positive proof that a turn actually ran. A turn that never ran because the credential was rejected also exits zero, with empty stdout and an authentication line on stderr and no trailer. A turn whose standard error could not be collected has no trailer to read either, and is reported as a failure for the same reason.
 
 So the adapter never maps a bare zero exit to success. It reports success only when the trailer is present, reports a specific authentication failure when a zero exit arrives with the auth marker and empty stdout, and otherwise lets the shared decision treat a zero exit with no trailer as a turn that produced nothing. Both markers are matched by substring containment and never by the numbers that follow them, which is what keeps the classification stable while the values vary.
 
