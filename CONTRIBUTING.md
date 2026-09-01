@@ -99,8 +99,8 @@ linter enforces:
 - **Shared adapter helpers:** don't re-implement a helper already extracted to a shared
   package (`internal/httpkit`, `internal/typeutil`, `internal/issuekit`, or an
   adapter-family package like `internal/scm/scmcore`). A contract test in
-  `internal/adaptertest` fails `make test` if a tracker or SCM package re-declares one of
-  these under a local name.
+  `internal/adaptertest` fails `make test` if a tracker, SCM, agent, or notifier package
+  re-declares one of these under a local name.
 
 ## Testing conventions
 
