@@ -35,3 +35,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0026](0026-re-read-issue-state-before-recording-absence-failure.md) | Re-Read the Issue State Before Recording an Absence Failure | Accepted |
 | [0027](0027-give-the-consecutive-absence-ceiling-its-own-setting.md) | Give the Consecutive-Absence Ceiling Its Own Setting | Accepted |
 | [0028](0028-let-the-agent-declare-that-nothing-needed-changing.md) | Let the Agent Declare That Nothing Needed Changing | Accepted |
+| [0029](0029-adopt-agent-client-protocol-as-a-generic-agent-transport.md) | Adopt the Agent Client Protocol as a Single Generic Agent Transport | Accepted |
