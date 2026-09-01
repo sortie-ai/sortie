@@ -2777,7 +2777,7 @@ model used by `claude-code`, `copilot-cli`, and `opencode`.
 > the check `codex.approval_policy.interactive` and no agent is dispatched while that
 > value stands. Codex also accepts an object form of this policy, a `granular` member
 > whose booleans decide each approval category, but this key is read as a string only,
-> so a map value is treated as absent and `thread/start` receives `never`.
+> so a map value is a type fault that fails construction rather than a value Codex sees.
 
 > **Important:** When `thread_sandbox` is omitted, the adapter defaults to
 > `workspaceWrite` with `writableRoots` set to the workspace path and
@@ -2806,7 +2806,9 @@ The `opencode` block is forwarded to the OpenCode adapter. The adapter runs
 `opencode run --format json --dir <workspace>` once per turn, appends
 `--session <session_id>` when continuing a session, and recovers final token
 usage with `opencode export --sanitize <session_id>` when the session ID is
-known.
+known. A string key whose YAML value carries another type fails construction and,
+offline, is reported by `sortie validate` under the check
+`opencode.<key>.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2847,7 +2849,9 @@ kiro:
 The `kiro` block is forwarded to the Kiro adapter, which runs
 `kiro-cli chat --no-interactive --wrap never` once per turn and adds `--resume`
 on continuation turns to attach to the cwd-scoped conversation. The Kiro CLI
-is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`.
+is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`. A string key whose
+YAML value carries another type fails construction and, offline, is reported by
+`sortie validate` under the check `kiro.<key>.wrong_type`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |

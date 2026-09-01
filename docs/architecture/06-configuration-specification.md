@@ -83,10 +83,12 @@ Per-tick dispatch validation:
 Validation checks:
 
 - Workflow file can be loaded and parsed.
-- A configuration key the config layer reads as a string is rejected when its value carries
-  another YAML type, distinct from the diagnostic for an absent key. This verdict is identical
-  at startup, at `sortie validate`, and on the reload fail-safe path, because all three read the
-  same config-construction result.
+- A `tracker`, `agent`, `ci_feedback` or `notifications` key the config layer reads as a string,
+  together with `db_path`, is rejected when its value carries another YAML type, distinct from the
+  diagnostic for an absent key. This verdict is identical at startup, at `sortie validate`, and on
+  the reload fail-safe path, because all three read the same config-construction result. The
+  `workspace.root`, hook-script and reaction-escalation keys are not covered: a wrong-typed value
+  there still reads as the empty string.
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution, when required by the selected tracker adapter.
 - `tracker.project` is present when required by the selected tracker adapter.

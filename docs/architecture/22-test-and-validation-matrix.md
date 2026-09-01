@@ -39,8 +39,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   `9223372036854` itself is accepted
 - Per-state concurrency override map normalizes state names and ignores invalid values
 - A string-typed adapter configuration key whose value carries another YAML type is rejected with
-  a diagnostic naming the key and the type found, distinct from the absent-key diagnostic, at
-  config parse time, at construction, and offline through `sortie validate`
+  a diagnostic naming the key and the type found, distinct from the absent-key diagnostic, by the
+  earliest surface that reads it: config load for a key the config layer owns, adapter
+  construction and `sortie validate` for a key the adapter owns
 - A static check fails when a tracker, source-control, agent, notifier, or config-layer package
   gains a new discarded string type assertion outside its allowlisted sites
 - Prompt template renders `issue`, `attempt`, and `run`
