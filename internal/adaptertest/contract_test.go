@@ -27,9 +27,12 @@ const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/t
 // to the owner that received it. A top-level function re-declaring one of
 // these names is a violation; the banned name is the rule. The owner
 // records where the extraction landed rather than naming a universal
-// requirement: every entry came from a tracker or source-control package,
-// so a package in another family may satisfy the rule by choosing a
-// different name instead of calling an owner whose contract does not fit.
+// requirement: most entries came from a tracker or source-control
+// package, so a package in another family may satisfy the rule by
+// choosing a different name instead of calling an owner whose contract
+// does not fit. The agent-family entries are narrower: an agent kind
+// that needs persistent JSON-RPC framing has one owner rather than a
+// choice of names.
 var contractBanTable = map[string]string{
 	"classifyTransportError": "httpkit.ClassifyTransport",
 	"withRetry":              "httpkit.RetryWithBackoff",
@@ -58,6 +61,12 @@ var contractBanTable = map[string]string{
 	"parseUTC":               "scmcore.ParseTimestamp or scmcore.ParseTimestampOrZero",
 	"stringFrom":             "typeutil.StringField",
 	"StringFrom":             "typeutil.StringField",
+	"sendRequest":            "jsonrpc.Conn.SendRequest",
+	"sendNotification":       "jsonrpc.Conn.Notify",
+	"sendResponse":           "jsonrpc.Conn.Respond",
+	"sendErrorResponse":      "jsonrpc.Conn.RespondError",
+	"startScannerCh":         "jsonrpc.NewConn",
+	"readResponse":           "jsonrpc.Conn.Call",
 }
 
 // contractTrackerAdapterMethods are the tracker operation method names
@@ -140,6 +149,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/agentcore":                 {reason: "shared agent session, event, and disposition core; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig":                 {reason: "shared MCP configuration parsing; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/sshutil":                   {reason: "shared SSH invocation helpers; registers no kind and holds no adapter", coreImportable: true},
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc":                   {reason: "shared newline-delimited JSON-RPC framing; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest":                 {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 }

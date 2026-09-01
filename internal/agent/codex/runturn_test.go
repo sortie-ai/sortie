@@ -3,9 +3,9 @@
 package codex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -70,50 +71,324 @@ func loadFixture(t *testing.T, name string) []byte {
 	return data
 }
 
-// makeTestState builds a sessionState backed by in-memory pipes, safe
-// for use in RunTurn unit tests that do not launch a real subprocess.
-func makeTestState(fixtureData []byte) *sessionState {
+// signalingWriter wraps w and closes done the first time Write is
+// called. A goroutine waiting on done can then release a scripted
+// response without racing jsonrpc.Conn.Call's own pending-map
+// registration: Call registers its waiter, in program order, strictly
+// before the write this observes.
+type signalingWriter struct {
+	w    io.Writer
+	once sync.Once
+	done chan struct{}
+}
+
+func newSignalingWriter(w io.Writer) *signalingWriter {
+	if w == nil {
+		w = io.Discard
+	}
+	return &signalingWriter{w: w, done: make(chan struct{})}
+}
+
+func (s *signalingWriter) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	s.once.Do(func() { close(s.done) })
+	return n, err
+}
+
+// peekRequestID extracts the id field from one line codex writes,
+// without decoding the rest. It returns 0 for a fire-and-forget
+// notification, which carries no id.
+func peekRequestID(line []byte) int64 {
+	var wire struct {
+		ID int64 `json:"id"`
+	}
+	_ = json.Unmarshal(line, &wire)
+	return wire.ID
+}
+
+// peekResponseID reports whether line is a JSON-RPC response line (a
+// non-zero id with no method), and its id, mirroring the
+// classification jsonrpc.Conn's own reader applies.
+func peekResponseID(line []byte) (int64, bool) {
+	var wire struct {
+		ID     int64  `json:"id"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(line, &wire); err != nil {
+		return 0, false
+	}
+	if wire.Method != "" || wire.ID == 0 {
+		return 0, false
+	}
+	return wire.ID, true
+}
+
+// scanOutboundLines reads r until EOF or a read error, calling onLine
+// with each newline-delimited line it finds, delimiter stripped. It
+// exists so a fixture peer can observe what codex writes without
+// reaching for bufio: the discriminator that turns a line into a
+// jsonrpc.Message is unexported outside the jsonrpc package, and no
+// helper here may reach it, or duplicate its classification, even for
+// this narrower purpose of peeking at an id to gate a reply.
+func scanOutboundLines(r io.Reader, onLine func(line []byte)) {
+	var buf []byte
+	chunk := make([]byte, 4096)
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			for {
+				i := bytes.IndexByte(buf, '\n')
+				if i < 0 {
+					break
+				}
+				onLine(buf[:i])
+				buf = buf[i+1:]
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// fixtureSegment is one alternating block of a flat JSONL fixture: a
+// run of notification or malformed lines with no id (id 0), or a
+// single response line keyed by the id jsonrpc.Conn will allocate for
+// the call it answers.
+type fixtureSegment struct {
+	id    int64
+	lines []string
+}
+
+// splitFixtureSegments splits fixtureData's non-empty lines into
+// fixtureSegments in order. A response line (a non-empty id with no
+// method) starts a new gated segment; every other line joins the
+// nearest notification segment.
+func splitFixtureSegments(fixtureData []byte) []fixtureSegment {
+	var segments []fixtureSegment
+	var junk []string
+	flush := func() {
+		if len(junk) > 0 {
+			segments = append(segments, fixtureSegment{lines: junk})
+			junk = nil
+		}
+	}
+	for line := range strings.SplitSeq(string(fixtureData), "\n") {
+		if line == "" {
+			continue
+		}
+		if id, ok := peekResponseID([]byte(line)); ok {
+			flush()
+			segments = append(segments, fixtureSegment{id: id, lines: []string{line}})
+			continue
+		}
+		junk = append(junk, line)
+	}
+	flush()
+	return segments
+}
+
+// startFixturePeer drives the peer side of a sessionState's
+// jsonrpc.Conn from segments, over outPr/inPw. A notification segment
+// (id 0) is written immediately; a response segment is written only
+// once the peer has observed codex write the matching id. That
+// gating is required for correctness: Call registers its pending
+// waiter before it writes the request, so a response readable earlier
+// would be misrouted as an unmatched response instead of answering
+// the call.
+//
+// An empty segments list closes inPw immediately, reproducing a
+// clean end of stream with nothing scripted at all — this is safe
+// because no call is ever left waiting on a response that might also
+// race a connection-termination signal. A non-empty segments list
+// never closes inPw on its own once exhausted; it keeps draining
+// outPr so a later fire-and-forget write (e.g. a Respond to a
+// server-initiated request) is never left to block forever on the
+// unbuffered pipe, and it leaves closing the connection, or ending
+// state.msgCh, to the test — closing eagerly right after a scripted
+// response would race jsonrpc.Conn.Call's own select between that
+// response and the connection's termination signal, which Go resolves
+// pseudo-randomly when both are ready. A test that needs the
+// connection to appear to end after some exchange achieves that by
+// controlling state.msgCh (or state.conn.Close, for a call with no
+// scripted response to race) directly instead.
+func startFixturePeer(t *testing.T, outPr *io.PipeReader, inPw *io.PipeWriter, segments []fixtureSegment) {
+	t.Helper()
+
+	if len(segments) == 0 {
+		_ = inPw.Close()
+		// Drain outPr forever so the call this empty fixture is meant
+		// to fail still gets to write its request before failing.
+		go func() {
+			_, _ = io.Copy(io.Discard, outPr)
+		}()
+		return
+	}
+
+	go func() {
+		write := func(s string) bool {
+			_, err := fmt.Fprintln(inPw, s)
+			return err == nil
+		}
+
+		si := 0
+		flushNotifications := func() bool {
+			for si < len(segments) && segments[si].id == 0 {
+				for _, l := range segments[si].lines {
+					if !write(l) {
+						return false
+					}
+				}
+				si++
+			}
+			return true
+		}
+		if !flushNotifications() {
+			return
+		}
+
+		scanOutboundLines(outPr, func(line []byte) {
+			if si >= len(segments) {
+				return
+			}
+			if peekRequestID(line) != segments[si].id {
+				return
+			}
+			if !write(segments[si].lines[0]) {
+				return
+			}
+			si++
+			flushNotifications()
+		})
+	}()
+}
+
+// makeTestState builds a sessionState wired to a real jsonrpc.Conn
+// whose peer replays fixtureData, safe for use in RunTurn unit tests
+// that do not launch a real subprocess. The session starts in the
+// turn phase: every fixture here represents a session already past
+// the handshake, the point at which StartSession itself calls
+// beginTurnPhase.
+func makeTestState(t *testing.T, fixtureData []byte) *sessionState {
+	t.Helper()
+	return makeTestStateWithStdin(t, fixtureData, nil)
+}
+
+// makeTestStateWithStdin behaves like makeTestState but records every
+// line the connection writes into recorder, so a test can assert on
+// the exact bytes RunTurn wrote back to the app-server. recorder sits
+// ahead of the pipe the fixture peer gates on, in one io.MultiWriter,
+// so a write is recorded before jsonrpc.Conn.write's call to the pipe
+// can even return — recording via the peer's own read of that pipe
+// would race the caller reading recorder's contents immediately after
+// RunTurn returns.
+func makeTestStateWithStdin(t *testing.T, fixtureData []byte, recorder *capturingWriteCloser) *sessionState {
+	t.Helper()
+
+	outPr, outPw := io.Pipe()
+	inPr, inPw := io.Pipe()
+	t.Cleanup(func() {
+		_ = outPr.Close()
+		_ = outPw.Close()
+		_ = inPr.Close()
+		_ = inPw.Close()
+	})
+
+	var w io.Writer = outPw
+	if recorder != nil {
+		w = io.MultiWriter(recorder, outPw)
+	}
+
 	state := &sessionState{
 		threadID:   "thread-001",
 		target:     agentcore.LaunchTarget{WorkspacePath: "/tmp"},
 		waitCh:     make(chan struct{}),
-		stdin:      nopWriteCloser{},
-		stdout:     io.NopCloser(bytes.NewReader(nil)),
-		msgCh:      make(chan parsedMessage, 16),
+		msgCh:      make(chan jsonrpc.Message, 16),
 		readerDone: make(chan struct{}),
 		stopCh:     make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
 	}
+	state.conn = jsonrpc.NewConn(w, inPr, sessionHandler(state))
+	go watchTermination(state)
+	state.turnPhase.Store(true)
+
+	startFixturePeer(t, outPr, inPw, splitFixtureSegments(fixtureData))
+
+	return state
+}
+
+// makeTestStateWithMalformedBeforeResponse builds a sessionState like
+// makeTestState, except malformed is written only once the peer has
+// observed codex's turn/start write, immediately before response —
+// reproducing a line that fails to parse arriving on the wire between
+// a request and its response.
+func makeTestStateWithMalformedBeforeResponse(t *testing.T, malformed, response string) *sessionState {
+	t.Helper()
+
+	sig := newSignalingWriter(nil)
+	inPr, inPw := io.Pipe()
+	t.Cleanup(func() {
+		_ = inPr.Close()
+		_ = inPw.Close()
+	})
+
+	state := &sessionState{
+		threadID:   "thread-001",
+		target:     agentcore.LaunchTarget{WorkspacePath: "/tmp"},
+		waitCh:     make(chan struct{}),
+		msgCh:      make(chan jsonrpc.Message, 16),
+		readerDone: make(chan struct{}),
+		stopCh:     make(chan struct{}),
+		acc:        agentcore.NewRunUsage(),
+	}
+	state.conn = jsonrpc.NewConn(sig, inPr, sessionHandler(state))
+	go watchTermination(state)
+	state.turnPhase.Store(true)
 
 	go func() {
-		defer close(state.readerDone)
-		defer close(state.msgCh)
-		scanner := bufio.NewScanner(bytes.NewReader(fixtureData))
-		scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-		for scanner.Scan() {
-			msg := parseMessage(scanner.Bytes())
-			select {
-			case state.msgCh <- msg:
-			case <-state.stopCh:
-				return
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			select {
-			case state.msgCh <- parsedMessage{Err: err}:
-			case <-state.stopCh:
-			}
-		}
+		<-sig.done
+		_, _ = fmt.Fprintln(inPw, malformed)
+		_, _ = fmt.Fprintln(inPw, response)
 	}()
 
 	return state
 }
 
-// makeTestStateWithStdin behaves like makeTestState but installs stdin so a
-// test can capture the exact bytes RunTurn writes back to the app-server.
-func makeTestStateWithStdin(fixtureData []byte, stdin io.WriteCloser) *sessionState {
-	state := makeTestState(fixtureData)
-	state.stdin = stdin
+// gatedTurnStartState builds a sessionState whose jsonrpc.Conn answers
+// exactly one turn/start call with response once its peer observes
+// codex write it, with a no-op handler. Every other message the test
+// needs is delivered by pushing directly onto state.msgCh, including
+// closing it: since the handler is a no-op, the connection never
+// contends for state.msgCh, so a test can end a turn's message stream
+// deterministically instead of racing jsonrpc.Conn.Call's own select
+// between a scripted response and a connection-termination signal.
+func gatedTurnStartState(t *testing.T, response string) *sessionState {
+	t.Helper()
+
+	sig := newSignalingWriter(nil)
+	inPr, inPw := io.Pipe()
+	t.Cleanup(func() {
+		_ = inPr.Close()
+		_ = inPw.Close()
+	})
+
+	state := &sessionState{
+		threadID: "thread-001",
+		target:   agentcore.LaunchTarget{WorkspacePath: "/tmp"},
+		waitCh:   make(chan struct{}),
+		msgCh:    make(chan jsonrpc.Message, 16),
+		stopCh:   make(chan struct{}),
+		acc:      agentcore.NewRunUsage(),
+	}
+	state.conn = jsonrpc.NewConn(sig, inPr, func(jsonrpc.Message) {})
+	state.turnPhase.Store(true)
+
+	go func() {
+		<-sig.done
+		_, _ = fmt.Fprintln(inPw, response)
+	}()
+
 	return state
 }
 
@@ -161,7 +436,7 @@ func TestRunTurn_InvalidInternalType(t *testing.T) {
 func TestRunTurn_SuccessfulTurn(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -217,7 +492,7 @@ func filterEventsOfType(events []domain.AgentEvent, typ domain.AgentEventType) [
 func TestRunTurn_TokenUsageUpdated(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "token_usage_updated.jsonl"))
+	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -273,7 +548,7 @@ func TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline(t *testing.T) {
 		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
-	state := makeTestState([]byte(fixture))
+	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -317,7 +592,7 @@ func TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification(t *testing
 		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-777\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-777\",\"status\":\"completed\"}}}\n"
 
-	state := makeTestState([]byte(fixture))
+	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -348,7 +623,7 @@ func TestRunTurn_FirstTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
 	// turnCount=0 → incremented to 1 inside RunTurn → EventSessionStarted.
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -372,7 +647,7 @@ func TestRunTurn_SubsequentTurnEmitsNotification(t *testing.T) {
 	t.Parallel()
 
 	// Pre-set turnCount=1 so the adapter sees this as the second turn.
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	state.turnCount = 1
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
@@ -392,7 +667,7 @@ func TestRunTurn_SubsequentTurnEmitsNotification(t *testing.T) {
 func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_failed.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_failed.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -432,18 +707,31 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	t.Parallel()
 
-	// Only the turn/start response — no turn/completed — so the
-	// background goroutine closes msgCh before turn/completed arrives.
-	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
-		"{\"method\":\"turn/started\",\"params\":{}}\n"
-	state := makeTestState([]byte(fixture))
+	// Only the turn/start response — no turn/completed — so state.msgCh
+	// is closed directly, right after turn/started, before turn/completed
+	// would arrive.
+	state := gatedTurnStartState(t, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
 	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
-		Prompt:  "go",
-		OnEvent: collectEvents(&events),
-	})
+	go func() {
+		result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+			Prompt:  "go",
+			OnEvent: collectEvents(&events),
+		})
+		outcomeCh <- outcome{result, err}
+	}()
+
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started"}
+	close(state.msgCh)
+
+	got := <-outcomeCh
+	result, err := got.result, got.err
 	requireAgentError(t, err, domain.ErrPortExit)
 
 	turnFailedEvents := filterEventsOfType(events, domain.EventTurnFailed)
@@ -467,7 +755,7 @@ func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
 
 	// Empty fixture: msgCh closes before any turn/start response arrives.
 	// Tests the !ok path in the session-scoped response-wait loop.
-	state := makeTestState(nil)
+	state := makeTestState(t, nil)
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -486,7 +774,7 @@ func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 
 	// turn/start response carries an error — RunTurn should return ErrTurnFailed.
 	fixture := "{\"id\":1,\"error\":{\"code\":-32000,\"message\":\"thread not found\"}}\n"
-	state := makeTestState([]byte(fixture))
+	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -519,14 +807,14 @@ func TestRunTurn_CancelledContextReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	_, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
 		OnEvent: func(domain.AgentEvent) {},
 	})
-	// readResponse returns context.Canceled → wrapped in ErrPortExit.
+	// Call's context arm returns context.Canceled.
 	if err == nil {
 		t.Fatal("expected error with cancelled context, got nil")
 	}
@@ -543,10 +831,8 @@ func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
 	defer cancel()
 	ctx := &countingDoneContext{Context: parentCtx}
 
-	state := newInterruptedStatusState()
-	close(state.readerDone)
 	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
-	state.stdin = stdin
+	state := newInterruptedStatusState(t, stdin)
 
 	type outcome struct {
 		result domain.TurnResult
@@ -568,21 +854,14 @@ func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
 	t.Cleanup(func() {
 		select {
 		case <-finished:
-			return
-		default:
-		}
-		close(state.msgCh)
-		select {
-		case <-finished:
 		case <-time.After(time.Second):
 		}
 	})
 
-	// The unbuffered sends return only after RunTurn has received each
-	// message. The second message therefore proves that its main event loop,
-	// rather than the turn/start response loop, is running before cancellation.
-	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+	// The unbuffered send returns only once RunTurn has received it,
+	// which proves its main event loop is running (rather than still
+	// inside the turn/start call) before cancellation.
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)}
 
 	cancel()
 	select {
@@ -601,8 +880,9 @@ func TestRunTurn_CancelledMainLoopWaitsForCompletion(t *testing.T) {
 	}
 
 	// A terminal event must still be received and mapped after cancellation.
+	turnCompletedMsg := jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"interrupted"}}`)}
 	select {
-	case state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"interrupted"}}}`)):
+	case state.msgCh <- turnCompletedMsg:
 	case <-time.After(time.Second):
 		t.Fatal("RunTurn did not wait for turn/completed after cancellation")
 	}
@@ -631,10 +911,8 @@ func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *test
 	defer cancel()
 	ctx := &countingDoneContext{Context: parentCtx}
 
-	state := newInterruptedStatusState()
-	close(state.readerDone)
 	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
-	state.stdin = stdin
+	state := newInterruptedStatusState(t, stdin)
 
 	type outcome struct {
 		result domain.TurnResult
@@ -657,21 +935,14 @@ func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *test
 	t.Cleanup(func() {
 		select {
 		case <-finished:
-			return
-		default:
-		}
-		close(state.msgCh)
-		select {
-		case <-finished:
 		case <-time.After(time.Second):
 		}
 	})
 
-	// The unbuffered sends return only after RunTurn has received each
-	// message. The second message therefore proves that its main event loop,
-	// rather than the turn/start response loop, is running before cancellation.
-	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+	// The unbuffered send returns only once RunTurn has received it,
+	// which proves its main event loop is running (rather than still
+	// inside the turn/start call) before cancellation.
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)}
 
 	cancel()
 	select {
@@ -683,8 +954,9 @@ func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *test
 		t.Errorf("turn/interrupt request count = %d, want 1", got)
 	}
 
+	turnCompletedMsg := jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"completed"}}`)}
 	select {
-	case state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`)):
+	case state.msgCh <- turnCompletedMsg:
 	case <-time.After(time.Second):
 		t.Fatal("RunTurn did not wait for turn/completed after cancellation")
 	}
@@ -710,7 +982,7 @@ func TestRunTurn_CancelledMainLoopReportsCancelledDespiteCompletedStatus(t *test
 func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_items.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_items.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -738,7 +1010,7 @@ func TestRunTurn_ItemStartedAndCompletedEmitsToolResult(t *testing.T) {
 func TestRunTurn_AgentMessageTextEmitsNotification(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_agent_message.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_agent_message.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -764,7 +1036,7 @@ func TestRunTurn_AgentMessageTextEmitsNotification(t *testing.T) {
 func TestRunTurn_MiscNotifications(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_misc_notifications.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_misc_notifications.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -802,7 +1074,7 @@ func TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prevDefault) })
 
-	state := makeTestState(loadFixture(t, "runturn_mcp_startup_failed.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_mcp_startup_failed.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -875,7 +1147,7 @@ func TestRunTurn_PermissionRequestDeniedContinues(t *testing.T) {
 			t.Parallel()
 
 			stdin := &capturingWriteCloser{}
-			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
+			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
 			adapter, _ := NewCodexAdapter(map[string]any{})
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -922,7 +1194,7 @@ func TestRunTurn_LegacyPermissionRequestDeniedContinues(t *testing.T) {
 			t.Parallel()
 
 			stdin := &capturingWriteCloser{}
-			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
+			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method, turnCompletedLine), stdin)
 			adapter, _ := NewCodexAdapter(map[string]any{})
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -955,7 +1227,7 @@ func TestRunTurn_LegacyPermissionRequestDeniedContinues(t *testing.T) {
 func TestRunTurn_PermissionRequestEmitsNotification(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(runTurnFixtureWithServerRequest(24, "item/commandExecution/requestApproval", turnCompletedLine))
+	state := makeTestState(t, runTurnFixtureWithServerRequest(24, "item/commandExecution/requestApproval", turnCompletedLine))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -1023,7 +1295,7 @@ func TestRunTurn_HumanInputRequestEndsAttempt(t *testing.T) {
 			t.Parallel()
 
 			stdin := &capturingWriteCloser{}
-			state := makeTestStateWithStdin(runTurnFixtureWithServerRequest(tt.requestID, tt.method), stdin)
+			state := makeTestStateWithStdin(t, runTurnFixtureWithServerRequest(tt.requestID, tt.method), stdin)
 			adapter, _ := NewCodexAdapter(map[string]any{})
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -1055,11 +1327,9 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	state := newInterruptedStatusState()
-	state.agentConfig = domain.AgentConfig{ReadTimeoutMS: 50}
-	close(state.readerDone)
 	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
-	state.stdin = stdin
+	state := newInterruptedStatusState(t, stdin)
+	state.agentConfig = domain.AgentConfig{ReadTimeoutMS: 50}
 
 	type outcome struct {
 		result domain.TurnResult
@@ -1081,18 +1351,14 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 	t.Cleanup(func() {
 		select {
 		case <-finished:
-			return
-		default:
-		}
-		close(state.msgCh)
-		select {
-		case <-finished:
 		case <-time.After(time.Second):
 		}
 	})
 
-	state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-	state.msgCh <- parseMessage([]byte(`{"method":"turn/started","params":{"turnId":"turn-001"}}`))
+	// The unbuffered send returns only once RunTurn has received it,
+	// which proves its main event loop is running (rather than still
+	// inside the turn/start call) before cancellation.
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)}
 
 	start := time.Now()
 	cancel()
@@ -1143,7 +1409,7 @@ func TestRunTurn_MultiTurnNoRace(t *testing.T) {
 		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0}}}}\n" +
 		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
-	state := makeTestState([]byte(fixture))
+	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 	session := fakeSession(state)
 
@@ -1173,19 +1439,18 @@ func TestRunTurn_MultiTurnNoRace(t *testing.T) {
 func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 	t.Parallel()
 
-	// One complete turn in the fixture. After the first RunTurn drains the
-	// channel, the reader goroutine closes msgCh on EOF. A second RunTurn
-	// call receives !ok immediately and returns ErrPortExit — the
-	// "stdout EOF between turns" behavior introduced by the session-scoped
-	// reader refactoring (previously undetected).
-	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
-		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
-		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":15,\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":15,\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5,\"reasoningOutputTokens\":0}}}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"}}}\n"
-
-	state := makeTestState([]byte(fixture))
+	// One complete turn, pushed directly onto state.msgCh once the
+	// gated turn/start call resolves. After the first turn returns,
+	// the connection is closed directly: the second turn's call can
+	// only resolve via that closed connection, since no response was
+	// ever scripted for it to race.
+	state := gatedTurnStartState(t, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
 	adapter, _ := NewCodexAdapter(map[string]any{})
 	session := fakeSession(state)
+
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)}
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "thread/tokenUsage/updated", Params: json.RawMessage(`{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"total":{"totalTokens":15,"inputTokens":10,"cachedInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0}}}`)}
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"completed"}}`)}
 
 	if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "first turn",
@@ -1194,7 +1459,8 @@ func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 		t.Fatalf("RunTurn(1) unexpected error: %v", err)
 	}
 
-	// After the first turn, the fixture is exhausted and msgCh is closed.
+	state.conn.Close()
+
 	// The second call must return ErrPortExit immediately.
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "second turn",
@@ -1224,7 +1490,7 @@ func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
 	// Provide more messages than the channel buffer (16) so the reader
 	// goroutine is blocked on a channel send when StopSession closes stopCh.
 	line := []byte("{\"method\":\"turn/started\",\"params\":{}}\n")
-	state := makeTestState(bytes.Repeat(line, 20))
+	state := makeTestState(t, bytes.Repeat(line, 20))
 	// Simulate the subprocess having already exited so waitCh does not block.
 	close(state.waitCh)
 
@@ -1240,5 +1506,208 @@ func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
 		// OK
 	default:
 		t.Error("readerDone should be closed after StopSession")
+	}
+}
+
+// --- Handshake/turn-phase isolation and wait-loop termination ---
+
+// TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn drives one
+// jsonrpc.Conn through initializeHandshake, authenticateIfNeeded, and
+// startThread, then reproduces what the handshake-phase handler
+// queues before the turn phase begins — a notification and a line
+// that fails to parse — and calls beginTurnPhase before running one
+// turn on the same connection. It asserts the turn completes normally
+// and the pre-turn messages produce no event and do not fail the
+// turn.
+func TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn(t *testing.T) {
+	t.Parallel()
+
+	state := handshakeState(t,
+		`{"id":1,"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"codex-app-server"}}}`,
+		`{"id":2,"result":{"account":{"id":"user-1"}}}`,
+		`{"id":3,"result":{"thread":{"id":"thread-abc"}}}`,
+		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
+		`{"id":4,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
+		`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`,
+	)
+
+	if err := initializeHandshake(context.Background(), state); err != nil {
+		t.Fatalf("initializeHandshake() error = %v", err)
+	}
+	if err := authenticateIfNeeded(context.Background(), state); err != nil {
+		t.Fatalf("authenticateIfNeeded() error = %v", err)
+	}
+	threadID, err := startThread(context.Background(), state, passthroughConfig{})
+	if err != nil {
+		t.Fatalf("startThread() error = %v", err)
+	}
+	state.threadID = threadID
+
+	// Reproduce what the handshake-phase handler queues before the
+	// turn phase begins: a notification and a line that fails to
+	// parse, the same shapes the app-server might send between the
+	// handshake and the first turn.
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "some/unsolicited"}
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindMalformed, Err: errors.New("malformed")}
+
+	beginTurnPhase(state)
+
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	for _, e := range events {
+		if e.Type == domain.EventOtherMessage && e.Message == "some/unsolicited" {
+			t.Errorf("event stream leaked the pre-turn notification %q", e.Message)
+		}
+	}
+}
+
+// TestRunTurn_StdoutParseFailureBeforeResponse pins that a line which
+// fails to parse arriving between the turn/start write and its
+// response ends the turn as domain.ErrPortExit, the same disposition
+// TestRunTurn_StdoutParseFailure pins for a malformed line arriving
+// after the response.
+func TestRunTurn_StdoutParseFailureBeforeResponse(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestStateWithMalformedBeforeResponse(t,
+		"not valid json",
+		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
+	)
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: collectEvents(&events),
+	})
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrPortExit)
+	}
+	if !strings.HasPrefix(agentErr.Message, "stdout read error: ") {
+		t.Errorf("AgentError.Message = %q, want prefix %q", agentErr.Message, "stdout read error: ")
+	}
+
+	turnFailedEvents := filterEventsOfType(events, domain.EventTurnFailed)
+	if len(turnFailedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(turnFailedEvents))
+	}
+}
+
+// TestAuthenticateIfNeeded_LoginWaitEOF drives the login wait past a
+// clean end of stream and asserts it returns the pinned text rather
+// than timing out, within 2s while readTimeout keeps its 30s default.
+func TestAuthenticateIfNeeded_LoginWaitEOF(t *testing.T) {
+	// No t.Parallel() — uses t.Setenv.
+	t.Setenv("CODEX_API_KEY", "test-key")
+
+	state := authWaitState(t, map[int64]string{
+		1: `{"id":1,"result":{"account":null}}`,
+		2: `{"id":2,"result":{}}`,
+	})
+
+	if got := readTimeout(state); got != 30*time.Second {
+		t.Fatalf("readTimeout() = %v, want the 30s default", got)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- authenticateIfNeeded(context.Background(), state) }()
+
+	// authenticateIfNeeded only reads state.msgCh once
+	// account/login/start has already returned, and Call never reads
+	// state.msgCh at all, so closing it here cannot race Call's own
+	// resolution on the connection.
+	close(state.msgCh)
+
+	select {
+	case err := <-done:
+		const want = "unexpected EOF waiting for login"
+		if err == nil || err.Error() != want {
+			t.Errorf("authenticateIfNeeded() error = %v, want %q", err, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("authenticateIfNeeded() did not return within 2s of the stream ending")
+	}
+}
+
+// TestAuthenticateIfNeeded_LoginWaitReadError drives the login wait
+// past a read failure (rather than a clean end of stream) and asserts
+// it returns the pinned text naming the underlying error, within 2s.
+func TestAuthenticateIfNeeded_LoginWaitReadError(t *testing.T) {
+	// No t.Parallel() — uses t.Setenv.
+	t.Setenv("CODEX_API_KEY", "test-key")
+
+	wantErr := errors.New("boom")
+	state := authWaitState(t, map[int64]string{
+		1: `{"id":1,"result":{"account":null}}`,
+		2: `{"id":2,"result":{}}`,
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- authenticateIfNeeded(context.Background(), state) }()
+
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindStreamEnd, Err: wantErr}
+
+	select {
+	case err := <-done:
+		want := "scanner error waiting for login: " + wantErr.Error()
+		if err == nil || err.Error() != want {
+			t.Errorf("authenticateIfNeeded() error = %v, want %q", err, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("authenticateIfNeeded() did not return within 2s of the read failure")
+	}
+}
+
+// TestStartThread_NotificationWaitEOF drives the thread/started wait
+// past a clean end of stream and asserts it returns the thread ID
+// with a nil error, within 2s, rather than waiting for the 30s
+// readTimeout default.
+func TestStartThread_NotificationWaitEOF(t *testing.T) {
+	t.Parallel()
+
+	state := authWaitState(t, map[int64]string{
+		1: `{"id":1,"result":{"thread":{"id":"thread-abc"}}}`,
+	})
+
+	type outcome struct {
+		threadID string
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		threadID, err := startThread(context.Background(), state, passthroughConfig{})
+		done <- outcome{threadID, err}
+	}()
+
+	close(state.msgCh)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Errorf("startThread() error = %v, want nil", got.err)
+		}
+		if got.threadID != "thread-abc" {
+			t.Errorf("startThread() threadID = %q, want %q", got.threadID, "thread-abc")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startThread() did not return within 2s of the stream ending")
 	}
 }

@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,182 +9,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// sendRequest writes a JSON-RPC request to the app-server stdin.
-// It acquires state.mu internally to protect both the request ID
-// counter and the stdin write. Callers must not hold state.mu.
-func sendRequest(state *sessionState, method string, params any) (int64, error) {
-	state.mu.Lock()
-	state.nextRequestID++
-	id := state.nextRequestID
-	state.mu.Unlock()
-
-	req := rpcRequest{
-		Method: method,
-		ID:     id,
-		Params: params,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return 0, fmt.Errorf("marshal request %s: %w", method, err)
-	}
-	data = append(data, '\n')
-
-	state.mu.Lock()
-	_, writeErr := state.stdin.Write(data)
-	state.mu.Unlock()
-	if writeErr != nil {
-		return 0, fmt.Errorf("write request %s: %w", method, writeErr)
-	}
-	return id, nil
-}
-
-// sendNotification writes a JSON-RPC notification (no id) to the
-// app-server stdin.
-func sendNotification(state *sessionState, method string, params any) error {
-	// Notifications have no id field. Use the rpcRequest type but
-	// omit the ID (zero value is omitempty).
-	notif := rpcRequest{
-		Method: method,
-		Params: params,
-	}
-	data, err := json.Marshal(notif)
-	if err != nil {
-		return fmt.Errorf("marshal notification %s: %w", method, err)
-	}
-	data = append(data, '\n')
-
-	state.mu.Lock()
-	_, writeErr := state.stdin.Write(data)
-	state.mu.Unlock()
-	if writeErr != nil {
-		return fmt.Errorf("write notification %s: %w", method, writeErr)
-	}
-	return nil
-}
-
-// sendResponse writes a JSON-RPC response to the app-server stdin.
-// The caller must hold state.mu.
-func sendResponse(state *sessionState, id int64, result any) error {
-	type response struct {
-		ID     int64 `json:"id"`
-		Result any   `json:"result"`
-	}
-	resp := response{ID: id, Result: result}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return fmt.Errorf("marshal response id=%d: %w", id, err)
-	}
-	data = append(data, '\n')
-
-	_, writeErr := state.stdin.Write(data)
-	if writeErr != nil {
-		return fmt.Errorf("write response id=%d: %w", id, writeErr)
-	}
-	return nil
-}
-
-// sendErrorResponse writes a JSON-RPC error response to the app-server
-// stdin. The caller must hold state.mu.
-func sendErrorResponse(state *sessionState, id int64, code int, message string) error {
-	type errorResponse struct {
-		ID    int64    `json:"id"`
-		Error rpcError `json:"error"`
-	}
-	resp := errorResponse{ID: id, Error: rpcError{Code: code, Message: message}}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return fmt.Errorf("marshal error response id=%d: %w", id, err)
-	}
-	data = append(data, '\n')
-
-	_, writeErr := state.stdin.Write(data)
-	if writeErr != nil {
-		return fmt.Errorf("write error response id=%d: %w", id, writeErr)
-	}
-	return nil
-}
-
-// scanResult carries one line from the background scanner goroutine,
-// or a terminal condition (EOF / error).
-type scanResult struct {
-	Line []byte
-	Err  error
-	EOF  bool
-}
-
-// startScannerCh wraps scanner.Scan in a background goroutine and
-// delivers results on the returned channel. The goroutine exits when
-// the scanner reaches EOF or returns an error. Closing stop only
-// interrupts delivery to scanCh; it does not unblock a scanner.Scan
-// call that is blocked on the underlying reader, so shutdown must also
-// close that reader or terminate the subprocess. Callers must not
-// close the returned channel.
-func startScannerCh(scanner *bufio.Scanner, stop <-chan struct{}) <-chan scanResult {
-	scanCh := make(chan scanResult, 1)
-	go func() {
-		defer close(scanCh)
-		for scanner.Scan() {
-			line := make([]byte, len(scanner.Bytes()))
-			copy(line, scanner.Bytes())
-			select {
-			case scanCh <- scanResult{Line: line}:
-			case <-stop:
-				return
-			}
-		}
-		termResult := scanResult{EOF: true}
-		if err := scanner.Err(); err != nil {
-			termResult = scanResult{Err: err}
-		}
-		select {
-		case scanCh <- termResult:
-		case <-stop:
-		}
-	}()
-	return scanCh
-}
-
-// readResponse reads from scanCh until a response with the expected
-// ID arrives or the context expires. Notifications encountered during
-// the wait are discarded.
-func readResponse(ctx context.Context, scanCh <-chan scanResult, expectedID int64) (rpcResponse, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return rpcResponse{}, ctx.Err()
-		case result, ok := <-scanCh:
-			if !ok || result.EOF {
-				return rpcResponse{}, fmt.Errorf("unexpected EOF waiting for response id=%d", expectedID)
-			}
-			if result.Err != nil {
-				return rpcResponse{}, fmt.Errorf("scanner error waiting for response id=%d: %w", expectedID, result.Err)
-			}
-			msg := parseMessage(result.Line)
-			if msg.Err != nil {
-				slog.Debug("discarding malformed message during handshake", slog.Any("error", msg.Err))
-				continue
-			}
-			if msg.IsNotification {
-				slog.Debug("discarding notification during handshake",
-					slog.String("method", msg.Notification.Method))
-				continue
-			}
-			if msg.IsResponse && msg.Response.ID == expectedID {
-				return msg.Response, nil
-			}
-			slog.Debug("discarding response with unexpected id",
-				slog.Int64("got", msg.Response.ID),
-				slog.Int64("want", expectedID))
-		}
-	}
-}
-
 // initializeHandshake sends the initialize request and initialized
 // notification per the app-server protocol.
-func initializeHandshake(ctx context.Context, state *sessionState, scanCh <-chan scanResult) error {
+func initializeHandshake(ctx context.Context, state *sessionState) error {
 	type clientInfo struct {
 		Name    string `json:"name"`
 		Title   string `json:"title"`
@@ -210,20 +40,15 @@ func initializeHandshake(ctx context.Context, state *sessionState, scanCh <-chan
 		},
 	}
 
-	id, err := sendRequest(state, "initialize", params)
+	resp, err := state.conn.Call(ctx, "initialize", params)
 	if err != nil {
 		return fmt.Errorf("initialize: %w", err)
-	}
-
-	resp, err := readResponse(ctx, scanCh, id)
-	if err != nil {
-		return fmt.Errorf("initialize response: %w", err)
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("initialize error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
-	if err := sendNotification(state, "initialized", map[string]any{}); err != nil {
+	if err := state.conn.Notify("initialized", map[string]any{}); err != nil {
 		return fmt.Errorf("initialized notification: %w", err)
 	}
 	return nil
@@ -231,15 +56,10 @@ func initializeHandshake(ctx context.Context, state *sessionState, scanCh <-chan
 
 // authenticateIfNeeded checks the app-server auth state and performs
 // API key login if needed.
-func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-chan scanResult) error {
-	id, err := sendRequest(state, "account/read", map[string]any{"refreshToken": false})
+func authenticateIfNeeded(ctx context.Context, state *sessionState) error {
+	resp, err := state.conn.Call(ctx, "account/read", map[string]any{"refreshToken": false})
 	if err != nil {
 		return fmt.Errorf("account/read: %w", err)
-	}
-
-	resp, err := readResponse(ctx, scanCh, id)
-	if err != nil {
-		return fmt.Errorf("account/read response: %w", err)
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("account/read error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
@@ -262,17 +82,12 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-cha
 		return nil
 	}
 
-	loginID, err := sendRequest(state, "account/login/start", map[string]any{
+	loginResp, err := state.conn.Call(ctx, "account/login/start", map[string]any{
 		"type":   "apiKey",
 		"apiKey": apiKey,
 	})
 	if err != nil {
 		return fmt.Errorf("account/login/start: %w", err)
-	}
-
-	loginResp, err := readResponse(ctx, scanCh, loginID)
-	if err != nil {
-		return fmt.Errorf("account/login/start response: %w", err)
 	}
 	if loginResp.Error != nil {
 		return &domain.AgentError{
@@ -289,20 +104,19 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-cha
 			return ctx.Err()
 		case <-deadline:
 			return fmt.Errorf("timeout waiting for account/login/completed")
-		case result, ok := <-scanCh:
-			if !ok || result.EOF {
+		case msg, ok := <-state.msgCh:
+			if !ok {
 				return fmt.Errorf("unexpected EOF waiting for login")
 			}
-			if result.Err != nil {
-				return fmt.Errorf("scanner error waiting for login: %w", result.Err)
+			if msg.Kind == jsonrpc.KindStreamEnd {
+				return fmt.Errorf("scanner error waiting for login: %w", msg.Err)
 			}
-			msg := parseMessage(result.Line)
-			if msg.Err != nil {
+			if msg.Kind == jsonrpc.KindMalformed {
 				continue
 			}
-			if msg.IsNotification && msg.Notification.Method == "account/login/completed" {
+			if msg.Kind == jsonrpc.KindNotification && msg.Method == "account/login/completed" {
 				var loginNotif accountLoginNotification
-				if err := json.Unmarshal(msg.Notification.Params, &loginNotif); err != nil {
+				if err := json.Unmarshal(msg.Params, &loginNotif); err != nil {
 					return fmt.Errorf("login notification unmarshal: %w", err)
 				}
 				if !loginNotif.Success {
@@ -319,7 +133,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-cha
 
 // startThread sends thread/start and waits for the thread/started
 // notification. Returns the thread ID.
-func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, pt passthroughConfig) (string, error) {
+func startThread(ctx context.Context, state *sessionState, pt passthroughConfig) (string, error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "never"
@@ -342,14 +156,9 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 		params["personality"] = pt.Personality
 	}
 
-	id, err := sendRequest(state, "thread/start", params)
+	resp, err := state.conn.Call(ctx, "thread/start", params)
 	if err != nil {
 		return "", fmt.Errorf("thread/start: %w", err)
-	}
-
-	resp, err := readResponse(ctx, scanCh, id)
-	if err != nil {
-		return "", fmt.Errorf("thread/start response: %w", err)
 	}
 	if resp.Error != nil {
 		return "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
@@ -374,19 +183,18 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 			// Accept the thread ID even without the notification.
 			// Some app-server versions may not emit it.
 			return threadID, nil
-		case result, ok := <-scanCh:
-			if !ok || result.EOF {
+		case msg, ok := <-state.msgCh:
+			if !ok {
 				return threadID, nil
 			}
-			if result.Err != nil {
-				slog.Debug("scanner error waiting for thread/started", slog.Any("error", result.Err))
+			if msg.Kind == jsonrpc.KindStreamEnd {
+				slog.Debug("scanner error waiting for thread/started", slog.Any("error", msg.Err))
 				return threadID, nil
 			}
-			msg := parseMessage(result.Line)
-			if msg.Err != nil {
+			if msg.Kind == jsonrpc.KindMalformed {
 				continue
 			}
-			if msg.IsNotification && msg.Notification.Method == "thread/started" {
+			if msg.Kind == jsonrpc.KindNotification && msg.Method == "thread/started" {
 				return threadID, nil
 			}
 		}
@@ -394,17 +202,12 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 }
 
 // resumeThread sends thread/resume for an existing thread.
-func resumeThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, threadID string) error {
-	id, err := sendRequest(state, "thread/resume", map[string]any{
+func resumeThread(ctx context.Context, state *sessionState, threadID string) error {
+	resp, err := state.conn.Call(ctx, "thread/resume", map[string]any{
 		"threadId": threadID,
 	})
 	if err != nil {
 		return fmt.Errorf("thread/resume: %w", err)
-	}
-
-	resp, err := readResponse(ctx, scanCh, id)
-	if err != nil {
-		return fmt.Errorf("thread/resume response: %w", err)
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)

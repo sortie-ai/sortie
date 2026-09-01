@@ -8,44 +8,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
-// rpcRequest is a JSON-RPC 2.0 request sent to the app-server.
-type rpcRequest struct {
-	Method string `json:"method"`
-	ID     int64  `json:"id,omitempty"`
-	Params any    `json:"params,omitempty"`
-}
-
-// rpcResponse is a JSON-RPC 2.0 response from the app-server.
-type rpcResponse struct {
-	ID     int64           `json:"id"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *rpcError       `json:"error,omitempty"`
-}
-
-// rpcNotification is a server-initiated notification (no id field).
-type rpcNotification struct {
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params,omitempty"`
-}
-
-// rpcError is a JSON-RPC error object.
-type rpcError struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
-}
-
-// parsedMessage is the result of parsing a single JSONL line from the
-// app-server. Exactly one of IsResponse or IsNotification is true when
-// Err is nil.
-type parsedMessage struct {
-	IsResponse     bool
-	IsNotification bool
-	Response       rpcResponse
-	Notification   rpcNotification
-	Err            error
-}
-
 // tokenUsageBreakdown is one token-count breakdown inside a
 // thread/tokenUsage/updated notification.
 type tokenUsageBreakdown struct {
@@ -141,55 +103,6 @@ type accountResult struct {
 // account/login/completed notification.
 type accountLoginNotification struct {
 	Success bool `json:"success"`
-}
-
-// wireMessage is used for initial discrimination of JSON-RPC messages.
-// A message with a non-zero ID and no Method is a response; a message
-// with a Method is a request or notification.
-type wireMessage struct {
-	ID     int64           `json:"id"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *rpcError       `json:"error,omitempty"`
-}
-
-// parseMessage parses a single JSONL line from the app-server stdout.
-// It discriminates between responses (non-zero id, no method) and
-// notifications (method present, zero or absent id).
-func parseMessage(line []byte) parsedMessage {
-	var wire wireMessage
-	if err := json.Unmarshal(line, &wire); err != nil {
-		return parsedMessage{Err: fmt.Errorf("parse message: %w", err)}
-	}
-
-	// Responses have a non-zero id and no method field. Notifications
-	// and requests have a method field. When both are present (a
-	// request from the server such as item/tool/call), treat it as a
-	// notification so the event loop dispatches on Method.
-	if wire.Method != "" {
-		return parsedMessage{
-			IsNotification: true,
-			Notification: rpcNotification{
-				Method: wire.Method,
-				Params: wire.Params,
-			},
-			// Preserve the request ID for item/tool/call responses.
-			Response: rpcResponse{ID: wire.ID},
-		}
-	}
-	if wire.ID != 0 {
-		return parsedMessage{
-			IsResponse: true,
-			Response: rpcResponse{
-				ID:     wire.ID,
-				Result: wire.Result,
-				Error:  wire.Error,
-			},
-		}
-	}
-
-	return parsedMessage{Err: fmt.Errorf("parse message: no method or id in JSON-RPC message")}
 }
 
 // normalizeBreakdown converts a raw [tokenUsageBreakdown] into a
