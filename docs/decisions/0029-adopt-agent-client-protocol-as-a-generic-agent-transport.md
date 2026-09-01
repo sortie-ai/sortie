@@ -12,7 +12,7 @@ Every coding-agent runtime Sortie drives is reached through a hand-written integ
 
 The Agent Client Protocol is a published, versioned standard for exactly this conversation: a client launches a coding agent as a subprocess and speaks newline-delimited JSON-RPC to it over the child's standard input and output. It normalizes most of what each integration reverse-engineers today. One framing. One turn lifecycle in which every turn ends with a declared outcome drawn from a closed set. One closed set of session updates covering messages, reasoning, tool calls, plans, and mode changes. One way to hand an agent its tool servers, which this project currently does five different ways.
 
-Sortie adopts it, and this record does not reopen that. Not adopting is not among the options below. It was weighed against the same evidence and rejected, because it leaves a hand-written integration as the only route to a runtime whose protocol mode ships before any structured native output does, and that ordering has already been observed once: one runtime shipped a working protocol mode six months before it shipped any machine-readable output of its own.
+Sortie adopts it. Continuing without the protocol was weighed against the same evidence and is recorded below as a rejected option, because it leaves a hand-written integration as the only route to a runtime whose protocol mode ships before any structured native output does, and that ordering has already been observed once: one runtime shipped a working protocol mode six months before it shipped any machine-readable output of its own.
 
 What this record settles is how adoption is structured, how far its scope reaches, what has to be true of a runtime before it moves, and the four questions a protocol-driven runtime cannot be operated without answering: where its token counts come from, whether session continuation is a condition of support, who answers a permission request, and which wire version is pinned.
 
@@ -41,6 +41,7 @@ One navigational fact bears on the answer. The abbreviation of this protocol's n
 - One registered adapter kind per agent, each pairing the protocol with one named runtime
 - A single generic adapter kind, with the agent named by the command that launches it
 - A transport selected inside each existing per-runtime kind
+- Continuing without the protocol, writing one hand-written integration per runtime
 
 ## Decision Outcome
 
@@ -68,9 +69,11 @@ The rule applies to measured surfaces on both sides. An unmeasured surface is ne
 
 The transport keeps a per-session record of this project's own capabilities, not of the protocol's. The list is the project's because the project's contract changes more slowly than the protocol does, and it is what the orchestrator was promised.
 
-Each entry resolves in three stages, and each stage can only lower it. First, what the kind structurally cannot do, known before launch and visible to offline validation. Second, what the agent advertised during the handshake and at session creation; an absent advertisement lowers the entry to absent, because the protocol says an omitted capability is unsupported. Third, what the agent was observed to do the first time the capability was used; a missing field, a refused method, or a continuation that replays nothing lowers the entry again.
+Each entry resolves in three stages, and each stage can only lower it. First, what the kind structurally cannot do, known before launch and visible to offline validation. Second, what the agent advertised during the handshake and at session creation. Third, what the agent was observed to do the first time the capability was used: a missing field, a refused method, or a continuation that replays nothing.
 
-A lowering within a session is final for that session and is re-evaluated on the next one. Decisions read these entries, and a decision that changes mid-turn is not reproducible.
+The second and third stages reach only those entries the protocol is expected to carry. Lowering such an entry withdraws the protocol as its source, because the protocol's own rule is that an omitted capability is unsupported; the entry then settles where it would have settled had the protocol never carried it, which is our own production for most of the list and a declared gap for the rest. An entry the shared layer already produces is never lowered by an advertisement the agent did not make, because the protocol was never its source. There is no separate absent state: absence of an advertisement is a transition, not a destination.
+
+A lowering within a session is final for that session and is re-evaluated on the next one. Decisions read these entries as they stood when the turn began: a lowering observed during a turn takes effect from the following turn, so that retry classification, the token ceiling, tool delivery and continuation cannot change meaning underneath a turn already in flight. The turn that made the observation still ends on the evidence it actually saw.
 
 Each entry ends in one of four states. **Protocol** means the agent advertised it and delivered it, and the value is read from the wire. **Ours** means the protocol does not carry it, or carries it in a form the contract cannot consume, and the shared layer produces it as it already does for every existing integration. **Gap** means nobody carries it and the contract wants it: the degradation is declared, the operator is told once for the session, and the decision that depends on it is switched off. **Refused** means the configuration contradicts the project's posture and the run does not start.
 
@@ -109,15 +112,20 @@ The policy is already settled by ADR-0025 and is not a property of the transport
 What it settles is the mechanics on this wire. The protocol offers a real reply channel, so this becomes the second transport in the project with one, and a permission request is refused rather than left to end the attempt.
 
 - The reply selects an offered option by its declared kind, never by its identifier. Identifiers are opaque strings the agent chooses; only the kind is a closed set, and only the kind is portable.
-- Where no option of a refusing kind is offered, the protocol provides no way to say no inside the channel, and the attempt ends with the human-input-required outcome rather than proceeding blind.
-- Where the option list is empty, which the pinned version permits and the draft successor forbids, the same ending applies.
+- Where no option of a refusing kind is offered, the protocol provides no way to say no by selection. The request is answered with the cancelled outcome, the only other answer the pinned line defines, and the attempt then ends with the human-input-required outcome rather than proceeding blind.
+- Where the option list is empty, which the pinned version permits and the draft successor forbids, the same answer and the same ending apply.
+- The request is always answered. The pinned line admits exactly two outcomes, selecting an offered option or cancelling, and offers no third way to express refusal; leaving the call unanswered would strand the agent on a request that never returns.
 - Two prominent implementations do the opposite, and neither is copied. The reference autonomous client selects the first option in the list; the widest measured consumer auto-approves when no handler is registered. Both fail open, and both are what a reader finds first when looking for an example.
 
 The client advertises no capability for showing a person a form or opening a URL, so the agent must not request one and is required to fall back gracefully. Those obligations are unconditionally about a present person: the client must let a person review and modify a response before it is sent, must obtain consent before navigating anywhere, and must not prefetch. None of them can be honestly satisfied by an unattended orchestrator, so the capability is not advertised at all rather than answered badly.
 
 ### The pinned version, and what triggers a migration
 
-The negotiated wire version is pinned at the integer 1, the released stable line. The draft successor is not adopted. The client validates against one pinned release of the published stable schema, and a version it cannot accept ends the session rather than continuing, because the protocol defines no error for a version mismatch and leaves the decision to disconnect entirely to the client.
+The negotiated wire version is pinned at the integer 1, the released stable line. The draft successor is not adopted. A version the client cannot accept ends the session rather than continuing, because the protocol defines no error for a version mismatch and leaves the decision to disconnect entirely to the client.
+
+The wire version and the schema release are different numbers, and conflating them is a known trap: the publisher versions its schema artifacts on their own line and states outright that wire compatibility must not be inferred from it. Validation and the hand-written types are therefore pinned to one named stable schema release, recorded with the tag and the commit it resolves to, and that pin moves deliberately rather than by following the latest publication. The release pinned at adoption is the stable line's 1.21.0 artifact, whose own metadata declares wire version 1.
+
+Later additions published against the same wire version are accepted on the wire and ignored by the client until the pin moves. Parsing stays lenient, so an unrecognized field or update variant is skipped rather than rejected; a client that refused them would reject agents that are already conformant, because every runtime measured for this decision sends something the pinned release does not describe. Treating such an addition as a source of truth requires moving the pin, which is its own change with its own evidence.
 
 Two conditions together trigger reconsideration, and neither alone is enough:
 
@@ -149,6 +157,8 @@ The cost is named in the negatives below: a change that keeps every field and ch
 **A model identifier for protocol-driven runtimes.** It is empty for several runtimes today, and the protocol's stable line has no standard field for it: the field that carried it was removed, and the method that set it was withdrawn. One measured runtime supplies both anyway, off-schema. Filling a recorded field from data that exists in no published schema artifact is a decision, and it is not made here.
 
 ### Considered Options in Detail
+
+**Continuing without the protocol.** Rejected because it holds the roster at its current width while leaving every future runtime to be reverse-engineered again. The cost it avoids is real but bounded, and the cost it keeps is unbounded: each integration parses a vendor format that changes on the vendor's schedule, and defects arrive by class because each integration solves the same problem in its own words. It is also the only option that forecloses a runtime whose protocol mode ships before any structured native output does, which has already happened once. It remains the correct answer for any runtime the eligibility rule below does not admit, so it is rejected as a general policy rather than as a per-runtime outcome.
 
 **One registered adapter kind per agent.** Rejected because its central justification does not survive the measurements. The option exists so that per-agent differences can be declared where per-kind properties already live: tool-server delivery mode, the continuation gate, and configuration validation. None of the three carries the differences that actually exist. Tool-server delivery is identical for every agent on this protocol, because servers are always re-expressed into the session-creation request and the standard-input mechanism for them is mandatory for every agent on the pinned line, so one value is honest for all of them and splitting kinds gains nothing. The continuation gate names a configuration key that blocks continuation, not an ability to continue, and a generic kind has no such keys. What does differ between agents is capabilities, and capabilities cannot be declared before launch, because the advertisement can be false and because two builds of the same runtime differ. The option's certain cost is a doubled configuration surface for every runtime that already has an integration, plus a registration, a metadata declaration, an environment-gated test suite, and two documentation rows for each agent added.
 
@@ -183,11 +193,11 @@ The decision is validated when all of the following hold:
 
 1. A runtime moves onto the protocol only with a recorded measurement of both its surfaces against the load-bearing list, and no runtime moves on an unmeasured surface.
 2. No code path branches on the agent's identity. Differences resolve through an advertised capability or an observed message shape.
-3. The client answers every permission request with no person involved, selecting by the option's declared kind and never by its identifier, and ends the attempt with the human-input-required outcome when no refusing option is offered or the option list is empty.
+3. The client answers every permission request with no person involved, selecting by the option's declared kind and never by its identifier. Where no refusing option is offered or the option list is empty, it answers with the cancelled outcome and then ends the attempt with the human-input-required outcome.
 4. The client advertises no filesystem, terminal, or human-prompting capability, and no run waits on an unanswered request.
 5. Token counters for a protocol-driven runtime are computed by the adapter from observed events, no runtime-supplied total is passed through, and a runtime that reports no counters is reported unmeasured with the token ceiling inactive and the incompleteness recorded.
-6. A capability the agent advertised but did not deliver is lowered to absent for the rest of that session and is not raised again within it.
+6. A capability the agent advertised but did not deliver stops being read from the protocol for the rest of that session, settling into our own production or a declared gap, and is not raised again within it. A capability the shared layer produces is unaffected by anything the agent did or did not advertise.
 7. Session continuation is absent from the conditions of support, and its state for a given session comes from a call with a negative control rather than from the advertisement.
-8. The negotiated wire version is the integer 1, and a version the client cannot accept ends the session.
-9. An unknown key, an unknown update variant, and an unknown value do not fail a message.
+8. The negotiated wire version is the integer 1, a version the client cannot accept ends the session, and validation runs against the named stable schema release the pin records rather than against whatever is published latest.
+9. An unknown key, an unknown update variant, and an unknown value do not fail a message, including additions published against the same wire version after the pinned release.
 10. The runtime version as the agent reports it is recorded for every session, and one notification per session lists the capabilities resolved to a declared gap.
