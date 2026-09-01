@@ -119,7 +119,7 @@ func extractID(t *testing.T, line []byte) int64 {
 	return wire.ID
 }
 
-// TestConn_RoutesEveryNonMatchingMessageWhileCallInFlight is AC2: a
+// TestConn_RoutesEveryNonMatchingMessageWhileCallInFlight checks that a
 // notification, an unmatched response, a malformed line, and a
 // server-initiated request that arrive while a Call is in flight each
 // reach the handler in order and with the right classification, and
@@ -179,7 +179,7 @@ func TestConn_RoutesEveryNonMatchingMessageWhileCallInFlight(t *testing.T) {
 	}
 }
 
-// TestConn_NotificationBeforeAnyCallReachesHandler is AC3: a
+// TestConn_NotificationBeforeAnyCallReachesHandler checks that a
 // notification delivered before any Call has been issued still
 // reaches the handler. No Call is ever issued in this test, so a
 // router keying on "a call is in flight" would fail it.
@@ -293,8 +293,8 @@ func TestConn_CallErrClosed(t *testing.T) {
 	}
 }
 
-// TestConn_OverLongLineFailsRead covers the MaxLineBytes case AC11
-// names: a line longer than MaxLineBytes with no newline fails the
+// TestConn_OverLongLineFailsRead covers the MaxLineBytes case: a
+// line longer than MaxLineBytes with no newline fails the
 // read, delivers a final KindStreamEnd message, and fails the call in
 // flight, all wrapping the scanner's own error.
 func TestConn_OverLongLineFailsRead(t *testing.T) {
@@ -336,7 +336,8 @@ func TestConn_OverLongLineFailsRead(t *testing.T) {
 	}
 }
 
-// TestConn_RespondError_WritesExactBytes is AC10's first half.
+// TestConn_RespondError_WritesExactBytes checks the exact bytes
+// RespondError writes to the connection.
 func TestConn_RespondError_WritesExactBytes(t *testing.T) {
 	t.Parallel()
 
@@ -358,8 +359,8 @@ func TestConn_RespondError_WritesExactBytes(t *testing.T) {
 	}
 }
 
-// TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines is AC10's
-// second half: concurrent Call and Notify operations each write one
+// TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines checks that
+// concurrent Call and Notify operations each write one
 // complete, separately parseable line, and no two calls receive the
 // same request id.
 func TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines(t *testing.T) {
@@ -462,7 +463,7 @@ func TestConn_ConcurrentCallsGetUniqueIDsAndCompleteLines(t *testing.T) {
 	}
 }
 
-// TestConn_DoneClosesAfterCloseAndReaderClose is AC9: the reader
+// TestConn_DoneClosesAfterCloseAndReaderClose checks that the reader
 // goroutine exits, signaled by Done closing, once Close has run and
 // the underlying reader has been closed to unblock the parked read.
 func TestConn_DoneClosesAfterCloseAndReaderClose(t *testing.T) {

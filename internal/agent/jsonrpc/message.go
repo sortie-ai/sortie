@@ -58,6 +58,13 @@ type Response struct {
 
 // Handler receives every message the connection reads that is not the
 // response to a call in flight.
+//
+// The connection invokes it synchronously on its reader goroutine, so
+// a handler that blocks stops the connection reading: a response to a
+// call already in flight is not correlated until the handler returns,
+// and a handler that calls back into the connection and waits for the
+// reply deadlocks. A handler that can block must bound the wait or
+// hand the message to another goroutine.
 type Handler func(Message)
 
 // wireEnvelope is the JSON shape one newline-delimited line decodes

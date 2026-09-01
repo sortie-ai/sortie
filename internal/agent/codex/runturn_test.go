@@ -127,9 +127,10 @@ func peekResponseID(line []byte) (int64, bool) {
 // with each newline-delimited line it finds, delimiter stripped. It
 // exists so a fixture peer can observe what codex writes without
 // reaching for bufio: the discriminator that turns a line into a
-// jsonrpc.Message is unexported outside the jsonrpc package, and no
-// helper here may reach it, or duplicate its classification, even for
-// this narrower purpose of peeking at an id to gate a reply.
+// jsonrpc.Message is unexported outside the jsonrpc package, so no
+// helper here may reach it. Reading the two wire fields that identify
+// a response, as peekResponseID does, is the narrowest substitute
+// that keeps these fixtures out of the jsonrpc package's internals.
 func scanOutboundLines(r io.Reader, onLine func(line []byte)) {
 	var buf []byte
 	chunk := make([]byte, 4096)
