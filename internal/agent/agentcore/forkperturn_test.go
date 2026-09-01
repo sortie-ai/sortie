@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -412,6 +413,78 @@ exit 1`)
 		}
 		if !hasEventType(*events, domain.EventTurnCompleted) {
 			t.Errorf("EventTurnCompleted not emitted; got %v", *events)
+		}
+	})
+
+	t.Run("Bound_NoFireOnLongTurn", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		// Closing the standard error handle right after the line is
+		// written puts the drain at EOF while the turn is still running,
+		// so the assertion that no bound fires does not depend on the
+		// drain goroutine being scheduled inside the grace.
+		script := agenttest.WriteScript(t, tmpDir, "agent", `echo 'long turn stderr' >&2
+exec 2>&-
+sleep 0.5
+exit 0`)
+		spy := &agenttest.LogSpy{}
+		target := newTestTarget(tmpDir, script)
+
+		var gotStderrLines []string
+		hooks := noopHooks()
+		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
+			gotStderrLines = stderrLines
+			EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
+			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+		}
+		sess := NewForkPerTurnSession(target, hooks, slog.New(spy))
+		sess.drainGrace = 50 * time.Millisecond // ten times shorter than the subprocess lifetime
+
+		emit, _ := sinkEvents()
+		_, err := sess.RunTurn(context.Background(), "p", emit)
+
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v, want nil", err)
+		}
+
+		wantStderrLines := []string{"long turn stderr"}
+		if !slices.Equal(gotStderrLines, wantStderrLines) {
+			t.Errorf("OnFinalize stderrLines = %v, want %v", gotStderrLines, wantStderrLines)
+		}
+
+		for _, e := range spy.Entries() {
+			if e.Level == slog.LevelWarn && e.Msg == "agent stderr was not fully collected before the process was reaped" {
+				t.Errorf("unexpected abandonment WARN record emitted on a turn that outlived drainGrace: %+v", e)
+			}
+		}
+	})
+
+	t.Run("Bound_OrdinaryTurnStderrUnmodified", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		script := agenttest.WriteScript(t, tmpDir, "agent", `echo 'first stderr line' >&2
+echo 'second stderr line' >&2`)
+		target := newTestTarget(tmpDir, script)
+
+		var gotStderrLines []string
+		hooks := noopHooks()
+		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
+			gotStderrLines = stderrLines
+			EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
+			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+		}
+		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+
+		emit, _ := sinkEvents()
+		_, err := sess.RunTurn(context.Background(), "p", emit)
+
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v, want nil", err)
+		}
+
+		wantStderrLines := []string{"first stderr line", "second stderr line"}
+		if !slices.Equal(gotStderrLines, wantStderrLines) {
+			t.Errorf("OnFinalize stderrLines = %v, want %v", gotStderrLines, wantStderrLines)
 		}
 	})
 

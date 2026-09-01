@@ -279,7 +279,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 
 	runtime.stderrCollector = procutil.NewStderrCollector(stderrPipe, logger)
 	startOpenCodeReader(stdoutPipe, runtime)
-	startWait(runtime, cmd)
+	startWait(runtime, cmd, procutil.DefaultDrainGrace)
 
 	emit := func(event domain.AgentEvent) {
 		if state.target.RemoteCommand == "" {
@@ -712,20 +712,31 @@ func startOpenCodeReader(stdout io.Reader, runtime *turnRuntime) {
 	}()
 }
 
-func startWait(runtime *turnRuntime, cmd *exec.Cmd) {
+// startWait reaps the turn's subprocess. grace bounds the wait for the
+// turn's stderr drain, once before cmd.Wait is called and once after
+// the process group is killed.
+func startWait(runtime *turnRuntime, cmd *exec.Cmd, grace time.Duration) {
 	go func() {
-		// Wait for both reader goroutines to finish before calling
-		// cmd.Wait(). cmd.Wait() closes the stdout and stderr pipe read
-		// ends after reaping the process, which races with a scanner
-		// still reading buffered output on either stream if called
-		// first; for stderr this can silently drop a permission-refusal
-		// warning that finalizeExitedTurn depends on.
+		// Wait for the stdout reader to finish before calling cmd.Wait().
+		// cmd.Wait() closes the stdout and stderr pipe read ends after
+		// reaping the process, which races with a scanner still reading
+		// buffered output on either stream if called first; for stderr
+		// this can silently drop a permission-refusal warning that
+		// finalizeExitedTurn depends on. The stderr wait is bounded so a
+		// descendant that inherits the stderr handle and outlives the
+		// direct child cannot withhold the reap.
 		<-runtime.readerDone
-		<-runtime.stderrCollector.Done()
+		drained := runtime.stderrCollector.WaitDone(grace)
 
 		waitErr := cmd.Wait()
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 		procutil.CleanupProcess(cmd.Process.Pid)
+
+		if !drained {
+			if !runtime.stderrCollector.WaitDone(grace) {
+				runtime.stderrCollector.Abandon(grace)
+			}
+		}
 
 		runtime.waitMu.Lock()
 		runtime.waitRes = waitResult{

@@ -24,7 +24,7 @@ That independence is a maintenance hazard. Improvements to the shared skeleton d
 
 The first-JSON deadline defaults to thirty seconds and is overridden by the workflow's read timeout. It stops once the first envelope arrives, so it guards a subprocess that never starts talking, not a mid-turn stall. Stalls are the orchestrator's business.
 
-There is one ordering constraint in the wait path that is easy to break and hard to see: the wait goroutine waits for both the stdout reader and the stderr collector to finish before reaping the process, because reaping closes the pipe read ends and races a scanner still draining buffered output. On stderr that race silently drops the permission-refusal warning that the finalize path depends on.
+There is one ordering constraint in the wait path that is easy to break and hard to see: the wait goroutine waits for both the stdout reader and the stderr collector to finish before reaping the process, because reaping closes the pipe read ends and races a scanner still draining buffered output. On stderr that race silently drops the permission-refusal warning that the finalize path depends on. The wait on the stdout reader stays unbounded; the wait on the stderr collector is bounded, so a descendant that inherits only the stderr handle and outlives the direct child cannot withhold the reap. Firing that bound costs the permission-refusal warning on the residual path where reaping the process does not also release the collector.
 
 ## Session identity and the dir-scoped resume
 

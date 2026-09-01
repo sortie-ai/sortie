@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -103,6 +105,12 @@ func TestClassifyStderr(t *testing.T) {
 			name:           "credits trailer embedded mid-line",
 			lines:          []string{"trailing noise ▸ Credits: 1.20 • Time: 12s done"},
 			wantCredits:    true,
+			wantAuthFailed: false,
+		},
+		{
+			name:           "abandonment marker is not evidence",
+			lines:          []string{procutil.AbandonedMarker},
+			wantCredits:    false,
 			wantAuthFailed: false,
 		},
 	}
@@ -210,4 +218,41 @@ func TestResumePath(t *testing.T) {
 		turn2Args := buildArgs(state, 2, "second", state.passthrough)
 		assertNoToken(t, turn2Args, "--resume")
 	})
+}
+
+// TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow pins the disposition
+// consequence of an abandoned stderr drain: marker-only stderr classifies
+// as neither the credits trailer nor an authentication failure, so the
+// evidence StartSession's OnFinalize closure builds from it selects the
+// shared decision's zero-work row and reports turn_failed rather than a
+// success. An end-to-end kiro turn is not exercised here because
+// drainGrace is unexported and this package cannot inject a short bound.
+func TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow(t *testing.T) {
+	t.Parallel()
+
+	creditsSeen, authFailed := classifyStderr([]string{procutil.AbandonedMarker})
+	if creditsSeen || authFailed {
+		t.Fatalf("classifyStderr(%v) = (creditsSeen=%v, authFailed=%v), want (false, false)",
+			procutil.AbandonedMarker, creditsSeen, authFailed)
+	}
+
+	// Mirrors the TurnEvidence StartSession's OnFinalize closure builds in
+	// kiro.go: neither the success nor the auth-failure switch arm matches
+	// when creditsSeen and authFailed are both false, so Terminal stays
+	// TerminalAbsent and the shared table decides from ExitCode and Work.
+	ev := agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkUnobservable,
+		WorkDetail:   "no credits trailer on stderr",
+	}
+
+	got := agentcore.DecideTurn(ev)
+
+	if got.Row != agentcore.RowZeroWork {
+		t.Errorf("DecideTurn(%+v).Row = %v, want %v", ev, got.Row, agentcore.RowZeroWork)
+	}
+	if got.ExitReason != domain.EventTurnFailed {
+		t.Errorf("DecideTurn(%+v).ExitReason = %q, want %q", ev, got.ExitReason, domain.EventTurnFailed)
+	}
 }
