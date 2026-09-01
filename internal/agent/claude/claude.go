@@ -111,7 +111,10 @@ func (s *sessionState) refreshForkLogger() {
 // "claude-code" sub-object in WORKFLOW.md. Command resolution is
 // deferred to [ClaudeCodeAdapter.StartSession].
 func NewClaudeCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt := parsePassthroughConfig(config)
+	pt, fault := parsePassthroughConfig(config)
+	if fault != nil {
+		return nil, fault
+	}
 	return &ClaudeCodeAdapter{passthrough: pt}, nil
 }
 

@@ -110,8 +110,11 @@ type waitResult struct {
 // NewOpenCodeAdapter creates an [OpenCodeAdapter] from the raw "opencode"
 // adapter configuration in WORKFLOW.md.
 func NewOpenCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
-	pt, err := parsePassthroughConfig(config)
-	if err != nil {
+	pt, fault := parsePassthroughConfig(config)
+	if fault != nil {
+		return nil, fault
+	}
+	if err := checkCrossField(pt); err != nil {
 		return nil, err
 	}
 	return &OpenCodeAdapter{passthrough: pt}, nil

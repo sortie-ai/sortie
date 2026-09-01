@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.
+  ([#911](https://github.com/sortie-ai/sortie/issues/911))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

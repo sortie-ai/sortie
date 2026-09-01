@@ -25,6 +25,14 @@ const trustToolsUntrustedMessage = "trust_all_tools does not resolve to true, an
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
+	if _, fault := parsePassthroughConfig(fields.Passthrough); fault != nil {
+		diags = append(diags, registry.ValidationDiag{
+			Severity: "error",
+			Check:    "kiro." + fault.Key + ".wrong_type",
+			Message:  fault.Error(),
+		})
+	}
+
 	diags = append(diags, validateTrustToolsConflict(fields.Passthrough)...)
 	diags = append(diags, validateTrustToolsUntrusted(fields.Passthrough)...)
 
@@ -33,7 +41,7 @@ func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag
 
 // validateTrustToolsConflict reports an error when trust_all_tools is
 // true and trust_tools is also non-empty, mirroring the check
-// [parsePassthroughConfig] used to enforce inline at construction.
+// [checkCrossField] used to enforce inline at construction.
 func validateTrustToolsConflict(passthrough map[string]any) []registry.ValidationDiag {
 	trustAllTools, _ := passthrough["trust_all_tools"].(bool)
 	trustTools := typeutil.ExtractStringSlice(passthrough["trust_tools"])

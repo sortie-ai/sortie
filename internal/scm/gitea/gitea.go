@@ -82,7 +82,10 @@ type GiteaAdapter struct {
 // token or unknown repository), returns a [*domain.TrackerError] and blocks
 // construction.
 func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	apiKey, _ := config["api_key"].(string)
+	apiKey, fault := typeutil.StringField(config, "api_key")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerAPIKey,
@@ -90,7 +93,10 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	project, _ := config["project"].(string)
+	project, fault := typeutil.StringField(config, "project")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerProject,
@@ -106,7 +112,10 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	endpoint, _ := config["endpoint"].(string)
+	endpoint, fault := typeutil.StringField(config, "endpoint")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if endpoint == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
@@ -143,12 +152,25 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		terminalStates[i] = strings.ToLower(s)
 	}
 
-	handoffRaw, _ := config["handoff_state"].(string)
+	handoffRaw, fault := typeutil.StringField(config, "handoff_state")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	handoffState := strings.ToLower(strings.TrimSpace(handoffRaw))
 
-	userAgent, _ := config["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(config, "user_agent")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
+	}
+
+	// query_filter is read here, ahead of the preflight below, so a
+	// mistyped value is reported without depending on network reachability.
+	raw, fault := typeutil.StringField(config, "query_filter")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
 	}
 
 	client := newGiteaClient(baseURL, apiKey, userAgent)
@@ -157,7 +179,6 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		return nil, err
 	}
 
-	raw, _ := config["query_filter"].(string)
 	filter, err := parseGiteaQueryFilter(raw)
 	if err != nil {
 		return nil, err

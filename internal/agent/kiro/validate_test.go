@@ -1,6 +1,7 @@
 package kiro
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -135,6 +136,70 @@ func TestValidateConfig_TrustToolsUntrusted(t *testing.T) {
 				t.Errorf("validateConfig(%v) check %q Severity = %q, want %q", tt.passthrough, diag.Check, diag.Severity, "error")
 			}
 		})
+	}
+}
+
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
+// wrong-typed value for a key the constructor reads fails NewKiroAdapter
+// with a plain error carrying the fault message, and validateConfig
+// reports the identical fault text under a "kiro.<key>.wrong_type" check
+// for the same input, so the two surfaces cannot diverge on what counts
+// as a type fault.
+func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{"model": 123}
+
+	_, constructErr := NewKiroAdapter(config)
+	if constructErr == nil {
+		t.Fatal("NewKiroAdapter(model=123) error = nil, want non-nil")
+	}
+	if constructErr.Error() != "model: expected string, got integer" {
+		t.Errorf("NewKiroAdapter(model=123) error = %q, want %q", constructErr.Error(), "model: expected string, got integer")
+	}
+
+	got := validateConfig(registry.AgentConfigFields{Kind: "kiro", Passthrough: config})
+
+	diag := hasCheck(got, "kiro.model.wrong_type")
+	if diag == nil {
+		t.Fatalf("validateConfig(model=123) missing check %q; got %+v", "kiro.model.wrong_type", got)
+	}
+	if diag.Message != constructErr.Error() {
+		t.Errorf("validateConfig(model=123) check %q Message = %q, want the same text the constructor failed with: %q", diag.Check, diag.Message, constructErr.Error())
+	}
+}
+
+// TestValidateConfig_TrustConflictNotWrongType covers that moving the
+// trust_all_tools/trust_tools conflict out of the funnel and into
+// [checkCrossField] must not turn it into a wrong_type diagnostic. A
+// config carrying only the conflict (no mistyped string key) reports
+// kiro.trust_tools.conflict exactly once and no kiro.*.wrong_type check.
+func TestValidateConfig_TrustConflictNotWrongType(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{"trust_all_tools": true, "trust_tools": []any{"read"}}
+
+	_, constructErr := NewKiroAdapter(config)
+	if constructErr == nil {
+		t.Fatal("NewKiroAdapter(trust conflict) error = nil, want error")
+	}
+	if constructErr.Error() != trustToolsConflictMessage {
+		t.Errorf("NewKiroAdapter(trust conflict) error = %q, want %q", constructErr.Error(), trustToolsConflictMessage)
+	}
+
+	got := validateConfig(registry.AgentConfigFields{Kind: "kiro", Passthrough: config})
+
+	conflictCount := 0
+	for _, d := range got {
+		if d.Check == "kiro.trust_tools.conflict" {
+			conflictCount++
+		}
+		if strings.HasSuffix(d.Check, ".wrong_type") {
+			t.Errorf("validateConfig(trust conflict) unexpectedly has a wrong_type check: %+v", d)
+		}
+	}
+	if conflictCount != 1 {
+		t.Errorf("validateConfig(trust conflict) has %d kiro.trust_tools.conflict diagnostics, want exactly 1: %+v", conflictCount, got)
 	}
 }
 

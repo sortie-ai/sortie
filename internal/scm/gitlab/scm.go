@@ -12,6 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -46,7 +47,10 @@ type GitLabSCMAdapter struct {
 //
 // Construction performs no network request.
 func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error) {
-	apiKey, _ := adapterConfig["api_key"].(string)
+	apiKey, fault := typeutil.StringField(adapterConfig, "api_key")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMAuth,
@@ -54,7 +58,10 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 		}
 	}
 
-	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(adapterConfig, "endpoint")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	parsedEndpoint, ok := httpkit.ResolveEndpoint(endpointRaw, defaultEndpoint)
 	if !ok {
 		return nil, &domain.SCMError{
@@ -67,7 +74,10 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 		baseURL += "/api/v4"
 	}
 
-	userAgent, _ := adapterConfig["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(adapterConfig, "user_agent")
+	if fault != nil {
+		return nil, &domain.SCMError{Kind: domain.ErrSCMPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

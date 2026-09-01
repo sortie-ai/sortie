@@ -25,23 +25,57 @@ type passthroughConfig struct {
 	SessionPersistence bool
 }
 
-// parsePassthroughConfig extracts Claude Code-specific settings from
-// the raw config map. Missing or wrong-typed keys use zero-value
-// defaults; SessionPersistence defaults to true.
-func parsePassthroughConfig(config map[string]any) passthroughConfig {
+// parsePassthroughConfig extracts Claude Code-specific settings from the
+// raw config map. A missing key uses its zero-value default;
+// SessionPersistence defaults to true. A key present with a non-string
+// value for a string field reports a fault rather than defaulting.
+func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
+	permissionMode, fault := typeutil.StringField(config, "permission_mode")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	fallbackModel, fault := typeutil.StringField(config, "fallback_model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	effort, fault := typeutil.StringField(config, "effort")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	allowedTools, fault := typeutil.StringField(config, "allowed_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	disallowedTools, fault := typeutil.StringField(config, "disallowed_tools")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	systemPrompt, fault := typeutil.StringField(config, "system_prompt")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	mcpConfig, fault := typeutil.StringField(config, "mcp_config")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+
 	return passthroughConfig{
-		PermissionMode:     typeutil.StringFrom(config, "permission_mode"),
-		Model:              typeutil.StringFrom(config, "model"),
-		FallbackModel:      typeutil.StringFrom(config, "fallback_model"),
+		PermissionMode:     permissionMode,
+		Model:              model,
+		FallbackModel:      fallbackModel,
 		MaxTurns:           typeutil.IntFrom(config, "max_turns", 0),
 		MaxBudgetUSD:       typeutil.FloatFrom(config, "max_budget_usd", 0),
-		Effort:             typeutil.StringFrom(config, "effort"),
-		AllowedTools:       typeutil.StringFrom(config, "allowed_tools"),
-		DisallowedTools:    typeutil.StringFrom(config, "disallowed_tools"),
-		SystemPrompt:       typeutil.StringFrom(config, "system_prompt"),
-		MCPConfig:          typeutil.StringFrom(config, "mcp_config"),
+		Effort:             effort,
+		AllowedTools:       allowedTools,
+		DisallowedTools:    disallowedTools,
+		SystemPrompt:       systemPrompt,
+		MCPConfig:          mcpConfig,
 		SessionPersistence: typeutil.BoolFrom(config, "session_persistence", true),
-	}
+	}, nil
 }
 
 // buildArgs constructs the CLI argument slice for a Claude Code

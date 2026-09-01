@@ -56,6 +56,23 @@ func TestNewGiteaSCMAdapter(t *testing.T) {
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
 
+	t.Run("api_key wrong type returns a payload error distinct from absent", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewGiteaSCMAdapter(map[string]any{"api_key": 4242, "endpoint": "http://gitea.invalid"})
+
+		var se *domain.SCMError
+		if !errors.As(err, &se) {
+			t.Fatalf("error type = %T, want *domain.SCMError", err)
+		}
+		if se.Kind != domain.ErrSCMPayload {
+			t.Errorf("SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMPayload)
+		}
+		if se.Message != "api_key: expected string, got integer" {
+			t.Errorf("SCMError.Message = %q, want %q", se.Message, "api_key: expected string, got integer")
+		}
+	})
+
 	t.Run("constructs without any network request", func(t *testing.T) {
 		t.Parallel()
 

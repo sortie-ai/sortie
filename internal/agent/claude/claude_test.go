@@ -404,7 +404,10 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 func TestBuildArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
 	t.Parallel()
 
-	pt := parsePassthroughConfig(map[string]any{})
+	pt, fault := parsePassthroughConfig(map[string]any{})
+	if fault != nil {
+		t.Fatalf("parsePassthroughConfig: %v", fault)
+	}
 	got := buildArgs(&sessionState{claudeSessionID: "sess-default"}, 1, "p", pt)
 
 	if !slices.Contains(got, "--dangerously-skip-permissions") {
@@ -443,7 +446,7 @@ func TestParsePassthroughConfig(t *testing.T) {
 
 	t.Run("full config", func(t *testing.T) {
 		t.Parallel()
-		cfg := parsePassthroughConfig(map[string]any{
+		cfg, fault := parsePassthroughConfig(map[string]any{
 			"permission_mode":     "dontAsk",
 			"model":               "claude-opus-4-20250514",
 			"fallback_model":      "claude-haiku-3",
@@ -456,6 +459,9 @@ func TestParsePassthroughConfig(t *testing.T) {
 			"mcp_config":          "/path/mcp.json",
 			"session_persistence": false,
 		})
+		if fault != nil {
+			t.Fatalf("parsePassthroughConfig: %v", fault)
+		}
 		if cfg.PermissionMode != "dontAsk" {
 			t.Errorf("PermissionMode = %q", cfg.PermissionMode)
 		}
@@ -475,7 +481,10 @@ func TestParsePassthroughConfig(t *testing.T) {
 
 	t.Run("empty config defaults", func(t *testing.T) {
 		t.Parallel()
-		cfg := parsePassthroughConfig(map[string]any{})
+		cfg, fault := parsePassthroughConfig(map[string]any{})
+		if fault != nil {
+			t.Fatalf("parsePassthroughConfig: %v", fault)
+		}
 		if cfg.PermissionMode != "" {
 			t.Errorf("PermissionMode = %q, want empty", cfg.PermissionMode)
 		}
@@ -487,15 +496,14 @@ func TestParsePassthroughConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("wrong types ignored", func(t *testing.T) {
+	t.Run("wrong non-string types ignored", func(t *testing.T) {
 		t.Parallel()
-		cfg := parsePassthroughConfig(map[string]any{
-			"model":          42,     // int instead of string
+		cfg, fault := parsePassthroughConfig(map[string]any{
 			"max_turns":      "five", // string instead of int
 			"max_budget_usd": "lots", // string instead of float
 		})
-		if cfg.Model != "" {
-			t.Errorf("Model = %q, want empty (wrong type)", cfg.Model)
+		if fault != nil {
+			t.Fatalf("parsePassthroughConfig: %v", fault)
 		}
 		if cfg.MaxTurns != 0 {
 			t.Errorf("MaxTurns = %d, want 0 (wrong type)", cfg.MaxTurns)
@@ -505,11 +513,27 @@ func TestParsePassthroughConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("wrong string type reports a fault", func(t *testing.T) {
+		t.Parallel()
+		_, fault := parsePassthroughConfig(map[string]any{
+			"model": 42, // int instead of string
+		})
+		if fault == nil {
+			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
+		}
+		if fault.Key != "model" {
+			t.Errorf("fault.Key = %q, want %q", fault.Key, "model")
+		}
+	})
+
 	t.Run("int coerced from float64", func(t *testing.T) {
 		t.Parallel()
-		cfg := parsePassthroughConfig(map[string]any{
+		cfg, fault := parsePassthroughConfig(map[string]any{
 			"max_turns": float64(7),
 		})
+		if fault != nil {
+			t.Fatalf("parsePassthroughConfig: %v", fault)
+		}
 		if cfg.MaxTurns != 7 {
 			t.Errorf("MaxTurns = %d, want 7", cfg.MaxTurns)
 		}
@@ -517,9 +541,12 @@ func TestParsePassthroughConfig(t *testing.T) {
 
 	t.Run("float coerced from int", func(t *testing.T) {
 		t.Parallel()
-		cfg := parsePassthroughConfig(map[string]any{
+		cfg, fault := parsePassthroughConfig(map[string]any{
 			"max_budget_usd": 3,
 		})
+		if fault != nil {
+			t.Fatalf("parsePassthroughConfig: %v", fault)
+		}
 		if cfg.MaxBudgetUSD != 3.0 {
 			t.Errorf("MaxBudgetUSD = %f, want 3.0", cfg.MaxBudgetUSD)
 		}

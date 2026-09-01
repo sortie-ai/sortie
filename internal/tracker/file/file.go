@@ -63,7 +63,10 @@ type FileAdapter struct {
 // Returns a [*domain.TrackerError] with Kind [domain.ErrTrackerPayload]
 // if "path" is missing or empty.
 func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	path, _ := config["path"].(string)
+	path, fault := typeutil.StringField(config, "path")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if path == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,

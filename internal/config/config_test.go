@@ -1785,6 +1785,161 @@ func TestNewServiceConfig_LabelCommandsExcludedFromReactionsMap(t *testing.T) {
 	}
 }
 
+// TestNewServiceConfig_TypeFaultOwnerGroups covers one key in each of the
+// four owner groups that route a wrong-typed value through
+// typeutil.StringField: a non-string value produces a *ConfigError naming
+// the field and the fault's Reason(), an absent key produces no error, and
+// a string value parses as before.
+func TestNewServiceConfig_TypeFaultOwnerGroups(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		field      string
+		buildRaw   func(v any) map[string]any
+		wrongValue any
+		wrongGot   string
+		// absentWantErr and absentWantMsg describe the existing, distinct
+		// absent-key diagnostic for this owner group. Three of the four
+		// groups have no required-key check ahead of the type check and
+		// so produce no error at all; notifications[0].kind is required,
+		// so its absent-key case keeps its own pre-existing message
+		// rather than becoming silent.
+		absentWantErr bool
+		absentWantMsg string
+	}{
+		{
+			name:  "tracker.endpoint",
+			field: "tracker.endpoint",
+			buildRaw: func(v any) map[string]any {
+				m := map[string]any{"kind": "jira"}
+				if v != nil {
+					m["endpoint"] = v
+				}
+				return map[string]any{"tracker": m}
+			},
+			wrongValue: 4242,
+			wrongGot:   "integer",
+		},
+		{
+			name:  "agent.kind",
+			field: "agent.kind",
+			buildRaw: func(v any) map[string]any {
+				m := map[string]any{}
+				if v != nil {
+					m["kind"] = v
+				}
+				return map[string]any{"agent": m}
+			},
+			wrongValue: true,
+			wrongGot:   "boolean",
+		},
+		{
+			name:  "ci_feedback.kind",
+			field: "ci_feedback.kind",
+			buildRaw: func(v any) map[string]any {
+				m := map[string]any{}
+				if v != nil {
+					m["kind"] = v
+				}
+				return map[string]any{"ci_feedback": m}
+			},
+			wrongValue: []any{"webhook"},
+			wrongGot:   "list",
+		},
+		{
+			name:  "notifications[0].kind",
+			field: "notifications[0].kind",
+			buildRaw: func(v any) map[string]any {
+				entry := map[string]any{}
+				if v != nil {
+					entry["kind"] = v
+				}
+				return map[string]any{"notifications": []any{entry}}
+			},
+			wrongValue:    7,
+			wrongGot:      "integer",
+			absentWantErr: true,
+			absentWantMsg: "kind is required and must be a non-empty string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("wrong type is a ConfigError", func(t *testing.T) {
+				t.Parallel()
+				_, err := NewServiceConfig(tt.buildRaw(tt.wrongValue))
+
+				assertConfigErrorField(t, err, tt.field)
+				var ce *ConfigError
+				if !errors.As(err, &ce) {
+					t.Fatalf("error type = %T, want *ConfigError", err)
+				}
+				wantMsg := "expected string, got " + tt.wrongGot
+				assertStringEqual(t, "ConfigError.Message", wantMsg, ce.Message)
+			})
+
+			t.Run("absent key stays distinct from the type fault", func(t *testing.T) {
+				t.Parallel()
+				_, err := NewServiceConfig(tt.buildRaw(nil))
+
+				if !tt.absentWantErr {
+					if err != nil {
+						t.Fatalf("NewServiceConfig() with %s absent = %v, want no error", tt.field, err)
+					}
+					return
+				}
+
+				assertConfigErrorField(t, err, tt.field)
+				var ce *ConfigError
+				if !errors.As(err, &ce) {
+					t.Fatalf("error type = %T, want *ConfigError", err)
+				}
+				assertStringEqual(t, "ConfigError.Message", tt.absentWantMsg, ce.Message)
+			})
+		})
+	}
+}
+
+// TestNewServiceConfig_TypeFaultCredentialNotLeaked covers the redaction rule: a
+// fault raised for a value that looks like a credential does not contain
+// that value in the rendered message.
+func TestNewServiceConfig_TypeFaultCredentialNotLeaked(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{"kind": "jira", "api_key": 4242},
+	})
+
+	assertConfigErrorField(t, err, "tracker.api_key")
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error type = %T, want *ConfigError", err)
+	}
+	if strings.Contains(ce.Message, "4242") {
+		t.Errorf("ConfigError.Message = %q, must not contain the offending value", ce.Message)
+	}
+}
+
+// TestNewServiceConfig_APIVersionCarveOutBool covers the non-carve-out
+// half: tracker.api_version: true is a type fault, unlike a bare integer.
+func TestNewServiceConfig_APIVersionCarveOutBool(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{"kind": "jira", "api_version": true},
+	})
+
+	assertConfigErrorField(t, err, "tracker.api_version")
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error type = %T, want *ConfigError", err)
+	}
+	assertStringEqual(t, "ConfigError.Message", "expected string, got boolean", ce.Message)
+}
+
 // --- test helpers ---
 
 func assertConfigErrorField(t *testing.T, err error, wantField string) {

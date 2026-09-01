@@ -13,11 +13,19 @@ import (
 // returns diagnostics for the sortie validate pipeline. It does not
 // construct an adapter instance or launch a subprocess. It shares the
 // overlap check with [NewOpenCodeAdapter], which reaches it through
-// parsePassthroughConfig, so the constructor's refusal and the offline
+// [checkCrossField], so the constructor's refusal and the offline
 // verdict report that fault identically. The warning below has no
 // constructor counterpart.
 func validateConfig(fields registry.AgentConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
+
+	if _, fault := parsePassthroughConfig(fields.Passthrough); fault != nil {
+		diags = append(diags, registry.ValidationDiag{
+			Severity: "error",
+			Check:    "opencode." + fault.Key + ".wrong_type",
+			Message:  fault.Error(),
+		})
+	}
 
 	diags = append(diags, validateSkipPermissions(fields.Passthrough)...)
 	diags = append(diags, validateToolOverlap(fields.Passthrough)...)
@@ -46,7 +54,7 @@ func validateSkipPermissions(passthrough map[string]any) []registry.ValidationDi
 
 // validateToolOverlap reports an error when allowed_tools and
 // denied_tools name at least one of the same tools, mirroring the check
-// [parsePassthroughConfig] used to enforce inline at construction.
+// [checkCrossField] used to enforce inline at construction.
 func validateToolOverlap(passthrough map[string]any) []registry.ValidationDiag {
 	message := overlapMessage(
 		typeutil.ExtractStringSlice(passthrough["allowed_tools"]),

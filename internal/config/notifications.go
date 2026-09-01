@@ -1,6 +1,10 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
+)
 
 // NotificationsConfig holds the parsed notifications list. The zero
 // value (nil Backends) means no backend is configured and the
@@ -77,7 +81,13 @@ func parseNotificationBackend(index int, elem any) (NotificationBackend, error) 
 		}
 	}
 
-	kind, _ := entry["kind"].(string)
+	kind, fault := typeutil.StringField(entry, "kind")
+	if fault != nil {
+		return NotificationBackend{}, &ConfigError{
+			Field:   field + ".kind",
+			Message: fault.Reason(),
+		}
+	}
 	if kind == "" {
 		return NotificationBackend{}, &ConfigError{
 			Field:   field + ".kind",

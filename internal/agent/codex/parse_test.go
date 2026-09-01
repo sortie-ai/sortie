@@ -72,12 +72,8 @@ func TestParsePassthroughConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "wrong types use zero-value defaults",
+			name: "wrong non-string type uses zero-value default",
 			config: map[string]any{
-				"model":               42,
-				"effort":              false,
-				"approval_policy":     123,
-				"thread_sandbox":      []string{"not-a-string"},
 				"turn_sandbox_policy": "not-a-map",
 			},
 			want: passthroughConfig{},
@@ -87,7 +83,10 @@ func TestParsePassthroughConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := parsePassthroughConfig(tt.config)
+			got, fault := parsePassthroughConfig(tt.config)
+			if fault != nil {
+				t.Fatalf("parsePassthroughConfig: %v", fault)
+			}
 			if got.Model != tt.want.Model {
 				t.Errorf("Model = %q, want %q", got.Model, tt.want.Model)
 			}
@@ -111,6 +110,17 @@ func TestParsePassthroughConfig(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("wrong string type reports a fault", func(t *testing.T) {
+		t.Parallel()
+		_, fault := parsePassthroughConfig(map[string]any{"model": 42})
+		if fault == nil {
+			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
+		}
+		if fault.Key != "model" {
+			t.Errorf("fault.Key = %q, want %q", fault.Key, "model")
+		}
+	})
 }
 
 func TestParseMessage_Response(t *testing.T) {

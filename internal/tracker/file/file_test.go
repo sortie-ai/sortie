@@ -98,6 +98,45 @@ func TestNewFileAdapter(t *testing.T) {
 	}
 }
 
+// TestNewFileAdapter_TypeFaultVsAbsentKey covers the distinction between a
+// wrong-typed path and an absent one: both report
+// domain.ErrTrackerPayload, but the type fault carries the typed-fault
+// message while the absent key keeps its existing "missing required
+// config key" message.
+func TestNewFileAdapter_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("path wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewFileAdapter(map[string]any{"path": 4242})
+
+		requireTrackerError(t, err)
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Message != "path: expected string, got integer" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "path: expected string, got integer")
+		}
+	})
+
+	t.Run("path absent", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewFileAdapter(map[string]any{})
+
+		requireTrackerError(t, err)
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Message != "missing required config key: path" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "missing required config key: path")
+		}
+	})
+}
+
 func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
 	t.Parallel()
 

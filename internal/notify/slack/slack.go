@@ -20,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 var _ domain.Notifier = (*notifier)(nil)
@@ -42,7 +43,10 @@ type notifier struct {
 // empty value (including a secret reference that resolved to the empty
 // string) is rejected.
 func newNotifier(config map[string]any) (domain.Notifier, error) {
-	rawURL, _ := config["webhook_url"].(string)
+	rawURL, fault := typeutil.StringField(config, "webhook_url")
+	if fault != nil {
+		return nil, fmt.Errorf("slack notifier: %w", fault)
+	}
 	endpoint := strings.TrimSpace(rawURL)
 	if endpoint == "" {
 		return nil, fmt.Errorf("slack notifier: webhook_url is required")

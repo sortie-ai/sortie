@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -66,7 +67,10 @@ type GitHubCIProvider struct {
 // http or https URL with a host returns a [*domain.CIError] of kind
 // [domain.ErrCIPayload]), "user_agent".
 func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error) {
-	apiKey, _ := adapterConfig["api_key"].(string)
+	apiKey, fault := typeutil.StringField(adapterConfig, "api_key")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIAuth,
@@ -74,7 +78,10 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 		}
 	}
 
-	project, _ := adapterConfig["project"].(string)
+	project, fault := typeutil.StringField(adapterConfig, "project")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIPayload,
@@ -90,7 +97,10 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 		}
 	}
 
-	endpointRaw, _ := adapterConfig["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(adapterConfig, "endpoint")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
 	if !endpointOK {
 		return nil, &domain.CIError{
@@ -99,7 +109,10 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 		}
 	}
 
-	userAgent, _ := adapterConfig["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(adapterConfig, "user_agent")
+	if fault != nil {
+		return nil, &domain.CIError{Kind: domain.ErrCIPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

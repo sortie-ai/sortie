@@ -2,6 +2,7 @@ package typeutil
 
 import (
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -98,33 +99,6 @@ func repeatString(s string, n int) string {
 	return string(result)
 }
 
-func TestStringFrom(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		config map[string]any
-		key    string
-		want   string
-	}{
-		{name: "key present string value", config: map[string]any{"k": "hello"}, key: "k", want: "hello"},
-		{name: "key present non-string value", config: map[string]any{"k": 42}, key: "k", want: ""},
-		{name: "key absent", config: map[string]any{}, key: "missing", want: ""},
-		{name: "nil value for key", config: map[string]any{"k": nil}, key: "k", want: ""},
-		{name: "empty string value", config: map[string]any{"k": ""}, key: "k", want: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := StringFrom(tt.config, tt.key)
-			if got != tt.want {
-				t.Errorf("StringFrom(%q) = %q, want %q", tt.key, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIntFrom(t *testing.T) {
 	t.Parallel()
 
@@ -208,6 +182,118 @@ func TestBoolFrom(t *testing.T) {
 				t.Errorf("BoolFrom(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStringField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		config    map[string]any
+		key       string
+		want      string
+		wantFault bool
+		wantWant  string
+		wantGot   string
+	}{
+		{name: "string value", config: map[string]any{"k": "hello"}, key: "k", want: "hello"},
+		{name: "absent key", config: map[string]any{}, key: "missing", want: ""},
+		{name: "nil value", config: map[string]any{"k": nil}, key: "k", want: ""},
+		{name: "bool value", config: map[string]any{"k": true}, key: "k", wantFault: true, wantWant: "string", wantGot: "boolean"},
+		{name: "int value", config: map[string]any{"k": 42}, key: "k", wantFault: true, wantWant: "string", wantGot: "integer"},
+		{name: "uint64 value", config: map[string]any{"k": uint64(9223372036854775808)}, key: "k", wantFault: true, wantWant: "string", wantGot: "integer"},
+		{name: "float64 value", config: map[string]any{"k": 1.5}, key: "k", wantFault: true, wantWant: "string", wantGot: "float"},
+		{name: "[]any value", config: map[string]any{"k": []any{"x", "y"}}, key: "k", wantFault: true, wantWant: "string", wantGot: "list"},
+		{name: "map[string]any value", config: map[string]any{"k": map[string]any{"a": "b"}}, key: "k", wantFault: true, wantWant: "string", wantGot: "mapping"},
+		{name: "map[any]any value", config: map[string]any{"k": map[any]any{1: "b"}}, key: "k", wantFault: true, wantWant: "string", wantGot: "mapping"},
+		{name: "time.Time value", config: map[string]any{"k": time.Now()}, key: "k", wantFault: true, wantWant: "string", wantGot: "timestamp"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, fault := StringField(tt.config, tt.key)
+
+			if got != tt.want {
+				t.Errorf("StringField(%q) got = %q, want %q", tt.key, got, tt.want)
+			}
+
+			if !tt.wantFault {
+				if fault != nil {
+					t.Errorf("StringField(%q) fault = %v, want nil", tt.key, fault)
+				}
+				return
+			}
+
+			if fault == nil {
+				t.Fatalf("StringField(%q) fault = nil, want non-nil", tt.key)
+			}
+			if fault.Key != tt.key {
+				t.Errorf("StringField(%q) fault.Key = %q, want %q", tt.key, fault.Key, tt.key)
+			}
+			if fault.Want != tt.wantWant {
+				t.Errorf("StringField(%q) fault.Want = %q, want %q", tt.key, fault.Want, tt.wantWant)
+			}
+			if fault.Got != tt.wantGot {
+				t.Errorf("StringField(%q) fault.Got = %q, want %q", tt.key, fault.Got, tt.wantGot)
+			}
+		})
+	}
+}
+
+func TestDescribeYAMLType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{name: "string", input: "text", want: "string"},
+		{name: "bool", input: true, want: "boolean"},
+		{name: "int", input: int(5), want: "integer"},
+		{name: "uint64", input: uint64(1), want: "integer"},
+		{name: "int8", input: int8(1), want: "integer"},
+		{name: "int16", input: int16(1), want: "integer"},
+		{name: "int32", input: int32(1), want: "integer"},
+		{name: "int64", input: int64(1), want: "integer"},
+		{name: "uint", input: uint(1), want: "integer"},
+		{name: "uint8", input: uint8(1), want: "integer"},
+		{name: "uint16", input: uint16(1), want: "integer"},
+		{name: "uint32", input: uint32(1), want: "integer"},
+		{name: "float64", input: float64(1.5), want: "float"},
+		{name: "float32", input: float32(1.5), want: "float"},
+		{name: "[]any", input: []any{"x"}, want: "list"},
+		{name: "map[string]any", input: map[string]any{"a": "b"}, want: "mapping"},
+		{name: "map[any]any", input: map[any]any{1: "b"}, want: "mapping"},
+		{name: "time.Time", input: time.Now(), want: "timestamp"},
+		{name: "nil", input: nil, want: "null"},
+		{name: "unrecognized value", input: complex(1, 2), want: "unrecognized value"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := DescribeYAMLType(tt.input)
+			if got != tt.want {
+				t.Errorf("DescribeYAMLType(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypeFault(t *testing.T) {
+	t.Parallel()
+
+	fault := &TypeFault{Key: "endpoint", Want: "string", Got: "integer"}
+
+	if got, want := fault.Error(), "endpoint: expected string, got integer"; got != want {
+		t.Errorf("TypeFault.Error() = %q, want %q", got, want)
+	}
+	if got, want := fault.Reason(), "expected string, got integer"; got != want {
+		t.Errorf("TypeFault.Reason() = %q, want %q", got, want)
 	}
 }
 

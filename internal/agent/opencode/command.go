@@ -53,24 +53,45 @@ var knownPermissionKeys = map[string]struct{}{
 	"websearch":          {},
 }
 
-func parsePassthroughConfig(config map[string]any) (passthroughConfig, error) {
-	pt := passthroughConfig{
-		Model:                    typeutil.StringFrom(config, "model"),
-		Agent:                    typeutil.StringFrom(config, "agent"),
-		Variant:                  typeutil.StringFrom(config, "variant"),
+// parsePassthroughConfig extracts OpenCode-specific settings from the
+// raw config map. A missing key uses its zero-value default. A key
+// present with a non-string value for a string field reports a fault
+// rather than defaulting; [checkCrossField] holds the allowed_tools and
+// denied_tools overlap check.
+func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
+	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	agent, fault := typeutil.StringField(config, "agent")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	variant, fault := typeutil.StringField(config, "variant")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+
+	return passthroughConfig{
+		Model:                    model,
+		Agent:                    agent,
+		Variant:                  variant,
 		Thinking:                 typeutil.BoolFrom(config, "thinking", false),
 		Pure:                     typeutil.BoolFrom(config, "pure", false),
 		DangerousSkipPermissions: typeutil.BoolFrom(config, "dangerously_skip_permissions", true),
 		DisableAutocompact:       typeutil.BoolFrom(config, "disable_autocompact", true),
 		AllowedTools:             slices.Clone(typeutil.ExtractStringSlice(config["allowed_tools"])),
 		DeniedTools:              slices.Clone(typeutil.ExtractStringSlice(config["denied_tools"])),
-	}
+	}, nil
+}
 
+// checkCrossField rejects a passthrough whose allowed_tools and
+// denied_tools overlap.
+func checkCrossField(pt passthroughConfig) error {
 	if message := overlapMessage(pt.AllowedTools, pt.DeniedTools); message != "" {
-		return passthroughConfig{}, fmt.Errorf("%s", message)
+		return fmt.Errorf("%s", message)
 	}
-
-	return pt, nil
+	return nil
 }
 
 func buildRunArgs(state *sessionState, prompt string, pt passthroughConfig) []string {

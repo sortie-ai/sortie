@@ -82,6 +82,27 @@ func TestNotificationsConfig_MissingKind(t *testing.T) {
 	assertConfigErrorField(t, err, "notifications[0].kind")
 }
 
+func TestNotificationsConfig_WrongTypeKind(t *testing.T) {
+	t.Parallel()
+
+	raw := map[string]any{
+		"notifications": []any{
+			map[string]any{
+				"kind": 123,
+			},
+		},
+	}
+
+	_, err := NewServiceConfig(raw)
+
+	assertConfigErrorField(t, err, "notifications[0].kind")
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error type = %T, want *ConfigError", err)
+	}
+	assertStringEqual(t, "ConfigError.Message", "expected string, got integer", ce.Message)
+}
+
 func TestNotificationsConfig_EmptyKind(t *testing.T) {
 	t.Parallel()
 

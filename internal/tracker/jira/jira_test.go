@@ -220,6 +220,55 @@ func TestNewJiraAdapter_EndpointTrailingSlash(t *testing.T) {
 	}
 }
 
+// TestNewJiraAdapter_TypeFaultVsAbsentKey covers the distinction between a
+// wrong-typed config key and an absent one: both report
+// domain.ErrTrackerPayload, but the type fault carries the typed-fault
+// message while the absent key keeps its existing "missing required
+// config key" message.
+func TestNewJiraAdapter_TypeFaultVsAbsentKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("endpoint wrong type", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://x.atlassian.net")
+		config["endpoint"] = 4242
+
+		_, err := NewJiraAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "endpoint: expected string, got integer" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "endpoint: expected string, got integer")
+		}
+	})
+
+	t.Run("endpoint absent", func(t *testing.T) {
+		t.Parallel()
+
+		config := validConfig("https://x.atlassian.net")
+		delete(config, "endpoint")
+
+		_, err := NewJiraAdapter(config)
+
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerPayload {
+			t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+		}
+		if te.Message != "missing required config key: endpoint" {
+			t.Errorf("TrackerError.Message = %q, want %q", te.Message, "missing required config key: endpoint")
+		}
+	})
+}
+
 func TestRegistration(t *testing.T) {
 	t.Parallel()
 

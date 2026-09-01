@@ -85,7 +85,10 @@ type GitHubAdapter struct {
 // "query_filter", "user_agent", "etag_cache_size" (int, default 1000;
 // set to 0 to disable ETag caching).
 func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	apiKey, _ := config["api_key"].(string)
+	apiKey, fault := typeutil.StringField(config, "api_key")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerAPIKey,
@@ -93,7 +96,10 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	project, _ := config["project"].(string)
+	project, fault := typeutil.StringField(config, "project")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if project == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerProject,
@@ -109,7 +115,10 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	endpointRaw, _ := config["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(config, "endpoint")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	endpoint, redactedEndpoint, endpointOK := resolveEndpoint(endpointRaw)
 	if !endpointOK {
 		return nil, &domain.TrackerError{
@@ -136,12 +145,21 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		terminalStates[i] = strings.ToLower(s)
 	}
 
-	handoffRaw, _ := config["handoff_state"].(string)
+	handoffRaw, fault := typeutil.StringField(config, "handoff_state")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	handoffState := strings.ToLower(strings.TrimSpace(handoffRaw))
 
-	queryFilter, _ := config["query_filter"].(string)
+	queryFilter, fault := typeutil.StringField(config, "query_filter")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 
-	userAgent, _ := config["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(config, "user_agent")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

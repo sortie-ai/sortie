@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // ServiceConfig is the typed runtime view of WORKFLOW.md front matter.
@@ -444,7 +446,10 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	}
 
 	rawTracker := extractSubMap(raw, "tracker")
-	tracker := buildTrackerConfig(rawTracker, envKeys)
+	tracker, err := buildTrackerConfig(rawTracker, envKeys)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
 
 	handoffEvidence, err := parseHandoffEvidencePolicy(rawTracker)
 	if err != nil {
@@ -452,81 +457,34 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	}
 	tracker.HandoffEvidence = handoffEvidence
 
-	// Validate handoff_state: enforce string type, reject explicit empty
-	// values, and detect env var indirection that resolved to empty.
-	if rawVal, ok := rawTracker["handoff_state"]; ok && rawVal != nil {
-		s, isStr := rawVal.(string)
-		if !isStr {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.handoff_state",
-				Message: fmt.Sprintf("expected string, got %T", rawVal),
-			}
-		}
-		if s == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.handoff_state",
-				Message: "must not be empty",
-			}
-		}
-		if tracker.HandoffState == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.handoff_state",
-				Message: "resolved to empty (check environment variable)",
-			}
+	// The type check and the raw-empty check for handoff_state,
+	// no_change_state, and in_progress_state already ran inside
+	// buildTrackerConfig; only the post-resolution "resolved to empty"
+	// check, which reads the resolved field, stays here.
+	if rawVal, ok := rawTracker["handoff_state"]; ok && rawVal != nil && tracker.HandoffState == "" {
+		return ServiceConfig{}, &ConfigError{
+			Field:   "tracker.handoff_state",
+			Message: "resolved to empty (check environment variable)",
 		}
 	}
 	if err := ValidateHandoffState(tracker.HandoffState, tracker.ActiveStates, tracker.TerminalStates); err != nil {
 		return ServiceConfig{}, err
 	}
 
-	// Validate no_change_state: enforce string type, reject explicit empty
-	// values, and detect env var indirection that resolved to empty.
-	if rawVal, ok := rawTracker["no_change_state"]; ok && rawVal != nil {
-		s, isStr := rawVal.(string)
-		if !isStr {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.no_change_state",
-				Message: fmt.Sprintf("expected string, got %T", rawVal),
-			}
-		}
-		if s == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.no_change_state",
-				Message: "must not be empty",
-			}
-		}
-		if tracker.NoChangeState == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.no_change_state",
-				Message: "resolved to empty (check environment variable)",
-			}
+	if rawVal, ok := rawTracker["no_change_state"]; ok && rawVal != nil && tracker.NoChangeState == "" {
+		return ServiceConfig{}, &ConfigError{
+			Field:   "tracker.no_change_state",
+			Message: "resolved to empty (check environment variable)",
 		}
 	}
 	if err := validateNoChangeState(tracker.NoChangeState, tracker.HandoffState, tracker.TerminalStates); err != nil {
 		return ServiceConfig{}, err
 	}
 
-	// Validate in_progress_state: enforce string type, reject explicit empty
-	// values, and detect env var indirection that resolved to empty.
-	if rawVal, ok := rawTracker["in_progress_state"]; ok && rawVal != nil {
-		s, isStr := rawVal.(string)
-		if !isStr {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.in_progress_state",
-				Message: fmt.Sprintf("expected string, got %T", rawVal),
-			}
-		}
-		if s == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.in_progress_state",
-				Message: "must not be empty",
-			}
-		}
-		if tracker.InProgressState == "" {
-			return ServiceConfig{}, &ConfigError{
-				Field:   "tracker.in_progress_state",
-				Message: "resolved to empty (check environment variable)",
-			}
+	if rawVal, ok := rawTracker["in_progress_state"]; ok && rawVal != nil && tracker.InProgressState == "" {
+		return ServiceConfig{}, &ConfigError{
+			Field:   "tracker.in_progress_state",
+			Message: "resolved to empty (check environment variable)",
 		}
 	}
 	if err := ValidateInProgressState(tracker.InProgressState, tracker.ActiveStates, tracker.TerminalStates, tracker.HandoffState); err != nil {
@@ -641,60 +599,97 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	}, nil
 }
 
-func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig {
+func buildTrackerConfig(m map[string]any, envKeys map[string]bool) (TrackerConfig, error) {
 	commentsMap := extractSubMap(m, "comments")
 
-	endpoint := extractString(m, "endpoint")
+	endpoint, fault := typeutil.StringField(m, "endpoint")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.endpoint", Message: fault.Reason()}
+	}
 	if !envKeys["tracker.endpoint"] {
 		endpoint = resolveEnvRef(endpoint)
 	}
 
-	apiKey := extractString(m, "api_key")
+	apiKey, fault := typeutil.StringField(m, "api_key")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.api_key", Message: fault.Reason()}
+	}
 	if !envKeys["tracker.api_key"] {
 		apiKey = resolveEnv(apiKey)
 	}
 
-	project := extractString(m, "project")
+	project, fault := typeutil.StringField(m, "project")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.project", Message: fault.Reason()}
+	}
 	if !envKeys["tracker.project"] {
 		project = resolveEnvRef(project)
 	}
 
-	queryFilter := extractString(m, "query_filter")
+	queryFilter, fault := typeutil.StringField(m, "query_filter")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.query_filter", Message: fault.Reason()}
+	}
 	if !envKeys["tracker.query_filter"] {
 		queryFilter = resolveEnvRef(queryFilter)
 	}
 
-	handoffState := extractString(m, "handoff_state")
+	handoffState, fault := typeutil.StringField(m, "handoff_state")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.handoff_state", Message: fault.Reason()}
+	}
+	if rawVal, ok := m["handoff_state"]; ok && rawVal != nil && handoffState == "" {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.handoff_state", Message: "must not be empty"}
+	}
 	if !envKeys["tracker.handoff_state"] {
 		handoffState = resolveEnvRef(handoffState)
 	}
 
-	noChangeState := extractString(m, "no_change_state")
+	noChangeState, fault := typeutil.StringField(m, "no_change_state")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.no_change_state", Message: fault.Reason()}
+	}
+	if rawVal, ok := m["no_change_state"]; ok && rawVal != nil && noChangeState == "" {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.no_change_state", Message: "must not be empty"}
+	}
 	if !envKeys["tracker.no_change_state"] {
 		noChangeState = resolveEnvRef(noChangeState)
 	}
 
-	inProgressState := extractString(m, "in_progress_state")
+	inProgressState, fault := typeutil.StringField(m, "in_progress_state")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.in_progress_state", Message: fault.Reason()}
+	}
+	if rawVal, ok := m["in_progress_state"]; ok && rawVal != nil && inProgressState == "" {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.in_progress_state", Message: "must not be empty"}
+	}
 	if !envKeys["tracker.in_progress_state"] {
 		inProgressState = resolveEnvRef(inProgressState)
 	}
 
-	apiVersion := extractString(m, "api_version")
-	if apiVersion == "" {
-		// A bare YAML integer (api_version: 2) is not a string, so
-		// extractString yields ""; coerce a whole-number value to its
-		// decimal form so a Server/DC config written as api_version: 2 is
-		// not silently treated as absent and defaulted to v3.
-		if n, err := coerceInt(mapVal(m, "api_version")); err == nil {
+	apiVersion, fault := typeutil.StringField(m, "api_version")
+	if fault != nil {
+		// A bare YAML integer (api_version: 2) is not a string; coerce a
+		// whole-number value to its decimal form so a Server/DC config
+		// written as api_version: 2 is not silently treated as absent
+		// and defaulted to v3.
+		if n, cerr := coerceInt(mapVal(m, "api_version")); cerr == nil {
 			apiVersion = strconv.Itoa(n)
+		} else {
+			return TrackerConfig{}, &ConfigError{Field: "tracker.api_version", Message: fault.Reason()}
 		}
 	}
 	if !envKeys["tracker.api_version"] {
 		apiVersion = resolveEnvRef(apiVersion)
 	}
 
+	kind, fault := typeutil.StringField(m, "kind")
+	if fault != nil {
+		return TrackerConfig{}, &ConfigError{Field: "tracker.kind", Message: fault.Reason()}
+	}
+
 	return TrackerConfig{
-		Kind:            extractString(m, "kind"),
+		Kind:            kind,
 		Endpoint:        endpoint,
 		APIKey:          apiKey,
 		Project:         project,
@@ -710,7 +705,7 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 			OnCompletion: coerceBool(commentsMap, "on_completion"),
 			OnFailure:    coerceBool(commentsMap, "on_failure"),
 		},
-	}
+	}, nil
 }
 
 func parseHandoffEvidencePolicy(m map[string]any) (HandoffEvidencePolicy, error) {
@@ -719,11 +714,11 @@ func parseHandoffEvidencePolicy(m map[string]any) (HandoffEvidencePolicy, error)
 		return HandoffEvidenceObserved, nil
 	}
 
-	value, ok := raw.(string)
-	if !ok {
+	value, fault := typeutil.StringField(m, "handoff_evidence")
+	if fault != nil {
 		return "", &ConfigError{
 			Field:   "tracker.handoff_evidence",
-			Message: fmt.Sprintf("expected string, got %T", raw),
+			Message: fault.Reason(),
 		}
 	}
 
@@ -802,11 +797,11 @@ func buildDBPath(raw map[string]any, envKeys map[string]bool) (string, error) {
 	if !exists || v == nil {
 		return "", nil
 	}
-	s, ok := v.(string)
-	if !ok {
+	s, fault := typeutil.StringField(raw, "db_path")
+	if fault != nil {
 		return "", &ConfigError{
 			Field:   "db_path",
-			Message: fmt.Sprintf("expected string, got %T", v),
+			Message: fault.Reason(),
 		}
 	}
 	// Explicit empty string (db_path: "") is equivalent to omitting
@@ -831,12 +826,18 @@ func buildDBPath(raw map[string]any, envKeys map[string]bool) (string, error) {
 }
 
 func buildAgentConfig(m map[string]any) (AgentConfig, error) {
-	kind := extractString(m, "kind")
+	kind, fault := typeutil.StringField(m, "kind")
+	if fault != nil {
+		return AgentConfig{}, &ConfigError{Field: "agent.kind", Message: fault.Reason()}
+	}
 	if kind == "" {
 		kind = "claude-code"
 	}
 
-	command := extractString(m, "command")
+	command, fault := typeutil.StringField(m, "command")
+	if fault != nil {
+		return AgentConfig{}, &ConfigError{Field: "agent.command", Message: fault.Reason()}
+	}
 
 	turnTimeoutMS := 3600000
 	if v, exists := m["turn_timeout_ms"]; exists && v != nil {
@@ -971,7 +972,10 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 const ciWatchWindowDefaultMS = 86400000
 
 func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
-	kind := extractString(m, "kind")
+	kind, fault := typeutil.StringField(m, "kind")
+	if fault != nil {
+		return CIFeedbackConfig{}, &ConfigError{Field: "ci_feedback.kind", Message: fault.Reason()}
+	}
 	if kind == "" {
 		return CIFeedbackConfig{}, nil
 	}
@@ -1471,6 +1475,10 @@ func extractSubMap(raw map[string]any, key string) map[string]any {
 	return m
 }
 
+// extractString reads a string field outside the adapter configuration
+// population, silently coercing a wrong-typed value to "". Adapter
+// configuration reads use [typeutil.StringField] instead, which reports
+// a wrong-typed value rather than coercing it.
 func extractString(m map[string]any, key string) string {
 	if m == nil {
 		return ""
@@ -1491,11 +1499,11 @@ func requireStringField(m map[string]any, key, fieldPath string) (string, bool, 
 	if !exists || raw == nil {
 		return "", false, nil
 	}
-	s, ok := raw.(string)
-	if !ok {
+	s, fault := typeutil.StringField(m, key)
+	if fault != nil {
 		return "", false, &ConfigError{
 			Field:   fieldPath,
-			Message: fmt.Sprintf("expected string, got %T", raw),
+			Message: fault.Reason(),
 		}
 	}
 	return s, true, nil

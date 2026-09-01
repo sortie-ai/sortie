@@ -12,6 +12,38 @@ const wantAllowedToolsDiagMessage = "copilot-cli.allowed_tools replaces the --al
 	"is approved; every other permissioned call is denied without a prompt, the turn continues, " +
 	"and a turn whose calls were all denied still reports success"
 
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
+// wrong-typed value for a key the constructor reads fails
+// NewCopilotAdapter with a plain error carrying the fault message, and
+// validateConfig reports the identical fault text under a
+// "copilot-cli.<key>.wrong_type" check for the same input, so the two
+// surfaces cannot diverge on what counts as a type fault.
+func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
+	t.Parallel()
+
+	config := map[string]any{"allowed_tools": 123}
+
+	_, constructErr := NewCopilotAdapter(config)
+	if constructErr == nil {
+		t.Fatal("NewCopilotAdapter(allowed_tools=123) error = nil, want non-nil")
+	}
+	if constructErr.Error() != "allowed_tools: expected string, got integer" {
+		t.Errorf("NewCopilotAdapter(allowed_tools=123) error = %q, want %q", constructErr.Error(), "allowed_tools: expected string, got integer")
+	}
+
+	diags := validateConfig(registry.AgentConfigFields{Kind: "copilot-cli", Passthrough: config})
+
+	if len(diags) != 1 {
+		t.Fatalf("validateConfig(allowed_tools=123) returned %d diagnostics, want 1: %+v", len(diags), diags)
+	}
+	if diags[0].Check != "copilot-cli.allowed_tools.wrong_type" {
+		t.Errorf("validateConfig(allowed_tools=123)[0].Check = %q, want %q", diags[0].Check, "copilot-cli.allowed_tools.wrong_type")
+	}
+	if diags[0].Message != constructErr.Error() {
+		t.Errorf("validateConfig(allowed_tools=123)[0].Message = %q, want the same text the constructor failed with: %q", diags[0].Message, constructErr.Error())
+	}
+}
+
 // TestValidateConfig covers copilot-cli's allowed_tools diagnostic: only a
 // non-whitespace allowed_tools value draws a warning, because that
 // allow-list replaces the blanket grant the runtime otherwise passes.

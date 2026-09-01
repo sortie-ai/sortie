@@ -317,7 +317,10 @@ func parseQueryFilter(raw string) (url.Values, error) {
 // key, or a preflight failure (invalid token or an unreachable project),
 // returns a [*domain.TrackerError] and blocks construction.
 func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
-	apiKey, _ := config["api_key"].(string)
+	apiKey, fault := typeutil.StringField(config, "api_key")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrMissingTrackerAPIKey,
@@ -325,7 +328,10 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	projectRaw, _ := config["project"].(string)
+	projectRaw, fault := typeutil.StringField(config, "project")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	project := strings.TrimSpace(projectRaw)
 	if project == "" {
 		return nil, &domain.TrackerError{
@@ -334,13 +340,19 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	queryFilterRaw, _ := config["query_filter"].(string)
+	queryFilterRaw, fault := typeutil.StringField(config, "query_filter")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	queryFilter, err := parseQueryFilter(queryFilterRaw)
 	if err != nil {
 		return nil, err
 	}
 
-	endpointRaw, _ := config["endpoint"].(string)
+	endpointRaw, fault := typeutil.StringField(config, "endpoint")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	parsedEndpoint, ok := httpkit.ResolveEndpoint(endpointRaw, defaultEndpoint)
 	if !ok {
 		return nil, &domain.TrackerError{
@@ -371,10 +383,16 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		terminalStates[i] = strings.ToLower(s)
 	}
 
-	handoffRaw, _ := config["handoff_state"].(string)
+	handoffRaw, fault := typeutil.StringField(config, "handoff_state")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	handoffState := strings.ToLower(strings.TrimSpace(handoffRaw))
 
-	userAgent, _ := config["user_agent"].(string)
+	userAgent, fault := typeutil.StringField(config, "user_agent")
+	if fault != nil {
+		return nil, &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: fault.Error()}
+	}
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}

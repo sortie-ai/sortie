@@ -24,17 +24,40 @@ type passthroughConfig struct {
 	Personality       string
 }
 
-// parsePassthroughConfig extracts Codex-specific settings from the
-// raw config map. Missing or wrong-typed keys use zero-value defaults.
-func parsePassthroughConfig(config map[string]any) passthroughConfig {
-	return passthroughConfig{
-		Model:             typeutil.StringFrom(config, "model"),
-		Effort:            typeutil.StringFrom(config, "effort"),
-		ApprovalPolicy:    typeutil.StringFrom(config, "approval_policy"),
-		ThreadSandbox:     typeutil.StringFrom(config, "thread_sandbox"),
-		TurnSandboxPolicy: typeutil.MapFrom(config, "turn_sandbox_policy"),
-		Personality:       typeutil.StringFrom(config, "personality"),
+// parsePassthroughConfig extracts Codex-specific settings from the raw
+// config map. A missing key uses its zero-value default. A key present
+// with a non-string value for a string field reports a fault rather
+// than defaulting.
+func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil.TypeFault) {
+	model, fault := typeutil.StringField(config, "model")
+	if fault != nil {
+		return passthroughConfig{}, fault
 	}
+	effort, fault := typeutil.StringField(config, "effort")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	approvalPolicy, fault := typeutil.StringField(config, "approval_policy")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	threadSandbox, fault := typeutil.StringField(config, "thread_sandbox")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+	personality, fault := typeutil.StringField(config, "personality")
+	if fault != nil {
+		return passthroughConfig{}, fault
+	}
+
+	return passthroughConfig{
+		Model:             model,
+		Effort:            effort,
+		ApprovalPolicy:    approvalPolicy,
+		ThreadSandbox:     threadSandbox,
+		TurnSandboxPolicy: typeutil.MapFrom(config, "turn_sandbox_policy"),
+		Personality:       personality,
+	}, nil
 }
 
 // buildSSHRemoteCmd returns the remote command string for SSH mode.
