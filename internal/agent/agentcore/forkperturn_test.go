@@ -419,7 +419,12 @@ exit 1`)
 	t.Run("Bound_NoFireOnLongTurn", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
+		// Closing the standard error handle right after the line is
+		// written puts the drain at EOF while the turn is still running,
+		// so the assertion that no bound fires does not depend on the
+		// drain goroutine being scheduled inside the grace.
 		script := agenttest.WriteScript(t, tmpDir, "agent", `echo 'long turn stderr' >&2
+exec 2>&-
 sleep 0.5
 exit 0`)
 		spy := &agenttest.LogSpy{}

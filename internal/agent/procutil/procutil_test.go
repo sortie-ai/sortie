@@ -694,10 +694,10 @@ func TestStderrCollector_WaitDonePolling(t *testing.T) {
 	})
 }
 
-// TestStderrCollector_AbandonmentPriority pins R1.9 in both directions: a
-// drain that finishes always outranks abandonment, whichever happened
-// first. It also pins the R1.5 skip: abandoning an already-finished drain
-// has no effect.
+// TestStderrCollector_AbandonmentPriority pins the precedence in both
+// directions: a drain that finishes always outranks abandonment,
+// whichever happened first. It also pins that abandoning an
+// already-finished drain has no effect.
 func TestStderrCollector_AbandonmentPriority(t *testing.T) {
 	t.Parallel()
 

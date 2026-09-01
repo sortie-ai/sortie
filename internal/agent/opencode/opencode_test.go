@@ -1748,6 +1748,7 @@ func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
 		t.Parallel()
 
 		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
 		collector := procutil.NewStderrCollector(pr, slog.Default())
 
 		cmd := exec.Command("true")
