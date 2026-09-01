@@ -7,7 +7,6 @@
 package codex
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -18,9 +17,11 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -57,8 +58,19 @@ type sessionState struct {
 	agentConfig domain.AgentConfig
 	turnCount   int
 
-	threadID      string
-	nextRequestID int64
+	threadID string
+
+	// conn is the JSON-RPC connection to the app-server. It owns
+	// request-id allocation, the write path, and the reader goroutine
+	// that classifies and routes every message.
+	conn *jsonrpc.Conn
+
+	// turnPhase reports whether the session has moved past the
+	// handshake. It is read only by the reader goroutine, inside the
+	// handler bound to this state, and written once by
+	// beginTurnPhase, so it is an atomic.Bool rather than
+	// mutex-guarded.
+	turnPhase atomic.Bool
 
 	// acc holds the session's run-cumulative token usage. Constructed
 	// once in StartSession and never reset between turns.
@@ -79,7 +91,9 @@ type sessionState struct {
 	usageMeasured bool
 
 	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
-	// concurrent access from StopSession and the event read loop.
+	// concurrent access from StopSession and the process-exit
+	// watcher. It guards no write to the peer; conn owns its own
+	// write mutex.
 	mu              sync.Mutex
 	proc            *os.Process
 	waitCh          chan struct{}
@@ -87,16 +101,87 @@ type sessionState struct {
 	stdout          io.ReadCloser
 	stderrCollector *procutil.StderrCollector
 
-	// Session-scoped reader channels. The reader goroutine reads
-	// stdout after the handshake and delivers parsed messages to
-	// RunTurn via msgCh. stopCh is closed by StopSession to unblock
-	// the reader if msgCh is full. readerDone is closed by the reader
-	// when it exits. closeStop guards against double-closing stopCh
-	// when StopSession is called more than once.
-	msgCh      chan parsedMessage
+	// Session-scoped delivery channel. The handler bound to this
+	// state, invoked on conn's reader goroutine, delivers every
+	// routed message to msgCh, which the handshake wait loops and
+	// RunTurn read. stopCh is closed by StopSession to unblock the
+	// handler if msgCh is full during the turn phase. readerDone is
+	// closed by the termination watcher once conn's reader has
+	// exited and msgCh has been closed. closeStop guards against
+	// double-closing stopCh when StopSession is called more than
+	// once.
+	msgCh      chan jsonrpc.Message
 	readerDone chan struct{}
 	stopCh     chan struct{}
 	closeStop  sync.Once
+}
+
+// closeConnAndStop closes stopCh and conn together, inside the
+// sync.Once that guards stopCh, so a session torn down from more than
+// one failure path neither double-closes a channel nor races between
+// the two teardown paths. It tolerates state.conn and state.stopCh
+// being nil, which a session that never reached construction leaves
+// unset.
+func (state *sessionState) closeConnAndStop() {
+	state.closeStop.Do(func() {
+		if state.stopCh != nil {
+			close(state.stopCh)
+		}
+		if state.conn != nil {
+			state.conn.Close()
+		}
+	})
+}
+
+// sessionHandler returns the [jsonrpc.Handler] bound to state. Before
+// the turn phase begins, it performs a non-blocking send and drops
+// the message on a full msgCh, since nothing drains msgCh while a
+// handshake wait loop is itself the one reading it directly. Once
+// beginTurnPhase runs, it becomes the same two-arm blocking send
+// RunTurn's caller depends on for back-pressure and shutdown.
+func sessionHandler(state *sessionState) jsonrpc.Handler {
+	return func(msg jsonrpc.Message) {
+		if !state.turnPhase.Load() {
+			select {
+			case state.msgCh <- msg:
+			default:
+			}
+			return
+		}
+		select {
+		case state.msgCh <- msg:
+		case <-state.stopCh:
+		}
+	}
+}
+
+// watchTermination closes state.msgCh once state.conn's reader
+// goroutine has exited, then closes state.readerDone. It is the
+// adapter's own signal, distinct from conn itself, to the handshake
+// wait loops and to RunTurn that no further message will arrive.
+func watchTermination(state *sessionState) {
+	<-state.conn.Done()
+	close(state.msgCh)
+	close(state.readerDone)
+}
+
+// beginTurnPhase discards whatever the handshake-phase handler
+// buffered into msgCh and moves the session into the turn phase, so
+// the first turn starts with nothing already queued, exactly as it
+// does before the handshake completes today.
+func beginTurnPhase(state *sessionState) {
+	for {
+		select {
+		case _, ok := <-state.msgCh:
+			if !ok {
+				state.turnPhase.Store(true)
+				return
+			}
+		default:
+			state.turnPhase.Store(true)
+			return
+		}
+	}
 }
 
 // NewCodexAdapter creates a [CodexAdapter] from adapter configuration.
@@ -221,7 +306,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			state.stdin.Close() //nolint:errcheck,gosec // best-effort cleanup
 		}
 		if state.stdout != nil {
-			state.stdout.Close() //nolint:errcheck,gosec // unblock scanner.Scan on the read end
+			state.stdout.Close() //nolint:errcheck,gosec // unblock the reader goroutine on the read end
 		}
 		state.mu.Unlock()
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup
@@ -237,16 +322,20 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		state.mu.Unlock()
 	}
 
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-
-	// Create stopCh before the scanner goroutine so it is available
-	// to startScannerCh and to handshake error paths.
+	// Create stopCh, msgCh, and readerDone before the connection, so
+	// the handler (bound to state below) has every resource it
+	// touches ready before the reader goroutine can call it.
 	state.stopCh = make(chan struct{})
-	scanCh := startScannerCh(scanner, state.stopCh)
+	state.msgCh = make(chan jsonrpc.Message, 16)
+	state.readerDone = make(chan struct{})
 
-	if err := initializeHandshake(ctx, state, scanCh); err != nil {
-		state.closeStop.Do(func() { close(state.stopCh) })
+	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, sessionHandler(state))
+	// Started before the handshake so the handshake wait loops observe
+	// a closed msgCh, rather than timing out, when stdout ends mid-handshake.
+	go watchTermination(state)
+
+	if err := initializeHandshake(ctx, state); err != nil {
+		state.closeConnAndStop()
 		killOnError()
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -255,8 +344,8 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		}
 	}
 
-	if err := authenticateIfNeeded(ctx, state, scanCh); err != nil {
-		state.closeStop.Do(func() { close(state.stopCh) })
+	if err := authenticateIfNeeded(ctx, state); err != nil {
+		state.closeConnAndStop()
 		killOnError()
 		var agentErr *domain.AgentError
 		if ok := isAgentError(err, &agentErr); ok {
@@ -271,14 +360,14 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	var threadID string
 	if params.ResumeSessionID != "" {
-		if err := resumeThread(ctx, state, scanCh, params.ResumeSessionID); err != nil {
+		if err := resumeThread(ctx, state, params.ResumeSessionID); err != nil {
 			// Fallback to new thread on resume failure.
 			logger.Warn("thread resume failed, starting new thread",
 				slog.String("resume_id", params.ResumeSessionID),
 				slog.Any("error", err))
-			tid, startErr := startThread(ctx, state, scanCh, a.passthrough)
+			tid, startErr := startThread(ctx, state, a.passthrough)
 			if startErr != nil {
-				state.closeStop.Do(func() { close(state.stopCh) })
+				state.closeConnAndStop()
 				killOnError()
 				return domain.Session{}, &domain.AgentError{
 					Kind:    domain.ErrResponseError,
@@ -291,9 +380,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			threadID = params.ResumeSessionID
 		}
 	} else {
-		tid, startErr := startThread(ctx, state, scanCh, a.passthrough)
+		tid, startErr := startThread(ctx, state, a.passthrough)
 		if startErr != nil {
-			state.closeStop.Do(func() { close(state.stopCh) })
+			state.closeConnAndStop()
 			killOnError()
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrResponseError,
@@ -305,31 +394,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	state.threadID = threadID
-
-	state.msgCh = make(chan parsedMessage, 16)
-	state.readerDone = make(chan struct{})
-
-	go func() {
-		defer close(state.readerDone)
-		defer close(state.msgCh)
-		for result := range scanCh {
-			if result.EOF || result.Err != nil {
-				if result.Err != nil {
-					select {
-					case state.msgCh <- parsedMessage{Err: result.Err}:
-					case <-state.stopCh:
-					}
-				}
-				return
-			}
-			msg := parseMessage(result.Line)
-			select {
-			case state.msgCh <- msg:
-			case <-state.stopCh:
-				return
-			}
-		}
-	}()
+	beginTurnPhase(state)
 
 	return domain.Session{
 		ID:       threadID,
@@ -401,7 +466,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		turnParams["effort"] = a.passthrough.Effort
 	}
 
-	id, err := sendRequest(state, "turn/start", turnParams)
+	resp, err := state.conn.Call(ctx, "turn/start", turnParams)
 	if err != nil {
 		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
@@ -409,53 +474,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			Err:     err,
 		}
 	}
-
-	// Fast-path: return immediately if the context is already done.
-	if ctx.Err() != nil {
-		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
-			Err:     ctx.Err(),
-		}
-	}
-
-	// Wait for the turn/start response from the session-scoped reader.
-	// Buffer any notifications (e.g. turn/started) that arrive before the
-	// response so they are not lost — they are replayed into the event
-	// loop below.
-	var turnStartResp rpcResponse
-	var buffered []parsedMessage
-	for turnStartResp.ID == 0 {
-		select {
-		case <-ctx.Done():
-			return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
-				Kind:    domain.ErrPortExit,
-				Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
-				Err:     ctx.Err(),
-			}
-		case msg, ok := <-state.msgCh:
-			if !ok {
-				return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
-					Kind:    domain.ErrPortExit,
-					Message: "stdout closed before turn/start response",
-				}
-			}
-			if msg.Err != nil {
-				logger.Warn("ignoring unparseable stdout line", slog.Any("error", msg.Err))
-				continue
-			}
-			if msg.IsResponse && msg.Response.ID == id {
-				turnStartResp = msg.Response
-			} else {
-				buffered = append(buffered, msg)
-			}
-		}
-	}
-	if turnStartResp.Error != nil {
+	if resp.Error != nil {
 		ev := agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnFailed,
-			TerminalMessage:   fmt.Sprintf("turn/start error: %s", turnStartResp.Error.Message),
+			TerminalMessage:   fmt.Sprintf("turn/start error: %s", resp.Error.Message),
 		}
 		meta := agentcore.TurnMeta{SessionID: state.threadID, UsageMeasured: state.usageMeasured}
 		result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
@@ -466,7 +489,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	}
 
 	var turnResult turnStartResult
-	if err := json.Unmarshal(turnStartResp.Result, &turnResult); err != nil {
+	if err := json.Unmarshal(resp.Result, &turnResult); err != nil {
 		logger.Warn("turn/start result unmarshal failed", slog.Any("error", err))
 	}
 	turnID := turnResult.Turn.ID
@@ -479,27 +502,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	// best-effort interrupt.
 	var cancelDeadline <-chan time.Time
 
-	// Replay buffered notifications (received during the response-waiting
-	// loop above) before entering the main event loop. These are
-	// typically turn/started notifications that arrived before the
-	// turn/start response.
-	for _, m := range buffered {
-		if !m.IsNotification {
-			continue
-		}
-		method := m.Notification.Method
-		switch method {
-		case "turn/started":
-			if state.turnCount == 1 {
-				agentcore.EmitSessionStarted(params.OnEvent, session.AgentPID, state.threadID)
-			} else {
-				agentcore.EmitNotification(params.OnEvent, "turn started")
-			}
-		default:
-			agentcore.EmitNotification(params.OnEvent, method)
-		}
-	}
-
 	for {
 		select {
 		case <-ctxDone:
@@ -509,7 +511,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			// armed below.
 			ctxDone = nil
 			// Best-effort write of turn/interrupt on the already-cancelled turn.
-			sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
+			state.conn.SendRequest("turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
 				"threadId": state.threadID,
 				"turnId":   turnID,
 			})
@@ -552,7 +554,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				}
 				return result, nil
 			}
-			if msg.Err != nil {
+			if msg.Kind == jsonrpc.KindMalformed || msg.Kind == jsonrpc.KindStreamEnd {
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -571,17 +573,15 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return result, nil
 			}
 
-			// Response messages (echoed tool-call confirmations).
-			if msg.IsResponse && !msg.IsNotification {
-				continue
-			}
-
-			if !msg.IsNotification {
+			// A server-initiated request and a notification both carry
+			// a method and dispatch below; an unmatched response
+			// (echoed tool-call confirmation) does not.
+			if msg.Kind != jsonrpc.KindNotification && msg.Kind != jsonrpc.KindRequest {
 				continue
 			}
 
 			now := time.Now().UTC()
-			method := msg.Notification.Method
+			method := msg.Method
 
 			switch method {
 			case "turn/started":
@@ -592,7 +592,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				}
 
 			case "thread/tokenUsage/updated":
-				p, parseErr := parseTokenUsageUpdated(msg.Notification.Params)
+				p, parseErr := parseTokenUsageUpdated(msg.Params)
 				if parseErr != nil {
 					logger.Debug("thread/tokenUsage/updated unmarshal failed", slog.String("method", method))
 					continue
@@ -629,7 +629,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 			case "turn/completed":
 				var tc turnCompletedParams
-				if err := json.Unmarshal(msg.Notification.Params, &tc); err != nil {
+				if err := json.Unmarshal(msg.Params, &tc); err != nil {
 					logger.Warn("turn/completed unmarshal failed", slog.Any("error", err))
 				}
 
@@ -683,7 +683,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 			case "item/started":
 				var ip itemParams
-				if err := json.Unmarshal(msg.Notification.Params, &ip); err != nil {
+				if err := json.Unmarshal(msg.Params, &ip); err != nil {
 					logger.Debug("item/started unmarshal failed", slog.Any("error", err))
 					continue
 				}
@@ -699,7 +699,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 			case "item/completed":
 				var ip itemParams
-				if err := json.Unmarshal(msg.Notification.Params, &ip); err != nil {
+				if err := json.Unmarshal(msg.Params, &ip); err != nil {
 					logger.Debug("item/completed unmarshal failed", slog.Any("error", err))
 					continue
 				}
@@ -723,7 +723,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				"applyPatchApproval", "execCommandApproval",
 				"mcpServer/elicitation/request", "item/permissions/requestApproval",
 				"item/tool/requestUserInput":
-				requestID := msg.Response.ID
+				requestID := msg.ID
 				if requestID == 0 {
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventOtherMessage,
@@ -750,27 +750,21 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				switch method {
 				case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 					posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending)
-					state.mu.Lock()
-					sendResponse(state, requestID, map[string]any{"decision": "decline"}) //nolint:errcheck,gosec // best-effort refusal
-					state.mu.Unlock()
+					state.conn.Respond(requestID, map[string]any{"decision": "decline"}) //nolint:errcheck,gosec // best-effort refusal
 					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(""))
 
 				case "applyPatchApproval", "execCommandApproval":
 					posture := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending)
-					state.mu.Lock()
-					sendResponse(state, requestID, map[string]any{ //nolint:errcheck,gosec // best-effort refusal
+					state.conn.Respond(requestID, map[string]any{ //nolint:errcheck,gosec // best-effort refusal
 						"decision": map[string]any{
 							"denied": map[string]any{"rejection": codexRefusalMessage},
 						},
 					})
-					state.mu.Unlock()
 					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(""))
 
 				case "mcpServer/elicitation/request":
 					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
-					state.mu.Lock()
-					sendResponse(state, requestID, map[string]any{"action": "decline"}) //nolint:errcheck,gosec // best-effort refusal
-					state.mu.Unlock()
+					state.conn.Respond(requestID, map[string]any{"action": "decline"}) //nolint:errcheck,gosec // best-effort refusal
 					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailAnswerToQuestion))
 
 					meta := agentcore.TurnMeta{
@@ -784,9 +778,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 				case "item/permissions/requestApproval":
 					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
-					state.mu.Lock()
-					sendErrorResponse(state, requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
-					state.mu.Unlock()
+					state.conn.RespondError(requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
 					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailWiderAccess))
 
 					meta := agentcore.TurnMeta{
@@ -800,9 +792,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 				case "item/tool/requestUserInput":
 					posture := agentcore.DecideHumanRequest(agentcore.ClassHumanInput, true, agentcore.AnswerPending)
-					state.mu.Lock()
-					sendErrorResponse(state, requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
-					state.mu.Unlock()
+					state.conn.RespondError(requestID, codexRefusalErrorCode, codexRefusalMessage) //nolint:errcheck,gosec // best-effort refusal
 					agentcore.EmitNotification(params.OnEvent, posture.NoticeWithDetail(detailAnswerToQuestion))
 
 					meta := agentcore.TurnMeta{
@@ -823,7 +813,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 			case "mcpServer/startupStatus/updated":
 				var su mcpServerStartupStatus
-				if err := json.Unmarshal(msg.Notification.Params, &su); err != nil {
+				if err := json.Unmarshal(msg.Params, &su); err != nil {
 					logger.Debug("mcpServer/startupStatus/updated unmarshal failed", slog.Any("error", err))
 					continue
 				}
@@ -869,13 +859,10 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
 
-	// Signal the reader goroutine to stop before closing stdin,
-	// preventing it from blocking on a full msgCh during teardown.
-	state.closeStop.Do(func() {
-		if state.stopCh != nil {
-			close(state.stopCh)
-		}
-	})
+	// Signal the reader goroutine to stop and close the connection
+	// before closing stdin, preventing the handler from blocking on a
+	// full msgCh during teardown.
+	state.closeConnAndStop()
 
 	// Close stdin to signal EOF to the app-server.
 	state.mu.Lock()

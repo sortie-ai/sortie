@@ -3,9 +3,10 @@
 package codex
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -194,7 +196,7 @@ func TestStartSession_BinaryNotFound(t *testing.T) {
 func TestRunTurn_UsageMeasured_AbsentWhenNoTokenUsageNotification(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_misc_notifications.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_misc_notifications.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
@@ -215,7 +217,7 @@ func TestRunTurn_UsageMeasured_AbsentWhenNoTokenUsageNotification(t *testing.T) 
 func TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -237,7 +239,7 @@ func TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification(t *testing.T) {
 func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	t.Parallel()
 
-	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -266,25 +268,47 @@ func (c atomicErrContext) Err() error {
 	return nil
 }
 
-// newInterruptedStatusState builds a sessionState whose msgCh is
-// unbuffered, so the test driving it can set the cancellation flag at
-// the exact point between the turn/start response and the
+// newInterruptedStatusState builds a sessionState wired to a real
+// jsonrpc.Conn over an io.Pipe, whose peer answers the turn/start call
+// only once it observes codex write it (required so the response
+// cannot be misrouted as unmatched, ahead of Call's own pending-map
+// registration), and whose msgCh is unbuffered so the test driving it
+// can set the cancellation flag at the exact point before the
 // turn/completed notification: an unbuffered send only returns once
 // RunTurn's own goroutine has received it, and the Go memory model
-// guarantees everything RunTurn did before that receive (including its
-// ctx.Err() fast-path check) happened before the send returns.
-func newInterruptedStatusState() *sessionState {
-	return &sessionState{
+// guarantees everything the test did before that receive (including
+// setting the cancellation flag) happened before the send returns.
+// stdin, when non-nil, receives every line codex writes, including
+// the turn/start request itself.
+func newInterruptedStatusState(t *testing.T, stdin io.Writer) *sessionState {
+	t.Helper()
+
+	sig := newSignalingWriter(stdin)
+	inPr, inPw := io.Pipe()
+	t.Cleanup(func() {
+		_ = inPr.Close()
+		_ = inPw.Close()
+	})
+
+	state := &sessionState{
 		threadID:   "thread-001",
 		target:     agentcore.LaunchTarget{WorkspacePath: "/tmp"},
 		waitCh:     make(chan struct{}),
-		stdin:      nopWriteCloser{},
-		stdout:     io.NopCloser(bytes.NewReader(nil)),
-		msgCh:      make(chan parsedMessage),
+		msgCh:      make(chan jsonrpc.Message),
 		readerDone: make(chan struct{}),
 		stopCh:     make(chan struct{}),
 		acc:        agentcore.NewRunUsage(),
 	}
+	state.conn = jsonrpc.NewConn(sig, inPr, sessionHandler(state))
+	go watchTermination(state)
+	state.turnPhase.Store(true)
+
+	go func() {
+		<-sig.done
+		_, _ = fmt.Fprintln(inPw, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
+	}()
+
+	return state
 }
 
 // TestRunTurn_InterruptedStatus pins the context-gated mapping for a
@@ -324,8 +348,7 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state := newInterruptedStatusState()
-			close(state.readerDone)
+			state := newInterruptedStatusState(t, nil)
 
 			var cancelled atomic.Bool
 			ctx := atomicErrContext{Context: context.Background(), cancelled: &cancelled}
@@ -345,19 +368,15 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 				outcomeCh <- outcome{result, err}
 			}()
 
-			// This send returns only once RunTurn's response-wait loop has
-			// received it, which happens strictly after the ctx.Err()
-			// fast-path check, so cancelled is still guaranteed false here.
-			state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-
 			if !tt.contextIsLive {
 				cancelled.Store(true)
 			}
 
 			// This send returns only once RunTurn's main loop is ready to
-			// receive again, which happens strictly after the turn/start
-			// response above has been fully processed.
-			state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"interrupted"}}}`))
+			// receive it, which happens strictly after the turn/start call
+			// has returned and after the ctx.Err() fast-path check that
+			// follows it.
+			state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(`{"turn":{"id":"turn-001","status":"interrupted"}}`)}
 
 			got := <-outcomeCh
 			result, err := got.result, got.err
@@ -411,8 +430,7 @@ func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state := newInterruptedStatusState()
-			close(state.readerDone)
+			state := newInterruptedStatusState(t, nil)
 
 			var cancelled atomic.Bool
 			ctx := atomicErrContext{Context: context.Background(), cancelled: &cancelled}
@@ -432,17 +450,13 @@ func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 				outcomeCh <- outcome{result, err}
 			}()
 
-			// This send returns only once RunTurn's response-wait loop has
-			// received it, which happens strictly after the ctx.Err()
-			// fast-path check, so cancelled is still guaranteed false here.
-			state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
-
 			cancelled.Store(true)
 
 			// This send returns only once RunTurn's main loop is ready to
-			// receive again, which happens strictly after the turn/start
-			// response above has been fully processed.
-			state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":` + tt.params + `}`))
+			// receive it, which happens strictly after the turn/start call
+			// has returned and after the ctx.Err() fast-path check that
+			// follows it.
+			state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/completed", Params: json.RawMessage(tt.params)}
 
 			got := <-outcomeCh
 			result, err := got.result, got.err
@@ -486,7 +500,7 @@ func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
 			t.Parallel()
 
 			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" + tt.fixture
-			state := makeTestState([]byte(fixture))
+			state := makeTestState(t, []byte(fixture))
 			adapter, _ := NewCodexAdapter(map[string]any{})
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -540,7 +554,7 @@ func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 
 			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" +
 				`{"method":"turn/completed","params":` + tt.params + `}` + "\n"
-			state := makeTestState([]byte(fixture))
+			state := makeTestState(t, []byte(fixture))
 			adapter, _ := NewCodexAdapter(map[string]any{})
 
 			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -580,7 +594,7 @@ func TestRunTurn_StdoutParseFailure(t *testing.T) {
 
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"not valid json\n"
-	state := makeTestState([]byte(fixture))
+	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	var events []domain.AgentEvent
