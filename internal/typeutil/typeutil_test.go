@@ -284,6 +284,19 @@ func TestDescribeYAMLType(t *testing.T) {
 	}
 }
 
+func TestTypeFault(t *testing.T) {
+	t.Parallel()
+
+	fault := &TypeFault{Key: "endpoint", Want: "string", Got: "integer"}
+
+	if got, want := fault.Error(), "endpoint: expected string, got integer"; got != want {
+		t.Errorf("TypeFault.Error() = %q, want %q", got, want)
+	}
+	if got, want := fault.Reason(), "expected string, got integer"; got != want {
+		t.Errorf("TypeFault.Reason() = %q, want %q", got, want)
+	}
+}
+
 func TestMapFrom(t *testing.T) {
 	t.Parallel()
 

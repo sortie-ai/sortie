@@ -126,16 +126,34 @@ func TestParsePassthroughConfig(t *testing.T) {
 		})
 	}
 
-	t.Run("wrong type for string field reports a fault", func(t *testing.T) {
-		t.Parallel()
-		_, fault := parsePassthroughConfig(map[string]any{"model": 42})
-		if fault == nil {
-			t.Fatal("parsePassthroughConfig: got nil fault, want non-nil")
-		}
-		if fault.Key != "model" {
-			t.Errorf("fault.Key = %q, want %q", fault.Key, "model")
-		}
-	})
+	// Every string key the funnel reads gets its own case, so a key
+	// whose fault arm was never wired shows up as a gap here rather
+	// than at runtime.
+	keys := []string{
+		"model",
+		"agent",
+		"allowed_tools",
+		"denied_tools",
+		"available_tools",
+		"excluded_tools",
+		"mcp_config",
+	}
+
+	for _, key := range keys {
+		t.Run("wrong type for "+key+" reports a fault", func(t *testing.T) {
+			t.Parallel()
+			pt, fault := parsePassthroughConfig(map[string]any{key: 42})
+			if fault == nil {
+				t.Fatalf("parsePassthroughConfig(%s=42): got nil fault, want non-nil", key)
+			}
+			if fault.Key != key {
+				t.Errorf("parsePassthroughConfig(%s=42) fault.Key = %q, want %q", key, fault.Key, key)
+			}
+			if pt != (passthroughConfig{}) {
+				t.Errorf("parsePassthroughConfig(%s=42) passthroughConfig = %+v, want zero value", key, pt)
+			}
+		})
+	}
 }
 
 // TestMCPInjectionConformance proves copilot-cli's real buildArgs
