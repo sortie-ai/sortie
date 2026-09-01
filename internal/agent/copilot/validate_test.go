@@ -12,7 +12,7 @@ const wantAllowedToolsDiagMessage = "copilot-cli.allowed_tools replaces the --al
 	"is approved; every other permissioned call is denied without a prompt, the turn continues, " +
 	"and a turn whose calls were all denied still reports success"
 
-// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
 // wrong-typed value for a key the constructor reads fails
 // NewCopilotAdapter with a plain error carrying the fault message, and
 // validateConfig reports the identical fault text under a

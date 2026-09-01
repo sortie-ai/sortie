@@ -1903,7 +1903,7 @@ func TestNewServiceConfig_TypeFaultOwnerGroups(t *testing.T) {
 	}
 }
 
-// TestNewServiceConfig_TypeFaultCredentialNotLeaked covers R1.2/R8.5: a
+// TestNewServiceConfig_TypeFaultCredentialNotLeaked covers the redaction rule: a
 // fault raised for a value that looks like a credential does not contain
 // that value in the rendered message.
 func TestNewServiceConfig_TypeFaultCredentialNotLeaked(t *testing.T) {
@@ -1923,7 +1923,7 @@ func TestNewServiceConfig_TypeFaultCredentialNotLeaked(t *testing.T) {
 	}
 }
 
-// TestNewServiceConfig_APIVersionCarveOutBool covers R8.3's non-carve-out
+// TestNewServiceConfig_APIVersionCarveOutBool covers the non-carve-out
 // half: tracker.api_version: true is a type fault, unlike a bare integer.
 func TestNewServiceConfig_APIVersionCarveOutBool(t *testing.T) {
 	t.Parallel()

@@ -6,7 +6,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
 // wrong-typed value for a key the constructor reads fails NewCodexAdapter
 // with a plain error carrying the fault message, and validateConfig
 // reports the identical fault text under a "codex.<key>.wrong_type" check

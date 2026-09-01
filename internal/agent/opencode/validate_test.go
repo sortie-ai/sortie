@@ -96,7 +96,7 @@ func TestValidateConfig_ToolOverlap(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
 // wrong-typed value for a key the constructor reads fails
 // NewOpenCodeAdapter with a plain error carrying the fault message, and
 // validateConfig reports the identical fault text under an
@@ -126,7 +126,7 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_TypeFaultAndToolOverlapBothReported covers R6.7/R8.10:
+// TestValidateConfig_TypeFaultAndToolOverlapBothReported covers the combination:
 // a passthrough carrying both a mistyped string key and an overlapping
 // allowed_tools/denied_tools pair fails NewOpenCodeAdapter with the type
 // fault (parsePassthroughConfig runs before checkCrossField), while

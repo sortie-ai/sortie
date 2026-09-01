@@ -139,7 +139,7 @@ func TestValidateConfig_TrustToolsUntrusted(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_TypeFaultNoDrift covers the R6.5 no-drift property: a
+// TestValidateConfig_TypeFaultNoDrift covers the no-drift property: a
 // wrong-typed value for a key the constructor reads fails NewKiroAdapter
 // with a plain error carrying the fault message, and validateConfig
 // reports the identical fault text under a "kiro.<key>.wrong_type" check
@@ -169,7 +169,7 @@ func TestValidateConfig_TypeFaultNoDrift(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_TrustConflictNotWrongType covers R6.6/R8.9: moving the
+// TestValidateConfig_TrustConflictNotWrongType covers that moving the
 // trust_all_tools/trust_tools conflict out of the funnel and into
 // [checkCrossField] must not turn it into a wrong_type diagnostic. A
 // config carrying only the conflict (no mistyped string key) reports
