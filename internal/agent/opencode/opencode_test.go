@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1728,18 +1729,137 @@ fi`, counterFile, counterFile))
 // on a synchronization primitive the test controls outright, so the guard
 // under test either blocks forever or doesn't - no timing luck involved.
 //
-// With the guard in place, startWait's goroutine cannot reach cmd.Wait
-// while the pipe is held open, so runtime.waitCh must still be open after
-// a generous bounded wait. Removing the
-// "<-runtime.stderrCollector.Done()" line in startWait lets the goroutine
-// call cmd.Wait immediately after readerDone closes; since the underlying
+// The first arm keeps the pipe open under a 5-second grace: startWait's
+// goroutine cannot reach cmd.Wait while the pipe is held open, so
+// runtime.waitCh must still be open after a generous bounded wait.
+// Removing the WaitDone guard in startWait lets the goroutine call
+// cmd.Wait immediately after readerDone closes; since the underlying
 // process ("true") has already exited, waitCh closes within a few
 // milliseconds, deterministically failing the first select below.
+//
+// The second arm never closes the pipe at all, under a 100-millisecond
+// grace: startWait must still close waitCh, with a real waitResult built
+// from cmd.Wait rather than a synthesized one, and the abandoned
+// collector must report [procutil.AbandonedMarker] rather than block.
 func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
 	t.Parallel()
 
+	t.Run("stderr drain held open blocks the wait", func(t *testing.T) {
+		t.Parallel()
+
+		pr, pw := io.Pipe()
+		collector := procutil.NewStderrCollector(pr, slog.Default())
+
+		cmd := exec.Command("true")
+		procutil.SetProcessGroup(cmd)
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+
+		readerDone := make(chan struct{})
+		close(readerDone)
+
+		runtime := &turnRuntime{
+			readerDone:      readerDone,
+			stderrCollector: collector,
+			waitCh:          make(chan waitResult, 1),
+		}
+
+		startWait(runtime, cmd, 5*time.Second)
+
+		select {
+		case <-runtime.waitCh:
+			t.Fatal("startWait closed waitCh before the stderr drain finished; " +
+				"the WaitDone guard is missing or bypassed")
+		case <-time.After(300 * time.Millisecond):
+		}
+
+		if err := pw.Close(); err != nil {
+			t.Fatalf("pw.Close() = %v", err)
+		}
+
+		select {
+		case <-runtime.waitCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("startWait did not close waitCh after the stderr drain finished")
+		}
+	})
+
+	t.Run("stderr drain never reaching EOF is abandoned within the grace", func(t *testing.T) {
+		t.Parallel()
+
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		collector := procutil.NewStderrCollector(pr, slog.Default())
+
+		cmd := exec.Command("true")
+		procutil.SetProcessGroup(cmd)
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+
+		readerDone := make(chan struct{})
+		close(readerDone)
+
+		runtime := &turnRuntime{
+			readerDone:      readerDone,
+			stderrCollector: collector,
+			waitCh:          make(chan waitResult, 1),
+		}
+
+		startWait(runtime, cmd, 100*time.Millisecond)
+
+		select {
+		case <-runtime.waitCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("startWait did not close waitCh within 5 seconds of a stderr drain that never reaches EOF")
+		}
+
+		runtime.waitMu.Lock()
+		got := runtime.waitRes
+		runtime.waitMu.Unlock()
+		if got.exitCode != 0 || got.err != nil {
+			t.Errorf("waitResult = {exitCode: %d, err: %v}, want {exitCode: 0, err: nil}", got.exitCode, got.err)
+		}
+
+		linesCh := make(chan []string, 1)
+		go func() { linesCh <- collector.Lines() }()
+		select {
+		case lines := <-linesCh:
+			if want := []string{procutil.AbandonedMarker}; !slices.Equal(lines, want) {
+				t.Errorf("Lines() after abandonment = %v, want %v", lines, want)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Lines() did not return the abandonment marker within 1 second")
+		}
+	})
+}
+
+// TestStartWait_NoBoundFiresOnLongTurn pins that a turn whose stdout reader
+// outlives the stderr grace is not mistaken for an abandoned drain. The
+// stderr write end is closed synchronously before startWait is invoked, so
+// the drain has already finished by the time the grace would matter; this
+// removes any dependency on a goroutine being scheduled inside the short
+// grace window. runtime.readerDone closes only after 300 milliseconds, so
+// the wait-channel assertion at 200 milliseconds catches an implementation
+// that anchors the stderr bound on anything earlier than that close.
+func TestStartWait_NoBoundFiresOnLongTurn(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := agenttest.InstallLogSpy(t)
+
 	pr, pw := io.Pipe()
 	collector := procutil.NewStderrCollector(pr, slog.Default())
+	if _, err := io.WriteString(pw, "stderr line\n"); err != nil {
+		t.Fatalf("pw.Write(stderr line) = %v", err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatalf("pw.Close() = %v", err)
+	}
+	select {
+	case <-collector.Done():
+	case <-time.After(1 * time.Second):
+		t.Fatal("collector.Done() did not close after the write end was closed")
+	}
 
 	cmd := exec.Command("true")
 	procutil.SetProcessGroup(cmd)
@@ -1748,7 +1868,10 @@ func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
 	}
 
 	readerDone := make(chan struct{})
-	close(readerDone)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		close(readerDone)
+	}()
 
 	runtime := &turnRuntime{
 		readerDone:      readerDone,
@@ -1756,22 +1879,29 @@ func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
 		waitCh:          make(chan waitResult, 1),
 	}
 
-	startWait(runtime, cmd)
+	startWait(runtime, cmd, 50*time.Millisecond)
 
 	select {
 	case <-runtime.waitCh:
-		t.Fatal("startWait closed waitCh before the stderr drain finished; " +
-			"the <-runtime.stderrCollector.Done() guard is missing or bypassed")
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	if err := pw.Close(); err != nil {
-		t.Fatalf("pw.Close() = %v", err)
+		t.Fatal("startWait closed waitCh before runtime.readerDone closed; " +
+			"the wait on the stdout reader must stay unbounded")
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	select {
 	case <-runtime.waitCh:
 	case <-time.After(5 * time.Second):
-		t.Fatal("startWait did not close waitCh after the stderr drain finished")
+		t.Fatal("startWait did not close waitCh after runtime.readerDone closed")
+	}
+
+	for _, e := range spy.Entries() {
+		if e.Level == slog.LevelWarn && e.Msg == "agent stderr was not fully collected before the process was reaped" {
+			t.Errorf("startWait() emitted an abandonment warning on a turn that outlived the grace; entry = %+v", e)
+		}
+	}
+
+	want := []string{"stderr line"}
+	if got := collector.Lines(); !slices.Equal(got, want) {
+		t.Errorf("Lines() = %v, want %v", got, want)
 	}
 }

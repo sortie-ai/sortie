@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
 // loadFixture reads testdata/<name> and returns its bytes.
@@ -175,6 +177,19 @@ func TestParseRunEvent_InvalidJSON(t *testing.T) {
 	_, err := parseRunEvent([]byte("not valid json"))
 	if err == nil {
 		t.Fatal("parseRunEvent(invalid) error = nil, want error")
+	}
+}
+
+// TestIsPermissionWarning_AbandonedMarkerIsNotAWarning pins that the stderr
+// abandonment marker can never be mistaken for a permission-refusal
+// warning. It references [procutil.AbandonedMarker] rather than a copy of
+// its text, so a future change to the marker cannot leave this guard
+// passing on stale text.
+func TestIsPermissionWarning_AbandonedMarkerIsNotAWarning(t *testing.T) {
+	t.Parallel()
+
+	if isPermissionWarning(procutil.AbandonedMarker) {
+		t.Errorf("isPermissionWarning(%q) = true, want false", procutil.AbandonedMarker)
 	}
 }
 

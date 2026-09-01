@@ -551,3 +551,224 @@ func TestStderrCollector_DoneClosesOnlyAfterDrainComplete(t *testing.T) {
 		t.Fatalf("Lines() after Done() closed = %v, want %v", got, want)
 	}
 }
+
+// TestStderrCollector_WaitDoneHealthyDrain pins the healthy path: a drain
+// that reaches EOF is never abandoned.
+func TestStderrCollector_WaitDoneHealthyDrain(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	c := NewStderrCollector(strings.NewReader("startup ok\n"), logger)
+
+	start := time.Now()
+	if !c.WaitDone(DefaultDrainGrace) {
+		t.Fatalf("WaitDone(%v) = false, want true", DefaultDrainGrace)
+	}
+	if elapsed := time.Since(start); elapsed >= DefaultDrainGrace {
+		t.Errorf("WaitDone(%v) took %v, want well under the bound", DefaultDrainGrace, elapsed)
+	}
+
+	want := []string{"startup ok"}
+	if got := c.Lines(); !slices.Equal(got, want) {
+		t.Errorf("Lines() = %v, want %v", got, want)
+	}
+	if strings.Contains(buf.String(), "not fully collected") {
+		t.Errorf("WaitDone() on a completed drain logged an abandonment warning; output = %q", buf.String())
+	}
+}
+
+// TestStderrCollector_AbandonAfterWaitDoneTimeout drives WaitDone and Abandon
+// over an io.Pipe whose write end the test holds open, so the drain goroutine
+// is still running (blocked in Read) while the abandoned readers run
+// concurrently with it. The race detector is the evidence that the abandoned
+// path reads none of the drain goroutine's state.
+func TestStderrCollector_AbandonAfterWaitDoneTimeout(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, logger)
+
+	const bound = 50 * time.Millisecond
+
+	if c.WaitDone(bound) {
+		t.Fatal("WaitDone() = true over a pipe whose write end the test holds open, want false")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("WaitDone() over an unfinished drain logged output; want none; got %q", buf.String())
+	}
+
+	c.Abandon(bound)
+	afterFirst := buf.String()
+	if !strings.Contains(afterFirst, "not fully collected") {
+		t.Errorf("Abandon() did not log the abandonment warning; output = %q", afterFirst)
+	}
+	if !strings.Contains(afterFirst, "drain_bound") {
+		t.Errorf("Abandon() warning missing the drain_bound attribute; output = %q", afterFirst)
+	}
+
+	c.Abandon(bound)
+	if got := buf.String(); got != afterFirst {
+		t.Errorf("second Abandon() call logged another record; output = %q", got)
+	}
+
+	select {
+	case <-c.Done():
+		t.Error("Done() closed after Abandon(); want it to stay open until the drain finishes")
+	default:
+	}
+
+	type readerResult struct {
+		lines   []string
+		dropped int
+	}
+	resCh := make(chan readerResult, 1)
+	go func() {
+		resCh <- readerResult{lines: c.Lines(), dropped: c.Dropped()}
+	}()
+
+	var res readerResult
+	select {
+	case res = <-resCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("Lines()/Dropped() blocked more than 1 second after Abandon()")
+	}
+	if want := []string{AbandonedMarker}; !slices.Equal(res.lines, want) {
+		t.Errorf("Lines() after Abandon() = %v, want %v", res.lines, want)
+	}
+	if res.dropped != 0 {
+		t.Errorf("Dropped() after Abandon() = %d, want 0", res.dropped)
+	}
+
+	warnDone := make(chan struct{})
+	go func() {
+		c.WarnLines(logger)
+		close(warnDone)
+	}()
+	select {
+	case <-warnDone:
+	case <-time.After(1 * time.Second):
+		t.Fatal("WarnLines() blocked more than 1 second after Abandon()")
+	}
+	if !strings.Contains(buf.String(), AbandonedMarker) {
+		t.Errorf("WarnLines() after Abandon() did not emit the marker; output = %q", buf.String())
+	}
+}
+
+// TestStderrCollector_WaitDonePolling pins the poll semantics of a
+// non-positive duration: it reports the current state immediately rather
+// than waiting, whatever that state is.
+func TestStderrCollector_WaitDonePolling(t *testing.T) {
+	t.Parallel()
+
+	t.Run("finished drain", func(t *testing.T) {
+		t.Parallel()
+
+		c := NewStderrCollector(strings.NewReader("done\n"), slog.Default())
+		<-c.Done()
+
+		for _, d := range []time.Duration{0, -1 * time.Millisecond} {
+			if !c.WaitDone(d) {
+				t.Errorf("WaitDone(%v) on a finished drain = false, want true", d)
+			}
+		}
+	})
+
+	t.Run("unfinished drain", func(t *testing.T) {
+		t.Parallel()
+
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		c := NewStderrCollector(pr, slog.Default())
+
+		for _, d := range []time.Duration{0, -1 * time.Millisecond} {
+			if c.WaitDone(d) {
+				t.Errorf("WaitDone(%v) on an unfinished drain = true, want false", d)
+			}
+		}
+	})
+}
+
+// TestStderrCollector_AbandonmentPriority pins R1.9 in both directions: a
+// drain that finishes always outranks abandonment, whichever happened
+// first. It also pins the R1.5 skip: abandoning an already-finished drain
+// has no effect.
+func TestStderrCollector_AbandonmentPriority(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lines call already blocked returns the marker", func(t *testing.T) {
+		t.Parallel()
+
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		c := NewStderrCollector(pr, slog.Default())
+
+		resCh := make(chan []string, 1)
+		go func() { resCh <- c.Lines() }()
+		time.Sleep(50 * time.Millisecond)
+		c.Abandon(50 * time.Millisecond)
+
+		select {
+		case got := <-resCh:
+			if want := []string{AbandonedMarker}; !slices.Equal(got, want) {
+				t.Errorf("Lines() blocked before Abandon() = %v, want %v", got, want)
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("Lines() call already blocked when Abandon() ran did not unblock within 1 second")
+		}
+	})
+
+	t.Run("drain finishing after abandonment wins on the next call", func(t *testing.T) {
+		t.Parallel()
+
+		pr, pw := io.Pipe()
+		c := NewStderrCollector(pr, slog.Default())
+
+		c.Abandon(50 * time.Millisecond)
+		if got := c.Lines(); !slices.Equal(got, []string{AbandonedMarker}) {
+			t.Fatalf("Lines() right after Abandon() = %v, want [%q]", got, AbandonedMarker)
+		}
+
+		if _, err := io.WriteString(pw, "real line\n"); err != nil {
+			t.Fatalf("pw.Write(real line) = %v", err)
+		}
+		if err := pw.Close(); err != nil {
+			t.Fatalf("pw.Close() = %v", err)
+		}
+
+		select {
+		case <-c.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("Done() did not close after the reader reached EOF")
+		}
+
+		want := []string{"real line"}
+		if got := c.Lines(); !slices.Equal(got, want) {
+			t.Errorf("Lines() after the drain finished = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("abandon on an already-finished drain is a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		c := NewStderrCollector(strings.NewReader("already collected\n"), logger)
+		<-c.Done()
+
+		c.Abandon(50 * time.Millisecond)
+
+		if buf.Len() != 0 {
+			t.Errorf("Abandon() on a finished drain logged output; want none; got %q", buf.String())
+		}
+		want := []string{"already collected"}
+		if got := c.Lines(); !slices.Equal(got, want) {
+			t.Errorf("Lines() after Abandon() on a finished drain = %v, want %v", got, want)
+		}
+	})
+}
