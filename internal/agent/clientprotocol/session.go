@@ -196,15 +196,22 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 	state.waitCh = make(chan struct{})
 	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
 
+	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, pumpHandler(state.itemCh, state.stopCh),
+		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
+
+	// The reaper waits for the connection's reader to finish before it
+	// reaps. cmd.Wait closes the pipe StdoutPipe returned, so reaping
+	// while the reader is still consuming would truncate the stream: an
+	// agent that writes its final response and exits would have that
+	// response discarded and the turn reported as a lost subprocess.
+	// Teardown closes the read handle itself, so this wait always ends.
 	go func() {
+		<-state.conn.Done()
 		cmd.Wait()                                 //nolint:errcheck,gosec // exit code is not read; teardown only waits for the process to be gone
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 		procutil.CleanupProcess(cmd.Process.Pid)
 		close(state.waitCh)
 	}()
-
-	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, pumpHandler(state.itemCh, state.stopCh),
-		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
 
 	// Start the pump before the handshake, so it is the sole mutator of
 	// session protocol state from this point on; StartSession publishes
@@ -224,7 +231,10 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		initResp.AgentCapabilities.MCPCapabilities != nil &&
 		initResp.AgentCapabilities.MCPCapabilities.HTTP != nil &&
 		*initResp.AgentCapabilities.MCPCapabilities.HTTP
-	wireServers, _ := parsedServers.wireServers(allowHTTP)
+	wireServers, withheld := parsedServers.wireServers(allowHTTP)
+	if withheld {
+		state.logger.Warn("configured tool servers were not delivered: the agent does not advertise HTTP tool-server support")
+	}
 
 	newSessResp, agentErr := doNewSession(ctx, state, target.WorkspacePath, wireServers)
 	if agentErr != nil {
