@@ -107,6 +107,12 @@ func NewConn(w io.Writer, r io.Reader, h Handler, opts ...Option) *Conn {
 	}
 	cfg := connConfig{maxLineBytes: MaxLineBytes}
 	for _, opt := range opts {
+		// A caller assembling options conditionally can hand over a nil
+		// entry, and dereferencing it here would panic inside a
+		// constructor rather than at the call site that built it.
+		if opt == nil {
+			continue
+		}
 		opt(&cfg)
 	}
 	c := &Conn{
@@ -182,12 +188,12 @@ func (c *Conn) Notify(method string, params any) error {
 
 // Respond writes a successful response to the request carrying id.
 //
-// It refuses an absent id, which names no request, and a null id,
-// which a peer sends only when it could not read the id it was
-// answering and which therefore never identifies a request this
-// connection can succeed at.
+// It refuses only an absent id, which names no request. A null id is
+// answered like any other, because a response must carry the id its
+// request carried, and refusing it would strand a peer that numbered
+// its request null on an answer that never arrives.
 func (c *Conn) Respond(id ID, result any) error {
-	if !id.Present() || id.IsNull() {
+	if !id.Present() {
 		return fmt.Errorf("respond: %s is not the id of a request to answer", id)
 	}
 	resp := struct {
@@ -210,9 +216,10 @@ func (c *Conn) Respond(id ID, result any) error {
 
 // RespondError writes an error response to the request carrying id.
 //
-// It refuses an absent id. A null id is allowed here and only here,
-// because that is the form the specification requires for an error
-// reporting that the request's own id could not be read.
+// It refuses an absent id. A null id is allowed, both because a
+// response carries the id its request carried and because null is the
+// form the specification requires for an error reporting that the
+// request's own id could not be read.
 func (c *Conn) RespondError(id ID, code int, message string) error {
 	if !id.Present() {
 		return fmt.Errorf("respond error: %s is not the id of a request to answer", id)

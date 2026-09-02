@@ -634,11 +634,10 @@ func TestConn_UnmatchedStringIDResponseReachesHandler(t *testing.T) {
 }
 
 // TestConn_RespondRejectsIDsThatNameNoRequest checks the guards on
-// the two reply paths. An absent id names no request at all, and a
-// null id is what a peer sends when it could not read the id it was
-// answering, so neither can carry a successful reply. An error reply
-// may carry null, because that is the form the specification requires
-// for an error about an unreadable id, and nothing else may.
+// the two reply paths. An absent id names no request at all, so
+// neither path can carry a reply for it. A null id is answerable on
+// both, because a response carries the id its request carried, and
+// because null is the form an error about an unreadable id must take.
 func TestConn_RespondRejectsIDsThatNameNoRequest(t *testing.T) {
 	t.Parallel()
 
@@ -651,12 +650,19 @@ func TestConn_RespondRejectsIDsThatNameNoRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("Respond refuses a null id", func(t *testing.T) {
+	t.Run("Respond answers a null id and writes it", func(t *testing.T) {
 		t.Parallel()
 
-		tc := newTestConn(t)
-		if err := tc.conn.Respond(jsonrpc.NullID(), map[string]any{"ok": true}); err == nil {
-			t.Error("Respond(NullID(), ...) error = nil, want non-nil")
+		var w bytes.Buffer
+		conn := jsonrpc.NewConn(&w, strings.NewReader(""), func(jsonrpc.Message) {})
+		t.Cleanup(conn.Close)
+
+		if err := conn.Respond(jsonrpc.NullID(), map[string]any{"ok": true}); err != nil {
+			t.Fatalf("Respond(NullID(), ...) error = %v", err)
+		}
+		const want = `{"id":null,"result":{"ok":true}}` + "\n"
+		if got := w.String(); got != want {
+			t.Errorf("Respond(NullID(), ...) wrote %q, want %q", got, want)
 		}
 	})
 
@@ -739,5 +745,24 @@ func assertBigNotification(t *testing.T, msg jsonrpc.Message) {
 	}
 	if msg.Method != "big" {
 		t.Errorf("Method = %q, want %q", msg.Method, "big")
+	}
+}
+
+// TestNewConn_SkipsNilOptions checks that a nil entry in the option
+// slice is ignored rather than panicking inside the constructor. A
+// caller assembling options conditionally can produce one, and the
+// panic would surface here instead of at the call site that built it.
+func TestNewConn_SkipsNilOptions(t *testing.T) {
+	t.Parallel()
+
+	var w bytes.Buffer
+	conn := jsonrpc.NewConn(&w, strings.NewReader(""), func(jsonrpc.Message) {}, nil, jsonrpc.WithVersionMember(), nil)
+	t.Cleanup(conn.Close)
+
+	if err := conn.Notify("ping", nil); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+	if got := w.String(); !strings.Contains(got, `"jsonrpc":"2.0"`) {
+		t.Errorf("Notify() wrote %q, want the version member the non-nil option asked for", got)
 	}
 }
