@@ -42,6 +42,12 @@ type sessionUpdateEvent struct {
 // other value" row of the normalization table rather than failing the
 // message, because the pinned schema itself expects a variant published
 // after the pin to arrive undescribed.
+//
+// A recognized variant whose payload does not decode reports found=false
+// for the same reason it reports it for an unrecognized one. Decoding a
+// payload partially and reporting success would normalize whatever was
+// recovered before the failure: an empty message chunk that still marks
+// work observed, or a tool call registered under an empty identifier.
 func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bool) {
 	var probe struct {
 		SessionUpdate string `json:"sessionUpdate"`
@@ -55,19 +61,29 @@ func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bo
 	switch probe.SessionUpdate {
 	case sessionUpdateAgentMessageChunk:
 		event.kind = updateAgentMessageChunk
-		_ = json.Unmarshal(raw, &event.chunk)
+		if err := json.Unmarshal(raw, &event.chunk); err != nil {
+			return event, false
+		}
 	case sessionUpdateAgentThoughtChunk:
 		event.kind = updateAgentThoughtChunk
-		_ = json.Unmarshal(raw, &event.chunk)
+		if err := json.Unmarshal(raw, &event.chunk); err != nil {
+			return event, false
+		}
 	case sessionUpdateUserMessageChunk:
 		event.kind = updateUserMessageChunk
-		_ = json.Unmarshal(raw, &event.chunk)
+		if err := json.Unmarshal(raw, &event.chunk); err != nil {
+			return event, false
+		}
 	case sessionUpdateToolCall:
 		event.kind = updateToolCall
-		_ = json.Unmarshal(raw, &event.toolCallBegin)
+		if err := json.Unmarshal(raw, &event.toolCallBegin); err != nil {
+			return event, false
+		}
 	case sessionUpdateToolCallUpdate:
 		event.kind = updateToolCallUpdate
-		_ = json.Unmarshal(raw, &event.toolCallUpdate)
+		if err := json.Unmarshal(raw, &event.toolCallUpdate); err != nil {
+			return event, false
+		}
 	case sessionUpdatePlan:
 		event.kind = updatePlan
 	case sessionUpdateAvailableCommandsUpdate:
@@ -80,7 +96,9 @@ func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bo
 		event.kind = updateSessionInfo
 	case sessionUpdateUsageUpdate:
 		event.kind = updateUsage
-		_ = json.Unmarshal(raw, &event.usage)
+		if err := json.Unmarshal(raw, &event.usage); err != nil {
+			return event, false
+		}
 	default:
 		event.kind = updateUnknown
 		return event, false
