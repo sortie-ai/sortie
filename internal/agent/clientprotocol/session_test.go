@@ -245,6 +245,41 @@ func TestDelayedTurnVerdictCannotBlockPump(t *testing.T) {
 	}
 }
 
+// TestAbandonedTurnIsNotStarted pins that a turn whose caller stopped
+// waiting is never started. runTurn returns on its own bound while the
+// startTurn control message is still queued, so the pump can reach that
+// message with nothing left to read the turn: starting it would prompt
+// the agent for work no one collects, and would leave activeTurn set so
+// that every later turn is rejected as already in flight.
+func TestAbandonedTurnIsNotStarted(t *testing.T) {
+	t.Parallel()
+
+	state := &sessionState{
+		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
+		itemCh:      make(chan pumpItem, 1),
+		logger:      discardLogger(),
+	}
+
+	outcome := awaitOutcome(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: func(domain.AgentEvent) {},
+	}))
+	var agentErr *domain.AgentError
+	if !errors.As(outcome.err, &agentErr) || agentErr.Kind != domain.ErrResponseTimeout {
+		t.Fatalf("runTurn() error = %v, want *domain.AgentError kind %q", outcome.err, domain.ErrResponseTimeout)
+	}
+
+	item := <-state.itemCh
+	// state.conn is nil here, so a pump that starts the turn anyway
+	// reaches the prompt send and panics rather than failing quietly.
+	pump := &pumpState{state: state}
+	pump.handleStartTurn(item.control.startTurn)
+
+	if pump.activeTurn != nil {
+		t.Error("handleStartTurn() set activeTurn for a turn whose caller stopped waiting, want the turn left unstarted")
+	}
+}
+
 // TestNoCounterSessionReportsUnmeasured confirms a session with no
 // counters emits no token_usage event and reports the run unmeasured.
 // This kind's normalization table never emits domain.EventTokenUsage,

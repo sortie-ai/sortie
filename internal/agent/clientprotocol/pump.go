@@ -411,6 +411,16 @@ func (p *pumpState) flushQueued(turn *activeTurn) {
 // handleStartTurn accepts or rejects a startTurn control message and,
 // on acceptance, starts the turn.
 func (p *pumpState) handleStartTurn(ts *turnStart) {
+	select {
+	case <-ts.done:
+		// The caller stopped waiting for this verdict, so nothing reads
+		// the turn any more. Accepting it would prompt the agent for work
+		// no one collects and leave the session holding a turn that can
+		// never end, which rejects every later turn as already in flight.
+		return
+	default:
+	}
+
 	if p.activeTurn != nil {
 		ts.reply <- turnVerdict{accepted: false, err: &domain.AgentError{
 			Kind:    domain.ErrResponseError,
