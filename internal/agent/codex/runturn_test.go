@@ -1712,3 +1712,51 @@ func TestStartThread_NotificationWaitEOF(t *testing.T) {
 		t.Fatal("startThread() did not return within 2s of the stream ending")
 	}
 }
+
+// TestRunTurn_NullIDApprovalRequestIsNotAnswered pins the guard on a
+// request this adapter cannot answer. A JSON null id is present on
+// the wire but names no request, and the reply path refuses it, so a
+// null-id approval request must take the same route as one carrying
+// no id at all: reported as another message, with nothing written
+// back. Answering it would write a reply the peer cannot match, and
+// dropping it silently would leave the peer waiting.
+func TestRunTurn_NullIDApprovalRequestIsNotAnswered(t *testing.T) {
+	t.Parallel()
+
+	fixture := []byte(
+		"{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
+			"{\"method\":\"turn/started\",\"params\":{}}\n" +
+			"{\"id\":null,\"method\":\"item/commandExecution/requestApproval\",\"params\":{}}\n" +
+			turnCompletedLine + "\n",
+	)
+
+	stdin := &capturingWriteCloser{}
+	state := makeTestStateWithStdin(t, fixture, stdin)
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	if _, ok := stdin.find(`"id":null`); ok {
+		t.Error("a reply was written for a null-id request, which the reply path refuses and the peer cannot match")
+	}
+
+	var reported bool
+	for _, e := range events {
+		if e.Type == domain.EventOtherMessage && e.Message == "item/commandExecution/requestApproval" {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Error("null-id approval request was not reported as another message")
+	}
+}

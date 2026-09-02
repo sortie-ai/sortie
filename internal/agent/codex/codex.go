@@ -724,7 +724,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				"mcpServer/elicitation/request", "item/permissions/requestApproval",
 				"item/tool/requestUserInput":
 				requestID := msg.ID
-				if !requestID.Present() {
+				// A null id is present on the wire but names no request
+				// this adapter can answer, and the reply path refuses it,
+				// so it takes the same route as an absent one rather than
+				// reaching a reply that would be dropped.
+				if !requestID.Present() || requestID.IsNull() {
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventOtherMessage,
 						Timestamp: now,

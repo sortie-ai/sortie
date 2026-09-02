@@ -703,20 +703,41 @@ func TestConn_ReadsALineLargerThanTheInitialBuffer(t *testing.T) {
 	tc := newTestConn(t, jsonrpc.WithMaxLineBytes(bound))
 	// Written on its own goroutine because the pipe blocks until the
 	// reader drains it, and without t, since a test helper that calls
-	// Fatalf may only run on the test's own goroutine.
+	// Fatalf may only run on the test's own goroutine. The write error
+	// is carried back rather than discarded, so a failed write reports
+	// itself instead of arriving as a timeout.
+	wrote := make(chan error, 1)
 	go func() {
-		_, _ = io.WriteString(tc.peerW, line+"\n")
+		_, err := io.WriteString(tc.peerW, line+"\n")
+		wrote <- err
 	}()
 
 	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatalf("write line: %v", err)
+		}
+		select {
+		case msg := <-tc.handled:
+			assertBigNotification(t, msg)
+		case <-time.After(5 * time.Second):
+			t.Fatal("no message reached the handler for a line above the initial buffer")
+		}
 	case msg := <-tc.handled:
-		if msg.Kind != jsonrpc.KindNotification {
-			t.Fatalf("Kind = %v, want %v (Err=%v)", msg.Kind, jsonrpc.KindNotification, msg.Err)
-		}
-		if msg.Method != "big" {
-			t.Errorf("Method = %q, want %q", msg.Method, "big")
-		}
+		assertBigNotification(t, msg)
 	case <-time.After(5 * time.Second):
 		t.Fatal("no message reached the handler for a line above the initial buffer")
+	}
+}
+
+// assertBigNotification checks the message the oversized line carries.
+func assertBigNotification(t *testing.T, msg jsonrpc.Message) {
+	t.Helper()
+
+	if msg.Kind != jsonrpc.KindNotification {
+		t.Fatalf("Kind = %v, want %v (Err=%v)", msg.Kind, jsonrpc.KindNotification, msg.Err)
+	}
+	if msg.Method != "big" {
+		t.Errorf("Method = %q, want %q", msg.Method, "big")
 	}
 }
