@@ -45,6 +45,7 @@ func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes i
 
 	state := &sessionState{
 		agentConfig: agentConfig,
+		caps:        newCapabilityRecord(false),
 		itemCh:      make(chan pumpItem, pumpChannelCapacity),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),

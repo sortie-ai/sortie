@@ -165,6 +165,7 @@ func newParkedTeardownSession(t *testing.T, wiring pipeWiring) *parkedTeardownFi
 		pumpDone:     make(chan struct{}),
 		logger:       discardLogger(),
 		agentConfig:  domain.AgentConfig{ReadTimeoutMS: 60000},
+		caps:         newCapabilityRecord(false),
 	}
 	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
 

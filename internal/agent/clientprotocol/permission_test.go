@@ -194,7 +194,7 @@ func TestPermissionRequestSelectsRefusingOption(t *testing.T) {
 
 	var gotNotice domain.AgentEvent
 	for _, event := range events {
-		if event.Type == domain.EventNotification {
+		if event.Type == domain.EventNotification && event.Message == wantNotice.Message {
 			gotNotice = event
 			break
 		}
