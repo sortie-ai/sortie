@@ -60,7 +60,11 @@ func TestStartSessionMCPInjectionWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startSession() error = %v", err)
 	}
-	t.Cleanup(func() { _ = stopSession(context.Background(), session) })
+	t.Cleanup(func() {
+		if err := stopSession(context.Background(), session); err != nil {
+			t.Errorf("stopSession() error = %v", err)
+		}
+	})
 
 	captured, err := os.ReadFile(capturePath)
 	if err != nil {

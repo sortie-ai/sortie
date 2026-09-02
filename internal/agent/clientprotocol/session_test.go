@@ -166,7 +166,16 @@ func TestRunTurnPreTurnWaits(t *testing.T) {
 				OnEvent: func(domain.AgentEvent) {},
 			})
 			if tt.cancel {
-				time.Sleep(10 * time.Millisecond)
+				if tt.wantQueued {
+					// Wait for the publication instead of hoping a fixed
+					// window covers it: drain the item runTurn published
+					// and restore it, so the cancellation below lands on
+					// the verdict wait rather than racing the send. The
+					// assertion further down drains it again.
+					state.itemCh <- <-state.itemCh
+				}
+				// With the queue full the send can never complete, so the
+				// cancellation is observed whenever it arrives.
 				cancel()
 			}
 
