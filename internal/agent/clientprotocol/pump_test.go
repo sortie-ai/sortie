@@ -188,8 +188,8 @@ func TestPumpDispatchNullID(t *testing.T) {
 
 // TestSessionUpdateBeforeAnyPromptNotLost confirms a message arriving
 // before any prompt is not lost. It is queued and flushed into the
-// next turn's sink immediately after that turn's own session_started
-// event.
+// next turn's sink after that turn's own session_started event and the
+// once-per-session capability notice.
 func TestSessionUpdateBeforeAnyPromptNotLost(t *testing.T) {
 	t.Parallel()
 
@@ -210,8 +210,12 @@ func TestSessionUpdateBeforeAnyPromptNotLost(t *testing.T) {
 		t.Fatalf("first event type = %q, want %q", first.Type, domain.EventSessionStarted)
 	}
 	second := waitEvent(t, eventCh)
-	if second.Type != domain.EventNotification || second.Message != "queued before any turn" {
-		t.Fatalf("second event = %+v, want the queued notification flushed right after session_started", second)
+	if second.Type != domain.EventNotification {
+		t.Fatalf("second event type = %q, want %q (the once-per-session capability notice)", second.Type, domain.EventNotification)
+	}
+	third := waitEvent(t, eventCh)
+	if third.Type != domain.EventNotification || third.Message != "queued before any turn" {
+		t.Fatalf("third event = %+v, want the queued notification flushed after session_started and the capability notice", third)
 	}
 
 	promptID := out.awaitMethod(t, methodSessionPrompt)

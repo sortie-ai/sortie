@@ -58,6 +58,12 @@ type activeTurn struct {
 	awaitedID    jsonrpc.ID
 	workObserved bool
 
+	// capsSnapshot is the capability record as it stood when this turn
+	// began. Every decision this turn makes from the record reads this
+	// copy rather than the pump's live one, so a lowering observed while
+	// the turn is in flight takes effect from the next turn onward.
+	capsSnapshot capabilityRecord
+
 	pendingEnd    turnEndKind
 	pendingDetail string
 	cancelSent    bool
@@ -89,6 +95,12 @@ type pumpState struct {
 
 	malformedVariantLogged bool
 	streamEnded            bool
+
+	// capabilityNoticeSent reports whether the once-per-session gap
+	// notice has already been emitted, as the first notification of the
+	// session's first turn. A lowering observed after that point is
+	// logged at warn level instead of producing a second notice.
+	capabilityNoticeSent bool
 
 	// openRequests records the request the pump is answering while it is
 	// answering it. The pump answers each request inside the call that
@@ -176,6 +188,7 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		p.agentInfo = ctrl.handshake.agentInfo
 		p.agentInfoPresent = ctrl.handshake.agentInfoPresent
 		p.caps = ctrl.handshake.caps
+		p.applyHandshakeCapabilityLowering(ctrl.handshake)
 
 	case ctrl.sessionID != "":
 		p.sessionID = ctrl.sessionID
@@ -196,6 +209,36 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 
 	case ctrl.answerOpen:
 		p.handleAnswerOpen()
+	}
+}
+
+// applyHandshakeCapabilityLowering lowers the capability record's
+// stage-two entries from what the initialize response advertised. It
+// never raises an entry. In this piece a lowering here always precedes
+// the once-per-session notice, because the handshake control message is
+// always published and processed before the session's first turn can
+// begin.
+func (p *pumpState) applyHandshakeCapabilityLowering(facts *handshakeFacts) {
+	if !facts.agentInfoPresent {
+		p.lowerCapability(&p.state.caps.agentVersion, capabilityLabelAgentVersion)
+	}
+	if !advertisesSessionContinuation(facts.caps) {
+		p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
+	}
+	if facts.toolServersWithheld {
+		p.lowerCapability(&p.state.caps.toolServers, capabilityLabelToolServers)
+	}
+}
+
+// lowerCapability lowers entry to gap. When that happens after the
+// once-per-session notice has already been sent, it is logged at warn
+// level rather than folded into a second notice.
+func (p *pumpState) lowerCapability(entry *capabilityState, label string) {
+	if !lower(entry) {
+		return
+	}
+	if p.capabilityNoticeSent {
+		p.state.logger.Warn("capability lowered after the once-per-session notice", slog.String("capability", label))
 	}
 }
 
@@ -436,11 +479,12 @@ func (p *pumpState) handleStartTurn(ts *turnStart) {
 		return
 	}
 
-	turn := &activeTurn{sink: ts.sink, resultCh: ts.resultCh, done: ts.done, cancelCh: ts.cancelCh}
+	turn := &activeTurn{sink: ts.sink, resultCh: ts.resultCh, done: ts.done, cancelCh: ts.cancelCh, capsSnapshot: *p.state.caps}
 	p.activeTurn = turn
 	ts.reply <- turnVerdict{accepted: true}
 
 	agentcore.EmitSessionStarted(p.publish(turn), strconv.Itoa(p.state.pid), p.sessionID)
+	p.emitCapabilityGapNoticeOnce(turn)
 	p.flushQueued(turn)
 
 	if p.latchedHumanInput {
@@ -465,6 +509,25 @@ func (p *pumpState) handleStartTurn(ts *turnStart) {
 		return
 	}
 	turn.awaitedID = id
+}
+
+// emitCapabilityGapNoticeOnce emits the once-per-session notice listing
+// turn's capability snapshot entries in the gap state, the first time
+// any turn starts. It reads turn's own snapshot rather than the pump's
+// live record, so the notice always reports what the session's first
+// turn actually saw, and never runs a second time for the same
+// session.
+func (p *pumpState) emitCapabilityGapNoticeOnce(turn *activeTurn) {
+	if p.capabilityNoticeSent {
+		return
+	}
+	p.capabilityNoticeSent = true
+
+	message, hasGap := turn.capsSnapshot.gapNotice()
+	if !hasGap {
+		return
+	}
+	agentcore.EmitNotification(p.publish(turn), message)
 }
 
 // finalizeTurn ends the active turn, calling agentcore.FinalizeTurn

@@ -154,6 +154,7 @@ func TestRunTurnPreTurnWaits(t *testing.T) {
 			state := &sessionState{
 				agentConfig: domain.AgentConfig{ReadTimeoutMS: 50},
 				itemCh:      make(chan pumpItem, 1),
+				caps:        newCapabilityRecord(false),
 			}
 			if tt.fillQueue {
 				state.itemCh <- pumpItem{}
@@ -215,6 +216,7 @@ func TestDelayedTurnVerdictCannotBlockPump(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		itemCh:      make(chan pumpItem, 1),
 		logger:      discardLogger(),
+		caps:        newCapabilityRecord(false),
 	}
 
 	outcome := awaitOutcome(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
@@ -258,6 +260,7 @@ func TestAbandonedTurnIsNotStarted(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		itemCh:      make(chan pumpItem, 1),
 		logger:      discardLogger(),
+		caps:        newCapabilityRecord(false),
 	}
 
 	outcome := awaitOutcome(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{

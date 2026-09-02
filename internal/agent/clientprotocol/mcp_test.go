@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
 )
 
 // writeMCPConfig writes a generated MCP configuration file declaring
@@ -55,5 +57,33 @@ func TestParseMCPServersRemoteLaunchIgnoresPath(t *testing.T) {
 	}
 	if len(parsed.servers) != 0 {
 		t.Errorf("parseMCPServers(remote, empty path).servers = %v, want empty", parsed.servers)
+	}
+}
+
+// TestWireServersWithholdsUnsupportedHTTP confirms an HTTP tool server
+// declared in the generated configuration is withheld when the
+// handshake does not advertise HTTP MCP support, and is delivered,
+// with withheld left false, when it does.
+func TestWireServersWithholdsUnsupportedHTTP(t *testing.T) {
+	t.Parallel()
+
+	parsed := parsedMCPServers{servers: []mcpconfig.Server{
+		{Name: "remote-tools", Transport: mcpconfig.TransportHTTP, URL: "https://tools.example/mcp"},
+	}}
+
+	servers, withheld := parsed.wireServers(false)
+	if !withheld {
+		t.Error("wireServers(false) withheld = false, want true: an HTTP server the agent did not advertise support for must be withheld")
+	}
+	if len(servers) != 0 {
+		t.Errorf("wireServers(false) = %d servers, want 0", len(servers))
+	}
+
+	servers, withheld = parsed.wireServers(true)
+	if withheld {
+		t.Error("wireServers(true) withheld = true, want false: the agent advertised HTTP support")
+	}
+	if len(servers) != 1 || servers[0].HTTP == nil {
+		t.Fatalf("wireServers(true) = %+v, want one HTTP server", servers)
 	}
 }

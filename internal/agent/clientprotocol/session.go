@@ -52,6 +52,11 @@ type sessionState struct {
 	target      agentcore.LaunchTarget
 	agentConfig domain.AgentConfig
 
+	// caps is built with its stage-one states before the pump starts and
+	// is owned by the pump from that point on: nothing outside the pump
+	// goroutine may mutate the value it points to.
+	caps *capabilityRecord
+
 	conn *jsonrpc.Conn
 
 	pid             int
@@ -94,6 +99,11 @@ type handshakeFacts struct {
 	agentInfo        implementation
 	agentInfoPresent bool
 	caps             agentCapabilities
+
+	// toolServersWithheld reports whether the generated configuration
+	// declared an HTTP tool server that this handshake's advertised MCP
+	// capabilities do not support, so it was omitted from session/new.
+	toolServersWithheld bool
 }
 
 // turnStart is what RunTurn publishes to start one turn.
@@ -131,9 +141,12 @@ func readTimeout(state *sessionState) time.Duration {
 }
 
 // startSession launches the runtime, performs the initialize handshake,
-// and creates a session with session/new. Session continuation and the
-// capability record are not implemented by this piece: every session is
-// created with session/new, and ResumeSessionID is not read.
+// and creates a session with session/new. Session continuation is not
+// implemented by this piece: every session is created with session/new,
+// and ResumeSessionID is not read. The session capability record is
+// built with its stage-one states before the pump starts, and the pump
+// applies handshake-based lowering to it once the handshake control
+// message arrives.
 func startSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
@@ -213,6 +226,12 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		close(state.waitCh)
 	}()
 
+	// The capability record is built here, on this goroutine, with its
+	// stage-one states, before the pump starts. The pump's start orders
+	// this write exactly as it orders the launch target beside it:
+	// StartSession must not touch state.caps after this point.
+	state.caps = newCapabilityRecord(remote)
+
 	// Start the pump before the handshake, so it is the sole mutator of
 	// session protocol state from this point on; StartSession publishes
 	// what it learns as control messages rather than writing that state
@@ -242,7 +261,7 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		return domain.Session{}, agentErr
 	}
 
-	facts := &handshakeFacts{}
+	facts := &handshakeFacts{toolServersWithheld: withheld}
 	if initResp.AgentCapabilities != nil {
 		facts.caps = *initResp.AgentCapabilities
 	}
