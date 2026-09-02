@@ -3,6 +3,8 @@ package agenttest
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -92,6 +94,28 @@ func TestAssertMCPInjection_Passing(t *testing.T) {
 			}})
 	})
 
+	t.Run("translated with the stdio command delivered inside a wire body", func(t *testing.T) {
+		t.Parallel()
+
+		mcpConfigPath := writeGeneratedMCPConfig(t, `{"mcpServers":{"win-server":{"command":"C:\\Program Files\\sortie\\mcp.exe"}}}`)
+
+		AssertMCPInjection(t, registry.MCPInjectionTranslated, mcpConfigPath,
+			MCPLaunchSurface{Wire: []string{
+				`win-server C:\Program Files\sortie\mcp.exe launched`,
+			}})
+	})
+
+	t.Run("translated with the stdio command delivered only in its JSON-escaped rendering", func(t *testing.T) {
+		t.Parallel()
+
+		mcpConfigPath := writeGeneratedMCPConfig(t, `{"mcpServers":{"win-server":{"command":"C:\\Program Files\\sortie\\mcp.exe"}}}`)
+
+		AssertMCPInjection(t, registry.MCPInjectionTranslated, mcpConfigPath,
+			MCPLaunchSurface{Wire: []string{
+				`{"method":"session/new","params":{"servers":[{"name":"win-server","argv":["C:\\Program Files\\sortie\\mcp.exe"]}]}}`,
+			}})
+	})
+
 	t.Run("unsupported with a neighbouring file that extends the path", func(t *testing.T) {
 		t.Parallel()
 
@@ -117,11 +141,18 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 	translatedNothingPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
 	translatedPartialPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
 
+	windowsCommandConfigPath := writeGeneratedMCPConfig(t, `{"mcpServers":{"win-server":{"command":"C:\\Program Files\\sortie\\mcp.exe"}}}`)
+
 	tests := []struct {
 		name          string
 		declared      registry.MCPInjection
 		mcpConfigPath string
 		surface       MCPLaunchSurface
+
+		// wantSubstr, when non-empty, must appear in at least one
+		// recorded error format string, pinning the failure to the
+		// expected rule rather than merely to some rule.
+		wantSubstr string
 	}{
 		{
 			name:          "empty mcpConfigPath",
@@ -199,6 +230,28 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			mcpConfigPath: "/ws/.sortie/mcp.json",
 			surface:       MCPLaunchSurface{},
 		},
+		{
+			// The wire body names the server so the name check
+			// passes, but carries the command in neither its
+			// verbatim nor its JSON-escaped rendering, so the
+			// command check must fail on its own.
+			name:          "translated declared but the wire body carries the command in neither rendering",
+			declared:      registry.MCPInjectionTranslated,
+			mcpConfigPath: windowsCommandConfigPath,
+			surface:       MCPLaunchSurface{Wire: []string{`{"argv":["win-server","--other-flag"]}`}},
+			wantSubstr:    `command %q not found on the launch surface`,
+		},
+		{
+			// The path appears only as encoding/json would render it
+			// inside a JSON string, immediately followed by the
+			// closing quote; an unsupported adapter delivering that
+			// rendering has still delivered the path.
+			name:          "unsupported declared but the wire body carries the path in its escaped rendering",
+			declared:      registry.MCPInjectionUnsupported,
+			mcpConfigPath: `C:\ws\.sortie\mcp.json`,
+			surface:       MCPLaunchSurface{Wire: []string{`{"argv":["--mcp-config","C:\\ws\\.sortie\\mcp.json"]}`}},
+			wantSubstr:    `want the surface not to carry mcpConfigPath`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +263,11 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 
 			if len(reporter.errors) == 0 {
 				t.Errorf("assertMCPInjection(%s) recorded no failures, want at least one", tt.name)
+			}
+			if tt.wantSubstr != "" && !slices.ContainsFunc(reporter.errors, func(format string) bool {
+				return strings.Contains(format, tt.wantSubstr)
+			}) {
+				t.Errorf("assertMCPInjection(%s) errors = %v, want one containing %q", tt.name, reporter.errors, tt.wantSubstr)
 			}
 		})
 	}

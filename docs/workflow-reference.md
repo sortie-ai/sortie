@@ -787,8 +787,8 @@ agent:
 
 | Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
-| `command`                        | string (argument vector)          | When adapter requires local process | Adapter-defined | Future dispatches                          | Command to launch the agent for adapters that run as a local subprocess (`claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro`). When the agent runs locally, the value is split on whitespace into an argument vector and run without a shell, so shell syntax is not interpreted and `~` and `$VAR` are not expanded; when `worker.ssh_hosts` sends the agent to a remote host, the value is passed to the remote shell unsplit. Adapters that do not start a local process ignore this field. |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, `opencode`, `kiro`, `mock`, and `agent-client-protocol`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `command`                        | string (argument vector)          | When adapter requires local process | Adapter-defined | Future dispatches                          | Command to launch the agent for adapters that run as a local subprocess (`claude-code`, `copilot-cli`, `codex`, `opencode`, `kiro`, and `agent-client-protocol`). When the agent runs locally, the value is split on whitespace into an argument vector and run without a shell, so shell syntax is not interpreted and `~` and `$VAR` are not expanded; when `worker.ssh_hosts` sends the agent to a remote host, the value is passed to the remote shell unsplit. Adapters that do not start a local process ignore this field. |
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Wall-clock bound on a single agent turn, enforced by the orchestrator. Must be positive.                                                                                         |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
 | `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
@@ -2554,6 +2554,8 @@ The `kiro` adapter reports no token counts on the headless path, so a `token_rat
 entry has no effect. Cost is surfaced only through the abstract credits figure in the
 `kiro-cli` stderr trailer, which the orchestrator does not aggregate.
 
+The `agent-client-protocol` adapter reports no token counts on the pinned wire version, so a `token_rates.agent-client-protocol` entry has no effect.
+
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `token_rates` | map | _(absent)_ | Top-level extension key. Keys are agent adapter kind strings. |
@@ -2886,6 +2888,19 @@ bound. A turn that goes silent is caught first by `agent.stall_timeout_ms`.
 disables MCP. A workspace `mcp.json` is not loaded and `--require-mcp-startup`
 is unreachable, so MCP-dependent workflows cannot run on the API-key path.
 
+**Agent Client Protocol adapter:**
+
+```yaml
+agent-client-protocol:
+  mcp_config: ./mcp-servers.json
+```
+
+The `agent-client-protocol` block is forwarded to the Agent Client Protocol adapter. `mcp_config` is the block's only key. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `agent-client-protocol.mcp_config.wrong_type`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `agent-client-protocol.mcp_config` | string | _(absent)_ | Path to an MCP server configuration JSON file, resolved relative to the directory holding WORKFLOW.md when it is not absolute, same as the other adapters. On a local launch, the generated file's servers are re-expressed inside the `session/new` request. A remote launch delivers neither form; see the MCP configuration section above. |
+
 **MCP configuration and the generated file:**
 
 For every agent kind, the worker writes a generated MCP configuration file into the
@@ -2906,6 +2921,7 @@ kind, and by delivery form:
 | `opencode` | Yes, local launch only | the generated servers are re-expressed as the runtime's own configuration document, delivered through an inline configuration environment variable |
 | `kiro` | No | the backend profile gate disables MCP under API-key authentication |
 | `mock` | No | the adapter launches no process |
+| `agent-client-protocol` | Yes, local launch only | the generated servers are re-expressed inside the session-creation request |
 
 An SSH session on `codex` or `opencode` receives neither form of delivery: both
 translating kinds carry the generated servers only on a local launch.
@@ -2920,8 +2936,7 @@ exit code is unchanged.
 
 A kind named by `dispatch.default.agent` or by `dispatch.rules[*].agent` that differs from the top-level `agent.kind` must carry its own top-level settings block; `agent.kind` itself never requires one. An empty mapping (`codex: {}`) or a bare key with nothing following (`codex:`) satisfies the requirement; a scalar or a list value does not. `sortie validate` reports a missing or malformed block as an error under the check `dispatch.agent.missing_block`, naming the selector that introduced the kind and the block it expects. `agent.command` is workflow-wide, and a routed kind's own settings block cannot override it ([architecture §5.3.5](architecture/05-workflow-specification.md#535-agent-object)); adding the block satisfies this check without making the route launch the routed kind's own binary.
 
-`claude-code.mcp_config`, `copilot-cli.mcp_config`, and `codex.mcp_config` are
-documented in the Claude Code, Copilot CLI, and Codex tables above.
+`claude-code.mcp_config`, `copilot-cli.mcp_config`, `codex.mcp_config`, and `agent-client-protocol.mcp_config` are documented in the Claude Code, Copilot CLI, Codex, and Agent Client Protocol tables above.
 
 **Custom or future adapters (illustrative example):**
 

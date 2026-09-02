@@ -1,0 +1,24 @@
+Agent Client Protocol schema pin - provenance record
+
+This directory vendors two unmodified files published by the Agent Client
+Protocol project's schema release. Both are read only by test code and by
+the Go source generator; a testdata/ directory is excluded from every Go
+build, so neither file reaches the compiled binary.
+
+Upstream repository: https://github.com/agentclientprotocol/agent-client-protocol
+Tag:    schema-v1.21.0
+Commit: 272bf799f35a258c6a4107a0410ed361e83683d3
+Upstream license at that commit: Apache License 2.0
+
+Format: each asset line below has the form
+  <relative-file-path> <byte-count> sha256:<hex-digest>
+fields are separated by a single space; the hex digest is lowercase and
+follows the literal prefix "sha256:". A test asserts that each listed
+file's sha256 equals the value recorded here.
+
+schema.json 246569 sha256:caf62ff962ada396878372ced11efb2c6764e59d90919a38583c319948931a42
+meta.json 1159 sha256:061edb6efa8fb2aa2792459a86ec7268de5fe665bba48b2ffe7939df01481f88
+
+Upstream source paths at the pinned commit:
+  schema.json came from schema/v1/schema.json
+  meta.json came from schema/v1/meta.json

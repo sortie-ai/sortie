@@ -23,9 +23,11 @@ An agent adapter must implement the following operations:
 
 Built-in agent adapter kinds:
 
-- `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro` are built-in agent adapter kinds.
+- `claude-code`, `copilot-cli`, `codex`, `opencode`, `kiro`, `mock`, and `agent-client-protocol` are built-in agent adapter kinds.
 - `claude-code`, `copilot-cli`, `opencode`, and `kiro` use one local subprocess per turn.
 - `codex` uses one persistent local subprocess per session.
+- `agent-client-protocol` uses one persistent subprocess per session, launched locally or through the SSH worker, in which a turn is a single open request that ends with a declared stop reason, a third session model beside the two above.
+- `mock` launches no process and belongs to none of these three session models.
 
 Built-in adapter summary:
 
@@ -36,6 +38,8 @@ Built-in adapter summary:
 | `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool handling is the MCP sidecar the runtime spawns from configuration overrides the adapter supplies on the app-server command line, on a local launch only; approval handling is unchanged and stays part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
 | `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_failed` with error kind `response_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. Tool handling is the same MCP sidecar, delivered through the runtime's inline configuration environment variable, on a local launch only. |
 | `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply; `agent.turn_timeout_ms` is the wall-clock budget bound, and a silent turn is caught first by `agent.stall_timeout_ms`. Every run is reported unmeasured, because the headless runtime reports no token counts. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and, only in local mode and once per session, runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight forecloses and which stall detection, not the turn timeout, would otherwise end. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
+| `mock` | Launches no process | Canned events for tests | Configured directly by the test rather than recovered from a runtime | Delivers no tool servers |
+| `agent-client-protocol` | One persistent subprocess per session, launched locally or through the SSH worker, in which a turn is a single open request that ends with a declared stop reason. This is a third model beside the one-subprocess-per-turn kinds and the persistent-session kind. | Newline-delimited JSON-RPC over stdio, with the runtime named by `agent.command`, and one closed set of session updates normalized at the boundary. | The session identifier comes from the session-creation response; continuation is attempted only when the agent advertised it, is confirmed by observation with a negative control, and falls back to a new session when the advertisement is absent or the observation fails. | The stable usage notification reports context occupancy rather than spend, so a run under this kind is reported unmeasured with token-based budget enforcement inactive; tool servers are re-expressed into the session-creation request and are not delivered on a remote launch; permission requests are refused inside the protocol by selecting an option of a refusing kind. |
 
 ### 10.2 Session Lifecycle
 
@@ -552,6 +556,8 @@ Error mapping (recommended normalized categories):
 - `turn_incomplete`
 - `turn_cancelled`
 - `turn_input_required`
+- `turn_refused`
+- `turn_outcome_unknown`
 
 ### 10.6 Agent Runner Contract
 

@@ -74,8 +74,19 @@ lint-shell: ## Run shellcheck on every tracked shell script
 fmt-check: ## Show formatting drift without rewriting any file
 	$(LINTER) fmt --diff ./...
 
+.PHONY: generate-check
+generate-check: ## Verify wire_gen.go matches what the generator emits, without touching the tree
+	@tmp=$$(mktemp "$${TMPDIR:-/tmp}/wire_gen_check.XXXXXX") && \
+	trap 'rm -f "$$tmp"' EXIT && \
+	$(GO) run ./internal/agent/clientprotocol/schemagen internal/agent/clientprotocol/testdata/schema-v1.21.0 "$$tmp" && \
+	if ! cmp -s "$$tmp" internal/agent/clientprotocol/wire_gen.go; then \
+		printf '$(RED)internal/agent/clientprotocol/wire_gen.go is stale$(RESET)\n'; \
+		cmp "$$tmp" internal/agent/clientprotocol/wire_gen.go; \
+		exit 1; \
+	fi
+
 .PHONY: check
-check: lint lint-no-tests lint-shell test ## Run the CI gates; shell lint covers all tracked scripts
+check: lint lint-no-tests lint-shell test generate-check ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod

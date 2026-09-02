@@ -1,6 +1,7 @@
 package agenttest
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +15,14 @@ import (
 type MCPLaunchSurface struct {
 	Args []string
 	Env  []string
+
+	// Wire carries the message bodies the adapter wrote to the agent's
+	// standard input. A value counts as delivered when a body carries
+	// it verbatim, or as encoding/json renders it inside a JSON string
+	// with the surrounding quotes removed; either rendering counts
+	// only when it ends exactly where the enclosing JSON string ends.
+	// A nil Wire contributes no hit.
+	Wire []string
 }
 
 // AssertMCPInjection fails t unless declared, the kind's registered
@@ -58,6 +67,8 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 		return carriesMCPConfigPath(arg, mcpConfigPath)
 	}) || slices.ContainsFunc(surface.Env, func(env string) bool {
 		return carriesMCPConfigPath(env, mcpConfigPath)
+	}) || slices.ContainsFunc(surface.Wire, func(wire string) bool {
+		return carriesMCPConfigPathOnWire(wire, mcpConfigPath)
 	})
 
 	switch declared {
@@ -109,9 +120,10 @@ func assertTranslatedInjection(t mcpInjectionReporter, mcpConfigPath string, sur
 }
 
 // surfaceContains reports whether value appears as a substring of any
-// argument or environment element on surface. Returns false for an
-// empty value so a stdio server with no command never passes
-// vacuously.
+// argument or environment element on surface, or on a Wire element
+// either verbatim or as encoding/json renders it inside a JSON string
+// with the surrounding quotes removed. Returns false for an empty
+// value so a stdio server with no command never passes vacuously.
 func surfaceContains(surface MCPLaunchSurface, value string) bool {
 	if value == "" {
 		return false
@@ -120,6 +132,8 @@ func surfaceContains(surface MCPLaunchSurface, value string) bool {
 		return strings.Contains(arg, value)
 	}) || slices.ContainsFunc(surface.Env, func(env string) bool {
 		return strings.Contains(env, value)
+	}) || slices.ContainsFunc(surface.Wire, func(wire string) bool {
+		return strings.Contains(wire, value) || strings.Contains(wire, jsonStringInterior(value))
 	})
 }
 
@@ -140,5 +154,49 @@ func carriesMCPConfigPath(elem, path string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// carriesMCPConfigPathOnWire reports whether one wire element hands
+// path to the agent process inside a JSON message body. Two renderings
+// of path count: the value verbatim, and the value as encoding/json
+// renders it inside a JSON string with the surrounding quotes removed.
+// Either rendering counts only when it ends exactly where the enclosing
+// JSON string ends, so a body naming a neighbouring file such as
+// <path>.tmp is not read as a delivery.
+func carriesMCPConfigPathOnWire(elem, path string) bool {
+	if path == "" {
+		return false
+	}
+	return wireRenderingEndsAtStringClose(elem, path) ||
+		wireRenderingEndsAtStringClose(elem, jsonStringInterior(path))
+}
+
+// jsonStringInterior returns the bytes encoding/json places between the
+// quotes of the JSON string it renders for s.
+func jsonStringInterior(s string) string {
+	// json.Marshal cannot fail for a string, so the error is discarded.
+	encoded, _ := json.Marshal(s)
+	return strings.TrimSuffix(strings.TrimPrefix(string(encoded), `"`), `"`)
+}
+
+// wireRenderingEndsAtStringClose reports whether elem carries rendering
+// at a position immediately followed by the closing quote of a JSON
+// string.
+func wireRenderingEndsAtStringClose(elem, rendering string) bool {
+	if rendering == "" {
+		return false
+	}
+	for start := 0; ; {
+		idx := strings.Index(elem[start:], rendering)
+		if idx == -1 {
+			return false
+		}
+		idx += start
+		end := idx + len(rendering)
+		if end < len(elem) && elem[end] == '"' {
+			return true
+		}
+		start = idx + 1
 	}
 }

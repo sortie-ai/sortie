@@ -39,6 +39,7 @@ import (
 
 	// Import adapter packages for their init-time registrations.
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
+	_ "github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	_ "github.com/sortie-ai/sortie/internal/agent/codex"
 	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
 	_ "github.com/sortie-ai/sortie/internal/agent/kiro"

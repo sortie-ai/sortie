@@ -6,11 +6,15 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"unicode"
 )
 
 // contractRegistryImportPath is the import path the checker resolves the
@@ -91,11 +95,12 @@ var contractTrackerAdapterMethods = map[string]bool{
 type contractRule string
 
 const (
-	ruleBAN     contractRule = "BAN"
-	ruleMETRICS contractRule = "METRICS"
-	ruleHOOK    contractRule = "HOOK"
-	ruleIMPORT  contractRule = "IMPORT"
-	ruleBLOCKER contractRule = "BLOCKER"
+	ruleBAN      contractRule = "BAN"
+	ruleMETRICS  contractRule = "METRICS"
+	ruleHOOK     contractRule = "HOOK"
+	ruleIMPORT   contractRule = "IMPORT"
+	ruleBLOCKER  contractRule = "BLOCKER"
+	ruleIDENTITY contractRule = "IDENTITY"
 )
 
 // Family roots and the orchestrator path rule IMPORT matches an import
@@ -660,6 +665,397 @@ func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPacka
 	return violations
 }
 
+// contractAgentIdentityFloorTable states the vendor and coding-agent
+// runtime names the identity rule always treats as identity tokens, in
+// addition to whatever kind strings contractAgentIdentitySnapshotData
+// extracts from the tree. The table is a floor, not a closed world: a
+// name absent here is still caught once some package registers it as
+// a kind.
+var contractAgentIdentityFloorTable = []string{
+	"claude", "codex", "copilot", "kiro", "opencode", "mock",
+	"gemini", "amp", "goose", "zed", "cursor", "aider", "qwen", "crush",
+}
+
+// contractAgentIdentitySnapshot is the identity rule's token set,
+// gathered once from the files under internal/agent: every floor and
+// extracted token, and, for each package that registered a kind, the
+// kinds it registered, keyed by that package's import path.
+type contractAgentIdentitySnapshot struct {
+	tokens           []string
+	kindImportPaths  map[string][]string
+	extractionErrors []contractViolation
+}
+
+var (
+	contractAgentIdentityOnce sync.Once
+	contractAgentIdentityData contractAgentIdentitySnapshot
+)
+
+// contractAgentIdentitySnapshotData returns the identity rule's token
+// set, building it from disk on first use and caching it for the rest
+// of the process. Every checked package shares one snapshot, which is
+// what lets a package be caught for naming a kind some other package
+// registers.
+func contractAgentIdentitySnapshotData() contractAgentIdentitySnapshot {
+	contractAgentIdentityOnce.Do(func() {
+		contractAgentIdentityData = buildContractAgentIdentitySnapshot()
+	})
+	return contractAgentIdentityData
+}
+
+// buildContractAgentIdentitySnapshot walks internal/agent fresh from
+// disk, collecting the first argument of every
+// registry.Agents.Register and registry.Agents.RegisterWithMeta call
+// in a non-test file, resolving the registry qualifier from each
+// file's own imports. A call whose kind argument is not a string
+// literal contributes an extraction error rather than being skipped,
+// so a kind the checker cannot read cannot go unreported.
+func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
+	fset := token.NewFileSet()
+	tokenSet := map[string]bool{}
+	for _, floor := range contractAgentIdentityFloorTable {
+		tokenSet[floor] = true
+	}
+	kindImportPaths := map[string][]string{}
+	var extractionErrors []contractViolation
+
+	dir := filepath.Join("..", "agent")
+	walkErr := filepath.WalkDir(dir, func(walkPath string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(walkPath, ".go") || strings.HasSuffix(walkPath, "_test.go") {
+			return nil
+		}
+
+		file, parseErr := parser.ParseFile(fset, walkPath, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			extractionErrors = append(extractionErrors, contractViolation{text: "parse " + walkPath + ": " + parseErr.Error()})
+			return nil
+		}
+		registryIdent := resolveContractImportName(file, contractRegistryImportPath)
+		if registryIdent == "" {
+			return nil
+		}
+		importPath := contractPackageImportPath(dir, contractAgentFamilyPath, filepath.Dir(walkPath))
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, isCall := n.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			outer, isSel := call.Fun.(*ast.SelectorExpr)
+			if !isSel {
+				return true
+			}
+			inner, isSel := outer.X.(*ast.SelectorExpr)
+			if !isSel {
+				return true
+			}
+			ident, isIdent := inner.X.(*ast.Ident)
+			if !isIdent || ident.Name != registryIdent || inner.Sel.Name != "Agents" {
+				return true
+			}
+			if outer.Sel.Name != "Register" && outer.Sel.Name != "RegisterWithMeta" {
+				return true
+			}
+			if len(call.Args) == 0 {
+				extractionErrors = append(extractionErrors, contractViolation{
+					pos:  fset.Position(call.Pos()),
+					text: registryIdent + ".Agents." + outer.Sel.Name + " call has no kind argument",
+				})
+				return true
+			}
+			lit, isBasicLit := call.Args[0].(*ast.BasicLit)
+			if !isBasicLit || lit.Kind != token.STRING {
+				extractionErrors = append(extractionErrors, contractViolation{
+					pos:  fset.Position(call.Args[0].Pos()),
+					text: registryIdent + ".Agents." + outer.Sel.Name + " call's kind argument is not a string literal",
+				})
+				return true
+			}
+			kind, unquoteErr := strconv.Unquote(lit.Value)
+			if unquoteErr != nil {
+				extractionErrors = append(extractionErrors, contractViolation{
+					pos:  fset.Position(lit.Pos()),
+					text: "unquote " + registryIdent + ".Agents." + outer.Sel.Name + " kind argument: " + unquoteErr.Error(),
+				})
+				return true
+			}
+			tokenSet[strings.ToLower(kind)] = true
+			kindImportPaths[importPath] = append(kindImportPaths[importPath], kind)
+			return true
+		})
+		return nil
+	})
+	if walkErr != nil {
+		extractionErrors = append(extractionErrors, contractViolation{text: "walk " + dir + ": " + walkErr.Error()})
+	}
+
+	tokens := make([]string, 0, len(tokenSet))
+	for tok := range tokenSet {
+		tokens = append(tokens, tok)
+	}
+	sort.Strings(tokens)
+
+	return contractAgentIdentitySnapshot{tokens: tokens, kindImportPaths: kindImportPaths, extractionErrors: extractionErrors}
+}
+
+// contractIdentityWordsFromIdent splits name into lowercase words on
+// every case transition and every underscore, which is the identity
+// rule's word-splitting rule for an identifier.
+func contractIdentityWordsFromIdent(name string) []string {
+	var words []string
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			words = append(words, strings.ToLower(string(current)))
+			current = current[:0]
+		}
+	}
+	runes := []rune(name)
+	for i, r := range runes {
+		if r == '_' {
+			flush()
+			continue
+		}
+		if i > 0 && unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1]) {
+			flush()
+		}
+		// An uppercase run ending in a lowercase rune starts a new word at
+		// that run's last uppercase rune, so useCLAUDEFlag yields "use",
+		// "claude" and "flag" rather than gluing the token to "flag".
+		if i > 0 && unicode.IsUpper(runes[i-1]) && unicode.IsLower(r) && len(current) > 1 {
+			last := current[len(current)-1]
+			current = current[:len(current)-1]
+			flush()
+			current = append(current, last)
+		}
+		current = append(current, r)
+	}
+	flush()
+	return words
+}
+
+// contractIdentityWordsFromLiteral splits value into lowercase words on
+// every character that is neither a letter nor a digit, which is the
+// identity rule's word-splitting rule for a string literal and for a
+// token.
+func contractIdentityWordsFromLiteral(value string) []string {
+	var words []string
+	var current []rune
+	flush := func() {
+		if len(current) > 0 {
+			words = append(words, strings.ToLower(string(current)))
+			current = current[:0]
+		}
+	}
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			current = append(current, r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return words
+}
+
+// contractIdentityTokenMatches reports whether tokenWords appears as a
+// consecutive run inside valueWords, compared word for word. Both
+// slices are already lowercased by the splitting functions, so the
+// comparison is case-insensitive.
+func contractIdentityTokenMatches(valueWords, tokenWords []string) bool {
+	if len(tokenWords) == 0 || len(tokenWords) > len(valueWords) {
+		return false
+	}
+	for start := 0; start+len(tokenWords) <= len(valueWords); start++ {
+		matched := true
+		for i, word := range tokenWords {
+			if valueWords[start+i] != word {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// contractPackageUnderKindPackage reports whether checkedImportPath is
+// kindPackageImportPath itself or sits under it, comparing on import
+// path segments. It backs the identity rule's subtree exclusion: a
+// package nested under a kind package's own path may still name the
+// kind that package registers.
+func contractPackageUnderKindPackage(checkedImportPath, kindPackageImportPath string) bool {
+	return contractPathIsUnder(checkedImportPath, kindPackageImportPath)
+}
+
+// contractIdentityExcludedTokens returns the tokens the identity rule
+// does not enforce against pkg: its own directory name, and the
+// directory name and every registered kind of any kind package whose
+// import path is pkg.importPath itself or an ancestor of it. The
+// ancestor case is what lets a package nested under a kind package,
+// such as a code generator that shares its path, name the kind that
+// package exists to serve.
+func contractIdentityExcludedTokens(pkg contractPackage, kindImportPaths map[string][]string) map[string]bool {
+	excluded := map[string]bool{strings.ToLower(pkg.dirName): true}
+	for kindImportPath, kinds := range kindImportPaths {
+		if !contractPackageUnderKindPackage(pkg.importPath, kindImportPath) {
+			continue
+		}
+		excluded[strings.ToLower(path.Base(kindImportPath))] = true
+		for _, kind := range kinds {
+			excluded[strings.ToLower(kind)] = true
+		}
+	}
+	return excluded
+}
+
+// contractIdentityArm1Violations reports every string literal or
+// identifier in file, outside an import declaration, whose word
+// sequence carries a token from tokens that excluded does not exempt.
+// Import declarations are excluded because rule IMPORT already governs
+// which packages one adapter may name; this arm targets identity
+// branching in prose and identifiers, not import paths.
+func contractIdentityArm1Violations(fset *token.FileSet, file *ast.File, tokens []string, excluded map[string]bool) []contractViolation {
+	type activeToken struct {
+		token string
+		words []string
+	}
+	active := make([]activeToken, 0, len(tokens))
+	for _, tok := range tokens {
+		if excluded[strings.ToLower(tok)] {
+			continue
+		}
+		active = append(active, activeToken{token: tok, words: contractIdentityWordsFromLiteral(tok)})
+	}
+
+	var violations []contractViolation
+	report := func(pos token.Pos, kind, spelling string, valueWords []string) {
+		for _, at := range active {
+			if contractIdentityTokenMatches(valueWords, at.words) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(pos),
+					text: kind + " " + spelling + " names agent identity token " + strconv.Quote(at.token),
+				})
+			}
+		}
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.ImportSpec:
+			return false
+		case *ast.BasicLit:
+			if v.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(v.Value)
+			if err != nil {
+				return true
+			}
+			report(v.Pos(), "string literal", v.Value, contractIdentityWordsFromLiteral(value))
+		case *ast.Ident:
+			report(v.Pos(), "identifier", v.Name, contractIdentityWordsFromIdent(v.Name))
+		}
+		return true
+	})
+
+	return violations
+}
+
+// exprContainsAgentInfo reports whether expr's syntax tree contains an
+// identifier spelled exactly agentInfo, case-sensitively, whether bare
+// or as part of a selector chain.
+func exprContainsAgentInfo(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if ident, ok := n.(*ast.Ident); ok && ident.Name == "agentInfo" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// contractIdentityArm2Violations reports every equality or inequality
+// comparison, switch tag, case expression, and map index in file whose
+// operand contains agentInfo: the recorded agent identity may be
+// logged, but nothing may compare it, switch on it, or use it as a map
+// key to decide behavior.
+func contractIdentityArm2Violations(fset *token.FileSet, file *ast.File) []contractViolation {
+	var violations []contractViolation
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.BinaryExpr:
+			if (v.Op == token.EQL || v.Op == token.NEQ) && (exprContainsAgentInfo(v.X) || exprContainsAgentInfo(v.Y)) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(v.Pos()),
+					text: "agentInfo is compared for equality or inequality; branch on an advertised capability or an observed message shape instead",
+				})
+			}
+		case *ast.SwitchStmt:
+			if v.Tag != nil && exprContainsAgentInfo(v.Tag) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(v.Pos()),
+					text: "switch tag is agentInfo; branch on an advertised capability or an observed message shape instead",
+				})
+			}
+		case *ast.CaseClause:
+			for _, expr := range v.List {
+				if exprContainsAgentInfo(expr) {
+					violations = append(violations, contractViolation{
+						pos:  fset.Position(expr.Pos()),
+						text: "case expression is agentInfo; branch on an advertised capability or an observed message shape instead",
+					})
+				}
+			}
+		case *ast.IndexExpr:
+			if exprContainsAgentInfo(v.Index) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(v.Pos()),
+					text: "map index is agentInfo; branch on an advertised capability or an observed message shape instead",
+				})
+			}
+		}
+		return true
+	})
+
+	return violations
+}
+
+// checkContractIdentity evaluates both arms of the identity rule
+// against pkg.files: the token arm (contractIdentityArm1Violations),
+// using the shared identity snapshot minus the tokens pkg excludes for
+// itself, and the agentInfo branch arm
+// (contractIdentityArm2Violations). Test files are exempt from both
+// arms.
+func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractViolation {
+	snapshot := contractAgentIdentitySnapshotData()
+	excluded := contractIdentityExcludedTokens(pkg, snapshot.kindImportPaths)
+
+	var violations []contractViolation
+	for _, file := range pkg.files {
+		violations = append(violations, contractIdentityArm1Violations(fset, file, snapshot.tokens, excluded)...)
+		violations = append(violations, contractIdentityArm2Violations(fset, file)...)
+	}
+	return violations
+}
+
 // contractExempt reports whether the package named dirName is
 // allowlisted for rule.
 func contractExempt(dirName string, rule contractRule) bool {
@@ -671,10 +1067,11 @@ func contractExempt(dirName string, rule contractRule) bool {
 	return ok
 }
 
-// checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK, and
-// IMPORT against pkg, honoring the allowlist entries for pkg.dirName.
-// Rules BAN, METRICS, and HOOK read pkg.files only; rule IMPORT reads
-// pkg.files and pkg.testFiles.
+// checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK,
+// IMPORT, and, for a package under the agent family root, IDENTITY
+// against pkg, honoring the allowlist entries for pkg.dirName. Rules
+// BAN, METRICS, HOOK, and IDENTITY read pkg.files only; rule IMPORT
+// reads pkg.files and pkg.testFiles.
 //
 // A ruleIMPORT entry in contractAllowlist is all-or-nothing: it lifts the
 // orchestrator ban, the sibling-adapter ban, and the package's own
@@ -730,6 +1127,10 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 		for _, file := range pkg.testFiles {
 			violations = append(violations, checkContractImports(fset, file, pkg)...)
 		}
+	}
+
+	if contractPathIsUnder(pkg.importPath, contractAgentFamilyPath) && !contractExempt(pkg.dirName, ruleIDENTITY) {
+		violations = append(violations, checkContractIdentity(fset, pkg)...)
 	}
 
 	return violations
@@ -900,6 +1301,12 @@ func TestCheckAdapterContract_DetectsViolations(t *testing.T) {
 		src        string
 		inTestFile bool
 		wantCount  int
+
+		// wantSubstr, when non-empty, must appear in the text of at
+		// least one returned violation, pinning the violation to the
+		// expected rule rather than accepting any violation of the
+		// right count.
+		wantSubstr string
 	}{
 		{
 			name:       "a re-declared ban-table name is rejected",
@@ -1231,6 +1638,91 @@ import (
 			inTestFile: true,
 			wantCount:  0,
 		},
+		{
+			name:       "a package naming a foreign runtime in a single-word string literal is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+const backend = "gemini"
+`,
+			wantCount:  1,
+			wantSubstr: `names agent identity token "gemini"`,
+		},
+		{
+			// "claude-code" also carries the single-word floor token
+			// "claude" as a prefix run, so this fixture reports two
+			// violations; wantSubstr pins that one of them names the
+			// multi-word token itself, which is the case plain word
+			// equality (matching only "claude") would miss.
+			name:       "a package naming a foreign multi-word kind string is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+const backend = "claude-code"
+`,
+			wantCount:  2,
+			wantSubstr: `names agent identity token "claude-code"`,
+		},
+		{
+			name:       "a package switching on agentInfo.Name is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+func check(agentInfo Info) bool {
+	switch agentInfo.Name {
+	case "special-mode":
+		return true
+	}
+	return false
+}
+`,
+			wantCount:  1,
+			wantSubstr: "switch tag is agentInfo",
+		},
+		{
+			// AgentInfo, capitalized, is the wire type's own field
+			// name; the recorded session field is a different
+			// identifier from the lowercase agentInfo the second arm
+			// bans, so deciding presence from it once is not a
+			// violation.
+			name:       "a package deciding presence once from the wire type's own AgentInfo field is accepted",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+func present(resp InitializeResponse) bool {
+	return resp.AgentInfo != nil
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a package naming the runtime of its own directory is accepted",
+			dirName:    "claude",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/claude",
+			src: `package fixture
+
+const kind = "claude-code"
+`,
+			wantCount: 0,
+		},
+		{
+			// subpkg sits under the real claude kind package's own
+			// import path, so the subtree exclusion covers every
+			// package nested under a kind package's import path,
+			// excluding both "claude" and "claude-code" for it too.
+			name:       "a package under a kind package's own path naming that kind's registered string is accepted",
+			dirName:    "subpkg",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/claude/subpkg",
+			src: `package fixture
+
+const kind = "claude-code"
+`,
+			wantCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1253,6 +1745,11 @@ import (
 			if len(got) != tt.wantCount {
 				t.Errorf("checkAdapterContractPackage() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
 			}
+			if tt.wantSubstr != "" && !slices.ContainsFunc(got, func(v contractViolation) bool {
+				return strings.Contains(v.text, tt.wantSubstr)
+			}) {
+				t.Errorf("checkAdapterContractPackage() violations = %+v, want one containing %q", got, tt.wantSubstr)
+			}
 		})
 	}
 }
@@ -1268,6 +1765,118 @@ func TestContractAllowlist_BlockerRuleHasNoExemptions(t *testing.T) {
 			t.Errorf("contractAllowlist[%q] exempts %q, want no exemption from that rule", dirName, ruleBLOCKER)
 		}
 	}
+}
+
+// contractIdentityReporter is the reporting surface the two identity-rule
+// staleness checks below need. *testing.T satisfies it, and so does the
+// fake the guard test drives them with, so both tests exercise one
+// implementation of each check rather than a copy of it.
+type contractIdentityReporter interface {
+	Errorf(format string, args ...any)
+}
+
+// contractCheckIdentityEvaluated reports when rule IDENTITY was
+// evaluated for no package under the agent family root.
+func contractCheckIdentityEvaluated(r contractIdentityReporter, walked []contractWalkedPackage) {
+	evaluated := 0
+	for _, w := range walked {
+		if contractPathIsUnder(w.pkg.importPath, contractAgentFamilyPath) && !contractExempt(w.pkg.dirName, ruleIDENTITY) {
+			evaluated++
+		}
+	}
+	if evaluated == 0 {
+		r.Errorf("rule %s was evaluated for no package under %s, want at least one", ruleIDENTITY, contractAgentFamilyPath)
+	}
+}
+
+// contractCheckIdentityAllowlist reports each contractAllowlist entry
+// that exempts rule IDENTITY for a directory the walk did not find.
+func contractCheckIdentityAllowlist(r contractIdentityReporter, found map[string]bool) {
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleIDENTITY]; !exempt {
+			continue
+		}
+		if !found[dirName] {
+			r.Errorf("contractAllowlist[%q] exempts %s, but the walk under %s did not find a directory named %q", dirName, ruleIDENTITY, contractAgentFamilyPath, dirName)
+		}
+	}
+}
+
+// TestContractIdentityRule_AppliesAndStaysCurrent guards rule IDENTITY
+// against going stale: it fails when the rule was evaluated for no
+// package under the agent family root, when the rule's own token
+// extraction reported an error, or when a contractAllowlist entry
+// naming ruleIDENTITY names a directory the walk did not find.
+func TestContractIdentityRule_AppliesAndStaysCurrent(t *testing.T) {
+	fset := token.NewFileSet()
+	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "agent"), contractAgentFamilyPath)
+
+	found := map[string]bool{}
+	for _, w := range walked {
+		found[w.pkg.dirName] = true
+	}
+
+	contractCheckIdentityEvaluated(t, walked)
+
+	for _, v := range contractAgentIdentitySnapshotData().extractionErrors {
+		t.Errorf("%s: %s", v.pos, v.text)
+	}
+
+	contractCheckIdentityAllowlist(t, found)
+}
+
+// contractStalenessFakeReporter records Errorf calls instead of failing
+// the enclosing test, so TestContractIdentityRule_StalenessGuardCatchesRealBreaks
+// can drive TestContractIdentityRule_AppliesAndStaysCurrent's own checks
+// against deliberately-broken synthetic input without reddening this
+// test file's own run.
+type contractStalenessFakeReporter struct {
+	errors []string
+}
+
+func (f *contractStalenessFakeReporter) Errorf(format string, _ ...any) {
+	f.errors = append(f.errors, format)
+}
+
+// TestContractIdentityRule_StalenessGuardCatchesRealBreaks proves the two
+// checks TestContractIdentityRule_AppliesAndStaysCurrent performs are
+// themselves capable of failing, not merely capable of passing against
+// the current tree: fed a walk that evaluated rule IDENTITY for no
+// package under the agent family root, or an allowlist naming a
+// directory that walk did not find, each check must record a failure.
+// Neither subtest runs in parallel: the second temporarily replaces the
+// package-level contractAllowlist, which a concurrently-running fixture
+// test also reads.
+func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
+	t.Run("zero packages evaluated under the agent family root", func(t *testing.T) {
+		walked := []contractWalkedPackage{
+			{pkg: contractPackage{dirName: "fixture", importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture"}},
+		}
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckIdentityEvaluated(reporter, walked)
+
+		if len(reporter.errors) == 0 {
+			t.Fatalf("staleness guard recorded no failure for a walk carrying no package under %s, want at least one", contractAgentFamilyPath)
+		}
+	})
+
+	t.Run("an allowlist entry names a directory the walk did not find", func(t *testing.T) {
+		original := contractAllowlist
+		contractAllowlist = map[string]map[contractRule]string{
+			"ghost-adapter": {ruleIDENTITY: "does not exist on disk"},
+		}
+		t.Cleanup(func() { contractAllowlist = original })
+
+		found := map[string]bool{"claude": true, "codex": true, "mock": true}
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckIdentityAllowlist(reporter, found)
+
+		if len(reporter.errors) == 0 {
+			t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")
+		}
+	})
 }
 
 // TestResolveContractImportName pins that the qualifier is read from the
