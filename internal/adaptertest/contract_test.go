@@ -1767,6 +1767,41 @@ func TestContractAllowlist_BlockerRuleHasNoExemptions(t *testing.T) {
 	}
 }
 
+// contractIdentityReporter is the reporting surface the two identity-rule
+// staleness checks below need. *testing.T satisfies it, and so does the
+// fake the guard test drives them with, so both tests exercise one
+// implementation of each check rather than a copy of it.
+type contractIdentityReporter interface {
+	Errorf(format string, args ...any)
+}
+
+// contractCheckIdentityEvaluated reports when rule IDENTITY was
+// evaluated for no package under the agent family root.
+func contractCheckIdentityEvaluated(r contractIdentityReporter, walked []contractWalkedPackage) {
+	evaluated := 0
+	for _, w := range walked {
+		if contractPathIsUnder(w.pkg.importPath, contractAgentFamilyPath) && !contractExempt(w.pkg.dirName, ruleIDENTITY) {
+			evaluated++
+		}
+	}
+	if evaluated == 0 {
+		r.Errorf("rule %s was evaluated for no package under %s, want at least one", ruleIDENTITY, contractAgentFamilyPath)
+	}
+}
+
+// contractCheckIdentityAllowlist reports each contractAllowlist entry
+// that exempts rule IDENTITY for a directory the walk did not find.
+func contractCheckIdentityAllowlist(r contractIdentityReporter, found map[string]bool) {
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleIDENTITY]; !exempt {
+			continue
+		}
+		if !found[dirName] {
+			r.Errorf("contractAllowlist[%q] exempts %s, but the walk under %s did not find a directory named %q", dirName, ruleIDENTITY, contractAgentFamilyPath, dirName)
+		}
+	}
+}
+
 // TestContractIdentityRule_AppliesAndStaysCurrent guards rule IDENTITY
 // against going stale: it fails when the rule was evaluated for no
 // package under the agent family root, when the rule's own token
@@ -1776,30 +1811,18 @@ func TestContractIdentityRule_AppliesAndStaysCurrent(t *testing.T) {
 	fset := token.NewFileSet()
 	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "agent"), contractAgentFamilyPath)
 
-	evaluated := 0
 	found := map[string]bool{}
 	for _, w := range walked {
 		found[w.pkg.dirName] = true
-		if contractPathIsUnder(w.pkg.importPath, contractAgentFamilyPath) && !contractExempt(w.pkg.dirName, ruleIDENTITY) {
-			evaluated++
-		}
 	}
-	if evaluated == 0 {
-		t.Fatalf("rule %s was evaluated for no package under %s, want at least one", ruleIDENTITY, contractAgentFamilyPath)
-	}
+
+	contractCheckIdentityEvaluated(t, walked)
 
 	for _, v := range contractAgentIdentitySnapshotData().extractionErrors {
 		t.Errorf("%s: %s", v.pos, v.text)
 	}
 
-	for dirName, reasons := range contractAllowlist {
-		if _, exempt := reasons[ruleIDENTITY]; !exempt {
-			continue
-		}
-		if !found[dirName] {
-			t.Errorf("contractAllowlist[%q] exempts %s, but the walk under %s did not find a directory named %q", dirName, ruleIDENTITY, contractAgentFamilyPath, dirName)
-		}
-	}
+	contractCheckIdentityAllowlist(t, found)
 }
 
 // contractStalenessFakeReporter records Errorf calls instead of failing
@@ -1830,17 +1853,8 @@ func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 			{pkg: contractPackage{dirName: "fixture", importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture"}},
 		}
 
-		evaluated := 0
-		for _, w := range walked {
-			if contractPathIsUnder(w.pkg.importPath, contractAgentFamilyPath) && !contractExempt(w.pkg.dirName, ruleIDENTITY) {
-				evaluated++
-			}
-		}
-
 		reporter := &contractStalenessFakeReporter{}
-		if evaluated == 0 {
-			reporter.Errorf("rule %s was evaluated for no package under %s, want at least one", ruleIDENTITY, contractAgentFamilyPath)
-		}
+		contractCheckIdentityEvaluated(reporter, walked)
 
 		if len(reporter.errors) == 0 {
 			t.Fatalf("staleness guard recorded no failure for a walk carrying no package under %s, want at least one", contractAgentFamilyPath)
@@ -1857,14 +1871,7 @@ func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 		found := map[string]bool{"claude": true, "codex": true, "mock": true}
 
 		reporter := &contractStalenessFakeReporter{}
-		for dirName, reasons := range contractAllowlist {
-			if _, exempt := reasons[ruleIDENTITY]; !exempt {
-				continue
-			}
-			if !found[dirName] {
-				reporter.Errorf("contractAllowlist[%q] exempts %s, but the walk under %s did not find a directory named %q", dirName, ruleIDENTITY, contractAgentFamilyPath, dirName)
-			}
-		}
+		contractCheckIdentityAllowlist(reporter, found)
 
 		if len(reporter.errors) == 0 {
 			t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")
