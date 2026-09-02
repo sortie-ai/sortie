@@ -6,6 +6,7 @@
 
 # Collapsed in GitHub PR diffs, excluded from language stats
 go.sum linguist-generated
+internal/agent/clientprotocol/wire_gen.go linguist-generated
 
 # Excluded from GitHub language stats
 docs/** linguist-documentation
