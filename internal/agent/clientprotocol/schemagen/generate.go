@@ -932,7 +932,7 @@ func (v *{{.TypeName}}) UnmarshalJSON(data []byte) error {
 		Value string ` + "`" + `json:"{{.PropName}}"` + "`" + `
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("{{.DefName}}: %w", err)
+		return fmt.Errorf("{{.TypeName}}: %w", err)
 	}
 	v.{{.FieldName}} = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -943,7 +943,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("{{.DefName}}: no decoded payload to re-encode")
+	return nil, fmt.Errorf("{{.TypeName}}: no decoded payload to re-encode")
 }
 {{if .Consts}}
 const (
@@ -964,7 +964,7 @@ func (v *{{.TypeName}}) UnmarshalJSON(data []byte) error {
 		Type *string ` + "`" + `json:"{{.DiscProp}}"` + "`" + `
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("{{.DefName}}: %w", err)
+		return fmt.Errorf("{{.TypeName}}: %w", err)
 	}
 	switch {
 {{range .ConstMembers}}	case probe.Type != nil && *probe.Type == "{{.DiscValue}}":
@@ -974,7 +974,7 @@ func (v *{{.TypeName}}) UnmarshalJSON(data []byte) error {
 		v.{{.DefaultMember.FieldName}} = new({{.DefaultMember.ElemType}})
 		return json.Unmarshal(data, v.{{.DefaultMember.FieldName}})
 {{else}}	default:
-		return fmt.Errorf("{{.DefName}}: unrecognized member")
+		return fmt.Errorf("{{.TypeName}}: unrecognized member")
 {{end}}	}
 }
 
@@ -985,7 +985,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 {{end}}{{if .DefaultMember}}	case v.{{.DefaultMember.FieldName}} != nil:
 		return json.Marshal(v.{{.DefaultMember.FieldName}})
 {{end}}	default:
-		return nil, fmt.Errorf("{{.DefName}}: no member set")
+		return nil, fmt.Errorf("{{.TypeName}}: no member set")
 	}
 }
 `))
@@ -1000,7 +1000,7 @@ type {{.TypeName}} struct {
 func (v *{{.TypeName}}) UnmarshalJSON(data []byte) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("{{.DefName}}: %w", err)
+		return fmt.Errorf("{{.TypeName}}: %w", err)
 	}
 	switch {
 {{range .KeyedMembers}}	case probe["{{.Key}}"] != nil:
@@ -1017,7 +1017,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 {{range .Members}}	case v.{{.FieldName}} != nil:
 		return json.Marshal(v.{{.FieldName}})
 {{end}}	default:
-		return nil, fmt.Errorf("{{.DefName}}: no member set")
+		return nil, fmt.Errorf("{{.TypeName}}: no member set")
 	}
 }
 `))
@@ -1032,7 +1032,7 @@ type {{.TypeName}} struct {
 func (v *{{.TypeName}}) UnmarshalJSON(data []byte) error {
 	var elems []json.RawMessage
 	if err := json.Unmarshal(data, &elems); err != nil {
-		return fmt.Errorf("{{.DefName}}: %w", err)
+		return fmt.Errorf("{{.TypeName}}: %w", err)
 	}
 	var probe map[string]json.RawMessage
 	if len(elems) > 0 {
@@ -1051,7 +1051,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 {{range .Members}}	case v.{{.FieldName}} != nil:
 		return json.Marshal(v.{{.FieldName}})
 {{end}}	default:
-		return nil, fmt.Errorf("{{.DefName}}: no member is set")
+		return nil, fmt.Errorf("{{.TypeName}}: no member is set")
 	}
 }
 `))
@@ -1072,6 +1072,6 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 	if v.{{.Member.FieldName}} != nil {
 		return json.Marshal(v.{{.Member.FieldName}})
 	}
-	return nil, fmt.Errorf("{{.DefName}}: no member set")
+	return nil, fmt.Errorf("{{.TypeName}}: no member set")
 }
 `))

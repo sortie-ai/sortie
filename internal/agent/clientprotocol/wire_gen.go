@@ -58,7 +58,7 @@ func (v *authMethod) UnmarshalJSON(data []byte) error {
 		Type *string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("AuthMethod: %w", err)
+		return fmt.Errorf("authMethod: %w", err)
 	}
 	switch {
 	case probe.Type != nil && *probe.Type == "terminal":
@@ -77,7 +77,7 @@ func (v authMethod) MarshalJSON() ([]byte, error) {
 	case v.Agent != nil:
 		return json.Marshal(v.Agent)
 	default:
-		return nil, fmt.Errorf("AuthMethod: no member set")
+		return nil, fmt.Errorf("authMethod: no member set")
 	}
 }
 
@@ -126,7 +126,7 @@ func (v availableCommandInput) MarshalJSON() ([]byte, error) {
 	if v.Unstructured != nil {
 		return json.Marshal(v.Unstructured)
 	}
-	return nil, fmt.Errorf("AvailableCommandInput: no member set")
+	return nil, fmt.Errorf("availableCommandInput: no member set")
 }
 
 // availableCommandsUpdate is generated from the AvailableCommandsUpdate definition of the pinned schema.
@@ -195,7 +195,7 @@ func (v *contentBlock) UnmarshalJSON(data []byte) error {
 		Value string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("ContentBlock: %w", err)
+		return fmt.Errorf("contentBlock: %w", err)
 	}
 	v.Type = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -206,7 +206,7 @@ func (v contentBlock) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("ContentBlock: no decoded payload to re-encode")
+	return nil, fmt.Errorf("contentBlock: no decoded payload to re-encode")
 }
 
 const (
@@ -280,7 +280,7 @@ type embeddedResourceResource struct {
 func (v *embeddedResourceResource) UnmarshalJSON(data []byte) error {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("EmbeddedResourceResource: %w", err)
+		return fmt.Errorf("embeddedResourceResource: %w", err)
 	}
 	switch {
 	case probe["text"] != nil:
@@ -299,7 +299,7 @@ func (v embeddedResourceResource) MarshalJSON() ([]byte, error) {
 	case v.BlobResourceContents != nil:
 		return json.Marshal(v.BlobResourceContents)
 	default:
-		return nil, fmt.Errorf("EmbeddedResourceResource: no member set")
+		return nil, fmt.Errorf("embeddedResourceResource: no member set")
 	}
 }
 
@@ -400,7 +400,7 @@ func (v *mcpServer) UnmarshalJSON(data []byte) error {
 		Type *string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("McpServer: %w", err)
+		return fmt.Errorf("mcpServer: %w", err)
 	}
 	switch {
 	case probe.Type != nil && *probe.Type == "http":
@@ -424,7 +424,7 @@ func (v mcpServer) MarshalJSON() ([]byte, error) {
 	case v.Stdio != nil:
 		return json.Marshal(v.Stdio)
 	default:
-		return nil, fmt.Errorf("McpServer: no member set")
+		return nil, fmt.Errorf("mcpServer: no member set")
 	}
 }
 
@@ -562,7 +562,7 @@ func (v *requestPermissionOutcome) UnmarshalJSON(data []byte) error {
 		Value string `json:"outcome"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("RequestPermissionOutcome: %w", err)
+		return fmt.Errorf("requestPermissionOutcome: %w", err)
 	}
 	v.Outcome = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -573,7 +573,7 @@ func (v requestPermissionOutcome) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("RequestPermissionOutcome: no decoded payload to re-encode")
+	return nil, fmt.Errorf("requestPermissionOutcome: no decoded payload to re-encode")
 }
 
 const (
@@ -681,7 +681,7 @@ func (v *sessionConfigOption) UnmarshalJSON(data []byte) error {
 		Value string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("SessionConfigOption: %w", err)
+		return fmt.Errorf("sessionConfigOption: %w", err)
 	}
 	v.Type = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -692,7 +692,7 @@ func (v sessionConfigOption) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("SessionConfigOption: no decoded payload to re-encode")
+	return nil, fmt.Errorf("sessionConfigOption: no decoded payload to re-encode")
 }
 
 const (
@@ -751,7 +751,7 @@ type sessionConfigSelectOptions struct {
 func (v *sessionConfigSelectOptions) UnmarshalJSON(data []byte) error {
 	var elems []json.RawMessage
 	if err := json.Unmarshal(data, &elems); err != nil {
-		return fmt.Errorf("SessionConfigSelectOptions: %w", err)
+		return fmt.Errorf("sessionConfigSelectOptions: %w", err)
 	}
 	var probe map[string]json.RawMessage
 	if len(elems) > 0 {
@@ -772,7 +772,7 @@ func (v sessionConfigSelectOptions) MarshalJSON() ([]byte, error) {
 	case v.Grouped != nil:
 		return json.Marshal(v.Grouped)
 	default:
-		return nil, fmt.Errorf("SessionConfigSelectOptions: no member is set")
+		return nil, fmt.Errorf("sessionConfigSelectOptions: no member is set")
 	}
 }
 
@@ -842,7 +842,7 @@ func (v *sessionUpdate) UnmarshalJSON(data []byte) error {
 		Value string `json:"sessionUpdate"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("SessionUpdate: %w", err)
+		return fmt.Errorf("sessionUpdate: %w", err)
 	}
 	v.SessionUpdate = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -853,7 +853,7 @@ func (v sessionUpdate) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("SessionUpdate: no decoded payload to re-encode")
+	return nil, fmt.Errorf("sessionUpdate: no decoded payload to re-encode")
 }
 
 const (
@@ -931,7 +931,7 @@ func (v *toolCallContent) UnmarshalJSON(data []byte) error {
 		Value string `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return fmt.Errorf("ToolCallContent: %w", err)
+		return fmt.Errorf("toolCallContent: %w", err)
 	}
 	v.Type = probe.Value
 	v.Remainder = append(json.RawMessage(nil), data...)
@@ -942,7 +942,7 @@ func (v toolCallContent) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return nil, fmt.Errorf("ToolCallContent: no decoded payload to re-encode")
+	return nil, fmt.Errorf("toolCallContent: no decoded payload to re-encode")
 }
 
 const (
