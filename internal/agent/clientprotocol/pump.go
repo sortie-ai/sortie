@@ -90,10 +90,12 @@ type pumpState struct {
 	malformedVariantLogged bool
 	streamEnded            bool
 
-	// openRequests tracks, best-effort, a request the pump has received
-	// but not yet answered, so the answerOpen control message of
-	// teardown's first step has something to walk if a reply is still
-	// outstanding when it is processed.
+	// openRequests records the request the pump is answering while it is
+	// answering it. The pump answers each request inside the call that
+	// receives it, so teardown's answerOpen step observes an empty map in
+	// the ordinary case; the map exists so that step walks a defined set
+	// rather than assuming one, not because a reply is expected to be
+	// outstanding.
 	openRequests map[jsonrpc.ID]string
 }
 

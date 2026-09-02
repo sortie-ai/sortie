@@ -175,6 +175,7 @@ func carriesMCPConfigPathOnWire(elem, path string) bool {
 // jsonStringInterior returns the bytes encoding/json places between the
 // quotes of the JSON string it renders for s.
 func jsonStringInterior(s string) string {
+	// json.Marshal cannot fail for a string, so the error is discarded.
 	encoded, _ := json.Marshal(s)
 	return strings.TrimSuffix(strings.TrimPrefix(string(encoded), `"`), `"`)
 }
