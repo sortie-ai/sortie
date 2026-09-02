@@ -828,6 +828,15 @@ func contractIdentityWordsFromIdent(name string) []string {
 		if i > 0 && unicode.IsUpper(r) && !unicode.IsUpper(runes[i-1]) {
 			flush()
 		}
+		// An uppercase run ending in a lowercase rune starts a new word at
+		// that run's last uppercase rune, so useCLAUDEFlag yields "use",
+		// "claude" and "flag" rather than gluing the token to "flag".
+		if i > 0 && unicode.IsUpper(runes[i-1]) && unicode.IsLower(r) && len(current) > 1 {
+			last := current[len(current)-1]
+			current = current[:len(current)-1]
+			flush()
+			current = append(current, last)
+		}
 		current = append(current, r)
 	}
 	flush()
