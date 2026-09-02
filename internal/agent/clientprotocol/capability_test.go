@@ -50,9 +50,11 @@ func TestNewCapabilityRecordToolServersStageOne(t *testing.T) {
 
 // TestNewCapabilityRecordStageOneEntries confirms all four stage-one
 // entries independently of any handshake, for both launch arms. The
-// sessionContinuation case is the load-bearing one: piece 4 (session
-// continuation) has not landed, so it must start at gap regardless of
-// remote, per the filed deviation from the plan's step 3.1 text.
+// sessionContinuation case is the load-bearing one: session
+// continuation is not implemented, so the entry must start at gap
+// whichever way the launch resolves. Only a handshake-free assertion
+// can prove it, because the handshake lowers that entry anyway and
+// would mask a wrong default.
 func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 	t.Parallel()
 
