@@ -724,7 +724,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				"mcpServer/elicitation/request", "item/permissions/requestApproval",
 				"item/tool/requestUserInput":
 				requestID := msg.ID
-				if requestID == 0 {
+				if !requestID.Present() {
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventOtherMessage,
 						Timestamp: now,

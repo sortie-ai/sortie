@@ -31,6 +31,9 @@ type Conn struct {
 	r io.Reader
 	h Handler
 
+	versionMember bool
+	maxLineBytes  int
+
 	writeMu sync.Mutex
 
 	// callMu guards nextID and pending together, so a request id is
@@ -54,6 +57,36 @@ type callResult struct {
 	err  error
 }
 
+// connConfig holds the state an [Option] sets before [NewConn] starts
+// the reader goroutine.
+type connConfig struct {
+	versionMember bool
+	maxLineBytes  int
+}
+
+// Option configures a [Conn]. Apply one or more to [NewConn].
+type Option func(*connConfig)
+
+// WithVersionMember makes the connection write "jsonrpc":"2.0" on
+// every outgoing request, notification, response, and error response.
+// Without this option, no such member is written.
+func WithVersionMember() Option {
+	return func(cfg *connConfig) {
+		cfg.versionMember = true
+	}
+}
+
+// WithMaxLineBytes sets the maximum length of one line the connection
+// will read. Zero or negative values are ignored, leaving the default
+// of [MaxLineBytes] in effect.
+func WithMaxLineBytes(n int) Option {
+	return func(cfg *connConfig) {
+		if n > 0 {
+			cfg.maxLineBytes = n
+		}
+	}
+}
+
 // NewConn starts a connection that writes to w, reads newline-
 // delimited JSON-RPC messages from r, and hands every message that is
 // not a correlated response to h.
@@ -61,18 +94,26 @@ type callResult struct {
 // NewConn panics when h is nil. It starts one reader goroutine before
 // returning, and it does not close w or r; closing them is the
 // caller's responsibility, and closing r is how the caller unblocks a
-// read parked on the stream.
-func NewConn(w io.Writer, r io.Reader, h Handler) *Conn {
+// read parked on the stream. With no options passed, behavior is
+// byte-identical to a connection with none of this package's options
+// applied.
+func NewConn(w io.Writer, r io.Reader, h Handler, opts ...Option) *Conn {
 	if h == nil {
 		panic("jsonrpc: handler must be non-nil")
 	}
+	cfg := connConfig{maxLineBytes: MaxLineBytes}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	c := &Conn{
-		w:       w,
-		r:       r,
-		h:       h,
-		pending: make(map[int64]chan callResult),
-		closed:  make(chan struct{}),
-		done:    make(chan struct{}),
+		w:             w,
+		r:             r,
+		h:             h,
+		versionMember: cfg.versionMember,
+		maxLineBytes:  cfg.maxLineBytes,
+		pending:       make(map[int64]chan callResult),
+		closed:        make(chan struct{}),
+		done:          make(chan struct{}),
 	}
 	go c.readLoop()
 	return c
@@ -81,9 +122,10 @@ func NewConn(w io.Writer, r io.Reader, h Handler) *Conn {
 // wireRequest is the JSON shape of a request or a notification. A
 // notification omits id via the zero value and the omitempty tag.
 type wireRequest struct {
-	Method string `json:"method"`
-	ID     int64  `json:"id,omitempty"`
-	Params any    `json:"params,omitempty"`
+	JSONRPC string `json:"jsonrpc,omitempty"`
+	Method  string `json:"method"`
+	ID      int64  `json:"id,omitempty"`
+	Params  any    `json:"params,omitempty"`
 }
 
 // write serializes one already-encoded line against every other
@@ -104,7 +146,11 @@ func (c *Conn) write(line []byte) error {
 }
 
 func (c *Conn) marshalAndWriteRequest(method string, id int64, params any) error {
-	data, err := json.Marshal(wireRequest{Method: method, ID: id, Params: params})
+	wire := wireRequest{Method: method, ID: id, Params: params}
+	if c.versionMember {
+		wire.JSONRPC = "2.0"
+	}
+	data, err := json.Marshal(wire)
 	if err != nil {
 		return fmt.Errorf("marshal request %s: %w", method, err)
 	}
@@ -116,7 +162,11 @@ func (c *Conn) marshalAndWriteRequest(method string, id int64, params any) error
 
 // Notify writes a notification, a message with no id, for method.
 func (c *Conn) Notify(method string, params any) error {
-	data, err := json.Marshal(wireRequest{Method: method, Params: params})
+	wire := wireRequest{Method: method, Params: params}
+	if c.versionMember {
+		wire.JSONRPC = "2.0"
+	}
+	data, err := json.Marshal(wire)
 	if err != nil {
 		return fmt.Errorf("marshal notification %s: %w", method, err)
 	}
@@ -127,33 +177,41 @@ func (c *Conn) Notify(method string, params any) error {
 }
 
 // Respond writes a successful response to the request carrying id.
-func (c *Conn) Respond(id int64, result any) error {
+func (c *Conn) Respond(id ID, result any) error {
 	resp := struct {
-		ID     int64 `json:"id"`
-		Result any   `json:"result"`
+		JSONRPC string `json:"jsonrpc,omitempty"`
+		ID      ID     `json:"id"`
+		Result  any    `json:"result"`
 	}{ID: id, Result: result}
+	if c.versionMember {
+		resp.JSONRPC = "2.0"
+	}
 	data, err := json.Marshal(resp)
 	if err != nil {
-		return fmt.Errorf("marshal response id=%d: %w", id, err)
+		return fmt.Errorf("marshal response id=%s: %w", id, err)
 	}
 	if err := c.write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write response id=%d: %w", id, err)
+		return fmt.Errorf("write response id=%s: %w", id, err)
 	}
 	return nil
 }
 
 // RespondError writes an error response to the request carrying id.
-func (c *Conn) RespondError(id int64, code int, message string) error {
+func (c *Conn) RespondError(id ID, code int, message string) error {
 	resp := struct {
-		ID    int64 `json:"id"`
-		Error Error `json:"error"`
+		JSONRPC string `json:"jsonrpc,omitempty"`
+		ID      ID     `json:"id"`
+		Error   Error  `json:"error"`
 	}{ID: id, Error: Error{Code: code, Message: message}}
+	if c.versionMember {
+		resp.JSONRPC = "2.0"
+	}
 	data, err := json.Marshal(resp)
 	if err != nil {
-		return fmt.Errorf("marshal error response id=%d: %w", id, err)
+		return fmt.Errorf("marshal error response id=%s: %w", id, err)
 	}
 	if err := c.write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write error response id=%d: %w", id, err)
+		return fmt.Errorf("write error response id=%s: %w", id, err)
 	}
 	return nil
 }
@@ -209,15 +267,19 @@ func (c *Conn) removePending(id int64) {
 }
 
 // SendRequest writes a request and returns its id without registering
-// a waiter, for a request whose response the caller deliberately
-// ignores. The response later reaches the handler as an unmatched
-// KindResponse message.
-func (c *Conn) SendRequest(method string, params any) (int64, error) {
+// a waiter. One caller uses it for a request whose response it
+// deliberately ignores; the response later reaches the handler as an
+// unmatched KindResponse message. A second caller uses it so the
+// response arrives through the [Handler] in wire order, behind the
+// notifications that preceded it, rather than being delivered ahead
+// of them the way [Conn.Call] would deliver it; that caller compares
+// the returned id against a later [Message.ID] with [ID.Equal].
+func (c *Conn) SendRequest(method string, params any) (ID, error) {
 	id := c.allocateID()
 	if err := c.marshalAndWriteRequest(method, id, params); err != nil {
-		return 0, err
+		return ID{}, err
 	}
-	return id, nil
+	return NumberID(id), nil
 }
 
 // Call writes a request for method and waits for its response.
@@ -312,7 +374,7 @@ func (e *unexpectedEOFCallError) Unwrap() error { return io.EOF }
 // rule, and reports the terminal condition once the scan ends.
 func (c *Conn) readLoop() {
 	scanner := bufio.NewScanner(c.r)
-	scanner.Buffer(make([]byte, 0, MaxLineBytes), MaxLineBytes)
+	scanner.Buffer(make([]byte, 0, c.maxLineBytes), c.maxLineBytes)
 
 	closedEarly := false
 scanLoop:
@@ -330,9 +392,11 @@ scanLoop:
 		copy(line, scanner.Bytes())
 		msg := parseMessage(line)
 		if msg.Kind == KindResponse {
-			if ch, ok := c.takePending(msg.ID); ok {
-				ch <- callResult{resp: Response{ID: msg.ID, Result: msg.Result, Error: msg.Error}}
-				continue
+			if n, isNumber := msg.ID.Number(); isNumber {
+				if ch, ok := c.takePending(n); ok {
+					ch <- callResult{resp: Response{ID: msg.ID, Result: msg.Result, Error: msg.Error}}
+					continue
+				}
 			}
 		}
 		c.h(msg)
