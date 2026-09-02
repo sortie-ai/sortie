@@ -632,3 +632,56 @@ func TestConn_UnmatchedStringIDResponseReachesHandler(t *testing.T) {
 		t.Fatal("timed out waiting for the handler to receive the unmatched string-id response")
 	}
 }
+
+// TestConn_RespondRejectsIDsThatNameNoRequest checks the guards on
+// the two reply paths. An absent id names no request at all, and a
+// null id is what a peer sends when it could not read the id it was
+// answering, so neither can carry a successful reply. An error reply
+// may carry null, because that is the form the specification requires
+// for an error about an unreadable id, and nothing else may.
+func TestConn_RespondRejectsIDsThatNameNoRequest(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Respond refuses an absent id", func(t *testing.T) {
+		t.Parallel()
+
+		tc := newTestConn(t)
+		if err := tc.conn.Respond(jsonrpc.ID{}, map[string]any{"ok": true}); err == nil {
+			t.Error("Respond(ID{}, ...) error = nil, want non-nil")
+		}
+	})
+
+	t.Run("Respond refuses a null id", func(t *testing.T) {
+		t.Parallel()
+
+		tc := newTestConn(t)
+		if err := tc.conn.Respond(jsonrpc.NullID(), map[string]any{"ok": true}); err == nil {
+			t.Error("Respond(NullID(), ...) error = nil, want non-nil")
+		}
+	})
+
+	t.Run("RespondError refuses an absent id", func(t *testing.T) {
+		t.Parallel()
+
+		tc := newTestConn(t)
+		if err := tc.conn.RespondError(jsonrpc.ID{}, -32700, "parse error"); err == nil {
+			t.Error("RespondError(ID{}, ...) error = nil, want non-nil")
+		}
+	})
+
+	t.Run("RespondError accepts a null id and writes it", func(t *testing.T) {
+		t.Parallel()
+
+		var w bytes.Buffer
+		conn := jsonrpc.NewConn(&w, strings.NewReader(""), func(jsonrpc.Message) {})
+		t.Cleanup(conn.Close)
+
+		if err := conn.RespondError(jsonrpc.NullID(), -32700, "parse error"); err != nil {
+			t.Fatalf("RespondError(NullID(), ...) error = %v", err)
+		}
+		const want = `{"id":null,"error":{"code":-32700,"message":"parse error"}}` + "\n"
+		if got := w.String(); got != want {
+			t.Errorf("RespondError(NullID(), ...) wrote %q, want %q", got, want)
+		}
+	})
+}
