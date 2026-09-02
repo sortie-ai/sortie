@@ -724,7 +724,12 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				"mcpServer/elicitation/request", "item/permissions/requestApproval",
 				"item/tool/requestUserInput":
 				requestID := msg.ID
-				if requestID == 0 {
+				// A null id is present on the wire, but this adapter has
+				// always treated it as no id at all, and the app-server
+				// does not send one. Routing it here keeps that behavior
+				// rather than changing what this adapter answers as a
+				// side effect of the shared framing learning the form.
+				if !requestID.Present() || requestID.IsNull() {
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventOtherMessage,
 						Timestamp: now,
