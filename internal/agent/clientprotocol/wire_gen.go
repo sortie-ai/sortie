@@ -206,7 +206,7 @@ func (v contentBlock) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("ContentBlock: no decoded payload to re-encode")
 }
 
 const (
@@ -573,7 +573,7 @@ func (v requestPermissionOutcome) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("RequestPermissionOutcome: no decoded payload to re-encode")
 }
 
 const (
@@ -692,7 +692,7 @@ func (v sessionConfigOption) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("SessionConfigOption: no decoded payload to re-encode")
 }
 
 const (
@@ -772,7 +772,7 @@ func (v sessionConfigSelectOptions) MarshalJSON() ([]byte, error) {
 	case v.Grouped != nil:
 		return json.Marshal(v.Grouped)
 	default:
-		return []byte("null"), nil
+		return nil, fmt.Errorf("SessionConfigSelectOptions: no member is set")
 	}
 }
 
@@ -853,7 +853,7 @@ func (v sessionUpdate) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("SessionUpdate: no decoded payload to re-encode")
 }
 
 const (
@@ -942,7 +942,7 @@ func (v toolCallContent) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("ToolCallContent: no decoded payload to re-encode")
 }
 
 const (

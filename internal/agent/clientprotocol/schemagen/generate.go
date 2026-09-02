@@ -627,6 +627,9 @@ func (g *generator) goType(prop *schemaDef) (string, error) {
 		if arbitrary {
 			return "json.RawMessage", nil
 		}
+		if sub == nil {
+			return "", errors.New("additionalProperties: false is not a supported property shape")
+		}
 		valType, err := g.goType(sub)
 		if err != nil {
 			return "", err
@@ -940,7 +943,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 	if v.Remainder != nil {
 		return v.Remainder, nil
 	}
-	return []byte("null"), nil
+	return nil, fmt.Errorf("{{.DefName}}: no decoded payload to re-encode")
 }
 {{if .Consts}}
 const (
@@ -1048,7 +1051,7 @@ func (v {{.TypeName}}) MarshalJSON() ([]byte, error) {
 {{range .Members}}	case v.{{.FieldName}} != nil:
 		return json.Marshal(v.{{.FieldName}})
 {{end}}	default:
-		return []byte("null"), nil
+		return nil, fmt.Errorf("{{.DefName}}: no member is set")
 	}
 }
 `))
