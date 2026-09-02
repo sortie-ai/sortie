@@ -134,6 +134,16 @@ const (
 	// ErrTurnIncomplete indicates the agent runtime ended the turn
 	// without reporting the task complete, so the work stopped short.
 	ErrTurnIncomplete AgentErrorKind = "turn_incomplete"
+
+	// ErrTurnRefused indicates the agent declined to continue the
+	// turn, and that the prompt and everything after it are excluded
+	// from the next prompt, so a retry would resume a different
+	// conversation.
+	ErrTurnRefused AgentErrorKind = "turn_refused"
+
+	// ErrTurnOutcomeUnknown indicates the runtime ended the turn with
+	// an outcome this client could not interpret.
+	ErrTurnOutcomeUnknown AgentErrorKind = "turn_outcome_unknown"
 )
 
 // AgentError is a structured error returned by [AgentAdapter]
@@ -225,6 +235,8 @@ func (k AgentErrorKind) RetryClassification() RetryClassification {
 	case ErrTurnCancelled:
 		return RetryClassification{Backoff: BackoffNone}
 	case ErrTurnInputRequired:
+		return RetryClassification{Backoff: BackoffNone}
+	case ErrTurnRefused, ErrTurnOutcomeUnknown:
 		return RetryClassification{Backoff: BackoffNone}
 	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
