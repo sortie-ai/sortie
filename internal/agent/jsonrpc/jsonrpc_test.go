@@ -685,3 +685,38 @@ func TestConn_RespondRejectsIDsThatNameNoRequest(t *testing.T) {
 		}
 	})
 }
+
+// TestConn_ReadsALineLargerThanTheInitialBuffer checks that the
+// reader grows toward its bound rather than being limited by the
+// buffer it starts with. The connection starts small so that a large
+// bound costs no memory until a line needs it, which is only safe if
+// growth actually happens.
+func TestConn_ReadsALineLargerThanTheInitialBuffer(t *testing.T) {
+	t.Parallel()
+
+	const bound = 1 << 20
+	line := fmt.Sprintf(`{"method":"big","params":{"blob":%q}}`, strings.Repeat("x", 256<<10))
+	if len(line) <= 64<<10 {
+		t.Fatalf("line is %d bytes, which does not exceed the initial buffer", len(line))
+	}
+
+	tc := newTestConn(t, jsonrpc.WithMaxLineBytes(bound))
+	// Written on its own goroutine because the pipe blocks until the
+	// reader drains it, and without t, since a test helper that calls
+	// Fatalf may only run on the test's own goroutine.
+	go func() {
+		_, _ = io.WriteString(tc.peerW, line+"\n")
+	}()
+
+	select {
+	case msg := <-tc.handled:
+		if msg.Kind != jsonrpc.KindNotification {
+			t.Fatalf("Kind = %v, want %v (Err=%v)", msg.Kind, jsonrpc.KindNotification, msg.Err)
+		}
+		if msg.Method != "big" {
+			t.Errorf("Method = %q, want %q", msg.Method, "big")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no message reached the handler for a line above the initial buffer")
+	}
+}

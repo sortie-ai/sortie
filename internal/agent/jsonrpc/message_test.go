@@ -371,3 +371,34 @@ func TestID_MarshalJSONRoundTripsWireForm(t *testing.T) {
 		}
 	})
 }
+
+// TestID_String checks the rendering of every id state, which is what
+// the reply guards put into their error text and what a log line
+// shows when a request cannot be answered.
+func TestID_String(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		id   ID
+		want string
+	}{
+		{name: "absent", id: ID{}, want: "<absent>"},
+		{name: "null", id: NullID(), want: "null"},
+		{name: "number", id: NumberID(7), want: "7"},
+		{name: "zero", id: NumberID(0), want: "0"},
+		{name: "negative", id: NumberID(-1), want: "-1"},
+		{name: "string", id: parseMessage([]byte(`{"method":"x","id":"req-1"}`)).ID, want: "req-1"},
+		{name: "number outside the plain integer form", id: parseMessage([]byte(`{"method":"x","id":1e3}`)).ID, want: "1e3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.id.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

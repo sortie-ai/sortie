@@ -20,6 +20,10 @@ import (
 // not a limit any peer documents.
 const MaxLineBytes = 1 << 20
 
+// initialLineBytes is the buffer the reader starts with before the
+// scanner grows it toward the connection's bound.
+const initialLineBytes = 64 << 10
+
 // ErrClosed is returned, wrapped, by a write or a call issued after
 // [Conn.Close].
 var ErrClosed = errors.New("connection closed")
@@ -389,7 +393,13 @@ func (e *unexpectedEOFCallError) Unwrap() error { return io.EOF }
 // rule, and reports the terminal condition once the scan ends.
 func (c *Conn) readLoop() {
 	scanner := bufio.NewScanner(c.r)
-	scanner.Buffer(make([]byte, 0, c.maxLineBytes), c.maxLineBytes)
+	// The scanner grows its buffer on demand up to the bound, so
+	// starting small keeps a large bound from costing every session
+	// that memory at construction. The starting size is capped by the
+	// bound itself, because a starting buffer larger than the maximum
+	// would raise the effective limit past the one this connection was
+	// given.
+	scanner.Buffer(make([]byte, 0, min(initialLineBytes, c.maxLineBytes)), c.maxLineBytes)
 
 	closedEarly := false
 scanLoop:
