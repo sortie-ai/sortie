@@ -201,8 +201,8 @@ Fields:
 
 - `kind` (string)
   - Specifies which agent adapter to use. Default: `claude-code`.
-  - Other supported values: `copilot-cli`, `codex`, `opencode`, `kiro`, `http`, and any
-    additionally registered adapter.
+  - Other supported values: `copilot-cli`, `codex`, `opencode`, `kiro`, `mock`, and `agent-client-protocol`.
+  - Other kinds (for example, HTTP-based adapters) are available only if you register them separately.
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see
     §5.3.10 for the override mechanism.
