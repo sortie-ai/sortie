@@ -156,12 +156,19 @@ func (id *ID) UnmarshalJSON(data []byte) error {
 		*id = ID{kind: idString, raw: string(trimmed), str: s}
 		return nil
 	default:
-		var n int64
-		if err := json.Unmarshal(trimmed, &n); err != nil {
-			*id = ID{kind: idNumber, raw: string(trimmed)}
-			return nil
+		// json.Number accepts every JSON number and rejects every
+		// other JSON value, so a bool, an array, or an object is
+		// refused here rather than surviving as an id the responder
+		// would echo back in a shape no id may take.
+		var num json.Number
+		if err := json.Unmarshal(trimmed, &num); err != nil {
+			return fmt.Errorf("unmarshal id: %w", err)
 		}
-		*id = ID{kind: idNumber, raw: string(trimmed), num: n, numOK: true}
+		decoded := ID{kind: idNumber, raw: string(trimmed)}
+		if n, err := num.Int64(); err == nil {
+			decoded.num, decoded.numOK = n, true
+		}
+		*id = decoded
 		return nil
 	}
 }

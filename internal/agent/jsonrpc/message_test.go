@@ -291,6 +291,46 @@ func TestParseMessage_NumberIDBeyondInt64Form(t *testing.T) {
 	}
 }
 
+// TestParseMessage_NonIdentifierJSONValueIsMalformed checks that a
+// JSON value that no id may take is refused rather than carried. The
+// specification admits a number, a string, and null, so a bool, an
+// array, and an object are not ids, and accepting one would have the
+// responder echo it back in a shape the peer cannot match.
+func TestParseMessage_NonIdentifierJSONValueIsMalformed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		line []byte
+	}{
+		{name: "true", line: []byte(`{"method":"x","id":true}`)},
+		{name: "false", line: []byte(`{"method":"x","id":false}`)},
+		{name: "empty array", line: []byte(`{"method":"x","id":[]}`)},
+		{name: "array", line: []byte(`{"method":"x","id":[1,2]}`)},
+		{name: "empty object", line: []byte(`{"method":"x","id":{}}`)},
+		{name: "object", line: []byte(`{"method":"x","id":{"a":1}}`)},
+		{name: "response with an object id", line: []byte(`{"id":{},"result":{"ok":true}}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			msg := parseMessage(tt.line)
+
+			if msg.Kind != KindMalformed {
+				t.Errorf("parseMessage(%q).Kind = %v, want %v", tt.line, msg.Kind, KindMalformed)
+			}
+			if msg.Err == nil {
+				t.Errorf("parseMessage(%q).Err = nil, want non-nil", tt.line)
+			}
+			if msg.ID.Present() {
+				t.Errorf("parseMessage(%q).ID.Present() = true, want false", tt.line)
+			}
+		})
+	}
+}
+
 // TestID_MarshalJSONRoundTripsWireForm checks that every id form an
 // answer must echo is reproduced byte for byte, and that an absent id
 // refuses to render at all.
