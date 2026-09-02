@@ -144,7 +144,16 @@ Two related choices follow from the same evidence. The client is written against
 
 They are generated here from the pinned schema artifact, and the framing beneath them stays this project's own. No third-party language binding is taken. The choice is recorded before the first protocol type exists, because once those types exist everything else is built on them and the choice is close to irreversible.
 
-The artifact fixes the input to generation by content rather than by name. The pinned release publishes the stable schema and its method index as downloadable assets whose digests are recorded here alongside the tag and the commit, and the method index in that artifact declares the same wire integer the handshake negotiates. A tag can be moved. A digest cannot.
+The artifact fixes the input to generation by content rather than by name. The pinned release publishes the stable schema and its method index as downloadable assets, and the method index in that artifact declares the same wire integer the handshake negotiates. A tag can be moved. A digest cannot.
+
+What binds is the practice, not the pair of numbers below: whichever release is pinned at any moment is identified by tag, by commit, and by the digest of each asset generation consumes. The values are a snapshot of the pin in force when this record was written, taken on 2026-09-02, and they are expected to change. Moving the pin replaces the tag, the commit and both digests together, in the same change that regenerates the types, and doing so falsifies nothing here.
+
+| Asset | Bytes | sha256 |
+|---|---|---|
+| `schema.json` | 246569 | `caf62ff962ada396878372ced11efb2c6764e59d90919a38583c319948931a42` |
+| `meta.json` | 1159 | `061edb6efa8fb2aa2792459a86ec7268de5fe665bba48b2ffe7939df01481f88` |
+
+The assets are published under `agentclientprotocol/agent-client-protocol`, which is where the project that once carried another owner name now lives.
 
 Four routes were weighed, and the project's standing test decides between them: a dependency earns its place when it sits on a boundary that moves more slowly than we do. Every measurement below was taken on 2026-09-02.
 
