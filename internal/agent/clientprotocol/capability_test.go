@@ -50,11 +50,12 @@ func TestNewCapabilityRecordToolServersStageOne(t *testing.T) {
 
 // TestNewCapabilityRecordStageOneEntries confirms all four stage-one
 // entries independently of any handshake, for both launch arms. The
-// sessionContinuation case is the load-bearing one: session
-// continuation is not implemented, so the entry must start at gap
-// whichever way the launch resolves. Only a handshake-free assertion
-// can prove it, because the handshake lowers that entry anyway and
-// would mask a wrong default.
+// sessionContinuation case is the load-bearing one: it must start at
+// protocol whichever way the launch resolves, because nothing is known
+// yet about whether the agent advertises a continuation method. Only a
+// handshake-free assertion can prove it, because the handshake lowers
+// that entry when neither method is advertised and would mask a wrong
+// default.
 func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 	t.Parallel()
 
@@ -82,8 +83,8 @@ func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 			if record.tokenCounts != capabilityGap {
 				t.Errorf("newCapabilityRecord(%v).tokenCounts = %q, want %q", tt.remote, record.tokenCounts, capabilityGap)
 			}
-			if record.sessionContinuation != capabilityGap {
-				t.Errorf("newCapabilityRecord(%v).sessionContinuation = %q, want %q: session continuation is not implemented yet", tt.remote, record.sessionContinuation, capabilityGap)
+			if record.sessionContinuation != capabilityProtocol {
+				t.Errorf("newCapabilityRecord(%v).sessionContinuation = %q, want %q", tt.remote, record.sessionContinuation, capabilityProtocol)
 			}
 			if record.agentVersion != capabilityProtocol {
 				t.Errorf("newCapabilityRecord(%v).agentVersion = %q, want %q", tt.remote, record.agentVersion, capabilityProtocol)
@@ -371,6 +372,40 @@ func TestToolServersLoweredWhenWithheld(t *testing.T) {
 	}
 }
 
+// TestSessionContinuationLoweredWhenHandshakeAdvertisesNeither confirms
+// the handshake-based half of sessionContinuation's lowering: a
+// handshake advertising neither continuation method lowers the entry
+// from its now-protocol stage-one default, while advertising either
+// one leaves it there. This branch was inert before this piece flipped
+// newCapabilityRecord's stage-one default to protocol, so no earlier
+// test observed it doing anything.
+func TestSessionContinuationLoweredWhenHandshakeAdvertisesNeither(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		caps      agentCapabilities
+		wantState capabilityState
+	}{
+		{name: "neither loadSession nor resume advertised lowers the entry", caps: agentCapabilities{}, wantState: capabilityGap},
+		{name: "loadSession advertised leaves the entry at its stage-one state", caps: capsAdvertisingLoad(), wantState: capabilityProtocol},
+		{name: "sessionCapabilities.resume advertised leaves the entry at its stage-one state", caps: capsAdvertisingResume(), wantState: capabilityProtocol},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, p := newPumpForCapabilityTests(t)
+			p.applyHandshakeCapabilityLowering(&handshakeFacts{agentInfoPresent: true, caps: tt.caps})
+
+			if state.caps.sessionContinuation != tt.wantState {
+				t.Errorf("sessionContinuation after applyHandshakeCapabilityLowering(caps=%+v) = %q, want %q", tt.caps, state.caps.sessionContinuation, tt.wantState)
+			}
+		})
+	}
+}
+
 // TestAdvertisesSessionContinuation confirms the predicate over the
 // four shapes that matter. The asymmetry between the two branches is
 // schema-driven, not a testing inconsistency: LoadSession is a *bool,
@@ -423,6 +458,47 @@ func TestAdvertisesSessionContinuation(t *testing.T) {
 
 			if got != tt.want {
 				t.Errorf("advertisesSessionContinuation(%+v) = %v, want %v", tt.caps, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod
+// confirms the handshake's lowering predicate and resolveSession's own
+// routing decision can never disagree about what caps advertises,
+// across a matrix wider than either function's own dedicated test: an
+// agent that advertised both, or that advertised one falsely, would
+// otherwise risk one predicate reporting a capability the other never
+// attempts, or an attempt the other reports as a gap.
+func TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod(t *testing.T) {
+	t.Parallel()
+
+	trueVal := true
+	falseVal := false
+	resume := &sessionCapabilities{Resume: &sessionResumeCapabilities{}}
+
+	tests := []struct {
+		name string
+		caps agentCapabilities
+	}{
+		{name: "neither advertised", caps: agentCapabilities{}},
+		{name: "loadSession true only", caps: agentCapabilities{LoadSession: &trueVal}},
+		{name: "loadSession false only", caps: agentCapabilities{LoadSession: &falseVal}},
+		{name: "resume only", caps: agentCapabilities{SessionCapabilities: resume}},
+		{name: "loadSession true and resume both advertised", caps: agentCapabilities{LoadSession: &trueVal, SessionCapabilities: resume}},
+		{name: "loadSession false and resume advertised", caps: agentCapabilities{LoadSession: &falseVal, SessionCapabilities: resume}},
+		{name: "sessionCapabilities present with close but no resume", caps: agentCapabilities{SessionCapabilities: &sessionCapabilities{Close: &sessionCloseCapabilities{}}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			advertises := advertisesSessionContinuation(tt.caps)
+			routes := chooseContinuationMethod(tt.caps) != continuationNone
+
+			if advertises != routes {
+				t.Errorf("advertisesSessionContinuation(%+v) = %v, chooseContinuationMethod(%+v) != continuationNone = %v, want agreement", tt.caps, advertises, tt.caps, routes)
 			}
 		})
 	}

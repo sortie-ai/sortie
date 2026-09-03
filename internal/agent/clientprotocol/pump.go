@@ -109,6 +109,25 @@ type pumpState struct {
 	// rather than assuming one, not because a reply is expected to be
 	// outstanding.
 	openRequests map[jsonrpc.ID]string
+
+	// loadExpected reports whether an expectLoad control message has
+	// been processed. It gates observeReplay so a chunk observed before
+	// the session/load call itself, during the initialize or
+	// negative-control round trip, cannot confirm a load that replayed
+	// nothing.
+	loadExpected bool
+
+	// replayObserved reports whether the pump has seen a chunk replayed
+	// for the identifier a session/load control message named. It is
+	// set at most once per session and never cleared.
+	replayObserved bool
+
+	// pendingReplayQuery and replayDeadlineC track a replayQuery still
+	// awaiting an answer: set together when the query arrives with no
+	// replay observed yet, and cleared together once either a replayed
+	// chunk resolves it or the deadline does.
+	pendingReplayQuery *replayQuery
+	replayDeadlineC    <-chan time.Time
 }
 
 // runPump is the sole goroutine that consumes routed messages and
@@ -148,6 +167,8 @@ func runPump(state *sessionState) {
 				p.beginEndAttempt(turnEndCancelled, "")
 			case <-deadlineC:
 				p.finalizeActiveTurnOnDeadline()
+			case <-p.replayDeadlineC:
+				p.finalizeReplayQueryOnDeadline()
 			}
 			continue
 		}
@@ -163,6 +184,8 @@ func runPump(state *sessionState) {
 			p.beginEndAttempt(turnEndCancelled, "")
 		case <-deadlineC:
 			p.finalizeActiveTurnOnDeadline()
+		case <-p.replayDeadlineC:
+			p.finalizeReplayQueryOnDeadline()
 		case <-state.stopCh:
 			p.logDroppedQueue()
 			return
@@ -204,12 +227,100 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 			slog.String("name", p.agentInfo.Name),
 			slog.String("version", p.agentInfo.Version))
 
+	case ctrl.expectLoad != "":
+		// Adopted silently, ahead of the definitive sessionID control
+		// message that always follows: this closes the same race a
+		// session/new launch leaves open by deferring the filter,
+		// because here the identifier is already known. If the load is
+		// not confirmed, handleReplayQuery and
+		// finalizeReplayQueryOnDeadline clear both fields back to their
+		// deferred-filter state before the fallback's own definitive
+		// sessionID control message arrives; otherwise that message
+		// simply overwrites this value with the one already in place.
+		p.sessionID = ctrl.expectLoad
+		p.sessionIDKnown = true
+		p.loadExpected = true
+
+	case ctrl.query != nil:
+		p.handleReplayQuery(ctrl.query)
+
 	case ctrl.startTurn != nil:
 		p.handleStartTurn(ctrl.startTurn)
 
 	case ctrl.answerOpen:
 		p.handleAnswerOpen()
 	}
+}
+
+// handleReplayQuery applies q, the control message a session/load or
+// session/resume continuation call publishes once its own response is
+// known. A nil reply means the call already failed: the provisional
+// identifier expectLoad adopted is cleared back to unknown and the
+// entry is lowered at once, with nothing sent back. Otherwise the call
+// was a session/load that answered success: this answers true at once
+// when replay has already been observed, or defers the answer until
+// either a replayed chunk resolves it or this query's own bounded wait
+// elapses.
+func (p *pumpState) handleReplayQuery(q *replayQuery) {
+	if q.reply == nil {
+		p.clearProvisionalSessionID()
+		p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
+		return
+	}
+	if p.replayObserved {
+		q.reply <- true
+		return
+	}
+	p.pendingReplayQuery = q
+	p.replayDeadlineC = time.After(readTimeout(p.state))
+}
+
+// finalizeReplayQueryOnDeadline ends a pending replay query once its
+// bounded wait has elapsed with no replay observed: the session/load
+// succeeded but replayed nothing, so this answers false, clears the
+// provisional identifier expectLoad adopted, and lowers
+// sessionContinuation.
+func (p *pumpState) finalizeReplayQueryOnDeadline() {
+	if p.pendingReplayQuery == nil {
+		return
+	}
+	q := p.pendingReplayQuery
+	p.pendingReplayQuery = nil
+	p.replayDeadlineC = nil
+	q.reply <- false
+	p.clearProvisionalSessionID()
+	p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
+}
+
+// clearProvisionalSessionID reverts the identifier expectLoad adopted
+// back to unknown, restoring the deferred-filter state
+// handleSessionUpdateMessage relies on until the fallback's own
+// definitive sessionID control message arrives. Without this, an
+// update for the session session/new actually created would be
+// compared against the loaded session's stale identifier and dropped
+// as foreign.
+func (p *pumpState) clearProvisionalSessionID() {
+	p.sessionID = ""
+	p.sessionIDKnown = false
+}
+
+// observeReplay records that the pump has seen a chunk replayed for
+// the session a session/load control message named, and resolves a
+// pending replay query if one is waiting. A chunk observed before that
+// control message arrives is not counted: it cannot confirm a load
+// that has not yet been attempted.
+func (p *pumpState) observeReplay() {
+	if !p.loadExpected || p.replayObserved {
+		return
+	}
+	p.replayObserved = true
+	if p.pendingReplayQuery == nil {
+		return
+	}
+	q := p.pendingReplayQuery
+	p.pendingReplayQuery = nil
+	p.replayDeadlineC = nil
+	q.reply <- true
 }
 
 // applyHandshakeCapabilityLowering lowers the capability record's
@@ -404,6 +515,10 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 		}
 		p.emitOrQueue(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: time.Now().UTC(), Message: unrecognizedSessionUpdateMessage})
 		return
+	}
+
+	if sue.kind == updateUserMessageChunk || sue.kind == updateAgentMessageChunk {
+		p.observeReplay()
 	}
 
 	result := applySessionUpdate(p.tracker, sue)

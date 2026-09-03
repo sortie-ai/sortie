@@ -372,3 +372,68 @@ func TestIntegration_RunTurnWithPermissionContinuation(t *testing.T) {
 		t.Log("no session/request_permission was observed on this run; this runtime's default approval posture may not require one for this prompt")
 	}
 }
+
+// TestIntegration_SessionContinuation drives one session through a
+// full turn, stops it, then starts a second session against the same
+// workspace naming the first session's identifier as ResumeSessionID.
+// It reads the outcome through the once-per-session capability notice
+// the second session's first turn emits: the notice names the session
+// continuation label only when the entry was lowered, so its absence
+// is the positive confirmation and its presence is the clean,
+// non-failing fallback either way. This runtime's own
+// support for continuation is not asserted either way; whichever
+// branch fires, a confirmed continuation must return the identifier
+// the first session held, and an unconfirmed one must still complete
+// its turn.
+func TestIntegration_SessionContinuation(t *testing.T) {
+	skipUnlessClientProtocolIntegration(t)
+
+	adapter := mustNewClientProtocolAdapter(t)
+	workspace := gitInitWorkspace(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	firstSession := mustStartClientProtocolSession(t, ctx, adapter, workspace)
+
+	onEvent1, _ := makeEventCollector(t)
+	if _, err := adapter.RunTurn(ctx, firstSession, domain.RunTurnParams{
+		Prompt:  "Reply with exactly one word: acknowledged.",
+		OnEvent: onEvent1,
+	}); err != nil {
+		t.Fatalf("first session RunTurn: %v", err)
+	}
+
+	if err := adapter.StopSession(ctx, firstSession); err != nil {
+		t.Fatalf("StopSession (first session): %v", err)
+	}
+
+	onEvent2, collected2 := makeEventCollector(t)
+	secondSession, err := adapter.StartSession(ctx, domain.StartSessionParams{
+		WorkspacePath:   workspace,
+		AgentConfig:     integrationAgentConfig(t),
+		ResumeSessionID: firstSession.ID,
+	})
+	if err != nil {
+		t.Fatalf("StartSession (continuation): %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), secondSession) })
+
+	if _, err := adapter.RunTurn(ctx, secondSession, domain.RunTurnParams{
+		Prompt:  "Reply with exactly one word: acknowledged.",
+		OnEvent: onEvent2,
+	}); err != nil {
+		t.Fatalf("second session RunTurn: %v", err)
+	}
+
+	notice := firstNotification(t, collected2())
+	confirmed := !strings.Contains(notice.Message, capabilityLabelSessionContinuation)
+	if confirmed {
+		t.Log("session continuation was confirmed by this runtime")
+		if secondSession.ID != firstSession.ID {
+			t.Errorf("second session id = %q, want %q: a confirmed continuation must return the identifier it actually loaded or resumed", secondSession.ID, firstSession.ID)
+		}
+	} else {
+		t.Log("session continuation was not confirmed by this runtime; the entry was lowered and the run fell back to a fresh session cleanly")
+	}
+}

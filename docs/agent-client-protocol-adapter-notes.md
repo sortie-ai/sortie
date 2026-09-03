@@ -22,7 +22,9 @@ The entry point is the `acp` subcommand. The handshake advertises `loadSession` 
 
 The entry point is the `--acp` flag; a `--experimental-acp` spelling also exists and is deprecated. The handshake advertises `loadSession` true and both `mcpCapabilities.http` and `mcpCapabilities.sse` true, and it advertises no `sessionCapabilities` object at all.
 
-This is the one runtime the gated suite was driven against end to end: a session starts, a turn runs to a completed outcome, a `session/request_permission` request arrives mid-turn and the adapter refuses it inside the protocol with the turn continuing past the refusal to completion, and the session stops cleanly afterward. Session continuation, `session/load` and `session/resume`, is not exercised against this runtime in this work.
+This is the one runtime the gated suite was driven against end to end: a session starts, a turn runs to a completed outcome, a `session/request_permission` request arrives mid-turn and the adapter refuses it inside the protocol with the turn continuing past the refusal to completion, and the session stops cleanly afterward.
+
+Session continuation was probed by hand against this runtime, not through the gated suite. `session/load` replays the prior turn's messages, observed as `user_message_chunk` notifications arriving before the load response itself returns, when the workspace directory already carries earlier session history. Against a workspace used for the first time, whose only session was ended the way this adapter always ends one, by terminating the process group rather than by a graceful exit, a reload of that session answers a JSON-RPC error reporting no prior session for the workspace instead of replaying anything; the adapter observes this exactly as it observes any other unconfirmed load, lowering the session continuation entry and falling back to a fresh session without failing the run. `session/resume` is not exercised: this runtime advertises no `sessionCapabilities` object at all, so the adapter never selects it.
 
 ## Runtimes not observed
 

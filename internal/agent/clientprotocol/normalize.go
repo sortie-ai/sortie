@@ -73,9 +73,9 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 		}
 
 	case updateUserMessageChunk:
-		// No event on the pinned line: this variant carries replay
-		// evidence for session continuation only, which this piece does
-		// not implement.
+		// No event on the pinned line: this variant is replay evidence
+		// for session continuation, which the pump observes directly
+		// rather than through this function's return value.
 		return normalizedUpdate{}
 
 	case updateToolCall:

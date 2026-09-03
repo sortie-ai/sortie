@@ -83,13 +83,39 @@ type pumpItem struct {
 
 // pumpControl carries what StartSession learned on its own goroutine
 // and what RunTurn and teardown ask of the pump. Exactly one field is
-// set. This piece uses only these four; session continuation adds
-// expectLoad and a replay query later.
+// set.
 type pumpControl struct {
-	handshake  *handshakeFacts
-	sessionID  string
+	handshake *handshakeFacts
+	sessionID string
+
+	// expectLoad is published before a session/load call, naming the
+	// identifier being loaded. It lets the pump treat that identifier
+	// as the session's own before the definitive sessionID control
+	// message arrives, and count any chunk replayed for it.
+	expectLoad string
+
+	// query carries the continuation verdict of a session/load or
+	// session/resume call once that call's own response is known. See
+	// [replayQuery].
+	query *replayQuery
+
 	startTurn  *turnStart
 	answerOpen bool
+}
+
+// replayQuery is the control message a session/load or session/resume
+// continuation call publishes once its own response is known, so the
+// pump, the capability record's sole mutator, applies the
+// sessionContinuation lowering. A call already known to have failed
+// carries a nil reply: the pump lowers the entry at once and answers
+// nothing, because the caller already has its verdict and is not
+// waiting. A session/load call that answered success carries a
+// buffered reply of capacity one instead: the pump answers true as
+// soon as it observes a chunk replayed for the identifier the
+// expectLoad control message named, or lowers the entry itself and
+// answers false once its own bounded wait for that chunk elapses.
+type replayQuery struct {
+	reply chan bool
 }
 
 // handshakeFacts is what StartSession decoded from the initialize
@@ -141,12 +167,13 @@ func readTimeout(state *sessionState) time.Duration {
 }
 
 // startSession launches the runtime, performs the initialize handshake,
-// and creates a session with session/new. Session continuation is not
-// implemented by this piece: every session is created with session/new,
-// and ResumeSessionID is not read. The session capability record is
-// built with its stage-one states before the pump starts, and the pump
-// applies handshake-based lowering to it once the handshake control
-// message arrives.
+// and creates or continues a session. A non-empty ResumeSessionID picks
+// the continuation route the handshake advertises; every other case,
+// and a continuation that is not confirmed, creates the session with
+// session/new instead. The session capability record is built with its
+// stage-one states before the pump starts, and the pump applies
+// handshake- and continuation-based lowering to it once the
+// corresponding control message arrives.
 func startSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
@@ -255,22 +282,22 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		state.logger.Warn("configured tool servers were not delivered: the agent does not advertise HTTP tool-server support")
 	}
 
-	newSessResp, agentErr := doNewSession(ctx, state, target.WorkspacePath, wireServers)
+	var caps agentCapabilities
+	if initResp.AgentCapabilities != nil {
+		caps = *initResp.AgentCapabilities
+	}
+
+	sessionID, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wireServers)
 	if agentErr != nil {
 		teardownOnFailure()
 		return domain.Session{}, agentErr
 	}
 
-	facts := &handshakeFacts{toolServersWithheld: withheld}
-	if initResp.AgentCapabilities != nil {
-		facts.caps = *initResp.AgentCapabilities
-	}
+	facts := &handshakeFacts{toolServersWithheld: withheld, caps: caps}
 	if initResp.AgentInfo != nil {
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
 	}
-
-	sessionID := string(newSessResp.SessionID)
 
 	state.itemCh <- pumpItem{control: &pumpControl{handshake: facts}}
 	state.itemCh <- pumpItem{control: &pumpControl{sessionID: sessionID}}
