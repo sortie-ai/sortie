@@ -302,7 +302,7 @@ func TestStartThread_Success(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	threadID, err := startThread(context.Background(), state, passthroughConfig{})
+	threadID, _, err := startThread(context.Background(), state, passthroughConfig{})
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -323,7 +323,7 @@ func TestStartThread_DefaultApprovalPolicyIsNever(t *testing.T) {
 		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
 	)
 
-	if _, err := startThread(context.Background(), state, passthroughConfig{}); err != nil {
+	if _, _, err := startThread(context.Background(), state, passthroughConfig{}); err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestStartThread_WithModelAndPersonality(t *testing.T) {
 		ThreadSandbox:  "workspaceWrite",
 	}
 
-	threadID, err := startThread(context.Background(), state, pt)
+	threadID, _, err := startThread(context.Background(), state, pt)
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -374,7 +374,7 @@ func TestStartThread_ErrorResponse(t *testing.T) {
 
 	state := handshakeState(t, `{"id":1,"error":{"code":-32000,"message":"workspace not found"}}`)
 
-	_, err := startThread(context.Background(), state, passthroughConfig{})
+	_, _, err := startThread(context.Background(), state, passthroughConfig{})
 	if err == nil {
 		t.Fatal("startThread() expected error for error response")
 	}
@@ -386,9 +386,56 @@ func TestStartThread_EmptyThreadID(t *testing.T) {
 	// Response with empty thread ID.
 	state := handshakeState(t, `{"id":1,"result":{"thread":{"id":""}}}`)
 
-	_, err := startThread(context.Background(), state, passthroughConfig{})
+	_, _, err := startThread(context.Background(), state, passthroughConfig{})
 	if err == nil {
 		t.Fatal("startThread() expected error for empty thread ID")
+	}
+}
+
+// TestStartThread_FixtureThreadStartResponse drives startThread against
+// the captured thread_start_response.jsonl fixture (thread/start
+// response, then thread/started notification, in file order) and
+// asserts the returned model equals the fixture's own "model" member.
+//
+// The fixture's response line carries the request id (4) observed at
+// capture time, when thread/start was the fourth call of that
+// session. handshakeState wires startThread to a bare connection
+// whose own request numbering starts at 1, so the response id is
+// rewritten to 1 here, in memory, to correlate with that request;
+// testdata/thread_start_response.jsonl itself is untouched.
+func TestStartThread_FixtureThreadStartResponse(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(strings.TrimRight(string(loadFixture(t, "thread_start_response.jsonl")), "\n"), "\n")
+	lines[0] = strings.Replace(lines[0], `"id":4,`, `"id":1,`, 1)
+	state := handshakeState(t, lines...)
+
+	_, model, err := startThread(context.Background(), state, passthroughConfig{})
+	if err != nil {
+		t.Fatalf("startThread() error = %v", err)
+	}
+	if model != "gpt-5.6-sol" {
+		t.Errorf("startThread() model = %q, want %q", model, "gpt-5.6-sol")
+	}
+}
+
+// TestStartThread_NoModelMember drives a thread/start response whose
+// result carries no "model" member and asserts startThread returns an
+// empty model alongside a nil error.
+func TestStartThread_NoModelMember(t *testing.T) {
+	t.Parallel()
+
+	state := handshakeState(t,
+		`{"id":1,"result":{"thread":{"id":"thread-abc"}}}`,
+		`{"method":"thread/started","params":{"threadId":"thread-abc"}}`,
+	)
+
+	_, model, err := startThread(context.Background(), state, passthroughConfig{})
+	if err != nil {
+		t.Fatalf("startThread() error = %v", err)
+	}
+	if model != "" {
+		t.Errorf("startThread() model = %q, want empty", model)
 	}
 }
 
@@ -397,10 +444,14 @@ func TestStartThread_EmptyThreadID(t *testing.T) {
 func TestResumeThread_Success(t *testing.T) {
 	t.Parallel()
 
-	state := handshakeState(t, `{"id":1,"result":{}}`)
+	state := handshakeState(t, `{"id":1,"result":{"model":"gpt-5.6-sol"}}`)
 
-	if err := resumeThread(context.Background(), state, "existing-thread-id"); err != nil {
+	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	if err != nil {
 		t.Fatalf("resumeThread() error = %v", err)
+	}
+	if model != "gpt-5.6-sol" {
+		t.Errorf("resumeThread() model = %q, want %q", model, "gpt-5.6-sol")
 	}
 }
 
@@ -409,9 +460,28 @@ func TestResumeThread_ErrorResponse(t *testing.T) {
 
 	state := handshakeState(t, `{"id":1,"error":{"code":-32002,"message":"thread not found"}}`)
 
-	err := resumeThread(context.Background(), state, "nonexistent-thread")
+	_, err := resumeThread(context.Background(), state, "nonexistent-thread")
 	if err == nil {
 		t.Fatal("resumeThread() expected error for error response")
+	}
+}
+
+// TestResumeThread_UnmarshalFailureReturnsEmptyModel drives a
+// thread/resume response whose result carries a "model" member of the
+// wrong wire type, so it fails to unmarshal into threadResult, and
+// asserts that failure does not turn a successful resume into an
+// error: resumeThread returns an empty model and a nil error.
+func TestResumeThread_UnmarshalFailureReturnsEmptyModel(t *testing.T) {
+	t.Parallel()
+
+	state := handshakeState(t, `{"id":1,"result":{"model":123}}`)
+
+	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	if err != nil {
+		t.Fatalf("resumeThread() error = %v", err)
+	}
+	if model != "" {
+		t.Errorf("resumeThread() model = %q, want empty", model)
 	}
 }
 
@@ -459,7 +529,7 @@ func TestStartThread_ContextCancelledDuringNotificationWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := startThread(ctx, state, passthroughConfig{})
+	_, _, err := startThread(ctx, state, passthroughConfig{})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("startThread() = %v, want context.Canceled", err)
 	}

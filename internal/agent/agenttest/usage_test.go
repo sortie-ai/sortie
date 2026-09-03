@@ -140,3 +140,65 @@ func TestAssertMeasurementAbsent_Violating(t *testing.T) {
 		})
 	}
 }
+
+// TestAssertModelReported_Passing exercises the exported
+// AssertModelReported entry point against a real *testing.T with a
+// sequence of token_usage events that all carry the wanted model. It
+// must report no failures.
+func TestAssertModelReported_Passing(t *testing.T) {
+	t.Parallel()
+
+	events := []domain.AgentEvent{
+		{Type: domain.EventNotification},
+		{Type: domain.EventTokenUsage, Model: "claude-sonnet-5"},
+		{Type: domain.EventTurnCompleted},
+		{Type: domain.EventTokenUsage, Model: "claude-sonnet-5"},
+	}
+
+	AssertModelReported(t, events, "claude-sonnet-5")
+}
+
+// TestAssertModelReported_Violating drives assertModelReported against
+// a fakeReporter for each way a slice can fail to report the wanted
+// model: no token_usage event at all, a token_usage event carrying the
+// wrong model, and a token_usage event carrying a non-empty model when
+// wantModel is the empty string. Each case must record at least one
+// failure.
+func TestAssertModelReported_Violating(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		events    []domain.AgentEvent
+		wantModel string
+	}{
+		{
+			name:      "no token_usage event present",
+			events:    []domain.AgentEvent{{Type: domain.EventTurnCompleted}},
+			wantModel: "claude-sonnet-5",
+		},
+		{
+			name:      "token_usage event carries the wrong model",
+			events:    []domain.AgentEvent{{Type: domain.EventTokenUsage, Model: "gpt-5.6-sol"}},
+			wantModel: "claude-sonnet-5",
+		},
+		{
+			name:      "token_usage event carries a model when wantModel is empty",
+			events:    []domain.AgentEvent{{Type: domain.EventTokenUsage, Model: "claude-sonnet-5"}},
+			wantModel: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := &fakeReporter{}
+			assertModelReported(reporter, tt.events, tt.wantModel)
+
+			if len(reporter.errors) == 0 {
+				t.Errorf("assertModelReported(%s) recorded no failures, want at least one", tt.name)
+			}
+		})
+	}
+}

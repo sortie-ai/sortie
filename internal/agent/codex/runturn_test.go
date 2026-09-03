@@ -620,6 +620,180 @@ func TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification(t *testing
 	}
 }
 
+// TestRunTurn_TokenUsageUpdated_StampsStoredModel drives the same
+// token_usage_updated.jsonl fixture as TestRunTurn_TokenUsageUpdated,
+// with a stored model set on the session before the turn runs, and
+// asserts every collected token_usage event carries it.
+func TestRunTurn_TokenUsageUpdated_StampsStoredModel(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
+	state.model = "gpt-5.6-sol"
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	}); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertModelReported(t, events, "gpt-5.6-sol")
+}
+
+// TestRunTurn_ModelRerouted drives model_rerouted.jsonl surrounded by
+// two thread/tokenUsage/updated notifications of the same turn, one
+// before the reroute and one after, and asserts each token_usage event
+// carries the model stored at the time it was emitted rather than one
+// value across the whole slice.
+func TestRunTurn_ModelRerouted(t *testing.T) {
+	t.Parallel()
+
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+
+	fixture := strings.Join([]string{
+		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
+		`{"method":"turn/started","params":{"turnId":"turn-001"}}`,
+		before,
+		strings.TrimRight(string(loadFixture(t, "model_rerouted.jsonl")), "\n"),
+		after,
+		`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`,
+	}, "\n") + "\n"
+
+	state := makeTestState(t, []byte(fixture))
+	state.model = "gpt-5.6-sol"
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	}); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 2 {
+		t.Fatalf("token_usage event count = %d, want 2", len(tokenUsageEvents))
+	}
+	if tokenUsageEvents[0].Model != "gpt-5.6-sol" {
+		t.Errorf("token_usage event before reroute: Model = %q, want %q", tokenUsageEvents[0].Model, "gpt-5.6-sol")
+	}
+	if tokenUsageEvents[1].Model != "gpt-5.6-nova" {
+		t.Errorf("token_usage event after reroute: Model = %q, want %q", tokenUsageEvents[1].Model, "gpt-5.6-nova")
+	}
+}
+
+// TestRunTurn_ModelRerouted_MalformedPayload drives a model/rerouted
+// notification whose params fail to unmarshal, surrounded by two
+// thread/tokenUsage/updated notifications of the same turn. It asserts
+// the malformed notification still produces an EventNotification named
+// after the method (since no destination model could be parsed out of
+// it) and that the stored model is left unchanged, so the token_usage
+// event reported after it still carries the pre-reroute model.
+func TestRunTurn_ModelRerouted_MalformedPayload(t *testing.T) {
+	t.Parallel()
+
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
+	const malformedReroute = `{"method":"model/rerouted","params":{"toModel":123}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+
+	fixture := strings.Join([]string{
+		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
+		`{"method":"turn/started","params":{"turnId":"turn-001"}}`,
+		before,
+		malformedReroute,
+		after,
+		`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`,
+	}, "\n") + "\n"
+
+	state := makeTestState(t, []byte(fixture))
+	state.model = "gpt-5.6-sol"
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	}); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	notified := false
+	for _, n := range filterEventsOfType(events, domain.EventNotification) {
+		if n.Message == "model/rerouted" {
+			notified = true
+		}
+	}
+	if !notified {
+		t.Error("expected an EventNotification carrying \"model/rerouted\" for the malformed payload, none found")
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 2 {
+		t.Fatalf("token_usage event count = %d, want 2", len(tokenUsageEvents))
+	}
+	if tokenUsageEvents[1].Model != "gpt-5.6-sol" {
+		t.Errorf("token_usage event after malformed reroute: Model = %q, want %q (unchanged)", tokenUsageEvents[1].Model, "gpt-5.6-sol")
+	}
+}
+
+// TestRunTurn_ModelRerouted_EmptyToModel drives a model/rerouted
+// notification that parses but names no destination model, surrounded
+// by two thread/tokenUsage/updated notifications of the same turn. It
+// asserts the notification names the reroute generically rather than
+// blank, and that the stored model is left unchanged, so the
+// token_usage event reported after it still carries the pre-reroute
+// model.
+func TestRunTurn_ModelRerouted_EmptyToModel(t *testing.T) {
+	t.Parallel()
+
+	const before = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0},"total":{"totalTokens":100,"inputTokens":80,"cachedInputTokens":0,"outputTokens":20,"reasoningOutputTokens":0}}}}`
+	const emptyToModelReroute = `{"method":"model/rerouted","params":{"threadId":"thread-001","turnId":"turn-001","fromModel":"gpt-5.6-sol","toModel":""}}`
+	const after = `{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":50,"inputTokens":40,"cachedInputTokens":0,"outputTokens":10,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":120,"cachedInputTokens":0,"outputTokens":30,"reasoningOutputTokens":0}}}}`
+
+	fixture := strings.Join([]string{
+		`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`,
+		`{"method":"turn/started","params":{"turnId":"turn-001"}}`,
+		before,
+		emptyToModelReroute,
+		after,
+		`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}`,
+	}, "\n") + "\n"
+
+	state := makeTestState(t, []byte(fixture))
+	state.model = "gpt-5.6-sol"
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	}); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	notified := false
+	for _, n := range filterEventsOfType(events, domain.EventNotification) {
+		if n.Message == "model rerouted" {
+			notified = true
+		}
+	}
+	if !notified {
+		t.Error("expected an EventNotification carrying \"model rerouted\" for the destinationless reroute, none found")
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 2 {
+		t.Fatalf("token_usage event count = %d, want 2", len(tokenUsageEvents))
+	}
+	if tokenUsageEvents[1].Model != "gpt-5.6-sol" {
+		t.Errorf("token_usage event after empty-toModel reroute: Model = %q, want %q (unchanged)", tokenUsageEvents[1].Model, "gpt-5.6-sol")
+	}
+}
+
 func TestRunTurn_FirstTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
@@ -1538,7 +1712,7 @@ func TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn(t *testing.T) {
 	if err := authenticateIfNeeded(context.Background(), state); err != nil {
 		t.Fatalf("authenticateIfNeeded() error = %v", err)
 	}
-	threadID, err := startThread(context.Background(), state, passthroughConfig{})
+	threadID, _, err := startThread(context.Background(), state, passthroughConfig{})
 	if err != nil {
 		t.Fatalf("startThread() error = %v", err)
 	}
@@ -1694,7 +1868,7 @@ func TestStartThread_NotificationWaitEOF(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		threadID, err := startThread(context.Background(), state, passthroughConfig{})
+		threadID, _, err := startThread(context.Background(), state, passthroughConfig{})
 		done <- outcome{threadID, err}
 	}()
 

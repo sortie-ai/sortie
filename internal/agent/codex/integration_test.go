@@ -212,6 +212,14 @@ func TestIntegration_StartSession(t *testing.T) {
 	if session.Internal == nil {
 		t.Error("session.Internal is nil")
 	}
+
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+	if state.model == "" {
+		t.Error("state.model is empty; expected the effective model reported by thread/start")
+	}
 }
 
 // TestIntegration_StopSession verifies that StopSession terminates the
@@ -314,6 +322,12 @@ func TestIntegration_RunTurn(t *testing.T) {
 	assertContainsEventType(t, events, domain.EventTokenUsage)
 	assertNoEventType(t, events, domain.EventTurnFailed)
 	assertNoEventType(t, events, domain.EventStartupFailed)
+
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage && e.Model == "" {
+			t.Error("EventTokenUsage.Model is empty; expected the effective model reported by thread/start")
+		}
+	}
 
 	// Token totals must be internally consistent if the app-server provides
 	// usage data. Some app-server versions omit the usage field; log rather
@@ -555,9 +569,10 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 
 	// A turn on the resumed session must complete successfully.
+	onEvent, collected := makeEventCollector(t)
 	result2, err := adapter2.RunTurn(ctx, session2, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
-		OnEvent: func(_ domain.AgentEvent) {},
+		OnEvent: onEvent,
 	})
 	if err != nil {
 		t.Fatalf("RunTurn (resumed): %v", err)
@@ -567,6 +582,14 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 	if result2.SessionID != originalThreadID {
 		t.Errorf("resumed turn: TurnResult.SessionID = %q, want %q", result2.SessionID, originalThreadID)
+	}
+
+	resumedEvents := collected()
+	assertContainsEventType(t, resumedEvents, domain.EventTokenUsage)
+	for _, e := range resumedEvents {
+		if e.Type == domain.EventTokenUsage && e.Model == "" {
+			t.Error("resumed turn: EventTokenUsage.Model is empty; expected the effective model reported by thread/resume")
+		}
 	}
 }
 

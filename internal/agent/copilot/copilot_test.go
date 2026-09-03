@@ -559,6 +559,8 @@ func TestRunTurn_HappyPath(t *testing.T) {
 		ExitCode:     0,
 		Work:         agentcore.WorkPresent,
 	}, result, err)
+
+	agenttest.AssertModelReported(t, events, "")
 }
 
 func TestRunTurn_ExitCode127(t *testing.T) {
@@ -1883,6 +1885,7 @@ func TestRunTurn_ModelMessageRelocation(t *testing.T) {
 		}
 
 		agenttest.AssertUsageContract(t, events)
+		agenttest.AssertModelReported(t, events, "claude-sonnet-5")
 	})
 
 	t.Run("work evidence holds with the terminal result line removed", func(t *testing.T) {

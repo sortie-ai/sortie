@@ -147,6 +147,11 @@ type sessionState struct {
 	// payload marked them as autopilot continuations. Diagnostic only;
 	// never consulted by the turn disposition.
 	turnContinuations int
+
+	// lastModel is the most recent LLM model identifier named by an
+	// assistant-authored record this turn. Reset at the top of each
+	// RunTurn call alongside the other per-turn scan state.
+	lastModel string
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -189,6 +194,7 @@ func (s *sessionState) admitOutputTokens(id string, tokens *int64, emit func(dom
 		Type:      domain.EventTokenUsage,
 		Timestamp: now,
 		Usage:     snapshot,
+		Model:     s.lastModel,
 	})
 	return true
 }
@@ -354,6 +360,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					msgData, dataErr := parseAssistantMessageData(event.Data)
 					if dataErr == nil {
+						if msgData.Model != "" {
+							state.lastModel = msgData.Model
+						}
 						state.admitOutputTokens(msgData.APICallID, msgData.OutputTokens, emit, now)
 						agentcore.EmitNotification(emit, summarizeAssistantMessage(msgData))
 					} else {
@@ -371,6 +380,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if dataErr != nil {
 					state.logger().Debug("failed to parse model.message data", slog.Any("error", dataErr))
 					break
+				}
+				if payload.Message.Role == "assistant" && payload.ModelCall.Model != "" {
+					state.lastModel = payload.ModelCall.Model
 				}
 				if payload.Message.Role != "assistant" {
 					state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
@@ -620,6 +632,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	state.turnCompletionSuccess = false
 	state.turnCompletionSummary = ""
 	state.turnContinuations = 0
+	state.lastModel = ""
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }

@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A turn whose output handle is held open by a surviving descendant process no longer leaks its process group and no longer withholds its outcome: the wait for that output is now bounded, and the turn's reap, process-group cleanup, and result publication all still run once that bound expires. On `kiro`, such a turn is reported as a failure, because its success evidence lives on that output and could not be read.
   ([#918](https://github.com/sortie-ai/sortie/issues/918))
 
+- `copilot-cli` and `codex` runs now report `model_name` and a per-model request count, carried on the `token_usage` events each adapter already emits, instead of leaving both fields blank for every run on those two adapter kinds. `kiro`'s inability to report an effective model is now documented rather than left as an unexplained blank.
+  ([#972](https://github.com/sortie-ai/sortie/issues/972))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

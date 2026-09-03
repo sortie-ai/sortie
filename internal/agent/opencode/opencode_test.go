@@ -605,6 +605,7 @@ cat '`+runPath+`'`)
 	allEvents = append(allEvents, events2...)
 
 	agenttest.AssertUsageContract(t, allEvents)
+	agenttest.AssertModelReported(t, allEvents, "anthropic/claude-sonnet-4-5")
 }
 
 func TestRunTurn_SessionStartedOnce(t *testing.T) {

@@ -77,11 +77,14 @@ type mcpServerStartupStatus struct {
 }
 
 // threadResult is the subset of thread/start or thread/resume
-// response used by the adapter.
+// response used by the adapter. Model is a sibling of Thread at the
+// top level of the result, not a member of it, and is empty when the
+// response omits it.
 type threadResult struct {
 	Thread struct {
 		ID string `json:"id"`
 	} `json:"thread"`
+	Model string `json:"model"`
 }
 
 // turnStartResult is the subset of turn/start response used by the
@@ -127,6 +130,26 @@ func parseTokenUsageUpdated(params json.RawMessage) (tokenUsageUpdatedParams, er
 	var p tokenUsageUpdatedParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return tokenUsageUpdatedParams{}, fmt.Errorf("parse thread/tokenUsage/updated params: %w", err)
+	}
+	return p, nil
+}
+
+// modelReroutedParams is the params payload of a model/rerouted
+// notification, sent when the runtime moves a live turn to a
+// different model.
+type modelReroutedParams struct {
+	ThreadID  string `json:"threadId"`
+	TurnID    string `json:"turnId"`
+	FromModel string `json:"fromModel"`
+	ToModel   string `json:"toModel"`
+}
+
+// parseModelRerouted unmarshals the params payload of a
+// model/rerouted notification.
+func parseModelRerouted(params json.RawMessage) (modelReroutedParams, error) {
+	var p modelReroutedParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return modelReroutedParams{}, fmt.Errorf("parse model/rerouted params: %w", err)
 	}
 	return p, nil
 }

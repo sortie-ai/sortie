@@ -70,6 +70,20 @@ The totals on that notification are thread-cumulative, spanning every turn of th
 
 One subtlety to preserve: a payload that carries no usage object at all is distinguishable from one reporting zeroes, because the field is a pointer. The absent case emits nothing and leaves the measurement flag alone, which is what keeps "we do not know" different from "it cost nothing". Flatten that to a value type and the distinction dies silently.
 
+## Model reporting
+
+The effective model rides on the response of whichever thread operation opens the session: `thread/start`'s `result.model`, a sibling of the `thread` object rather than a member of it, or `thread/resume`'s `result.model` on the same shape. Both are session-scoped, read once and stored rather than re-read per turn: the passthrough model sent on `thread/start` and `turn/start` requests is never read back as the effective one, so the stored value is the runtime's own report, not a mirror of what Sortie asked for.
+
+A live turn can later be rerouted to a different model. `model/rerouted`'s `toModel` replaces the stored model when it is non-empty; an empty `toModel` leaves the stored model unchanged, and either way a notification event still fires so stall detection keeps seeing activity.
+
+Only `thread/start`'s `model` member is captured against the running binary, by the reproduction procedure above. `thread/resume`'s and `model/rerouted`'s are schema declarations, not captures: no probe on this system could provoke either without a credentialed prior turn or a runtime-initiated reroute. Treat a change to either shape at a later release as unverified until captured.
+
+## Testdata fixture provenance
+
+`testdata/thread_start_response.jsonl`'s first line is a captured `thread/start` response reduced by six `result` members the capture above lists (`activePermissionProfile`, `cwd`, `instructionSources`, `multiAgentMode`, `runtimeWorkspaceRoots`, `sandbox`), each specific to the machine, the throwaway `CODEX_HOME`, and the throwaway working directory the capture ran against; nothing inside the `thread` object is removed. Its second line is a `thread/started` notification naming the same thread ID.
+
+`testdata/model_rerouted.jsonl` is derived from `ModelReroutedNotification` in the schema `codex app-server generate-json-schema --out <dir>` writes, not captured, because a reroute is runtime-initiated and no probe on this system could provoke one on demand.
+
 ## Failure modes worth recognizing
 
 Stdout closing before a turn completes is reported as a port failure, and it is the most common way a broken session presents: the handshake succeeded, a turn started, and then nothing.
