@@ -584,7 +584,9 @@ func TestIntegration_ResumeSession(t *testing.T) {
 		t.Errorf("resumed turn: TurnResult.SessionID = %q, want %q", result2.SessionID, originalThreadID)
 	}
 
-	for _, e := range collected() {
+	resumedEvents := collected()
+	assertContainsEventType(t, resumedEvents, domain.EventTokenUsage)
+	for _, e := range resumedEvents {
 		if e.Type == domain.EventTokenUsage && e.Model == "" {
 			t.Error("resumed turn: EventTokenUsage.Model is empty; expected the effective model reported by thread/resume")
 		}

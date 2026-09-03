@@ -189,6 +189,18 @@ func TestParseTokenUsageUpdated(t *testing.T) {
 	})
 }
 
+// TestParseModelRerouted_MalformedPayload asserts a model/rerouted
+// notification whose params cannot be unmarshalled into
+// modelReroutedParams returns a non-nil error.
+func TestParseModelRerouted_MalformedPayload(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseModelRerouted(json.RawMessage(`not json`))
+	if err == nil {
+		t.Fatal("parseModelRerouted(malformed) error = nil, want non-nil")
+	}
+}
+
 func TestSubtractUsage(t *testing.T) {
 	t.Parallel()
 

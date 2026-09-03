@@ -444,10 +444,14 @@ func TestStartThread_NoModelMember(t *testing.T) {
 func TestResumeThread_Success(t *testing.T) {
 	t.Parallel()
 
-	state := handshakeState(t, `{"id":1,"result":{}}`)
+	state := handshakeState(t, `{"id":1,"result":{"model":"gpt-5.6-sol"}}`)
 
-	if _, err := resumeThread(context.Background(), state, "existing-thread-id"); err != nil {
+	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	if err != nil {
 		t.Fatalf("resumeThread() error = %v", err)
+	}
+	if model != "gpt-5.6-sol" {
+		t.Errorf("resumeThread() model = %q, want %q", model, "gpt-5.6-sol")
 	}
 }
 
@@ -459,6 +463,25 @@ func TestResumeThread_ErrorResponse(t *testing.T) {
 	_, err := resumeThread(context.Background(), state, "nonexistent-thread")
 	if err == nil {
 		t.Fatal("resumeThread() expected error for error response")
+	}
+}
+
+// TestResumeThread_UnmarshalFailureReturnsEmptyModel drives a
+// thread/resume response whose result carries a "model" member of the
+// wrong wire type, so it fails to unmarshal into threadResult, and
+// asserts that failure does not turn a successful resume into an
+// error: resumeThread returns an empty model and a nil error.
+func TestResumeThread_UnmarshalFailureReturnsEmptyModel(t *testing.T) {
+	t.Parallel()
+
+	state := handshakeState(t, `{"id":1,"result":{"model":123}}`)
+
+	model, err := resumeThread(context.Background(), state, "existing-thread-id")
+	if err != nil {
+		t.Fatalf("resumeThread() error = %v", err)
+	}
+	if model != "" {
+		t.Errorf("resumeThread() model = %q, want empty", model)
 	}
 }
 
