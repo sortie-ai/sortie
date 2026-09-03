@@ -117,8 +117,6 @@ func (v *verdictWriter) StartSession(_ context.Context, _ domain.StartSessionPar
 
 func (v *verdictWriter) StopSession(_ context.Context, _ domain.Session) error { return nil }
 
-func (v *verdictWriter) EventStream() <-chan domain.AgentEvent { return nil }
-
 func (v *verdictWriter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	idx := v.callIdx
 	v.callIdx++
@@ -147,7 +145,6 @@ func (f *failOnFirstAdapter) StartSession(_ context.Context, _ domain.StartSessi
 	return domain.Session{ID: "fail-sess"}, nil
 }
 func (f *failOnFirstAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
-func (f *failOnFirstAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
 func (f *failOnFirstAdapter) RunTurn(_ context.Context, s domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
 	f.callIdx++
 	return domain.TurnResult{}, fmt.Errorf("simulated turn error")
@@ -163,7 +160,6 @@ func (s *statusWriterAdapter) StartSession(_ context.Context, _ domain.StartSess
 	return domain.Session{ID: "status-sess"}, nil
 }
 func (s *statusWriterAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
-func (s *statusWriterAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
 func (s *statusWriterAdapter) RunTurn(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
 	dir := filepath.Join(s.wsPath, ".sortie")
 	_ = os.MkdirAll(dir, 0o755)
@@ -197,7 +193,6 @@ func (s *scriptedReviewAdapter) StartSession(_ context.Context, _ domain.StartSe
 	return domain.Session{ID: "scripted-sess"}, nil
 }
 func (s *scriptedReviewAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
-func (s *scriptedReviewAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
 func (s *scriptedReviewAdapter) RunTurn(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	idx := s.callIdx
 	s.callIdx++
@@ -239,7 +234,6 @@ func (r *repeatingNeedsReviewAdapter) StartSession(_ context.Context, _ domain.S
 func (r *repeatingNeedsReviewAdapter) StopSession(_ context.Context, _ domain.Session) error {
 	return nil
 }
-func (r *repeatingNeedsReviewAdapter) EventStream() <-chan domain.AgentEvent { return nil }
 func (r *repeatingNeedsReviewAdapter) RunTurn(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	writeStatusFile(r.t, r.wsPath, "needs-human-review")
 	writeVerdictFile(r.t, r.wsPath, domain.ReviewVerdict{Verdict: "iterate", Summary: "still broken"})
@@ -1533,7 +1527,6 @@ func (a *fixTurnTimeoutAdapter) StartSession(_ context.Context, _ domain.StartSe
 	return domain.Session{ID: "expiring-sess"}, nil
 }
 func (a *fixTurnTimeoutAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
-func (a *fixTurnTimeoutAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
 func (a *fixTurnTimeoutAdapter) RunTurn(ctx context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	idx := a.callIdx
 	a.callIdx++

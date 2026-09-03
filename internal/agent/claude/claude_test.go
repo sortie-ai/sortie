@@ -553,15 +553,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 	})
 }
 
-func TestEventStream(t *testing.T) {
-	t.Parallel()
-
-	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
-	if ch := adapter.EventStream(); ch != nil {
-		t.Errorf("EventStream() = %v, want nil", ch)
-	}
-}
-
 func TestStopSession_NilProc(t *testing.T) {
 	t.Parallel()
 

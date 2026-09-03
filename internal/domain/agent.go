@@ -306,9 +306,4 @@ type AgentAdapter interface {
 	// be called exactly once per session. Safe to call after a failed
 	// [AgentAdapter.RunTurn].
 	StopSession(ctx context.Context, session Session) error
-
-	// EventStream returns a read-only channel for adapters that push
-	// events asynchronously. Synchronous adapters (which deliver
-	// events via the RunTurn callback) return nil.
-	EventStream() <-chan AgentEvent
 }

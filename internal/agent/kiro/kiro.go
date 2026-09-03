@@ -281,9 +281,3 @@ func (a *KiroAdapter) StopSession(ctx context.Context, session domain.Session) e
 	}
 	return state.forkSession.Stop(ctx)
 }
-
-// EventStream returns nil. The Kiro CLI adapter delivers events
-// synchronously via the [domain.RunTurnParams] OnEvent callback.
-func (a *KiroAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}

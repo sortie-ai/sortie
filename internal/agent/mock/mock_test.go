@@ -771,15 +771,6 @@ func TestStopSession(t *testing.T) {
 	}
 }
 
-func TestEventStream_ReturnsNil(t *testing.T) {
-	t.Parallel()
-
-	adapter, _ := NewMockAdapter(map[string]any{})
-	if ch := adapter.EventStream(); ch != nil {
-		t.Errorf("EventStream() = %v, want nil", ch)
-	}
-}
-
 // TestNewMockAdapter_ExtendedConfigKeys verifies that the new
 // cache_read_tokens_per_turn and model_name config keys are parsed.
 func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {

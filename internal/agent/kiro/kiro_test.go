@@ -448,18 +448,6 @@ func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
 	}
 }
 
-func TestEventStream_Nil(t *testing.T) {
-	t.Parallel()
-
-	adapter, err := NewKiroAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewKiroAdapter: %v", err)
-	}
-	if ch := adapter.EventStream(); ch != nil {
-		t.Errorf("EventStream() = non-nil channel, want nil (synchronous adapter)")
-	}
-}
-
 func TestRunTurn_NilOnEventPanics(t *testing.T) {
 	t.Parallel()
 
