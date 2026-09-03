@@ -945,9 +945,11 @@ func TestSchemaConformance(t *testing.T) {
 
 		loadState, loadOutPr, loadInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 		loadOut := newOutboundReader(loadOutPr)
+		loadCtx, cancelLoad := context.WithCancel(context.Background())
+		t.Cleanup(cancelLoad)
 		loadOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, err := resolveSession(context.Background(), loadState, "prior-session", capsAdvertisingLoad(), "", servers)
+			sessionID, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
 			loadOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		loadProbeID := loadOut.awaitMethod(t, negativeControlMethod)
@@ -959,9 +961,11 @@ func TestSchemaConformance(t *testing.T) {
 
 		resumeState, resumeOutPr, resumeInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
 		resumeOut := newOutboundReader(resumeOutPr)
+		resumeCtx, cancelResume := context.WithCancel(context.Background())
+		t.Cleanup(cancelResume)
 		resumeOutcomeCh := make(chan resolveSessionOutcome, 1)
 		go func() {
-			sessionID, err := resolveSession(context.Background(), resumeState, "prior-session", capsAdvertisingResume(), "", servers)
+			sessionID, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
 			resumeOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
 		}()
 		resumeProbeID := resumeOut.awaitMethod(t, negativeControlMethod)
