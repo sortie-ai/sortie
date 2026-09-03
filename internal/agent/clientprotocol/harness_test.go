@@ -244,6 +244,21 @@ func respondLine(t *testing.T, w io.Writer, id json.RawMessage, result any) {
 	sendLine(t, w, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%s}`, string(id), string(body)))
 }
 
+// respondErrorLine writes a JSON-RPC error response answering id with
+// code and message, splicing id in verbatim so it carries whatever
+// wire form the caller captured from a request line.
+func respondErrorLine(t *testing.T, w io.Writer, id json.RawMessage, code int, message string) {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message})
+	if err != nil {
+		t.Fatalf("marshal error response body: %v", err)
+	}
+	sendLine(t, w, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":%s}`, string(id), string(body)))
+}
+
 // decodeResponse decodes line as a wireResponse, failing t on a
 // decode error.
 func decodeResponse(t *testing.T, line []byte) wireResponse {

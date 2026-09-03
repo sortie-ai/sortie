@@ -943,6 +943,37 @@ func TestSchemaConformance(t *testing.T) {
 		respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
 		awaitOutcome(t, outcomeCh)
 
+		loadState, loadOutPr, loadInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+		loadOut := newOutboundReader(loadOutPr)
+		loadCtx, cancelLoad := context.WithCancel(context.Background())
+		t.Cleanup(cancelLoad)
+		loadOutcomeCh := make(chan resolveSessionOutcome, 1)
+		go func() {
+			sessionID, err := resolveSession(loadCtx, loadState, "prior-session", capsAdvertisingLoad(), "", servers)
+			loadOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
+		}()
+		loadProbeID := loadOut.awaitMethod(t, negativeControlMethod)
+		respondErrorLine(t, loadInPw, loadProbeID, jsonrpcMethodNotFound, "method not found")
+		loadRaw, loadReqID := nextRequestLine(t, loadOut, methodSessionLoad)
+		sendLine(t, loadInPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
+		respondLine(t, loadInPw, loadReqID, loadSessionResponse{})
+		awaitResolveSessionOutcome(t, loadOutcomeCh)
+
+		resumeState, resumeOutPr, resumeInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+		resumeOut := newOutboundReader(resumeOutPr)
+		resumeCtx, cancelResume := context.WithCancel(context.Background())
+		t.Cleanup(cancelResume)
+		resumeOutcomeCh := make(chan resolveSessionOutcome, 1)
+		go func() {
+			sessionID, err := resolveSession(resumeCtx, resumeState, "prior-session", capsAdvertisingResume(), "", servers)
+			resumeOutcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
+		}()
+		resumeProbeID := resumeOut.awaitMethod(t, negativeControlMethod)
+		respondErrorLine(t, resumeInPw, resumeProbeID, jsonrpcMethodNotFound, "method not found")
+		resumeRaw, resumeReqID := nextRequestLine(t, resumeOut, methodSessionResume)
+		respondLine(t, resumeInPw, resumeReqID, resumeSessionResponse{})
+		awaitResolveSessionOutcome(t, resumeOutcomeCh)
+
 		for _, tc := range []struct {
 			label   string
 			defName string
@@ -954,6 +985,8 @@ func TestSchemaConformance(t *testing.T) {
 			{"session/prompt", "PromptRequest", promptRaw, requestParams},
 			{"permission selected", "RequestPermissionResponse", selectedPermissionRaw, responseResult},
 			{"permission cancelled", "RequestPermissionResponse", cancelledPermissionRaw, responseResult},
+			{"session/load", "LoadSessionRequest", loadRaw, requestParams},
+			{"session/resume", "ResumeSessionRequest", resumeRaw, requestParams},
 		} {
 			t.Run(tc.label, func(t *testing.T) {
 				body := tc.body(t, tc.raw)

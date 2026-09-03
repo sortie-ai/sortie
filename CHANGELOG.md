@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The new `agent-client-protocol` agent kind runs Agent Client Protocol-compatible runtimes over stdio and resumes previous sessions when supported by the runtime. Locally launched runtimes can use workflow-configured MCP servers, while requests requiring human input are refused or end the attempt rather than waiting indefinitely. Token-based budgets do not apply because the protocol does not report token usage.
+  ([#976](https://github.com/sortie-ai/sortie/issues/976))
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.

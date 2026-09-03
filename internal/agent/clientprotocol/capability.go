@@ -47,10 +47,12 @@ type capabilityRecord struct {
 // before the handshake. remote reports whether the session's launch
 // target runs the agent on a remote host.
 //
-// sessionContinuation starts at gap because session continuation is
-// not implemented yet; a local launch with no generated tool-server
-// configuration at all still leaves toolServers at protocol, because
-// nothing was withheld when nothing was offered.
+// sessionContinuation starts at protocol: the handshake lowers it when
+// the agent advertises neither continuation method, and a continuation
+// call the agent does not deliver on lowers it later still. A local
+// launch with no generated tool-server configuration at all leaves
+// toolServers at protocol, because nothing was withheld when nothing
+// was offered.
 func newCapabilityRecord(remote bool) *capabilityRecord {
 	toolServers := capabilityProtocol
 	if remote {
@@ -59,7 +61,7 @@ func newCapabilityRecord(remote bool) *capabilityRecord {
 	return &capabilityRecord{
 		toolServers:         toolServers,
 		tokenCounts:         capabilityGap,
-		sessionContinuation: capabilityGap,
+		sessionContinuation: capabilityProtocol,
 		agentVersion:        capabilityProtocol,
 	}
 }
@@ -101,12 +103,11 @@ func (r capabilityRecord) gapNotice() (string, bool) {
 
 // advertisesSessionContinuation reports whether caps advertises support
 // for continuing a prior session through session/load or
-// session/resume.
+// session/resume. It defers to [chooseContinuationMethod] so the
+// handshake's lowering decision and resolveSession's routing decision
+// can never disagree about what caps advertises.
 func advertisesSessionContinuation(caps agentCapabilities) bool {
-	if caps.LoadSession != nil && *caps.LoadSession {
-		return true
-	}
-	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Resume != nil
+	return chooseContinuationMethod(caps) != continuationNone
 }
 
 // lower moves *entry to the gap state and reports whether it actually
