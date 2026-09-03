@@ -117,18 +117,6 @@ func TestNewCodexAdapter(t *testing.T) {
 	})
 }
 
-func TestEventStream(t *testing.T) {
-	t.Parallel()
-
-	adapter, err := NewCodexAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewCodexAdapter() error = %v", err)
-	}
-	if ch := adapter.EventStream(); ch != nil {
-		t.Errorf("EventStream() = %v, want nil", ch)
-	}
-}
-
 func TestRegistration(t *testing.T) {
 	t.Parallel()
 

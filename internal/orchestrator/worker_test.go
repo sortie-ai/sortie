@@ -124,8 +124,6 @@ func (m *mockAgentAdapter) StopSession(ctx context.Context, session domain.Sessi
 	return nil
 }
 
-func (m *mockAgentAdapter) EventStream() <-chan domain.AgentEvent { return nil }
-
 // transitionIssueCall records a single invocation of TransitionIssue.
 type transitionIssueCall struct {
 	IssueID     string

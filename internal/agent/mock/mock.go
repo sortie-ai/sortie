@@ -316,12 +316,6 @@ func (m *MockAdapter) StopSession(_ context.Context, _ domain.Session) error {
 	return nil
 }
 
-// EventStream returns nil. The mock adapter delivers all events
-// synchronously via the [domain.RunTurnParams] OnEvent callback.
-func (m *MockAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}
-
 // outcomeAt returns the outcome string for the given turn index.
 // Falls back to "completed" when the index exceeds the configured
 // turn_outcomes slice.

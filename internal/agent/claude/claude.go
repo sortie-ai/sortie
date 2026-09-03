@@ -398,12 +398,6 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 	return state.forkSession.Stop(ctx)
 }
 
-// EventStream returns nil. The Claude Code adapter delivers events
-// synchronously via the [domain.RunTurnParams] OnEvent callback.
-func (a *ClaudeCodeAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}
-
 // maxToolErrorLen is the maximum byte budget for [domain.AgentEvent.Message]
 // when a tool_result block carries is_error: true. Output that exceeds this
 // limit is formatted as first-line-plus-tail: the first line of the error

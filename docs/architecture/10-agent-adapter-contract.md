@@ -13,13 +13,10 @@ An agent adapter must implement the following operations:
   - Returns an opaque session handle.
 - `RunTurn(session, prompt, issue, on_event) -> TurnResult`
   - Execute one agent turn with the given prompt.
-  - Delivers events to the orchestrator via `on_event` callback (push adapters) or returns
-    them in the result (synchronous adapters).
+  - Delivers every event to the orchestrator by calling `on_event` during the turn; the returned `TurnResult` carries the turn's outcome, not its events.
   - Returns when the turn completes (success, failure, or timeout).
 - `StopSession(session)`
   - Terminate the agent process/service cleanly.
-- `EventStream() -> <event channel>`
-  - Optional: adapters that push events asynchronously may expose an event channel.
 
 Built-in agent adapter kinds:
 

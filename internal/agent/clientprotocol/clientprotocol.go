@@ -63,8 +63,3 @@ func (a *ClientProtocolAdapter) RunTurn(ctx context.Context, session domain.Sess
 func (a *ClientProtocolAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	return stopSession(ctx, session)
 }
-
-// EventStream returns nil. This adapter delivers every event
-// synchronously through RunTurn's OnEvent callback, matching every
-// other registered kind.
-func (a *ClientProtocolAdapter) EventStream() <-chan domain.AgentEvent { return nil }

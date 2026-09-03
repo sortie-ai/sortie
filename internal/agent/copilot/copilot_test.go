@@ -130,16 +130,6 @@ func TestRegistration(t *testing.T) {
 	}
 }
 
-func TestEventStream(t *testing.T) {
-	t.Parallel()
-
-	adapter, _ := NewCopilotAdapter(map[string]any{})
-	ch := adapter.EventStream()
-	if ch != nil {
-		t.Errorf("EventStream() = non-nil channel, want nil (synchronous adapter)")
-	}
-}
-
 func TestStartSession(t *testing.T) {
 	t.Parallel()
 

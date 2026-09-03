@@ -518,10 +518,6 @@ func (m *mockAgentAdapter) StopSession(_ context.Context, _ domain.Session) erro
 	return nil
 }
 
-func (m *mockAgentAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}
-
 func TestAgentRegistry(t *testing.T) {
 	t.Parallel()
 

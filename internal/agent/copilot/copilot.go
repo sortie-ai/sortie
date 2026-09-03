@@ -649,9 +649,3 @@ func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session
 	}
 	return state.forkSession.Stop(ctx)
 }
-
-// EventStream returns nil. The Copilot CLI adapter delivers events
-// synchronously via the [domain.RunTurnParams] OnEvent callback.
-func (a *CopilotAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}

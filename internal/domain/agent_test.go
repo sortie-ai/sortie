@@ -25,10 +25,6 @@ func (m *mockAgentAdapter) StopSession(_ context.Context, _ Session) error {
 	return nil
 }
 
-func (m *mockAgentAdapter) EventStream() <-chan AgentEvent {
-	return nil
-}
-
 func TestAgentEventType_Values(t *testing.T) {
 	t.Parallel()
 

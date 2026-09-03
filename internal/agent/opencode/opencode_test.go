@@ -156,15 +156,6 @@ func TestNewOpenCodeAdapter_OverlapErrorMatchesValidateConfig(t *testing.T) {
 	}
 }
 
-func TestEventStream_ReturnsNil(t *testing.T) {
-	t.Parallel()
-
-	a, _ := NewOpenCodeAdapter(map[string]any{})
-	if ch := a.EventStream(); ch != nil {
-		t.Errorf("EventStream() = %v, want nil", ch)
-	}
-}
-
 func TestStartSession_InvalidWorkspace(t *testing.T) {
 	t.Parallel()
 

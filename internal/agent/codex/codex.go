@@ -961,10 +961,6 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 	return nil
 }
 
-// EventStream returns nil. The Codex adapter delivers events
-// synchronously via [CodexAdapter.RunTurn]'s OnEvent callback.
-func (a *CodexAdapter) EventStream() <-chan domain.AgentEvent { return nil }
-
 // isAgentError extracts an *[domain.AgentError] from err using type
 // assertion.
 func isAgentError(err error, target **domain.AgentError) bool {

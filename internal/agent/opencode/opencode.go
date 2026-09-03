@@ -526,12 +526,6 @@ func (a *OpenCodeAdapter) StopSession(ctx context.Context, session domain.Sessio
 	return stopActiveTurn(ctx, active)
 }
 
-// EventStream returns nil because OpenCode events are delivered via the
-// RunTurn callback.
-func (a *OpenCodeAdapter) EventStream() <-chan domain.AgentEvent {
-	return nil
-}
-
 // finalizeExitedTurn builds and emits the turn's terminal disposition once
 // the subprocess has exited. It also scans the turn's stderr lines for a
 // denied-permission warning, which the runtime writes to stderr rather than
