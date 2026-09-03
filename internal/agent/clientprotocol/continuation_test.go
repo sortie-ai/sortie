@@ -535,3 +535,59 @@ func TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate(t *testing.T
 	}
 	t.Errorf("events = %+v, want the session/update observed before the fallback session's identifier was confirmed to have reached the turn", events)
 }
+
+// TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpdate
+// confirms the no-replay counterpart of
+// TestUnconfirmedLoadClearsProvisionalSessionIDForFallbackUpdate: a
+// session/load response carrying success but no replayed chunk still
+// clears the provisional identifier expectLoad adopted once the
+// pump's own bounded wait elapses, so a session/update naming the
+// fallback session, arriving once session/new has been answered,
+// reaches the turn rather than being dropped as foreign.
+func TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpdate(t *testing.T) {
+	t.Parallel()
+
+	const noReplayReadTimeoutMS = 50
+	const replayedMessage = "from the fallback session"
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: noReplayReadTimeoutMS}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+
+	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+
+	probeID := out.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+	loadID := out.awaitMethod(t, methodSessionLoad)
+	respondLine(t, inPw, loadID, loadSessionResponse{})
+
+	newID := out.awaitMethod(t, methodSessionNew)
+	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fallback-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"`+replayedMessage+`"}}}}`)
+
+	outcome := awaitResolveSessionOutcome(t, outcomeCh)
+	if outcome.err != nil {
+		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
+	}
+	if outcome.sessionID != "fallback-session" {
+		t.Fatalf("resolveSession() session id = %q, want %q", outcome.sessionID, "fallback-session")
+	}
+
+	state.itemCh <- pumpItem{control: &pumpControl{sessionID: outcome.sessionID}}
+
+	var events []domain.AgentEvent
+	turnCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+	turnOutcome := awaitOutcome(t, turnCh)
+	if turnOutcome.err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", turnOutcome.err)
+	}
+
+	for _, ev := range events {
+		if ev.Type == domain.EventNotification && ev.Message == replayedMessage {
+			return
+		}
+	}
+	t.Errorf("events = %+v, want the session/update observed once the fallback session/new was answered to have reached the turn", events)
+}

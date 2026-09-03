@@ -150,9 +150,10 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 		if confirmed {
 			return resumeID, nil
 		}
+		return createNewSession(ctx, state, cwd, servers)
 	case <-timer.C:
+		return unconfirmedFallback(ctx, state, cwd, servers)
 	}
-	return createNewSession(ctx, state, cwd, servers)
 }
 
 // resolveResume attempts session/resume for resumeID. No replay is

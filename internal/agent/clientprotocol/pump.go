@@ -263,6 +263,7 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 // elapses.
 func (p *pumpState) handleReplayQuery(q *replayQuery) {
 	if q.reply == nil {
+		p.cancelPendingReplayQuery()
 		p.clearProvisionalSessionID()
 		p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
 		return
@@ -285,11 +286,19 @@ func (p *pumpState) finalizeReplayQueryOnDeadline() {
 		return
 	}
 	q := p.pendingReplayQuery
-	p.pendingReplayQuery = nil
-	p.replayDeadlineC = nil
-	q.reply <- false
+	p.cancelPendingReplayQuery()
 	p.clearProvisionalSessionID()
 	p.lowerCapability(&p.state.caps.sessionContinuation, capabilityLabelSessionContinuation)
+	q.reply <- false
+}
+
+// cancelPendingReplayQuery drops a replay query still waiting and
+// disarms its deadline, so a wait that has already been answered or
+// abandoned cannot fire later and act on a session that has since
+// been replaced.
+func (p *pumpState) cancelPendingReplayQuery() {
+	p.pendingReplayQuery = nil
+	p.replayDeadlineC = nil
 }
 
 // clearProvisionalSessionID reverts the identifier expectLoad adopted
@@ -302,6 +311,7 @@ func (p *pumpState) finalizeReplayQueryOnDeadline() {
 func (p *pumpState) clearProvisionalSessionID() {
 	p.sessionID = ""
 	p.sessionIDKnown = false
+	p.loadExpected = false
 }
 
 // observeReplay records that the pump has seen a chunk replayed for
@@ -318,8 +328,7 @@ func (p *pumpState) observeReplay() {
 		return
 	}
 	q := p.pendingReplayQuery
-	p.pendingReplayQuery = nil
-	p.replayDeadlineC = nil
+	p.cancelPendingReplayQuery()
 	q.reply <- true
 }
 
