@@ -846,7 +846,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			case "model/rerouted":
 				p, parseErr := parseModelRerouted(msg.Params)
 				if parseErr != nil {
-					logger.Debug("model/rerouted unmarshal failed", slog.String("method", method))
+					logger.Debug("model/rerouted unmarshal failed", slog.Any("error", parseErr))
 					agentcore.EmitNotification(params.OnEvent, method)
 					continue
 				}
