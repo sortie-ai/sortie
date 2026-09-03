@@ -53,6 +53,33 @@ func assertMeasurementAbsent(t usageContractReporter, events []domain.AgentEvent
 	}
 }
 
+// AssertModelReported fails t when events contains no event of type
+// [domain.EventTokenUsage], or when any such event carries a Model
+// other than wantModel. Passing the empty string as wantModel asserts
+// that every emitted token_usage event reports no model.
+func AssertModelReported(t *testing.T, events []domain.AgentEvent, wantModel string) {
+	t.Helper()
+	assertModelReported(t, events, wantModel)
+}
+
+func assertModelReported(t usageContractReporter, events []domain.AgentEvent, wantModel string) {
+	t.Helper()
+
+	seen := false
+	for i, event := range events {
+		if event.Type != domain.EventTokenUsage {
+			continue
+		}
+		seen = true
+		if event.Model != wantModel {
+			t.Errorf("event %d: Model = %q, want %q", i, event.Model, wantModel)
+		}
+	}
+	if !seen {
+		t.Errorf("events contain no token_usage event")
+	}
+}
+
 func assertUsageContract(t usageContractReporter, events []domain.AgentEvent) {
 	t.Helper()
 

@@ -60,6 +60,14 @@ type sessionState struct {
 
 	threadID string
 
+	// model is the effective LLM model reported by the thread
+	// operation that started or resumed this session's thread,
+	// possibly later replaced by a runtime-initiated model/rerouted
+	// notification. Session-scoped: set once in StartSession before
+	// the turn phase opens and never reset between turns, because the
+	// app-server subprocess and its thread outlive the turn.
+	model string
+
 	// conn is the JSON-RPC connection to the app-server. It owns
 	// request-id allocation, the write path, and the reader goroutine
 	// that classifies and routes every message.
@@ -358,14 +366,15 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		}
 	}
 
-	var threadID string
+	var threadID, model string
 	if params.ResumeSessionID != "" {
-		if err := resumeThread(ctx, state, params.ResumeSessionID); err != nil {
+		resumedModel, resumeErr := resumeThread(ctx, state, params.ResumeSessionID)
+		if resumeErr != nil {
 			// Fallback to new thread on resume failure.
 			logger.Warn("thread resume failed, starting new thread",
 				slog.String("resume_id", params.ResumeSessionID),
-				slog.Any("error", err))
-			tid, startErr := startThread(ctx, state, a.passthrough)
+				slog.Any("error", resumeErr))
+			tid, startedModel, startErr := startThread(ctx, state, a.passthrough)
 			if startErr != nil {
 				state.closeConnAndStop()
 				killOnError()
@@ -376,11 +385,13 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 				}
 			}
 			threadID = tid
+			model = startedModel
 		} else {
 			threadID = params.ResumeSessionID
+			model = resumedModel
 		}
 	} else {
-		tid, startErr := startThread(ctx, state, a.passthrough)
+		tid, startedModel, startErr := startThread(ctx, state, a.passthrough)
 		if startErr != nil {
 			state.closeConnAndStop()
 			killOnError()
@@ -391,9 +402,11 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			}
 		}
 		threadID = tid
+		model = startedModel
 	}
 
 	state.threadID = threadID
+	state.model = model
 	beginTurnPhase(state)
 
 	return domain.Session{
@@ -625,6 +638,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Type:      domain.EventTokenUsage,
 					Timestamp: now,
 					Usage:     snapshot,
+					Model:     state.model,
 				})
 
 			case "turn/completed":
@@ -829,6 +843,18 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						slog.String("reason", reason))
 				}
 
+			case "model/rerouted":
+				p, parseErr := parseModelRerouted(msg.Params)
+				if parseErr != nil {
+					logger.Debug("model/rerouted unmarshal failed", slog.String("method", method))
+					agentcore.EmitNotification(params.OnEvent, method)
+					continue
+				}
+				if p.ToModel != "" {
+					state.model = p.ToModel
+				}
+				agentcore.EmitNotification(params.OnEvent, reroutedMessage(p.ToModel))
+
 			default:
 				params.OnEvent(domain.AgentEvent{
 					Type:      domain.EventOtherMessage,
@@ -855,6 +881,17 @@ func cancelledMessage(status string, turnErr *turnError) string {
 		message += ": " + turnErr.Message
 	}
 	return message
+}
+
+// reroutedMessage composes the notification message for a
+// model/rerouted notification, naming the model the turn moved to. An
+// empty toModel, meaning the runtime rerouted the turn without naming
+// a destination, is named as such rather than left blank.
+func reroutedMessage(toModel string) string {
+	if toModel == "" {
+		return "model rerouted"
+	}
+	return "model rerouted to " + toModel
 }
 
 // StopSession terminates the persistent app-server subprocess.

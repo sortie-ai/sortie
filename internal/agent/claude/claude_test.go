@@ -1013,6 +1013,7 @@ exit 0
 	}
 
 	agenttest.AssertUsageContract(t, events)
+	agenttest.AssertModelReported(t, events, "claude-haiku-4-5-20251001")
 }
 
 // TestRunTurn_SubAgentUsage exercises R15's sub-agent accounting rule

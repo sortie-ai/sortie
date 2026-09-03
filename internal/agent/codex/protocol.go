@@ -132,8 +132,10 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState) error {
 }
 
 // startThread sends thread/start and waits for the thread/started
-// notification. Returns the thread ID.
-func startThread(ctx context.Context, state *sessionState, pt passthroughConfig) (string, error) {
+// notification. Returns the thread ID and the effective model the
+// response reported, empty when the response omitted it. An empty
+// model is never an error.
+func startThread(ctx context.Context, state *sessionState, pt passthroughConfig) (threadID string, model string, err error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "never"
@@ -156,21 +158,21 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig)
 		params["personality"] = pt.Personality
 	}
 
-	resp, err := state.conn.Call(ctx, "thread/start", params)
-	if err != nil {
-		return "", fmt.Errorf("thread/start: %w", err)
+	resp, callErr := state.conn.Call(ctx, "thread/start", params)
+	if callErr != nil {
+		return "", "", fmt.Errorf("thread/start: %w", callErr)
 	}
 	if resp.Error != nil {
-		return "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
 	var result threadResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return "", fmt.Errorf("thread/start unmarshal: %w", err)
+	if unmarshalErr := json.Unmarshal(resp.Result, &result); unmarshalErr != nil {
+		return "", "", fmt.Errorf("thread/start unmarshal: %w", unmarshalErr)
 	}
-	threadID := result.Thread.ID
+	threadID = result.Thread.ID
 	if threadID == "" {
-		return "", fmt.Errorf("thread/start returned empty thread ID")
+		return "", "", fmt.Errorf("thread/start returned empty thread ID")
 	}
 
 	// Wait for thread/started notification.
@@ -178,41 +180,49 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig)
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", "", ctx.Err()
 		case <-deadline:
 			// Accept the thread ID even without the notification.
 			// Some app-server versions may not emit it.
-			return threadID, nil
+			return threadID, result.Model, nil
 		case msg, ok := <-state.msgCh:
 			if !ok {
-				return threadID, nil
+				return threadID, result.Model, nil
 			}
 			if msg.Kind == jsonrpc.KindStreamEnd {
 				slog.Debug("scanner error waiting for thread/started", slog.Any("error", msg.Err))
-				return threadID, nil
+				return threadID, result.Model, nil
 			}
 			if msg.Kind == jsonrpc.KindMalformed {
 				continue
 			}
 			if msg.Kind == jsonrpc.KindNotification && msg.Method == "thread/started" {
-				return threadID, nil
+				return threadID, result.Model, nil
 			}
 		}
 	}
 }
 
-// resumeThread sends thread/resume for an existing thread.
-func resumeThread(ctx context.Context, state *sessionState, threadID string) error {
-	resp, err := state.conn.Call(ctx, "thread/resume", map[string]any{
+// resumeThread sends thread/resume for an existing thread. It returns
+// the effective model the response reported. A response whose result
+// fails to unmarshal does not turn a successful resume into a
+// failure: it returns an empty model and a nil error.
+func resumeThread(ctx context.Context, state *sessionState, threadID string) (model string, err error) {
+	resp, callErr := state.conn.Call(ctx, "thread/resume", map[string]any{
 		"threadId": threadID,
 	})
-	if err != nil {
-		return fmt.Errorf("thread/resume: %w", err)
+	if callErr != nil {
+		return "", fmt.Errorf("thread/resume: %w", callErr)
 	}
 	if resp.Error != nil {
-		return fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
+		return "", fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
-	return nil
+
+	var result threadResult
+	if unmarshalErr := json.Unmarshal(resp.Result, &result); unmarshalErr != nil {
+		return "", nil
+	}
+	return result.Model, nil
 }
 
 // buildSandboxPolicy constructs the sandboxPolicy for turn/start.

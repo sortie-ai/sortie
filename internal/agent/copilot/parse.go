@@ -41,19 +41,28 @@ type rawCodeChange struct {
 // assistantMessageData is the data payload of an assistant.message
 // event. OutputTokens is a pointer so a message whose outputTokens
 // field is absent from the wire payload is distinguishable from one
-// reporting a measured zero.
+// reporting a measured zero. Model names the LLM model that produced
+// the message, empty when the wire payload omits it.
 type assistantMessageData struct {
 	MessageID    string           `json:"messageId"`
 	APICallID    string           `json:"apiCallId"`
 	Content      string           `json:"content"`
 	ToolRequests []rawToolRequest `json:"toolRequests"`
 	OutputTokens *int64           `json:"outputTokens"`
+	Model        string           `json:"model"`
+}
+
+// modelCall is the modelCall member of a model.message event's data
+// payload. It names the model that produced the record.
+type modelCall struct {
+	Model string `json:"model"`
 }
 
 // modelMessageData is the data payload of a model.message event, the
 // post-relocation carrier of the per-message output-token count.
 type modelMessageData struct {
-	Message modelMessage `json:"message"`
+	Message   modelMessage `json:"message"`
+	ModelCall modelCall    `json:"modelCall"`
 }
 
 // modelMessage is the message payload of a model.message event. Role
