@@ -475,10 +475,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Each coding-agent adapter carries a test asserting one of: its `token_usage` events carry the
   model when the runtime names one, they carry an empty model when it does not, or it emits no
   `token_usage` event at all
-- The captured-output rule two lines above admits two fixture exceptions, kept apart rather than
-  merged into one permission: a protocol-shape fixture for a surface no probe can reach, derived
-  from the schema the runtime's own binary generates, naming the schema type it derives from; and
-  a captured line reduced by members the adapter does not read, naming the members removed
+- The token-accounting regression test's captured-output requirement admits two fixture
+  exceptions, kept apart rather than merged into one permission: a protocol-shape fixture for a
+  surface no probe can reach, derived from the schema the runtime's own binary generates, naming
+  the schema type it derives from; and a captured line reduced by members the adapter does not
+  read, naming the members removed
 - `ToolRegistry` is populated at startup; a registered tool appears in the prompt-time
   advertisement when the session's agent kind and launch mode deliver an execution channel, and
   every advertised tool is callable over that channel, asserted per adapter
