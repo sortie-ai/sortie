@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"synthetic-agent","version":"0.1.0"}}}
+{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-0001"}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-0001","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Writing the greeting file now."}}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-0001","update":{"sessionUpdate":"tool_call","toolCallId":"call-01","title":"Write greeting.txt","kind":"edit","status":"pending"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-0001","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-01","status":"completed","title":"Write greeting.txt"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-0001","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The file now contains the greeting text."}}}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}
