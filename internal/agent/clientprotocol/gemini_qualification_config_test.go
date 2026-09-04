@@ -26,6 +26,16 @@ const (
 	geminiQualificationNonUnixFailure = "Gemini live qualification requires a Unix process-group oracle"
 )
 
+// geminiQualificationToolchainEnvNames are environment variable names a
+// shim-based version manager needs to resolve the real interpreter
+// behind a command named through PATH, forwarded to the measurement
+// subprocess only when present in the invoking environment. A name
+// resolved this way, for example the asdf CLI's exec dispatcher,
+// otherwise depends on the real HOME to locate the installed toolchain,
+// which the run-scoped HOME the qualification profile isolates with
+// does not provide.
+var geminiQualificationToolchainEnvNames = []string{"ASDF_DATA_DIR"}
+
 // geminiQualificationConfig is the resolved coordinate set the live
 // profile launches with. It carries names only: no credential value,
 // model payload, or environment value is ever stored in or printed
@@ -99,8 +109,23 @@ func geminiResolveQualificationCoordinates(env func(string) (string, bool)) (gem
 		CommandPath:  commandPath,
 		Model:        model,
 		AuthEnvNames: authNames,
-		EnvAllowlist: geminiQualificationEnvAllowlist(authNames),
+		EnvAllowlist: geminiQualificationEnvAllowlist(authNames, geminiQualificationPresentToolchainEnvNames(env)),
 	}, nil
+}
+
+// geminiQualificationPresentToolchainEnvNames returns the names from
+// geminiQualificationToolchainEnvNames that env reports present, in
+// declared order. A name absent from the invoking environment is
+// omitted rather than failing the resolution: unlike the required
+// coordinates, no version manager is mandatory.
+func geminiQualificationPresentToolchainEnvNames(env func(string) (string, bool)) []string {
+	var present []string
+	for _, name := range geminiQualificationToolchainEnvNames {
+		if _, ok := env(name); ok {
+			present = append(present, name)
+		}
+	}
+	return present
 }
 
 // geminiCoordinateValue reads one coordinate. A coordinate absent from
@@ -185,12 +210,13 @@ func parseGeminiQualificationAuthEnvNames(raw string) ([]string, error) {
 // geminiQualificationEnvAllowlist builds the minimum environment-name
 // allowlist the measurement subprocess may inherit: platform process
 // essentials, the run-scoped HOME and GEMINI_CLI_HOME coordinates, the
-// named authentication entries, and nothing else. Names are sorted
+// named authentication entries, the toolchain names present in the
+// invoking environment, and nothing else. Names are sorted
 // lexicographically, which is also the order the workspace-security
 // record reports them in. Values are never part of an allowlist.
-func geminiQualificationEnvAllowlist(authNames []string) []string {
+func geminiQualificationEnvAllowlist(authNames, presentToolchainNames []string) []string {
 	allowlist := []string{geminiQualificationExecPathEnv, geminiQualificationRunHomeEnv, geminiQualificationRunCLIHomeEnv}
-	for _, name := range authNames {
+	for _, name := range slices.Concat(authNames, presentToolchainNames) {
 		if !slices.Contains(allowlist, name) {
 			allowlist = append(allowlist, name)
 		}
@@ -467,7 +493,7 @@ func TestGeminiQualificationAuthNameValidation(t *testing.T) {
 // a parallel parent.
 func TestGeminiQualificationEnvironmentAllowlist(t *testing.T) {
 	authNames := []string{"FIXTURE_AUTH_B", "FIXTURE_AUTH_A"}
-	allowlist := geminiQualificationEnvAllowlist(authNames)
+	allowlist := geminiQualificationEnvAllowlist(authNames, nil)
 	want := []string{"FIXTURE_AUTH_A", "FIXTURE_AUTH_B", "GEMINI_CLI_HOME", "HOME", "PATH"}
 	if !slices.Equal(allowlist, want) {
 		t.Errorf("geminiQualificationEnvAllowlist(%v) = %v, want %v sorted lexicographically", authNames, allowlist, want)
