@@ -60,11 +60,17 @@ func geminiIdentityWordsFromIdent(name string) []string {
 }
 
 // geminiIdentityWordsFromLiteral splits a string literal into lowercase
-// words on every character that is neither a letter nor a digit.
+// words on every character that is neither a letter nor a digit. The
+// words are lowered because the token compared against them is, so a
+// literal spelling the name the way prose does still exposes it.
 func geminiIdentityWordsFromLiteral(value string) []string {
-	return strings.FieldsFunc(value, func(r rune) bool {
+	words := strings.FieldsFunc(value, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
+	for i, word := range words {
+		words[i] = strings.ToLower(word)
+	}
+	return words
 }
 
 // geminiIdentityArm1Violations reports every string literal or identifier
@@ -264,6 +270,18 @@ func f() string { return "gemini --acp" }
 		}
 		if !strings.Contains(violations[0].text, geminiIdentityToken+" identity token") {
 			t.Errorf("violation text = %q, want it to name the identity token", violations[0].text)
+		}
+	})
+
+	t.Run("scanner flags a capitalized gemini literal", func(t *testing.T) {
+		t.Parallel()
+
+		violations := geminiScanInline(t, `package fixture
+
+func f() string { return "Gemini CLI reported a stall" }
+`)
+		if len(violations) != 1 {
+			t.Fatalf("inline scan violations = %d, want 1: %v", len(violations), violations)
 		}
 	})
 
