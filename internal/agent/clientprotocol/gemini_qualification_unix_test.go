@@ -424,6 +424,10 @@ func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surf
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the operator-selected executable with the documented flags
 	cmd.Dir = runtime.Workspace.Checkout
 	cmd.Env = runtime.Env
+	// The probe leads its own group, so the drain below reaches the
+	// tree it forked. Without this the leader inherits this test's
+	// group and the signal names a group the probe does not lead.
+	procutil.SetProcessGroup(cmd)
 
 	var output strings.Builder
 	cmd.Stdout = &output
@@ -431,15 +435,19 @@ func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surf
 	if err := cmd.Start(); err != nil {
 		return output.String(), fmt.Errorf("native launch: %w", err)
 	}
+	pgid := cmd.Process.Pid
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case waitErr := <-done:
-		_ = procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
+		_ = procutil.SignalProcessGroup(pgid, syscall.SIGKILL)
 		return output.String(), waitErr
 	case <-time.After(geminiNativeProbeBound):
-		_ = procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-		_, _ = cmd.Process.Wait()
+		// The wait goroutine owns the only reap; the bounded wait
+		// drains the group and then collects that one result rather
+		// than racing a second wait on the same process.
+		_ = procutil.SignalProcessGroup(pgid, syscall.SIGKILL)
+		<-done
 		return output.String(), errors.New("the native probe exceeded its bounded wait")
 	}
 }
