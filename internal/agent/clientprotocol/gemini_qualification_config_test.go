@@ -499,6 +499,36 @@ func TestGeminiQualificationEnvironmentAllowlist(t *testing.T) {
 		t.Errorf("geminiQualificationEnvAllowlist(%v) = %v, want %v sorted lexicographically", authNames, allowlist, want)
 	}
 
+	t.Run("a present toolchain name joins the allowlist and an absent one does not", func(t *testing.T) {
+		if !slices.Contains(geminiQualificationToolchainEnvNames, "ASDF_DATA_DIR") {
+			t.Fatalf("toolchain names = %v, want the shim data directory among them", geminiQualificationToolchainEnvNames)
+		}
+
+		present := geminiQualificationPresentToolchainEnvNames(func(name string) (string, bool) {
+			return "/fixture/toolchain/data", slices.Contains(geminiQualificationToolchainEnvNames, name)
+		})
+		if !slices.Equal(present, geminiQualificationToolchainEnvNames) {
+			t.Fatalf("present names = %v, want every declared name in declared order", present)
+		}
+		withToolchain := geminiQualificationEnvAllowlist(authNames, present)
+		for _, name := range geminiQualificationToolchainEnvNames {
+			if !slices.Contains(withToolchain, name) {
+				t.Errorf("allowlist %v omits the present toolchain name %s", withToolchain, name)
+			}
+		}
+		if !slices.IsSorted(withToolchain) {
+			t.Errorf("allowlist %v is not sorted lexicographically", withToolchain)
+		}
+
+		absent := geminiQualificationPresentToolchainEnvNames(func(string) (string, bool) { return "", false })
+		if len(absent) != 0 {
+			t.Fatalf("present names = %v, want none when the invoking environment declares none", absent)
+		}
+		if got := geminiQualificationEnvAllowlist(authNames, absent); !slices.Equal(got, want) {
+			t.Errorf("allowlist without a toolchain name = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("built environment carries exactly the allowlist names", func(t *testing.T) {
 		t.Setenv("SORTIE_GEMINI_QUALIFICATION_TEST", "irrelevant-undeclared-entry-must-not-cross")
 		t.Setenv("FIXTURE_AUTH_A", "value-a-not-logged")
