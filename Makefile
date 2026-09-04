@@ -51,17 +51,27 @@ vet: ## Run go vet on all packages
 
 .PHONY: lint
 lint: ## Run golangci-lint for every target platform (LINT_GOOS=windows ...)
-	@for goos in $(LINT_GOOS); do \
+	@failed=''; \
+	for goos in $(LINT_GOOS); do \
 		printf '$(BOLD)golangci-lint: GOOS=%s$(RESET)\n' "$$goos"; \
-		GOOS=$$goos $(LINTER) run ./... || exit 1; \
-	done
+		GOOS=$$goos $(LINTER) run ./... || failed="$$failed $$goos"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf '$(RED)findings reported for:$(RESET)$(BOLD)%s$(RESET)\n' "$$failed"; \
+		exit 1; \
+	fi
 
 .PHONY: lint-no-tests
 lint-no-tests: ## Fail if shipped code is reachable only from its own test
-	@for goos in $(LINT_GOOS); do \
+	@failed=''; \
+	for goos in $(LINT_GOOS); do \
 		printf '$(BOLD)golangci-lint (shipped code only): GOOS=%s$(RESET)\n' "$$goos"; \
-		GOOS=$$goos $(LINTER) run --config .golangci-no-tests.yml --tests=false ./... || exit 1; \
-	done
+		GOOS=$$goos $(LINTER) run --config .golangci-no-tests.yml --tests=false ./... || failed="$$failed $$goos"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf '$(RED)findings reported for:$(RESET)$(BOLD)%s$(RESET)\n' "$$failed"; \
+		exit 1; \
+	fi
 
 .PHONY: lint-shell
 lint-shell: ## Run shellcheck on every tracked shell script
