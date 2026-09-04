@@ -712,17 +712,15 @@ func ProtocolSessionCount(records []Record) int {
 }
 
 // ComparisonCapabilities is the set of capabilities measured in
-// comparison scenarios.
-var ComparisonCapabilities = []Capability{
-	CapabilityTurnDisposition, CapabilityRetryClassification,
-	CapabilityTokenCeiling, CapabilitySessionContinuation,
-}
+// comparison scenarios. It is a copy of the list the validator itself
+// reads rather than a second declaration of the same members, so a
+// collector iterating this set cannot come to measure a set the
+// cardinality rules no longer enforce.
+var ComparisonCapabilities = slices.Clone(comparisonCapabilities)
 
-// MeasuredSurfaces is the set of surfaces measured in protocol records.
-var MeasuredSurfaces = []Surface{
-	SurfaceProtocol, SurfaceNativeText,
-	SurfaceNativeJSON, SurfaceNativeStreamJSON,
-}
+// MeasuredSurfaces is the set of surfaces measured in protocol records,
+// copied from the validator's own list for the same reason.
+var MeasuredSurfaces = slices.Clone(measuredSurfaces)
 
 // ReadEvidenceFile reads a JSONL evidence file and strictly decodes
 // all records.
