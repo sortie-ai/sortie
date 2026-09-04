@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copilot-cli` and `codex` runs now report `model_name` and a per-model request count, carried on the `token_usage` events each adapter already emits, instead of leaving both fields blank for every run on those two adapter kinds. `kiro`'s inability to report an effective model is now documented rather than left as an unexplained blank.
   ([#972](https://github.com/sortie-ai/sortie/issues/972))
 
+- The `agent-client-protocol` transport now sends its subprocess a catchable termination signal and waits a bounded grace period for it to exit on its own before force-terminating its process group, instead of terminating the group immediately with no graceful phase at all; a runtime that flushes state on a clean exit now gets a chance to reach that exit path. Every adapter kind's stop deadline no longer follows `agent.read_timeout_ms` below a full teardown: a stop against an agent that ignores its termination signal can now hold a worker or a shutdown for up to 20 seconds, where the shipping default previously gave it 5.
+  ([#1006](https://github.com/sortie-ai/sortie/issues/1006))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

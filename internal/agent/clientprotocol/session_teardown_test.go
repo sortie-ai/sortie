@@ -3,8 +3,10 @@
 package clientprotocol
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// teardownReturnOverhead is the margin a return-time assertion adds on
+// top of teardown's specified ceiling. The ceiling bounds the sum of
+// the steps that wait; the steps that do not wait still cost some
+// scheduling time, so a bound asserted on the wall clock of the
+// return must allow for it rather than asserting the ceiling exactly.
+const teardownReturnOverhead = 2 * time.Second
 
 // teardownParkedOptionSize is the selected permission option's
 // identifier length: at least four mebibytes, so no pipe buffer can
@@ -301,8 +310,10 @@ func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 // TestStopSessionTeardownOrder pins teardown's step order by its
 // bound: under the three parking conditions this package's scenario
 // establishes, plus an agent-initiated request left unanswered,
-// StopSession must still return within 2*procutil.DefaultDrainGrace,
-// and leave no goroutine of the session running afterward.
+// StopSession must still return within teardown's specified ceiling,
+// procutil.DefaultStopGrace plus three times procutil.DefaultDrainGrace,
+// plus the overhead its non-blocking steps cost, and leave no
+// goroutine of the session running afterward.
 func TestStopSessionTeardownOrder(t *testing.T) {
 	t.Parallel()
 
@@ -315,7 +326,7 @@ func TestStopSessionTeardownOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stopSession() error = %v", err)
 	}
-	if bound := 2 * procutil.DefaultDrainGrace; elapsed >= bound {
+	if bound := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace + teardownReturnOverhead; elapsed >= bound {
 		t.Errorf("stopSession() took %v, want under %v", elapsed, bound)
 	}
 
@@ -370,7 +381,7 @@ func TestStopSessionTeardownControlConnectionBeforeKill(t *testing.T) {
 		{name: "close_stdin", run: closeStdin},
 		{name: "close_stdout", run: closeStdout},
 		{name: "stop_pump", run: stopPump},
-		{name: "drain_stderr_and_reap", run: drainStderrAndReap},
+		{name: "drain_stderr_and_reap", run: drainStderrAndReap(context.Background())},
 	})
 }
 
@@ -389,6 +400,368 @@ func TestStopSessionTeardownControlNoStdoutClose(t *testing.T) {
 		{name: "close_stdin", run: closeStdin},
 		{name: "close_connection", run: closeConnection},
 		{name: "stop_pump", run: stopPump},
-		{name: "drain_stderr_and_reap", run: drainStderrAndReap},
+		{name: "drain_stderr_and_reap", run: drainStderrAndReap(context.Background())},
+	})
+}
+
+// --- Graceful-phase coverage ---
+
+// teardownGracefulExitScript is a fake agent that installs a handler
+// for the graceful signal: on TERM it waits delaySeconds, writes
+// evidencePath, and exits. It writes readyPath immediately after the
+// trap is installed, which newGracefulTeardownSession waits for before
+// returning: sending the signal any earlier risks the shell's own
+// default disposition running instead of the handler, on whichever of
+// the two wins the race with the interpreter reaching the trap
+// statement. The handler waits on nothing but the fixed interval, so
+// the only timing in a fixture built from it is the one this scenario
+// bounds on both sides.
+func teardownGracefulExitScript(evidencePath, readyPath, delaySeconds string) string {
+	return `trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
+touch "` + readyPath + `"
+while :; do sleep 1; done
+`
+}
+
+// teardownExitsImmediatelyScript is a fake agent that exits from the
+// graceful signal at once, with no interval of its own. See
+// teardownGracefulExitScript for why readyPath exists.
+func teardownExitsImmediatelyScript(readyPath string) string {
+	return `trap 'exit 0' TERM
+touch "` + readyPath + `"
+while :; do sleep 1; done
+`
+}
+
+// teardownIgnoresGracefulScript is a fake agent that ignores the
+// graceful signal entirely, so only the unconditional kill ends it.
+// See teardownGracefulExitScript for why readyPath exists.
+func teardownIgnoresGracefulScript(readyPath string) string {
+	return `trap '' TERM
+touch "` + readyPath + `"
+while :; do sleep 1; done
+`
+}
+
+// teardownExitsOnItsOwnScript is a fake agent that exits the moment it
+// starts, without any signal from the caller, so it has no trap to
+// race and needs no readiness marker.
+func teardownExitsOnItsOwnScript() string {
+	return "exit 0\n"
+}
+
+// newGracefulTeardownSession launches script as a real subprocess and
+// wires a session to it exactly as newParkedTeardownSession does,
+// skipping the handshake calls this scenario has no use for, except
+// that its reaper goroutine gates on state.conn.Done() before
+// cmd.Wait(), exactly as startSession's own reaper does.
+// newParkedTeardownSession's own reaper does not: it calls cmd.Wait()
+// first, so state.waitCh would close on process exit alone and satisfy
+// await_exit for a reason production cannot produce. logger is used
+// as the session's logger; a nil logger falls back to discardLogger.
+// A non-empty readyPath is awaited before this returns, so a caller
+// that signals the process right away does not race the script's own
+// startup.
+func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *slog.Logger) *sessionState {
+	t.Helper()
+
+	dir := t.TempDir()
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
+
+	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
+	procutil.SetProcessGroup(cmd)
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("StderrPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if logger == nil {
+		logger = discardLogger()
+	}
+	state := &sessionState{
+		pid:          cmd.Process.Pid,
+		stdinCloser:  stdinPipe,
+		stdoutCloser: stdoutPipe,
+		waitCh:       make(chan struct{}),
+		itemCh:       make(chan pumpItem, pumpChannelCapacity),
+		stopCh:       make(chan struct{}),
+		pumpDone:     make(chan struct{}),
+		logger:       logger,
+		caps:         newCapabilityRecord(false),
+	}
+	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
+	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, pumpHandler(state.itemCh, state.stopCh),
+		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
+
+	go func() {
+		<-state.conn.Done()
+		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap, mirroring startSession's own reaper
+		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+		procutil.CleanupProcess(cmd.Process.Pid)
+		close(state.waitCh)
+	}()
+
+	go runPump(state)
+
+	t.Cleanup(func() {
+		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort; the process is expected to already be gone
+	})
+
+	if readyPath != "" {
+		waitForFile(t, readyPath, awaitTimeout)
+	}
+
+	return state
+}
+
+// waitForPIDFile polls path until it holds a parseable positive PID,
+// failing t if timeout elapses first. A shell's own "> file" redirect
+// creates and truncates the file before the write that follows it
+// lands, so a single read can observe it as present but empty; polling
+// for content rather than mere existence closes that window.
+func waitForPIDFile(t *testing.T, path string, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if data, err := os.ReadFile(path); err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s to hold a valid PID", path)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestStopSessionTeardownGracefulHandler: against a fake agent that
+// installs a handler for the graceful signal and exits from it,
+// teardown produces the handler's durable evidence, and the property
+// fails if steps 2 (signal_graceful) and 5 (kill_process_group) are
+// exchanged, or if step 4 (await_exit) is removed.
+func TestStopSessionTeardownGracefulHandler(t *testing.T) {
+	t.Parallel()
+
+	t.Run("shipping_order_produces_the_handler_evidence", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		evidencePath := filepath.Join(dir, "evidence")
+		readyPath := filepath.Join(dir, "ready")
+		state := newGracefulTeardownSession(t, teardownGracefulExitScript(evidencePath, readyPath, "0.4"), readyPath, nil)
+
+		if err := stopSession(context.Background(), fakeSession(state)); err != nil {
+			t.Fatalf("stopSession() error = %v", err)
+		}
+
+		if _, err := os.Stat(evidencePath); err != nil {
+			t.Errorf("handler evidence not found after stopSession(): %v", err)
+		}
+	})
+
+	t.Run("reordering_signal_after_kill_loses_the_evidence", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		evidencePath := filepath.Join(dir, "evidence")
+		readyPath := filepath.Join(dir, "ready")
+		state := newGracefulTeardownSession(t, teardownGracefulExitScript(evidencePath, readyPath, "0.4"), readyPath, nil)
+
+		callerCtx := context.Background()
+		graceCtx, cancel := context.WithTimeout(callerCtx, procutil.DefaultStopGrace)
+		defer cancel()
+		runTeardown(state, []teardownStep{
+			{name: "answer_open", run: signalAnswerOpen},
+			{name: "kill_process_group", run: killProcessGroup},
+			{name: "close_stdin", run: closeStdin},
+			{name: "await_exit", run: awaitExit(callerCtx, graceCtx)},
+			{name: "signal_graceful", run: signalGraceful},
+			{name: "close_stdout", run: closeStdout},
+			{name: "close_connection", run: closeConnection},
+			{name: "stop_pump", run: stopPump},
+			{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
+		})
+
+		if _, err := os.Stat(evidencePath); err == nil {
+			t.Error("handler evidence found with signal_graceful reordered after kill_process_group, want none")
+		}
+	})
+
+	t.Run("removing_await_exit_loses_the_evidence", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		evidencePath := filepath.Join(dir, "evidence")
+		readyPath := filepath.Join(dir, "ready")
+		state := newGracefulTeardownSession(t, teardownGracefulExitScript(evidencePath, readyPath, "0.4"), readyPath, nil)
+
+		callerCtx := context.Background()
+		runTeardown(state, []teardownStep{
+			{name: "answer_open", run: signalAnswerOpen},
+			{name: "signal_graceful", run: signalGraceful},
+			{name: "close_stdin", run: closeStdin},
+			{name: "kill_process_group", run: killProcessGroup},
+			{name: "close_stdout", run: closeStdout},
+			{name: "close_connection", run: closeConnection},
+			{name: "stop_pump", run: stopPump},
+			{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
+		})
+
+		if _, err := os.Stat(evidencePath); err == nil {
+			t.Error("handler evidence found with await_exit removed, want none: kill_process_group must land before the handler's fixed interval elapses")
+		}
+	})
+}
+
+// TestStopSessionTeardownIgnoredSignal: against a fake agent that
+// ignores the graceful signal, stopSession still returns within
+// teardown's specified ceiling, and no member of the agent's process
+// group survives the return.
+func TestStopSessionTeardownIgnoredSignal(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	childPIDPath := filepath.Join(dir, "child.pid")
+	script := `trap '' TERM
+sh -c 'trap "" TERM; while :; do sleep 1; done' &
+printf '%s\n' "$!" > "` + childPIDPath + `"
+while :; do sleep 1; done
+`
+	state := newGracefulTeardownSession(t, script, "", nil)
+	childPID := waitForPIDFile(t, childPIDPath, awaitTimeout)
+
+	start := time.Now()
+	err := stopSession(context.Background(), fakeSession(state))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("stopSession() error = %v", err)
+	}
+	if bound := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace + teardownReturnOverhead; elapsed >= bound {
+		t.Errorf("stopSession() took %v, want under %v", elapsed, bound)
+	}
+
+	assertProcessGone(t, state.pid, awaitTimeout)
+	assertProcessGone(t, childPID, awaitTimeout)
+}
+
+// assertProcessGone polls until pid no longer answers a signal-0
+// probe, failing t if it still does after timeout. A descendant
+// orphaned by the group kill is reparented before it is reaped, and a
+// signal-0 probe against a zombie still succeeds during that window,
+// so a single check would be flaky; polling absorbs the reparenting
+// delay while still failing on a process that is genuinely still
+// running.
+func assertProcessGone(t *testing.T, pid int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("process %d still alive after %v", pid, timeout)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestStopSessionTeardownEscalationLogging: an escalation to the
+// force kill is logged at Warn carrying the outcome, an ordinary stop
+// is not, and neither is a stop whose agent had already exited when
+// the grace ran out.
+func TestStopSessionTeardownEscalationLogging(t *testing.T) {
+	t.Parallel()
+
+	t.Run("agent_exits_inside_grace_emits_no_warn", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		readyPath := filepath.Join(dir, "ready")
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		state := newGracefulTeardownSession(t, teardownExitsImmediatelyScript(readyPath), readyPath, logger)
+
+		if err := stopSession(context.Background(), fakeSession(state)); err != nil {
+			t.Fatalf("stopSession() error = %v", err)
+		}
+
+		if strings.Contains(buf.String(), "level=WARN") {
+			t.Errorf("teardown logged a Warn record for an agent that exited inside the grace: %s", buf.String())
+		}
+	})
+
+	t.Run("escalation_emits_one_warn_with_the_outcome", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		readyPath := filepath.Join(dir, "ready")
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, logger)
+
+		// A short caller deadline is the lever that shortens the wait:
+		// going through the real procutil.DefaultStopGrace here would
+		// spend the full five-second grace in wall clock for a property
+		// that is not the ceiling itself.
+		callerCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		if err := stopSession(callerCtx, fakeSession(state)); err != nil {
+			t.Fatalf("stopSession() error = %v", err)
+		}
+
+		output := buf.String()
+		if got := strings.Count(output, "level=WARN"); got != 1 {
+			t.Errorf("teardown logged %d Warn records for an escalation, want 1: %s", got, output)
+		}
+		if !strings.Contains(output, `outcome="caller deadline"`) {
+			t.Errorf("teardown's Warn record did not carry outcome=\"caller deadline\": %s", output)
+		}
+		// The record reports the wait that actually elapsed, not the
+		// ceiling: a caller deadline shorter than the grace ends the
+		// wait early, and reporting the ceiling here would tell an
+		// operator the adapter waited five seconds when it waited a
+		// fraction of one.
+		if strings.Contains(output, "grace="+procutil.DefaultStopGrace.String()) {
+			t.Errorf("teardown's Warn record reported the full grace ceiling for a wait cut short by the caller's deadline: %s", output)
+		}
+	})
+
+	t.Run("already_expired_context_against_an_already_exited_agent_emits_no_warn", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		state := newGracefulTeardownSession(t, teardownExitsOnItsOwnScript(), "", logger)
+
+		select {
+		case <-state.waitCh:
+		case <-time.After(awaitTimeout):
+			t.Fatal("agent was not reaped before the test needed it exited")
+		}
+
+		expiredCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Hour))
+		defer cancel()
+		if err := stopSession(expiredCtx, fakeSession(state)); err != nil {
+			t.Fatalf("stopSession() error = %v", err)
+		}
+
+		if strings.Contains(buf.String(), "level=WARN") {
+			t.Errorf("teardown logged a Warn record for an agent that had already exited, want none (the re-read on the graceCtx arm must classify this as exited): %s", buf.String())
+		}
 	})
 }

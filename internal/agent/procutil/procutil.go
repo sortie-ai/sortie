@@ -32,6 +32,12 @@ const (
 	// before it gives up on the drain and reads the collector anyway.
 	DefaultDrainGrace = 5 * time.Second
 
+	// DefaultStopGrace is the time an adapter's graceful phase spends
+	// between sending a catchable termination signal and force-killing
+	// the process group, so a subprocess that flushes state on a clean
+	// exit has a bounded chance to reach that exit path first.
+	DefaultStopGrace = 5 * time.Second
+
 	// AbandonedMarker replaces the collected lines of a collector whose
 	// drain was abandoned. It is exported so an adapter that classifies
 	// stderr can pin, in its own tests, that the marker is not evidence.

@@ -80,3 +80,59 @@ func TestStartSessionMCPInjectionWire(t *testing.T) {
 		Wire: []string{strings.TrimSpace(string(captured))},
 	})
 }
+
+// mcpHandshakeThenGracefulExitScript answers startSession's handshake
+// exactly as mcpHandshakeScript does, then installs a handler for the
+// graceful signal that waits delaySeconds and writes evidencePath
+// before exiting, so a test can tell a catchable signal from an
+// uncatchable kill.
+func mcpHandshakeThenGracefulExitScript(evidencePath, delaySeconds string) string {
+	return `while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+      ;;
+    *'"method":"session/new"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-1"}}'
+      break
+      ;;
+  esac
+done
+trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
+while :; do sleep 1; done
+`
+}
+
+// TestStartSessionCancelledLaunchContextSignalsGracefully:
+// cancelling the context a session was started with, without calling
+// stopSession at all, delivers the catchable termination signal to the
+// agent rather than an uncatchable kill, and the agent's handler
+// evidence shows it. The property fails if either startSession's
+// cmd.Cancel or its cmd.WaitDelay is removed: without them,
+// exec.CommandContext's default cancellation path SIGKILLs the direct
+// child instead, the handler this fixture depends on never runs, and
+// the evidence file this test waits for never appears.
+func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	evidencePath := filepath.Join(dir, "evidence")
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeThenGracefulExitScript(evidencePath, "0.4"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session, err := startSession(ctx, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: scriptPath},
+	})
+	if err != nil {
+		t.Fatalf("startSession() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stopSession(context.Background(), session); err != nil {
+			t.Errorf("stopSession() error = %v", err)
+		}
+	})
+
+	cancel()
+	waitForFile(t, evidencePath, awaitTimeout)
+}
