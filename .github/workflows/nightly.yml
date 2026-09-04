@@ -18,7 +18,7 @@ jobs:
   integration:
     name: "Integration: ${{ matrix.name }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     # The per-test guard variable is exported per shard inside the check step.
     # All API credentials are provided here as the union of every adapter's
@@ -35,6 +35,8 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SORTIE_CLIENTPROTOCOL_COMMAND: "gemini --acp"
 
     strategy:
       fail-fast: false
@@ -99,6 +101,18 @@ jobs:
             install: curl -fsSL https://cli.kiro.dev/install | bash
             version_cmd: kiro-cli --version
             source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
+
+          - name: Gemini - ACP
+            adapter: clientprotocol
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 900s
+            node: true
+            install: npm install -g @google/gemini-cli
+            version_cmd: gemini --version
+            source: "npm: @google/gemini-cli (unpinned, installs latest)"
 
           - name: Jira
             adapter: jira

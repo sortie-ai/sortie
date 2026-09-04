@@ -16,6 +16,13 @@
 // without SORTIE_CLIENTPROTOCOL_COMMAND, every test in this file skips
 // rather than failing.
 //
+// The runtime SORTIE_CLIENTPROTOCOL_COMMAND names must complete a turn,
+// answer it with a stop reason of end_turn, stream at least one text
+// message chunk, and report agentInfo in its initialize response. The
+// example commands above illustrate command shape only; neither is
+// known to satisfy that contract, since both were driven through the
+// handshake alone.
+//
 // Run:
 //
 //	SORTIE_CLIENTPROTOCOL_TEST=1 SORTIE_CLIENTPROTOCOL_COMMAND="..." \
@@ -40,6 +47,8 @@ import (
 type liveProtocolCapture struct {
 	clientPath string
 	agentPath  string
+	expect     captureExpectation
+	events     func() []domain.AgentEvent // nil for expectHandshakeOnly
 }
 
 // --- Integration test helpers ---
@@ -63,12 +72,14 @@ func skipUnlessClientProtocolIntegration(t *testing.T) {
 // integrationAgentConfig returns the [domain.AgentConfig] every test in
 // this suite launches with. Timeouts are deliberately generous to
 // accommodate a real model's latency.
-func integrationAgentConfig(t *testing.T) domain.AgentConfig {
+func integrationAgentConfig(t *testing.T, expect captureExpectation, events func() []domain.AgentEvent) domain.AgentConfig {
 	t.Helper()
 	dir := t.TempDir()
 	capture := liveProtocolCapture{
 		clientPath: filepath.Join(dir, "client.jsonl"),
 		agentPath:  filepath.Join(dir, "agent.jsonl"),
+		expect:     expect,
+		events:     events,
 	}
 	wrapperPath := filepath.Join(dir, "capture.sh")
 	wrapper := fmt.Sprintf("#!/bin/sh\nset -eu\ntee %q | \"$@\" | tee %q\n", capture.clientPath, capture.agentPath)
@@ -150,6 +161,10 @@ func assertLiveProtocolConformance(t *testing.T, capture liveProtocolCapture) {
 				defName = "InitializeResponse"
 			case methodSessionNew:
 				defName = "NewSessionResponse"
+			case methodSessionLoad:
+				defName = "LoadSessionResponse"
+			case methodSessionResume:
+				defName = "ResumeSessionResponse"
 			case methodSessionPrompt:
 				defName = "PromptResponse"
 			default:
@@ -169,6 +184,16 @@ func assertLiveProtocolConformance(t *testing.T, capture liveProtocolCapture) {
 		undeclared = append(undeclared, messageUndeclared...)
 	}
 	t.Logf("live agent undeclared properties: %v", undeclared)
+
+	var events []domain.AgentEvent
+	if capture.events != nil {
+		events = capture.events()
+	}
+	shapeViolations, observed := recordedShapeViolations(capturedJSONLines(t, capture.clientPath), capturedJSONLines(t, capture.agentPath), events, capture.expect)
+	for _, v := range shapeViolations {
+		t.Errorf("live shape violation: %s", v)
+	}
+	t.Logf("live shape observation: %+v", observed)
 }
 
 // gitInitWorkspace creates a temp directory and runs git init inside
@@ -199,11 +224,11 @@ func mustNewClientProtocolAdapter(t *testing.T) *ClientProtocolAdapter {
 // mustStartClientProtocolSession calls StartSession with the standard
 // integration config and registers a StopSession cleanup. It fails the
 // test immediately on error.
-func mustStartClientProtocolSession(t *testing.T, ctx context.Context, adapter *ClientProtocolAdapter, workspace string) domain.Session {
+func mustStartClientProtocolSession(t *testing.T, ctx context.Context, adapter *ClientProtocolAdapter, workspace string, expect captureExpectation, events func() []domain.AgentEvent) domain.Session {
 	t.Helper()
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
-		AgentConfig:   integrationAgentConfig(t),
+		AgentConfig:   integrationAgentConfig(t, expect, events),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -265,7 +290,7 @@ func TestIntegration_StartSession(t *testing.T) {
 
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
-		AgentConfig:   integrationAgentConfig(t),
+		AgentConfig:   integrationAgentConfig(t, expectHandshakeOnly, nil),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -297,7 +322,7 @@ func TestIntegration_StopSession(t *testing.T) {
 
 	session, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath: workspace,
-		AgentConfig:   integrationAgentConfig(t),
+		AgentConfig:   integrationAgentConfig(t, expectHandshakeOnly, nil),
 	})
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -332,8 +357,8 @@ func TestIntegration_RunTurnWithPermissionContinuation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	session := mustStartClientProtocolSession(t, ctx, adapter, workspace)
 	onEvent, collected := makeEventCollector(t)
+	session := mustStartClientProtocolSession(t, ctx, adapter, workspace, expectToolForcingTurn, collected)
 
 	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt: fmt.Sprintf(
@@ -394,9 +419,9 @@ func TestIntegration_SessionContinuation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
-	firstSession := mustStartClientProtocolSession(t, ctx, adapter, workspace)
+	onEvent1, collected1 := makeEventCollector(t)
+	firstSession := mustStartClientProtocolSession(t, ctx, adapter, workspace, expectCompletedTurn, collected1)
 
-	onEvent1, _ := makeEventCollector(t)
 	if _, err := adapter.RunTurn(ctx, firstSession, domain.RunTurnParams{
 		Prompt:  "Reply with exactly one word: acknowledged.",
 		OnEvent: onEvent1,
@@ -411,7 +436,7 @@ func TestIntegration_SessionContinuation(t *testing.T) {
 	onEvent2, collected2 := makeEventCollector(t)
 	secondSession, err := adapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:   workspace,
-		AgentConfig:     integrationAgentConfig(t),
+		AgentConfig:     integrationAgentConfig(t, expectCompletedTurn, collected2),
 		ResumeSessionID: firstSession.ID,
 	})
 	if err != nil {

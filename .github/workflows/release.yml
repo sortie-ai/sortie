@@ -491,6 +491,47 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/kiro/...
 
+  test-integration-clientprotocol:
+    name: "Integration: Gemini - ACP"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CLIENTPROTOCOL_TEST: "1"
+      SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Verify Gemini secrets are configured
+        run: |
+          missing=()
+          [ -z "$GEMINI_API_KEY" ] && missing+=("GEMINI_API_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All Gemini secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Install Gemini CLI
+        run: npm install -g @google/gemini-cli
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 900s -run 'Integration' ./internal/agent/clientprotocol/...
+
   release:
     name: Tag & Release
     needs:
@@ -508,6 +549,7 @@ jobs:
       - test-integration-codex
       - test-integration-opencode
       - test-integration-kiro
+      - test-integration-clientprotocol
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
