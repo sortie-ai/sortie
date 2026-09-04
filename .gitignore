@@ -8,9 +8,6 @@
 # Test binary, built with `go test -c`.
 *.test
 
-# Manual tests
-/WORKFLOW.test.md
-
 # Code coverage profiles and other test artifacts.
 *.out
 coverage.*
@@ -38,6 +35,3 @@ go.work.sum
 # Python cache files.
 __pycache__
 *.pyc
-
-# Local environment variables for E2E tests.
-env.local.sh
