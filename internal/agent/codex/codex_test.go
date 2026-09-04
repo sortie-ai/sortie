@@ -12,8 +12,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
@@ -611,5 +613,84 @@ func TestRunTurn_StdoutParseFailure(t *testing.T) {
 	}
 	if turnFailedEvents[0].Message != agentErr.Message {
 		t.Errorf("turn_failed Message = %q, want the same text as AgentError.Message %q", turnFailedEvents[0].Message, agentErr.Message)
+	}
+}
+
+// entrySignalingWriter wraps an io.Writer and closes done the instant
+// Write is entered, before delegating to the wrapped writer. Unlike
+// signalingWriter, which signals once Write returns, this lets a test
+// observe that a write has been parked inside a call that never
+// returns on its own.
+type entrySignalingWriter struct {
+	w    io.Writer
+	once sync.Once
+	done chan struct{}
+}
+
+func newEntrySignalingWriter(w io.Writer) *entrySignalingWriter {
+	return &entrySignalingWriter{w: w, done: make(chan struct{})}
+}
+
+func (s *entrySignalingWriter) Write(p []byte) (int, error) {
+	s.once.Do(func() { close(s.done) })
+	return s.w.Write(p)
+}
+
+// TestStopSession_ReturnsWhileWriteParked checks that StopSession
+// returns while another goroutine is parked writing on the session's
+// connection, proving that closeConnAndStop's call to conn.Close does
+// not wait for that write. The fixture leaves no process handle and
+// no wait channel, and readerDone already closed, so no other bounded
+// wait in StopSession can substitute for that proof.
+func TestStopSession_ReturnsWhileWriteParked(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	sig := newEntrySignalingWriter(pw)
+
+	readerDone := make(chan struct{})
+	close(readerDone)
+
+	state := &sessionState{
+		msgCh:      make(chan jsonrpc.Message),
+		readerDone: readerDone,
+		stopCh:     make(chan struct{}),
+	}
+	state.conn = jsonrpc.NewConn(sig, strings.NewReader(""), sessionHandler(state))
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- state.conn.Notify("parked/notify", nil)
+	}()
+
+	// Registered before the assertions below, so a t.Fatal on the
+	// regression path still releases the parked write.
+	t.Cleanup(func() {
+		_ = pr.Close()
+		_ = pw.Close()
+		select {
+		case <-writeErr:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	select {
+	case <-sig.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the write to enter the wrapped writer")
+	}
+
+	stopErr := make(chan error, 1)
+	go func() {
+		stopErr <- (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state})
+	}()
+
+	select {
+	case err := <-stopErr:
+		if err != nil {
+			t.Errorf("StopSession() error = %v, want nil", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("StopSession() did not return while a write was parked, want it to return well short of its own 5-second graceful-wait ceiling")
 	}
 }

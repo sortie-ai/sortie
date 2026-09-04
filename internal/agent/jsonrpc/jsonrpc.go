@@ -97,8 +97,9 @@ func WithMaxLineBytes(n int) Option {
 //
 // NewConn panics when h is nil. It starts one reader goroutine before
 // returning, and it does not close w or r; closing them is the
-// caller's responsibility, and closing r is how the caller unblocks a
-// read parked on the stream. With no options passed, behavior is
+// caller's responsibility, closing r is how the caller unblocks a
+// read parked on the stream, and closing w is how the caller unblocks
+// a write parked on it. With no options passed, behavior is
 // byte-identical to a connection with none of this package's options
 // applied.
 func NewConn(w io.Writer, r io.Reader, h Handler, opts ...Option) *Conn {
@@ -141,6 +142,11 @@ type wireRequest struct {
 // write serializes one already-encoded line against every other
 // write on the connection, and reports ErrClosed after Close without
 // touching w.
+//
+// A write already past the closed check is not stopped by Close. A
+// write still waiting for the write mutex is not released by Close
+// either, and it reports ErrClosed only once the write ahead of it
+// finishes.
 func (c *Conn) write(line []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -344,13 +350,14 @@ func (c *Conn) Call(ctx context.Context, method string, params any) (Response, e
 // any goroutine, and it does not close the underlying writer or
 // reader.
 //
-// Close acquires the write mutex while it marks the connection
-// closed, so no write is in flight when Close returns and none will
-// start.
+// Close never waits for the peer. At most one write, one that has
+// already passed the closed check, may still reach the underlying
+// writer after Close returns, and Close neither waits for it nor
+// interrupts it. Such a write reports whatever the underlying writer
+// reports, which once the caller closes that writer is the writer's
+// own error rather than one wrapping ErrClosed.
 func (c *Conn) Close() {
-	c.writeMu.Lock()
 	c.closeOnce.Do(func() { close(c.closed) })
-	c.writeMu.Unlock()
 
 	for id, ch := range c.drainPending() {
 		ch <- callResult{err: &closedCallError{id: id}}

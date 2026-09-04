@@ -766,3 +766,86 @@ func TestNewConn_SkipsNilOptions(t *testing.T) {
 		t.Errorf("Notify() wrote %q, want the version member the non-nil option asked for", got)
 	}
 }
+
+// entrySignalingWriter wraps an io.Writer and closes done the instant
+// Write is entered, before delegating to the wrapped writer. Unlike a
+// writer that signals once Write returns, this lets a test observe
+// that a write has been parked inside a call that never returns on
+// its own.
+type entrySignalingWriter struct {
+	w    io.Writer
+	once sync.Once
+	done chan struct{}
+}
+
+func newEntrySignalingWriter(w io.Writer) *entrySignalingWriter {
+	return &entrySignalingWriter{w: w, done: make(chan struct{})}
+}
+
+func (s *entrySignalingWriter) Write(p []byte) (int, error) {
+	s.once.Do(func() { close(s.done) })
+	return s.w.Write(p)
+}
+
+// TestConn_CloseReturnsWithWriteParked checks that Close returns while
+// a write is parked on a writer that never accepts the bytes, rather
+// than waiting for the write to finish.
+func TestConn_CloseReturnsWithWriteParked(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	sig := newEntrySignalingWriter(pw)
+	conn := jsonrpc.NewConn(sig, strings.NewReader(""), func(jsonrpc.Message) {})
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- conn.Notify("parked/notify", nil)
+	}()
+
+	// Registered before the assertions below, so a t.Fatal on the
+	// regression path still releases the parked write.
+	t.Cleanup(func() {
+		_ = pr.Close()
+		_ = pw.Close()
+		select {
+		case <-writeErr:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	select {
+	case <-sig.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the write to enter the wrapped writer")
+	}
+
+	closeReturned := make(chan struct{})
+	go func() {
+		conn.Close()
+		close(closeReturned)
+	}()
+
+	select {
+	case <-closeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not return while a write was parked on a writer that does not accept bytes")
+	}
+}
+
+// TestConn_WriteAfterCloseReportsErrClosedWithoutTouchingWriter checks
+// that a write issued after Close reports an error wrapping ErrClosed
+// and never reaches the underlying writer.
+func TestConn_WriteAfterCloseReportsErrClosedWithoutTouchingWriter(t *testing.T) {
+	t.Parallel()
+
+	var w captureWriter
+	conn := jsonrpc.NewConn(&w, strings.NewReader(""), func(jsonrpc.Message) {})
+	conn.Close()
+
+	if err := conn.Notify("after/close", nil); !errors.Is(err, jsonrpc.ErrClosed) {
+		t.Errorf("Notify() after Close() error = %v, want error wrapping jsonrpc.ErrClosed", err)
+	}
+	if got := w.String(); got != "" {
+		t.Errorf("Notify() after Close() wrote %q to the writer, want none", got)
+	}
+}
