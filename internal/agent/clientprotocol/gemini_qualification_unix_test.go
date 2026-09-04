@@ -250,6 +250,15 @@ func TestGeminiQualificationCollectorOrdering(t *testing.T) {
 
 	shuffled := slices.Clone(fixture.Records)
 	slices.Reverse(shuffled)
+	for i := range shuffled {
+		// A real collector never assigns Sequence itself; only the
+		// writer does, after sorting. Zeroing it here proves the sort
+		// key is the canonical scenario/surface/capability tiebreak,
+		// not a leftover sequence number the reversal happened to
+		// preserve, which would mask a comparator that only looks at
+		// Sequence.
+		shuffled[i].Sequence = 0
+	}
 
 	path := geminiWriteQualificationObservations(t, geminiEvidenceDir(t), shuffled)
 

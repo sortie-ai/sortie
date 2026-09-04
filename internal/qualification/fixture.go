@@ -92,7 +92,7 @@ func (f *Fixture) Finalize() {
 	for _, id := range ids {
 		f.Add(IdentityFixtureRecord(id))
 	}
-	slices.SortStableFunc(f.Records, orderCompare)
+	slices.SortStableFunc(f.Records, OrderCompare)
 	f.Renumber()
 }
 
@@ -683,7 +683,7 @@ func (f *Fixture) DuplicateAfter(target *Record) {
 // session id after Finalize call this to keep the identity set complete.
 func (f *Fixture) AppendIdentity(SessionID string) {
 	f.Add(IdentityFixtureRecord(SessionID))
-	slices.SortStableFunc(f.Records, orderCompare)
+	slices.SortStableFunc(f.Records, OrderCompare)
 	f.Renumber()
 }
 

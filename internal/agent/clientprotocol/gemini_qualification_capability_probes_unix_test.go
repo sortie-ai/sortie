@@ -794,21 +794,19 @@ func TestGeminiHandshakeIdentityCollector(t *testing.T) {
 	}
 }
 
-// geminiOrderCompare compares two qualification.Record by sequence number.
-
 // checkGeminiVerdictClassification verifies outcome and grade consistency.
 func checkGeminiVerdictClassification(rec *qualification.Record) error {
 	// Placeholder: this function should verify outcome/grade rules
 	return nil
 }
+
+// geminiOrderCompare orders two records by the same canonical write
+// order the validator enforces. It delegates to
+// [qualification.OrderCompare] rather than reimplementing the rule, so
+// the collector's write order and the validator's order check cannot
+// drift apart the way they did before this delegation existed.
 func geminiOrderCompare(a, b qualification.Record) int {
-	if a.Sequence < b.Sequence {
-		return -1
-	}
-	if a.Sequence > b.Sequence {
-		return 1
-	}
-	return 0
+	return qualification.OrderCompare(a, b)
 }
 
 // identityDetailShape pins the identity record's bounded detail: a

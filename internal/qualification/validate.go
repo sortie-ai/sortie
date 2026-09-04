@@ -198,12 +198,16 @@ func compareNullableString(a, b *string) int {
 	return strings.Compare(*a, *b)
 }
 
-// orderCompare orders two records by the canonical write order:
+// OrderCompare orders two records by the canonical write order:
 // the closed scenario write order, then surface order, then capability
 // order, then a scenario-specific tiebreak (semantic case, token path
 // with the null sentinel first, session identifier, or input catalog
-// order).
-func orderCompare(a, b Record) int {
+// order). It is the single source of truth for canonical order: every
+// collector that writes an evidence file must sort with this
+// function rather than reimplementing the rule, so a collector's
+// write order and the validator's own order check can never drift
+// apart.
+func OrderCompare(a, b Record) int {
 	if c := cmp.Compare(rank(scenarioWriteOrder, a.Scenario), rank(scenarioWriteOrder, b.Scenario)); c != 0 {
 		return c
 	}
@@ -395,7 +399,7 @@ func validateSequence(records []Record) error {
 // capability, and per-scenario tiebreak ordering across file order.
 func validateOrder(records []Record) error {
 	for i := 1; i < len(records); i++ {
-		if orderCompare(records[i-1], records[i]) > 0 {
+		if OrderCompare(records[i-1], records[i]) > 0 {
 			prev, cur := records[i-1], records[i]
 			return fmt.Errorf("record %d (%s/%s/%s/%s) is out of canonical order after record %d (%s/%s/%s/%s)",
 				i+1, cur.Scenario, cur.Surface, cur.Capability, cur.InputID,
