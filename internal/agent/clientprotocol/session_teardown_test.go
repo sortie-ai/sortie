@@ -89,10 +89,14 @@ const (
 	// fixture's own always-running reaper goroutine, mirroring
 	// StartSession's, races that automatic close against teardown's
 	// own closeStdin and closeStdout, and wins once
-	// kill_process_group has actually reaped the process. That is
-	// the right wiring for the bound case and for the first control,
-	// where kill_process_group either succeeds immediately or never
-	// runs at all, so the race never has a chance to matter.
+	// kill_process_group has actually reaped the process. That is the
+	// right wiring for the bound case and for
+	// TestStopSessionTeardownReturnsWithConnectionClosedFirst, where
+	// every step able to release the parked write runs after
+	// close_connection: whichever close wins the race between
+	// Cmd.Wait's automatic pipe close and teardown's own closes, that
+	// test's assertion is unchanged, and a Close that still waits on
+	// the parked write still fails it.
 	pipeWiringAutoClosing pipeWiring = iota
 
 	// pipeWiringManual connects a plain os.Pipe pair directly to
@@ -366,15 +370,16 @@ func runTeardownControl(t *testing.T, fx *parkedTeardownFixture, steps []teardow
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownControlConnectionBeforeKill is the first
-// negative control: closing the connection before the process group
-// is terminated waits on the write mutex the parked write holds, so
-// teardown must not return until the park is released from outside.
-func TestStopSessionTeardownControlConnectionBeforeKill(t *testing.T) {
+// TestStopSessionTeardownReturnsWithConnectionClosedFirst checks a
+// step order that closes the connection before the process group is
+// terminated. Closing the connection no longer waits on a parked
+// write, so this order returns inside the bound below instead of
+// parking until the write is released from outside.
+func TestStopSessionTeardownReturnsWithConnectionClosedFirst(t *testing.T) {
 	t.Parallel()
 
 	fx := newParkedTeardownSession(t, pipeWiringAutoClosing)
-	runTeardownControl(t, fx, []teardownStep{
+	steps := []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
 		{name: "close_connection", run: closeConnection},
 		{name: "kill_process_group", run: killProcessGroup},
@@ -382,7 +387,21 @@ func TestStopSessionTeardownControlConnectionBeforeKill(t *testing.T) {
 		{name: "close_stdout", run: closeStdout},
 		{name: "stop_pump", run: stopPump},
 		{name: "drain_stderr_and_reap", run: drainStderrAndReap(context.Background())},
-	})
+	}
+
+	done := make(chan struct{})
+	go func() {
+		runTeardown(fx.state, steps)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3*procutil.DefaultDrainGrace + teardownReturnOverhead):
+		t.Fatal("runTeardown() did not return inside the bound, want it to return without waiting for the parked write")
+	}
+
+	assertSessionGoroutinesExited(t, fx.state)
 }
 
 // TestStopSessionTeardownControlNoStdoutClose is the second negative

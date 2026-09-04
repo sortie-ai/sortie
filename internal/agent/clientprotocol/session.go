@@ -666,9 +666,10 @@ func closeStdout(state *sessionState) {
 	}
 }
 
-// closeConnection closes the JSON-RPC connection. Closing it before the
-// process group is terminated and the handles above are closed would
-// wait on the same parked write those two actions exist to release.
+// closeConnection closes the JSON-RPC connection. Closing the
+// connection does not release a write the pump has parked on standard
+// input, so the handle close and the group termination ahead of it are
+// what release the pump before the step that waits for it.
 func closeConnection(state *sessionState) {
 	if state.conn != nil {
 		state.conn.Close()
