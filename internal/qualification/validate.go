@@ -504,7 +504,7 @@ func (v *setValidation) ClassifyRecords() error {
 		if rec.Outcome == OutcomeNotApplicable && class == RowSemantic {
 			return fmt.Errorf("record %d: verdict not_applicable is invalid for a semantic probe", rec.Sequence)
 		}
-		if err := checkOutcomeGradePairing(rec); err != nil {
+		if err := CheckOutcomeGradePairing(rec); err != nil {
 			return fmt.Errorf("record %d: %w", rec.Sequence, err)
 		}
 		if rec.Grade == GradeCorroborationOnly &&
@@ -544,9 +544,11 @@ func (v *setValidation) ClassifyRecords() error {
 	return v.checkSemanticSessionRelations()
 }
 
-// checkOutcomeGradePairing enforces the closed pairing between a
-// record's outcome and its grade.
-func checkOutcomeGradePairing(rec *Record) error {
+// CheckOutcomeGradePairing enforces the closed pairing between a
+// record's outcome and its grade. It is exported so a collector that
+// builds one record at a time can check that record against the same
+// rule the set validator applies, rather than restating the pairing.
+func CheckOutcomeGradePairing(rec *Record) error {
 	classification := rec.Grade
 	verdict := rec.Outcome
 	switch classification {

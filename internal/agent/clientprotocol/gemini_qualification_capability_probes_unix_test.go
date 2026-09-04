@@ -794,10 +794,13 @@ func TestGeminiHandshakeIdentityCollector(t *testing.T) {
 	}
 }
 
-// checkGeminiVerdictClassification verifies outcome and grade consistency.
+// checkGeminiVerdictClassification verifies one record's outcome and
+// grade consistency. It delegates to
+// [qualification.CheckOutcomeGradePairing] rather than restating the
+// pairing, so a collector record built here is held to the same rule
+// the set validator applies to the written evidence.
 func checkGeminiVerdictClassification(rec *qualification.Record) error {
-	// Placeholder: this function should verify outcome/grade rules
-	return nil
+	return qualification.CheckOutcomeGradePairing(rec)
 }
 
 // geminiOrderCompare orders two records by the same canonical write
