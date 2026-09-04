@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/prompt"
@@ -2316,10 +2317,118 @@ func TestStopSessionBestEffort(t *testing.T) {
 		before := time.Now()
 		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
 
-		// Default is 10000ms; deadline should be ~10s from now.
-		expectedMin := before.Add(9 * time.Second)
-		if deadlineReceived.Before(expectedMin) {
-			t.Errorf("deadline = %v, want >= %v (default 10s timeout)", deadlineReceived, expectedMin)
+		// A zero read timeout carries no fallback of its own anymore:
+		// the floor, teardown's specified ceiling, subsumes it.
+		floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
+		wantDeadline := before.Add(floor)
+		if deadlineReceived.Before(wantDeadline.Add(-2 * time.Second)) {
+			t.Errorf("deadline = %v, want >= %v (teardown's specified ceiling)", deadlineReceived, wantDeadline)
+		}
+	})
+
+	t.Run("deadline_at_shipping_default_meets_the_floor", func(t *testing.T) {
+		t.Parallel()
+
+		var deadlineReceived time.Time
+		adapter := &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				dl, _ := ctx.Deadline()
+				deadlineReceived = dl
+				return nil
+			},
+		}
+
+		cfg := config.ServiceConfig{
+			Agent: config.AgentConfig{ReadTimeoutMS: 5000},
+		}
+
+		before := time.Now()
+		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+
+		floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
+		wantDeadline := before.Add(floor)
+		if deadlineReceived.Before(wantDeadline.Add(-2 * time.Second)) {
+			t.Errorf("deadline = %v, want >= %v: agent.read_timeout_ms=5000 must not shorten the deadline below the floor", deadlineReceived, wantDeadline)
+		}
+	})
+
+	t.Run("deadline_below_the_floor_still_meets_it", func(t *testing.T) {
+		t.Parallel()
+
+		var deadlineReceived time.Time
+		adapter := &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				dl, _ := ctx.Deadline()
+				deadlineReceived = dl
+				return nil
+			},
+		}
+
+		cfg := config.ServiceConfig{
+			Agent: config.AgentConfig{ReadTimeoutMS: 12000},
+		}
+
+		before := time.Now()
+		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+
+		floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
+		wantDeadline := before.Add(floor)
+		if deadlineReceived.Before(wantDeadline.Add(-2 * time.Second)) {
+			t.Errorf("deadline = %v, want >= %v: agent.read_timeout_ms=12000 sits below the floor and must not reach the caller", deadlineReceived, wantDeadline)
+		}
+	})
+
+	t.Run("deadline_above_the_floor_follows_the_field", func(t *testing.T) {
+		t.Parallel()
+
+		var deadlineReceived time.Time
+		adapter := &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				dl, _ := ctx.Deadline()
+				deadlineReceived = dl
+				return nil
+			},
+		}
+
+		cfg := config.ServiceConfig{
+			Agent: config.AgentConfig{ReadTimeoutMS: 25000},
+		}
+
+		before := time.Now()
+		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+
+		wantDeadline := before.Add(25 * time.Second)
+		if deadlineReceived.Before(wantDeadline.Add(-2*time.Second)) || deadlineReceived.After(wantDeadline.Add(2*time.Second)) {
+			t.Errorf("deadline = %v, want ~%v: agent.read_timeout_ms=25000 sits above the floor and must reach the caller", deadlineReceived, wantDeadline)
+		}
+	})
+
+	t.Run("fails_without_the_floor", func(t *testing.T) {
+		t.Parallel()
+
+		var deadlineReceived time.Time
+		adapter := &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				dl, _ := ctx.Deadline()
+				deadlineReceived = dl
+				return nil
+			},
+		}
+
+		// A value far below the floor: without the floor this would
+		// build a deadline a handful of milliseconds from now, not the
+		// ~20s ceiling the assertion below pins.
+		cfg := config.ServiceConfig{
+			Agent: config.AgentConfig{ReadTimeoutMS: 1},
+		}
+
+		before := time.Now()
+		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+
+		floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
+		wantDeadline := before.Add(floor)
+		if deadlineReceived.Before(wantDeadline.Add(-2 * time.Second)) {
+			t.Errorf("deadline = %v, want >= %v", deadlineReceived, wantDeadline)
 		}
 	})
 
@@ -2338,6 +2447,75 @@ func TestStopSessionBestEffort(t *testing.T) {
 
 		// Should not panic or propagate the error.
 		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+	})
+}
+
+// TestStopSessionBestEffort_FloorStopsAFalseFailedStop pins the one
+// operator-visible effect of the floor outside this transport: it
+// stops the orchestrator reporting a failed stop for an adapter family
+// whose own stop returns only after its own grace has elapsed. The
+// stub stands in for that family rather than driving a real adapter's
+// stop, which would spend that grace in wall clock and would need an
+// ordinary import this package's own layering rules reject for at
+// least one real family.
+func TestStopSessionBestEffort_FloorStopsAFalseFailedStop(t *testing.T) {
+	t.Parallel()
+
+	// Strictly between the 5000ms the unfloored path built at the
+	// shipping default and the floor (20s at defaults), so neither arm
+	// below is decided by scheduling noise around the threshold.
+	threshold := procutil.DefaultStopGrace + procutil.DefaultDrainGrace
+
+	newGraceBoundStub := func() *mockAgentAdapter {
+		return &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					return nil
+				}
+				if time.Until(deadline) < threshold {
+					return context.DeadlineExceeded
+				}
+				return nil
+			},
+		}
+	}
+
+	t.Run("floored_deadline_reports_no_failed_stop", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		cfg := config.ServiceConfig{Agent: config.AgentConfig{ReadTimeoutMS: 5000}}
+
+		stopSessionBestEffort(context.Background(), newGraceBoundStub(), domain.Session{ID: "s1"}, cfg, logger)
+
+		if strings.Contains(buf.String(), "stop session failed") {
+			t.Errorf("stopSessionBestEffort() logged a failed stop at the shipping default, want none: %s", buf.String())
+		}
+	})
+
+	t.Run("unfloored_deadline_would_report_a_failed_stop", func(t *testing.T) {
+		t.Parallel()
+
+		// Reproduces the deadline stopSessionBestEffort built before the
+		// floor existed: derived straight from ReadTimeoutMS, with
+		// nothing raising it. Driving the same stub and the same
+		// logging shape stopSessionBestEffort uses against that
+		// deadline shows the floor is what the first subtest's silence
+		// depends on.
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		unflooredCtx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+		defer cancel()
+		if err := newGraceBoundStub().StopSession(unflooredCtx, domain.Session{ID: "s1"}); err != nil {
+			logger.Warn("stop session failed", slog.Any("error", err))
+		}
+
+		if !strings.Contains(buf.String(), "stop session failed") {
+			t.Errorf("stub did not report a failed stop against the unfloored 5000ms deadline, want one: %s", buf.String())
+		}
 	})
 }
 
@@ -6579,7 +6757,10 @@ func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
 
 	cfg := defaultWorkerConfig(tmpDir)
 	cfg.Agent.TurnTimeoutMS = 150
-	cfg.Agent.ReadTimeoutMS = 5000
+	// Above the floor stopSessionBestEffort now applies (20s at
+	// defaults), so the deadline it builds still follows this field
+	// rather than the floor.
+	cfg.Agent.ReadTimeoutMS = 25000
 	cfg.Agent.StallTimeoutMS = 0
 	cfg.Agent.MaxTurns = 1
 	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
@@ -6635,8 +6816,8 @@ func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
 	if !hadDeadline {
 		t.Fatal("StopSession context has no deadline")
 	}
-	if remaining := time.Until(deadline); remaining <= 3*time.Second || remaining > 5*time.Second {
-		t.Errorf("StopSession context deadline = %v from now, want in (3s, 5s], reflecting read_timeout_ms=5000 rather than the 150ms turn bound", remaining)
+	if remaining := time.Until(deadline); remaining <= 23*time.Second || remaining > 25*time.Second {
+		t.Errorf("StopSession context deadline = %v from now, want in (23s, 25s], reflecting read_timeout_ms=25000 rather than the 150ms turn bound", remaining)
 	}
 
 	if _, err := os.Stat(markerPath); err != nil {

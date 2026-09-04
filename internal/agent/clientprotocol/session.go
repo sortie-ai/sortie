@@ -207,6 +207,10 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		cmd.Dir = target.WorkspacePath
 	}
 	procutil.SetProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		return procutil.SignalGraceful(cmd.Process.Pid)
+	}
+	cmd.WaitDelay = procutil.DefaultStopGrace
 	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -265,7 +269,11 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 	// itself.
 	go runPump(state)
 
-	teardownOnFailure := func() { runTeardown(state, defaultTeardownOrder()) }
+	teardownOnFailure := func() {
+		graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+		defer cancel()
+		runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
+	}
 
 	initResp, agentErr := doInitialize(ctx, state)
 	if agentErr != nil {
@@ -500,12 +508,14 @@ func runTurn(ctx context.Context, session domain.Session, params domain.RunTurnP
 }
 
 // stopSession runs teardown's fixed step order.
-func stopSession(_ context.Context, session domain.Session) error {
+func stopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	runTeardown(state, defaultTeardownOrder())
+	graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+	defer cancel()
+	runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
 	return nil
 }
 
@@ -521,20 +531,40 @@ type teardownStep struct {
 // when they are not met, so StopSession never panics on a
 // partially-constructed session.
 //
-// No step waits in front of terminating the process group and closing
-// the standard-input and standard-output handles: a write the pump has
-// begun and the agent has stopped reading cannot complete on its own,
-// and closing those handles is what releases it, in the order below,
-// before the connection is closed.
-func defaultTeardownOrder() []teardownStep {
+// The order gives the agent a bounded graceful phase before the
+// unconditional group kill: signal_graceful sends a catchable
+// termination signal to the launched process group (on a remote
+// launch, the local relay's group, not a runtime reached only through
+// it), close_stdin then hands the runtime end-of-input immediately
+// behind that signal, and await_exit waits for the process to exit and
+// be reaped on its own, bounded by the graceful phase's own ceiling and
+// by the caller's deadline, whichever is nearer. kill_process_group
+// still runs unconditionally after that wait, whatever it observed: it
+// is the backstop for a descendant that escaped the direct child or a
+// runtime that ignored every signal, and it is a no-op against a group
+// that has already exited. Closing standard input ahead of the wait
+// also releases a pump write parked on that pipe, so the agent is never
+// left blocked on us during the graceful phase. The remaining steps are
+// unchanged: close_stdout releases the connection's parked read only
+// after the wait, close_connection and stop_pump follow, and
+// drain_stderr_and_reap collects diagnostics and reaps last.
+//
+// A residual: an agent parked on a permission request the pump has not
+// yet answered may not reach its exit path, because close_stdin runs
+// before the pump's answer would be written. Closing that gap needs a
+// synchronization point between teardown and the pump that this order
+// does not add.
+func defaultTeardownOrder(callerCtx, graceCtx context.Context) []teardownStep {
 	return []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
-		{name: "kill_process_group", run: killProcessGroup},
+		{name: "signal_graceful", run: signalGraceful},
 		{name: "close_stdin", run: closeStdin},
+		{name: "await_exit", run: awaitExit(callerCtx, graceCtx)},
+		{name: "kill_process_group", run: killProcessGroup},
 		{name: "close_stdout", run: closeStdout},
 		{name: "close_connection", run: closeConnection},
 		{name: "stop_pump", run: stopPump},
-		{name: "drain_stderr_and_reap", run: drainStderrAndReap},
+		{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
 	}
 }
 
@@ -563,6 +593,56 @@ func signalAnswerOpen(state *sessionState) {
 func killProcessGroup(state *sessionState) {
 	if state.pid > 0 {
 		procutil.KillProcessGroup(state.pid) //nolint:errcheck,gosec // best-effort
+	}
+}
+
+// signalGraceful sends the catchable graceful-termination signal to the
+// subprocess's process group, mirroring killProcessGroup's guard. It
+// never waits, never returns an error, and never changes teardown's
+// path when the signal cannot be delivered: kill_process_group covers
+// that case unconditionally.
+func signalGraceful(state *sessionState) {
+	if state.pid > 0 {
+		procutil.SignalGraceful(state.pid) //nolint:errcheck,gosec // best-effort
+	}
+}
+
+// awaitExit returns a teardown step that waits for the subprocess to
+// exit and be reaped on its own, bounded by graceCtx. graceCtx already
+// carries both the graceful phase's own ceiling and callerCtx's
+// deadline, whichever is nearer, so this step declares no timer of its
+// own and never spawns a goroutine.
+//
+// On the graceCtx arm it re-reads state.waitCh with a non-blocking
+// receive before classifying the outcome: graceCtx and state.waitCh can
+// both be ready when this step starts, most often because the process
+// was already signalled and reaped ahead of StopSession, and treating
+// that race as an escalation would warn about a state loss that never
+// happened.
+func awaitExit(callerCtx, graceCtx context.Context) func(state *sessionState) {
+	return func(state *sessionState) {
+		if state.pid <= 0 || state.waitCh == nil {
+			return
+		}
+
+		select {
+		case <-state.waitCh:
+			state.logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
+			return
+		case <-graceCtx.Done():
+		}
+
+		select {
+		case <-state.waitCh:
+			state.logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
+		default:
+			outcome := "grace elapsed"
+			if callerCtx.Err() != nil {
+				outcome = "caller deadline"
+			}
+			state.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+				slog.String("outcome", outcome), slog.Duration("grace", procutil.DefaultStopGrace))
+		}
 	}
 }
 
@@ -605,25 +685,39 @@ func stopPump(state *sessionState) {
 	}
 }
 
-// drainStderrAndReap waits for the bounded standard-error drain, reaps
-// the process, and on a drain that has not finished waits once more and
-// abandons it, so this step spends procutil.DefaultDrainGrace at most
-// twice in total.
-func drainStderrAndReap(state *sessionState) {
-	var drained bool
-	if state.stderrCollector != nil {
-		drained = state.stderrCollector.WaitDone(procutil.DefaultDrainGrace)
-	} else {
-		drained = true
-	}
+// drainStderrAndReap returns a teardown step that waits for the bounded
+// standard-error drain, reaps the process, and on a drain that has not
+// finished waits once more and abandons it, so the two stderr drain
+// waits spend procutil.DefaultDrainGrace at most twice in total. Only
+// the reap wait is bounded by callerCtx: the group kill has already run
+// by this point in the order, so cutting that wait short leaves the
+// process unreaped rather than a descendant alive, and the two stderr
+// drain waits keep their own bound so a shorter caller deadline does
+// not cost the collected diagnostics.
+func drainStderrAndReap(callerCtx context.Context) func(state *sessionState) {
+	return func(state *sessionState) {
+		var drained bool
+		if state.stderrCollector != nil {
+			drained = state.stderrCollector.WaitDone(procutil.DefaultDrainGrace)
+		} else {
+			drained = true
+		}
 
-	if state.waitCh != nil {
-		<-state.waitCh
-	}
+		if state.waitCh != nil {
+			timer := time.NewTimer(procutil.DefaultDrainGrace)
+			select {
+			case <-state.waitCh:
+				timer.Stop()
+			case <-callerCtx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
 
-	if !drained && state.stderrCollector != nil {
-		if !state.stderrCollector.WaitDone(procutil.DefaultDrainGrace) {
-			state.stderrCollector.Abandon(procutil.DefaultDrainGrace)
+		if !drained && state.stderrCollector != nil {
+			if !state.stderrCollector.WaitDone(procutil.DefaultDrainGrace) {
+				state.stderrCollector.Abandon(procutil.DefaultDrainGrace)
+			}
 		}
 	}
 }

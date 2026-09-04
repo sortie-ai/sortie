@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -429,8 +430,10 @@ func toDomainAgentConfig(c config.AgentConfig, kind string) domain.AgentConfig {
 
 // stopSessionBestEffort terminates the agent session using a detached
 // context so that teardown proceeds even when the worker's ctx is
-// cancelled. The timeout is derived from the agent's ReadTimeoutMS
-// config (default: 10 000 ms). Errors are logged and swallowed.
+// cancelled. The timeout is the agent's ReadTimeoutMS config, floored
+// at the duration a full graceful teardown can take: a value above the
+// floor still lengthens the deadline, and no value shortens it below a
+// full teardown. Errors are logged and swallowed.
 func stopSessionBestEffort(
 	ctx context.Context,
 	adapter domain.AgentAdapter,
@@ -440,12 +443,10 @@ func stopSessionBestEffort(
 ) {
 	detachedCtx := context.WithoutCancel(ctx)
 
-	timeoutMS := cfg.Agent.ReadTimeoutMS
-	if timeoutMS <= 0 {
-		timeoutMS = 10_000
-	}
+	floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
+	timeout := max(time.Duration(cfg.Agent.ReadTimeoutMS)*time.Millisecond, floor)
 
-	stopCtx, cancel := context.WithTimeout(detachedCtx, time.Duration(timeoutMS)*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(detachedCtx, timeout)
 	defer cancel()
 
 	if err := adapter.StopSession(stopCtx, session); err != nil {
