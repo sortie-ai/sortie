@@ -731,6 +731,14 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		if !strings.Contains(output, `outcome="caller deadline"`) {
 			t.Errorf("teardown's Warn record did not carry outcome=\"caller deadline\": %s", output)
 		}
+		// The record reports the wait that actually elapsed, not the
+		// ceiling: a caller deadline shorter than the grace ends the
+		// wait early, and reporting the ceiling here would tell an
+		// operator the adapter waited five seconds when it waited a
+		// fraction of one.
+		if strings.Contains(output, "grace="+procutil.DefaultStopGrace.String()) {
+			t.Errorf("teardown's Warn record reported the full grace ceiling for a wait cut short by the caller's deadline: %s", output)
+		}
 	})
 
 	t.Run("already_expired_context_against_an_already_exited_agent_emits_no_warn", func(t *testing.T) {

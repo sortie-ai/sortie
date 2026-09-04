@@ -625,6 +625,8 @@ func awaitExit(callerCtx, graceCtx context.Context) func(state *sessionState) {
 			return
 		}
 
+		started := time.Now()
+
 		select {
 		case <-state.waitCh:
 			state.logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
@@ -641,7 +643,7 @@ func awaitExit(callerCtx, graceCtx context.Context) func(state *sessionState) {
 				outcome = "caller deadline"
 			}
 			state.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-				slog.String("outcome", outcome), slog.Duration("grace", procutil.DefaultStopGrace))
+				slog.String("outcome", outcome), slog.Duration("grace", time.Since(started)))
 		}
 	}
 }
