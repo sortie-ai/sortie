@@ -23,6 +23,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/qualification"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -993,6 +994,10 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 		ProtocolVersion: new(1),
 	}
 	switch {
+	case permissionErr != nil:
+		permissionRecord.Outcome = qualification.OutcomePrerequisiteFailed
+		permissionRecord.Grade = qualification.GradeNotObserved
+		permissionRecord.Detail = "the permission control turn did not complete"
 	case !permissionRequested:
 		permissionRecord.Outcome = qualification.OutcomeFixtureInductionFailed
 		permissionRecord.Grade = qualification.GradeNotObserved
@@ -1000,13 +1005,12 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 	case !permissionAnswered:
 		permissionRecord.Outcome = qualification.OutcomeAdapterUnanswered
 		permissionRecord.Grade = qualification.GradeNotObserved
-		permissionRecord.Detail = "the request was captured but no correlated client response arrived within the read timeout"
+		permissionRecord.Detail = "the request was captured and no correlated client response went back for it"
 	default:
 		permissionRecord.Outcome = qualification.OutcomePass
 		permissionRecord.Grade = qualification.GradeUsable
 		permissionRecord.Detail = "request answered with a refusing option and no request left pending"
 	}
-	_ = permissionErr
 
 	// The MCP probe: delivery is graded only on server receipt plus the
 	// turn consuming the returned nonce.
@@ -1060,6 +1064,42 @@ func geminiEventsCarry(events []domain.AgentEvent, needle string) bool {
 	})
 }
 
+// TestGeminiPermissionNoticeStems pins the permission scenario's two
+// observations to the notices the shared human-request decision
+// actually produces. A renamed notice reddens here instead of quietly
+// collapsing the requested and answered readings into one and making
+// the unanswered verdict unreachable.
+func TestGeminiPermissionNoticeStems(t *testing.T) {
+	t.Parallel()
+
+	answered := agentcore.DecideHumanRequest(agentcore.ClassPermission, true, agentcore.AnswerPending)
+	unanswered := agentcore.DecideHumanRequest(agentcore.ClassPermission, false, agentcore.AnswerPending)
+
+	if !answered.Transmit {
+		t.Fatal("the answering posture Transmit = false, want a correlated reply going back")
+	}
+	if unanswered.Transmit {
+		t.Fatal("the unanswered posture Transmit = true, want no correlated reply")
+	}
+	if !strings.Contains(answered.Notice, geminiPermissionNoticeStem) {
+		t.Errorf("answered notice = %q, want it to carry %q", answered.Notice, geminiPermissionNoticeStem)
+	}
+	if !strings.Contains(unanswered.Notice, geminiPermissionUnansweredStem) {
+		t.Errorf("unanswered notice = %q, want it to carry %q", unanswered.Notice, geminiPermissionUnansweredStem)
+	}
+	if strings.Contains(unanswered.Notice, geminiPermissionNoticeStem) {
+		t.Errorf("unanswered notice = %q carries the answered stem, want the two observations distinct", unanswered.Notice)
+	}
+
+	captured := []domain.AgentEvent{{Type: domain.EventNotification, Message: unanswered.Notice}}
+	if !geminiPermissionRequested(captured) {
+		t.Error("geminiPermissionRequested() = false for a captured request, want true")
+	}
+	if geminiPermissionAnswered(captured) {
+		t.Error("geminiPermissionAnswered() = true with no correlated reply, want false")
+	}
+}
+
 // geminiProbeMarkerAbsent reports whether a probe's side-effect file is
 // absent, the no-side-effect condition the policy precondition and the
 // permission scenarios require.
@@ -1071,22 +1111,31 @@ func geminiProbeMarkerAbsent(t *testing.T, probePath string) bool {
 	return false
 }
 
-// geminiPermissionNoticeStem is the observable stem of the adapter's
-// own refusal notice for a permission request, the message-shape
-// observation the permission scenario reads.
+// geminiPermissionNoticeStem is the observable stem of the notice the
+// adapter emits when it answers a permission request with a refusing
+// option, which is the message-shape observation of a correlated reply
+// going back to the runtime.
 const geminiPermissionNoticeStem = "refused a permission request"
 
-// geminiPermissionRequested reports whether the adapter observed and
-// answered a session/request_permission request during the turn: the
-// adapter emits its refusal notice when it handles one, and never on
-// an unanswered request.
+// geminiPermissionUnansweredStem is the observable stem of the notice
+// the adapter emits instead when the request carried no option it
+// could answer with. The request reached the client and ended the
+// attempt, and no correlated reply went back, so this stem observes a
+// request without an answer.
+const geminiPermissionUnansweredStem = "needs a permission this unattended run cannot grant"
+
+// geminiPermissionRequested reports whether a permission request
+// reached the adapter during the turn, read through either notice the
+// adapter emits for one. Both postures observe the request; only one
+// of them observes an answer, which is why the two predicates read
+// different stems.
 func geminiPermissionRequested(events []domain.AgentEvent) bool {
-	return geminiEventsCarry(events, geminiPermissionNoticeStem)
+	return geminiEventsCarry(events, geminiPermissionNoticeStem) ||
+		geminiEventsCarry(events, geminiPermissionUnansweredStem)
 }
 
-// geminiPermissionAnswered reports whether the adapter's own handling
-// of the permission request reached the turn's events, which is the
-// observable correlated reply the permission record requires.
+// geminiPermissionAnswered reports whether a correlated reply went back
+// for the request, which only the answering posture's notice observes.
 func geminiPermissionAnswered(events []domain.AgentEvent) bool {
 	return geminiEventsCarry(events, geminiPermissionNoticeStem)
 }
