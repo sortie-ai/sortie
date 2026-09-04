@@ -175,26 +175,51 @@ func geminiDriveMCPFixture(t *testing.T, fixture geminiMCPFixture) geminiMCPDriv
 	reader := bufio.NewScanner(stdout)
 	reader.Buffer(make([]byte, 0, 64<<10), 1<<20)
 
+	// The scan runs off the caller's goroutine so a server that never
+	// answers cannot park the caller inside a blocking read until the
+	// whole package times out with no diagnostic. readerDone gives the
+	// scan a cancellation path: every send selects against it, so the
+	// goroutine cannot block on a channel the caller has abandoned.
+	lines := make(chan []byte)
+	readerDone := make(chan struct{})
+	t.Cleanup(func() { close(readerDone) })
+	go func() {
+		defer close(lines)
+		for reader.Scan() {
+			line := append([]byte(nil), reader.Bytes()...)
+			select {
+			case lines <- line:
+			case <-readerDone:
+				return
+			}
+		}
+	}()
+
 	call := func(method string, params string) map[string]json.RawMessage {
 		t.Helper()
 		if _, err := fmt.Fprintf(stdin, `{"jsonrpc":"2.0","id":7,"method":%q,"params":%s}`+"\n", method, params); err != nil {
 			t.Fatalf("write %s request: %v", method, err)
 		}
-		deadline := time.Now().Add(awaitTimeout)
-		for reader.Scan() {
-			var envelope map[string]json.RawMessage
-			if err := json.Unmarshal(reader.Bytes(), &envelope); err != nil {
-				continue
-			}
-			if id, ok := envelope["id"]; ok && strings.TrimSpace(string(id)) == "7" {
-				return envelope
-			}
-			if time.Now().After(deadline) {
+		deadline := time.After(awaitTimeout)
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("MCP fixture server stream ended before the %s response", method)
+					return nil
+				}
+				var envelope map[string]json.RawMessage
+				if err := json.Unmarshal(line, &envelope); err != nil {
+					continue
+				}
+				if id, ok := envelope["id"]; ok && strings.TrimSpace(string(id)) == "7" {
+					return envelope
+				}
+			case <-deadline:
 				t.Fatalf("timed out waiting for the %s response", method)
+				return nil
 			}
 		}
-		t.Fatalf("MCP fixture server stream ended before the %s response", method)
-		return nil
 	}
 
 	call("initialize", `{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sortie","version":"fixture"}}`)
