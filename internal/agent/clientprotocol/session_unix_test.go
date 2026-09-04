@@ -81,13 +81,22 @@ func TestStartSessionMCPInjectionWire(t *testing.T) {
 	})
 }
 
-// mcpHandshakeThenGracefulExitScript answers startSession's handshake
-// exactly as mcpHandshakeScript does, then installs a handler for the
+// mcpHandshakeThenGracefulExitScript installs a handler for the
 // graceful signal that waits delaySeconds and writes evidencePath
-// before exiting, so a test can tell a catchable signal from an
-// uncatchable kill.
+// before exiting, then answers startSession's handshake exactly as
+// mcpHandshakeScript does, so a test can tell a catchable signal from
+// an uncatchable kill.
+//
+// The handler is installed before the handshake rather than after it.
+// A caller signals only once startSession has returned, which cannot
+// happen until the handshake below has been answered, so installing
+// first leaves no window in which the default disposition applies and
+// the evidence is never written. The idle loop sleeps in short
+// intervals because the handler does not run until the command it
+// interrupts has finished.
 func mcpHandshakeThenGracefulExitScript(evidencePath, delaySeconds string) string {
-	return `while IFS= read -r line; do
+	return `trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
+while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
       printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
@@ -98,8 +107,7 @@ func mcpHandshakeThenGracefulExitScript(evidencePath, delaySeconds string) strin
       ;;
   esac
 done
-trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
-while :; do sleep 1; done
+while :; do sleep 0.05; done
 `
 }
 
