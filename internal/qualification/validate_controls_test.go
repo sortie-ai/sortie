@@ -543,6 +543,21 @@ func TestValidatorContinuationControls(T *testing.T) {
 			T.Errorf("ValidateObservations() error = %v, want it to name the missing identity record", err)
 		}
 	})
+
+	T.Run("a runtime identity for a session no other evidence references", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		fixture.AppendIdentity("sess-referenced-by-nothing")
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Error("ValidateObservations() = nil error, want rejection of an identity record no other evidence references")
+		} else if !strings.Contains(err.Error(), "references no non-final evidence") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the unreferenced identity record", err)
+		}
+	})
 }
 
 // TestValidatorCrossSurfacePriorSessionControl pins the separate

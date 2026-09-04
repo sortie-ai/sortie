@@ -914,11 +914,19 @@ func tokenBaselineGrade(records []*Record) Grade {
 
 // checkIdentityCoverage requires exactly one runtime-identity record for
 // every distinct non-null actual protocol session id referenced by any
-// non-final record, including a fresh fallback id, and no others.
+// non-final record that is not itself a runtime identity, including a
+// fresh fallback id, and no others. An identity record is skipped while
+// the referenced ids are collected: it carries the protocol surface and
+// its own session id, so counting it would let it satisfy its own
+// coverage requirement and leave an identity for a session no other
+// evidence mentions undetected.
 func (v *setValidation) checkIdentityCoverage() error {
 	referenced := map[string]bool{}
 	for i := range v.records {
 		rec := &v.records[i]
+		if rec.Scenario == ScenarioRuntimeIdentity {
+			continue
+		}
 		if rec.Surface == SurfaceProtocol && rec.SessionID != nil {
 			referenced[*rec.SessionID] = true
 		}
