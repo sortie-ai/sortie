@@ -575,8 +575,8 @@ Note:
 ### 10.7 Local Subprocess Launch Contract
 
 This subsection applies only to adapters that launch a local subprocess (e.g., Claude Code,
-Copilot CLI, OpenCode CLI, Kiro CLI, and the Codex app-server). HTTP-based and remote
-adapters define their own connection semantics.
+Copilot CLI, OpenCode CLI, Kiro CLI, the Codex app-server, and a locally launched Agent Client
+Protocol runtime). HTTP-based and remote adapters define their own connection semantics.
 
 When `agent.kind` requires a local subprocess:
 
@@ -611,7 +611,9 @@ Graceful shutdown sequence:
   shutdown signal to the process group:
   - POSIX: `SIGTERM` to the process group (`kill(-pgid, SIGTERM)`).
   - Windows: `CTRL_BREAK_EVENT` via `GenerateConsoleCtrlEvent` to the process group.
-- After a grace period (default 5 seconds), force-terminate the process tree:
+- The grace period that follows (default 5 seconds) is a ceiling: a shorter caller deadline
+  shortens it. When the grace period or the caller's deadline elapses, whichever comes first,
+  the adapter force-terminates the process tree:
   - POSIX: `SIGKILL` to the process group.
   - Windows: `TerminateJobObject` to kill all processes in the Job Object.
 - After `cmd.Wait()` returns, a best-effort force kill is sent to the process group to reap any
@@ -629,6 +631,11 @@ Standard-error drain before reap:
 - When neither release ends the wait, the turn's collected standard-error output is replaced by
   a marker, and an adapter whose success evidence lives on standard error reports the turn
   failed rather than succeeded.
+- Teardown can spend time in up to four separately bounded waits: the graceful wait before the
+  force-terminate, the standard-error drain before the reap, the reap wait where an adapter
+  bounds it, and a second standard-error drain after that reap wait. Each defaults to five
+  seconds, so a teardown that runs all four spends at most 20 seconds in them at those defaults,
+  less whenever the caller's deadline is shorter.
 
 Recommended additional process settings:
 
