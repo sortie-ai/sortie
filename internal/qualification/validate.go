@@ -1091,6 +1091,18 @@ func ValidateEvidence(path string) (Verdict, error) {
 	aggregate := records[finalIndex]
 	nonFinal := records[:finalIndex]
 
+	// The final record is located by either half of its tuple so that a
+	// stray one anywhere in the set is counted and rejected above. That
+	// leaves the located record's own tuple unchecked, so it is closed
+	// here: nothing but the aggregate eligibility row may occupy the
+	// position the verdict is read from.
+	if aggregate.Scenario != ScenarioQualification || aggregate.Surface != SurfaceAggregate ||
+		aggregate.Capability != CapabilityEligibility || aggregate.Source != SourceComparison {
+		return "", fmt.Errorf(
+			"final qualification record tuple = %s/%s/%s/%s, want %s/%s/%s/%s",
+			aggregate.Scenario, aggregate.Surface, aggregate.Capability, aggregate.Source,
+			ScenarioQualification, SurfaceAggregate, CapabilityEligibility, SourceComparison)
+	}
 	if aggregate.Outcome != OutcomePass {
 		return "", fmt.Errorf("final qualification record verdict = %s, want pass", aggregate.Outcome)
 	}

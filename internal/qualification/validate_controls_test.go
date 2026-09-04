@@ -607,6 +607,25 @@ func TestValidatorFinalTupleControls(T *testing.T) {
 		}
 	})
 
+	T.Run("final pass whose aggregate carries a foreign tuple", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		aggregate := aggregateFixtureRecord(GradeQualified)
+		aggregate.Capability = CapabilityWorkspaceSecurity
+		withAggregate := append(slices.Clone(fixture.Records), aggregate)
+		for i := range withAggregate {
+			withAggregate[i].Sequence = i + 1
+		}
+		path := WriteEvidenceFile(T, withAggregate)
+		if _, err := ValidateEvidence(path); err == nil {
+			T.Error("ValidateEvidence() = nil error, want rejection of an aggregate outside the closed tuple")
+		} else if !strings.Contains(err.Error(), "tuple") {
+			T.Errorf("ValidateEvidence() error = %v, want it to name the rejected tuple", err)
+		}
+	})
+
 	T.Run("final pass without the aggregate", func(T *testing.T) {
 		T.Parallel()
 
