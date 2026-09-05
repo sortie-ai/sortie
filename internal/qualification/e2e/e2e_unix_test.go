@@ -190,3 +190,20 @@ func TestTerminalOracle(t *testing.T) {
 		t.Errorf("run history rows = %+v, want exactly one succeeded first attempt", rows)
 	}
 }
+
+// TestHarnessWorkflowPathIsAbsolute pins the workflow path the
+// orchestrator hands each worker. Settings and MCP configuration
+// resolve against its directory, so a relative value would resolve them
+// against whichever directory the test binary ran in.
+func TestHarnessWorkflowPathIsAbsolute(t *testing.T) {
+	t.Parallel()
+
+	harness := NewHarness(t)
+	got := harness.manager.WorkflowAbsPath()
+	if !filepath.IsAbs(got) {
+		t.Fatalf("WorkflowAbsPath() = %q, want an absolute path", got)
+	}
+	if filepath.Base(got) != "WORKFLOW.md" {
+		t.Errorf("WorkflowAbsPath() base = %q, want \"WORKFLOW.md\"", filepath.Base(got))
+	}
+}

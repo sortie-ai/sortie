@@ -106,9 +106,10 @@ func serviceConfig(workspaceRoot string, sample effectiveSample) config.ServiceC
 // workflowManager implements [orchestrator.WorkflowManager] with the
 // harness's frozen configuration and one prompt template.
 type workflowManager struct {
-	mu       sync.RWMutex
-	config   config.ServiceConfig
-	template *prompt.Template
+	mu           sync.RWMutex
+	config       config.ServiceConfig
+	template     *prompt.Template
+	workflowPath string
 }
 
 func (m *workflowManager) Config() config.ServiceConfig {
@@ -129,7 +130,12 @@ func (m *workflowManager) PromptTemplateByID(string) *prompt.Template {
 
 func (m *workflowManager) Reload() error { return nil }
 
-func (m *workflowManager) WorkflowAbsPath() string { return "WORKFLOW.md" }
+// WorkflowAbsPath reports the fixture's workflow path. The orchestrator
+// hands this to each worker as an absolute path and resolves settings
+// and MCP configuration against its directory, so a relative value
+// would make the harness resolve those against whatever working
+// directory the test binary happened to run in.
+func (m *workflowManager) WorkflowAbsPath() string { return m.workflowPath }
 
 // fakeAgent is the fake protocol agent the deterministic E2E oracle
 // drives: it launches a real bounded child process in its own process
@@ -379,7 +385,7 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	if err != nil {
 		t.Fatalf("parse fixture prompt template: %v", err)
 	}
-	manager := &workflowManager{config: cfg, template: tmpl}
+	manager := &workflowManager{config: cfg, template: tmpl, workflowPath: filepath.Join(root, "WORKFLOW.md")}
 
 	store, err := persistence.Open(context.Background(), filepath.Join(root, "e2e.db"))
 	if err != nil {
