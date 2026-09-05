@@ -520,6 +520,12 @@ func StartWorkflow(t *testing.T, harness *Harness) (context.CancelFunc, <-chan s
 		select {
 		case <-runDone:
 		case <-time.After(qualification.ShutdownDeadline):
+			// Reported rather than swallowed: a run still going after
+			// cancellation leaks its goroutine into the rest of the
+			// package's tests, and a silent branch here hides exactly
+			// the hang this bound exists to catch. Errorf, not Fatalf,
+			// so the remaining cleanups still run.
+			t.Errorf("orchestrator still running %s after cancellation; the harness leaked its run goroutine", qualification.ShutdownDeadline)
 		}
 	})
 	return cancel, runDone

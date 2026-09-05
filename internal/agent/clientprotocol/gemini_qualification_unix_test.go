@@ -1477,12 +1477,16 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 	// Stop the run and join its goroutine before the absence oracle
 	// polls, so no still-dispatching orchestrator can keep a captured
 	// group alive and drive groupClean false for a reason that is not
-	// the agent's cleanup. The join carries the shared bound, so a
-	// wedged run costs one deadline rather than blocking forever.
+	// the agent's cleanup. A run that will not stop within the shared
+	// bound is a cleanup failure, not an observation: the groups below
+	// would be read while dispatch can still create more, so the
+	// record built from them would grade the harness rather than the
+	// runtime.
 	cancel()
 	select {
 	case <-runDone:
 	case <-time.After(qualification.ShutdownDeadline):
+		t.Fatalf("qualification workflow still running %s after cancellation; cleanup cannot be observed", qualification.ShutdownDeadline)
 	}
 
 	groupClean := true
