@@ -124,7 +124,16 @@ func (m *workflowManager) PromptTemplate() *prompt.Template {
 	return m.template
 }
 
-func (m *workflowManager) PromptTemplateByID(string) *prompt.Template {
+// PromptTemplateByID serves the fixture's only template, which is the
+// default one, and reports nil for any other id exactly as a real
+// workflow does for an id it does not define. Answering every id with
+// the default would let a dispatch that asked for a template this
+// fixture never declared run anyway, which is a resolution failure the
+// harness would then hide.
+func (m *workflowManager) PromptTemplateByID(id string) *prompt.Template {
+	if id != "" {
+		return nil
+	}
 	return m.PromptTemplate()
 }
 
@@ -394,7 +403,11 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatalf("migrate temporary store: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close the temporary store: %v", err)
+		}
+	})
 
 	observer := &AdapterObserver{inner: agent}
 	state := orchestrator.NewState(20, 1, nil, orchestrator.AgentTotals{})

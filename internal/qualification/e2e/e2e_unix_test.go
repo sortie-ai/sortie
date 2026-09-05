@@ -364,3 +364,21 @@ func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
 		t.Error("SessionIDs()[0] is empty, want the observed protocol session identifier")
 	}
 }
+
+// TestPromptTemplateByIDRefusesAnUndeclaredID pins the fixture's
+// template resolution against the contract a real workflow keeps. The
+// harness declares one template under the default id; answering some
+// other id with it would let a dispatch for a template this fixture
+// never declared proceed as though it had resolved.
+func TestPromptTemplateByIDRefusesAnUndeclaredID(t *testing.T) {
+	t.Parallel()
+
+	harness := NewHarness(t)
+
+	if got := harness.manager.PromptTemplateByID(""); got == nil {
+		t.Error("PromptTemplateByID(\"\") = nil, want the fixture's default template")
+	}
+	if got := harness.manager.PromptTemplateByID("a-template-the-fixture-never-declared"); got != nil {
+		t.Error("PromptTemplateByID() returned a template for an id the fixture never declared, want nil")
+	}
+}
