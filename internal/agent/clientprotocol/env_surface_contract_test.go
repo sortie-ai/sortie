@@ -44,11 +44,14 @@ type envSurfaceViolation struct {
 }
 
 // envSurfaceViolations reports every violation in file's two
-// environment-name positions: the value expression of a const or var
-// specification (including each string element of a slice literal in
-// that position), and the first argument of a call whose callee selects
-// Getenv, LookupEnv, Setenv, or Unsetenv. A literal elsewhere in the
-// file, however it spells a SORTIE_ name, is not inspected.
+// environment-name positions: the value a declaration binds to a name,
+// and the first argument of a call whose callee selects Getenv,
+// LookupEnv, Setenv, or Unsetenv. The first position covers a const or
+// var specification, a short variable declaration, and an assignment
+// alike, including each string element of a slice literal in any of
+// them, because a name's spelling is what the rule is about and the
+// syntax that binds it is not. A literal elsewhere in the file, however
+// it spells a SORTIE_ name, is not inspected.
 func envSurfaceViolations(fset *token.FileSet, file *ast.File) []envSurfaceViolation {
 	var violations []envSurfaceViolation
 	report := func(lit *ast.BasicLit) {
@@ -68,20 +71,32 @@ func envSurfaceViolations(fset *token.FileSet, file *ast.File) []envSurfaceViola
 		})
 	}
 
+	// reportBound inspects the values a declaration binds, and only
+	// those written directly as a literal there. It never descends into
+	// a call on the right-hand side, whose arguments are the other
+	// position's business.
+	reportBound := func(values []ast.Expr) {
+		for _, value := range values {
+			switch expr := value.(type) {
+			case *ast.BasicLit:
+				report(expr)
+			case *ast.CompositeLit:
+				for _, elt := range expr.Elts {
+					if lit, ok := elt.(*ast.BasicLit); ok {
+						report(lit)
+					}
+				}
+			}
+		}
+	}
+
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.ValueSpec:
-			for _, value := range v.Values {
-				switch expr := value.(type) {
-				case *ast.BasicLit:
-					report(expr)
-				case *ast.CompositeLit:
-					for _, elt := range expr.Elts {
-						if lit, ok := elt.(*ast.BasicLit); ok {
-							report(lit)
-						}
-					}
-				}
+			reportBound(v.Values)
+		case *ast.AssignStmt:
+			if v.Tok == token.DEFINE || v.Tok == token.ASSIGN {
+				reportBound(v.Rhs)
 			}
 		case *ast.CallExpr:
 			sel, ok := v.Fun.(*ast.SelectorExpr)
@@ -143,9 +158,11 @@ func envSurfaceScanInline(t *testing.T, src string) []envSurfaceViolation {
 //
 // The guard scans this package's own directory only; a second runtime's
 // profile placed in a sibling package passes unseen. It reads a literal
-// only where that literal is written directly into a const or var
-// value, or into a slice literal in that position, or passed as a
-// literal to an os or testing environment call; a name assembled by
+// only where that literal is written directly into a value a
+// declaration binds, whether a const or var specification, a short
+// variable declaration or an assignment, or into a slice literal in
+// any of those, or passed as a literal to an os or testing environment
+// call; a name assembled by
 // concatenation, or handed as a bare literal to a lookup function this
 // package injects rather than to os or testing directly, escapes both
 // positions and is not caught. It does not catch a stale literal from a
@@ -221,6 +238,56 @@ const prompt = "Reply with the token SORTIE_AUTH_OK when finished."
 
 func f(output string) bool {
 	return strings.Contains(output, "SORTIE_AUTH_OK")
+}
+`)
+		if len(violations) != 0 {
+			t.Errorf("violations = %v, want none", violations)
+		}
+	})
+
+	t.Run("a short variable declaration outside the family reports one violation", func(t *testing.T) {
+		t.Parallel()
+
+		violations := envSurfaceScanInline(t, `package fixture
+
+import "os"
+
+func f() string {
+	name := "SORTIE_QWEN_TEST"
+	return os.Getenv(name)
+}
+`)
+		if len(violations) != 1 {
+			t.Fatalf("violations = %d, want 1: %v", len(violations), violations)
+		}
+	})
+
+	t.Run("an assignment outside the family reports one violation", func(t *testing.T) {
+		t.Parallel()
+
+		violations := envSurfaceScanInline(t, `package fixture
+
+var name string
+
+func f() {
+	name = "SORTIE_QWEN_TEST"
+}
+`)
+		if len(violations) != 1 {
+			t.Fatalf("violations = %d, want 1: %v", len(violations), violations)
+		}
+	})
+
+	t.Run("a call on a declaration's right-hand side is not a bound value", func(t *testing.T) {
+		t.Parallel()
+
+		violations := envSurfaceScanInline(t, `package fixture
+
+func helper(src string) string { return src }
+
+func f() string {
+	v := helper("SORTIE_QWEN_TEST")
+	return v
 }
 `)
 		if len(violations) != 0 {
