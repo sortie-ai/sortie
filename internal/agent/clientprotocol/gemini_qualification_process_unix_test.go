@@ -3,7 +3,6 @@
 package clientprotocol
 
 import (
-	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -12,19 +11,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 	"unicode/utf8"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
-
-// geminiQualificationShutdownDeadline is the shared 30-second shutdown
-// bound: once it starts, every captured process group is polled until
-// the kernel reports its absence or this deadline expires, whichever
-// comes first.
-const geminiQualificationShutdownDeadline = 30 * time.Second
 
 // geminiKillGroupAndReap terminates a tracked process's group and reaps
 // its leader, so the oracle's poll observes a genuinely empty group
@@ -32,47 +23,6 @@ const geminiQualificationShutdownDeadline = 30 * time.Second
 func geminiKillGroupAndReap(cmd *exec.Cmd) {
 	_ = procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
 	_, _ = cmd.Process.Wait()
-}
-
-// geminiProcessGroupPresent reports whether the kernel still has a
-// process group led by pgid, using the Unix signal-zero liveness
-// primitive on the exact negative PGID. A nil result with no error
-// means a member survives; a query error other than group absence is
-// a runtime failure, never a clean absence.
-func geminiProcessGroupPresent(pgid int) (bool, error) {
-	err := syscall.Kill(-pgid, syscall.Signal(0))
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, syscall.ESRCH):
-		return false, nil
-	default:
-		return false, fmt.Errorf("signal-zero query for the launched group: %w", err)
-	}
-}
-
-// geminiAwaitProcessGroupAbsence polls the exact negative PGID with the
-// signal-zero primitive until the group is absent or the shared 30
-// second shutdown deadline elapses. A survivor or a query error fails
-// the test; the caller records the outcome in the cleanup evidence
-// without ever naming the PGID.
-func geminiAwaitProcessGroupAbsence(t *testing.T, pgid int) {
-	t.Helper()
-
-	deadline := time.Now().Add(geminiQualificationShutdownDeadline)
-	for {
-		present, err := geminiProcessGroupPresent(pgid)
-		if err != nil {
-			t.Fatalf("process-group liveness query failed: %v", err)
-		}
-		if !present {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("a member of the launched process group survived the cleanup deadline")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // geminiProcessGroupTracker is the run-owned record of every process
@@ -349,15 +299,15 @@ func geminiProcessCleanupRecord(groups int, survivors bool) qualification.Record
 	return rec
 }
 
-// TestGeminiQualificationProcessGroupAbsenceOracle confirms the exact
-// negative-PGID oracle: a live group is present, a killed single-member
-// group drains to absence within the shared deadline, and a group
-// whose leader dies while a grandchild keeps the group alive still
-// reports present until the whole group is terminated.
-func TestGeminiQualificationProcessGroupAbsenceOracle(t *testing.T) {
+// TestGeminiQualificationProcessCleanupBookkeeping confirms the
+// cleanup-side bookkeeping that stays behind after the process-group
+// absence oracle moved into the qualification package: the tracker
+// counts one registered group per registerCmd call, and the cleanup
+// record reports only the group count.
+func TestGeminiQualificationProcessCleanupBookkeeping(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a live group is present", func(t *testing.T) {
+	t.Run("the tracker counts one registered group", func(t *testing.T) {
 		t.Parallel()
 
 		tracker := &geminiProcessGroupTracker{}
@@ -365,49 +315,6 @@ func TestGeminiQualificationProcessGroupAbsenceOracle(t *testing.T) {
 		if got := tracker.count(); got != 1 {
 			t.Fatalf("tracked group count = %d, want 1", got)
 		}
-		present, err := geminiProcessGroupPresent(tracker.groups[0])
-		if err != nil {
-			t.Fatalf("geminiProcessGroupPresent() error = %v, want nil", err)
-		}
-		if !present {
-			t.Error("geminiProcessGroupPresent() = false for a live group, want true")
-		}
-	})
-
-	t.Run("a killed group drains to absence within the deadline", func(t *testing.T) {
-		t.Parallel()
-
-		tracker := &geminiProcessGroupTracker{}
-		cmd := tracker.registerCmd(t, exec.Command("sleep", "60")) //nolint:gosec // bounded fake local process killed below
-		pgid := tracker.groups[0]
-		geminiKillGroupAndReap(cmd)
-		geminiAwaitProcessGroupAbsence(t, pgid)
-		if present, err := geminiProcessGroupPresent(pgid); present || err != nil {
-			t.Errorf("geminiProcessGroupPresent() = %v, %v, want false, nil after cleanup", present, err)
-		}
-	})
-
-	t.Run("a surviving grandchild keeps the group present", func(t *testing.T) {
-		t.Parallel()
-
-		tracker := &geminiProcessGroupTracker{}
-		// The leader forks a grandchild into the same group and exits;
-		// the group survives while the grandchild does.
-		script := agenttest.WriteScript(t, t.TempDir(), "leader.sh", "sleep 60 &\nexit 0\n")
-		cmd := tracker.registerCmd(t, exec.Command(script)) //nolint:gosec // test-owned script under the test's temp directory
-		pgid := tracker.groups[0]
-
-		// A bounded settle lets the leader fork and exit before the
-		// first liveness check.
-		time.Sleep(50 * time.Millisecond)
-		if present, err := geminiProcessGroupPresent(pgid); err != nil || !present {
-			t.Fatalf("geminiProcessGroupPresent() = %v, %v, want the group alive while the grandchild survives", present, err)
-		}
-		if err := procutil.SignalProcessGroup(pgid, syscall.SIGKILL); err != nil {
-			t.Fatalf("SignalProcessGroup(SIGKILL) error = %v", err)
-		}
-		_, _ = cmd.Process.Wait()
-		geminiAwaitProcessGroupAbsence(t, pgid)
 	})
 
 	t.Run("the cleanup record reports only the group count", func(t *testing.T) {
@@ -455,7 +362,7 @@ func TestGeminiQualificationUnexpectedHelperFails(t *testing.T) {
 			t.Errorf("geminiUnexpectedHelpers() = %v, want none for a declared probe and its own wait child", unexpected)
 		}
 		geminiKillGroupAndReap(cmd)
-		geminiAwaitProcessGroupAbsence(t, pgid)
+		qualification.AwaitProcessGroupAbsence(t, pgid)
 	})
 
 	t.Run("an undeclared helper is reported", func(t *testing.T) {
@@ -476,7 +383,7 @@ func TestGeminiQualificationUnexpectedHelperFails(t *testing.T) {
 		// The unexpected helper is contained with the same bounded
 		// cleanup, and the absence oracle still holds afterward.
 		geminiKillGroupAndReap(cmd)
-		geminiAwaitProcessGroupAbsence(t, pgid)
+		qualification.AwaitProcessGroupAbsence(t, pgid)
 	})
 }
 

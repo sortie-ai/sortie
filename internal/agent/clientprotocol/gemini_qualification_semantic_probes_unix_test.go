@@ -764,7 +764,7 @@ func geminiAwaitGroupDrain(t *testing.T, pgid int, within time.Duration) bool {
 
 	deadline := time.Now().Add(within)
 	for {
-		present, err := geminiProcessGroupPresent(pgid)
+		present, err := qualification.ProcessGroupPresent(pgid)
 		if err != nil {
 			t.Fatalf("liveness query: %v", err)
 		}
