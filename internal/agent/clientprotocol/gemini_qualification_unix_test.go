@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/qualification"
+	"github.com/sortie-ai/sortie/internal/qualification/e2e"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -1438,13 +1439,13 @@ func geminiCollectCleanupRecord(t *testing.T, tracker *geminiProcessGroupTracker
 
 	survivors := false
 	for _, pgid := range tracker.groups {
-		present, err := geminiProcessGroupPresent(pgid)
+		present, err := qualification.ProcessGroupPresent(pgid)
 		if err != nil {
 			return geminiProcessCleanupRecord(tracker.count(), true)
 		}
 		if present {
 			_ = procutil.SignalProcessGroup(pgid, syscall.SIGKILL)
-			if !geminiAwaitGroupDrain(t, pgid, geminiQualificationShutdownDeadline) {
+			if !geminiAwaitGroupDrain(t, pgid, qualification.ShutdownDeadline) {
 				survivors = true
 			}
 		}
@@ -1460,31 +1461,45 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 
 	adapter := &ClientProtocolAdapter{}
 	command := strings.Join(geminiQualificationLaunchArgv(runtime.Config, qualification.SurfaceProtocol, "", runtime.PolicyPath), " ")
-	fixture := geminiNewE2EFixtureWithAgent(t, adapter, command)
-	_, runDone := geminiE2EStartWorkflow(t, fixture)
+	harness := e2e.NewHarnessWithAgent(t, adapter, command, "agent-client-protocol")
+	cancel, runDone := e2e.StartWorkflow(t, harness)
 
-	deadline := time.Now().Add(geminiQualificationShutdownDeadline)
-	var condition geminiE2ETerminalCondition
+	deadline := time.Now().Add(qualification.ShutdownDeadline)
+	var condition e2e.TerminalCondition
 	for {
-		condition = geminiObserveE2ETerminalCondition(t, fixture)
-		if condition.reached() || time.Now().After(deadline) {
+		condition = e2e.ObserveTerminalCondition(t, harness)
+		if condition.Reached() || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// Stop the run and join its goroutine before the absence oracle
+	// polls, so no still-dispatching orchestrator can keep a captured
+	// group alive and drive groupClean false for a reason that is not
+	// the agent's cleanup. A run that will not stop within the shared
+	// bound is a cleanup failure, not an observation: the groups below
+	// would be read while dispatch can still create more, so the
+	// record built from them would grade the harness rather than the
+	// runtime.
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(qualification.ShutdownDeadline):
+		t.Fatalf("qualification workflow still running %s after cancellation; cleanup cannot be observed", qualification.ShutdownDeadline)
+	}
+
 	groupClean := true
-	for _, pgid := range fixture.Agent.PGIDs() {
-		if !geminiAwaitGroupDrain(t, pgid, geminiQualificationShutdownDeadline) {
+	for _, pgid := range harness.Agent().PGIDs() {
+		if !geminiAwaitGroupDrain(t, pgid, qualification.ShutdownDeadline) {
 			groupClean = false
 		}
 	}
-	_ = runDone
 	sessionID := ""
-	if ids := fixture.Agent.SessionIDs(); len(ids) > 0 {
+	if ids := harness.Agent().SessionIDs(); len(ids) > 0 {
 		sessionID = ids[0]
 	}
-	return geminiE2ERecord(condition, groupClean, sessionID, agentName, runtime.Version)
+	return e2e.TerminalRecord(condition, groupClean, sessionID, agentName, runtime.Version)
 }
 
 // geminiHandshakeAgentName reports the runtime's handshake-reported

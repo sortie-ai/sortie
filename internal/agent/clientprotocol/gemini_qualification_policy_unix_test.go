@@ -511,7 +511,7 @@ func TestGeminiQualificationLocalProbeFixtures(t *testing.T) {
 				}
 				_ = procutil.SignalProcessGroup(groupPID, syscall.SIGKILL)
 				_, _ = cmd.Process.Wait()
-				geminiAwaitProcessGroupAbsence(t, groupPID)
+				qualification.AwaitProcessGroupAbsence(t, groupPID)
 				return
 			}
 

@@ -644,36 +644,9 @@ func checkCoreContractPackage(fset *token.FileSet, pkg contractPackage) []contra
 	return violations
 }
 
-// contractTestImportAllowlist exempts one named test file of one
-// package, keyed by the package's directory base name and the test
-// file's base name, from the sibling-adapter and orchestrator import
-// bans for the exact import paths listed, with a reason per path. It is
-// the narrow mechanism the all-or-nothing ruleIMPORT allowlist cannot
-// express: a test-only harness inside an adapter package that drives
-// the real orchestrator and one sibling tracker adapter, while the
-// package's production files and every other test file stay fully
-// guarded. Entries are matched on the exact test-file base name and the
-// exact import path, so the exemption lifts nothing else.
-var contractTestImportAllowlist = map[string]map[string]map[string]string{
-	"clientprotocol": {
-		"gemini_qualification_e2e_unix_test.go": {
-			"github.com/sortie-ai/sortie/internal/orchestrator": "the test-only qualification harness drives the real orchestrator event loop for its isolated end-to-end oracle; production adapter code stays orchestrator-free",
-			"github.com/sortie-ai/sortie/internal/tracker/file": "the test-only qualification harness uses the file tracker as its isolated tracker kind",
-		},
-	},
-}
-
 // checkContractImports reports a violation for every import declaration
-// in file that contractImportBanReason rejects for pkg. A test file
-// named by contractTestImportAllowlist may carry the exact import paths
-// its entry lists; every other banned import still reports.
+// in file that contractImportBanReason rejects for pkg.
 func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPackage) []contractViolation {
-	fileExemptions := map[string]string{}
-	if perFile, ok := contractTestImportAllowlist[pkg.dirName]; ok {
-		if slices.Contains(pkg.testFiles, file) {
-			fileExemptions = perFile[filepath.Base(fset.Position(file.Pos()).Filename)]
-		}
-	}
 	var violations []contractViolation
 	for _, imp := range file.Imports {
 		importPath, err := strconv.Unquote(imp.Path.Value)
@@ -682,9 +655,6 @@ func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPacka
 		}
 		reason := contractImportBanReason(importPath, pkg)
 		if reason == "" {
-			continue
-		}
-		if _, exempt := fileExemptions[importPath]; exempt && fileExemptions[importPath] != "" {
 			continue
 		}
 		violations = append(violations, contractViolation{
@@ -2333,81 +2303,3 @@ func doWork() {}
 		})
 	}
 }
-
-// TestCheckAdapterContract_TestImportAllowlist confirms the per-test-file
-// import exemption is narrow: the named qualification harness test file
-// may import exactly the two paths its entry lists, any other banned
-// import in that same file still reports, and the exemption never
-// reaches a differently named test file or a non-test file.
-func TestCheckAdapterContract_TestImportAllowlist(t *testing.T) {
-	t.Parallel()
-
-	parseFixture := func(t *testing.T, name, src string) (*token.FileSet, *ast.File) {
-		t.Helper()
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parser.ParseFile: %v", err)
-		}
-		return fset, file
-	}
-	packageWithTestFile := func(file *ast.File) contractPackage {
-		return contractPackage{
-			dirName:    "clientprotocol",
-			importPath: "github.com/sortie-ai/sortie/internal/agent/clientprotocol",
-			testFiles:  []*ast.File{file},
-		}
-	}
-
-	t.Run("the listed test file may import its listed paths", func(t *testing.T) {
-		t.Parallel()
-
-		src := "package fixture\n\nimport (\n\t\"github.com/sortie-ai/sortie/internal/orchestrator\"\n\t\"github.com/sortie-ai/sortie/internal/tracker/file\"\n)\n"
-		fset, file := parseFixture(t, harnessFileFixtureName, src)
-		pkg := packageWithTestFile(file)
-		if violations := checkContractImports(fset, file, pkg); len(violations) != 0 {
-			t.Errorf("checkContractImports() = %+v, want none for the allowlisted harness file", violations)
-		}
-	})
-
-	t.Run("another banned import in the same file still reports", func(t *testing.T) {
-		t.Parallel()
-
-		src := "package fixture\n\nimport \"github.com/sortie-ai/sortie/internal/tracker/jira\"\n"
-		fset, file := parseFixture(t, harnessFileFixtureName, src)
-		pkg := packageWithTestFile(file)
-		if violations := checkContractImports(fset, file, pkg); len(violations) != 1 {
-			t.Errorf("checkContractImports() returned %d violations, want 1 for an import the entry does not list: %+v", len(violations), violations)
-		}
-	})
-
-	t.Run("a differently named test file gets no exemption", func(t *testing.T) {
-		t.Parallel()
-
-		src := "package fixture\n\nimport \"github.com/sortie-ai/sortie/internal/orchestrator\"\n"
-		fset, file := parseFixture(t, "other_test.go", src)
-		pkg := packageWithTestFile(file)
-		if violations := checkContractImports(fset, file, pkg); len(violations) != 1 {
-			t.Errorf("checkContractImports() returned %d violations, want 1 for a file the exemption does not name: %+v", len(violations), violations)
-		}
-	})
-
-	t.Run("a non-test file gets no exemption", func(t *testing.T) {
-		t.Parallel()
-
-		src := "package clientprotocol\n\nimport \"github.com/sortie-ai/sortie/internal/orchestrator\"\n"
-		fset, file := parseFixture(t, harnessFileFixtureName, src)
-		pkg := contractPackage{
-			dirName:    "clientprotocol",
-			importPath: "github.com/sortie-ai/sortie/internal/agent/clientprotocol",
-			files:      []*ast.File{file},
-		}
-		if violations := checkContractImports(fset, file, pkg); len(violations) != 1 {
-			t.Errorf("checkContractImports() returned %d violations for a non-test file, want 1: %+v", len(violations), violations)
-		}
-	})
-}
-
-// harnessFileFixtureName is the base name the test-import allowlist
-// exempts, shared by the controls above.
-const harnessFileFixtureName = "gemini_qualification_e2e_unix_test.go"
