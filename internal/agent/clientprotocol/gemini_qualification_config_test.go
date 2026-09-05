@@ -15,15 +15,15 @@ import (
 // coordinates only: names are read and printed, values never are. The
 // generic integration helper's variables stay untouched.
 const (
-	geminiQualificationGateEnv        = "SORTIE_GEMINI_QUALIFICATION_TEST"
-	geminiQualificationCommandEnv     = "SORTIE_GEMINI_COMMAND"
-	geminiQualificationModelEnv       = "SORTIE_GEMINI_MODEL"
-	geminiQualificationAuthNamesEnv   = "SORTIE_GEMINI_AUTH_ENV_NAMES"
-	geminiQualificationRunHomeEnv     = "HOME"
-	geminiQualificationRunCLIHomeEnv  = "GEMINI_CLI_HOME"
-	geminiQualificationExecPathEnv    = "PATH"
-	geminiQualificationSkipReason     = "skipping Gemini qualification: set SORTIE_GEMINI_QUALIFICATION_TEST=1 to enable the live profile"
-	geminiQualificationNonUnixFailure = "Gemini live qualification requires a Unix process-group oracle"
+	qualificationGateEnv             = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST"
+	qualificationCommandEnv          = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND"
+	qualificationModelEnv            = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_MODEL"
+	qualificationAuthNamesEnv        = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_AUTH_ENV_NAMES"
+	geminiQualificationRunHomeEnv    = "HOME"
+	geminiQualificationRunCLIHomeEnv = "GEMINI_CLI_HOME"
+	geminiQualificationExecPathEnv   = "PATH"
+	qualificationSkipReason          = "skipping Agent Client Protocol qualification: set SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST=1 to enable the live profile"
+	qualificationNonUnixFailure      = "Agent Client Protocol qualification requires a Unix process-group oracle"
 )
 
 // geminiQualificationToolchainEnvNames are environment variable names a
@@ -60,18 +60,18 @@ type geminiQualificationConfig struct {
 	EnvAllowlist []string
 }
 
-// requireGeminiQualification skips the test when the Gemini
-// qualification gate is disabled and otherwise resolves the live
+// requireGeminiQualification skips the test when the qualification
+// gate is disabled and otherwise resolves the live
 // coordinates, failing the test rather than skipping when any
 // prerequisite is missing or invalid.
 func requireGeminiQualification(t *testing.T) geminiQualificationConfig {
 	t.Helper()
-	if os.Getenv(geminiQualificationGateEnv) != "1" {
-		t.Skip(geminiQualificationSkipReason)
+	if os.Getenv(qualificationGateEnv) != "1" {
+		t.Skip(qualificationSkipReason)
 	}
 	config, err := geminiResolveQualificationCoordinates(os.LookupEnv)
 	if err != nil {
-		t.Fatalf("Gemini qualification gate is enabled but a prerequisite is missing: %v", err)
+		t.Fatalf("the qualification gate is enabled but a prerequisite is missing: %v", err)
 	}
 	return config
 }
@@ -83,25 +83,25 @@ func requireGeminiQualification(t *testing.T) geminiQualificationConfig {
 // it is present; the resolved config's allowlist is built from the
 // resolved authentication names.
 func geminiResolveQualificationCoordinates(env func(string) (string, bool)) (geminiQualificationConfig, error) {
-	command := geminiCoordinateValue(env, geminiQualificationCommandEnv)
+	command := geminiCoordinateValue(env, qualificationCommandEnv)
 	commandPath, err := parseGeminiQualificationCommand(command)
 	if err != nil {
 		return geminiQualificationConfig{}, err
 	}
 
-	model := geminiCoordinateValue(env, geminiQualificationModelEnv)
+	model := geminiCoordinateValue(env, qualificationModelEnv)
 	if model == "" {
-		return geminiQualificationConfig{}, fmt.Errorf("%s must name one model identifier for every surface", geminiQualificationModelEnv)
+		return geminiQualificationConfig{}, fmt.Errorf("%s must name one model identifier for every surface", qualificationModelEnv)
 	}
 
-	rawNames := geminiCoordinateValue(env, geminiQualificationAuthNamesEnv)
+	rawNames := geminiCoordinateValue(env, qualificationAuthNamesEnv)
 	authNames, err := parseGeminiQualificationAuthEnvNames(rawNames)
 	if err != nil {
 		return geminiQualificationConfig{}, err
 	}
 	for _, name := range authNames {
 		if _, present := env(name); !present {
-			return geminiQualificationConfig{}, fmt.Errorf("authentication environment variable %q named by %s is absent from the invoking environment", name, geminiQualificationAuthNamesEnv)
+			return geminiQualificationConfig{}, fmt.Errorf("authentication environment variable %q named by %s is absent from the invoking environment", name, qualificationAuthNamesEnv)
 		}
 	}
 
@@ -144,29 +144,29 @@ func geminiCoordinateValue(env func(string) (string, bool), name string) string 
 func parseGeminiQualificationCommand(raw string) (string, error) {
 	command := strings.TrimSpace(raw)
 	if command == "" {
-		return "", fmt.Errorf("%s must name exactly one executable path with no arguments", geminiQualificationCommandEnv)
+		return "", fmt.Errorf("%s must name exactly one executable path with no arguments", qualificationCommandEnv)
 	}
 	if strings.ContainsAny(command, " \t\n\r") {
-		return "", fmt.Errorf("%s must be one executable path with no arguments; surface-specific flags are appended by the harness", geminiQualificationCommandEnv)
+		return "", fmt.Errorf("%s must be one executable path with no arguments; surface-specific flags are appended by the harness", qualificationCommandEnv)
 	}
 
 	if strings.ContainsRune(command, '/') || strings.ContainsRune(command, '\\') {
 		info, err := os.Stat(command)
 		if err != nil {
-			return "", fmt.Errorf("%s does not resolve to an executable file", geminiQualificationCommandEnv)
+			return "", fmt.Errorf("%s does not resolve to an executable file", qualificationCommandEnv)
 		}
 		if info.IsDir() {
-			return "", fmt.Errorf("%s names a directory, want one executable file", geminiQualificationCommandEnv)
+			return "", fmt.Errorf("%s names a directory, want one executable file", qualificationCommandEnv)
 		}
 		if !isGeminiExecutableMode(info.Mode()) {
-			return "", fmt.Errorf("%s names a file that is not executable", geminiQualificationCommandEnv)
+			return "", fmt.Errorf("%s names a file that is not executable", qualificationCommandEnv)
 		}
 		return command, nil
 	}
 
 	resolved, err := exec.LookPath(command)
 	if err != nil {
-		return "", fmt.Errorf("%s does not resolve to an executable on PATH", geminiQualificationCommandEnv)
+		return "", fmt.Errorf("%s does not resolve to an executable on PATH", qualificationCommandEnv)
 	}
 	return resolved, nil
 }
@@ -188,7 +188,7 @@ func isGeminiExecutableMode(mode os.FileMode) bool {
 // names only, never values.
 func parseGeminiQualificationAuthEnvNames(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s must be a comma-separated list of non-empty environment variable names", geminiQualificationAuthNamesEnv)
+		return nil, fmt.Errorf("%s must be a comma-separated list of non-empty environment variable names", qualificationAuthNamesEnv)
 	}
 
 	var names []string
@@ -196,11 +196,11 @@ func parseGeminiQualificationAuthEnvNames(raw string) ([]string, error) {
 		name := strings.TrimSpace(entry)
 		switch {
 		case name == "":
-			return nil, fmt.Errorf("%s carries an empty entry after trimming", geminiQualificationAuthNamesEnv)
+			return nil, fmt.Errorf("%s carries an empty entry after trimming", qualificationAuthNamesEnv)
 		case strings.ContainsAny(name, " \t\n\r="):
-			return nil, fmt.Errorf("%s entry %q is not a bare environment variable name", geminiQualificationAuthNamesEnv, name)
+			return nil, fmt.Errorf("%s entry %q is not a bare environment variable name", qualificationAuthNamesEnv, name)
 		case slices.Contains(names, name):
-			return nil, fmt.Errorf("%s names %q more than once", geminiQualificationAuthNamesEnv, name)
+			return nil, fmt.Errorf("%s names %q more than once", qualificationAuthNamesEnv, name)
 		}
 		names = append(names, name)
 	}
@@ -252,26 +252,26 @@ func geminiBuildQualificationSubprocessEnv(config geminiQualificationConfig, hom
 }
 
 // TestRequireGeminiQualificationDisabled confirms the gate's disabled
-// behavior: with SORTIE_GEMINI_QUALIFICATION_TEST unset or not "1",
-// requireGeminiQualification skips before resolving any coordinate, so
-// no qualification scenario runs and none fails. The enabled-gate
-// coordinates resolve in the same test through the injected resolver,
-// which is what the enabled paths call.
+// behavior: with SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST unset or not
+// "1", requireGeminiQualification skips before resolving any
+// coordinate, so no qualification scenario runs and none fails. The
+// enabled-gate coordinates resolve in the same test through the
+// injected resolver, which is what the enabled paths call.
 func TestRequireGeminiQualificationDisabled(t *testing.T) {
 	t.Run("skip reason text is the one explicit reason", func(t *testing.T) {
 		t.Parallel()
 
-		if !strings.HasPrefix(geminiQualificationSkipReason, "skipping Gemini qualification: ") {
-			t.Errorf("skip reason = %q, want it to state the skip and the enabling gate", geminiQualificationSkipReason)
+		if !strings.HasPrefix(qualificationSkipReason, "skipping Agent Client Protocol qualification: ") {
+			t.Errorf("skip reason = %q, want it to state the skip and the enabling gate", qualificationSkipReason)
 		}
-		if !strings.Contains(geminiQualificationSkipReason, geminiQualificationGateEnv+"=1") {
-			t.Errorf("skip reason = %q, want it to name %s=1", geminiQualificationSkipReason, geminiQualificationGateEnv)
+		if !strings.Contains(qualificationSkipReason, qualificationGateEnv+"=1") {
+			t.Errorf("skip reason = %q, want it to name %s=1", qualificationSkipReason, qualificationGateEnv)
 		}
 	})
 
 	for _, gate := range []string{"", "0", "true"} {
 		t.Run("gate value "+gate, func(t *testing.T) {
-			t.Setenv(geminiQualificationGateEnv, gate)
+			t.Setenv(qualificationGateEnv, gate)
 
 			proceeded := false
 			t.Run("requireGeminiQualification skips", func(t *testing.T) {
@@ -289,8 +289,8 @@ func TestRequireGeminiQualificationDisabled(t *testing.T) {
 	t.Run("non-unix enabled failure text is pinned", func(t *testing.T) {
 		t.Parallel()
 
-		if geminiQualificationNonUnixFailure != "Gemini live qualification requires a Unix process-group oracle" {
-			t.Errorf("non-unix failure = %q, want the exact unsupported-platform diagnostic", geminiQualificationNonUnixFailure)
+		if qualificationNonUnixFailure != "Agent Client Protocol qualification requires a Unix process-group oracle" {
+			t.Errorf("non-unix failure = %q, want the exact unsupported-platform diagnostic", qualificationNonUnixFailure)
 		}
 	})
 }
@@ -308,68 +308,68 @@ func TestGeminiQualificationConfigRejectsMissingCoordinates(t *testing.T) {
 		wantSub string
 		banned  []string
 	}{
-		{name: "gate coordinate missing entirely", coords: map[string]string{}, wantSub: geminiQualificationCommandEnv},
+		{name: "gate coordinate missing entirely", coords: map[string]string{}, wantSub: qualificationCommandEnv},
 		{
 			name: "command coordinate missing",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
+				qualificationCommandEnv:   "",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
 			},
-			wantSub: geminiQualificationCommandEnv,
+			wantSub: qualificationCommandEnv,
 		},
 		{
 			name: "command carries arguments",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "gemini --acp",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
+				qualificationCommandEnv:   "gemini --acp",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
 			},
-			wantSub: geminiQualificationCommandEnv,
+			wantSub: qualificationCommandEnv,
 			banned:  []string{"gemini --acp"},
 		},
 		{
 			name: "command resolves to a directory",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "@DIR@",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
+				qualificationCommandEnv:   "@DIR@",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
 			},
-			wantSub: geminiQualificationCommandEnv,
+			wantSub: qualificationCommandEnv,
 		},
 		{
 			name: "command names a missing file",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "@MISSING@",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
+				qualificationCommandEnv:   "@MISSING@",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
 			},
-			wantSub: geminiQualificationCommandEnv,
+			wantSub: qualificationCommandEnv,
 		},
 		{
 			name: "model coordinate empty",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "@EXEC@",
-				geminiQualificationModelEnv:     "",
-				geminiQualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
+				qualificationCommandEnv:   "@EXEC@",
+				qualificationModelEnv:     "",
+				qualificationAuthNamesEnv: "FIXTURE_AUTH_TOKEN_NAME",
 			},
-			wantSub: geminiQualificationModelEnv,
+			wantSub: qualificationModelEnv,
 		},
 		{
 			name: "auth name coordinate missing",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "@EXEC@",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "",
+				qualificationCommandEnv:   "@EXEC@",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "",
 			},
-			wantSub: geminiQualificationAuthNamesEnv,
+			wantSub: qualificationAuthNamesEnv,
 		},
 		{
 			name: "named authentication entry absent from the environment",
 			coords: map[string]string{
-				geminiQualificationCommandEnv:   "@EXEC@",
-				geminiQualificationModelEnv:     "gemini-fixture-model",
-				geminiQualificationAuthNamesEnv: "FIXTURE_ABSENT_AUTH_NAME",
+				qualificationCommandEnv:   "@EXEC@",
+				qualificationModelEnv:     "gemini-fixture-model",
+				qualificationAuthNamesEnv: "FIXTURE_ABSENT_AUTH_NAME",
 			},
 			wantSub: "absent from the invoking environment",
 		},
@@ -378,9 +378,9 @@ func TestGeminiQualificationConfigRejectsMissingCoordinates(t *testing.T) {
 	dir := t.TempDir()
 	executable := writeGeminiConfigExecutable(t, dir)
 	for i := range tests {
-		tests[i].coords[geminiQualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[geminiQualificationCommandEnv], "@EXEC@", executable)
-		tests[i].coords[geminiQualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[geminiQualificationCommandEnv], "@DIR@", dir)
-		tests[i].coords[geminiQualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[geminiQualificationCommandEnv], "@MISSING@", filepath.Join(dir, "definitely-not-here"))
+		tests[i].coords[qualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[qualificationCommandEnv], "@EXEC@", executable)
+		tests[i].coords[qualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[qualificationCommandEnv], "@DIR@", dir)
+		tests[i].coords[qualificationCommandEnv] = strings.ReplaceAll(tests[i].coords[qualificationCommandEnv], "@MISSING@", filepath.Join(dir, "definitely-not-here"))
 	}
 
 	for _, tt := range tests {
@@ -411,11 +411,11 @@ func TestGeminiQualificationConfigRejectsMissingCoordinates(t *testing.T) {
 
 		env := func(name string) (string, bool) {
 			switch name {
-			case geminiQualificationCommandEnv:
+			case qualificationCommandEnv:
 				return executable, true
-			case geminiQualificationModelEnv:
+			case qualificationModelEnv:
 				return "gemini-fixture-model", true
-			case geminiQualificationAuthNamesEnv:
+			case qualificationAuthNamesEnv:
 				return " FIXTURE_AUTH_ONE ,FIXTURE_AUTH_TWO", true
 			case "FIXTURE_AUTH_ONE", "FIXTURE_AUTH_TWO":
 				return "present-but-never-printed", true
@@ -530,7 +530,7 @@ func TestGeminiQualificationEnvironmentAllowlist(t *testing.T) {
 	})
 
 	t.Run("built environment carries exactly the allowlist names", func(t *testing.T) {
-		t.Setenv("SORTIE_GEMINI_QUALIFICATION_TEST", "irrelevant-undeclared-entry-must-not-cross")
+		t.Setenv("SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST", "irrelevant-undeclared-entry-must-not-cross")
 		t.Setenv("FIXTURE_AUTH_A", "value-a-not-logged")
 		t.Setenv("FIXTURE_AUTH_B", "value-b-not-logged")
 
@@ -556,8 +556,8 @@ func TestGeminiQualificationEnvironmentAllowlist(t *testing.T) {
 				t.Errorf("environment is missing allowlisted name %s", name)
 			}
 		}
-		if leaked := got["SORTIE_GEMINI_QUALIFICATION_TEST"]; leaked != "" {
-			t.Errorf("environment carries undeclared orchestrator entry SORTIE_GEMINI_QUALIFICATION_TEST")
+		if leaked := got["SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST"]; leaked != "" {
+			t.Errorf("environment carries undeclared orchestrator entry SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST")
 		}
 		if got["HOME"] != "/run-scoped/home" || got["GEMINI_CLI_HOME"] != "/run-scoped/cli-home" {
 			t.Errorf("home coordinates = %q/%q, want the run-scoped values to override the invoking environment", got["HOME"], got["GEMINI_CLI_HOME"])
