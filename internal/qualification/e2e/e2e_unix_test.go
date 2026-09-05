@@ -191,6 +191,120 @@ func TestTerminalOracle(t *testing.T) {
 	}
 }
 
+// terminalConditionReached is the fully satisfied condition every case
+// below starts from, so each case states only the field it withholds.
+func terminalConditionReached() TerminalCondition {
+	return TerminalCondition{
+		SucceededRow:    true,
+		HandoffReached:  true,
+		NoRunningEntry:  true,
+		NoRetryEntry:    true,
+		StopSessionDone: true,
+	}
+}
+
+// TestTerminalConditionReached pins the oracle's verdict across the
+// whole field set. Reached is one conjunction, so a field dropped from
+// it stays invisible to a happy-path run and to statement coverage
+// alike: the run still passes and the field is still executed. Only
+// withholding each field in turn shows that every one of them is load
+// bearing.
+func TestTerminalConditionReached(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every part satisfied reports reached", func(t *testing.T) {
+		t.Parallel()
+
+		if !terminalConditionReached().Reached() {
+			t.Error("Reached() = false for a fully satisfied condition, want true")
+		}
+	})
+
+	withheld := []struct {
+		name     string
+		withdraw func(*TerminalCondition)
+	}{
+		{name: "no succeeded run-history row", withdraw: func(c *TerminalCondition) { c.SucceededRow = false }},
+		{name: "the issue never reached its handoff state", withdraw: func(c *TerminalCondition) { c.HandoffReached = false }},
+		{name: "a running snapshot entry remains", withdraw: func(c *TerminalCondition) { c.NoRunningEntry = false }},
+		{name: "a retry snapshot entry remains", withdraw: func(c *TerminalCondition) { c.NoRetryEntry = false }},
+		{name: "the session never completed StopSession", withdraw: func(c *TerminalCondition) { c.StopSessionDone = false }},
+	}
+
+	for _, tt := range withheld {
+		t.Run(tt.name+" reports not reached", func(t *testing.T) {
+			t.Parallel()
+
+			condition := terminalConditionReached()
+			tt.withdraw(&condition)
+			if condition.Reached() {
+				t.Errorf("Reached() = true with %s, want false", tt.name)
+			}
+		})
+	}
+}
+
+// TestTerminalRecordGrades pins the three verdicts the end-to-end
+// record can carry. The grade is what the qualification evidence
+// reports, so a run that reached its terminal condition but left a
+// process group behind must not be graded the same as a clean one.
+func TestTerminalRecordGrades(t *testing.T) {
+	t.Parallel()
+
+	notReached := terminalConditionReached()
+	notReached.StopSessionDone = false
+
+	tests := []struct {
+		name        string
+		condition   TerminalCondition
+		groupClean  bool
+		wantGrade   qualification.Grade
+		wantOutcome qualification.Outcome
+	}{
+		{
+			name:        "reached with a clean process group is usable",
+			condition:   terminalConditionReached(),
+			groupClean:  true,
+			wantGrade:   qualification.GradeUsable,
+			wantOutcome: qualification.OutcomePass,
+		},
+		{
+			name:        "not reached is not observed",
+			condition:   notReached,
+			groupClean:  true,
+			wantGrade:   qualification.GradeNotObserved,
+			wantOutcome: qualification.OutcomeNotObserved,
+		},
+		{
+			name:        "reached with a surviving group is a runtime failure",
+			condition:   terminalConditionReached(),
+			groupClean:  false,
+			wantGrade:   qualification.GradeNotObserved,
+			wantOutcome: qualification.OutcomeRuntimeFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := TerminalRecord(tt.condition, tt.groupClean, "sess-1", "fixture-agent", "1.0.0-fixture")
+			if rec.Grade != tt.wantGrade {
+				t.Errorf("TerminalRecord() grade = %q, want %q", rec.Grade, tt.wantGrade)
+			}
+			if rec.Outcome != tt.wantOutcome {
+				t.Errorf("TerminalRecord() outcome = %q, want %q", rec.Outcome, tt.wantOutcome)
+			}
+			if rec.SessionID == nil || *rec.SessionID != "sess-1" {
+				t.Errorf("TerminalRecord() session id = %v, want a pointer to \"sess-1\"", rec.SessionID)
+			}
+			if rec.Scenario != qualification.ScenarioEndToEnd {
+				t.Errorf("TerminalRecord() scenario = %q, want %q", rec.Scenario, qualification.ScenarioEndToEnd)
+			}
+		})
+	}
+}
+
 // TestHarnessWorkflowPathIsAbsolute pins the workflow path the
 // orchestrator hands each worker. Settings and MCP configuration
 // resolve against its directory, so a relative value would resolve them
@@ -205,5 +319,48 @@ func TestHarnessWorkflowPathIsAbsolute(t *testing.T) {
 	}
 	if filepath.Base(got) != "WORKFLOW.md" {
 		t.Errorf("WorkflowAbsPath() base = %q, want \"WORKFLOW.md\"", filepath.Base(got))
+	}
+}
+
+// TestStartWorkflowDrivesTheRunToItsTerminalCondition exercises the
+// exported starter and the session accessor the gated live collector
+// uses. TestTerminalOracle drives the orchestrator inline, so without
+// this the only call shape the collector actually takes would never run
+// outside the gate, and a break in it would surface first on a
+// maintainer's machine with the qualification gate set rather than on a
+// pull request.
+func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
+	harness := NewHarness(t)
+
+	cancel, runDone := StartWorkflow(t, harness)
+
+	deadline := time.Now().Add(qualification.ShutdownDeadline)
+	var condition TerminalCondition
+	for {
+		condition = ObserveTerminalCondition(t, harness)
+		if condition.Reached() {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-runDone
+			t.Fatalf("StartWorkflow never reached the terminal condition; last observation = %+v", condition)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(qualification.ShutdownDeadline):
+		t.Fatal("the run goroutine did not return after cancellation")
+	}
+
+	sessions := harness.Agent().SessionIDs()
+	if len(sessions) == 0 {
+		t.Fatal("SessionIDs() is empty after a completed run, want the session the harness observed")
+	}
+	if sessions[0] == "" {
+		t.Error("SessionIDs()[0] is empty, want the observed protocol session identifier")
 	}
 }
