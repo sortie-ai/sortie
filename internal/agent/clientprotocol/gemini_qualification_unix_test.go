@@ -1461,7 +1461,7 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 
 	adapter := &ClientProtocolAdapter{}
 	command := strings.Join(geminiQualificationLaunchArgv(runtime.Config, qualification.SurfaceProtocol, "", runtime.PolicyPath), " ")
-	harness := e2e.NewHarnessWithAgent(t, adapter, command)
+	harness := e2e.NewHarnessWithAgent(t, adapter, command, "agent-client-protocol")
 	_, runDone := e2e.StartWorkflow(t, harness)
 
 	deadline := time.Now().Add(qualification.ShutdownDeadline)

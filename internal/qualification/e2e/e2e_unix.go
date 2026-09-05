@@ -29,7 +29,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/tracker/file"
 )
 
-// fixtureAgentKind is the agent kind every harness instance configures.
+// fixtureAgentKind is the agent kind the deterministic harness
+// configures.
 // The orchestrator's dispatch preflight requires cfg.Agent.Kind to
 // resolve in the agent registry even though the harness always
 // supplies its adapter directly through AgentAdapterByKind, so this
@@ -305,19 +306,29 @@ func (o *AdapterObserver) SessionIDs() []string {
 }
 
 // NewHarness assembles the deterministic harness: the fake protocol
-// agent behind the same builder the live collector uses.
+// agent behind the same builder the live collector uses, configured
+// under this package's own fixture kind.
 func NewHarness(t *testing.T) *Harness {
 	t.Helper()
-	return NewHarnessWithAgent(t, newFakeAgent(), "sortie-qualification-fake-agent --session-fixture")
+	return NewHarnessWithAgent(t, newFakeAgent(), "sortie-qualification-fake-agent --session-fixture", fixtureAgentKind)
 }
 
 // NewHarnessWithAgent assembles the harness under t.TempDir() with the
-// given agent adapter and agent.command coordinate: a temporary issue
-// file, a controlled git workspace, a temporary store, and the
-// orchestrator wired to the file tracker and that agent. The live
-// collector passes the real protocol adapter; the deterministic tests
-// pass the fake protocol agent.
-func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand string) *Harness {
+// given agent adapter, agent.command coordinate and agent kind: a
+// temporary issue file, a controlled git workspace, a temporary store,
+// and the orchestrator wired to the file tracker and that agent.
+//
+// agentKind selects the registry entry the run resolves its metadata
+// through, and must name a kind registered in the calling test binary.
+// A caller qualifying a real adapter passes that adapter's own kind, so
+// the run reads the adapter's declared MCP injection mode and its
+// adapter-specific configuration validator exactly as production does;
+// passing this package's fixture kind instead would silently substitute
+// the zero-value metadata. A caller driving the fake agent passes
+// fixtureAgentKind, which this package registers itself so the harness
+// needs no adapter package loaded into the binary to satisfy dispatch
+// preflight.
+func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, agentKind string) *Harness {
 	t.Helper()
 
 	root := t.TempDir()
@@ -354,7 +365,7 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand s
 	}
 
 	sample := effectiveSample{
-		AgentKind:      fixtureAgentKind,
+		AgentKind:      agentKind,
 		AgentCommand:   agentCommand,
 		ReadTimeoutMS:  5000,
 		TurnTimeoutMS:  10000,
