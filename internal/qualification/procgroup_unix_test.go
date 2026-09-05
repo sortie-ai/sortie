@@ -84,3 +84,38 @@ func TestProcessGroupAbsenceOracle(t *testing.T) {
 		AwaitProcessGroupAbsence(t, pgid)
 	})
 }
+
+// TestProcessGroupPresentRejectsUnqueryableIDs pins the guard on the
+// exported query. The negation the liveness probe relies on gives every
+// id at or below 1 a different target, and each of those targets answers
+// present for a reason that has nothing to do with the launched group:
+// 0 addresses the caller's own group, 1 addresses every process the
+// caller may signal, and a negative id addresses a single process. A
+// caller that passed one of these would poll AwaitProcessGroupAbsence
+// until the deadline and then report a survivor that never existed.
+func TestProcessGroupPresentRejectsUnqueryableIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		pgid int
+	}{
+		{name: "zero addresses the caller's own process group", pgid: 0},
+		{name: "one addresses every process the caller may signal", pgid: 1},
+		{name: "a negative id addresses a process rather than a group", pgid: -5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			present, err := ProcessGroupPresent(tt.pgid)
+			if err == nil {
+				t.Fatalf("ProcessGroupPresent(%d) error = nil, want a rejection", tt.pgid)
+			}
+			if present {
+				t.Errorf("ProcessGroupPresent(%d) present = true, want false alongside the rejection", tt.pgid)
+			}
+		})
+	}
+}

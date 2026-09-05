@@ -15,7 +15,20 @@ import (
 // the exact negative PGID. A nil result with no error means a member
 // survives; a query error other than group absence is a runtime
 // failure, never a clean absence.
+//
+// pgid must be a positive group id. The negation this query relies on
+// gives every other value a different meaning that would answer a
+// question the caller did not ask: 0 negates to 0, which addresses the
+// caller's own process group and so reports present for as long as the
+// test process lives; 1 negates to -1, which addresses every process
+// the caller may signal; a negative value negates to a positive pid and
+// addresses one process rather than a group. Each would report a
+// liveness that is not the launched group's, so they are rejected
+// rather than queried.
 func ProcessGroupPresent(pgid int) (bool, error) {
+	if pgid <= 1 {
+		return false, fmt.Errorf("process group id must be greater than 1, got %d", pgid)
+	}
 	err := syscall.Kill(-pgid, syscall.Signal(0))
 	switch {
 	case err == nil:
