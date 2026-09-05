@@ -1462,7 +1462,7 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 	adapter := &ClientProtocolAdapter{}
 	command := strings.Join(geminiQualificationLaunchArgv(runtime.Config, qualification.SurfaceProtocol, "", runtime.PolicyPath), " ")
 	harness := e2e.NewHarnessWithAgent(t, adapter, command, "agent-client-protocol")
-	_, runDone := e2e.StartWorkflow(t, harness)
+	cancel, runDone := e2e.StartWorkflow(t, harness)
 
 	deadline := time.Now().Add(qualification.ShutdownDeadline)
 	var condition e2e.TerminalCondition
@@ -1474,13 +1474,23 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// Stop the run and join its goroutine before the absence oracle
+	// polls, so no still-dispatching orchestrator can keep a captured
+	// group alive and drive groupClean false for a reason that is not
+	// the agent's cleanup. The join carries the shared bound, so a
+	// wedged run costs one deadline rather than blocking forever.
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(qualification.ShutdownDeadline):
+	}
+
 	groupClean := true
 	for _, pgid := range harness.Agent().PGIDs() {
 		if !geminiAwaitGroupDrain(t, pgid, qualification.ShutdownDeadline) {
 			groupClean = false
 		}
 	}
-	_ = runDone
 	sessionID := ""
 	if ids := harness.Agent().SessionIDs(); len(ids) > 0 {
 		sessionID = ids[0]
