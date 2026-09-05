@@ -85,12 +85,13 @@ func geminiResolveQualificationRuntime(t *testing.T, config geminiQualificationC
 // once with a bounded call. The value is ephemeral per-session
 // evidence; it never reaches notes or summaries.
 //
-// SORTIE_GEMINI_COMMAND can itself be a shim from a version manager
-// such as asdf, whose own "#!/usr/bin/env node" shebang re-resolves
-// node through PATH and can land on that manager's node shim rather
-// than a pinned install. That shim needs the manager's own
-// HOME-derived data directory to pick a node version; the run-scoped,
-// deliberately isolated HOME this environment carries has none, so
+// SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND can itself be a shim
+// from a version manager such as asdf, whose own "#!/usr/bin/env
+// node" shebang re-resolves node through PATH and can land on that
+// manager's node shim rather than a pinned install. That shim needs
+// the manager's own HOME-derived data directory to pick a node
+// version; the run-scoped, deliberately isolated HOME this
+// environment carries has none, so
 // geminiQualificationToolchainEnvNames forwards that data-directory
 // coordinate from the invoking environment when present, without
 // widening the HOME isolation itself.
