@@ -134,9 +134,12 @@ func parseQualificationDirNonTestFiles(t *testing.T, fset *token.FileSet) []qual
 }
 
 // TestQualificationImportsMatchTheManifest proves internal/qualification's
-// own non-test files import no github.com/sortie-ai/sortie package,
-// making section 3.1's leaf property executable instead of a
-// review-time assertion.
+// own non-test files import no github.com/sortie-ai/sortie package.
+// That leaf property is why the end-to-end harness lives in a
+// subpackage rather than here: every importer of this package would
+// otherwise inherit the orchestrator and its dependency cone. The
+// check makes the property executable instead of a review-time
+// assertion.
 func TestQualificationImportsMatchTheManifest(t *testing.T) {
 	t.Parallel()
 
