@@ -434,25 +434,48 @@ var errNativeProbeBoundExceeded = errors.New("the native probe exceeded its boun
 // several megabytes; without this bound that echo would be retained
 // for the whole classification.
 type lineBoundedWriter struct {
-	limit   int
-	pending []byte
-	built   strings.Builder
-	dropped int
+	limit      int
+	pending    []byte
+	built      strings.Builder
+	dropped    int
+	discarding bool
 }
 
 // Write implements io.Writer, buffering p and emitting every complete
-// line it now contains.
+// line it now contains. A line is counted and abandoned as soon as the
+// buffer passes limit rather than once its newline arrives, so the
+// buffer never grows past one over-limit line plus one write: holding a
+// multi-megabyte echo in memory only to drop it would defeat the bound
+// this writer exists to impose.
 func (w *lineBoundedWriter) Write(p []byte) (int, error) {
-	w.pending = append(w.pending, p...)
-	for {
-		idx := bytes.IndexByte(w.pending, '\n')
-		if idx < 0 {
-			break
+	n := len(p)
+	for len(p) > 0 {
+		if w.discarding {
+			idx := bytes.IndexByte(p, '\n')
+			if idx < 0 {
+				return n, nil
+			}
+			w.discarding = false
+			p = p[idx+1:]
+			continue
 		}
-		w.emit(w.pending[:idx+1])
-		w.pending = w.pending[idx+1:]
+		w.pending = append(w.pending, p...)
+		p = nil
+		for {
+			idx := bytes.IndexByte(w.pending, '\n')
+			if idx < 0 {
+				break
+			}
+			w.emit(w.pending[:idx+1])
+			w.pending = w.pending[idx+1:]
+		}
+		if len(w.pending) > w.limit {
+			w.dropped++
+			w.discarding = true
+			w.pending = nil
+		}
 	}
-	return len(p), nil
+	return n, nil
 }
 
 // emit retains line if it is within limit, and otherwise drops it and
@@ -2082,22 +2105,69 @@ func TestLineBoundedWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("a trailing line with no final newline is classified once Flush runs", func(t *testing.T) {
+	t.Run("a trailing line within the limit is retained once Flush runs", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 16}
+		if _, err := w.Write([]byte("short")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := w.String(); got != "" {
+			t.Errorf("String() before Flush = %q, want empty: the line has no newline yet", got)
+		}
+		w.Flush()
+		if w.dropped != 0 {
+			t.Errorf("dropped = %d, want 0", w.dropped)
+		}
+		if got := w.String(); got != "short" {
+			t.Errorf("String() = %q, want the trailing partial line retained", got)
+		}
+	})
+
+	t.Run("an oversize line is counted and abandoned as soon as the bound is passed", func(t *testing.T) {
 		t.Parallel()
 
 		w := &lineBoundedWriter{limit: 4}
 		if _, err := w.Write([]byte("toolong")); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
-		if w.dropped != 0 {
-			t.Fatal("dropped counted before Flush ran on the trailing partial line")
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want 1 as soon as the buffer passes the limit", w.dropped)
+		}
+		if len(w.pending) != 0 {
+			t.Errorf("pending holds %d bytes, want 0: an over-limit line must not be retained while waiting for its newline", len(w.pending))
 		}
 		w.Flush()
 		if w.dropped != 1 {
-			t.Errorf("dropped after Flush = %d, want 1 for an oversize trailing line", w.dropped)
+			t.Errorf("dropped after Flush = %d, want the same single drop", w.dropped)
 		}
 		if got := w.String(); got != "" {
 			t.Errorf("String() = %q, want empty: the only line was dropped", got)
+		}
+	})
+
+	t.Run("an oversize line arriving in chunks never grows the buffer past the bound", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 64}
+		chunk := strings.Repeat("x", 32)
+		for range 100 {
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			if len(w.pending) > w.limit {
+				t.Fatalf("pending grew to %d bytes, want at most the %d-byte limit", len(w.pending), w.limit)
+			}
+		}
+		if _, err := w.Write([]byte("\nkept\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want exactly 1 for the one oversize line", w.dropped)
+		}
+		if got := w.String(); got != "kept\n" {
+			t.Errorf("String() = %q, want only the line after the dropped one", got)
 		}
 	})
 }
