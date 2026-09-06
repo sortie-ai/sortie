@@ -206,11 +206,7 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 		cmd.Dir = target.WorkspacePath
 	}
-	procutil.SetProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		return procutil.SignalGraceful(cmd.Process.Pid)
-	}
-	cmd.WaitDelay = procutil.DefaultStopGrace
+	procutil.SetGroupCancel(cmd)
 	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()

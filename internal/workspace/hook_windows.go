@@ -16,6 +16,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
 // statusControlCExit is the Windows NTSTATUS code for
@@ -107,9 +109,8 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 
 	cmd := exec.CommandContext(hookCtx, "cmd.exe", "/C", params.Script) //nolint:gosec // G204: hook scripts are from trusted workflow configuration
 	cmd.Dir = params.Dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_SUSPENDED,
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	procutil.SetProcessGroup(cmd)
 	cmd.Env = hookEnv(params.Env)
 
 	buf := &limitedBuffer{max: MaxHookOutputBytes}

@@ -251,16 +251,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetProcessGroup(cmd)
-	// Cancelling ctx otherwise falls back to os/exec's default of killing
-	// only the direct child, giving the agent no chance to exit cleanly and
-	// leaving any descendant it started running. Signal the process group
-	// instead and grant the same 5-second grace period StopSession already
-	// waits before escalating to a force-kill.
-	cmd.Cancel = func() error {
-		return procutil.SignalGraceful(cmd.Process.Pid)
-	}
-	cmd.WaitDelay = 5 * time.Second
+	procutil.SetGroupCancel(cmd)
 	cmd.Dir = target.WorkspacePath
 	cmd.Env = os.Environ()
 

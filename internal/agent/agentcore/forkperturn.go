@@ -29,9 +29,6 @@ const (
 	// stdoutScannerMaxTokenSize is handled by bufio.Scanner automatically.
 	stdoutScannerInitialBufSize = 64 * 1024 // 64 KB
 
-	// stopGracePeriod is the time between SIGTERM and SIGKILL in Stop
-	// and in the cmd.WaitDelay grace period.
-	stopGracePeriod = 5 * time.Second
 )
 
 // ForkPerTurnHooks provides the adapter-specific behavior points plugged into
@@ -247,11 +244,7 @@ func (s *ForkPerTurnSession) RunTurn(
 		allArgs := append(slices.Clip(s.target.Args), cmdArgs...)       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
 		cmd = exec.CommandContext(cmdCtx, s.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		return procutil.SignalGraceful(cmd.Process.Pid)
-	}
-	cmd.WaitDelay = stopGracePeriod
+	procutil.SetGroupCancel(cmd)
 	cmd.Dir = s.target.WorkspacePath
 	cmd.Env = os.Environ()
 
@@ -486,7 +479,7 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 	select {
 	case <-waitCh:
 		return nil
-	case <-time.After(stopGracePeriod):
+	case <-time.After(procutil.DefaultStopGrace):
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return nil
 	case <-ctx.Done():
