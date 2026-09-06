@@ -360,7 +360,7 @@ func TestDeclarationSetDeclared(t *testing.T) {
 	t.Parallel()
 
 	set := DeclarationSet{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Declarations: []DeclaredGap{
 			{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced},
 		},

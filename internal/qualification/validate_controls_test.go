@@ -846,7 +846,7 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture.Finalize()
 		path := WriteEvidenceFile(T, fixture.Records)
 		declarations := DeclarationSet{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Declarations:  []DeclaredGap{{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced}},
 		}
 		_, err := ValidateObservationsWithDeclarations(path, declarations)

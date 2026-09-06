@@ -495,7 +495,7 @@ func TestGeminiSemanticRecordForEmptySessionIDMapping(t *testing.T) {
 	t.Parallel()
 
 	declarations := qualification.DeclarationSet{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Declarations: []qualification.DeclaredGap{
 			{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 		},
@@ -1035,7 +1035,7 @@ func TestGeminiSemanticRecordForDeclarationArms(t *testing.T) {
 	t.Parallel()
 
 	declarations := qualification.DeclarationSet{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Declarations: []qualification.DeclaredGap{
 			{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 		},
@@ -1079,7 +1079,7 @@ func TestGeminiSemanticRecordForArm5FailsUnderDeclaration(t *testing.T) {
 
 	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
 		declarations := qualification.DeclarationSet{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Declarations: []qualification.DeclaredGap{
 				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 			},
@@ -1112,7 +1112,7 @@ func TestGeminiSemanticRecordForArm6FailsUnderDeclaration(t *testing.T) {
 
 	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
 		declarations := qualification.DeclarationSet{
-			SchemaVersion: 1,
+			SchemaVersion: 2,
 			Declarations: []qualification.DeclaredGap{
 				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 			},
