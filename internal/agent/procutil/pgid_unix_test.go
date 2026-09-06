@@ -152,13 +152,16 @@ func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 	pidFile := filepath.Join(dir, "descendant.pid")
 
 	descendant := writeShellScript(t, dir, "descendant.sh", fmt.Sprintf(
-		"trap 'printf terminated > %s; exit 0' TERM\n"+
-			"printf '%%s\\n' \"$$\" > %s\n"+
+		"MARKER='%s'\n"+
+			"PID_FILE='%s'\n"+
+			"trap 'printf terminated > \"$MARKER\"; exit 0' TERM\n"+
+			"printf '%%s\\n' \"$$\" > \"$PID_FILE\"\n"+
 			"while :; do sleep 1; done\n",
 		marker, pidFile,
 	))
 	leader := writeShellScript(t, dir, "leader.sh", fmt.Sprintf(
-		"/bin/sh %s &\n"+
+		"DESCENDANT='%s'\n"+
+			"/bin/sh \"$DESCENDANT\" &\n"+
 			"DESCENDANT_PID=$!\n"+
 			"trap 'wait \"$DESCENDANT_PID\"; exit 0' TERM\n"+
 			"wait \"$DESCENDANT_PID\"\n",

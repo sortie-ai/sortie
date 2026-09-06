@@ -39,8 +39,10 @@ func TestRunVerification_TimeoutSignalsDescendantGroup(t *testing.T) {
 	descendant := filepath.Join(wsPath, "descendant.sh")
 
 	script := fmt.Sprintf(
-		"trap 'printf terminated > %s; exit 0' TERM\n"+
-			"printf '%%s\\n' \"$$\" > %s\n"+
+		"MARKER='%s'\n"+
+			"PID_FILE='%s'\n"+
+			"trap 'printf terminated > \"$MARKER\"; exit 0' TERM\n"+
+			"printf '%%s\\n' \"$$\" > \"$PID_FILE\"\n"+
 			"while :; do sleep 1; done\n",
 		marker, pidFile,
 	)
@@ -48,7 +50,7 @@ func TestRunVerification_TimeoutSignalsDescendantGroup(t *testing.T) {
 		t.Fatalf("os.WriteFile(%q) = %v, want nil", descendant, err)
 	}
 
-	command := fmt.Sprintf(`/bin/sh %s & D=$!; trap 'wait "$D"; exit 0' TERM; wait "$D"`, descendant)
+	command := fmt.Sprintf(`DESCENDANT='%s'; /bin/sh "$DESCENDANT" & D=$!; trap 'wait "$D"; exit 0' TERM; wait "$D"`, descendant)
 
 	done := make(chan domain.VerificationResult, 1)
 	go func() {

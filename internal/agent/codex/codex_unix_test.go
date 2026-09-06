@@ -28,8 +28,10 @@ import (
 func writeDescendantScript(t *testing.T, dir, pidFile, markerFile string) string {
 	t.Helper()
 	content := fmt.Sprintf(
-		"trap 'printf terminated > %s; exit 0' TERM\n"+
-			"printf '%%s\\n' \"$$\" > %s\n"+
+		"MARKER='%s'\n"+
+			"PID_FILE='%s'\n"+
+			"trap 'printf terminated > \"$MARKER\"; exit 0' TERM\n"+
+			"printf '%%s\\n' \"$$\" > \"$PID_FILE\"\n"+
 			"while :; do sleep 1; done\n",
 		markerFile, pidFile,
 	)
@@ -64,7 +66,7 @@ func writeFakeAppServerScript(t *testing.T, dir, descendantScript string) string
 			"read -r _thread_start_req\n"+
 			"printf '{\"id\":3,\"result\":{\"thread\":{\"id\":\"fake-thread-1\"}}}\\n'\n"+
 			"printf '{\"method\":\"thread/started\",\"params\":{}}\\n'\n"+
-			"%s &\n"+
+			"'%s' &\n"+
 			"DESCENDANT_PID=$!\n"+
 			"trap 'wait \"$DESCENDANT_PID\"; exit 0' TERM\n"+
 			"wait \"$DESCENDANT_PID\"\n",
