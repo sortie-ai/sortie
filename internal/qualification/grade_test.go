@@ -207,7 +207,8 @@ func TestRichestNativeReference(T *testing.T) {
 					SurfaceNativeJSON:       {CapabilityTurnDisposition: tt.jsonGrade},
 					SurfaceNativeStreamJSON: {CapabilityTurnDisposition: tt.streamGrade},
 				}
-				reference, surface, unmeasured := nativeReferenceStanding(grades, CapabilityTurnDisposition)
+				reference, surface, standing := nativeReferenceStanding(grades, CapabilityTurnDisposition, []Surface{SurfaceNativeJSON, SurfaceNativeStreamJSON})
+				unmeasured := standing == nativeReferenceIncomplete
 				if unmeasured != tt.wantUnmeasured {
 					T.Fatalf("nativeReferenceStanding(json=%s, stream=%s) unmeasured = %v, want %v", tt.jsonGrade, tt.streamGrade, unmeasured, tt.wantUnmeasured)
 				}
@@ -397,8 +398,8 @@ func TestExplainEligibility(T *testing.T) {
 				T.Parallel()
 
 				fixture := NewFixture(variant)
-				report := ExplainEligibility(fixture.Records)
-				if got := ComputeEligibility(fixture.Records); got != report.Verdict {
+				report := ExplainEligibility(fixture.Records, fixture.Declarations())
+				if got := ComputeEligibility(fixture.Records, fixture.Declarations()); got != report.Verdict {
 					T.Errorf("ComputeEligibility(%s) = %s, want ExplainEligibility(...).Verdict %s", variant, got, report.Verdict)
 				}
 			})
@@ -422,7 +423,7 @@ func TestExplainEligibility(T *testing.T) {
 				T.Parallel()
 
 				fixture := NewFixture(tt.variant)
-				report := ExplainEligibility(fixture.Records)
+				report := ExplainEligibility(fixture.Records, fixture.Declarations())
 				if report.Verdict != tt.want {
 					T.Errorf("ExplainEligibility(%s).Verdict = %s, want %s", tt.variant, report.Verdict, tt.want)
 				}
@@ -436,7 +437,7 @@ func TestExplainEligibility(T *testing.T) {
 		fixture := NewFixture(FixtureQualified)
 		fixture.SetTokenCorroborationOnly(SurfaceProtocol)
 		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityRetryClassification, CaseUnknownOutcome)
-		report := ExplainEligibility(fixture.Records)
+		report := ExplainEligibility(fixture.Records, fixture.Declarations())
 		if report.Verdict != VerdictNotQualified {
 			T.Fatalf("ExplainEligibility().Verdict = %s, want not_qualified when a below row and an unmeasured row both appear", report.Verdict)
 		}
@@ -460,7 +461,7 @@ func TestExplainEligibility(T *testing.T) {
 
 		fixture := NewFixture(FixtureNotQualified)
 		fixture.SetSemanticDeclaredGap(CapabilityTurnDisposition, CaseCancellation, DeclaredGapNeverProduced)
-		report := ExplainEligibility(fixture.Records)
+		report := ExplainEligibility(fixture.Records, fixture.Declarations())
 		if report.Verdict != VerdictNotQualified {
 			T.Errorf("ExplainEligibility().Verdict = %s, want not_qualified: excluding a sibling Case must not mask the conflated refusal Case's below standing", report.Verdict)
 		}

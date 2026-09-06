@@ -21,12 +21,23 @@ type geminiSummaryGrade struct {
 	Label      string
 }
 
-// geminiSummarySemantic is one of the 36 semantic-case verdicts.
+// geminiSummarySemantic is one of the semantic-case verdicts.
 type geminiSummarySemantic struct {
 	Surface    qualification.Surface
 	Capability qualification.Capability
 	Case       qualification.Case
 	Verdict    qualification.Outcome
+	Grade      qualification.Grade
+	Detail     string
+}
+
+// geminiSummaryAbsentSurface is one declared-absent surface with its
+// declared reason, printed next to the verdict so the operator reads
+// it beside the eligibility line rather than inferring it from a
+// shrunken grade section.
+type geminiSummaryAbsentSurface struct {
+	Surface qualification.Surface
+	Reason  string
 }
 
 // geminiSummaryToken is one token-bearing path with its classification.
@@ -57,6 +68,13 @@ type geminiSummaryConclusions struct {
 	Blocking       []string
 	UnmeasuredRows []string
 	Excluded       []string
+	// AbsentSurfaces lists every surface the declaration set reports
+	// absent, with its declared reason.
+	AbsentSurfaces []geminiSummaryAbsentSurface
+	// NativeReferenceAbsent reports that this run measured no
+	// structured native surface, so every comparison row stands on the
+	// protocol surface alone.
+	NativeReferenceAbsent bool
 }
 
 // geminiNotesHeadings are the required adapter-notes headings in R8
@@ -97,7 +115,7 @@ func geminiStatusLabel(classification qualification.Grade) string {
 
 // geminiSummaryConclusionsFromRecords derives the bounded conclusions
 // from a validated non-final evidence set and its computed verdict.
-func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict qualification.Verdict) (geminiSummaryConclusions, error) {
+func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict qualification.Verdict, declarations qualification.DeclarationSet) (geminiSummaryConclusions, error) {
 	conclusions := geminiSummaryConclusions{Verdict: verdict}
 
 	for i := range records {
@@ -126,6 +144,8 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 				Surface:    rec.Surface,
 				Capability: rec.Capability,
 				Verdict:    rec.Outcome,
+				Grade:      rec.Grade,
+				Detail:     rec.Detail,
 			}
 			if rec.SemanticCase != nil {
 				semantic.Case = *rec.SemanticCase
@@ -134,7 +154,7 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 			switch rec.Grade {
 			case qualification.GradeNotObserved:
 				conclusions.Unobserved = append(conclusions.Unobserved,
-					fmt.Sprintf("%s %s %s", rec.Surface, rec.Capability, semantic.Case))
+					fmt.Sprintf("%s %s %s: %s", rec.Surface, rec.Capability, semantic.Case, rec.Outcome))
 			case qualification.GradeDeclaredGap:
 				conclusions.Excluded = append(conclusions.Excluded,
 					fmt.Sprintf("%s %s: declared %s", rec.Capability, semantic.Case, rec.Detail))
@@ -163,14 +183,18 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 		}
 	}
 
-	if len(conclusions.Grades) != 18 {
-		return geminiSummaryConclusions{}, fmt.Errorf("derived %d capability grades, want 16 baselines plus tool server and permission", len(conclusions.Grades))
+	measured := qualification.MeasuredSurfaces(declarations)
+	wantGrades := len(measured)*len(qualification.ComparisonCapabilities) + 2
+	wantSemantics := len(measured) * (len(qualification.CapabilityCases[qualification.CapabilityTurnDisposition]) + len(qualification.CapabilityCases[qualification.CapabilityRetryClassification]))
+	wantContinuations := len(measured)
+	if len(conclusions.Grades) != wantGrades {
+		return geminiSummaryConclusions{}, fmt.Errorf("derived %d capability grades, want %d baselines plus tool server and permission", len(conclusions.Grades), wantGrades)
 	}
-	if len(conclusions.Semantics) != 36 {
-		return geminiSummaryConclusions{}, fmt.Errorf("derived %d semantic verdicts, want 36", len(conclusions.Semantics))
+	if len(conclusions.Semantics) != wantSemantics {
+		return geminiSummaryConclusions{}, fmt.Errorf("derived %d semantic verdicts, want %d", len(conclusions.Semantics), wantSemantics)
 	}
-	if len(conclusions.Continuations) != 4 {
-		return geminiSummaryConclusions{}, fmt.Errorf("derived %d continuation outcomes, want 4", len(conclusions.Continuations))
+	if len(conclusions.Continuations) != wantContinuations {
+		return geminiSummaryConclusions{}, fmt.Errorf("derived %d continuation outcomes, want %d", len(conclusions.Continuations), wantContinuations)
 	}
 	if conclusions.Workspace == "" {
 		return geminiSummaryConclusions{}, fmt.Errorf("derived no workspace security conclusion")
@@ -209,7 +233,17 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 	slices.Sort(conclusions.Excluded)
 	conclusions.Excluded = slices.Compact(conclusions.Excluded)
 
-	report := qualification.ExplainEligibility(records)
+	report := qualification.ExplainEligibility(records, declarations)
+	conclusions.NativeReferenceAbsent = report.NativeReferenceAbsent
+	for _, entry := range declarations.AbsentSurfaces {
+		conclusions.AbsentSurfaces = append(conclusions.AbsentSurfaces, geminiSummaryAbsentSurface{
+			Surface: entry.Surface,
+			Reason:  entry.Reason,
+		})
+	}
+	slices.SortFunc(conclusions.AbsentSurfaces, func(a, b geminiSummaryAbsentSurface) int {
+		return slices.Index(qualification.Surfaces, a.Surface) - slices.Index(qualification.Surfaces, b.Surface)
+	})
 	for _, row := range report.Rows {
 		switch row.Standing {
 		case qualification.StandingBelow:
@@ -230,6 +264,16 @@ func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) stri
 	var b strings.Builder
 	fmt.Fprintf(&b, "Eligibility: %s\n", conclusions.Verdict)
 	fmt.Fprintf(&b, "%s\n", qualification.VerdictRationale(conclusions.Verdict))
+	fmt.Fprint(&b, "Declared-absent surfaces:\n")
+	if len(conclusions.AbsentSurfaces) == 0 {
+		fmt.Fprint(&b, "none\n")
+	}
+	for _, entry := range conclusions.AbsentSurfaces {
+		fmt.Fprintf(&b, "%s: declared absent (%s); corroborated\n", entry.Surface, entry.Reason)
+	}
+	if conclusions.NativeReferenceAbsent {
+		fmt.Fprint(&b, "no structured native surface was measured: every comparison row stands on the protocol surface alone\n")
+	}
 	fmt.Fprint(&b, "Blocking rows:\n")
 	if len(conclusions.Blocking) == 0 {
 		fmt.Fprint(&b, "none\n")
@@ -257,7 +301,11 @@ func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) stri
 	}
 	fmt.Fprint(&b, "Semantic verdicts:\n")
 	for _, semantic := range conclusions.Semantics {
-		fmt.Fprintf(&b, "%s %s %s: %s\n", semantic.Surface, semantic.Capability, semantic.Case, semantic.Verdict)
+		if semantic.Grade == qualification.GradeUsable {
+			fmt.Fprintf(&b, "%s %s %s: %s (%s)\n", semantic.Surface, semantic.Capability, semantic.Case, semantic.Verdict, semantic.Grade)
+			continue
+		}
+		fmt.Fprintf(&b, "%s %s %s: %s (%s): %s\n", semantic.Surface, semantic.Capability, semantic.Case, semantic.Verdict, semantic.Grade, semantic.Detail)
 	}
 	fmt.Fprint(&b, "Token sources:\n")
 	for _, token := range conclusions.Tokens {
@@ -497,7 +545,7 @@ func TestGeminiQualificationBoundedSummary(t *testing.T) {
 
 	fixture := qualification.NewFixture(qualification.FixtureQualified)
 	fixture.Finalize()
-	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, fixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
@@ -555,7 +603,7 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 
 	qualifiedFixture := qualification.NewFixture(qualification.FixtureQualified)
 	qualifiedFixture.Finalize()
-	qualified, err := geminiSummaryConclusionsFromRecords(qualifiedFixture.Records, qualification.VerdictQualified)
+	qualified, err := geminiSummaryConclusionsFromRecords(qualifiedFixture.Records, qualification.VerdictQualified, qualifiedFixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
@@ -566,7 +614,7 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 	// genuinely goes unobserved.
 	unmeasuredFixture := qualification.NewFixture(qualification.FixtureUnmeasured)
 	unmeasuredFixture.Finalize()
-	unmeasured, err := geminiSummaryConclusionsFromRecords(unmeasuredFixture.Records, qualification.VerdictUnmeasured)
+	unmeasured, err := geminiSummaryConclusionsFromRecords(unmeasuredFixture.Records, qualification.VerdictUnmeasured, unmeasuredFixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
@@ -723,14 +771,14 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 
 	freshFixture := qualification.NewFixture(qualification.FixtureQualified)
 	freshFixture.Finalize()
-	fresh, err := geminiSummaryConclusionsFromRecords(freshFixture.Records, qualification.VerdictQualified)
+	fresh, err := geminiSummaryConclusionsFromRecords(freshFixture.Records, qualification.VerdictQualified, freshFixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
 
 	otherFixture := qualification.NewFixture(qualification.FixtureNotQualified)
 	otherFixture.Finalize()
-	other, err := geminiSummaryConclusionsFromRecords(otherFixture.Records, qualification.VerdictNotQualified)
+	other, err := geminiSummaryConclusionsFromRecords(otherFixture.Records, qualification.VerdictNotQualified, otherFixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
@@ -740,7 +788,7 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 
 		independent := qualification.NewFixture(qualification.FixtureQualified)
 		independent.Finalize()
-		independentConclusions, err := geminiSummaryConclusionsFromRecords(independent.Records, qualification.VerdictQualified)
+		independentConclusions, err := geminiSummaryConclusionsFromRecords(independent.Records, qualification.VerdictQualified, independent.Declarations())
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
@@ -779,7 +827,7 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 		restored.Finalize()
 		// A not_observed retry baseline is an unmeasured standing, so
 		// this record set's own verdict is unmeasured.
-		fresh, err := geminiSummaryConclusionsFromRecords(restored.Records, qualification.VerdictUnmeasured)
+		fresh, err := geminiSummaryConclusionsFromRecords(restored.Records, qualification.VerdictUnmeasured, restored.Declarations())
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
@@ -834,12 +882,12 @@ func TestGeminiQualificationSummarySections(t *testing.T) {
 				// rather than assumed from the table, so a variant whose
 				// records do not actually produce its named verdict fails
 				// here rather than passing the assertions below vacuously.
-				verdict := qualification.ExplainEligibility(fixture.Records).Verdict
+				verdict := qualification.ExplainEligibility(fixture.Records, fixture.Declarations()).Verdict
 				if verdict != tt.verdict {
 					t.Fatalf("ExplainEligibility(%s fixture) = %s, want %s", tt.variant, verdict, tt.verdict)
 				}
 
-				conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, verdict)
+				conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, verdict, fixture.Declarations())
 				if err != nil {
 					t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 				}
@@ -884,7 +932,7 @@ func TestGeminiQualificationSummarySections(t *testing.T) {
 
 		fixture := qualification.NewFixture(qualification.FixtureQualified)
 		fixture.Finalize()
-		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, fixture.Declarations())
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
@@ -907,7 +955,7 @@ func TestGeminiQualificationSummarySections(t *testing.T) {
 		t.Parallel()
 
 		fixture := qualification.NewFixture(qualification.FixtureDeclaredGap)
-		for _, surface := range qualification.MeasuredSurfaces {
+		for _, surface := range qualification.MeasuredSurfaces(fixture.Declarations()) {
 			rec := fixture.FindFirst(qualification.MatchSemantic(surface, qualification.CapabilityRetryClassification, qualification.CaseHumanInput))
 			rec.Grade = qualification.GradeNotInducible
 			rec.Outcome = qualification.OutcomeNotInducible
@@ -916,7 +964,7 @@ func TestGeminiQualificationSummarySections(t *testing.T) {
 			rec.SessionID = nil
 		}
 		fixture.Finalize()
-		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, fixture.Declarations())
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
@@ -952,7 +1000,7 @@ func TestGeminiQualificationExcludedCaseNeverInUnobserved(t *testing.T) {
 
 	fixture := qualification.NewFixture(qualification.FixtureDeclaredGap)
 	fixture.Finalize()
-	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, fixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}

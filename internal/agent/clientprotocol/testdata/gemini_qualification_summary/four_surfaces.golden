@@ -1,0 +1,81 @@
+Eligibility: qualified
+Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it.
+Declared-absent surfaces:
+none
+Blocking rows:
+none
+Unmeasured rows:
+none
+Excluded cases:
+none
+Capability grades:
+protocol turn_disposition: Observed: usable
+protocol retry_classification: Observed: usable
+protocol token_ceiling: Observed: usable
+protocol tool_server_delivery: Observed: usable
+protocol session_continuation: Observed: usable
+protocol permission_handling: Observed: usable
+native_text turn_disposition: Observed: gap
+native_text retry_classification: Observed: gap
+native_text token_ceiling: Observed: gap
+native_text session_continuation: Observed: usable
+native_json turn_disposition: Observed: usable
+native_json retry_classification: Observed: usable
+native_json token_ceiling: Observed: usable
+native_json session_continuation: Observed: usable
+native_stream_json turn_disposition: Observed: usable
+native_stream_json retry_classification: Observed: usable
+native_stream_json token_ceiling: Observed: usable
+native_stream_json session_continuation: Observed: usable
+Semantic verdicts:
+protocol turn_disposition success: pass (usable)
+protocol turn_disposition runtime_failure: pass (usable)
+protocol turn_disposition runtime_refusal: pass (usable)
+protocol turn_disposition cancellation: pass (usable)
+protocol turn_disposition limit_reached: pass (usable)
+protocol retry_classification retryable_runtime_or_transport_failure: pass (usable)
+protocol retry_classification non_retryable_refusal: pass (usable)
+protocol retry_classification human_input: pass (usable)
+protocol retry_classification unknown_outcome: pass (usable)
+native_text turn_disposition success: pass (gap): turn_disposition success Case completed with a distinct Outcome on native_text
+native_text turn_disposition runtime_failure: pass (gap): turn_disposition runtime_failure Case completed with a distinct Outcome on native_text
+native_text turn_disposition runtime_refusal: pass (gap): turn_disposition runtime_refusal Case completed with a distinct Outcome on native_text
+native_text turn_disposition cancellation: pass (gap): turn_disposition cancellation Case completed with a distinct Outcome on native_text
+native_text turn_disposition limit_reached: pass (gap): turn_disposition limit_reached Case completed with a distinct Outcome on native_text
+native_text retry_classification retryable_runtime_or_transport_failure: pass (gap): retry_classification retryable_runtime_or_transport_failure Case completed with a distinct Outcome on native_text
+native_text retry_classification non_retryable_refusal: pass (gap): retry_classification non_retryable_refusal Case completed with a distinct Outcome on native_text
+native_text retry_classification human_input: pass (gap): retry_classification human_input Case completed with a distinct Outcome on native_text
+native_text retry_classification unknown_outcome: pass (gap): retry_classification unknown_outcome Case completed with a distinct Outcome on native_text
+native_json turn_disposition success: pass (usable)
+native_json turn_disposition runtime_failure: pass (usable)
+native_json turn_disposition runtime_refusal: pass (usable)
+native_json turn_disposition cancellation: pass (usable)
+native_json turn_disposition limit_reached: pass (usable)
+native_json retry_classification retryable_runtime_or_transport_failure: pass (usable)
+native_json retry_classification non_retryable_refusal: pass (usable)
+native_json retry_classification human_input: pass (usable)
+native_json retry_classification unknown_outcome: pass (usable)
+native_stream_json turn_disposition success: pass (usable)
+native_stream_json turn_disposition runtime_failure: pass (usable)
+native_stream_json turn_disposition runtime_refusal: pass (usable)
+native_stream_json turn_disposition cancellation: pass (usable)
+native_stream_json turn_disposition limit_reached: pass (usable)
+native_stream_json retry_classification retryable_runtime_or_transport_failure: pass (usable)
+native_stream_json retry_classification non_retryable_refusal: pass (usable)
+native_stream_json retry_classification human_input: pass (usable)
+native_stream_json retry_classification unknown_outcome: pass (usable)
+Token sources:
+protocol session/prompt/result/usage: usable
+protocol session/update/vendor_usage: corroboration_only
+native_text (no token-bearing path): gap
+native_json /response/stats: usable
+native_stream_json /stream/final/usage: usable
+Continuation:
+protocol: confirmed_same_session (Observed: usable)
+native_text: confirmed_same_session (Observed: usable)
+native_json: confirmed_same_session (Observed: usable)
+native_stream_json: confirmed_same_session (Observed: usable)
+Workspace security:
+Observed: controlled checkout without project settings; run-scoped homes; allowlisted environment names only; skip-trust accepted
+Unobserved semantic cases:
+none

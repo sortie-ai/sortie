@@ -68,7 +68,7 @@ var (
 		CapabilityTurnDisposition, CapabilityRetryClassification,
 		CapabilityTokenCeiling, CapabilitySessionContinuation,
 	}
-	measuredSurfaces = []Surface{
+	measurableSurfaces = []Surface{
 		SurfaceProtocol, SurfaceNativeText,
 		SurfaceNativeJSON, SurfaceNativeStreamJSON,
 	}
@@ -97,7 +97,7 @@ const (
 // and returns its row class, rejecting any tuple the table does not
 // declare.
 func ClassifyRecord(rec *Record) (RowClass, error) {
-	inMeasuredSurfaces := slices.Contains(measuredSurfaces, rec.Surface)
+	inMeasuredSurfaces := slices.Contains(measurableSurfaces, rec.Surface)
 
 	switch {
 	case rec.Scenario == ScenarioWorkspaceSecurity &&
@@ -283,23 +283,28 @@ func DeriveBaselineGrade(classifications []Grade) Grade {
 	return GradeGap
 }
 
-// richestNativeReference combines the native JSON and native
-// stream-JSON grades for one capability. The reference is the higher
-// observed grade, but if either surface is not_observed the reference is
-// not_observed even when the other surface is usable.
-func richestNativeReference(a, b Grade) Grade {
-	if a == GradeNotObserved || b == GradeNotObserved {
-		return GradeNotObserved
+// richestNativeReference combines the structured native surfaces'
+// grades for one capability. The reference is the highest observed
+// grade, but any member that is not_observed, or that carries no
+// numeric grade at all, makes the reference not_observed even when
+// another member is usable.
+func richestNativeReference(grades ...Grade) Grade {
+	best := Grade("")
+	bestRank := -1
+	for _, grade := range grades {
+		if grade == GradeNotObserved {
+			return GradeNotObserved
+		}
+		rank, ok := numericGrade(grade)
+		if !ok {
+			return GradeNotObserved
+		}
+		if best == "" || rank >= bestRank {
+			bestRank = rank
+			best = grade
+		}
 	}
-	aGrade, aOK := numericGrade(a)
-	bGrade, bOK := numericGrade(b)
-	if !aOK || !bOK {
-		return GradeNotObserved
-	}
-	if aGrade >= bGrade {
-		return a
-	}
-	return b
+	return best
 }
 
 // baselineGrades extracts the written per-surface baseline grades
@@ -354,7 +359,27 @@ type RowOutcome struct {
 type EligibilityReport struct {
 	Verdict Verdict
 	Rows    []RowOutcome
+	// NativeReferenceAbsent reports that the run measured no
+	// structured native surface, so every comparison row stands on the
+	// protocol surface alone.
+	NativeReferenceAbsent bool
 }
+
+// nativeReferenceState is the three-way state of one capability's
+// native structured reference.
+type nativeReferenceState int
+
+const (
+	// nativeReferenceGraded reports that the reference carries a grade,
+	// numeric or not.
+	nativeReferenceGraded nativeReferenceState = iota
+	// nativeReferenceIncomplete reports that a structured native
+	// surface this run measured carries no numeric baseline grade.
+	nativeReferenceIncomplete
+	// nativeReferenceMissing reports that this run measured no
+	// structured native surface at all.
+	nativeReferenceMissing
+)
 
 // presentGrade reports a surface-capability baseline grade and whether
 // a baseline record for it exists at all.
@@ -368,32 +393,41 @@ func presentGrade(grades map[Surface]map[Capability]Grade, surface Surface, capa
 }
 
 // nativeReferenceStanding derives one capability's native structured
-// reference: the higher-ranked of the two structured native surfaces'
-// baseline grades, or an unmeasured standing naming the first
-// unmeasured structured surface in measuredSurfaces order. native_text
-// stays excluded; it is not a structured surface.
-func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability Capability) (Grade, Surface, bool) {
-	for _, surface := range measuredSurfaces {
+// reference from the structured native surfaces this run measured: the
+// richest of their baseline grades, an incomplete standing naming the
+// first unmeasured structured surface in measurableSurfaces order, or
+// a missing standing when this run measured no structured native
+// surface at all. native_text stays excluded; it is not a structured
+// surface.
+func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability Capability, measured []Surface) (Grade, Surface, nativeReferenceState) {
+	var structured []Surface
+	for _, surface := range measurableSurfaces {
 		if surface != SurfaceNativeJSON && surface != SurfaceNativeStreamJSON {
 			continue
 		}
-		grade, _ := presentGrade(grades, surface, capability)
-		if _, ok := numericGrade(grade); !ok {
-			return "", surface, true
+		if slices.Contains(measured, surface) {
+			structured = append(structured, surface)
 		}
 	}
-	reference := richestNativeReference(
-		grades[SurfaceNativeJSON][capability],
-		grades[SurfaceNativeStreamJSON][capability],
-	)
-	return reference, "", false
+	if len(structured) == 0 {
+		return "", "", nativeReferenceMissing
+	}
+	surfaceGrades := make([]Grade, 0, len(structured))
+	for _, surface := range structured {
+		grade, _ := presentGrade(grades, surface, capability)
+		if _, ok := numericGrade(grade); !ok {
+			return "", surface, nativeReferenceIncomplete
+		}
+		surfaceGrades = append(surfaceGrades, grade)
+	}
+	return richestNativeReference(surfaceGrades...), "", nativeReferenceGraded
 }
 
 // explainComparisonRow derives one comparison capability's standing
 // against the ordered condition table: an absent or unmeasured
-// protocol baseline, an incomplete native reference, or a rank
-// comparison between the two.
-func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Capability) RowOutcome {
+// protocol baseline, an incomplete or missing native reference, or a
+// rank comparison between the two.
+func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Capability, measured []Surface) RowOutcome {
 	label := string(capability)
 	protocolGrade, present := presentGrade(grades, SurfaceProtocol, capability)
 	if !present {
@@ -402,8 +436,8 @@ func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Ca
 	if protocolGrade == GradeNotObserved {
 		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
 	}
-	referenceGrade, unmeasuredSurface, unmeasured := nativeReferenceStanding(grades, capability)
-	if unmeasured {
+	referenceGrade, unmeasuredSurface, standing := nativeReferenceStanding(grades, capability, measured)
+	if standing == nativeReferenceIncomplete {
 		return RowOutcome{
 			Label:    label,
 			Standing: StandingUnmeasured,
@@ -411,10 +445,15 @@ func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Ca
 		}
 	}
 	protocolRank, protocolOK := numericGrade(protocolGrade)
-	referenceRank, referenceOK := numericGrade(referenceGrade)
 	if !protocolOK {
 		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
 	}
+	if standing == nativeReferenceMissing {
+		// With no structured native surface measured there is nothing
+		// for the protocol surface to be below.
+		return RowOutcome{Label: label, Standing: StandingSatisfied}
+	}
+	referenceRank, referenceOK := numericGrade(referenceGrade)
 	if !referenceOK {
 		// Blame the side that is actually unmeasured. The caller filters
 		// an unranked reference out before this point, so neither arm is
@@ -459,14 +498,18 @@ func explainSingletonRow(records []Record, class RowClass) RowOutcome {
 var singletonRowClasses = []RowClass{RowPolicyPrecondition, RowPermission, RowMCPDelivery, RowEndToEnd}
 
 // ExplainEligibility derives the verdict and the per-row standings from
-// the non-final records alone. It is pure and total: it returns a
-// report for any record slice, including an empty one, without
-// panicking on a missing baseline or a missing singleton row.
-func ExplainEligibility(records []Record) EligibilityReport {
+// the non-final records and the declaration set they were collected
+// under. It is pure and total: it returns a report for any record
+// slice, including an empty one, without panicking on a missing
+// baseline or a missing singleton row.
+func ExplainEligibility(records []Record, declarations DeclarationSet) EligibilityReport {
+	measured := MeasuredSurfaces(declarations)
 	grades := baselineGrades(records)
-	report := EligibilityReport{}
+	report := EligibilityReport{
+		NativeReferenceAbsent: !slices.Contains(measured, SurfaceNativeJSON) && !slices.Contains(measured, SurfaceNativeStreamJSON),
+	}
 	for _, capability := range comparisonCapabilities {
-		report.Rows = append(report.Rows, explainComparisonRow(grades, capability))
+		report.Rows = append(report.Rows, explainComparisonRow(grades, capability, measured))
 	}
 	for _, class := range singletonRowClasses {
 		report.Rows = append(report.Rows, explainSingletonRow(records, class))
@@ -493,10 +536,11 @@ func ExplainEligibility(records []Record) EligibilityReport {
 }
 
 // ComputeEligibility derives the qualification verdict from the
-// non-final records alone, returning ExplainEligibility(records).Verdict
-// so the two can never disagree.
-func ComputeEligibility(records []Record) Verdict {
-	return ExplainEligibility(records).Verdict
+// non-final records and the declaration set, returning
+// ExplainEligibility(records, declarations).Verdict so the two can
+// never disagree.
+func ComputeEligibility(records []Record, declarations DeclarationSet) Verdict {
+	return ExplainEligibility(records, declarations).Verdict
 }
 
 // readEvidenceFile reads a JSONL evidence file and strictly decodes
@@ -552,18 +596,20 @@ func validateOrder(records []Record) error {
 // setValidation carries the per-record lookups the strict set
 // checks assemble as they walk the file.
 type setValidation struct {
-	records    []Record
-	seen       map[string]bool
-	counts     map[RowClass]int
-	semantic   map[Surface]map[Capability]map[Case]*Record
-	tokens     map[Surface][]*Record
-	seeds      map[Surface]*Record
-	recalls    map[Surface]*Record
-	identity   map[string]bool
-	policy     *Record
-	permission *Record
-	mcp        *Record
-	e2e        *Record
+	records      []Record
+	declarations DeclarationSet
+	measured     []Surface
+	seen         map[string]bool
+	counts       map[RowClass]int
+	semantic     map[Surface]map[Capability]map[Case]*Record
+	tokens       map[Surface][]*Record
+	seeds        map[Surface]*Record
+	recalls      map[Surface]*Record
+	identity     map[string]bool
+	policy       *Record
+	permission   *Record
+	mcp          *Record
+	e2e          *Record
 }
 
 // validateNonFinalSet enforces the closed first-pass evidence set:
@@ -571,16 +617,18 @@ type setValidation struct {
 // relations, token sentinel rules, derived baselines, runtime-identity
 // coverage, and the derived cardinality formula. It returns the
 // eligibility verdict computed from the records.
-func validateNonFinalSet(records []Record, declarations DeclaredGapSet) (Verdict, error) {
+func validateNonFinalSet(records []Record, declarations DeclarationSet) (Verdict, error) {
 	v := &setValidation{
-		records:  records,
-		seen:     map[string]bool{},
-		counts:   map[RowClass]int{},
-		semantic: map[Surface]map[Capability]map[Case]*Record{},
-		tokens:   map[Surface][]*Record{},
-		seeds:    map[Surface]*Record{},
-		recalls:  map[Surface]*Record{},
-		identity: map[string]bool{},
+		records:      records,
+		declarations: declarations,
+		measured:     MeasuredSurfaces(declarations),
+		seen:         map[string]bool{},
+		counts:       map[RowClass]int{},
+		semantic:     map[Surface]map[Capability]map[Case]*Record{},
+		tokens:       map[Surface][]*Record{},
+		seeds:        map[Surface]*Record{},
+		recalls:      map[Surface]*Record{},
+		identity:     map[string]bool{},
 	}
 
 	if err := v.checkClosedScenario(); err != nil {
@@ -590,6 +638,9 @@ func validateNonFinalSet(records []Record, declarations DeclaredGapSet) (Verdict
 		return "", err
 	}
 	if err := v.ClassifyRecords(); err != nil {
+		return "", err
+	}
+	if err := v.checkDeclaredAbsentSurfaces(); err != nil {
 		return "", err
 	}
 	if err := v.checkExcludedCases(declarations); err != nil {
@@ -613,7 +664,21 @@ func validateNonFinalSet(records []Record, declarations DeclaredGapSet) (Verdict
 	if err := v.checkCardinality(); err != nil {
 		return "", err
 	}
-	return ComputeEligibility(records), nil
+	return ComputeEligibility(records, declarations), nil
+}
+
+// checkDeclaredAbsentSurfaces rejects any record whose surface the
+// declaration set names absent, naming the surface and its declared
+// reason: a record on a surface the operator says the runtime does not
+// offer describes neither the runtime nor the declaration honestly.
+func (v *setValidation) checkDeclaredAbsentSurfaces() error {
+	for i := range v.records {
+		rec := &v.records[i]
+		if reason, declared := v.declarations.AbsentSurfaceDeclared(rec.Surface); declared {
+			return fmt.Errorf("record %d: surface %s is declared absent (%s), so it cannot carry a record", rec.Sequence, rec.Surface, reason)
+		}
+	}
+	return nil
 }
 
 // checkClosedScenario rejects any final qualification record from the
@@ -863,7 +928,11 @@ func (v *setValidation) checkSessionRelation(rec *Record, class RowClass) error 
 	case RowContinuationRecall:
 		return nil
 	case RowSemantic:
-		if rec.Outcome == OutcomePass && rec.SessionID == nil {
+		if slices.Contains(SessionlessSurfaces, rec.Surface) {
+			if rec.SessionID != nil {
+				return fmt.Errorf("semantic probe on a sessionless surface must carry a null session_id")
+			}
+		} else if rec.Surface == SurfaceProtocol && rec.Outcome == OutcomePass && rec.SessionID == nil {
 			return fmt.Errorf("passing semantic probe must carry its own session_id")
 		}
 		if rec.Grade == GradeDeclaredGap && rec.SessionID == nil {
@@ -879,7 +948,7 @@ func (v *setValidation) checkSessionRelation(rec *Record, class RowClass) error 
 // checkRecallRecords validates every surface's recall record after the
 // continuation relations are known.
 func (v *setValidation) checkRecallRecords() error {
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		recall := v.recalls[surface]
 		if recall == nil {
 			continue
@@ -963,7 +1032,7 @@ func (v *setValidation) indexRecord(rec *Record, class RowClass) {
 // records reuse the matching disposition-refusal session, and the
 // protocol human-input record reuses the permission attempt's session.
 func (v *setValidation) checkSemanticSessionRelations() error {
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		dispositionRefusal := v.semanticRecord(surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
 		retryRefusal := v.semanticRecord(surface, CapabilityRetryClassification, CaseNonRetryableRefusal)
 		if dispositionRefusal != nil && retryRefusal != nil &&
@@ -1018,6 +1087,18 @@ func missingSurfaces(have, want []Surface) []Surface {
 	return missing
 }
 
+// intersectSurfaces returns every member of want that is present in
+// have, in want's order.
+func intersectSurfaces(want, have []Surface) []Surface {
+	var kept []Surface
+	for _, surface := range want {
+		if slices.Contains(have, surface) {
+			kept = append(kept, surface)
+		}
+	}
+	return kept
+}
+
 // checkExcludedCases enforces the closed excluded-case rules for every
 // (capability, case) pair: a case is one kind of excluded or the
 // other, an exclusion kind carries the surface set it requires, a
@@ -1027,7 +1108,7 @@ func missingSurfaces(have, want []Surface) []Surface {
 // always NotInducibleDetail. It then requires every declaration to
 // match a record, mirroring checkIdentityCoverage's bidirectional
 // shape.
-func (v *setValidation) checkExcludedCases(declarations DeclaredGapSet) error {
+func (v *setValidation) checkExcludedCases(declarations DeclarationSet) error {
 	for _, capability := range Capabilities {
 		cases, ok := CapabilityCases[capability]
 		if !ok {
@@ -1057,10 +1138,10 @@ func (v *setValidation) checkExcludedCases(declarations DeclaredGapSet) error {
 
 // checkExcludedCase enforces the closed excluded-case rules for one
 // (capability, case) pair.
-func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capability Capability, caseID Case) error {
+func (v *setValidation) checkExcludedCase(declarations DeclarationSet, capability Capability, caseID Case) error {
 	var declared, catalog []Surface
 	var declaredDetail string
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		rec := v.semanticRecord(surface, capability, caseID)
 		if rec == nil {
 			continue
@@ -1074,16 +1155,17 @@ func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capabilit
 		}
 	}
 
+	declarableMeasured := intersectSurfaces(DeclarableSurfaces, v.measured)
 	if len(declared) > 0 && len(catalog) > 0 {
 		return fmt.Errorf("capability %s case %s carries both a declared gap and a not-inducible grade", capability, caseID)
 	}
 	if len(declared) > 0 {
-		if missing := missingSurfaces(declared, DeclarableSurfaces); len(missing) > 0 {
+		if missing := missingSurfaces(declared, declarableMeasured); len(missing) > 0 {
 			return fmt.Errorf("capability %s case %s declared gap is missing on surfaces %v", capability, caseID, missing)
 		}
 	}
 	if len(catalog) > 0 {
-		if missing := missingSurfaces(catalog, measuredSurfaces); len(missing) > 0 {
+		if missing := missingSurfaces(catalog, v.measured); len(missing) > 0 {
 			return fmt.Errorf("capability %s case %s not-inducible grade is missing on surfaces %v", capability, caseID, missing)
 		}
 	}
@@ -1104,7 +1186,7 @@ func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capabilit
 			peerCapability := capabilityOwning(peer)
 			var peerDeclared []Surface
 			var peerDetail string
-			for _, surface := range measuredSurfaces {
+			for _, surface := range v.measured {
 				rec := v.semanticRecord(surface, peerCapability, peer)
 				if rec == nil || rec.Grade != GradeDeclaredGap {
 					continue
@@ -1112,7 +1194,7 @@ func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capabilit
 				peerDeclared = append(peerDeclared, surface)
 				peerDetail = rec.Detail
 			}
-			if missing := missingSurfaces(peerDeclared, DeclarableSurfaces); len(missing) > 0 {
+			if missing := missingSurfaces(peerDeclared, declarableMeasured); len(missing) > 0 {
 				return fmt.Errorf("capability %s case %s's peer %s case %s does not carry a declared gap on surfaces %v", capability, caseID, peerCapability, peer, missing)
 			}
 			if peerDetail != declaredDetail {
@@ -1135,7 +1217,7 @@ func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capabilit
 // prior_session_id resolves to exactly one same-surface seed and that
 // each surface carries one seed and one recall.
 func (v *setValidation) checkContinuationRelations() error {
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		if v.seeds[surface] == nil {
 			return fmt.Errorf("surface %s has no continuation seed record", surface)
 		}
@@ -1158,7 +1240,7 @@ func (v *setValidation) checkContinuationRelations() error {
 // at least one record per surface, at most one sentinel, and mutual
 // exclusion between the sentinel and non-sentinel records.
 func (v *setValidation) checkTokenInventories() error {
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		records := v.tokens[surface]
 		if len(records) == 0 {
 			return fmt.Errorf("surface %s has no token inventory record", surface)
@@ -1189,7 +1271,7 @@ func (v *setValidation) checkTokenInventories() error {
 func (v *setValidation) checkDerivedBaselines() error {
 	grades := baselineGrades(v.records)
 
-	for _, surface := range measuredSurfaces {
+	for _, surface := range v.measured {
 		for _, capability := range comparisonCapabilities {
 			written, ok := grades[surface][capability]
 			if !ok {
@@ -1286,22 +1368,19 @@ func (v *setValidation) checkIdentityCoverage() error {
 // Per-scenario record counts the closed evidence set requires. Each of
 // the six singleton scenarios (workspace security, policy precondition,
 // permission, tool server delivery, process cleanup, end to end)
-// contributes singletonRowCount records; checkCardinality sums these
-// same constants into its fixed term, so a changed count here cannot
-// drift from the total it is checked against.
-const (
-	singletonRowCount        = 1
-	dispositionSemanticCount = 20
-	retrySemanticCount       = 16
-	surfaceBaselineCount     = 16
-	continuationSeedCount    = 4
-	continuationRecallCount  = 4
-)
+// contributes singletonRowCount records; checkCardinality sums this
+// same constant into its fixed term, so a changed count here cannot
+// drift from the total it is checked against. The five per-surface
+// counts derive from CapabilityCases and comparisonCapabilities rather
+// than restating their sizes, so a changed case set cannot drift from
+// the total it is checked against either.
+const singletonRowCount = 1
 
 // checkCardinality enforces the fixed row counts and the closed
-// cardinality formula fixed+T+N, where fixed is the sum of the per-
-// scenario record counts above, T is the token-inventory record count,
-// and N is the number of distinct non-null actual protocol session ids
+// cardinality formula fixed+T+N, where fixed is the sum of the six
+// singleton rows plus, for every measured surface, the per-surface
+// counts derived below, T is the token-inventory record count, and N
+// is the number of distinct non-null actual protocol session ids
 // referenced by non-final records.
 func (v *setValidation) checkCardinality() error {
 	fixed := map[RowClass]int{
@@ -1319,10 +1398,18 @@ func (v *setValidation) checkCardinality() error {
 			return err
 		}
 	}
-	if err := checkCount("disposition semantic", v.countSemanticByCapability(CapabilityTurnDisposition), dispositionSemanticCount); err != nil {
+
+	measuredCount := len(v.measured)
+	dispositionCount := len(CapabilityCases[CapabilityTurnDisposition]) * measuredCount
+	retryCount := len(CapabilityCases[CapabilityRetryClassification]) * measuredCount
+	surfaceBaselineCount := len(comparisonCapabilities) * measuredCount
+	continuationSeedCount := measuredCount
+	continuationRecallCount := measuredCount
+
+	if err := checkCount("disposition semantic", v.countSemanticByCapability(CapabilityTurnDisposition), dispositionCount); err != nil {
 		return err
 	}
-	if err := checkCount("retry semantic", v.countSemanticByCapability(CapabilityRetryClassification), retrySemanticCount); err != nil {
+	if err := checkCount("retry semantic", v.countSemanticByCapability(CapabilityRetryClassification), retryCount); err != nil {
 		return err
 	}
 	if err := checkCount("surface baseline", v.counts[RowBaseline], surfaceBaselineCount); err != nil {
@@ -1334,7 +1421,7 @@ func (v *setValidation) checkCardinality() error {
 	if err := checkCount("continuation recall", v.counts[RowContinuationRecall], continuationRecallCount); err != nil {
 		return err
 	}
-	fixedTotal += dispositionSemanticCount + retrySemanticCount + surfaceBaselineCount + continuationSeedCount + continuationRecallCount
+	fixedTotal += dispositionCount + retryCount + surfaceBaselineCount + continuationSeedCount + continuationRecallCount
 
 	T := 0
 	for _, records := range v.tokens {
@@ -1394,7 +1481,7 @@ func AggregateGradeFor(verdict Verdict) Grade {
 func VerdictRationale(verdict Verdict) string {
 	switch verdict {
 	case VerdictQualified:
-		return "Every load-bearing row was measured and the protocol surface is not below the richest measured native reference."
+		return "Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it."
 	case VerdictNotQualified:
 		return "The protocol surface is below the richest measured native reference on at least one load-bearing row. This runtime stays on its existing integration."
 	case VerdictUnmeasured:
@@ -1410,7 +1497,7 @@ func VerdictRationale(verdict Verdict) string {
 // empty declaration set, which rejects every declared_gap record, so
 // an existing caller stays fail-closed without being rewritten.
 func ValidateObservations(path string) (Verdict, error) {
-	return ValidateObservationsWithDeclarations(path, DeclaredGapSet{})
+	return ValidateObservationsWithDeclarations(path, DeclarationSet{})
 }
 
 // ValidateObservationsWithDeclarations strictly validates the closed
@@ -1418,7 +1505,7 @@ func ValidateObservations(path string) (Verdict, error) {
 // declaration set the run was collected under, and returns the
 // computed eligibility verdict. It rejects any final qualification
 // record.
-func ValidateObservationsWithDeclarations(path string, declarations DeclaredGapSet) (Verdict, error) {
+func ValidateObservationsWithDeclarations(path string, declarations DeclarationSet) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err
@@ -1445,7 +1532,7 @@ var (
 // declaration set, which rejects every declared_gap record, so an
 // existing caller stays fail-closed without being rewritten.
 func ValidateEvidence(path string) (Verdict, error) {
-	return ValidateEvidenceWithDeclarations(path, DeclaredGapSet{})
+	return ValidateEvidenceWithDeclarations(path, DeclarationSet{})
 }
 
 // ValidateEvidenceWithDeclarations strictly validates the complete
@@ -1454,7 +1541,7 @@ func ValidateEvidence(path string) (Verdict, error) {
 // aggregate record in the last position, and exact equality between
 // the aggregate's grade and an independent recomputation of
 // eligibility.
-func ValidateEvidenceWithDeclarations(path string, declarations DeclaredGapSet) (Verdict, error) {
+func ValidateEvidenceWithDeclarations(path string, declarations DeclarationSet) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err

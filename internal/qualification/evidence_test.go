@@ -357,6 +357,94 @@ func TestDecodeRecordWidenedVocabulary(t *testing.T) {
 	})
 }
 
+// TestDecodeRecordRejectsEmptyNullableString confirms decodeNullableString's
+// rejection reaches all five nullable string fields DecodeRecord decodes
+// through it, that null still decodes to a nil pointer on each, and that
+// a non-empty value still round trips.
+func TestDecodeRecordRejectsEmptyNullableString(t *testing.T) {
+	t.Parallel()
+
+	fields := []string{"evidence_path", "session_id", "prior_session_id", "agent_name", "agent_version"}
+
+	for _, name := range fields {
+		t.Run(name+" empty string is rejected", func(t *testing.T) {
+			t.Parallel()
+
+			doctored := marshalRecordFields(t, ValidRecord())
+			doctored[name] = json.RawMessage(`""`)
+			line, err := json.Marshal(doctored)
+			if err != nil {
+				t.Fatalf("marshal doctored fields: %v", err)
+			}
+			_, err = DecodeRecord(line)
+			if err == nil {
+				t.Fatalf("DecodeRecord(%s) = nil error, want rejection of an empty %s", line, name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("DecodeRecord() error = %v, want it to name %q", err, name)
+			}
+		})
+
+		t.Run(name+" null still decodes to nil", func(t *testing.T) {
+			t.Parallel()
+
+			doctored := marshalRecordFields(t, ValidRecord())
+			doctored[name] = json.RawMessage(`null`)
+			line, err := json.Marshal(doctored)
+			if err != nil {
+				t.Fatalf("marshal doctored fields: %v", err)
+			}
+			got, err := DecodeRecord(line)
+			if err != nil {
+				t.Fatalf("DecodeRecord(%s) error = %v, want nil for a null %s", line, err, name)
+			}
+			if nullableStringField(t, got, name) != nil {
+				t.Errorf("DecodeRecord() field %s = %v, want nil", name, nullableStringField(t, got, name))
+			}
+		})
+
+		t.Run(name+" a non-empty value round trips", func(t *testing.T) {
+			t.Parallel()
+
+			doctored := marshalRecordFields(t, ValidRecord())
+			doctored[name] = json.RawMessage(`"observed-value"`)
+			line, err := json.Marshal(doctored)
+			if err != nil {
+				t.Fatalf("marshal doctored fields: %v", err)
+			}
+			got, err := DecodeRecord(line)
+			if err != nil {
+				t.Fatalf("DecodeRecord(%s) error = %v, want nil for a non-empty %s", line, err, name)
+			}
+			field := nullableStringField(t, got, name)
+			if field == nil || *field != "observed-value" {
+				t.Errorf("DecodeRecord() field %s = %v, want a pointer to %q", name, field, "observed-value")
+			}
+		})
+	}
+}
+
+// nullableStringField reads one of Record's five nullable string
+// fields by its wire name, so the table above can assert on any of
+// them without a per-field switch at each call site.
+func nullableStringField(t *testing.T, rec Record, name string) *string {
+	t.Helper()
+	switch name {
+	case "evidence_path":
+		return rec.EvidencePath
+	case "session_id":
+		return rec.SessionID
+	case "prior_session_id":
+		return rec.PriorSessionID
+	case "agent_name":
+		return rec.AgentName
+	case "agent_version":
+		return rec.AgentVersion
+	}
+	t.Fatalf("nullableStringField: unknown field %q", name)
+	return nil
+}
+
 // TestRowGradesClosedSetTotality confirms RowGrades is a subset of
 // Grades and excludes exactly the three eligibility-only grades.
 func TestRowGradesClosedSetTotality(t *testing.T) {

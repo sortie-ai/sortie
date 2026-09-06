@@ -247,6 +247,26 @@ var DeclarableSurfaces = []Surface{
 	SurfaceProtocol, SurfaceNativeJSON, SurfaceNativeStreamJSON,
 }
 
+// SurfaceNotOffered states that the runtime exposes no entry point for
+// this surface.
+const SurfaceNotOffered = "surface_not_offered"
+
+// AbsentSurfaceReasons is the closed set of reasons an absent-surface
+// declaration may carry.
+var AbsentSurfaceReasons = []string{SurfaceNotOffered}
+
+// DeclarableAbsentSurfaces are the surfaces an operator may declare
+// absent. SurfaceNativeText is excluded: it recognizes no terminal
+// outcome, so an absence claim there would be unfalsifiable.
+// SurfaceProtocol is excluded because it is the surface under test,
+// and SurfaceAggregate is excluded because it is not measured.
+var DeclarableAbsentSurfaces = []Surface{SurfaceNativeJSON, SurfaceNativeStreamJSON}
+
+// SessionlessSurfaces are the surfaces that report no session
+// identifier of their own, so a semantic probe record on them carries
+// a null session_id.
+var SessionlessSurfaces = []Surface{SurfaceNativeText}
+
 // CapabilityCases maps each semantic capability to its closed case set,
 // in the order the evidence contract requires records to be written.
 var CapabilityCases = map[Capability][]Case{
@@ -346,8 +366,8 @@ const DetailBound = 256
 // DecodeRecord strictly decodes one evidence line. It rejects unknown
 // and missing fields, wrong types, null where a value is required,
 // values outside the closed enum sets, a schema version other than 1,
-// a non-UTC or unparseable timestamp, and an empty or over-bound
-// detail.
+// a non-UTC or unparseable timestamp, an empty or over-bound detail,
+// and an empty string in any nullable string field.
 func DecodeRecord(line []byte) (Record, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(line, &fields); err != nil {
@@ -451,7 +471,10 @@ func decodeString(raw json.RawMessage) (string, error) {
 	return v, nil
 }
 
-// decodeNullableString decodes a JSON string or null.
+// decodeNullableString decodes a JSON string or null, rejecting an
+// empty non-null string: a nullable string field attests to a value
+// that was observed, and an empty string satisfies a session-relation
+// or identity check while attesting to nothing.
 func decodeNullableString(raw json.RawMessage) (*string, error) {
 	if string(raw) == "null" {
 		return nil, nil
@@ -459,6 +482,9 @@ func decodeNullableString(raw json.RawMessage) (*string, error) {
 	v, err := decodeString(raw)
 	if err != nil {
 		return nil, err
+	}
+	if v == "" {
+		return nil, errors.New("is empty, want null or a non-empty string")
 	}
 	return &v, nil
 }

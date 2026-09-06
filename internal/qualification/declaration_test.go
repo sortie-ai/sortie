@@ -17,7 +17,7 @@ func declarationEntryJSON(capability, caseID, reason string) string {
 // declarationSetJSON renders a declaration document from raw entry
 // bodies.
 func declarationSetJSON(entries ...string) string {
-	return fmt.Sprintf(`{"schema_version":1,"declarations":[%s]}`, strings.Join(entries, ","))
+	return fmt.Sprintf(`{"schema_version":2,"declarations":[%s],"absent_surfaces":[]}`, strings.Join(entries, ","))
 }
 
 // validRefusalPeerEntries are the two entries the refusal/non-retryable
@@ -29,33 +29,33 @@ func validRefusalPeerEntries() []string {
 	}
 }
 
-// TestDecodeDeclaredGapSet confirms the strict declaration decoder:
+// TestDecodeDeclarationSet confirms the strict declaration decoder:
 // the accepting control for a valid peer pair, and one rejection per
 // clause the decoder enforces.
-func TestDecodeDeclaredGapSet(t *testing.T) {
+func TestDecodeDeclarationSet(t *testing.T) {
 	t.Parallel()
 
 	t.Run("valid two-entry peer pair decodes", func(t *testing.T) {
 		t.Parallel()
 
 		doc := declarationSetJSON(validRefusalPeerEntries()...)
-		got, err := DecodeDeclaredGapSet([]byte(doc))
+		got, err := DecodeDeclarationSet([]byte(doc))
 		if err != nil {
-			t.Fatalf("DecodeDeclaredGapSet(%s) error = %v, want nil", doc, err)
+			t.Fatalf("DecodeDeclarationSet(%s) error = %v, want nil", doc, err)
 		}
-		want := DeclaredGapSet{
-			SchemaVersion: 1,
+		want := DeclarationSet{
+			SchemaVersion: 2,
 			Declarations: []DeclaredGap{
 				{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced},
 				{Capability: CapabilityRetryClassification, Case: CaseNonRetryableRefusal, Reason: DeclaredGapNeverProduced},
 			},
 		}
 		if got.SchemaVersion != want.SchemaVersion || len(got.Declarations) != len(want.Declarations) {
-			t.Fatalf("DecodeDeclaredGapSet() = %+v, want %+v", got, want)
+			t.Fatalf("DecodeDeclarationSet() = %+v, want %+v", got, want)
 		}
 		for i := range want.Declarations {
 			if got.Declarations[i] != want.Declarations[i] {
-				t.Errorf("DecodeDeclaredGapSet() entry %d = %+v, want %+v", i, got.Declarations[i], want.Declarations[i])
+				t.Errorf("DecodeDeclarationSet() entry %d = %+v, want %+v", i, got.Declarations[i], want.Declarations[i])
 			}
 		}
 	})
@@ -64,7 +64,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 		t.Parallel()
 
 		doc := fmt.Sprintf(`{"schema_version":1,"declarations":[%s],"extra":1}`, validRefusalPeerEntries()[0])
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, `unknown field "extra"`)
 	})
 
@@ -72,7 +72,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 		t.Parallel()
 
 		doc := fmt.Sprintf(`{"declarations":[%s]}`, validRefusalPeerEntries()[0])
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, `missing field "schema_version"`)
 	})
 
@@ -80,7 +80,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 		t.Parallel()
 
 		doc := `{"schema_version":1}`
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, `missing field "declarations"`)
 	})
 
@@ -90,7 +90,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 		entry := fmt.Sprintf(`{"capability":%q,"case":%q,"reason":%q,"extra":1}`,
 			CapabilityTurnDisposition, CaseRuntimeRefusal, DeclaredGapNeverProduced)
 		doc := declarationSetJSON(entry, validRefusalPeerEntries()[1])
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, `unknown field "extra"`)
 	})
 
@@ -110,26 +110,26 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 				t.Parallel()
 
 				doc := declarationSetJSON(tt.entry)
-				_, err := DecodeDeclaredGapSet([]byte(doc))
+				_, err := DecodeDeclarationSet([]byte(doc))
 				requireDeclarationError(t, doc, err, `missing field "`)
 			})
 		}
 	})
 
-	t.Run("schema_version other than 1 is rejected", func(t *testing.T) {
+	t.Run("schema_version other than 2 is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		doc := `{"schema_version":2,"declarations":[` + validRefusalPeerEntries()[0] + `]}`
-		_, err := DecodeDeclaredGapSet([]byte(doc))
-		requireDeclarationError(t, doc, err, "schema_version = 2, want 1")
+		doc := `{"schema_version":1,"declarations":[` + validRefusalPeerEntries()[0] + `],"absent_surfaces":[]}`
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "schema_version = 1, want 2 (absent_surfaces)")
 	})
 
-	t.Run("empty declarations list is rejected", func(t *testing.T) {
+	t.Run("declarations and absent_surfaces both empty is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		doc := `{"schema_version":1,"declarations":[]}`
-		_, err := DecodeDeclaredGapSet([]byte(doc))
-		requireDeclarationError(t, doc, err, "declarations is empty")
+		doc := `{"schema_version":2,"declarations":[],"absent_surfaces":[]}`
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "declarations and absent_surfaces are both empty")
 	})
 
 	t.Run("capability outside CapabilityCases is rejected", func(t *testing.T) {
@@ -137,7 +137,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 
 		entry := declarationEntryJSON(string(CapabilityTokenCeiling), string(CaseSuccess), DeclaredGapNeverProduced)
 		doc := declarationSetJSON(entry)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "outside CapabilityCases")
 	})
 
@@ -146,7 +146,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 
 		entry := declarationEntryJSON(string(CapabilityTurnDisposition), string(CaseRetryableTransport), DeclaredGapNeverProduced)
 		doc := declarationSetJSON(entry)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "outside capability")
 	})
 
@@ -155,7 +155,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 
 		entry := declarationEntryJSON(string(CapabilityTurnDisposition), string(CaseRuntimeRefusal), "bogus_reason")
 		doc := declarationSetJSON(entry)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "outside the closed value set")
 	})
 
@@ -164,7 +164,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 
 		entry := declarationEntryJSON(string(CapabilityTurnDisposition), string(CaseRuntimeRefusal), DeclaredGapNeverProduced)
 		doc := declarationSetJSON(entry, entry)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "duplicate capability")
 	})
 
@@ -173,7 +173,7 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 
 		entry := declarationEntryJSON(string(CapabilityTurnDisposition), string(CaseRuntimeRefusal), DeclaredGapNeverProduced)
 		doc := declarationSetJSON(entry)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "declared without its peer")
 	})
 
@@ -185,9 +185,113 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 			declarationEntryJSON(string(CapabilityRetryClassification), string(CaseNonRetryableRefusal), DeclaredGapFolded),
 		}
 		doc := declarationSetJSON(entries...)
-		_, err := DecodeDeclaredGapSet([]byte(doc))
+		_, err := DecodeDeclarationSet([]byte(doc))
 		requireDeclarationError(t, doc, err, "differing reasons")
 	})
+
+	t.Run("a valid absent_surfaces-only document decodes", func(t *testing.T) {
+		t.Parallel()
+
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`,
+			absentSurfaceEntryJSON(string(SurfaceNativeJSON), SurfaceNotOffered))
+		got, err := DecodeDeclarationSet([]byte(doc))
+		if err != nil {
+			t.Fatalf("DecodeDeclarationSet(%s) error = %v, want nil", doc, err)
+		}
+		want := []AbsentSurface{{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered}}
+		if len(got.AbsentSurfaces) != len(want) || got.AbsentSurfaces[0] != want[0] {
+			t.Errorf("DecodeDeclarationSet() AbsentSurfaces = %+v, want %+v", got.AbsentSurfaces, want)
+		}
+		if len(got.Declarations) != 0 {
+			t.Errorf("DecodeDeclarationSet() Declarations = %+v, want none", got.Declarations)
+		}
+	})
+
+	t.Run("unknown field at the absent-surface entry level is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		entry := fmt.Sprintf(`{"surface":%q,"reason":%q,"extra":1}`, SurfaceNativeJSON, SurfaceNotOffered)
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`, entry)
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, `unknown field "extra"`)
+	})
+
+	t.Run("missing field at the absent-surface entry level is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name  string
+			entry string
+		}{
+			{"missing surface", fmt.Sprintf(`{"reason":%q}`, SurfaceNotOffered)},
+			{"missing reason", fmt.Sprintf(`{"surface":%q}`, SurfaceNativeJSON)},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`, tt.entry)
+				_, err := DecodeDeclarationSet([]byte(doc))
+				requireDeclarationError(t, doc, err, `missing field "`)
+			})
+		}
+	})
+
+	t.Run("a surface outside DeclarableAbsentSurfaces is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`,
+			absentSurfaceEntryJSON(string(SurfaceProtocol), SurfaceNotOffered))
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "outside DeclarableAbsentSurfaces")
+	})
+
+	t.Run("native_text is outside DeclarableAbsentSurfaces", func(t *testing.T) {
+		t.Parallel()
+
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`,
+			absentSurfaceEntryJSON(string(SurfaceNativeText), SurfaceNotOffered))
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "outside DeclarableAbsentSurfaces")
+	})
+
+	t.Run("a reason outside AbsentSurfaceReasons is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s]}`,
+			absentSurfaceEntryJSON(string(SurfaceNativeJSON), "bogus_reason"))
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "outside the closed value set")
+	})
+
+	t.Run("a surface declared absent twice is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		entry := absentSurfaceEntryJSON(string(SurfaceNativeJSON), SurfaceNotOffered)
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s,%s]}`, entry, entry)
+		_, err := DecodeDeclarationSet([]byte(doc))
+		requireDeclarationError(t, doc, err, "declared absent twice")
+	})
+
+	t.Run("both structured native surfaces may be declared absent together", func(t *testing.T) {
+		t.Parallel()
+
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[],"absent_surfaces":[%s,%s]}`,
+			absentSurfaceEntryJSON(string(SurfaceNativeJSON), SurfaceNotOffered),
+			absentSurfaceEntryJSON(string(SurfaceNativeStreamJSON), SurfaceNotOffered))
+		got, err := DecodeDeclarationSet([]byte(doc))
+		if err != nil {
+			t.Fatalf("DecodeDeclarationSet(%s) error = %v, want nil", doc, err)
+		}
+		if len(got.AbsentSurfaces) != 2 {
+			t.Errorf("DecodeDeclarationSet() AbsentSurfaces = %+v, want 2 entries", got.AbsentSurfaces)
+		}
+	})
+}
+
+// absentSurfaceEntryJSON renders one raw absent-surface entry.
+func absentSurfaceEntryJSON(surface, reason string) string {
+	return fmt.Sprintf(`{"surface":%q,"reason":%q}`, surface, reason)
 }
 
 // requireDeclarationError fails t unless err is non-nil and its message
@@ -195,29 +299,29 @@ func TestDecodeDeclaredGapSet(t *testing.T) {
 func requireDeclarationError(t *testing.T, doc string, err error, wantSub string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("DecodeDeclaredGapSet(%s) = nil error, want error naming %q", doc, wantSub)
+		t.Fatalf("DecodeDeclarationSet(%s) = nil error, want error naming %q", doc, wantSub)
 	}
 	if !strings.Contains(err.Error(), wantSub) {
-		t.Errorf("DecodeDeclaredGapSet() error = %v, want it to mention %q", err, wantSub)
+		t.Errorf("DecodeDeclarationSet() error = %v, want it to mention %q", err, wantSub)
 	}
 }
 
-// TestReadDeclaredGapFile confirms the file reader surfaces both a
+// TestReadDeclarationFile confirms the file reader surfaces both a
 // read error for a missing path and a decode error for invalid
 // content, unwrapped rather than swallowed.
-func TestReadDeclaredGapFile(t *testing.T) {
+func TestReadDeclarationFile(t *testing.T) {
 	t.Parallel()
 
 	t.Run("missing path surfaces the read error", func(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "does-not-exist.json")
-		_, err := ReadDeclaredGapFile(path)
+		_, err := ReadDeclarationFile(path)
 		if err == nil {
-			t.Fatalf("ReadDeclaredGapFile(%s) = nil error, want a read error", path)
+			t.Fatalf("ReadDeclarationFile(%s) = nil error, want a read error", path)
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("ReadDeclaredGapFile() error = %v, want it to wrap os.ErrNotExist", err)
+			t.Errorf("ReadDeclarationFile() error = %v, want it to wrap os.ErrNotExist", err)
 		}
 	})
 
@@ -228,7 +332,7 @@ func TestReadDeclaredGapFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
 			t.Fatalf("write declaration file: %v", err)
 		}
-		_, err := ReadDeclaredGapFile(path)
+		_, err := ReadDeclarationFile(path)
 		requireDeclarationError(t, path, err, "decode declaration document")
 	})
 
@@ -240,22 +344,22 @@ func TestReadDeclaredGapFile(t *testing.T) {
 		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 			t.Fatalf("write declaration file: %v", err)
 		}
-		set, err := ReadDeclaredGapFile(path)
+		set, err := ReadDeclarationFile(path)
 		if err != nil {
-			t.Fatalf("ReadDeclaredGapFile(%s) error = %v, want nil", path, err)
+			t.Fatalf("ReadDeclarationFile(%s) error = %v, want nil", path, err)
 		}
 		if len(set.Declarations) != 2 {
-			t.Errorf("ReadDeclaredGapFile() declarations = %d, want 2", len(set.Declarations))
+			t.Errorf("ReadDeclarationFile() declarations = %d, want 2", len(set.Declarations))
 		}
 	})
 }
 
-// TestDeclaredGapSetDeclared confirms the linear-scan lookup reports
+// TestDeclarationSetDeclared confirms the linear-scan lookup reports
 // the declared reason and found flag exactly for a declared pair.
-func TestDeclaredGapSetDeclared(t *testing.T) {
+func TestDeclarationSetDeclared(t *testing.T) {
 	t.Parallel()
 
-	set := DeclaredGapSet{
+	set := DeclarationSet{
 		SchemaVersion: 1,
 		Declarations: []DeclaredGap{
 			{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced},
@@ -267,5 +371,27 @@ func TestDeclaredGapSetDeclared(t *testing.T) {
 	}
 	if _, found := set.Declared(CapabilityRetryClassification, CaseNonRetryableRefusal); found {
 		t.Error("Declared(retry_classification, non_retryable_refusal) = true, want false for an undeclared pair")
+	}
+}
+
+// TestDeclarationSetAbsentSurfaceDeclared confirms the linear-scan
+// lookup reports the declared reason and found flag exactly for a
+// declared-absent surface, and false for every other surface.
+func TestDeclarationSetAbsentSurfaceDeclared(t *testing.T) {
+	t.Parallel()
+
+	set := DeclarationSet{
+		SchemaVersion:  2,
+		AbsentSurfaces: []AbsentSurface{{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered}},
+	}
+
+	if reason, found := set.AbsentSurfaceDeclared(SurfaceNativeJSON); !found || reason != SurfaceNotOffered {
+		t.Errorf("AbsentSurfaceDeclared(native_json) = %q, %v, want %q, true", reason, found, SurfaceNotOffered)
+	}
+	if _, found := set.AbsentSurfaceDeclared(SurfaceNativeStreamJSON); found {
+		t.Error("AbsentSurfaceDeclared(native_stream_json) = true, want false: only native_json was declared absent")
+	}
+	if _, found := set.AbsentSurfaceDeclared(SurfaceProtocol); found {
+		t.Error("AbsentSurfaceDeclared(protocol) = true, want false for the zero value")
 	}
 }

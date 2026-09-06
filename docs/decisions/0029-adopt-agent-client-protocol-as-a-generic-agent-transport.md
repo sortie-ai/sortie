@@ -226,7 +226,7 @@ The cost is named in the negatives below: a change that keeps every field and ch
 
 The decision is validated when all of the following hold:
 
-1. A runtime moves onto the protocol only with a recorded measurement of both its surfaces against the load-bearing list, and no runtime moves on an unmeasured surface.
+1. A runtime moves onto the protocol only with a recorded measurement of its protocol surface and of every native surface it offers against the load-bearing list, and no runtime moves on an unmeasured surface.
 2. No code path branches on the agent's identity. Differences resolve through an advertised capability or an observed message shape.
 3. The client answers every permission request with no person involved, selecting by the option's declared kind and never by its identifier, selecting the once-only refusing kind when both refusing kinds are offered, and selecting the earliest option in the order the agent sent them when several share the selected kind. A request offering two options of the same kind is one of the cases confirmed. Where no refusing option is offered or the option list is empty, it answers with the cancelled outcome and then ends the attempt with the human-input-required outcome.
 4. The client advertises no filesystem, terminal, or human-prompting capability, and no run waits on an unanswered request.

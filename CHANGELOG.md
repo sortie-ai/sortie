@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A self-review verification command now stops the process it started when the command exceeds `self_review.verification_timeout_ms` or the run is cancelled. Previously only the shell wrapping the command was killed, so a build or test suite kept running against the workspace after the run had moved on, and a run cancelled rather than timed out left it running with nothing to stop it.
   ([PR #1020](https://github.com/sortie-ai/sortie/pull/1020))
 
+- An `agent-client-protocol` turn that ends because the runtime reached a token limit no longer schedules a retry that resumes the same oversized context into the same limit; the claim is released instead. A turn that ends because the runtime's own request or turn budget was exhausted keeps its existing retryable classification, since a fresh session can complete within it.
+  ([#1023](https://github.com/sortie-ai/sortie/issues/1023))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

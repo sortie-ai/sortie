@@ -204,16 +204,16 @@ func TestStopReasonEvidence(t *testing.T) {
 			wantErrorKind: domain.ErrTurnRefused,
 		},
 		{
-			name:          "max_tokens maps to turn failed",
+			name:          "max_tokens maps to the token limit kind",
 			reason:        stopReasonMaxTokens,
 			wantTerminal:  agentcore.TerminalFailure,
-			wantErrorKind: domain.ErrTurnFailed,
+			wantErrorKind: domain.ErrTurnTokenLimit,
 		},
 		{
-			name:          "max_turn_requests maps to turn failed",
+			name:          "max_turn_requests maps to the request limit kind",
 			reason:        stopReasonMaxTurnRequests,
 			wantTerminal:  agentcore.TerminalFailure,
-			wantErrorKind: domain.ErrTurnFailed,
+			wantErrorKind: domain.ErrTurnRequestLimit,
 		},
 		{
 			name:           "cancelled with no cancellation on either side reports failed",
@@ -257,6 +257,18 @@ func TestStopReasonEvidence(t *testing.T) {
 		got := stopReasonEvidence(stopReason("some_future_reason"), agentcore.WorkAbsent)
 		if !strings.Contains(got.TerminalMessage, "some_future_reason") {
 			t.Errorf("stopReasonEvidence(...).TerminalMessage = %q, want it to name the value received", got.TerminalMessage)
+		}
+	})
+
+	t.Run("a token limit terminal carries its kind regardless of work presence", func(t *testing.T) {
+		t.Parallel()
+
+		got := stopReasonEvidence(stopReasonMaxTokens, agentcore.WorkAbsent)
+		if got.TerminalErrorKind != domain.ErrTurnTokenLimit {
+			t.Errorf("stopReasonEvidence(max_tokens, WorkAbsent).TerminalErrorKind = %q, want %q", got.TerminalErrorKind, domain.ErrTurnTokenLimit)
+		}
+		if got.Terminal != agentcore.TerminalFailure {
+			t.Errorf("stopReasonEvidence(max_tokens, WorkAbsent).Terminal = %v, want %v", got.Terminal, agentcore.TerminalFailure)
 		}
 	})
 

@@ -144,6 +144,16 @@ const (
 	// ErrTurnOutcomeUnknown indicates the runtime ended the turn with
 	// an outcome this client could not interpret.
 	ErrTurnOutcomeUnknown AgentErrorKind = "turn_outcome_unknown"
+
+	// ErrTurnTokenLimit indicates the runtime ended the turn because a
+	// token limit was reached, so the same input cannot succeed on a
+	// later run.
+	ErrTurnTokenLimit AgentErrorKind = "turn_token_limit"
+
+	// ErrTurnRequestLimit indicates the runtime ended the turn because
+	// its own budget for requests or turns within the session was
+	// exhausted.
+	ErrTurnRequestLimit AgentErrorKind = "turn_request_limit"
 )
 
 // AgentError is a structured error returned by [AgentAdapter]
@@ -238,7 +248,9 @@ func (k AgentErrorKind) RetryClassification() RetryClassification {
 		return RetryClassification{Backoff: BackoffNone}
 	case ErrTurnRefused, ErrTurnOutcomeUnknown:
 		return RetryClassification{Backoff: BackoffNone}
-	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete:
+	case ErrTurnTokenLimit:
+		return RetryClassification{Backoff: BackoffNone}
+	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete, ErrTurnRequestLimit:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
 	default:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
