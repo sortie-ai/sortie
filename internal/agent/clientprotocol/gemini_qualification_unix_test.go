@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -1041,7 +1042,7 @@ func geminiRunAuthenticationCanary(t *testing.T, runtime geminiQualificationRunt
 func geminiCorroborateAbsentSurface(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, reason string) {
 	t.Helper()
 
-	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	catalog := geminiProtocolInputCatalog(runtime)
 	prompt := catalog[qualification.InputDispositionSuccess].Prompt
 	marker := geminiInstructionMarker(prompt)
 
@@ -1199,7 +1200,7 @@ func geminiFreshConclusions(t *testing.T, dir string, verdict qualification.Verd
 func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRuntime, tracker *geminiProcessGroupTracker, ledger *geminiTokenLedger) []qualification.Record {
 	t.Helper()
 
-	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	catalog := geminiProtocolInputCatalog(runtime)
 	adapter := &ClientProtocolAdapter{}
 	command := strings.Join(geminiQualificationLaunchArgv(runtime.Config, qualification.SurfaceProtocol, "", runtime.PolicyPath), " ")
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
@@ -1223,27 +1224,19 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 		}
 	})
 
-	var events []domain.AgentEvent
-	runProbe := func(prompt string) (domain.TurnResult, error) {
-		return adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-			Prompt:  prompt,
-			OnEvent: collectEvents(&events),
-		})
-	}
-
 	// The policy precondition: one turn instructing run_shell_command
 	// with the policy-load probe. The precondition passes only when the
 	// captured tool result carries the deny marker and the probe's
 	// side-effect file stays absent.
 	policySessionID := session.ID
-	policyResult, policyErr := runProbe(catalog[qualification.InputPolicyControl].Prompt)
+	policyResult, policyEvents, policyErr := geminiRunProbeTurn(context.Background(), adapter, session, catalog[qualification.InputPolicyControl].Prompt)
 	if policyErr == nil && policyResult.UsageMeasured {
 		ledger.add(qualification.SurfaceProtocol, geminiTokenSource{
 			Path: "/turn/result/usage", Usage: &policyResult.Usage, SessionID: session.ID,
 		})
 	}
 	policyObserved := policyErr == nil &&
-		geminiEventsCarry(events, runtime.PolicyDenyMarker) &&
+		geminiEventsCarry(policyEvents, runtime.PolicyDenyMarker) &&
 		geminiProbeMarkerAbsent(t, runtime.Probes.PolicyLoad)
 	policyRecord := qualification.Record{
 		SchemaVersion: 1,
@@ -1274,14 +1267,14 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 
 	// The permission probe: exactly one attempt, no retry until a
 	// desired result appears.
-	permissionResult, permissionErr := runProbe(catalog[qualification.InputPermissionProbe].Prompt)
+	permissionResult, permissionEvents, permissionErr := geminiRunProbeTurn(context.Background(), adapter, session, catalog[qualification.InputPermissionProbe].Prompt)
 	if permissionErr == nil && permissionResult.UsageMeasured {
 		ledger.add(qualification.SurfaceProtocol, geminiTokenSource{
 			Path: "/turn/result/usage", Usage: &permissionResult.Usage, SessionID: session.ID,
 		})
 	}
-	permissionRequested := geminiPermissionRequested(events)
-	permissionAnswered := geminiPermissionAnswered(events)
+	permissionRequested := geminiPermissionRequested(permissionEvents)
+	permissionAnswered := geminiPermissionAnswered(permissionEvents)
 	permissionRecord := qualification.Record{
 		SchemaVersion:   1,
 		ObservedAt:      qualification.FixtureTime,
@@ -1316,15 +1309,15 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 	}
 
 	// The MCP probe: delivery is graded only on server receipt plus the
-	// turn consuming the returned nonce.
-	mcpResult, mcpErr := runProbe(catalog[qualification.InputMCPProbe].Prompt)
+	// turn's own window carrying the server's reply.
+	mcpResult, mcpEvents, mcpErr := geminiRunProbeTurn(context.Background(), adapter, session, catalog[qualification.InputMCPProbe].Prompt)
 	if mcpErr == nil && mcpResult.UsageMeasured {
 		ledger.add(qualification.SurfaceProtocol, geminiTokenSource{
 			Path: "/turn/result/usage", Usage: &mcpResult.Usage, SessionID: session.ID,
 		})
 	}
 	received := geminiReadMCPReceipt(t, runtime.MCP)
-	turnConsumed := mcpErr == nil && geminiEventsCarry(events, runtime.MCP.Nonce)
+	grade, outcome, detail := geminiGradeMCPRow(runtime.MCP, received, mcpEvents, mcpErr)
 	mcpRecord := qualification.Record{
 		SchemaVersion:   1,
 		ObservedAt:      qualification.FixtureTime,
@@ -1332,19 +1325,15 @@ func geminiCollectProtocolRecords(t *testing.T, runtime geminiQualificationRunti
 		Surface:         qualification.SurfaceProtocol,
 		Capability:      qualification.CapabilityToolServerDelivery,
 		Source:          qualification.SourceProcessObservation,
-		Grade:           geminiGradeMCPDelivery(received, runtime.MCP.Nonce, turnConsumed),
-		Outcome:         qualification.OutcomePass,
+		Grade:           grade,
+		Outcome:         outcome,
 		InputID:         qualification.InputMCPProbe,
 		EvidencePath:    new("mcp_server.receipt"),
 		SessionID:       new(session.ID),
 		AgentName:       new(filepath.Base(runtime.Config.CommandPath)),
 		AgentVersion:    new(runtime.Version),
 		ProtocolVersion: new(1),
-		Detail:          "test server receipt and the turn's returned nonce",
-	}
-	if got := geminiGradeMCPDelivery(received, runtime.MCP.Nonce, turnConsumed); got != qualification.GradeUsable {
-		mcpRecord.Outcome = qualification.OutcomeNotObserved
-		mcpRecord.Detail = "no server receipt or unconsumed returned nonce"
+		Detail:          detail,
 	}
 
 	return []qualification.Record{policyRecord, permissionRecord, mcpRecord}
@@ -1365,6 +1354,139 @@ func geminiEventsCarry(events []domain.AgentEvent, needle string) bool {
 	return slices.ContainsFunc(events, func(event domain.AgentEvent) bool {
 		return strings.Contains(event.Message, needle)
 	})
+}
+
+// geminiNotificationsCarry reports whether the turn's notification
+// stream carries needle, joining every domain.EventNotification
+// message, in arrival order and with no separator, before searching
+// it. This join is the turn's whole notification stream, not its
+// answer alone: the adapter's own permission and refusal notices ride
+// the same event type, so a needle split across two chunk boundaries
+// is found here even though no single event carries it.
+func geminiNotificationsCarry(events []domain.AgentEvent, needle string) bool {
+	var joined strings.Builder
+	for _, event := range events {
+		if event.Type == domain.EventNotification {
+			joined.WriteString(event.Message)
+		}
+	}
+	return strings.Contains(joined.String(), needle)
+}
+
+// geminiRunProbeTurn runs one turn on session and returns that turn's
+// own event window and no other turn's. It allocates one fresh event
+// slice per call and returns only after RunTurn itself has returned,
+// so no caller ever reads the slice while the pump goroutine may still
+// be appending to it.
+func geminiRunProbeTurn(ctx context.Context, adapter *ClientProtocolAdapter, session domain.Session, prompt string) (domain.TurnResult, []domain.AgentEvent, error) {
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt:  prompt,
+		OnEvent: collectEvents(&events),
+	})
+	return result, events, err
+}
+
+// TestGeminiNotificationsCarry binds geminiNotificationsCarry in both
+// directions: a needle split across two consecutive notification
+// messages is found by the join, and a needle present only in an event
+// of a different type is not.
+func TestGeminiNotificationsCarry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a needle split across two consecutive notifications is found by the join", func(t *testing.T) {
+		t.Parallel()
+
+		events := []domain.AgentEvent{
+			{Type: domain.EventNotification, Message: "sortie-re"},
+			{Type: domain.EventNotification, Message: "ply-split-fixture"},
+		}
+		if !geminiNotificationsCarry(events, "sortie-reply-split-fixture") {
+			t.Error("geminiNotificationsCarry() = false for a needle split across two consecutive notifications, want true")
+		}
+	})
+
+	t.Run("a needle carried only by a non-notification event is not found", func(t *testing.T) {
+		t.Parallel()
+
+		events := []domain.AgentEvent{
+			{Type: domain.EventToolResult, Message: "sortie-reply-tool-result-only"},
+		}
+		if geminiNotificationsCarry(events, "sortie-reply-tool-result-only") {
+			t.Error("geminiNotificationsCarry() = true for a needle carried only by a domain.EventToolResult event, want false")
+		}
+	})
+}
+
+// geminiProbeTurnOutcome bundles one geminiRunProbeTurn call's return
+// values so a test can hand them across a goroutine boundary on one
+// channel.
+type geminiProbeTurnOutcome struct {
+	result domain.TurnResult
+	events []domain.AgentEvent
+	err    error
+}
+
+// geminiRunProbeTurnAsync starts geminiRunProbeTurn on its own
+// goroutine, so a test can drive the simulated peer while the turn is
+// in flight, matching the package's own runTurnAsync pattern.
+func geminiRunProbeTurnAsync(ctx context.Context, adapter *ClientProtocolAdapter, session domain.Session, prompt string) <-chan geminiProbeTurnOutcome {
+	ch := make(chan geminiProbeTurnOutcome, 1)
+	go func() {
+		result, events, err := geminiRunProbeTurn(ctx, adapter, session, prompt)
+		ch <- geminiProbeTurnOutcome{result: result, events: events, err: err}
+	}()
+	return ch
+}
+
+// TestGeminiRunProbeTurnWindowIsolation confirms geminiRunProbeTurn
+// returns one turn's events and no other turn's: two turns run in
+// sequence on one session yield windows with no event in common,
+// against the package's in-memory session harness, with no gate and no
+// runtime.
+func TestGeminiRunProbeTurnWindowIsolation(t *testing.T) {
+	t.Parallel()
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	markSessionKnown(state)
+	adapter := &ClientProtocolAdapter{}
+	session := fakeSession(state)
+
+	firstCh := geminiRunProbeTurnAsync(context.Background(), adapter, session, "first turn")
+	firstID := out.awaitMethod(t, methodSessionPrompt)
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first-turn-marker"}}}}`)
+	respondLine(t, inPw, firstID, promptResponse{StopReason: stopReasonEndTurn})
+	first := <-firstCh
+	if first.err != nil {
+		t.Fatalf("first geminiRunProbeTurn() error = %v, want nil", first.err)
+	}
+
+	secondCh := geminiRunProbeTurnAsync(context.Background(), adapter, session, "second turn")
+	secondID := out.awaitMethod(t, methodSessionPrompt)
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second-turn-marker"}}}}`)
+	respondLine(t, inPw, secondID, promptResponse{StopReason: stopReasonEndTurn})
+	second := <-secondCh
+	if second.err != nil {
+		t.Fatalf("second geminiRunProbeTurn() error = %v, want nil", second.err)
+	}
+
+	if len(first.events) == 0 || len(second.events) == 0 {
+		t.Fatalf("turn windows carry %d and %d events, want both windows non-empty", len(first.events), len(second.events))
+	}
+	for _, se := range second.events {
+		for _, fe := range first.events {
+			if reflect.DeepEqual(se, fe) {
+				t.Errorf("the two turns' windows share an event: %+v", se)
+			}
+		}
+	}
+	if geminiEventsCarry(first.events, "second-turn-marker") {
+		t.Error("the first turn's window carries the second turn's marker, want windows isolated")
+	}
+	if geminiEventsCarry(second.events, "first-turn-marker") {
+		t.Error("the second turn's window carries the first turn's marker, want windows isolated")
+	}
 }
 
 // TestGeminiPermissionNoticeStems pins the permission scenario's two
@@ -1455,7 +1577,7 @@ func policyResultExitFailed(err error) bool {
 func geminiCollectSurfaceRecords(t *testing.T, runtime geminiQualificationRuntime, tracker *geminiProcessGroupTracker, ledger *geminiTokenLedger) []qualification.Record {
 	t.Helper()
 
-	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	catalog := geminiProtocolInputCatalog(runtime)
 	records := []qualification.Record{}
 	refusalRuns := map[qualification.Surface]geminiSemanticObservation{}
 
@@ -2714,7 +2836,7 @@ func TestGeminiNativeJSONCaseSuccessGradesUsableLive(t *testing.T) {
 	config := requireGeminiQualification(t)
 	runtime := geminiResolveQualificationRuntime(t, config)
 
-	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	catalog := geminiProtocolInputCatalog(runtime)
 	obs := geminiCollectSemanticCase(t, runtime, &geminiProcessGroupTracker{}, qualification.SurfaceNativeJSON, qualification.CaseSuccess, catalog, newGeminiTokenLedger())
 	rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclarationSet{})
 	if rec.Grade != qualification.GradeUsable {

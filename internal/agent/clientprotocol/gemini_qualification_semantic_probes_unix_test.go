@@ -401,7 +401,7 @@ func geminiSemanticInputCatalog(probes geminiQualificationProbes, nonce string) 
 		qualification.InputPermissionProbe: probeInput(
 			"Call run_shell_command exactly once with the absolute path %s, with no arguments and no other tool.", probes.Permission),
 		qualification.InputMCPProbe: {
-			Prompt: fmt.Sprintf("Call the test server's %s tool exactly once with the nonce %s and then reply with the nonce the tool returned.", geminiMCPToolName, nonce),
+			Prompt: fmt.Sprintf("Call the test server's %s tool exactly once with the nonce %s, then reply with exactly the text the tool returned and no other text.", geminiMCPToolName, nonce),
 			Launch: true,
 		},
 		qualification.InputContinuationSeed: {
@@ -418,6 +418,50 @@ func geminiSemanticInputCatalog(probes geminiQualificationProbes, nonce string) 
 			Prompt: "Reply with exactly SORTIE_E2E_OK and do not call any tool.",
 			Launch: true,
 		},
+	}
+}
+
+// geminiProtocolInputCatalog builds the protocol collector's input
+// catalog on the fixture's own nonce, so the tool-server prompt names
+// the same value the fixture server and the grader read rather than an
+// unrelated freshly generated one. It has one production call site,
+// wired into the collector, replacing the freshly generated nonce it
+// used before.
+func geminiProtocolInputCatalog(runtime geminiQualificationRuntime) map[qualification.InputID]geminiInputSpec {
+	return geminiSemanticInputCatalog(runtime.Probes, runtime.MCP.Nonce)
+}
+
+// TestGeminiProtocolInputCatalogMCPPrompt binds geminiProtocolInputCatalog's
+// tool-server prompt against a geminiQualificationRuntime built from
+// literal fields alone, with no runtime and no files. It confirms the
+// prompt matches the exact literal substituted on geminiMCPToolName and
+// the runtime's own nonce, and that it names the fixture's reply token
+// nowhere: a prompt naming Reply would make the turn's own consumption
+// evidence circular.
+func TestGeminiProtocolInputCatalogMCPPrompt(t *testing.T) {
+	t.Parallel()
+
+	runtime := geminiQualificationRuntime{
+		Probes: geminiQualificationProbes{
+			PolicyLoad:   "/controlled/policy-load-probe",
+			Permission:   "/controlled/permission-probe",
+			Failing:      "/controlled/failing-probe",
+			Cancellation: "/controlled/cancellation-probe",
+			Transport:    "/controlled/transport-probe",
+		},
+		MCP: geminiMCPFixture{
+			Nonce: "sortie-nonce-catalog-fixture",
+			Reply: "sortie-reply-catalog-fixture",
+		},
+	}
+
+	got := geminiProtocolInputCatalog(runtime)[qualification.InputMCPProbe].Prompt
+	want := fmt.Sprintf("Call the test server's %s tool exactly once with the nonce %s, then reply with exactly the text the tool returned and no other text.", geminiMCPToolName, runtime.MCP.Nonce)
+	if got != want {
+		t.Errorf("geminiProtocolInputCatalog(runtime)[InputMCPProbe].Prompt = %q, want %q", got, want)
+	}
+	if strings.Contains(got, runtime.MCP.Reply) {
+		t.Errorf("geminiProtocolInputCatalog(runtime)[InputMCPProbe].Prompt = %q, want it to name the reply token %q nowhere", got, runtime.MCP.Reply)
 	}
 }
 
