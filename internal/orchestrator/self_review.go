@@ -110,22 +110,26 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", command) //nolint:gosec // command comes from operator-controlled config
 	cmd.Dir = workspacePath
-	procutil.SetProcessGroup(cmd)
+	// The verification command's real work always runs as a grandchild of
+	// this shell, so a cancelled or timed-out run has to be signalled
+	// across the whole group: os/exec's default reaches the shell alone
+	// and leaves the build running. The wait delay this installs also lets
+	// cmd.Wait return when Go's internal I/O goroutines are still blocked
+	// on a pipe read, which they can be on Windows after the subprocess is
+	// killed.
+	procutil.SetGroupCancel(cmd)
 
 	// Use cappedWriter for stdout/stderr instead of StdoutPipe/StderrPipe.
 	// On Windows, ReadFile on a pipe can remain blocked after the subprocess
 	// is killed, causing wg.Wait() to hang before cmd.Wait() is reached.
 	// Assigning direct writers lets Go manage the internal pipe goroutines
-	// and WaitDelay ensures Wait returns even if those goroutines are stuck.
+	// and the wait delay ensures Wait returns even if those goroutines are
+	// stuck.
 	var stdoutBuf, stderrBuf cappedWriter
 	stdoutBuf.max = int(domain.MaxVerificationOutputBytes)
 	stderrBuf.max = int(domain.MaxVerificationOutputBytes)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
-
-	// WaitDelay lets cmd.Wait return after process termination even when
-	// internal I/O goroutines are still blocked on pipe reads (Windows).
-	cmd.WaitDelay = 5 * time.Second
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -147,10 +151,14 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 
 	metrics.ObserveSelfReviewVerificationDuration(command, duration.Seconds())
 
+	// os/exec escalates a cancellation to a force kill of the direct child
+	// alone, so reap the group here on every cancelled outcome and not
+	// only on the timeout that reports TimedOut below.
+	if cmdCtx.Err() != nil && cmd.Process != nil {
+		_ = procutil.KillProcessGroup(cmd.Process.Pid)
+	}
+
 	if cmdCtx.Err() == context.DeadlineExceeded {
-		if cmd.Process != nil {
-			_ = procutil.KillProcessGroup(cmd.Process.Pid)
-		}
 		logger.Info("verification command timed out",
 			slog.String("command", command),
 			slog.Int64("duration_ms", duration.Milliseconds()),
