@@ -51,9 +51,12 @@ type Fixture struct {
 	absent []AbsentSurface
 }
 
-// NewFixture builds the non-final records of one variant in
-// canonical order, declaring every surface in absent as unmeasured.
-// The runtime-identity records are added by Finalize.
+// NewFixture builds the non-final records of one variant in canonical
+// order, declaring every surface in absent as one the runtime does not
+// offer. An absent surface is not an unmeasured one: it carries no
+// records at all, and the comparison rows that would read it stand on
+// the protocol surface alone. The runtime-identity records are added
+// by Finalize.
 func NewFixture(variant string, absent ...AbsentSurface) *Fixture {
 	f := &Fixture{absent: slices.Clone(absent)}
 	f.addWorkspaceSecurity()
