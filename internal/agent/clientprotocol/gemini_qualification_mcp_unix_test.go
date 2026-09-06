@@ -276,7 +276,7 @@ func geminiGradeMCPRow(fixture geminiMCPFixture, received []string, events []dom
 	case !receiptEmpty:
 		return qualification.GradeNotObserved, qualification.OutcomeNotObserved, "the server recorded a value that is not this run's nonce"
 	case permissionNoted:
-		return qualification.GradeNotObserved, qualification.OutcomeNotObserved, "no tool call reached the server, and a permission request in this turn was refused"
+		return qualification.GradeNotObserved, qualification.OutcomeNotObserved, "no tool call reached the server, and the turn carried a permission request"
 	default:
 		return qualification.GradeNotObserved, qualification.OutcomeNotObserved, "no tool call reached the server"
 	}
