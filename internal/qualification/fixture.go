@@ -19,6 +19,8 @@ const (
 
 	FixtureQualified    = "qualified"
 	FixtureNotQualified = "not_qualified"
+	FixtureUnmeasured   = "unmeasured"
+	FixtureDeclaredGap  = "declared_gap"
 )
 
 // FixtureSession builds the synthetic session identifier for one
@@ -29,10 +31,20 @@ func FixtureSession(Surface Surface, name string) string {
 
 // Fixture is a complete, canonically ordered evidence set. The
 // qualified variant records every required observation; the
-// not_qualified variant leaves the runtime-refusal disposition and
-// non-retryable-refusal retry Cases unobserved on every Surface.
+// not_qualified variant records the protocol surface conflating the
+// runtime-refusal disposition and non-retryable-refusal retry Cases,
+// so it is measured and below rather than unmeasured; the unmeasured
+// variant leaves the protocol runtime-refusal disposition Case
+// unobserved; the declared_gap variant excludes that same Case and its
+// peer on every declarable Surface under an operator declaration.
 type Fixture struct {
 	Records []Record
+
+	// declared accumulates one DeclaredGap entry per distinct
+	// (capability, case) SetSemanticDeclaredGap rewrote, so
+	// Declarations can return the exact set the fixture's records
+	// assume.
+	declared []DeclaredGap
 }
 
 // NewFixture builds the non-final records of one variant in
@@ -49,13 +61,29 @@ func NewFixture(variant string) *Fixture {
 	f.addContinuation()
 	f.addEndToEnd()
 	f.addProcessCleanup()
-	if variant == FixtureNotQualified {
-		for _, Surface := range measuredSurfaces {
-			f.SetSemanticNotObserved(Surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
-			f.SetSemanticNotObserved(Surface, CapabilityRetryClassification, CaseNonRetryableRefusal)
-		}
+	switch variant {
+	case FixtureNotQualified:
+		f.setProtocolRefusalGap()
+	case FixtureUnmeasured:
+		f.SetSemanticNotObserved(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal)
+	case FixtureDeclaredGap:
+		f.SetSemanticDeclaredGap(CapabilityTurnDisposition, CaseRuntimeRefusal, DeclaredGapNeverProduced)
 	}
 	return f
+}
+
+// setProtocolRefusalGap rewrites the protocol surface's
+// runtime_refusal disposition record to a conflated gap while leaving
+// every other surface untouched, so the protocol disposition baseline
+// grades gap while the structured native reference stays usable.
+func (f *Fixture) setProtocolRefusalGap() {
+	rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal))
+	if rec == nil {
+		return
+	}
+	rec.Grade = GradeGap
+	rec.Detail = fmt.Sprintf("%s %s case completed with a conflated outcome on %s", CapabilityTurnDisposition, CaseRuntimeRefusal, SurfaceProtocol)
+	f.UpdateSemanticBaseline(SurfaceProtocol, CapabilityTurnDisposition)
 }
 
 // base returns a Record stub with the fixed identity fields every
@@ -163,6 +191,62 @@ func (f *Fixture) UpdateSemanticBaseline(Surface Surface, Capability Capability)
 		baseline.Grade = DeriveBaselineGrade(classes)
 		baseline.Outcome = BaselineVerdictFor(baseline.Grade)
 	}
+}
+
+// SetSemanticDeclaredGap rewrites the named case's record on every
+// surface in DeclarableSurfaces to a declared gap with the given
+// reason, and rewrites each owning capability's baseline to the newly
+// derived grade. It applies the DeclaredGapPeers closure, so declaring
+// CaseRuntimeRefusal also rewrites CaseNonRetryableRefusal the same
+// way. It never touches SurfaceNativeText's record for the case,
+// matching DeclarableSurfaces' exclusion.
+func (f *Fixture) SetSemanticDeclaredGap(capability Capability, caseID Case, reason string) {
+	f.setSemanticDeclaredGapOne(capability, caseID, reason)
+	if peer, ok := DeclaredGapPeers[caseID]; ok {
+		f.setSemanticDeclaredGapOne(capabilityOwning(peer), peer, reason)
+	}
+}
+
+// setSemanticDeclaredGapOne rewrites one case's declarable-surface
+// records and baselines, without applying the DeclaredGapPeers
+// closure.
+func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, reason string) {
+	for _, surface := range DeclarableSurfaces {
+		rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
+		if rec == nil {
+			continue
+		}
+		rec.Outcome = OutcomeNotProducible
+		rec.Grade = GradeDeclaredGap
+		rec.Detail = reason
+	}
+	f.recordDeclaration(capability, caseID, reason)
+	for _, surface := range DeclarableSurfaces {
+		f.UpdateSemanticBaseline(surface, capability)
+	}
+}
+
+// recordDeclaration adds one declaration entry, or rewrites its reason
+// in place when the capability and case pair is already recorded. A
+// pair reaches here twice whenever the peer closure and a direct call
+// declare the same case, and DecodeDeclaredGapSet rejects a duplicate
+// pair, so recording it twice would build a document the fixture's own
+// declared_gap records could never be authorized under.
+func (f *Fixture) recordDeclaration(capability Capability, caseID Case, reason string) {
+	for i := range f.declared {
+		if f.declared[i].Capability == capability && f.declared[i].Case == caseID {
+			f.declared[i].Reason = reason
+			return
+		}
+	}
+	f.declared = append(f.declared, DeclaredGap{Capability: capability, Case: caseID, Reason: reason})
+}
+
+// Declarations returns the declaration set the fixture's declared_gap
+// records were built from, so a control validates against the exact
+// set the collector would have supplied.
+func (f *Fixture) Declarations() DeclaredGapSet {
+	return DeclaredGapSet{SchemaVersion: 1, Declarations: slices.Clone(f.declared)}
 }
 
 // addWorkspaceSecurity adds the single aggregate workspace observation.

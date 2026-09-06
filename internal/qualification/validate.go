@@ -249,14 +249,26 @@ func numericGrade(classification Grade) (int, bool) {
 	return 0, false
 }
 
-// DeriveBaselineGrade derives one capability's per-surface
-// baseline grade from that capability's own case classifications only.
-// Any not_observed case makes the grade not_observed; otherwise any gap
-// case makes it gap; only all-usable cases yield usable. Cases of the
-// other capability never influence the result.
+// DeriveBaselineGrade derives one capability's per-surface baseline
+// grade from that capability's own case classifications only. It
+// first drops every declared_gap and not_inducible entry; an empty
+// remainder derives not_observed. Otherwise, any remaining not_observed
+// case makes the grade not_observed; else any gap case makes it gap;
+// only all-usable cases yield usable. Cases of the other capability
+// never influence the result.
 func DeriveBaselineGrade(classifications []Grade) Grade {
-	allUsable := true
+	remaining := make([]Grade, 0, len(classifications))
 	for _, c := range classifications {
+		if c == GradeDeclaredGap || c == GradeNotInducible {
+			continue
+		}
+		remaining = append(remaining, c)
+	}
+	if len(remaining) == 0 {
+		return GradeNotObserved
+	}
+	allUsable := true
+	for _, c := range remaining {
 		switch c {
 		case GradeNotObserved:
 			return GradeNotObserved
@@ -319,44 +331,172 @@ func firstRecordOfClass(records []Record, class RowClass) *Record {
 	return nil
 }
 
-// ComputeEligibility derives the qualification verdict from the
-// non-final records alone. Every comparison capability needs an observed
-// protocol grade at or above the richest native structured reference;
-// protocol tool-server delivery must be usable by server receipt;
-// permission induction and the policy precondition must have been
-// answered; and the isolated end-to-end run must have reached its
-// terminal condition.
-func ComputeEligibility(records []Record) Verdict {
-	grades := baselineGrades(records)
-	for _, capability := range comparisonCapabilities {
-		reference := richestNativeReference(
-			grades[SurfaceNativeJSON][capability],
-			grades[SurfaceNativeStreamJSON][capability],
-		)
-		protocolGrade, protocolOK := numericGrade(grades[SurfaceProtocol][capability])
-		referenceGrade, referenceOK := numericGrade(reference)
-		if !protocolOK || !referenceOK || protocolGrade < referenceGrade {
-			return VerdictNotQualified
+// Standing is the three-way standing of one load-bearing row.
+type Standing string
+
+const (
+	StandingSatisfied  Standing = "satisfied"
+	StandingBelow      Standing = "below"
+	StandingUnmeasured Standing = "unmeasured"
+)
+
+// RowOutcome is one load-bearing row's contribution to the verdict.
+// Cause is assembled only from closed vocabulary and is empty when
+// Standing is StandingSatisfied.
+type RowOutcome struct {
+	Label    string
+	Standing Standing
+	Cause    string
+}
+
+// EligibilityReport carries the verdict and every row that produced
+// it, in canonical row order.
+type EligibilityReport struct {
+	Verdict Verdict
+	Rows    []RowOutcome
+}
+
+// presentGrade reports a surface-capability baseline grade and whether
+// a baseline record for it exists at all.
+func presentGrade(grades map[Surface]map[Capability]Grade, surface Surface, capability Capability) (Grade, bool) {
+	bySurface, ok := grades[surface]
+	if !ok {
+		return "", false
+	}
+	grade, ok := bySurface[capability]
+	return grade, ok
+}
+
+// nativeReferenceStanding derives one capability's native structured
+// reference: the higher-ranked of the two structured native surfaces'
+// baseline grades, or an unmeasured standing naming the first
+// unmeasured structured surface in measuredSurfaces order. native_text
+// stays excluded; it is not a structured surface.
+func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability Capability) (Grade, Surface, bool) {
+	for _, surface := range measuredSurfaces {
+		if surface != SurfaceNativeJSON && surface != SurfaceNativeStreamJSON {
+			continue
+		}
+		grade, _ := presentGrade(grades, surface, capability)
+		if _, ok := numericGrade(grade); !ok {
+			return "", surface, true
 		}
 	}
+	reference := richestNativeReference(
+		grades[SurfaceNativeJSON][capability],
+		grades[SurfaceNativeStreamJSON][capability],
+	)
+	return reference, "", false
+}
 
-	mcp := firstRecordOfClass(records, RowMCPDelivery)
-	if mcp == nil || mcp.Grade != GradeUsable {
-		return VerdictNotQualified
+// explainComparisonRow derives one comparison capability's standing
+// against the ordered condition table: an absent or unmeasured
+// protocol baseline, an incomplete native reference, or a rank
+// comparison between the two.
+func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Capability) RowOutcome {
+	label := string(capability)
+	protocolGrade, present := presentGrade(grades, SurfaceProtocol, capability)
+	if !present {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "baseline record missing"}
 	}
-	permission := firstRecordOfClass(records, RowPermission)
-	if permission == nil || permission.Outcome != OutcomePass || permission.Grade != GradeUsable {
-		return VerdictNotQualified
+	if protocolGrade == GradeNotObserved {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
 	}
-	policy := firstRecordOfClass(records, RowPolicyPrecondition)
-	if policy == nil || policy.Outcome != OutcomePass || policy.Grade != GradeUsable {
-		return VerdictNotQualified
+	referenceGrade, unmeasuredSurface, unmeasured := nativeReferenceStanding(grades, capability)
+	if unmeasured {
+		return RowOutcome{
+			Label:    label,
+			Standing: StandingUnmeasured,
+			Cause:    fmt.Sprintf("native reference incomplete: %s not measured", unmeasuredSurface),
+		}
 	}
-	e2e := firstRecordOfClass(records, RowEndToEnd)
-	if e2e == nil || e2e.Outcome != OutcomePass || e2e.Grade != GradeUsable {
-		return VerdictNotQualified
+	protocolRank, protocolOK := numericGrade(protocolGrade)
+	referenceRank, referenceOK := numericGrade(referenceGrade)
+	if !protocolOK {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
 	}
-	return VerdictQualified
+	if !referenceOK {
+		// Blame the side that is actually unmeasured. The caller filters
+		// an unranked reference out before this point, so neither arm is
+		// reachable today; a wrong cause here would send the operator to
+		// the wrong surface the moment one of them becomes reachable.
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "native reference not measured"}
+	}
+	if protocolRank >= referenceRank {
+		return RowOutcome{Label: label, Standing: StandingSatisfied}
+	}
+	return RowOutcome{
+		Label:    label,
+		Standing: StandingBelow,
+		Cause:    fmt.Sprintf("protocol %s below native reference %s", protocolGrade, referenceGrade),
+	}
+}
+
+// explainSingletonRow derives one singleton row's standing against the
+// ordered condition table: an absent record, a not_observed grade, or
+// a usable-and-pass record against anything else.
+func explainSingletonRow(records []Record, class RowClass) RowOutcome {
+	label := rowLabel(class)
+	rec := firstRecordOfClass(records, class)
+	if rec == nil {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "record missing"}
+	}
+	if rec.Grade == GradeNotObserved {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: fmt.Sprintf("outcome %s", rec.Outcome)}
+	}
+	if rec.Grade == GradeUsable && rec.Outcome == OutcomePass {
+		return RowOutcome{Label: label, Standing: StandingSatisfied}
+	}
+	return RowOutcome{
+		Label:    label,
+		Standing: StandingBelow,
+		Cause:    fmt.Sprintf("grade %s with outcome %s", rec.Grade, rec.Outcome),
+	}
+}
+
+// singletonRowClasses is the fixed order of the four singleton rows in
+// an EligibilityReport, following the four comparison capabilities.
+var singletonRowClasses = []RowClass{RowPolicyPrecondition, RowPermission, RowMCPDelivery, RowEndToEnd}
+
+// ExplainEligibility derives the verdict and the per-row standings from
+// the non-final records alone. It is pure and total: it returns a
+// report for any record slice, including an empty one, without
+// panicking on a missing baseline or a missing singleton row.
+func ExplainEligibility(records []Record) EligibilityReport {
+	grades := baselineGrades(records)
+	report := EligibilityReport{}
+	for _, capability := range comparisonCapabilities {
+		report.Rows = append(report.Rows, explainComparisonRow(grades, capability))
+	}
+	for _, class := range singletonRowClasses {
+		report.Rows = append(report.Rows, explainSingletonRow(records, class))
+	}
+
+	below, unmeasured := false, false
+	for _, row := range report.Rows {
+		switch row.Standing {
+		case StandingBelow:
+			below = true
+		case StandingUnmeasured:
+			unmeasured = true
+		}
+	}
+	switch {
+	case below:
+		report.Verdict = VerdictNotQualified
+	case unmeasured:
+		report.Verdict = VerdictUnmeasured
+	default:
+		report.Verdict = VerdictQualified
+	}
+	return report
+}
+
+// ComputeEligibility derives the qualification verdict from the
+// non-final records alone, returning ExplainEligibility(records).Verdict
+// so the two can never disagree.
+func ComputeEligibility(records []Record) Verdict {
+	return ExplainEligibility(records).Verdict
 }
 
 // readEvidenceFile reads a JSONL evidence file and strictly decodes
@@ -431,7 +571,7 @@ type setValidation struct {
 // relations, token sentinel rules, derived baselines, runtime-identity
 // coverage, and the derived cardinality formula. It returns the
 // eligibility verdict computed from the records.
-func validateNonFinalSet(records []Record) (Verdict, error) {
+func validateNonFinalSet(records []Record, declarations DeclaredGapSet) (Verdict, error) {
 	v := &setValidation{
 		records:  records,
 		seen:     map[string]bool{},
@@ -450,6 +590,9 @@ func validateNonFinalSet(records []Record) (Verdict, error) {
 		return "", err
 	}
 	if err := v.ClassifyRecords(); err != nil {
+		return "", err
+	}
+	if err := v.checkExcludedCases(declarations); err != nil {
 		return "", err
 	}
 	if err := v.checkContinuationRelations(); err != nil {
@@ -511,11 +654,31 @@ func (v *setValidation) ClassifyRecords() error {
 			(class != RowToken || rec.EvidencePath == nil) {
 			return fmt.Errorf("record %d: corroboration_only is valid only on a non-sentinel token_source record", rec.Sequence)
 		}
+		if (rec.Grade == GradeDeclaredGap || rec.Grade == GradeNotInducible) && class != RowSemantic {
+			return fmt.Errorf("record %d: %s is valid only on a semantic probe record", rec.Sequence, rec.Grade)
+		}
+
+		if rec.Grade == GradeDeclaredGap && rec.EvidencePath == nil {
+			return fmt.Errorf("record %d: declared_gap record must carry a non-null evidence_path", rec.Sequence)
+		}
 
 		pathNullAllowed := (class == RowSemantic && rec.Grade == GradeNotObserved) ||
+			(class == RowSemantic && rec.Grade == GradeNotInducible) ||
 			(class == RowToken && rec.EvidencePath == nil)
 		if rec.EvidencePath == nil && !pathNullAllowed {
 			return fmt.Errorf("record %d: evidence_path must be set for a %s record", rec.Sequence, rowLabel(class))
+		}
+		if rec.Grade == GradeNotInducible && rec.EvidencePath != nil {
+			return fmt.Errorf("record %d: not_inducible record must carry a null evidence_path", rec.Sequence)
+		}
+		if rec.Grade == GradeDeclaredGap && !slices.Contains(DeclarableSurfaces, rec.Surface) {
+			return fmt.Errorf("record %d: declared_gap record must carry a surface in DeclarableSurfaces, got %s", rec.Sequence, rec.Surface)
+		}
+		if rec.Grade == GradeDeclaredGap && !slices.Contains(DeclaredGapReasons, rec.Detail) {
+			return fmt.Errorf("record %d: declared_gap record detail %q is outside the closed reason set", rec.Sequence, rec.Detail)
+		}
+		if rec.Grade == GradeNotInducible && rec.Detail != NotInducibleDetail {
+			return fmt.Errorf("record %d: not_inducible record detail = %q, want %q", rec.Sequence, rec.Detail, NotInducibleDetail)
 		}
 
 		if rec.PriorSessionID != nil && class != RowContinuationRecall {
@@ -564,7 +727,15 @@ func CheckOutcomeGradePairing(rec *Record) error {
 		if verdict != OutcomeNotApplicable {
 			return fmt.Errorf("classification not_applicable requires verdict not_applicable, got %s", verdict)
 		}
-	case GradeQualified, GradeNotQualified:
+	case GradeDeclaredGap:
+		if verdict != OutcomeNotProducible {
+			return fmt.Errorf("classification declared_gap requires verdict not_producible, got %s", verdict)
+		}
+	case GradeNotInducible:
+		if verdict != OutcomeNotInducible {
+			return fmt.Errorf("classification not_inducible requires verdict not_inducible, got %s", verdict)
+		}
+	case GradeQualified, GradeNotQualified, GradeUnmeasured:
 		return fmt.Errorf("classification %s is valid only for capability eligibility", classification)
 	}
 	switch verdict {
@@ -585,6 +756,14 @@ func CheckOutcomeGradePairing(rec *Record) error {
 	case OutcomePrerequisiteFailed, OutcomeFixtureInductionFailed, OutcomeAdapterUnanswered, OutcomeRuntimeFailed:
 		if classification != GradeNotObserved {
 			return fmt.Errorf("verdict %s requires classification not_observed, got %s", verdict, classification)
+		}
+	case OutcomeNotProducible:
+		if classification != GradeDeclaredGap {
+			return fmt.Errorf("verdict not_producible requires classification declared_gap, got %s", classification)
+		}
+	case OutcomeNotInducible:
+		if classification != GradeNotInducible {
+			return fmt.Errorf("verdict not_inducible requires classification not_inducible, got %s", classification)
 		}
 	}
 	return nil
@@ -687,6 +866,12 @@ func (v *setValidation) checkSessionRelation(rec *Record, class RowClass) error 
 		if rec.Outcome == OutcomePass && rec.SessionID == nil {
 			return fmt.Errorf("passing semantic probe must carry its own session_id")
 		}
+		if rec.Grade == GradeDeclaredGap && rec.SessionID == nil {
+			return fmt.Errorf("declared_gap record must carry its own session_id")
+		}
+		if rec.Grade == GradeNotInducible && rec.SessionID != nil {
+			return fmt.Errorf("not_inducible record must carry a null session_id")
+		}
 	}
 	return nil
 }
@@ -781,7 +966,15 @@ func (v *setValidation) checkSemanticSessionRelations() error {
 	for _, surface := range measuredSurfaces {
 		dispositionRefusal := v.semanticRecord(surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
 		retryRefusal := v.semanticRecord(surface, CapabilityRetryClassification, CaseNonRetryableRefusal)
-		if dispositionRefusal != nil && retryRefusal != nil {
+		if dispositionRefusal != nil && retryRefusal != nil &&
+			dispositionRefusal.SessionID != nil && retryRefusal.SessionID != nil {
+			// The rule states that two records of one physical refusal run
+			// carry that run's session. A side carrying no session made no
+			// such run, so it has none to reuse and none to check against,
+			// and the comparison is skipped rather than failed. Keying the
+			// skip on the absent session rather than on a grade keeps it
+			// exactly as wide as the rule it exempts: whenever both sides
+			// carry a session, they must still agree, whatever their grades.
 			if compareNullableString(dispositionRefusal.SessionID, retryRefusal.SessionID) != 0 {
 				return fmt.Errorf("%s refusal retry record does not reuse the matching disposition-refusal session id", surface)
 			}
@@ -800,6 +993,142 @@ func (v *setValidation) checkSemanticSessionRelations() error {
 // semanticRecord returns one semantic record by tuple, or nil.
 func (v *setValidation) semanticRecord(surface Surface, capability Capability, caseID Case) *Record {
 	return v.semantic[surface][capability][caseID]
+}
+
+// capabilityOwning returns the capability CapabilityCases lists caseID
+// under, or the zero value if none does.
+func capabilityOwning(caseID Case) Capability {
+	for _, capability := range Capabilities {
+		if slices.Contains(CapabilityCases[capability], caseID) {
+			return capability
+		}
+	}
+	return ""
+}
+
+// missingSurfaces returns the members of want that have does not
+// carry, in want's order.
+func missingSurfaces(have, want []Surface) []Surface {
+	var missing []Surface
+	for _, surface := range want {
+		if !slices.Contains(have, surface) {
+			missing = append(missing, surface)
+		}
+	}
+	return missing
+}
+
+// checkExcludedCases enforces the closed excluded-case rules for every
+// (capability, case) pair: a case is one kind of excluded or the
+// other, an exclusion kind carries the surface set it requires, a
+// declared gap's details agree with one another and with the
+// declaration that authorizes it, its peer under DeclaredGapPeers
+// carries the identical exclusion, and a not-inducible detail is
+// always NotInducibleDetail. It then requires every declaration to
+// match a record, mirroring checkIdentityCoverage's bidirectional
+// shape.
+func (v *setValidation) checkExcludedCases(declarations DeclaredGapSet) error {
+	for _, capability := range Capabilities {
+		cases, ok := CapabilityCases[capability]
+		if !ok {
+			continue
+		}
+		for _, caseID := range cases {
+			if err := v.checkExcludedCase(declarations, capability, caseID); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, entry := range declarations.Declarations {
+		matched := false
+		for _, surface := range DeclarableSurfaces {
+			if rec := v.semanticRecord(surface, entry.Capability, entry.Case); rec != nil && rec.Grade == GradeDeclaredGap {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return fmt.Errorf("declaration for capability %s case %s matches no declared_gap record", entry.Capability, entry.Case)
+		}
+	}
+	return nil
+}
+
+// checkExcludedCase enforces the closed excluded-case rules for one
+// (capability, case) pair.
+func (v *setValidation) checkExcludedCase(declarations DeclaredGapSet, capability Capability, caseID Case) error {
+	var declared, catalog []Surface
+	var declaredDetail string
+	for _, surface := range measuredSurfaces {
+		rec := v.semanticRecord(surface, capability, caseID)
+		if rec == nil {
+			continue
+		}
+		switch rec.Grade {
+		case GradeDeclaredGap:
+			declared = append(declared, surface)
+			declaredDetail = rec.Detail
+		case GradeNotInducible:
+			catalog = append(catalog, surface)
+		}
+	}
+
+	if len(declared) > 0 && len(catalog) > 0 {
+		return fmt.Errorf("capability %s case %s carries both a declared gap and a not-inducible grade", capability, caseID)
+	}
+	if len(declared) > 0 {
+		if missing := missingSurfaces(declared, DeclarableSurfaces); len(missing) > 0 {
+			return fmt.Errorf("capability %s case %s declared gap is missing on surfaces %v", capability, caseID, missing)
+		}
+	}
+	if len(catalog) > 0 {
+		if missing := missingSurfaces(catalog, measuredSurfaces); len(missing) > 0 {
+			return fmt.Errorf("capability %s case %s not-inducible grade is missing on surfaces %v", capability, caseID, missing)
+		}
+	}
+	if len(declared) == 0 && len(catalog) == 0 {
+		return nil
+	}
+
+	if len(declared) > 0 {
+		for _, surface := range declared {
+			if rec := v.semanticRecord(surface, capability, caseID); rec.Detail != declaredDetail {
+				return fmt.Errorf("capability %s case %s carries differing declared-gap details", capability, caseID)
+			}
+		}
+		if _, found := declarations.Declared(capability, caseID); !found {
+			return fmt.Errorf("capability %s case %s carries a declared gap no declaration authorizes", capability, caseID)
+		}
+		if peer, hasPeer := DeclaredGapPeers[caseID]; hasPeer {
+			peerCapability := capabilityOwning(peer)
+			var peerDeclared []Surface
+			var peerDetail string
+			for _, surface := range measuredSurfaces {
+				rec := v.semanticRecord(surface, peerCapability, peer)
+				if rec == nil || rec.Grade != GradeDeclaredGap {
+					continue
+				}
+				peerDeclared = append(peerDeclared, surface)
+				peerDetail = rec.Detail
+			}
+			if missing := missingSurfaces(peerDeclared, DeclarableSurfaces); len(missing) > 0 {
+				return fmt.Errorf("capability %s case %s's peer %s case %s does not carry a declared gap on surfaces %v", capability, caseID, peerCapability, peer, missing)
+			}
+			if peerDetail != declaredDetail {
+				return fmt.Errorf("capability %s case %s and its peer %s case %s carry differing declared-gap reasons", capability, caseID, peerCapability, peer)
+			}
+		}
+	}
+	if len(catalog) > 0 {
+		for _, surface := range catalog {
+			rec := v.semanticRecord(surface, capability, caseID)
+			if rec.Detail != NotInducibleDetail {
+				return fmt.Errorf("capability %s case %s not-inducible record carries detail %q, want %q", capability, caseID, rec.Detail, NotInducibleDetail)
+			}
+		}
+	}
+	return nil
 }
 
 // checkContinuationRelations enforces that every non-null
@@ -870,12 +1199,19 @@ func (v *setValidation) checkDerivedBaselines() error {
 			switch capability {
 			case CapabilityTurnDisposition, CapabilityRetryClassification:
 				var classes []Grade
+				allExcluded := true
 				for _, caseID := range CapabilityCases[capability] {
 					rec := v.semanticRecord(surface, capability, caseID)
 					if rec == nil {
 						return fmt.Errorf("surface %s is missing its %s %s semantic record", surface, capability, caseID)
 					}
 					classes = append(classes, rec.Grade)
+					if rec.Grade != GradeDeclaredGap && rec.Grade != GradeNotInducible {
+						allExcluded = false
+					}
+				}
+				if allExcluded {
+					return fmt.Errorf("surface %s capability %s has every case excluded, leaving no case to derive a baseline from", surface, capability)
 				}
 				derived = DeriveBaselineGrade(classes)
 			case CapabilityTokenCeiling:
@@ -1036,11 +1372,53 @@ func checkCount(name string, got, want int) error {
 	return fmt.Errorf("%s row holds %d records, want exactly %d (required record missing)", name, got, want)
 }
 
+// AggregateGradeFor maps a verdict to the grade the final aggregate
+// record carries. It is total over Verdicts; a value outside the set
+// is a programming error and returns the zero value rather than
+// panicking.
+func AggregateGradeFor(verdict Verdict) Grade {
+	switch verdict {
+	case VerdictQualified:
+		return GradeQualified
+	case VerdictNotQualified:
+		return GradeNotQualified
+	case VerdictUnmeasured:
+		return GradeUnmeasured
+	}
+	return ""
+}
+
+// VerdictRationale returns the one operator-facing rationale line for
+// a verdict. It is total over Verdicts, names no runtime, and returns
+// the zero value for a value outside the set.
+func VerdictRationale(verdict Verdict) string {
+	switch verdict {
+	case VerdictQualified:
+		return "Every load-bearing row was measured and the protocol surface is not below the richest measured native reference."
+	case VerdictNotQualified:
+		return "The protocol surface is below the richest measured native reference on at least one load-bearing row. This runtime stays on its existing integration."
+	case VerdictUnmeasured:
+		return "At least one load-bearing row was not measured. This runtime waits; re-run the profile after the causes listed below are removed."
+	}
+	return ""
+}
+
 // ValidateObservations strictly validates the closed
 // non-final observation set written by the collector and returns the
 // computed eligibility verdict. It rejects any final qualification
-// record.
+// record. It delegates to ValidateObservationsWithDeclarations with an
+// empty declaration set, which rejects every declared_gap record, so
+// an existing caller stays fail-closed without being rewritten.
 func ValidateObservations(path string) (Verdict, error) {
+	return ValidateObservationsWithDeclarations(path, DeclaredGapSet{})
+}
+
+// ValidateObservationsWithDeclarations strictly validates the closed
+// non-final observation set written by the collector against the
+// declaration set the run was collected under, and returns the
+// computed eligibility verdict. It rejects any final qualification
+// record.
+func ValidateObservationsWithDeclarations(path string, declarations DeclaredGapSet) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err
@@ -1048,7 +1426,7 @@ func ValidateObservations(path string) (Verdict, error) {
 	if err := validateSequence(records); err != nil {
 		return "", err
 	}
-	return validateNonFinalSet(records)
+	return validateNonFinalSet(records, declarations)
 }
 
 // The final-pass aggregate causes, wrapped by ValidateEvidence
@@ -1059,11 +1437,24 @@ var (
 	errRecordAfterAggregate  = errors.New("a record follows the final qualification record; the aggregate must be last")
 )
 
-// ValidateEvidence strictly validates the complete
-// two-pass evidence file: the closed non-final set, exactly one terminal
-// aggregate record in the last position, and exact equality between the
+// ValidateEvidence strictly validates the complete two-pass evidence
+// file: the closed non-final set, exactly one terminal aggregate
+// record in the last position, and exact equality between the
 // aggregate's grade and an independent recomputation of eligibility.
+// It delegates to ValidateEvidenceWithDeclarations with an empty
+// declaration set, which rejects every declared_gap record, so an
+// existing caller stays fail-closed without being rewritten.
 func ValidateEvidence(path string) (Verdict, error) {
+	return ValidateEvidenceWithDeclarations(path, DeclaredGapSet{})
+}
+
+// ValidateEvidenceWithDeclarations strictly validates the complete
+// two-pass evidence file against the declaration set the run was
+// collected under: the closed non-final set, exactly one terminal
+// aggregate record in the last position, and exact equality between
+// the aggregate's grade and an independent recomputation of
+// eligibility.
+func ValidateEvidenceWithDeclarations(path string, declarations DeclaredGapSet) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err
@@ -1117,14 +1508,11 @@ func ValidateEvidence(path string) (Verdict, error) {
 		return "", fmt.Errorf("final qualification record must carry null session, prior, semantic case, agent, and protocol fields")
 	}
 
-	verdict, err := validateNonFinalSet(nonFinal)
+	verdict, err := validateNonFinalSet(nonFinal, declarations)
 	if err != nil {
 		return "", err
 	}
-	want := GradeQualified
-	if verdict == VerdictNotQualified {
-		want = GradeNotQualified
-	}
+	want := AggregateGradeFor(verdict)
 	if aggregate.Grade != want {
 		return "", fmt.Errorf("final qualification record classification = %s, want %s from independent recomputation", aggregate.Grade, want)
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/qualification"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -168,10 +170,14 @@ func geminiRetryCaseFor(outcome geminiProtocolTurnOutcome) (qualification.Case, 
 
 // geminiSemanticObservation is what one bounded probe observed. Tag
 // names the case the probe induced the observation for, which is the
-// only case the observation may ever fill.
+// only case the observation may ever fill. NoInducer is true only when
+// the catalog declares no probe for the case at all; it defaults false,
+// so an observation built anywhere else falls through to the
+// evidence-graded arms rather than into that exclusion.
 type geminiSemanticObservation struct {
 	Tag          qualification.Case
 	Induced      bool
+	NoInducer    bool
 	Distinct     bool
 	Structured   bool
 	Failure      qualification.Outcome
@@ -181,13 +187,26 @@ type geminiSemanticObservation struct {
 }
 
 // geminiSemanticRecordFor builds one semantic probe record from an
-// observation. The classification follows the evidence contract: a
-// failure or an uninduced case is not_observed with its specific
-// verdict and never becomes gap; an observed, distinct, structured
-// outcome is usable; an observed but conflated or unstructured outcome
-// is gap. An observation tagged for another case is refused, so one
-// record can never satisfy more than one tuple.
-func geminiSemanticRecordFor(surface qualification.Surface, capability qualification.Capability, caseID qualification.Case, obs geminiSemanticObservation) qualification.Record {
+// observation, consulting declarations only when surface is a
+// declarable one. The classification follows the evidence contract in
+// order: an observation tagged for another case, a harness failure,
+// and a catalog case with no inducer are each refused independently of
+// any declaration; a case the probe produced no observation of grades
+// declared_gap when a declaration covers it and not_observed
+// otherwise; and a case that appeared, whether distinctly or
+// conflated, fails the run outright when a declaration claims the
+// runtime cannot produce it, because the run's own evidence
+// contradicts the claim.
+//
+// On a structured native surface a recognized and mapped terminal
+// outcome already implies a distinct, structured observation, so the
+// conflated-or-unstructured arm below is unreachable there; gap stays
+// reachable only through native_text, characterized as unstructured
+// residue, and through the protocol surface's cancellation and
+// transport branches, which set Induced before checking distinctness.
+func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capability qualification.Capability, caseID qualification.Case, obs geminiSemanticObservation, declarations qualification.DeclaredGapSet) qualification.Record {
+	t.Helper()
+
 	rec := qualification.Record{
 		SchemaVersion: 1,
 		ObservedAt:    qualification.FixtureTime,
@@ -202,6 +221,12 @@ func geminiSemanticRecordFor(surface qualification.Surface, capability qualifica
 		rec.Detail = fmt.Sprintf("%s %s case observation on %s", capability, caseID, surface)
 	}
 
+	var reason string
+	var declared bool
+	if slices.Contains(qualification.DeclarableSurfaces, surface) {
+		reason, declared = declarations.Declared(capability, caseID)
+	}
+
 	switch {
 	case obs.Tag != caseID:
 		// An observation collected for a different case never fills
@@ -212,15 +237,35 @@ func geminiSemanticRecordFor(surface qualification.Surface, capability qualifica
 	case obs.Failure != "":
 		rec.Outcome = obs.Failure
 		rec.Grade = qualification.GradeNotObserved
+	case obs.NoInducer:
+		rec.Outcome = qualification.OutcomeNotInducible
+		rec.Grade = qualification.GradeNotInducible
+		rec.Detail = qualification.NotInducibleDetail
+		rec.EvidencePath = nil
+		rec.SessionID = nil
 	case !obs.Induced:
-		rec.Outcome = qualification.OutcomeNotObserved
-		rec.Grade = qualification.GradeNotObserved
+		if declared {
+			rec.Outcome = qualification.OutcomeNotProducible
+			rec.Grade = qualification.GradeDeclaredGap
+			rec.Detail = reason
+			rec.SessionID = new(obs.SessionID)
+			rec.EvidencePath = new(obs.EvidencePath)
+		} else {
+			rec.Outcome = qualification.OutcomeNotObserved
+			rec.Grade = qualification.GradeNotObserved
+		}
 	case obs.Distinct && obs.Structured:
+		if declared {
+			t.Fatalf("capability %s case %s on surface %s appeared distinctly, but a declaration claims the runtime cannot produce it", capability, caseID, surface)
+		}
 		rec.Outcome = qualification.OutcomePass
 		rec.Grade = qualification.GradeUsable
 		rec.SessionID = new(obs.SessionID)
 		rec.EvidencePath = new(obs.EvidencePath)
 	default:
+		if declared {
+			t.Fatalf("capability %s case %s on surface %s appeared conflated, but a declaration claims the runtime cannot produce it", capability, caseID, surface)
+		}
 		rec.Outcome = qualification.OutcomePass
 		rec.Grade = qualification.GradeGap
 		rec.SessionID = new(obs.SessionID)
@@ -474,7 +519,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			EvidencePath: "/turn/stop_reason",
 			Detail:       "bounded probe cancellation completed with a distinct outcome",
 		}
-		rec := geminiSemanticRecordFor(qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseCancellation, obs)
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseCancellation, obs, qualification.DeclaredGapSet{})
 		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeUsable {
 			t.Errorf("cancellation record = %s/%s, want pass/usable", rec.Outcome, rec.Grade)
 		}
@@ -603,7 +648,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			EvidencePath: "session/request_permission",
 			Detail:       "permission request answered",
 		}
-		rec := geminiSemanticRecordFor(qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, permissionObservation)
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, permissionObservation, qualification.DeclaredGapSet{})
 		if rec.Outcome != qualification.OutcomeNotObserved || rec.Grade != qualification.GradeNotObserved {
 			t.Errorf("mismatched-tag record = %s/%s, want not_observed/not_observed", rec.Outcome, rec.Grade)
 		}
@@ -612,17 +657,17 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 		}
 
 		// An uninduced case stays not_observed, never gap.
-		uninduced := geminiSemanticRecordFor(qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseUnknownOutcome, geminiSemanticObservation{Tag: qualification.CaseUnknownOutcome})
+		uninduced := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseUnknownOutcome, geminiSemanticObservation{Tag: qualification.CaseUnknownOutcome}, qualification.DeclaredGapSet{})
 		if uninduced.Outcome != qualification.OutcomeNotObserved || uninduced.Grade != qualification.GradeNotObserved {
 			t.Errorf("uninduced record = %s/%s, want not_observed/not_observed", uninduced.Outcome, uninduced.Grade)
 		}
 
 		// A harness failure keeps its specific verdict and never
 		// becomes gap evidence about the runtime surface.
-		failed := geminiSemanticRecordFor(qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, geminiSemanticObservation{
+		failed := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, geminiSemanticObservation{
 			Tag:     qualification.CaseRetryableTransport,
 			Failure: qualification.OutcomePrerequisiteFailed,
-		})
+		}, qualification.DeclaredGapSet{})
 		if failed.Outcome != qualification.OutcomePrerequisiteFailed || failed.Grade != qualification.GradeNotObserved {
 			t.Errorf("failure record = %s/%s, want prerequisite_failed/not_observed", failed.Outcome, failed.Grade)
 		}
@@ -631,7 +676,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 	t.Run("a conflated unstructured outcome grades gap", func(t *testing.T) {
 		t.Parallel()
 
-		rec := geminiSemanticRecordFor(qualification.SurfaceNativeText, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, geminiSemanticObservation{
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeText, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, geminiSemanticObservation{
 			Tag:          qualification.CaseSuccess,
 			Induced:      true,
 			Distinct:     false,
@@ -639,7 +684,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			SessionID:    "sess-native-text",
 			EvidencePath: "/text/final",
 			Detail:       "unstructured residue only",
-		})
+		}, qualification.DeclaredGapSet{})
 		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeGap {
 			t.Errorf("unstructured record = %s/%s, want pass/gap", rec.Outcome, rec.Grade)
 		}
@@ -775,5 +820,161 @@ func geminiAwaitGroupDrain(t *testing.T, pgid int, within time.Duration) bool {
 			return false
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestGeminiSemanticRecordForDeclarationArms confirms arm 4's
+// declared_gap conversion happens only when a declaration covers the
+// case, and only on a declarable surface.
+func TestGeminiSemanticRecordForDeclarationArms(t *testing.T) {
+	t.Parallel()
+
+	declarations := qualification.DeclaredGapSet{
+		SchemaVersion: 1,
+		Declarations: []qualification.DeclaredGap{
+			{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
+		},
+	}
+
+	t.Run("arm 4 converts to declared_gap only when declared", func(t *testing.T) {
+		t.Parallel()
+
+		obs := geminiSemanticObservation{Tag: qualification.CaseRuntimeRefusal, SessionID: "sess-fixture", EvidencePath: "/turn/stop_reason"}
+		declared := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, declarations)
+		if declared.Grade != qualification.GradeDeclaredGap || declared.Outcome != qualification.OutcomeNotProducible {
+			t.Errorf("declared record = %s/%s, want declared_gap/not_producible", declared.Grade, declared.Outcome)
+		}
+		if declared.Detail != qualification.DeclaredGapNeverProduced {
+			t.Errorf("declared record detail = %q, want %q", declared.Detail, qualification.DeclaredGapNeverProduced)
+		}
+
+		undeclared := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, qualification.DeclaredGapSet{})
+		if undeclared.Grade != qualification.GradeNotObserved || undeclared.Outcome != qualification.OutcomeNotObserved {
+			t.Errorf("undeclared record = %s/%s, want not_observed/not_observed", undeclared.Grade, undeclared.Outcome)
+		}
+	})
+
+	t.Run("arm 4 ignores a declaration on a non-declarable surface", func(t *testing.T) {
+		t.Parallel()
+
+		obs := geminiSemanticObservation{Tag: qualification.CaseRuntimeRefusal}
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeText, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, declarations)
+		if rec.Grade != qualification.GradeNotObserved {
+			t.Errorf("native_text record = %s, want not_observed even under a declaration, since native_text is not declarable", rec.Grade)
+		}
+	})
+}
+
+// TestGeminiSemanticRecordForArm5FailsUnderDeclaration confirms arm 5
+// fails the run when a declared case appeared distinctly. The
+// assertion runs in a re-exec'd subprocess: a t.Fatalf inside this
+// test would otherwise mark the whole test binary's run failed.
+func TestGeminiSemanticRecordForArm5FailsUnderDeclaration(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		declarations := qualification.DeclaredGapSet{
+			SchemaVersion: 1,
+			Declarations: []qualification.DeclaredGap{
+				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
+			},
+		}
+		obs := geminiSemanticObservation{
+			Tag: qualification.CaseRuntimeRefusal, Induced: true, Distinct: true, Structured: true,
+			SessionID: "sess", EvidencePath: "/turn/stop_reason",
+		}
+		geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, declarations)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiSemanticRecordForArm5FailsUnderDeclaration$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want arm 5 to fail the run; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "appeared distinctly, but a declaration claims the runtime cannot produce it") {
+		t.Errorf("subprocess output = %s, want it to name the arm 5 rejection", output)
+	}
+}
+
+// TestGeminiSemanticRecordForArm6FailsUnderDeclaration confirms arm 6
+// fails the run when a declared case appeared conflated, mirroring
+// TestGeminiSemanticRecordForArm5FailsUnderDeclaration's re-exec
+// technique.
+func TestGeminiSemanticRecordForArm6FailsUnderDeclaration(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		declarations := qualification.DeclaredGapSet{
+			SchemaVersion: 1,
+			Declarations: []qualification.DeclaredGap{
+				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
+			},
+		}
+		obs := geminiSemanticObservation{
+			Tag: qualification.CaseRuntimeRefusal, Induced: true, Distinct: false, Structured: false,
+			SessionID: "sess", EvidencePath: "/turn/stop_reason",
+		}
+		geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, declarations)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiSemanticRecordForArm6FailsUnderDeclaration$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want arm 6 to fail the run; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "appeared conflated, but a declaration claims the runtime cannot produce it") {
+		t.Errorf("subprocess output = %s, want it to name the arm 6 rejection", output)
+	}
+}
+
+// TestGeminiInduceNativeCaseInducedImpliesDistinctAndStructured runs a
+// controlled native probe against each structured native surface and
+// confirms geminiInduceNativeCase's own invariant: Induced true always
+// carries Distinct and Structured true alongside it there, so
+// geminiSemanticRecordFor's conflated-or-unstructured arm (gap) can
+// never fire for an Induced observation on these two surfaces, closing
+// this unreachability in code rather than by inspection alone.
+func TestGeminiInduceNativeCaseInducedImpliesDistinctAndStructured(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		surface qualification.Surface
+		output  string
+	}{
+		{qualification.SurfaceNativeJSON, `{"session_id":"sess-fixture","response":{"text":"SORTIE_BASELINE_OK"},"stats":{}}`},
+		{qualification.SurfaceNativeStreamJSON, `{"type":"result","status":"success"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.surface), func(t *testing.T) {
+			t.Parallel()
+
+			workspace := t.TempDir()
+			script := agenttest.WriteScript(t, workspace, "native-success-probe", fmt.Sprintf("printf '%%s\\n' '%s'\n", tt.output))
+			runtime := geminiQualificationRuntime{
+				Config:    geminiQualificationConfig{CommandPath: script, Model: "fixture-model"},
+				Workspace: geminiQualificationWorkspace{Checkout: workspace},
+				Env:       []string{"PATH=" + os.Getenv("PATH")},
+			}
+			catalog := map[qualification.InputID]geminiInputSpec{
+				qualification.InputDispositionSuccess: {Prompt: "reply", Launch: true},
+			}
+			obs := geminiInduceNativeCase(t, runtime, tt.surface, qualification.CaseSuccess, catalog, newGeminiTokenLedger())
+			if !obs.Induced {
+				t.Fatalf("observation = %+v, want Induced true for this recognized success shape", obs)
+			}
+			if !obs.Distinct || !obs.Structured {
+				t.Fatalf("observation = %+v, want Induced to imply Distinct and Structured together on a structured native surface", obs)
+			}
+
+			rec := geminiSemanticRecordFor(t, tt.surface, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclaredGapSet{})
+			if rec.Grade != qualification.GradeUsable {
+				t.Errorf("record = %s, want usable, never gap, for an Induced observation on a structured native surface", rec.Grade)
+			}
+		})
 	}
 }
