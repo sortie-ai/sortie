@@ -1675,6 +1675,17 @@ func geminiComposeProtocolPrompt(spec geminiInputSpec) string {
 	return spec.Stdin + "\n\n" + spec.Prompt
 }
 
+// geminiModelDecisionBudget bounds a wait on the model deciding to call
+// a tool, which is model latency rather than machine latency. The turn
+// carrying that call is already bounded, and a marker the turn has not
+// produced by its own deadline cannot appear afterwards, so that
+// deadline is the only defensible bound. A fixed value here pins the
+// profile to whatever model it was tuned against and fails every
+// slower one as a missing marker.
+func geminiModelDecisionBudget(timeouts domain.AgentConfig) time.Duration {
+	return time.Duration(timeouts.TurnTimeoutMS) * time.Millisecond
+}
+
 // geminiInduceProtocolCase runs one protocol case's live probe through
 // the adapter's own session lifecycle.
 func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, tracker *geminiProcessGroupTracker, caseID qualification.Case, catalog map[qualification.InputID]geminiInputSpec, ledger *geminiTokenLedger) geminiSemanticObservation {
@@ -1719,7 +1730,7 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 			})
 			turnDone <- turnOutcome{result: result, err: err}
 		}()
-		waitForFile(t, geminiProbeMarkerPath(runtime.Probes.Cancellation), geminiSemanticProbeTimeout)
+		waitForFile(t, geminiProbeMarkerPath(runtime.Probes.Cancellation), geminiModelDecisionBudget(runtime.Timeouts))
 		cancel()
 		outcome := <-turnDone
 		if agentErr, ok := errors.AsType[*domain.AgentError](outcome.err); ok {
@@ -1743,7 +1754,7 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 			})
 			turnDone <- turnOutcome{result: result, err: err}
 		}()
-		waitForFile(t, geminiProbeMarkerPath(runtime.Probes.Transport), geminiSemanticProbeTimeout)
+		waitForFile(t, geminiProbeMarkerPath(runtime.Probes.Transport), geminiModelDecisionBudget(runtime.Timeouts))
 		_ = procutil.SignalProcessGroup(geminiSessionGroupPID(session), syscall.SIGKILL)
 		outcome := <-turnDone
 		if outcome.result.UsageMeasured {
