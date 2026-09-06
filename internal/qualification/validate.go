@@ -1006,8 +1006,8 @@ func capabilityOwning(caseID Case) Capability {
 	return ""
 }
 
-// missingSurfaces returns the members of want that have does not
-// carry, in want's order.
+// missingSurfaces returns every member of want that is absent from
+// have, in want's order.
 func missingSurfaces(have, want []Surface) []Surface {
 	var missing []Surface
 	for _, surface := range want {
