@@ -10,14 +10,20 @@ import (
 )
 
 // Verdict is the final qualification outcome computed by both
-// validators. The two values are the only permitted results; there is
-// no manual override.
+// validators. The three values are the only permitted results, and a
+// row that was never measured is reported apart from one that was
+// measured and came out below; there is no manual override.
 type Verdict string
 
 const (
 	VerdictQualified    Verdict = "qualified"
 	VerdictNotQualified Verdict = "not_qualified"
+	VerdictUnmeasured   Verdict = "unmeasured"
 )
+
+// Verdicts is the closed verdict set. Every consumer that switches on a
+// verdict is proved total against it.
+var Verdicts = []Verdict{VerdictQualified, VerdictNotQualified, VerdictUnmeasured}
 
 // Scenario names the kind of observation one evidence line carries.
 type Scenario string
@@ -93,7 +99,24 @@ const (
 	GradeNotApplicable     Grade = "not_applicable"
 	GradeQualified         Grade = "qualified"
 	GradeNotQualified      Grade = "not_qualified"
+	// GradeDeclaredGap is valid only on a semantic case row: the runtime
+	// cannot produce the case and the operator declared the gap.
+	GradeDeclaredGap Grade = "declared_gap"
+	// GradeNotInducible is valid only on a semantic case row: the input
+	// catalog has no deterministic inducer for the case, on any runtime.
+	GradeNotInducible Grade = "not_inducible"
+	// GradeUnmeasured is valid only on the final aggregate row.
+	GradeUnmeasured Grade = "unmeasured"
 )
+
+// RowGrades is the closed set of grades a non-final row may carry. It
+// excludes the three eligibility-only grades (GradeQualified,
+// GradeNotQualified, GradeUnmeasured), which are valid only on the
+// final aggregate row.
+var RowGrades = []Grade{
+	GradeUsable, GradeGap, GradeDeclaredGap, GradeNotInducible,
+	GradeCorroborationOnly, GradeNotObserved, GradeNotApplicable,
+}
 
 // Outcome is the bounded probe outcome a record carries.
 type Outcome string
@@ -106,6 +129,10 @@ const (
 	OutcomeFixtureInductionFailed Outcome = "fixture_induction_failed"
 	OutcomeAdapterUnanswered      Outcome = "adapter_unanswered"
 	OutcomeRuntimeFailed          Outcome = "runtime_failed"
+	// OutcomeNotProducible pairs with GradeDeclaredGap.
+	OutcomeNotProducible Outcome = "not_producible"
+	// OutcomeNotInducible pairs with GradeNotInducible.
+	OutcomeNotInducible Outcome = "not_inducible"
 )
 
 // Case names one required disposition or retry class. A record carries
@@ -183,12 +210,14 @@ var (
 		GradeUsable, GradeGap,
 		GradeCorroborationOnly, GradeNotObserved,
 		GradeNotApplicable, GradeQualified,
-		GradeNotQualified,
+		GradeNotQualified, GradeDeclaredGap,
+		GradeNotInducible, GradeUnmeasured,
 	}
 	Outcomes = []Outcome{
 		OutcomePass, OutcomeNotObserved, OutcomeNotApplicable,
 		OutcomePrerequisiteFailed, OutcomeFixtureInductionFailed,
 		OutcomeAdapterUnanswered, OutcomeRuntimeFailed,
+		OutcomeNotProducible, OutcomeNotInducible,
 	}
 	Cases = []Case{
 		CaseSuccess, CaseRuntimeFailure, CaseRuntimeRefusal,
@@ -209,6 +238,14 @@ var (
 		InputE2E, InputAggregate,
 	}
 )
+
+// DeclarableSurfaces are the surfaces whose evidence can confirm or
+// contradict an operator declaration. SurfaceNativeText is absent: it
+// recognizes no terminal outcome, so it can attest to nothing about a
+// specific case.
+var DeclarableSurfaces = []Surface{
+	SurfaceProtocol, SurfaceNativeJSON, SurfaceNativeStreamJSON,
+}
 
 // CapabilityCases maps each semantic capability to its closed case set,
 // in the order the evidence contract requires records to be written.
@@ -235,6 +272,32 @@ var CaseInputs = map[Case]InputID{
 	CaseNonRetryableRefusal: InputRetryNonRetryableRefusal,
 	CaseHumanInput:          InputRetryHumanInput,
 	CaseUnknownOutcome:      InputRetryUnknownOutcome,
+}
+
+// The excluded-case detail constants. They occupy the record's
+// existing detail member; no new record field is introduced.
+const (
+	// DeclaredGapNeverProduced states that the runtime has no code path
+	// that emits this outcome.
+	DeclaredGapNeverProduced = "outcome_never_produced"
+	// DeclaredGapFolded states that the runtime detects the condition
+	// but reports it under another case's outcome, so no observation of
+	// this case is produced.
+	DeclaredGapFolded = "outcome_folded_into_another"
+	// NotInducibleDetail is the one detail a not_inducible row carries.
+	NotInducibleDetail = "no_deterministic_inducer"
+)
+
+// DeclaredGapReasons is the closed set of reasons an operator
+// declaration may carry.
+var DeclaredGapReasons = []string{DeclaredGapNeverProduced, DeclaredGapFolded}
+
+// DeclaredGapPeers pairs the two semantic cases whose outcomes derive
+// from one physical run, so a declaration of one without the other is
+// incoherent.
+var DeclaredGapPeers = map[Case]Case{
+	CaseRuntimeRefusal:      CaseNonRetryableRefusal,
+	CaseNonRetryableRefusal: CaseRuntimeRefusal,
 }
 
 // EvidencePathQualificationVerdict is the evidence_path the single

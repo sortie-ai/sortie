@@ -279,14 +279,18 @@ func TestValidatorSemanticControls(T *testing.T) {
 		}
 	})
 
-	T.Run("unobserved retry Case lowers only retry classification", func(T *testing.T) {
+	T.Run("unobserved retry Case lowers only retry classification, to an unmeasured verdict", func(T *testing.T) {
 		T.Parallel()
 
+		// The retry classification row was never measured on the
+		// protocol surface, so it now reports the unmeasured verdict
+		// its own not_observed baseline produces, rather than the
+		// not_qualified a measured failure would produce.
 		fixture := NewFixture(FixtureQualified)
 		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityRetryClassification, CaseUnknownOutcome)
 		fixture.Finalize()
 		path := WriteEvidenceFile(T, fixture.Records)
-		RequireObservationVerdict(T, path, VerdictNotQualified)
+		RequireObservationVerdict(T, path, VerdictUnmeasured)
 
 		retryBaseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilityRetryClassification))
 		dispositionBaseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilityTurnDisposition))
@@ -337,14 +341,17 @@ func TestValidatorTokenControls(T *testing.T) {
 		RequireObservationVerdict(T, path, VerdictQualified)
 	})
 
-	T.Run("failed inventory sentinel is valid and not qualified", func(T *testing.T) {
+	T.Run("failed inventory sentinel is valid and unmeasured", func(T *testing.T) {
 		T.Parallel()
 
+		// A failed token inventory means the protocol token_ceiling
+		// baseline was never measured, so the row is unmeasured rather
+		// than a measured failure.
 		fixture := NewFixture(FixtureQualified)
 		fixture.SetTokenSentinel(SurfaceProtocol, true)
 		fixture.Finalize()
 		path := WriteEvidenceFile(T, fixture.Records)
-		RequireObservationVerdict(T, path, VerdictNotQualified)
+		RequireObservationVerdict(T, path, VerdictUnmeasured)
 	})
 
 	T.Run("missing Surface inventory", func(T *testing.T) {
@@ -706,5 +713,445 @@ func TestValidatorFinalTupleControls(T *testing.T) {
 		}
 		path := WriteFinalEvidenceFile(T, fixture.Records, GradeQualified)
 		RequireFinalVerdict(T, path, VerdictQualified)
+	})
+}
+
+// declareSemanticGap rewrites one semantic record in place to a
+// declared_gap grade with the given reason, leaving its session_id and
+// evidence_path as the fixture originally built them, matching the
+// rule that a declared_gap row's session follows the observation.
+func declareSemanticGap(f *Fixture, surface Surface, caseID Case, reason string) {
+	rec := f.FindFirst(MatchSemantic(surface, CapabilityTurnDisposition, caseID))
+	rec.Grade = GradeDeclaredGap
+	rec.Outcome = OutcomeNotProducible
+	rec.Detail = reason
+}
+
+// declareNotInducible rewrites one semantic record in place to a
+// not_inducible grade, nulling its session_id and evidence_path per
+// the closed rule for that grade.
+func declareNotInducible(f *Fixture, surface Surface, capability Capability, caseID Case) {
+	rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
+	rec.Grade = GradeNotInducible
+	rec.Outcome = OutcomeNotInducible
+	rec.Detail = NotInducibleDetail
+	rec.EvidencePath = nil
+	rec.SessionID = nil
+}
+
+// TestValidatorExcludedCaseControls covers checkExcludedCases: one
+// rejection control per clause, built from a qualified fixture mutated
+// with declareSemanticGap and declareNotInducible.
+func TestValidatorExcludedCaseControls(T *testing.T) {
+	T.Parallel()
+
+	T.Run("both a declared gap and a not-inducible grade on one Case", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		declareSemanticGap(fixture, SurfaceProtocol, CaseCancellation, DeclaredGapNeverProduced)
+		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityTurnDisposition, CaseCancellation)
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection of both exclusion kinds on one case")
+		}
+		if !strings.Contains(err.Error(), "carries both a declared gap and a not-inducible grade") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the conflicting exclusion kinds", err)
+		}
+	})
+
+	T.Run("declared set is not exactly DeclarableSurfaces", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		declareSemanticGap(fixture, SurfaceProtocol, CaseRuntimeRefusal, DeclaredGapNeverProduced)
+		declareSemanticGap(fixture, SurfaceNativeJSON, CaseRuntimeRefusal, DeclaredGapNeverProduced)
+		// native_stream_json intentionally left observed, so the
+		// declared set is incomplete.
+		fixture.UpdateSemanticBaseline(SurfaceProtocol, CapabilityTurnDisposition)
+		fixture.UpdateSemanticBaseline(SurfaceNativeJSON, CapabilityTurnDisposition)
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection of an incomplete declared set")
+		}
+		if !strings.Contains(err.Error(), "declared gap is missing on surfaces") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the missing surfaces", err)
+		}
+	})
+
+	T.Run("catalog set is not exactly every measured surface", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		declareNotInducible(fixture, SurfaceProtocol, CapabilityRetryClassification, CaseHumanInput)
+		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityRetryClassification, CaseHumanInput)
+		declareNotInducible(fixture, SurfaceNativeStreamJSON, CapabilityRetryClassification, CaseHumanInput)
+		// native_text intentionally left observed: not_inducible must
+		// cover every measured surface, not only the declarable three.
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection of an incomplete not-inducible catalog set")
+		}
+		if !strings.Contains(err.Error(), "not-inducible grade is missing on surfaces") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the missing surfaces", err)
+		}
+	})
+
+	T.Run("mixed detail within one declared set", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		declareSemanticGap(fixture, SurfaceProtocol, CaseCancellation, DeclaredGapNeverProduced)
+		declareSemanticGap(fixture, SurfaceNativeJSON, CaseCancellation, DeclaredGapNeverProduced)
+		declareSemanticGap(fixture, SurfaceNativeStreamJSON, CaseCancellation, DeclaredGapFolded)
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection of a non-uniform declared-gap detail")
+		}
+		if !strings.Contains(err.Error(), "differing declared-gap details") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the differing details", err)
+		}
+	})
+
+	T.Run("declared record no declaration authorizes", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		declareSemanticGap(fixture, SurfaceProtocol, CaseCancellation, DeclaredGapNeverProduced)
+		declareSemanticGap(fixture, SurfaceNativeJSON, CaseCancellation, DeclaredGapNeverProduced)
+		declareSemanticGap(fixture, SurfaceNativeStreamJSON, CaseCancellation, DeclaredGapNeverProduced)
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservationsWithDeclarations(path, DeclaredGapSet{})
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of an unauthorized declared record")
+		}
+		if !strings.Contains(err.Error(), "no declaration authorizes") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the unauthorized record", err)
+		}
+	})
+
+	T.Run("a declaration no record matches", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		path := WriteEvidenceFile(T, fixture.Records)
+		declarations := DeclaredGapSet{
+			SchemaVersion: 1,
+			Declarations:  []DeclaredGap{{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced}},
+		}
+		_, err := ValidateObservationsWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of an unmatched declaration")
+		}
+		if !strings.Contains(err.Error(), "matches no declared_gap record") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the unmatched declaration", err)
+		}
+	})
+
+	T.Run("a peer whose declared set differs from DeclarableSurfaces", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureDeclaredGap)
+		fixture.Finalize()
+		declarations := fixture.Declarations()
+		// Revert the peer's native_stream_json record back to observed,
+		// leaving CaseRuntimeRefusal itself fully and uniformly declared.
+		peer := fixture.FindFirst(MatchSemantic(SurfaceNativeStreamJSON, CapabilityRetryClassification, CaseNonRetryableRefusal))
+		peer.Grade = GradeUsable
+		peer.Outcome = OutcomePass
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservationsWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of a peer whose declared set is incomplete")
+		}
+		if !strings.Contains(err.Error(), "peer") || !strings.Contains(err.Error(), "does not carry a declared gap on surfaces") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the peer's incomplete declared set", err)
+		}
+	})
+
+	T.Run("a peer whose reason differs", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureDeclaredGap)
+		fixture.Finalize()
+		declarations := fixture.Declarations()
+		for _, surface := range DeclarableSurfaces {
+			rec := fixture.FindFirst(MatchSemantic(surface, CapabilityRetryClassification, CaseNonRetryableRefusal))
+			rec.Detail = DeclaredGapFolded
+		}
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservationsWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of a peer reason mismatch")
+		}
+		if !strings.Contains(err.Error(), "differing declared-gap reasons") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the differing reasons", err)
+		}
+	})
+}
+
+// TestValidatorAllExcludedBaselineControl covers checkDerivedBaselines'
+// rejection of a surface-capability whose every case is excluded,
+// leaving no case to derive a baseline from.
+func TestValidatorAllExcludedBaselineControl(T *testing.T) {
+	T.Parallel()
+
+	fixture := NewFixture(FixtureQualified)
+	fixture.Finalize()
+	for _, surface := range MeasuredSurfaces {
+		declareNotInducible(fixture, surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
+		for _, caseID := range CapabilityCases[CapabilityRetryClassification] {
+			declareNotInducible(fixture, surface, CapabilityRetryClassification, caseID)
+		}
+	}
+	path := WriteEvidenceFile(T, fixture.Records)
+	_, err := ValidateObservations(path)
+	if err == nil {
+		T.Fatal("ValidateObservations() = nil error, want rejection of a surface-capability with every case excluded")
+	}
+	if !strings.Contains(err.Error(), "has every case excluded") {
+		T.Errorf("ValidateObservations() error = %v, want it to name the all-excluded surface and capability", err)
+	}
+}
+
+// TestValidatorClassifyRecordsExcludedRowControls covers the per-record
+// rejections ClassifyRecords, CheckOutcomeGradePairing, and
+// checkSessionRelation enforce for the two excluded grades.
+func TestValidatorClassifyRecordsExcludedRowControls(T *testing.T) {
+	T.Parallel()
+
+	tests := []struct {
+		name    string
+		mutate  func(*Fixture)
+		wantSub string
+	}{
+		{
+			name: "declared_gap Grade on a non-semantic row class",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(matchRowClass(RowPermission))
+				rec.Grade = GradeDeclaredGap
+				rec.Outcome = OutcomeNotProducible
+			},
+			wantSub: "is valid only on a semantic probe record",
+		},
+		{
+			name: "not_inducible Grade on a non-semantic row class",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(matchRowClass(RowMCPDelivery))
+				rec.Grade = GradeNotInducible
+				rec.Outcome = OutcomeNotInducible
+			},
+			wantSub: "is valid only on a semantic probe record",
+		},
+		{
+			// The declared_gap check runs ahead of the generic
+			// semantic-probe path check, so the operator who authored the
+			// declaration reads which rule his record broke rather than a
+			// message about semantic probes in general.
+			name: "declared_gap record with a null evidence_path",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeDeclaredGap
+				rec.Outcome = OutcomeNotProducible
+				rec.Detail = DeclaredGapNeverProduced
+				rec.EvidencePath = nil
+			},
+			wantSub: "declared_gap record must carry a non-null evidence_path",
+		},
+		{
+			name: "not_inducible record with a non-null evidence_path",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeNotInducible
+				rec.Outcome = OutcomeNotInducible
+				rec.Detail = NotInducibleDetail
+			},
+			wantSub: "not_inducible record must carry a null evidence_path",
+		},
+		{
+			name: "not_inducible record with a non-null session_id",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeNotInducible
+				rec.Outcome = OutcomeNotInducible
+				rec.Detail = NotInducibleDetail
+				rec.EvidencePath = nil
+			},
+			wantSub: "not_inducible record must carry a null session_id",
+		},
+		{
+			name: "declared_gap record with a null session_id",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeDeclaredGap
+				rec.Outcome = OutcomeNotProducible
+				rec.Detail = DeclaredGapNeverProduced
+				rec.SessionID = nil
+			},
+			wantSub: "declared_gap record must carry its own session_id",
+		},
+		{
+			name: "declared_gap Detail outside the closed reason set",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeDeclaredGap
+				rec.Outcome = OutcomeNotProducible
+				rec.Detail = "bogus_reason"
+			},
+			wantSub: "outside the closed reason set",
+		},
+		{
+			name: "not_inducible Detail differs from the one closed value",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeNotInducible
+				rec.Outcome = OutcomeNotInducible
+				rec.Detail = "bogus_detail"
+				rec.EvidencePath = nil
+				rec.SessionID = nil
+			},
+			wantSub: "not_inducible record detail",
+		},
+		{
+			name: "declared_gap Surface outside DeclarableSurfaces",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchSemantic(SurfaceNativeText, CapabilityTurnDisposition, CaseCancellation))
+				rec.Grade = GradeDeclaredGap
+				rec.Outcome = OutcomeNotProducible
+				rec.Detail = DeclaredGapNeverProduced
+			},
+			wantSub: "must carry a surface in DeclarableSurfaces",
+		},
+		{
+			name: "unmeasured Grade on a non-final row",
+			mutate: func(f *Fixture) {
+				rec := f.FindFirst(MatchBaseline(SurfaceProtocol, CapabilityTurnDisposition))
+				rec.Grade = GradeUnmeasured
+			},
+			wantSub: "is valid only for capability eligibility",
+		},
+	}
+
+	for _, tt := range tests {
+		T.Run(tt.name, func(T *testing.T) {
+			T.Parallel()
+
+			fixture := NewFixture(FixtureQualified)
+			fixture.Finalize()
+			tt.mutate(fixture)
+			path := WriteEvidenceFile(T, fixture.Records)
+			_, err := ValidateObservations(path)
+			if err == nil {
+				T.Fatalf("ValidateObservations() = nil error, want rejection naming %q", tt.wantSub)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				T.Errorf("ValidateObservations() error = %v, want it to mention %q", err, tt.wantSub)
+			}
+		})
+	}
+}
+
+// TestValidatorSemanticSessionRelationExemption covers the refusal/retry
+// session-reuse rule: it still rejects a session mismatch whenever both
+// peer records carry a session, and it exempts the comparison only when
+// one side carries none, whatever that side's grade. The exemption must
+// not silently widen beyond that one condition: a declared_gap peer
+// pair still carries a session on both sides (checkSessionRelation
+// requires it) and so is never exempt, and a not_observed peer that
+// still carries a session is likewise never exempt, proving the skip
+// keys on the absent session rather than on either grade.
+func TestValidatorSemanticSessionRelationExemption(T *testing.T) {
+	T.Parallel()
+
+	T.Run("a session mismatch between two observed peers is rejected", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		retry := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityRetryClassification, CaseNonRetryableRefusal))
+		retry.SessionID = new(FixtureSession(SurfaceProtocol, "diverged"))
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection of a session mismatch between two observed peers")
+		}
+		if !strings.Contains(err.Error(), "does not reuse the matching disposition-refusal session id") {
+			T.Errorf("ValidateObservations() error = %v, want the session-reuse cause", err)
+		}
+	})
+
+	T.Run("a not_observed disposition peer is exempt even when the retry session diverges", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal)
+		retry := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityRetryClassification, CaseNonRetryableRefusal))
+		retry.SessionID = new(FixtureSession(SurfaceProtocol, "diverged"))
+		fixture.Finalize()
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err != nil {
+			T.Errorf("ValidateObservations() error = %v, want nil: a not_observed disposition peer carries no session to check", err)
+		}
+	})
+
+	T.Run("a not_observed retry peer is exempt even when the disposition session diverges", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityRetryClassification, CaseNonRetryableRefusal)
+		disposition := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal))
+		disposition.SessionID = new(FixtureSession(SurfaceProtocol, "diverged"))
+		fixture.Finalize()
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err != nil {
+			T.Errorf("ValidateObservations() error = %v, want nil: a not_observed retry peer carries no session to check", err)
+		}
+	})
+
+	T.Run("a session mismatch between two declared_gap peers is rejected", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureDeclaredGap)
+		retry := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityRetryClassification, CaseNonRetryableRefusal))
+		retry.SessionID = new(FixtureSession(SurfaceProtocol, "diverged"))
+		fixture.Finalize()
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservationsWithDeclarations(path, fixture.Declarations())
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of a session mismatch between two declared_gap peers: the exemption must not widen to a grade that still carries a session")
+		}
+		if !strings.Contains(err.Error(), "does not reuse the matching disposition-refusal session id") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want the session-reuse cause", err)
+		}
+	})
+
+	T.Run("a not_observed disposition peer that still carries a session is not exempt", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal)
+		disposition := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal))
+		disposition.SessionID = new(FixtureSession(SurfaceProtocol, "not-observed-but-sessioned"))
+		retry := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityRetryClassification, CaseNonRetryableRefusal))
+		retry.SessionID = new(FixtureSession(SurfaceProtocol, "diverged"))
+		fixture.Finalize()
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservations(path)
+		if err == nil {
+			T.Fatal("ValidateObservations() = nil error, want rejection: a not_observed peer that still carries a session must not be exempt, proving the skip keys on the absent session rather than on the not_observed grade")
+		}
+		if !strings.Contains(err.Error(), "does not reuse the matching disposition-refusal session id") {
+			T.Errorf("ValidateObservations() error = %v, want the session-reuse cause", err)
+		}
 	})
 }

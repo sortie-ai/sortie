@@ -47,13 +47,16 @@ type geminiSummaryContinuation struct {
 // set produces. It carries no runtime version, timestamp, session
 // identifier, filesystem path, prompt, or secret value.
 type geminiSummaryConclusions struct {
-	Verdict       qualification.Verdict
-	Grades        []geminiSummaryGrade
-	Semantics     []geminiSummarySemantic
-	Tokens        []geminiSummaryToken
-	Continuations []geminiSummaryContinuation
-	Workspace     string
-	Unobserved    []string
+	Verdict        qualification.Verdict
+	Grades         []geminiSummaryGrade
+	Semantics      []geminiSummarySemantic
+	Tokens         []geminiSummaryToken
+	Continuations  []geminiSummaryContinuation
+	Workspace      string
+	Unobserved     []string
+	Blocking       []string
+	UnmeasuredRows []string
+	Excluded       []string
 }
 
 // geminiNotesHeadings are the required adapter-notes headings in R8
@@ -65,6 +68,7 @@ var geminiNotesHeadings = []string{
 	"## Protocol-specific observations",
 	"## Native headless observations",
 	"## Workspace trust and process boundary",
+	"## Excluded capability cases",
 	"## Unobserved surfaces",
 }
 
@@ -72,7 +76,9 @@ var geminiNotesHeadings = []string{
 // Unix-only live scope and the unobserved Windows behavior.
 const geminiNotesUnixScope = "Windows live qualification is unobserved"
 
-// geminiStatusLabel maps a grade to the exact notes status label.
+// geminiStatusLabel maps a grade to the exact notes status label. It
+// returns the empty string for a grade a baseline, tool-server, or
+// permission row never carries.
 func geminiStatusLabel(classification qualification.Grade) string {
 	switch classification {
 	case qualification.GradeUsable, qualification.GradeGap:
@@ -81,6 +87,10 @@ func geminiStatusLabel(classification qualification.Grade) string {
 		return "Not observed:"
 	case qualification.GradeNotApplicable:
 		return "Not applicable:"
+	case qualification.GradeDeclaredGap:
+		return "Declared gap:"
+	case qualification.GradeNotInducible:
+		return "Not inducible:"
 	}
 	return ""
 }
@@ -121,9 +131,16 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 				semantic.Case = *rec.SemanticCase
 			}
 			conclusions.Semantics = append(conclusions.Semantics, semantic)
-			if rec.Grade == qualification.GradeNotObserved {
+			switch rec.Grade {
+			case qualification.GradeNotObserved:
 				conclusions.Unobserved = append(conclusions.Unobserved,
 					fmt.Sprintf("%s %s %s", rec.Surface, rec.Capability, semantic.Case))
+			case qualification.GradeDeclaredGap:
+				conclusions.Excluded = append(conclusions.Excluded,
+					fmt.Sprintf("%s %s: declared %s", rec.Capability, semantic.Case, rec.Detail))
+			case qualification.GradeNotInducible:
+				conclusions.Excluded = append(conclusions.Excluded,
+					fmt.Sprintf("%s %s: no inducer", rec.Capability, semantic.Case))
 			}
 		case qualification.RowToken:
 			path := "(no token-bearing path)"
@@ -185,6 +202,25 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 	})
 	slices.Sort(conclusions.Unobserved)
 
+	// A declared or catalog-owned exclusion carries its grade on every
+	// surface its kind requires, so the walk above appends one
+	// identical line per surface; collapse those down to the one line
+	// per excluded case the summary prints.
+	slices.Sort(conclusions.Excluded)
+	conclusions.Excluded = slices.Compact(conclusions.Excluded)
+
+	report := qualification.ExplainEligibility(records)
+	for _, row := range report.Rows {
+		switch row.Standing {
+		case qualification.StandingBelow:
+			conclusions.Blocking = append(conclusions.Blocking, fmt.Sprintf("%s: %s", row.Label, row.Cause))
+		case qualification.StandingUnmeasured:
+			conclusions.UnmeasuredRows = append(conclusions.UnmeasuredRows, fmt.Sprintf("%s: %s", row.Label, row.Cause))
+		}
+	}
+	slices.Sort(conclusions.Blocking)
+	slices.Sort(conclusions.UnmeasuredRows)
+
 	return conclusions, nil
 }
 
@@ -193,6 +229,28 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Eligibility: %s\n", conclusions.Verdict)
+	fmt.Fprintf(&b, "%s\n", qualification.VerdictRationale(conclusions.Verdict))
+	fmt.Fprint(&b, "Blocking rows:\n")
+	if len(conclusions.Blocking) == 0 {
+		fmt.Fprint(&b, "none\n")
+	}
+	for _, entry := range conclusions.Blocking {
+		fmt.Fprintf(&b, "%s\n", entry)
+	}
+	fmt.Fprint(&b, "Unmeasured rows:\n")
+	if len(conclusions.UnmeasuredRows) == 0 {
+		fmt.Fprint(&b, "none\n")
+	}
+	for _, entry := range conclusions.UnmeasuredRows {
+		fmt.Fprintf(&b, "%s\n", entry)
+	}
+	fmt.Fprint(&b, "Excluded cases:\n")
+	if len(conclusions.Excluded) == 0 {
+		fmt.Fprint(&b, "none\n")
+	}
+	for _, entry := range conclusions.Excluded {
+		fmt.Fprintf(&b, "%s\n", entry)
+	}
 	fmt.Fprint(&b, "Capability grades:\n")
 	for _, grade := range conclusions.Grades {
 		fmt.Fprintf(&b, "%s %s: %s %s\n", grade.Surface, grade.Capability, grade.Label, grade.Grade)
@@ -223,7 +281,7 @@ func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) stri
 // The notes-validation patterns: grade rows with their exact status
 // labels, and the banned version, date, and environment-value shapes.
 var (
-	geminiNotesGradeRowPattern = regexp.MustCompile(`^- (` + geminiNotesAlternation(qualification.Surfaces) + `) ([a-z_]+): (Observed|Not observed|Not applicable): (usable|gap|not_observed|not_applicable)\b`)
+	geminiNotesGradeRowPattern = regexp.MustCompile(`^- (` + geminiNotesAlternation(qualification.Surfaces) + `) ([a-z_]+): (` + geminiNotesStatusLabelAlternation(qualification.RowGrades) + `): (` + geminiNotesAlternation(qualification.RowGrades) + `)\b`)
 	geminiNotesVersionPattern  = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
 	geminiNotesDatePattern     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 	geminiNotesEnvValuePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*=\S`)
@@ -237,6 +295,22 @@ func geminiNotesAlternation[T ~string](values []T) string {
 		quoted = append(quoted, regexp.QuoteMeta(string(value)))
 	}
 	return strings.Join(quoted, "|")
+}
+
+// geminiNotesStatusLabelAlternation renders the status labels
+// geminiStatusLabel maps grades to as a regex alternation, one
+// alternative per grade, skipping a grade whose label is empty (the
+// eligibility-only grades no non-final row can carry).
+func geminiNotesStatusLabelAlternation(grades []qualification.Grade) string {
+	var labels []string
+	for _, grade := range grades {
+		label := geminiStatusLabel(grade)
+		if label == "" {
+			continue
+		}
+		labels = append(labels, regexp.QuoteMeta(strings.TrimSuffix(label, ":")))
+	}
+	return strings.Join(labels, "|")
 }
 
 // validateGeminiAdapterNotes validates a durable adapter-notes document
@@ -306,11 +380,27 @@ func validateGeminiAdapterNotes(notes string, want geminiSummaryConclusions) err
 		}
 	}
 
+	excludedHeading := slices.Index(trimmed, "## Excluded capability cases")
+	if excludedHeading < 0 {
+		return fmt.Errorf("notes heading %q is missing", "## Excluded capability cases")
+	}
 	unobservedHeading := slices.Index(trimmed, "## Unobserved surfaces")
 	if unobservedHeading < 0 {
 		return fmt.Errorf("notes heading %q is missing", "## Unobserved surfaces")
 	}
+	excludedBody := strings.Join(trimmed[excludedHeading:unobservedHeading], "\n")
+	for _, entry := range want.Excluded {
+		if !strings.Contains(excludedBody, entry) {
+			return fmt.Errorf("excluded capability case %q is absent from the Excluded capability cases section", entry)
+		}
+	}
+
 	tail := strings.Join(trimmed[unobservedHeading:], "\n")
+	for _, entry := range want.Excluded {
+		if strings.Contains(tail, entry) {
+			return fmt.Errorf("excluded capability case %q appears in the Unobserved surfaces section, want only the Excluded capability cases section", entry)
+		}
+	}
 	for _, entry := range want.Unobserved {
 		if !strings.Contains(tail, entry) {
 			return fmt.Errorf("unobserved semantic case %q is absent from the Unobserved surfaces section", entry)
@@ -367,6 +457,15 @@ func geminiAdapterNotesFixture(want geminiSummaryConclusions) string {
 	fmt.Fprint(&b, "\n")
 
 	fmt.Fprintf(&b, "## Workspace trust and process boundary\n\n%s. %s and out of scope for this measurement.\n\n", want.Workspace, geminiNotesUnixScope)
+
+	fmt.Fprint(&b, "## Excluded capability cases\n\n")
+	if len(want.Excluded) == 0 {
+		fmt.Fprint(&b, "none\n")
+	}
+	for _, entry := range want.Excluded {
+		fmt.Fprintf(&b, "- %s\n", entry)
+	}
+	fmt.Fprint(&b, "\n")
 
 	fmt.Fprint(&b, "## Unobserved surfaces\n\n")
 	if len(want.Unobserved) == 0 {
@@ -461,14 +560,18 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
 
-	notQualifiedFixture := qualification.NewFixture(qualification.FixtureNotQualified)
-	notQualifiedFixture.Finalize()
-	notQualified, err := geminiSummaryConclusionsFromRecords(notQualifiedFixture.Records, qualification.VerdictNotQualified)
+	// The redefined not_qualified fixture conflates a Case rather than
+	// leaving it unobserved, so it carries no Unobserved entries any
+	// more; the unmeasured variant is the one whose semantic probe
+	// genuinely goes unobserved.
+	unmeasuredFixture := qualification.NewFixture(qualification.FixtureUnmeasured)
+	unmeasuredFixture.Finalize()
+	unmeasured, err := geminiSummaryConclusionsFromRecords(unmeasuredFixture.Records, qualification.VerdictUnmeasured)
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
-	if len(notQualified.Unobserved) == 0 {
-		t.Fatal("not_qualified fixture carries no unobserved cases to check")
+	if len(unmeasured.Unobserved) == 0 {
+		t.Fatal("unmeasured fixture carries no unobserved cases to check")
 	}
 
 	t.Run("compliant transfer validates from a file", func(t *testing.T) {
@@ -484,11 +587,11 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 		}
 	})
 
-	t.Run("compliant not_qualified transfer validates", func(t *testing.T) {
+	t.Run("compliant unmeasured transfer validates", func(t *testing.T) {
 		t.Parallel()
 
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(notQualified), notQualified); err != nil {
-			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for the not_qualified transfer", err)
+		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(unmeasured), unmeasured); err != nil {
+			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for the unmeasured transfer", err)
 		}
 	})
 
@@ -565,9 +668,9 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 		},
 		{
 			name:        "unobserved case absent from the final section",
-			conclusions: notQualified,
+			conclusions: unmeasured,
 			doctor: func(notes string) string {
-				entry := notQualified.Unobserved[0]
+				entry := unmeasured.Unobserved[0]
 				return strings.Replace(notes, "- "+entry+"\n", "", 1)
 			},
 		},
@@ -668,21 +771,224 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 		}
 	})
 
-	t.Run("an unobserved case that the fresh run observed mismatches", func(t *testing.T) {
+	t.Run("an unobserved case the notes omit mismatches", func(t *testing.T) {
 		t.Parallel()
 
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(other), other); err != nil {
-			t.Fatalf("validateGeminiAdapterNotes() error = %v, want nil for the baseline not_qualified transfer", err)
-		}
 		restored := qualification.NewFixture(qualification.FixtureQualified)
 		restored.SetSemanticNotObserved(qualification.SurfaceProtocol, qualification.CapabilityRetryClassification, qualification.CaseUnknownOutcome)
 		restored.Finalize()
-		freshWithGap, err := geminiSummaryConclusionsFromRecords(restored.Records, qualification.VerdictNotQualified)
+		// A not_observed retry baseline is an unmeasured standing, so
+		// this record set's own verdict is unmeasured.
+		fresh, err := geminiSummaryConclusionsFromRecords(restored.Records, qualification.VerdictUnmeasured)
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(other), freshWithGap); err == nil {
-			t.Error("validateGeminiAdapterNotes() = nil error, want mismatch when the fresh summary observes a case the notes call unobserved")
+		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(fresh), fresh); err != nil {
+			t.Fatalf("validateGeminiAdapterNotes() error = %v, want nil for a fresh consistent rerun", err)
+		}
+
+		// stale shares fresh's verdict, grades, and excluded cases, so
+		// only the omitted unobserved entry can trip the check: this
+		// isolates the Unobserved surfaces rule from the eligibility-line
+		// and grade-row checks its sibling subtests already cover.
+		stale := fresh
+		stale.Unobserved = slices.DeleteFunc(slices.Clone(fresh.Unobserved), func(entry string) bool {
+			return strings.Contains(entry, string(qualification.CaseUnknownOutcome))
+		})
+		if len(stale.Unobserved) != len(fresh.Unobserved)-1 {
+			t.Fatalf("stale.Unobserved = %d entries, want exactly one fewer than fresh's %d", len(stale.Unobserved), len(fresh.Unobserved))
+		}
+
+		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(stale), fresh); err == nil {
+			t.Error("validateGeminiAdapterNotes() = nil error, want mismatch when the notes omit a case the fresh summary reports unobserved")
 		}
 	})
+}
+
+// TestGeminiQualificationSummarySections confirms the three printed
+// sections this change adds: each verdict's rationale line matches
+// qualification.VerdictRationale exactly, each section prints "none"
+// when empty, and an Excluded entry renders both the declared and the
+// no-inducer wordings.
+func TestGeminiQualificationSummarySections(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the rationale line matches VerdictRationale for every verdict", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			variant string
+			verdict qualification.Verdict
+		}{
+			{qualification.FixtureQualified, qualification.VerdictQualified},
+			{qualification.FixtureNotQualified, qualification.VerdictNotQualified},
+			{qualification.FixtureUnmeasured, qualification.VerdictUnmeasured},
+		}
+		for _, tt := range tests {
+			t.Run(string(tt.verdict), func(t *testing.T) {
+				t.Parallel()
+
+				fixture := qualification.NewFixture(tt.variant)
+				fixture.Finalize()
+				// The verdict is derived from the fixture's own records
+				// rather than assumed from the table, so a variant whose
+				// records do not actually produce its named verdict fails
+				// here rather than passing the assertions below vacuously.
+				verdict := qualification.ExplainEligibility(fixture.Records).Verdict
+				if verdict != tt.verdict {
+					t.Fatalf("ExplainEligibility(%s fixture) = %s, want %s", tt.variant, verdict, tt.verdict)
+				}
+
+				conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, verdict)
+				if err != nil {
+					t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
+				}
+				lines := strings.Split(formatGeminiQualificationSummary(conclusions), "\n")
+				if len(lines) < 2 {
+					t.Fatalf("formatGeminiQualificationSummary() produced %d lines, want at least 2", len(lines))
+				}
+				if lines[0] != "Eligibility: "+string(verdict) {
+					t.Errorf("summary line 1 = %q, want the eligibility line for %s", lines[0], verdict)
+				}
+				if want := qualification.VerdictRationale(verdict); lines[1] != want {
+					t.Errorf("summary line 2 = %q, want VerdictRationale(%s) = %q", lines[1], verdict, want)
+				}
+
+				// The printed Eligibility line and the Blocking/Unmeasured
+				// sections both derive from ExplainEligibility(records); a
+				// disagreement between them (a stale verdict paired with
+				// rows that tell a different story) would surface here.
+				switch verdict {
+				case qualification.VerdictQualified:
+					if len(conclusions.Blocking) != 0 || len(conclusions.UnmeasuredRows) != 0 {
+						t.Errorf("qualified verdict paired with blocking=%v unmeasured=%v, want both empty", conclusions.Blocking, conclusions.UnmeasuredRows)
+					}
+				case qualification.VerdictNotQualified:
+					if len(conclusions.Blocking) == 0 {
+						t.Error("not_qualified verdict paired with no blocking rows, want at least one")
+					}
+				case qualification.VerdictUnmeasured:
+					if len(conclusions.Blocking) != 0 {
+						t.Errorf("unmeasured verdict paired with blocking rows %v, want none", conclusions.Blocking)
+					}
+					if len(conclusions.UnmeasuredRows) == 0 {
+						t.Error("unmeasured verdict paired with no unmeasured rows, want at least one")
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("each section prints none when empty", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := qualification.NewFixture(qualification.FixtureQualified)
+		fixture.Finalize()
+		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+		if err != nil {
+			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
+		}
+		if len(conclusions.Blocking) != 0 || len(conclusions.UnmeasuredRows) != 0 || len(conclusions.Excluded) != 0 {
+			t.Fatalf("qualified fixture conclusions = %+v, want all three sections empty", conclusions)
+		}
+		summary := formatGeminiQualificationSummary(conclusions)
+		for _, heading := range []string{"Blocking rows:", "Unmeasured rows:", "Excluded cases:"} {
+			_, rest, found := strings.Cut(summary, heading)
+			if !found {
+				t.Fatalf("summary carries no %q heading", heading)
+			}
+			if !strings.HasPrefix(strings.TrimPrefix(rest, "\n"), "none\n") {
+				t.Errorf("section %q does not print none on an empty input", heading)
+			}
+		}
+	})
+
+	t.Run("Excluded entries render both the declared and the no-inducer wordings", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := qualification.NewFixture(qualification.FixtureDeclaredGap)
+		for _, surface := range qualification.MeasuredSurfaces {
+			rec := fixture.FindFirst(qualification.MatchSemantic(surface, qualification.CapabilityRetryClassification, qualification.CaseHumanInput))
+			rec.Grade = qualification.GradeNotInducible
+			rec.Outcome = qualification.OutcomeNotInducible
+			rec.Detail = qualification.NotInducibleDetail
+			rec.EvidencePath = nil
+			rec.SessionID = nil
+		}
+		fixture.Finalize()
+		conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+		if err != nil {
+			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
+		}
+
+		var sawDeclared, sawNoInducer bool
+		for _, entry := range conclusions.Excluded {
+			if strings.Contains(entry, "declared "+qualification.DeclaredGapNeverProduced) {
+				sawDeclared = true
+			}
+			if strings.Contains(entry, "no inducer") {
+				sawNoInducer = true
+			}
+		}
+		if !sawDeclared {
+			t.Errorf("Excluded = %v, want an entry naming the declared reason", conclusions.Excluded)
+		}
+		if !sawNoInducer {
+			t.Errorf("Excluded = %v, want an entry naming no inducer", conclusions.Excluded)
+		}
+
+		notes := geminiAdapterNotesFixture(conclusions)
+		if err := validateGeminiAdapterNotes(notes, conclusions); err != nil {
+			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for a compliant excluded-case transfer", err)
+		}
+	})
+}
+
+// TestGeminiQualificationExcludedCaseNeverInUnobserved confirms a
+// declared_gap or not_inducible case appears under the "## Excluded
+// capability cases" heading and never under "## Unobserved surfaces".
+func TestGeminiQualificationExcludedCaseNeverInUnobserved(t *testing.T) {
+	t.Parallel()
+
+	fixture := qualification.NewFixture(qualification.FixtureDeclaredGap)
+	fixture.Finalize()
+	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+	if err != nil {
+		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
+	}
+	if len(conclusions.Excluded) == 0 {
+		t.Fatal("declared_gap fixture carries no excluded cases to check")
+	}
+	for _, entry := range conclusions.Unobserved {
+		for _, excluded := range conclusions.Excluded {
+			if entry == excluded {
+				t.Errorf("entry %q appears in both Excluded and Unobserved, want mutual exclusion", entry)
+			}
+		}
+	}
+
+	notes := geminiAdapterNotesFixture(conclusions)
+	if err := validateGeminiAdapterNotes(notes, conclusions); err != nil {
+		t.Fatalf("validateGeminiAdapterNotes() error = %v, want a compliant transfer to validate", err)
+	}
+
+	trimmed := strings.Split(notes, "\n")
+	for i := range trimmed {
+		trimmed[i] = strings.TrimSpace(trimmed[i])
+	}
+	excludedHeading := slices.Index(trimmed, "## Excluded capability cases")
+	unobservedHeading := slices.Index(trimmed, "## Unobserved surfaces")
+	if excludedHeading < 0 || unobservedHeading < 0 || excludedHeading >= unobservedHeading {
+		t.Fatalf("notes carry Excluded at %d and Unobserved at %d, want Excluded first", excludedHeading, unobservedHeading)
+	}
+	excludedBody := strings.Join(trimmed[excludedHeading:unobservedHeading], "\n")
+	unobservedBody := strings.Join(trimmed[unobservedHeading:], "\n")
+	for _, entry := range conclusions.Excluded {
+		if !strings.Contains(excludedBody, entry) {
+			t.Errorf("excluded entry %q is absent from the Excluded capability cases section", entry)
+		}
+		if strings.Contains(unobservedBody, entry) {
+			t.Errorf("excluded entry %q appears in the Unobserved surfaces section, want it only under Excluded capability cases", entry)
+		}
+	}
 }

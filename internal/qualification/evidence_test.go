@@ -2,6 +2,7 @@ package qualification
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -284,6 +285,98 @@ func marshalRecordFields(t *testing.T, rec Record) map[string]json.RawMessage {
 		t.Fatalf("unmarshal line %s: %v", line, err)
 	}
 	return fields
+}
+
+// TestDecodeRecordWidenedVocabulary confirms DecodeRecord accepts a
+// record carrying each grade and outcome this change adds, as long as
+// the value is a member of the widened closed sets, and still rejects
+// a value outside them.
+func TestDecodeRecordWidenedVocabulary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepts every new grade and outcome value", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name    string
+			grade   Grade
+			outcome Outcome
+		}{
+			{"declared_gap grade pairs with not_producible", GradeDeclaredGap, OutcomeNotProducible},
+			{"not_inducible grade pairs with not_inducible", GradeNotInducible, OutcomeNotInducible},
+			{"unmeasured grade is decodable", GradeUnmeasured, OutcomePass},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				rec := ValidRecord()
+				rec.Grade = tt.grade
+				rec.Outcome = tt.outcome
+				line, err := MarshalRecord(rec)
+				if err != nil {
+					t.Fatalf("MarshalRecord() error = %v", err)
+				}
+				got, err := DecodeRecord(line)
+				if err != nil {
+					t.Fatalf("DecodeRecord(%s) error = %v, want nil", line, err)
+				}
+				if got.Grade != tt.grade || got.Outcome != tt.outcome {
+					t.Errorf("DecodeRecord() = %s/%s, want %s/%s", got.Grade, got.Outcome, tt.grade, tt.outcome)
+				}
+			})
+		}
+	})
+
+	t.Run("still rejects a grade outside the widened closed set", func(t *testing.T) {
+		t.Parallel()
+
+		fields := marshalRecordFields(t, ValidRecord())
+		fields["grade"] = json.RawMessage(`"excellent"`)
+		line, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatalf("marshal doctored fields: %v", err)
+		}
+		if _, err := DecodeRecord(line); err == nil {
+			t.Error("DecodeRecord() = nil error, want rejection of a grade outside the widened set")
+		}
+	})
+
+	t.Run("still rejects an outcome outside the widened closed set", func(t *testing.T) {
+		t.Parallel()
+
+		fields := marshalRecordFields(t, ValidRecord())
+		fields["outcome"] = json.RawMessage(`"mystery_outcome"`)
+		line, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatalf("marshal doctored fields: %v", err)
+		}
+		if _, err := DecodeRecord(line); err == nil {
+			t.Error("DecodeRecord() = nil error, want rejection of an outcome outside the widened set")
+		}
+	})
+}
+
+// TestRowGradesClosedSetTotality confirms RowGrades is a subset of
+// Grades and excludes exactly the three eligibility-only grades.
+func TestRowGradesClosedSetTotality(t *testing.T) {
+	t.Parallel()
+
+	for _, grade := range RowGrades {
+		if !slices.Contains(Grades, grade) {
+			t.Errorf("RowGrades contains %s, which Grades does not carry", grade)
+		}
+	}
+
+	eligibilityOnly := []Grade{GradeQualified, GradeNotQualified, GradeUnmeasured}
+	for _, grade := range eligibilityOnly {
+		if slices.Contains(RowGrades, grade) {
+			t.Errorf("RowGrades contains eligibility-only grade %s, want it excluded", grade)
+		}
+	}
+	if want := len(Grades) - len(eligibilityOnly); len(RowGrades) != want {
+		t.Errorf("RowGrades holds %d members, want %d (Grades minus the three eligibility-only grades)", len(RowGrades), want)
+	}
 }
 
 // TestEvidenceRecordDetailBound confirms the detail field accepts

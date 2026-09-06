@@ -22,6 +22,7 @@ var envSurfaceOwnedNames = map[string]bool{
 	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND":        true,
 	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_MODEL":          true,
 	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_AUTH_ENV_NAMES": true,
+	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_DECLARED_GAPS":  true,
 }
 
 // envSurfaceCallSelectors are the selector names an environment-access

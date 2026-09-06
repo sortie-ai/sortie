@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
 // The Gemini qualification profile's own coordinates. They are test
@@ -19,6 +21,7 @@ const (
 	qualificationCommandEnv          = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND"
 	qualificationModelEnv            = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_MODEL"
 	qualificationAuthNamesEnv        = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_AUTH_ENV_NAMES"
+	qualificationDeclaredGapsEnv     = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_DECLARED_GAPS"
 	geminiQualificationRunHomeEnv    = "HOME"
 	geminiQualificationRunCLIHomeEnv = "GEMINI_CLI_HOME"
 	geminiQualificationExecPathEnv   = "PATH"
@@ -58,6 +61,13 @@ type geminiQualificationConfig struct {
 	// EnvAllowlist is the sorted minimum allowlist of environment
 	// variable names the measurement subprocess may inherit.
 	EnvAllowlist []string
+
+	// DeclaredGaps is the operator's declaration set, read once at
+	// coordinate resolution. It defaults to the empty set when the
+	// coordinate is unset, a deliberate state distinct from the other
+	// coordinates: this one records a claim rather than naming what to
+	// measure.
+	DeclaredGaps qualification.DeclaredGapSet
 }
 
 // requireGeminiQualification skips the test when the qualification
@@ -76,12 +86,13 @@ func requireGeminiQualification(t *testing.T) geminiQualificationConfig {
 	return config
 }
 
-// geminiResolveQualificationCoordinates resolves the three enabled-gate
-// coordinates: exactly one executable path, one model identifier, and
-// a valid list of authentication environment names that all exist in
-// the parent environment. env reports a coordinate's value and whether
-// it is present; the resolved config's allowlist is built from the
-// resolved authentication names.
+// geminiResolveQualificationCoordinates resolves the four enabled-gate
+// coordinates: exactly one executable path, one model identifier, a
+// valid list of authentication environment names that all exist in
+// the parent environment, and the operator's declaration document,
+// whose absence is a valid state resolving to the empty set. env
+// reports a coordinate's value and whether it is present; the resolved
+// config's allowlist is built from the resolved authentication names.
 func geminiResolveQualificationCoordinates(env func(string) (string, bool)) (geminiQualificationConfig, error) {
 	command := geminiCoordinateValue(env, qualificationCommandEnv)
 	commandPath, err := parseGeminiQualificationCommand(command)
@@ -105,12 +116,42 @@ func geminiResolveQualificationCoordinates(env func(string) (string, bool)) (gem
 		}
 	}
 
+	declaredGaps, err := geminiResolveDeclaredGaps(env)
+	if err != nil {
+		return geminiQualificationConfig{}, err
+	}
+
 	return geminiQualificationConfig{
 		CommandPath:  commandPath,
 		Model:        model,
 		AuthEnvNames: authNames,
 		EnvAllowlist: geminiQualificationEnvAllowlist(authNames, geminiQualificationPresentToolchainEnvNames(env)),
+		DeclaredGaps: declaredGaps,
 	}, nil
+}
+
+// geminiResolveDeclaredGaps resolves the operator's declaration
+// coordinate. Its absence is a valid, deliberate state: it resolves to
+// the empty declaration set and the run proceeds. When set, the named
+// file must be readable and strictly decodable, or resolution fails
+// before any probe launches, naming the path and the decode cause. A
+// present-but-empty value is not folded into absence: unlike the
+// three required coordinates, where the empty string is indistinguishable
+// from missing, this one is optional, so its own presence is the only
+// deliberate absent state the resolver honors. An operator who sets the
+// variable to an empty value gets the same fail-closed load error as
+// any other unreadable path, naming the empty path, rather than a
+// silent empty declaration set.
+func geminiResolveDeclaredGaps(env func(string) (string, bool)) (qualification.DeclaredGapSet, error) {
+	path, present := env(qualificationDeclaredGapsEnv)
+	if !present {
+		return qualification.DeclaredGapSet{}, nil
+	}
+	declarations, err := qualification.ReadDeclaredGapFile(path)
+	if err != nil {
+		return qualification.DeclaredGapSet{}, fmt.Errorf("%s names %q, which failed to load: %w", qualificationDeclaredGapsEnv, path, err)
+	}
+	return declarations, nil
 }
 
 // geminiQualificationPresentToolchainEnvNames returns the names from
@@ -434,6 +475,93 @@ func TestGeminiQualificationConfigRejectsMissingCoordinates(t *testing.T) {
 		}
 		if !slices.Equal(config.AuthEnvNames, []string{"FIXTURE_AUTH_ONE", "FIXTURE_AUTH_TWO"}) {
 			t.Errorf("AuthEnvNames = %v, want trimmed, duplicate-free declared order", config.AuthEnvNames)
+		}
+	})
+}
+
+// TestGeminiResolveDeclaredGaps covers the one operator entry point for
+// the declaration coordinate: absence resolves to the empty set, a
+// present-but-empty value is not folded into that absence, an
+// unreadable path fails naming the path, an undecodable document fails
+// naming the decode cause, and a valid document resolves to its own
+// declarations.
+func TestGeminiResolveDeclaredGaps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absent coordinate resolves to the empty set", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := geminiResolveDeclaredGaps(func(string) (string, bool) { return "", false })
+		if err != nil {
+			t.Fatalf("geminiResolveDeclaredGaps() error = %v, want nil for an absent coordinate", err)
+		}
+		if len(got.Declarations) != 0 {
+			t.Errorf("geminiResolveDeclaredGaps() = %+v, want the empty declaration set", got)
+		}
+	})
+
+	t.Run("a present but empty value is not folded into absence", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := geminiResolveDeclaredGaps(func(string) (string, bool) { return "", true })
+		if err == nil {
+			t.Fatal("geminiResolveDeclaredGaps() = nil error, want a load failure: a present value is a claim, never silently absent")
+		}
+		if !strings.Contains(err.Error(), qualificationDeclaredGapsEnv) {
+			t.Errorf("geminiResolveDeclaredGaps() error = %v, want it to name %s", err, qualificationDeclaredGapsEnv)
+		}
+	})
+
+	t.Run("a set but unreadable path fails naming the path", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "does-not-exist.json")
+		_, err := geminiResolveDeclaredGaps(func(string) (string, bool) { return path, true })
+		if err == nil {
+			t.Fatal("geminiResolveDeclaredGaps() = nil error, want a read failure for a missing path")
+		}
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("geminiResolveDeclaredGaps() error = %v, want it to name the path %q", err, path)
+		}
+	})
+
+	t.Run("a set but undecodable document fails naming the decode cause", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "declared-gaps.json")
+		if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
+			t.Fatalf("write declaration file: %v", err)
+		}
+		_, err := geminiResolveDeclaredGaps(func(string) (string, bool) { return path, true })
+		if err == nil {
+			t.Fatal("geminiResolveDeclaredGaps() = nil error, want a decode failure for an invalid document")
+		}
+		if !strings.Contains(err.Error(), "decode declaration document") {
+			t.Errorf("geminiResolveDeclaredGaps() error = %v, want it to name the decode cause", err)
+		}
+	})
+
+	t.Run("a valid document resolves to its own declarations", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "declared-gaps.json")
+		doc := fmt.Sprintf(`{"schema_version":1,"declarations":[{"capability":%q,"case":%q,"reason":%q}]}`,
+			qualification.CapabilityTurnDisposition, qualification.CaseCancellation, qualification.DeclaredGapNeverProduced)
+		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+			t.Fatalf("write declaration file: %v", err)
+		}
+		got, err := geminiResolveDeclaredGaps(func(string) (string, bool) { return path, true })
+		if err != nil {
+			t.Fatalf("geminiResolveDeclaredGaps() error = %v, want nil for a valid document", err)
+		}
+		want := qualification.DeclaredGapSet{
+			SchemaVersion: 1,
+			Declarations: []qualification.DeclaredGap{
+				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseCancellation, Reason: qualification.DeclaredGapNeverProduced},
+			},
+		}
+		if len(got.Declarations) != 1 || got.Declarations[0] != want.Declarations[0] {
+			t.Errorf("geminiResolveDeclaredGaps() = %+v, want %+v", got, want)
 		}
 	})
 }

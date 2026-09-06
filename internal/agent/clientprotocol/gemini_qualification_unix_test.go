@@ -5,7 +5,6 @@ package clientprotocol
 import (
 	"context"
 	cryptorand "crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +24,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification/e2e"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -140,10 +140,7 @@ func geminiEvidenceLineCount(t *testing.T, path string) int {
 func geminiAppendQualificationAggregate(t *testing.T, path string, verdict qualification.Verdict) {
 	t.Helper()
 
-	classification := qualification.GradeNotQualified
-	if verdict == qualification.VerdictQualified {
-		classification = qualification.GradeQualified
-	}
+	classification := qualification.AggregateGradeFor(verdict)
 	aggregate := qualification.Record{
 		SchemaVersion: 1,
 		Sequence:      geminiEvidenceLineCount(t, path) + 1,
@@ -170,20 +167,21 @@ func geminiAppendQualificationAggregate(t *testing.T, path string, verdict quali
 	writer.close(t)
 }
 
-// geminiRunTwoPassEvidenceFlow runs the strict two-pass state machine:
-// write the closed non-final set, validate it, append exactly one
-// aggregate, validate the complete file, derive the bounded summary,
-// and return the verdict with the summary and the final record count.
-func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualification.Record) (qualification.Verdict, string, int) {
+// geminiRunTwoPassEvidenceFlow runs the strict two-pass state machine
+// against the declaration set the run was collected under: write the
+// closed non-final set, validate it, append exactly one aggregate,
+// validate the complete file, derive the bounded summary, and return
+// the verdict with the summary and the final record count.
+func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualification.Record, declarations qualification.DeclaredGapSet) (qualification.Verdict, string, int) {
 	t.Helper()
 
 	path := geminiWriteQualificationObservations(t, dir, records)
-	verdict, err := qualification.ValidateObservations(path)
+	verdict, err := qualification.ValidateObservationsWithDeclarations(path, declarations)
 	if err != nil {
 		t.Fatalf("first-pass validation failed: %v", err)
 	}
 	geminiAppendQualificationAggregate(t, path, verdict)
-	finalVerdict, err := qualification.ValidateEvidence(path)
+	finalVerdict, err := qualification.ValidateEvidenceWithDeclarations(path, declarations)
 	if err != nil {
 		t.Fatalf("final-pass validation failed: %v", err)
 	}
@@ -415,6 +413,13 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 	})
 }
 
+// errNativeProbeLaunchFailed marks a cmd.Start failure. A binary that
+// never launched is a prerequisite the native path never reached, not
+// evidence about what a run produced, so it is reported and recognized
+// differently from a failure of the run itself: a non-zero exit or the
+// bounded-wait timeout.
+var errNativeProbeLaunchFailed = errors.New("native probe failed to launch")
+
 // geminiRunNativeProbe launches one native surface's bounded probe with
 // the qualification argv plus any documented per-input flags, the
 // minimum environment allowlist, and the controlled workspace, captures
@@ -435,7 +440,7 @@ func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surf
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
-		return output.String(), fmt.Errorf("native launch: %w", err)
+		return output.String(), fmt.Errorf("native launch: %w: %w", errNativeProbeLaunchFailed, err)
 	}
 	pgid := cmd.Process.Pid
 	done := make(chan error, 1)
@@ -454,65 +459,119 @@ func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surf
 	}
 }
 
-// geminiNativeTerminalMembers are the generic terminal member names the
-// harness recognizes in a native structured output. Recognition is by
-// message shape, never by runtime identity, and every unrecognized
-// shape stays not_observed.
-var geminiNativeTerminalMembers = []string{"stopReason", "stop_reason", "error", "is_error", "status"}
-
 // geminiNativeTerminal recognizes one native surface's terminal outcome
 // from its output. A text surface carries no terminal member this
-// harness recognizes and is characterized as unstructured. A structured
-// surface is recognized only through its closed generic member set;
-// anything else reports no distinct outcome.
+// harness recognizes and is characterized as unstructured. A launch or
+// run failure is classified before either structured recognizer runs.
+// Each structured surface is recognized only by the one terminal shape
+// a live probe of the installed runtime was directly observed to
+// produce on that surface: native_json by its response member,
+// native_stream_json by its own type: "result" event; anything else
+// reports no distinct outcome.
+//
+// A declaration's residual exposure has a second cause beyond an
+// unreliable probe prompt: geminiNativeJSONTerminal or
+// geminiNativeStreamTerminal failing to map the runtime's actual
+// terminal shape. A refusal reported under a shape outside what either
+// recognizer reads falls through unrecognized on every surface. The
+// same bounds apply as for the prompt cause (the all-excluded rejection
+// when every case of a surface-capability is excluded, and the
+// notes-consistency rerun), and the remedy for this cause is widening
+// one of the two recognizers, not the probe's prompt.
 func geminiNativeTerminal(surface qualification.Surface, output string, launchErr error) (geminiProtocolTurnOutcome, bool) {
 	if surface == qualification.SurfaceNativeText {
 		// Unstructured residue is characterized, never graded usable.
 		return geminiProtocolTurnOutcome{}, false
 	}
 	if launchErr != nil {
+		if errors.Is(launchErr, errNativeProbeLaunchFailed) {
+			// A binary that never launched carries no case-specific
+			// terminal signal to recognize.
+			return geminiProtocolTurnOutcome{}, false
+		}
 		// A bounded exit or timeout is the process ending without a
 		// recognizable terminal member: transport loss for the retry
 		// classification only when the surface said nothing else.
 		return geminiProtocolTurnOutcome{ErrKind: domain.ErrPortExit}, true
 	}
-	for rawLine := range strings.SplitSeq(output, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-		var body map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &body); err != nil {
-			continue
-		}
-		for _, member := range geminiNativeTerminalMembers {
-			reason, ok := body[member]
-			if !ok {
-				continue
-			}
-			var value string
-			if err := json.Unmarshal(reason, &value); err != nil {
-				continue
-			}
-			outcome := geminiProtocolTurnOutcome{StopReason: stopReason(value)}
-			switch value {
-			case "end_turn", "success", "completed":
-				outcome.StopReason = stopReasonEndTurn
-			case "refusal", "declined":
-				outcome.ErrKind = domain.ErrTurnRefused
-			case "cancelled", "canceled":
-				outcome.ErrKind = domain.ErrTurnCancelled
-			case "max_tokens", "max_requests", "limit":
-				outcome.ErrKind = domain.ErrTurnFailed
-			default:
-				if _, exists := body["error"]; exists {
-					outcome.ErrKind = domain.ErrResponseError
-				}
-			}
-			return outcome, true
-		}
+	switch surface {
+	case qualification.SurfaceNativeJSON:
+		return geminiNativeJSONTerminal(output)
+	case qualification.SurfaceNativeStreamJSON:
+		return geminiNativeStreamTerminal(output)
 	}
 	return geminiProtocolTurnOutcome{}, false
+}
+
+// geminiNativeJSONTerminal recognizes native_json's one observed
+// terminal shape: a single document. Neither native surface has ever
+// been observed to carry stopReason, stop_reason, or is_error, and a
+// document that matches neither response-shaped nor error-shaped stays
+// unstructured rather than guessed at.
+func geminiNativeJSONTerminal(output string) (geminiProtocolTurnOutcome, bool) {
+	values := geminiDecodeNativeJSONValues(output)
+	if len(values) == 0 {
+		return geminiProtocolTurnOutcome{}, false
+	}
+	object, ok := values[0].(map[string]any)
+	if !ok {
+		return geminiProtocolTurnOutcome{}, false
+	}
+	if _, hasError := object["error"]; hasError {
+		// A defensive branch with no observed trigger on this surface,
+		// kept for symmetry with the stream path's own error check.
+		return geminiProtocolTurnOutcome{ErrKind: domain.ErrResponseError}, true
+	}
+	if _, hasResponse := object["response"]; hasResponse {
+		return geminiProtocolTurnOutcome{StopReason: stopReasonEndTurn}, true
+	}
+	return geminiProtocolTurnOutcome{}, false
+}
+
+// geminiNativeStreamTerminal recognizes native_stream_json's own
+// terminal event: the one decoded object whose type member equals
+// "result". Every other event is skipped regardless of what members it
+// happens to carry. The found event's status member is read directly,
+// never behind an incidental unmarshal failure on a different member,
+// and mapped to the same closed outcome enum the harness uses
+// elsewhere.
+func geminiNativeStreamTerminal(output string) (geminiProtocolTurnOutcome, bool) {
+	var result map[string]any
+	found := false
+	for _, value := range geminiDecodeNativeJSONValues(output) {
+		object, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if object["type"] == "result" {
+			result, found = object, true
+			break
+		}
+	}
+	if !found {
+		return geminiProtocolTurnOutcome{}, false
+	}
+	status, ok := result["status"].(string)
+	if !ok {
+		return geminiProtocolTurnOutcome{}, false
+	}
+	var outcome geminiProtocolTurnOutcome
+	switch status {
+	case "end_turn", "success", "completed":
+		outcome.StopReason = stopReasonEndTurn
+	case "refusal", "declined":
+		outcome.ErrKind = domain.ErrTurnRefused
+	case "cancelled", "canceled":
+		outcome.ErrKind = domain.ErrTurnCancelled
+	case "max_tokens", "max_requests", "limit":
+		outcome.ErrKind = domain.ErrTurnFailed
+	default:
+		if _, hasError := result["error"]; !hasError {
+			return geminiProtocolTurnOutcome{}, false
+		}
+		outcome.ErrKind = domain.ErrResponseError
+	}
+	return outcome, true
 }
 
 // geminiTokenLedger accumulates the token-bearing paths each surface's
@@ -775,8 +834,8 @@ func geminiRunAuthenticationCanary(t *testing.T, runtime geminiQualificationRunt
 func TestGeminiQualification(t *testing.T) {
 	config := requireGeminiQualification(t)
 	result := collectGeminiQualification(t, config)
-	if result.Verdict != qualification.VerdictQualified && result.Verdict != qualification.VerdictNotQualified {
-		t.Fatalf("collectGeminiQualification() verdict = %q, want exactly qualified or not_qualified", result.Verdict)
+	if !slices.Contains(qualification.Verdicts, result.Verdict) {
+		t.Fatalf("collectGeminiQualification() verdict = %q, want a member of the closed verdict set", result.Verdict)
 	}
 }
 
@@ -859,7 +918,7 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	// session, from each session's own structured log.
 	records = append(records, geminiIdentityRecordsForReferenced(t, capture, records, agentName, runtime.Version)...)
 
-	verdict, summary, count := geminiRunTwoPassEvidenceFlow(t, dir, records)
+	verdict, summary, count := geminiRunTwoPassEvidenceFlow(t, dir, records, runtime.Config.DeclaredGaps)
 	t.Logf("%s", summary)
 
 	// On a rerun the durable notes must match the fresh summary; an
@@ -1174,7 +1233,7 @@ func geminiCollectSurfaceRecords(t *testing.T, runtime geminiQualificationRuntim
 						refusalRuns[surface] = obs
 					}
 				}
-				records = append(records, geminiSemanticRecordFor(surface, capability, caseID, obs))
+				records = append(records, geminiSemanticRecordFor(t, surface, capability, caseID, obs, runtime.Config.DeclaredGaps))
 			}
 		}
 	}
@@ -1210,19 +1269,24 @@ func geminiBaselineRecords(t *testing.T, prior []qualification.Record) []qualifi
 }
 
 // geminiCollectSemanticCase launches one case's bounded probe on one
-// surface and returns its observation.
+// surface and returns its observation. A case with no CaseInputs entry
+// or no catalog entry fails the run: that is a harness defect, never a
+// fact about the catalog, so it must never be marked NoInducer.
 func geminiCollectSemanticCase(t *testing.T, runtime geminiQualificationRuntime, tracker *geminiProcessGroupTracker, surface qualification.Surface, caseID qualification.Case, catalog map[qualification.InputID]geminiInputSpec, ledger *geminiTokenLedger) geminiSemanticObservation {
 	t.Helper()
 
 	inputID, known := qualification.CaseInputs[caseID]
 	if !known {
-		return geminiSemanticObservation{Tag: caseID, Detail: "unknown semantic case"}
+		t.Fatalf("semantic case %s carries no CaseInputs entry", caseID)
 	}
 	spec, inCatalog := catalog[inputID]
-	if !inCatalog || !spec.Launch {
-		// limit_reached and the refusal-retry reference: no separate
-		// launch, an honest not_observed.
-		return geminiSemanticObservation{Tag: caseID, Induced: false}
+	if !inCatalog {
+		t.Fatalf("semantic case %s maps to input %s, which the catalog omits", caseID, inputID)
+	}
+	if !spec.Launch {
+		// limit_reached and the refusal-retry reference: the catalog
+		// declares no probe for this case at all.
+		return geminiSemanticObservation{Tag: caseID, NoInducer: true}
 	}
 
 	switch surface {
@@ -1345,7 +1409,12 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 
 // geminiInduceNativeCase launches one native surface's case probe and
 // classifies the captured output, feeding any token-bearing structured
-// member the output carries into the surface's inventory.
+// member the output carries into the surface's inventory. Induced
+// carries one meaning on the structured surfaces: the recognized
+// terminal outcome maps to the case being probed, so it implies both
+// Distinct and Structured there; on the text surface, which recognizes
+// no terminal member by construction, it stays whether the probe ran
+// at all.
 func geminiInduceNativeCase(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, caseID qualification.Case, catalog map[qualification.InputID]geminiInputSpec, ledger *geminiTokenLedger) geminiSemanticObservation {
 	t.Helper()
 
@@ -1357,9 +1426,34 @@ func geminiInduceNativeCase(t *testing.T, runtime geminiQualificationRuntime, su
 	ledger.add(surface, geminiScanNativeTokenOutput(surface, output, nativeSession)...)
 	outcome, structured := geminiNativeTerminal(surface, output, launchErr)
 	observation.Structured = structured
-	observation.Induced = launchErr == nil
-	if mapped, distinct := geminiProtocolCase(outcome); distinct && mapped == caseID && structured {
+
+	mapped, distinct := geminiProtocolCase(outcome)
+	caseOwnSignal := distinct && mapped == caseID && structured
+	if caseOwnSignal {
 		observation.Distinct = true
+	}
+
+	switch surface {
+	case qualification.SurfaceNativeText:
+		observation.Induced = launchErr == nil
+	default:
+		observation.Induced = caseOwnSignal
+	}
+
+	if launchErr != nil {
+		switch {
+		case errors.Is(launchErr, errNativeProbeLaunchFailed):
+			// A missing or unlaunchable binary is a prerequisite the
+			// run never reached, not evidence the run produced,
+			// mirroring the protocol surface's own StartSession
+			// failure.
+			observation.Failure = qualification.OutcomePrerequisiteFailed
+		case !caseOwnSignal:
+			// A non-zero exit is the case's own terminal signal only
+			// for retryable_transport; any other failed run is a
+			// failed measurement.
+			observation.Failure = qualification.OutcomeRuntimeFailed
+		}
 	}
 	// The text surface is characterized as unstructured residue; every
 	// induced text case grades gap through Structured=false.
@@ -1512,4 +1606,253 @@ func geminiHandshakeAgentName(capture *geminiLogCapture, fallback string) string
 		}
 	}
 	return fallback
+}
+
+// TestGeminiNativeProbeClassification exercises the harness helpers
+// directly, with no qualification gate required: a cmd.Start failure
+// never carries a case signal, a run failure keeps reaching its
+// outcome (including the retryable_transport repair), the
+// missing-CaseInputs-or-catalog-entry guard fails the run, and the
+// DeclarableSurfaces recognizer binding holds.
+func TestGeminiNativeProbeClassification(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a cmd.Start failure never carries a case signal", func(t *testing.T) {
+		t.Parallel()
+
+		runtime := geminiQualificationRuntime{
+			Config: geminiQualificationConfig{CommandPath: filepath.Join(t.TempDir(), "does-not-exist"), Model: "fixture-model"},
+			Env:    []string{"PATH=" + os.Getenv("PATH")},
+		}
+		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt")
+		if !errors.Is(err, errNativeProbeLaunchFailed) {
+			t.Fatalf("geminiRunNativeProbe() error = %v, want it to satisfy errNativeProbeLaunchFailed", err)
+		}
+
+		catalog := map[qualification.InputID]geminiInputSpec{
+			qualification.InputRetryableTransport: {Prompt: "probe", Launch: true},
+		}
+		observation := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseRetryableTransport, catalog, newGeminiTokenLedger())
+		if observation.Failure != qualification.OutcomePrerequisiteFailed {
+			t.Errorf("observation.Failure = %s, want prerequisite_failed", observation.Failure)
+		}
+		if observation.Distinct {
+			t.Error("observation.Distinct = true, want false: a missing binary carries no case-specific terminal signal, even though its recognized-outcome mapping would otherwise match")
+		}
+		if observation.Induced {
+			t.Error("observation.Induced = true, want false for a launch failure")
+		}
+	})
+
+	t.Run("a run failure keeps reaching its outcome, contrasted with a launch failure", func(t *testing.T) {
+		t.Parallel()
+
+		workspace := t.TempDir()
+		script := agenttest.WriteScript(t, workspace, "run-failure-probe", "exit 7\n")
+		runtime := geminiQualificationRuntime{
+			Config:    geminiQualificationConfig{CommandPath: script, Model: "fixture-model"},
+			Workspace: geminiQualificationWorkspace{Checkout: workspace},
+			Env:       []string{"PATH=" + os.Getenv("PATH")},
+		}
+
+		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt")
+		if err == nil {
+			t.Fatal("geminiRunNativeProbe() = nil error, want a non-zero-exit run failure")
+		}
+		if errors.Is(err, errNativeProbeLaunchFailed) {
+			t.Errorf("geminiRunNativeProbe() error = %v, want it NOT to satisfy errNativeProbeLaunchFailed for a run failure", err)
+		}
+
+		retryCatalog := map[qualification.InputID]geminiInputSpec{
+			qualification.InputRetryableTransport: {Prompt: "probe", Launch: true},
+		}
+		repaired := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseRetryableTransport, retryCatalog, newGeminiTokenLedger())
+		if repaired.Failure != "" {
+			t.Errorf("retryable_transport observation.Failure = %q, want empty: the repair maps a run failure onto the case's own terminal signal", repaired.Failure)
+		}
+		if !repaired.Induced || !repaired.Distinct || !repaired.Structured {
+			t.Errorf("retryable_transport observation = %+v, want Induced, Distinct, and Structured all true", repaired)
+		}
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, repaired, qualification.DeclaredGapSet{})
+		if rec.Grade != qualification.GradeUsable || rec.Outcome != qualification.OutcomePass {
+			t.Errorf("retryable_transport record = %s/%s, want usable/pass", rec.Grade, rec.Outcome)
+		}
+
+		successCatalog := map[qualification.InputID]geminiInputSpec{
+			qualification.InputDispositionSuccess: {Prompt: "probe", Launch: true},
+		}
+		unmatched := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseSuccess, successCatalog, newGeminiTokenLedger())
+		if unmatched.Failure != qualification.OutcomeRuntimeFailed {
+			t.Errorf("success observation.Failure = %s, want runtime_failed for a run failure whose outcome does not map to the case", unmatched.Failure)
+		}
+		unmatchedRec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, unmatched, qualification.DeclaredGapSet{})
+		if unmatchedRec.Grade != qualification.GradeNotObserved {
+			t.Errorf("success record = %s, want not_observed", unmatchedRec.Grade)
+		}
+	})
+
+	t.Run("the DeclarableSurfaces recognizer binding", func(t *testing.T) {
+		t.Parallel()
+
+		// geminiNativeTerminal returns the zero outcome for
+		// SurfaceNativeText before it ever reads output, so varying the
+		// output content proves nothing beyond this one call; the output
+		// value here is an arbitrary structured-looking payload chosen to
+		// show the surface check, not the content, decides the result.
+		output := `{"session_id":"sess","response":{"text":"hi"},"stats":{}}`
+		outcome, structured := geminiNativeTerminal(qualification.SurfaceNativeText, output, nil)
+		if structured || outcome != (geminiProtocolTurnOutcome{}) {
+			t.Errorf("geminiNativeTerminal(native_text, %q, nil) = %+v, %v, want the zero outcome and false", output, outcome, structured)
+		}
+		if slices.Contains(qualification.DeclarableSurfaces, qualification.SurfaceNativeText) {
+			t.Error("DeclarableSurfaces contains SurfaceNativeText, want it excluded to match geminiNativeTerminal's non-recognition")
+		}
+	})
+}
+
+// geminiTestHelperProcessEnv gates the re-exec branch
+// TestGeminiCollectSemanticCaseMissingEntryGuard spawns to observe a
+// t.Fatalf call from outside the failing goroutine, since a failed
+// subtest would otherwise mark this whole package's test run failed.
+const geminiTestHelperProcessEnv = "CLIENTPROTOCOL_TEST_HELPER_PROCESS"
+
+// TestGeminiCollectSemanticCaseMissingEntryGuard confirms
+// geminiCollectSemanticCase fails the run, rather than returning an
+// observation, for a case with no CaseInputs entry or whose mapped
+// input_id has no catalog entry. The assertion runs in a re-exec'd
+// subprocess: a t.Fatalf inside a subtest would otherwise mark this
+// whole test binary's run failed, masking every other passing test.
+func TestGeminiCollectSemanticCaseMissingEntryGuard(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		geminiCollectSemanticCase(t, geminiQualificationRuntime{}, &geminiProcessGroupTracker{},
+			qualification.SurfaceProtocol, qualification.Case("bogus-case"), map[qualification.InputID]geminiInputSpec{}, newGeminiTokenLedger())
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiCollectSemanticCaseMissingEntryGuard$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want a failure from the missing-CaseInputs guard; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "carries no CaseInputs entry") {
+		t.Errorf("subprocess output = %s, want it to name the missing CaseInputs entry", output)
+	}
+}
+
+// TestGeminiNativeJSONTerminal covers native_json's own observed
+// terminal shape: a success document, an empty stdout (the shape every
+// observed native_json failure path writes), and an error-bearing
+// document.
+func TestGeminiNativeJSONTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		output      string
+		wantOutcome geminiProtocolTurnOutcome
+		wantOK      bool
+	}{
+		{
+			name:        "a success document recognizes end_turn",
+			output:      `{"session_id":"sess-fixture","response":{"text":"hi"},"stats":{"input":1}}`,
+			wantOutcome: geminiProtocolTurnOutcome{StopReason: stopReasonEndTurn},
+			wantOK:      true,
+		},
+		{
+			name:   "an empty stdout, the shape every observed failure path writes, recognizes nothing",
+			output: "",
+			wantOK: false,
+		},
+		{
+			name:        "an error-bearing document recognizes ErrResponseError",
+			output:      `{"error":{"message":"boom"}}`,
+			wantOutcome: geminiProtocolTurnOutcome{ErrKind: domain.ErrResponseError},
+			wantOK:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			outcome, ok := geminiNativeJSONTerminal(tt.output)
+			if ok != tt.wantOK || outcome != tt.wantOutcome {
+				t.Errorf("geminiNativeJSONTerminal(%q) = %+v, %v, want %+v, %v", tt.output, outcome, ok, tt.wantOutcome, tt.wantOK)
+			}
+		})
+	}
+}
+
+// TestGeminiNativeStreamTerminal covers native_stream_json's own
+// type: "result" terminal event: the status mapping, the ordering
+// fragility this file's own comment names (status read directly rather
+// than gated behind an error unmarshal failure), and the imprecision
+// this recognizer closes (only a type: "result" line is ever the
+// terminal event, never an incidental status-named member elsewhere).
+func TestGeminiNativeStreamTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		output      string
+		wantOutcome geminiProtocolTurnOutcome
+		wantOK      bool
+	}{
+		{
+			name:        "a type result line with status success recognizes end_turn",
+			output:      `{"type":"result","status":"success"}`,
+			wantOutcome: geminiProtocolTurnOutcome{StopReason: stopReasonEndTurn},
+			wantOK:      true,
+		},
+		{
+			name:        "a type result line with status error and an object-valued error recognizes ErrResponseError",
+			output:      `{"type":"result","status":"error","error":{"message":"boom"}}`,
+			wantOutcome: geminiProtocolTurnOutcome{ErrKind: domain.ErrResponseError},
+			wantOK:      true,
+		},
+		{
+			name:        "status is read directly off the result event, even when error is a plain string rather than an object",
+			output:      `{"type":"result","status":"error","error":"boom"}`,
+			wantOutcome: geminiProtocolTurnOutcome{ErrKind: domain.ErrResponseError},
+			wantOK:      true,
+		},
+		{
+			name: "a non-terminal line carrying a status-named member is never the terminal event, and no type result line at all recognizes nothing",
+			output: `{"type":"init","status":"success"}
+{"type":"message","status":"success"}`,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			outcome, ok := geminiNativeStreamTerminal(tt.output)
+			if ok != tt.wantOK || outcome != tt.wantOutcome {
+				t.Errorf("geminiNativeStreamTerminal(%q) = %+v, %v, want %+v, %v", tt.output, outcome, ok, tt.wantOutcome, tt.wantOK)
+			}
+		})
+	}
+}
+
+// TestGeminiNativeJSONCaseSuccessGradesUsableLive proves, against the
+// live-gated Gemini CLI, that CaseSuccess on SurfaceNativeJSON now
+// grades usable end to end through geminiInduceNativeCase, closing the
+// open question about a structured native surface's
+// terminal member in code rather than by probe transcript alone. With
+// the gate disabled it skips cleanly.
+func TestGeminiNativeJSONCaseSuccessGradesUsableLive(t *testing.T) {
+	config := requireGeminiQualification(t)
+	runtime := geminiResolveQualificationRuntime(t, config)
+
+	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	obs := geminiCollectSemanticCase(t, runtime, &geminiProcessGroupTracker{}, qualification.SurfaceNativeJSON, qualification.CaseSuccess, catalog, newGeminiTokenLedger())
+	rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclaredGapSet{})
+	if rec.Grade != qualification.GradeUsable {
+		t.Errorf("native_json CaseSuccess record = %s, want usable", rec.Grade)
+	}
 }
