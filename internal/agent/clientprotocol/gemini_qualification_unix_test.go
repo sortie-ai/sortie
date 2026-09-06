@@ -1013,7 +1013,12 @@ func geminiCorroborateAbsentSurface(t *testing.T, runtime geminiQualificationRun
 	if errors.Is(err, errNativeProbeLaunchFailed) {
 		t.Fatalf("corroborate declared-absent surface %s: the declared entry point failed to launch: %v", surface, err)
 	}
-	if _, structured := geminiNativeTerminal(surface, output, err); structured {
+	// A non-zero exit is the ordinary shape of a surface the runtime
+	// does not offer, so the terminal is read from the capture alone.
+	// Passing the error here would classify every rejected surface
+	// flag as a recognized terminal and fail the run for the very
+	// case the declaration describes.
+	if _, structured := geminiNativeTerminal(surface, output, nil); structured {
 		t.Fatalf("corroborate declared-absent surface %s: declared absent (%s), but its own entry point returned a recognized terminal, so the runtime offers it", surface, reason)
 	}
 	if strings.Contains(output, marker) {
@@ -2408,6 +2413,17 @@ func TestGeminiCorroborateAbsentSurfacePasses(t *testing.T) {
 	t.Parallel()
 
 	runtime := geminiCorroborationRuntime(t, "printf '%s\\n' 'garbage output, not json and no marker'\n")
+	geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+}
+
+// TestGeminiCorroborateAbsentSurfacePassesOnNonZeroExit confirms the
+// ordinary shape of a surface the runtime does not offer: its entry
+// point rejects the flag, writes a diagnostic and exits non-zero. That
+// is absence, not a recognized terminal, so the declaration stands.
+func TestGeminiCorroborateAbsentSurfacePassesOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	runtime := geminiCorroborationRuntime(t, "printf '%s\\n' 'unknown flag: --output-format' >&2\nexit 2\n")
 	geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
 }
 
