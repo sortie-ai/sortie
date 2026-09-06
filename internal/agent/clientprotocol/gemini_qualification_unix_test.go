@@ -439,19 +439,29 @@ type lineBoundedWriter struct {
 	built      strings.Builder
 	dropped    int
 	discarding bool
+	// peak is the high-water mark of the pending buffer. The bound is
+	// a claim about memory held mid-write, which no assertion made
+	// after Write returns can observe, so the writer records it.
+	peak int
 }
 
-// Write implements io.Writer, buffering p and emitting every complete
-// line it now contains. A line is counted and abandoned as soon as the
-// buffer passes limit rather than once its newline arrives, so the
-// buffer never grows past one over-limit line plus one write: holding a
-// multi-megabyte echo in memory only to drop it would defeat the bound
-// this writer exists to impose.
+// buffer appends b to the pending line and records the high-water mark.
+func (w *lineBoundedWriter) buffer(b []byte) {
+	w.pending = append(w.pending, b...)
+	w.peak = max(w.peak, len(w.pending))
+}
+
+// Write implements io.Writer, emitting every complete line p now
+// closes. A line is counted and abandoned before any byte of it is
+// buffered once it cannot fit, so the buffer never exceeds limit
+// whatever a single write carries: holding a multi-megabyte echo in
+// memory only to drop it would defeat the bound this writer exists to
+// impose.
 func (w *lineBoundedWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	for len(p) > 0 {
+		idx := bytes.IndexByte(p, '\n')
 		if w.discarding {
-			idx := bytes.IndexByte(p, '\n')
 			if idx < 0 {
 				return n, nil
 			}
@@ -459,21 +469,24 @@ func (w *lineBoundedWriter) Write(p []byte) (int, error) {
 			p = p[idx+1:]
 			continue
 		}
-		w.pending = append(w.pending, p...)
-		p = nil
-		for {
-			idx := bytes.IndexByte(w.pending, '\n')
-			if idx < 0 {
-				break
+		if idx < 0 {
+			if len(w.pending)+len(p) > w.limit {
+				w.dropped++
+				w.discarding = true
+				w.pending = nil
+				return n, nil
 			}
-			w.emit(w.pending[:idx+1])
-			w.pending = w.pending[idx+1:]
+			w.buffer(p)
+			return n, nil
 		}
-		if len(w.pending) > w.limit {
+		if len(w.pending)+idx+1 > w.limit {
 			w.dropped++
-			w.discarding = true
-			w.pending = nil
+		} else {
+			w.buffer(p[:idx+1])
+			w.emit(w.pending)
 		}
+		w.pending = nil
+		p = p[idx+1:]
 	}
 	return n, nil
 }
@@ -2134,8 +2147,8 @@ func TestLineBoundedWriter(t *testing.T) {
 		if w.dropped != 1 {
 			t.Errorf("dropped = %d, want 1 as soon as the buffer passes the limit", w.dropped)
 		}
-		if len(w.pending) != 0 {
-			t.Errorf("pending holds %d bytes, want 0: an over-limit line must not be retained while waiting for its newline", len(w.pending))
+		if w.peak > w.limit {
+			t.Errorf("pending peaked at %d bytes, want at most the %d-byte limit: an over-limit line must never be buffered while waiting for its newline", w.peak, w.limit)
 		}
 		w.Flush()
 		if w.dropped != 1 {
@@ -2143,6 +2156,28 @@ func TestLineBoundedWriter(t *testing.T) {
 		}
 		if got := w.String(); got != "" {
 			t.Errorf("String() = %q, want empty: the only line was dropped", got)
+		}
+	})
+
+	t.Run("one oversize write never grows the buffer past the bound", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 64}
+		if _, err := w.Write([]byte(strings.Repeat("x", 1<<20))); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if w.peak > w.limit {
+			t.Errorf("pending peaked at %d bytes on one write, want at most the %d-byte limit", w.peak, w.limit)
+		}
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want 1", w.dropped)
+		}
+		if _, err := w.Write([]byte("\nkept\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if got := w.String(); got != "kept\n" {
+			t.Errorf("String() = %q, want only the line after the dropped one", got)
 		}
 	})
 
@@ -2155,8 +2190,8 @@ func TestLineBoundedWriter(t *testing.T) {
 			if _, err := w.Write([]byte(chunk)); err != nil {
 				t.Fatalf("Write() error = %v", err)
 			}
-			if len(w.pending) > w.limit {
-				t.Fatalf("pending grew to %d bytes, want at most the %d-byte limit", len(w.pending), w.limit)
+			if w.peak > w.limit {
+				t.Fatalf("pending peaked at %d bytes, want at most the %d-byte limit", w.peak, w.limit)
 			}
 		}
 		if _, err := w.Write([]byte("\nkept\n")); err != nil {
