@@ -771,7 +771,11 @@ func geminiCollectContinuationRecords(t *testing.T, runtime geminiQualificationR
 	records := []qualification.Record{}
 	seed, recall := geminiRunProtocolContinuation(t, runtime, tracker, ledger, agentName)
 	records = append(records, seed, recall)
-	for _, surface := range []qualification.Surface{qualification.SurfaceNativeText, qualification.SurfaceNativeJSON, qualification.SurfaceNativeStreamJSON} {
+	for _, surface := range qualification.MeasuredSurfaces(runtime.Config.DeclaredGaps) {
+		if surface == qualification.SurfaceProtocol {
+			// The protocol surface's own continuation ran above.
+			continue
+		}
 		seed, recall := geminiRunNativeContinuation(t, runtime, surface)
 		records = append(records, seed, recall)
 	}
