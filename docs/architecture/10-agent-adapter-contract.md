@@ -550,6 +550,8 @@ Error mapping (recommended normalized categories):
 - `port_exit`
 - `response_error`
 - `turn_failed`
+- `turn_token_limit`
+- `turn_request_limit`
 - `turn_incomplete`
 - `turn_cancelled`
 - `turn_input_required`

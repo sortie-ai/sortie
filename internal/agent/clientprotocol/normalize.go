@@ -181,10 +181,16 @@ func stopReasonEvidence(reason stopReason, work agentcore.WorkReport) agentcore.
 			TerminalErrorKind: domain.ErrTurnRefused,
 			Work:              work,
 		}
-	case stopReasonMaxTokens, stopReasonMaxTurnRequests:
+	case stopReasonMaxTokens:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
-			TerminalErrorKind: domain.ErrTurnFailed,
+			TerminalErrorKind: domain.ErrTurnTokenLimit,
+			Work:              work,
+		}
+	case stopReasonMaxTurnRequests:
+		return agentcore.TurnEvidence{
+			Terminal:          agentcore.TerminalFailure,
+			TerminalErrorKind: domain.ErrTurnRequestLimit,
 			Work:              work,
 		}
 	case stopReasonCancelled:

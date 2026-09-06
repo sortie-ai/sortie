@@ -45,12 +45,20 @@ type Fixture struct {
 	// Declarations can return the exact set the fixture's records
 	// assume.
 	declared []DeclaredGap
+
+	// absent is the set of surfaces this fixture was built to declare
+	// absent, so its records never cover them.
+	absent []AbsentSurface
 }
 
-// NewFixture builds the non-final records of one variant in
-// canonical order. The runtime-identity records are added by Finalize.
-func NewFixture(variant string) *Fixture {
-	f := &Fixture{}
+// NewFixture builds the non-final records of one variant in canonical
+// order, declaring every surface in absent as one the runtime does not
+// offer. An absent surface is not an unmeasured one: it carries no
+// records at all, and the comparison rows that would read it stand on
+// the protocol surface alone. The runtime-identity records are added
+// by Finalize.
+func NewFixture(variant string, absent ...AbsentSurface) *Fixture {
+	f := &Fixture{absent: slices.Clone(absent)}
 	f.addWorkspaceSecurity()
 	f.addPolicyPrecondition()
 	f.addSemanticProbes()
@@ -209,9 +217,12 @@ func (f *Fixture) SetSemanticDeclaredGap(capability Capability, caseID Case, rea
 
 // setSemanticDeclaredGapOne rewrites one case's declarable-surface
 // records and baselines, without applying the DeclaredGapPeers
-// closure.
+// closure. It never touches a surface this fixture also declares
+// absent, so a fixture cannot write a declared-gap record on a
+// surface it declared absent.
 func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, reason string) {
-	for _, surface := range DeclarableSurfaces {
+	declarable := intersectSurfaces(DeclarableSurfaces, f.measured())
+	for _, surface := range declarable {
 		rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
 		if rec == nil {
 			continue
@@ -221,7 +232,7 @@ func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, 
 		rec.Detail = reason
 	}
 	f.recordDeclaration(capability, caseID, reason)
-	for _, surface := range DeclarableSurfaces {
+	for _, surface := range declarable {
 		f.UpdateSemanticBaseline(surface, capability)
 	}
 }
@@ -229,7 +240,7 @@ func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, 
 // recordDeclaration adds one declaration entry, or rewrites its reason
 // in place when the capability and case pair is already recorded. A
 // pair reaches here twice whenever the peer closure and a direct call
-// declare the same case, and DecodeDeclaredGapSet rejects a duplicate
+// declare the same case, and DecodeDeclarationSet rejects a duplicate
 // pair, so recording it twice would build a document the fixture's own
 // declared_gap records could never be authorized under.
 func (f *Fixture) recordDeclaration(capability Capability, caseID Case, reason string) {
@@ -243,10 +254,16 @@ func (f *Fixture) recordDeclaration(capability Capability, caseID Case, reason s
 }
 
 // Declarations returns the declaration set the fixture's declared_gap
-// records were built from, so a control validates against the exact
-// set the collector would have supplied.
-func (f *Fixture) Declarations() DeclaredGapSet {
-	return DeclaredGapSet{SchemaVersion: 1, Declarations: slices.Clone(f.declared)}
+// and absent-surface records were built from, so a control validates
+// against the exact set the collector would have supplied.
+func (f *Fixture) Declarations() DeclarationSet {
+	return DeclarationSet{SchemaVersion: 2, Declarations: slices.Clone(f.declared), AbsentSurfaces: slices.Clone(f.absent)}
+}
+
+// measured returns the surfaces this fixture measures: the closed
+// measurable order minus every surface this fixture declares absent.
+func (f *Fixture) measured() []Surface {
+	return MeasuredSurfaces(f.Declarations())
 }
 
 // addWorkspaceSecurity adds the single aggregate workspace observation.
@@ -284,7 +301,7 @@ func (f *Fixture) addPolicyPrecondition() {
 
 // addSemanticProbes adds all 36 semantic records in canonical order.
 func (f *Fixture) addSemanticProbes() {
-	for _, Surface := range measuredSurfaces {
+	for _, Surface := range f.measured() {
 		for _, Capability := range []Capability{CapabilityTurnDisposition, CapabilityRetryClassification} {
 			for _, caseID := range CapabilityCases[Capability] {
 				f.Add(f.semanticRecord(Surface, Capability, caseID))
@@ -330,6 +347,10 @@ func (f *Fixture) semanticRecord(Surface Surface, Capability Capability, caseID 
 	}
 
 	switch {
+	case slices.Contains(SessionlessSurfaces, Surface):
+		// A sessionless surface reports no identifier of its own, so
+		// the record carries a null session_id rather than a synthetic
+		// one.
 	case caseID == CaseRuntimeRefusal:
 		rec.SessionID = new(FixtureSession(Surface, "runtime-refusal"))
 	case caseID == CaseNonRetryableRefusal:
@@ -357,7 +378,7 @@ func BaselineVerdictFor(classification Grade) Outcome {
 
 // addBaselines adds the 16 derived per-Surface Capability summaries.
 func (f *Fixture) addBaselines() {
-	for _, Surface := range measuredSurfaces {
+	for _, Surface := range f.measured() {
 		for _, Capability := range comparisonCapabilities {
 			rec := f.base()
 			rec.Scenario = ScenarioSurfaceBaseline
@@ -388,36 +409,45 @@ func (f *Fixture) addBaselines() {
 	}
 }
 
-// addTokenInventories adds each Surface's token-bearing paths, with the
-// native text Surface carried by the zero-Source sentinel.
+// addTokenInventories adds each measured Surface's token-bearing
+// paths, with the native text Surface carried by the zero-Source
+// sentinel. A Surface this fixture declares absent contributes no
+// token record, mirroring the other builders' measured-set iteration.
 func (f *Fixture) addTokenInventories() {
-	f.Add(f.tokenRecord(SurfaceProtocol, "session/prompt/result/usage",
-		SourceProtocolStable, GradeUsable,
-		FixtureSession(SurfaceProtocol, "success"),
-		"standard usage member on the final prompt result"))
-	f.Add(f.tokenRecord(SurfaceProtocol, "session/update/vendor_usage",
-		SourceProtocolExtension, GradeCorroborationOnly,
-		FixtureSession(SurfaceProtocol, "runtime-failure"),
-		"vendor extension reports totals outside the shared contract"))
-	f.Add(f.tokenRecord(SurfaceNativeJSON, "/response/stats",
-		SourceNativeStructured, GradeUsable,
-		FixtureSession(SurfaceNativeJSON, "success"),
-		"structured response carries the usage stats member"))
-	f.Add(f.tokenRecord(SurfaceNativeStreamJSON, "/stream/final/usage",
-		SourceNativeStructured, GradeUsable,
-		FixtureSession(SurfaceNativeStreamJSON, "success"),
-		"final stream event carries the usage member"))
-
-	sentinel := f.base()
-	sentinel.Scenario = ScenarioTokenSource
-	sentinel.Surface = SurfaceNativeText
-	sentinel.Capability = CapabilityTokenCeiling
-	sentinel.Source = SourceNone
-	sentinel.Grade = GradeGap
-	sentinel.Outcome = OutcomePass
-	sentinel.InputID = InputTokenInventory
-	sentinel.Detail = "inventory completed with no token-bearing path"
-	f.Add(sentinel)
+	for _, Surface := range f.measured() {
+		switch Surface {
+		case SurfaceProtocol:
+			f.Add(f.tokenRecord(SurfaceProtocol, "session/prompt/result/usage",
+				SourceProtocolStable, GradeUsable,
+				FixtureSession(SurfaceProtocol, "success"),
+				"standard usage member on the final prompt result"))
+			f.Add(f.tokenRecord(SurfaceProtocol, "session/update/vendor_usage",
+				SourceProtocolExtension, GradeCorroborationOnly,
+				FixtureSession(SurfaceProtocol, "runtime-failure"),
+				"vendor extension reports totals outside the shared contract"))
+		case SurfaceNativeJSON:
+			f.Add(f.tokenRecord(SurfaceNativeJSON, "/response/stats",
+				SourceNativeStructured, GradeUsable,
+				FixtureSession(SurfaceNativeJSON, "success"),
+				"structured response carries the usage stats member"))
+		case SurfaceNativeStreamJSON:
+			f.Add(f.tokenRecord(SurfaceNativeStreamJSON, "/stream/final/usage",
+				SourceNativeStructured, GradeUsable,
+				FixtureSession(SurfaceNativeStreamJSON, "success"),
+				"final stream event carries the usage member"))
+		case SurfaceNativeText:
+			sentinel := f.base()
+			sentinel.Scenario = ScenarioTokenSource
+			sentinel.Surface = SurfaceNativeText
+			sentinel.Capability = CapabilityTokenCeiling
+			sentinel.Source = SourceNone
+			sentinel.Grade = GradeGap
+			sentinel.Outcome = OutcomePass
+			sentinel.InputID = InputTokenInventory
+			sentinel.Detail = "inventory completed with no token-bearing path"
+			f.Add(sentinel)
+		}
+	}
 }
 
 // tokenRecord builds one non-sentinel token inventory Record.
@@ -484,7 +514,7 @@ func (f *Fixture) addToolServer() {
 // addContinuation adds one seed and one confirmed same-session recall per
 // Surface.
 func (f *Fixture) addContinuation() {
-	for _, Surface := range measuredSurfaces {
+	for _, Surface := range f.measured() {
 		seedSession := FixtureSession(Surface, "seed")
 
 		seed := f.base()
@@ -802,9 +832,18 @@ func ProtocolSessionCount(records []Record) int {
 // cardinality rules no longer enforce.
 var ComparisonCapabilities = slices.Clone(comparisonCapabilities)
 
-// MeasuredSurfaces is the set of surfaces measured in protocol records,
-// copied from the validator's own list for the same reason.
-var MeasuredSurfaces = slices.Clone(measuredSurfaces)
+// MeasuredSurfaces returns the surfaces one run measures: the closed
+// measurable order minus every surface the declaration set reports
+// absent. It is total: the zero DeclarationSet returns all four.
+func MeasuredSurfaces(declarations DeclarationSet) []Surface {
+	surfaces := make([]Surface, 0, len(measurableSurfaces))
+	for _, surface := range measurableSurfaces {
+		if _, absent := declarations.AbsentSurfaceDeclared(surface); !absent {
+			surfaces = append(surfaces, surface)
+		}
+	}
+	return surfaces
+}
 
 // ReadEvidenceFile reads a JSONL evidence file and strictly decodes
 // all records.

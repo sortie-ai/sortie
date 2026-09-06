@@ -3,6 +3,7 @@
 package clientprotocol
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"errors"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -172,7 +174,7 @@ func geminiAppendQualificationAggregate(t *testing.T, path string, verdict quali
 // closed non-final set, validate it, append exactly one aggregate,
 // validate the complete file, derive the bounded summary, and return
 // the verdict with the summary and the final record count.
-func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualification.Record, declarations qualification.DeclaredGapSet) (qualification.Verdict, string, int) {
+func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualification.Record, declarations qualification.DeclarationSet) (qualification.Verdict, string, int) {
 	t.Helper()
 
 	path := geminiWriteQualificationObservations(t, dir, records)
@@ -193,7 +195,7 @@ func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualificat
 	if err != nil {
 		t.Fatalf("read the validated evidence file: %v", err)
 	}
-	conclusions, err := geminiSummaryConclusionsFromRecords(complete[:len(complete)-1], verdict)
+	conclusions, err := geminiSummaryConclusionsFromRecords(complete[:len(complete)-1], verdict, declarations)
 	if err != nil {
 		t.Fatalf("derive the bounded summary: %v", err)
 	}
@@ -350,7 +352,7 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 
 	fixture := qualification.NewFixture(qualification.FixtureQualified)
 	fixture.Finalize()
-	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified)
+	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, fixture.Declarations())
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
@@ -420,27 +422,132 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 // bounded-wait timeout.
 var errNativeProbeLaunchFailed = errors.New("native probe failed to launch")
 
+// errNativeProbeBoundExceeded marks a probe that exceeded
+// geminiNativeProbeBound, distinguishable from a non-zero-exit run
+// failure via errors.Is.
+var errNativeProbeBoundExceeded = errors.New("the native probe exceeded its bounded wait")
+
+// lineBoundedWriter accumulates newline-delimited lines up to limit
+// bytes each, dropping any single line that exceeds it instead of
+// retaining it, and counting the lines it dropped. A stream-json
+// treatment run echoes its filler payload as one line that can reach
+// several megabytes; without this bound that echo would be retained
+// for the whole classification.
+type lineBoundedWriter struct {
+	limit      int
+	pending    []byte
+	built      strings.Builder
+	dropped    int
+	discarding bool
+	// peak is the high-water mark of the pending buffer. The bound is
+	// a claim about memory held mid-write, which no assertion made
+	// after Write returns can observe, so the writer records it.
+	peak int
+}
+
+// buffer appends b to the pending line and records the high-water mark.
+func (w *lineBoundedWriter) buffer(b []byte) {
+	w.pending = append(w.pending, b...)
+	w.peak = max(w.peak, len(w.pending))
+}
+
+// Write implements io.Writer, emitting every complete line p now
+// closes. A line is counted and abandoned before any byte of it is
+// buffered once it cannot fit, so the buffer never exceeds limit
+// whatever a single write carries: holding a multi-megabyte echo in
+// memory only to drop it would defeat the bound this writer exists to
+// impose.
+func (w *lineBoundedWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		idx := bytes.IndexByte(p, '\n')
+		if w.discarding {
+			if idx < 0 {
+				return n, nil
+			}
+			w.discarding = false
+			p = p[idx+1:]
+			continue
+		}
+		if idx < 0 {
+			if len(w.pending)+len(p) > w.limit {
+				w.dropped++
+				w.discarding = true
+				w.pending = nil
+				return n, nil
+			}
+			w.buffer(p)
+			return n, nil
+		}
+		if len(w.pending)+idx+1 > w.limit {
+			w.dropped++
+		} else {
+			w.buffer(p[:idx+1])
+			w.emit(w.pending)
+		}
+		w.pending = nil
+		p = p[idx+1:]
+	}
+	return n, nil
+}
+
+// emit retains line if it is within limit, and otherwise drops it and
+// counts the drop.
+func (w *lineBoundedWriter) emit(line []byte) {
+	if len(line) > w.limit {
+		w.dropped++
+		return
+	}
+	w.built.Write(line)
+}
+
+// Flush emits any trailing partial line that never received a
+// newline. Call it once the writer will receive no further data.
+func (w *lineBoundedWriter) Flush() {
+	if len(w.pending) == 0 {
+		return
+	}
+	w.emit(w.pending)
+	w.pending = nil
+}
+
+// String returns the writer's retained content.
+func (w *lineBoundedWriter) String() string {
+	return w.built.String()
+}
+
 // geminiRunNativeProbe launches one native surface's bounded probe with
 // the qualification argv plus any documented per-input flags, the
-// minimum environment allowlist, and the controlled workspace, captures
-// its combined output, and drains its process group.
-func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, prompt string, extraArgs ...string) (string, error) {
+// minimum environment allowlist, and the controlled workspace, writes
+// stdin to the process when non-empty, captures its combined output
+// through a line-bounded writer per stream, and drains its process
+// group.
+func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, prompt string, stdin string, extraArgs ...string) (string, error) {
 	t.Helper()
 
 	argv := append(geminiQualificationLaunchArgv(runtime.Config, surface, prompt, runtime.PolicyPath), extraArgs...)
 	cmd := exec.Command(argv[0], argv[1:]...) //nolint:gosec // the operator-selected executable with the documented flags
 	cmd.Dir = runtime.Workspace.Checkout
 	cmd.Env = runtime.Env
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	// The probe leads its own group, so the drain below reaches the
 	// tree it forked. Without this the leader inherits this test's
 	// group and the signal names a group the probe does not lead.
 	procutil.SetProcessGroup(cmd)
 
-	var output strings.Builder
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	stdout := &lineBoundedWriter{limit: jsonrpc.MaxLineBytes}
+	stderr := &lineBoundedWriter{limit: jsonrpc.MaxLineBytes}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	capture := func() string {
+		stdout.Flush()
+		stderr.Flush()
+		return stdout.String() + stderr.String()
+	}
 	if err := cmd.Start(); err != nil {
-		return output.String(), fmt.Errorf("native launch: %w: %w", errNativeProbeLaunchFailed, err)
+		return capture(), fmt.Errorf("native launch: %w: %w", errNativeProbeLaunchFailed, err)
 	}
 	pgid := cmd.Process.Pid
 	done := make(chan error, 1)
@@ -448,14 +555,14 @@ func geminiRunNativeProbe(t *testing.T, runtime geminiQualificationRuntime, surf
 	select {
 	case waitErr := <-done:
 		_ = procutil.SignalProcessGroup(pgid, syscall.SIGKILL)
-		return output.String(), waitErr
+		return capture(), waitErr
 	case <-time.After(geminiNativeProbeBound):
 		// The wait goroutine owns the only reap; the bounded wait
 		// drains the group and then collects that one result rather
 		// than racing a second wait on the same process.
 		_ = procutil.SignalProcessGroup(pgid, syscall.SIGKILL)
 		<-done
-		return output.String(), errors.New("the native probe exceeded its bounded wait")
+		return capture(), fmt.Errorf("native probe: %w", errNativeProbeBoundExceeded)
 	}
 }
 
@@ -535,6 +642,16 @@ func geminiNativeJSONTerminal(output string) (geminiProtocolTurnOutcome, bool) {
 // never behind an incidental unmarshal failure on a different member,
 // and mapped to the same closed outcome enum the harness uses
 // elsewhere.
+//
+// The runtime's stream-json writer sets status to "error" or "success"
+// at every emission site and to nothing else, so a former arm mapping
+// "max_tokens", "max_requests", and "limit" to domain.ErrTurnFailed was
+// dead at the wire and has been removed rather than retargeted. The
+// other status strings this recognizer maps ("end_turn", "completed",
+// "refusal", "declined", "cancelled", "canceled") are equally
+// unobserved on this runtime version and stay: this removal restores
+// no broader discipline, and a later runtime version's status value is
+// recognized here or nowhere.
 func geminiNativeStreamTerminal(output string) (geminiProtocolTurnOutcome, bool) {
 	var result map[string]any
 	found := false
@@ -563,8 +680,6 @@ func geminiNativeStreamTerminal(output string) (geminiProtocolTurnOutcome, bool)
 		outcome.ErrKind = domain.ErrTurnRefused
 	case "cancelled", "canceled":
 		outcome.ErrKind = domain.ErrTurnCancelled
-	case "max_tokens", "max_requests", "limit":
-		outcome.ErrKind = domain.ErrTurnFailed
 	default:
 		if _, hasError := result["error"]; !hasError {
 			return geminiProtocolTurnOutcome{}, false
@@ -572,6 +687,76 @@ func geminiNativeStreamTerminal(output string) (geminiProtocolTurnOutcome, bool)
 		outcome.ErrKind = domain.ErrResponseError
 	}
 	return outcome, true
+}
+
+// nativeModelRequestReading is the three-way state one structured
+// native surface's model-request reading resolves to.
+type nativeModelRequestReading int
+
+const (
+	// modelRequestUnreadable reports that the terminal's stats.models
+	// object is absent or does not decode.
+	modelRequestUnreadable nativeModelRequestReading = iota
+	// modelRequestNone reports that stats.models decoded and holds no
+	// member.
+	modelRequestNone
+	// modelRequestAtLeastOne reports that stats.models decoded and
+	// holds at least one member.
+	modelRequestAtLeastOne
+)
+
+// geminiNativeModelRequestReading reads one structured native surface's
+// terminal stats.models object without reading any message text: on
+// native_json the terminal document's own stats member, on
+// native_stream_json the result event's. A single default for an
+// unreadable object is unsafe in both directions: reading it as "no
+// model request" would manufacture a false positive out of a truncated
+// terminal, so the unreadable state is reported and left for the
+// caller to classify as a runtime failure rather than as evidence.
+func geminiNativeModelRequestReading(surface qualification.Surface, output string) nativeModelRequestReading {
+	var terminal map[string]any
+	switch surface {
+	case qualification.SurfaceNativeJSON:
+		values := geminiDecodeNativeJSONValues(output)
+		if len(values) == 0 {
+			return modelRequestUnreadable
+		}
+		object, ok := values[0].(map[string]any)
+		if !ok {
+			return modelRequestUnreadable
+		}
+		terminal = object
+	case qualification.SurfaceNativeStreamJSON:
+		found := false
+		for _, value := range geminiDecodeNativeJSONValues(output) {
+			object, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if object["type"] == "result" {
+				terminal, found = object, true
+				break
+			}
+		}
+		if !found {
+			return modelRequestUnreadable
+		}
+	default:
+		return modelRequestUnreadable
+	}
+
+	stats, ok := terminal["stats"].(map[string]any)
+	if !ok {
+		return modelRequestUnreadable
+	}
+	models, ok := stats["models"].(map[string]any)
+	if !ok {
+		return modelRequestUnreadable
+	}
+	if len(models) == 0 {
+		return modelRequestNone
+	}
+	return modelRequestAtLeastOne
 }
 
 // geminiTokenLedger accumulates the token-bearing paths each surface's
@@ -622,7 +807,11 @@ func geminiCollectContinuationRecords(t *testing.T, runtime geminiQualificationR
 	records := []qualification.Record{}
 	seed, recall := geminiRunProtocolContinuation(t, runtime, tracker, ledger, agentName)
 	records = append(records, seed, recall)
-	for _, surface := range []qualification.Surface{qualification.SurfaceNativeText, qualification.SurfaceNativeJSON, qualification.SurfaceNativeStreamJSON} {
+	for _, surface := range qualification.MeasuredSurfaces(runtime.Config.DeclaredGaps) {
+		if surface == qualification.SurfaceProtocol {
+			// The protocol surface's own continuation ran above.
+			continue
+		}
 		seed, recall := geminiRunNativeContinuation(t, runtime, surface)
 		records = append(records, seed, recall)
 	}
@@ -659,7 +848,7 @@ func geminiRunProtocolContinuation(t *testing.T, runtime geminiQualificationRunt
 	relation := geminiContinuationRelation{Surface: qualification.SurfaceProtocol}
 	seedSession, err := adapter.StartSession(context.Background(), startParams(""))
 	if err != nil {
-		return geminiLiveContinuationRecords(relation, agentName, runtime.Version)
+		t.Fatalf("continuation seed on surface %s: StartSession failed: %v", qualification.SurfaceProtocol, err)
 	}
 	tracker.register(geminiSessionGroupPID(seedSession))
 	t.Cleanup(func() {
@@ -726,17 +915,17 @@ func geminiRunNativeContinuation(t *testing.T, runtime geminiQualificationRuntim
 	generated := geminiGeneratedNativeSessionID(t)
 	nativeName := filepath.Base(runtime.Config.CommandPath)
 
-	seedOutput, seedErr := geminiRunNativeProbe(t, runtime, surface, catalog[qualification.InputContinuationSeed].Prompt,
+	seedOutput, seedErr := geminiRunNativeProbe(t, runtime, surface, catalog[qualification.InputContinuationSeed].Prompt, "",
 		"--session-id", generated)
 	if seedErr != nil {
-		return geminiLiveContinuationRecords(geminiContinuationRelation{Surface: surface}, nativeName, runtime.Version)
+		t.Fatalf("continuation seed on surface %s: launch failed: %v", surface, seedErr)
 	}
 	seedID := geminiNativeSessionID(surface, seedOutput)
 	if seedID == "" {
 		seedID = generated
 	}
 
-	recallOutput, recallErr := geminiRunNativeProbe(t, runtime, surface, catalog[qualification.InputContinuationRecall].Prompt,
+	recallOutput, recallErr := geminiRunNativeProbe(t, runtime, surface, catalog[qualification.InputContinuationRecall].Prompt, "",
 		"--resume", "latest")
 	relation := geminiContinuationRelation{Surface: surface, SeedSessionID: seedID}
 	if recallErr != nil {
@@ -813,17 +1002,64 @@ func geminiIdentityRecordsForReferenced(t *testing.T, capture *geminiLogCapture,
 // geminiRunAuthenticationCanary runs one bounded headless canary in the
 // isolated configuration home and distinguishes usable authentication
 // from a model call failure without printing any credential name or
-// value. A canary that does not produce its marker is a prerequisite
-// failure of the enabled gate.
+// value. It distinguishes a launch failure, a non-zero exit naming the
+// exit status, a bounded-wait timeout, and a completed run without the
+// marker, and reports an authentication failure only for the last of
+// these.
 func geminiRunAuthenticationCanary(t *testing.T, runtime geminiQualificationRuntime) {
 	t.Helper()
 
 	output, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeText,
-		"Reply with exactly SORTIE_AUTH_OK and do not call any tool.")
-	if err == nil && strings.Contains(output, "SORTIE_AUTH_OK") {
+		"Reply with exactly SORTIE_AUTH_OK and do not call any tool.", "")
+	switch {
+	case err == nil && strings.Contains(output, "SORTIE_AUTH_OK"):
 		return
+	case errors.Is(err, errNativeProbeLaunchFailed):
+		t.Fatalf("the authentication canary failed to launch: %v", err)
+	case errors.Is(err, errNativeProbeBoundExceeded):
+		t.Fatal("the authentication canary exceeded its bounded wait")
+	case err != nil:
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			t.Fatalf("the authentication canary exited with status %d", exitErr.ExitCode())
+		}
+		t.Fatalf("the authentication canary ended with a run failure: %v", err)
+	default:
+		t.Fatal("the authentication canary did not produce its marker: usable authentication could not be distinguished from a model call failure, and no credential name or value is reported")
 	}
-	t.Fatal("the authentication canary did not produce its marker: usable authentication could not be distinguished from a model call failure, and no credential name or value is reported")
+}
+
+// geminiCorroborateAbsentSurface checks one declared-absent surface's
+// own claim before any probe or record for this run spends anything
+// else. It launches surface's own argv with the catalog's own baseline
+// marker prompt, read from InputDispositionSuccess rather than
+// restated, and reads two facts from the one capture: whether
+// surface's structured recognizer returns a terminal from it, and
+// whether the capture carries the marker. Exit status is consulted
+// only to tell a process that never started from one that ran, so a
+// recognized terminal contradicts the declaration whether the process
+// exited zero or not. It writes no record and feeds no ledger.
+func geminiCorroborateAbsentSurface(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, reason string) {
+	t.Helper()
+
+	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
+	prompt := catalog[qualification.InputDispositionSuccess].Prompt
+	marker := geminiInstructionMarker(prompt)
+
+	output, err := geminiRunNativeProbe(t, runtime, surface, prompt, "")
+	if errors.Is(err, errNativeProbeLaunchFailed) {
+		t.Fatalf("corroborate declared-absent surface %s: the declared entry point failed to launch: %v", surface, err)
+	}
+	// A non-zero exit is the ordinary shape of a surface the runtime
+	// does not offer, so the terminal is read from the capture alone.
+	// Passing the error here would classify every rejected surface
+	// flag as a recognized terminal and fail the run for the very
+	// case the declaration describes.
+	if _, structured := geminiNativeTerminal(surface, output, nil); structured {
+		t.Fatalf("corroborate declared-absent surface %s: declared absent (%s), but its own entry point returned a recognized terminal, so the runtime offers it", surface, reason)
+	}
+	if strings.Contains(output, marker) {
+		t.Fatalf("corroborate declared-absent surface %s: declared absent (%s), but its entry point answered in a shape neither recognizer reads, which is unmeasured rather than absent; the remedy is widening a recognizer", surface, reason)
+	}
 }
 
 // TestGeminiQualification is the Unix live qualification test. With the
@@ -866,6 +1102,13 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	// The authentication canary is the live credential prerequisite.
 	geminiRunAuthenticationCanary(t, runtime)
 
+	// A declared-absent surface is corroborated before any probe or
+	// record spends anything else, so a false declaration stops the
+	// run at the coordinate that named it.
+	for _, entry := range runtime.Config.DeclaredGaps.AbsentSurfaces {
+		geminiCorroborateAbsentSurface(t, runtime, entry.Surface, entry.Reason)
+	}
+
 	// Workspace security is recorded first, from fixture facts only.
 	workspaceRecord := geminiWorkspaceSecurityRecord(geminiWorkspaceSecurityFacts{
 		PresentProjectConfig: geminiPresentProjectGeminiConfig(runtime.Workspace.Checkout),
@@ -891,7 +1134,7 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	// The per-surface token inventories, one record per observed path
 	// or the single sentinel.
 	tokenRecords := []qualification.Record{}
-	for _, surface := range qualification.MeasuredSurfaces {
+	for _, surface := range qualification.MeasuredSurfaces(runtime.Config.DeclaredGaps) {
 		tokenRecords = append(tokenRecords, geminiLiveTokenInventoryRecords(
 			surface, ledger.sorted(surface), false, agentName, runtime.Version)...)
 	}
@@ -912,7 +1155,7 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	)
 
 	// The derived baselines follow their own complete observations.
-	records := slices.Concat(observations, geminiBaselineRecords(t, observations))
+	records := slices.Concat(observations, geminiBaselineRecords(t, observations, runtime.Config.DeclaredGaps))
 
 	// One runtime-identity record per referenced actual protocol
 	// session, from each session's own structured log.
@@ -925,7 +1168,7 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	// initial run without notes yet stops after the validated summary.
 	notesPath, notesErr := filepath.Abs(geminiAdapterNotesRelPath)
 	if notesErr == nil {
-		geminiRunNotesConsistency(t, notesPath, geminiFreshConclusions(t, dir, verdict), false)
+		geminiRunNotesConsistency(t, notesPath, geminiFreshConclusions(t, dir, verdict, runtime.Config.DeclaredGaps), false)
 	}
 
 	return geminiQualificationResult{
@@ -937,13 +1180,13 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 
 // geminiFreshConclusions derives the bounded conclusions from the
 // validated evidence file.
-func geminiFreshConclusions(t *testing.T, dir string, verdict qualification.Verdict) geminiSummaryConclusions {
+func geminiFreshConclusions(t *testing.T, dir string, verdict qualification.Verdict, declarations qualification.DeclarationSet) geminiSummaryConclusions {
 	t.Helper()
 	complete, err := qualification.ReadEvidenceFile(filepath.Join(dir, "evidence.jsonl"))
 	if err != nil {
 		t.Fatalf("read the validated evidence file: %v", err)
 	}
-	conclusions, err := geminiSummaryConclusionsFromRecords(complete[:len(complete)-1], verdict)
+	conclusions, err := geminiSummaryConclusionsFromRecords(complete[:len(complete)-1], verdict, declarations)
 	if err != nil {
 		t.Fatalf("derive the bounded conclusions: %v", err)
 	}
@@ -1216,7 +1459,7 @@ func geminiCollectSurfaceRecords(t *testing.T, runtime geminiQualificationRuntim
 	records := []qualification.Record{}
 	refusalRuns := map[qualification.Surface]geminiSemanticObservation{}
 
-	for _, surface := range qualification.MeasuredSurfaces {
+	for _, surface := range qualification.MeasuredSurfaces(runtime.Config.DeclaredGaps) {
 		for _, capability := range []qualification.Capability{qualification.CapabilityTurnDisposition, qualification.CapabilityRetryClassification} {
 			for _, caseID := range qualification.CapabilityCases[capability] {
 				var obs geminiSemanticObservation
@@ -1240,14 +1483,14 @@ func geminiCollectSurfaceRecords(t *testing.T, runtime geminiQualificationRuntim
 	return records
 }
 
-// geminiBaselineRecords derives all 16 per-surface comparison baselines
+// geminiBaselineRecords derives all per-surface comparison baselines
 // from their own complete observations, so a written baseline can never
 // differ from its derivation.
-func geminiBaselineRecords(t *testing.T, prior []qualification.Record) []qualification.Record {
+func geminiBaselineRecords(t *testing.T, prior []qualification.Record, declarations qualification.DeclarationSet) []qualification.Record {
 	t.Helper()
 
 	records := []qualification.Record{}
-	for _, surface := range qualification.MeasuredSurfaces {
+	for _, surface := range qualification.MeasuredSurfaces(declarations) {
 		for _, capability := range qualification.ComparisonCapabilities {
 			grade := geminiDeriveBaseline(t, surface, capability, prior)
 			records = append(records, qualification.Record{
@@ -1297,6 +1540,19 @@ func geminiCollectSemanticCase(t *testing.T, runtime geminiQualificationRuntime,
 	}
 }
 
+// geminiComposeProtocolPrompt composes one protocol turn's prompt text
+// from its catalog entry: the stdin payload, a blank line, then the
+// instruction prompt, mirroring the native transport's own
+// stdin-prepend composition so both transports present the same bytes
+// in the same order. An empty Stdin composes to the prompt alone,
+// which is every non-limit case's unchanged behavior.
+func geminiComposeProtocolPrompt(spec geminiInputSpec) string {
+	if spec.Stdin == "" {
+		return spec.Prompt
+	}
+	return spec.Stdin + "\n\n" + spec.Prompt
+}
+
 // geminiInduceProtocolCase runs one protocol case's live probe through
 // the adapter's own session lifecycle.
 func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, tracker *geminiProcessGroupTracker, caseID qualification.Case, catalog map[qualification.InputID]geminiInputSpec, ledger *geminiTokenLedger) geminiSemanticObservation {
@@ -1336,7 +1592,7 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 		go func() {
 			var turnEvents []domain.AgentEvent
 			result, err := adapter.RunTurn(probeCtx, session, domain.RunTurnParams{
-				Prompt:  catalog[qualification.InputDispositionCancellation].Prompt,
+				Prompt:  geminiComposeProtocolPrompt(catalog[qualification.InputDispositionCancellation]),
 				OnEvent: collectEvents(&turnEvents),
 			})
 			turnDone <- turnOutcome{result: result, err: err}
@@ -1360,7 +1616,7 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 		go func() {
 			var turnEvents []domain.AgentEvent
 			result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-				Prompt:  catalog[qualification.InputRetryableTransport].Prompt,
+				Prompt:  geminiComposeProtocolPrompt(catalog[qualification.InputRetryableTransport]),
 				OnEvent: collectEvents(&turnEvents),
 			})
 			turnDone <- turnOutcome{result: result, err: err}
@@ -1380,10 +1636,46 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 		}
 		return observation
 
+	case qualification.CaseLimitReached:
+		var turnEvents []domain.AgentEvent
+		turnResult, turnErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  geminiComposeProtocolPrompt(catalog[qualification.CaseInputs[caseID]]),
+			OnEvent: collectEvents(&turnEvents),
+		})
+		if turnErr == nil && turnResult.UsageMeasured {
+			ledger.add(qualification.SurfaceProtocol, geminiTokenSource{
+				Path: "/turn/result/usage", Usage: &turnResult.Usage, SessionID: session.ID,
+			})
+		}
+		outcome := geminiProtocolTurnOutcome{Attributed: true}
+		if agentErr, ok := errors.AsType[*domain.AgentError](turnErr); ok {
+			outcome.ErrKind = agentErr.Kind
+		}
+		switch {
+		case outcome.ErrKind == domain.ErrTurnTokenLimit || outcome.ErrKind == domain.ErrTurnRequestLimit:
+			observation.Induced = true
+			observation.Distinct = true
+			observation.Structured = true
+		case turnErr == nil:
+			// The instruction with a filler that does not overflow
+			// answers normally: the run's own control, needing no
+			// second launch.
+			observation.Failure = qualification.OutcomeFixtureInductionFailed
+			observation.Detail = "the treatment filler did not induce a limit; the turn completed normally"
+		default:
+			// Unlike the structured native surfaces, where the control
+			// run detects a cause that stops the runtime reaching the
+			// model, nothing on the protocol surface detects it before
+			// the turn: the same cause reads prerequisite_failed there
+			// and runtime_failed here.
+			observation.Failure = qualification.OutcomeRuntimeFailed
+		}
+		return observation
+
 	default:
 		var turnEvents []domain.AgentEvent
 		turnResult, turnErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-			Prompt:  catalog[qualification.CaseInputs[caseID]].Prompt,
+			Prompt:  geminiComposeProtocolPrompt(catalog[qualification.CaseInputs[caseID]]),
 			OnEvent: collectEvents(&turnEvents),
 		})
 		if turnErr == nil && turnResult.UsageMeasured {
@@ -1412,17 +1704,25 @@ func geminiInduceProtocolCase(t *testing.T, runtime geminiQualificationRuntime, 
 // member the output carries into the surface's inventory. Induced
 // carries one meaning on the structured surfaces: the recognized
 // terminal outcome maps to the case being probed, so it implies both
-// Distinct and Structured there; on the text surface, which recognizes
-// no terminal member by construction, it stays whether the probe ran
-// at all.
+// Distinct and Structured there, with one exception: limit_reached's
+// row where the treatment's recognized terminal reports a completed
+// turn with no model request, delegated to geminiInduceNativeLimitCase
+// and graded gap by design (Induced true, Distinct false). On the text
+// surface, which recognizes no terminal member by construction,
+// Induced stays whether the probe ran at all.
 func geminiInduceNativeCase(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, caseID qualification.Case, catalog map[qualification.InputID]geminiInputSpec, ledger *geminiTokenLedger) geminiSemanticObservation {
 	t.Helper()
+
+	if caseID == qualification.CaseLimitReached && surface != qualification.SurfaceNativeText {
+		return geminiInduceNativeLimitCase(t, runtime, surface, catalog)
+	}
 
 	inputID := qualification.CaseInputs[caseID]
 	observation := geminiSemanticObservation{Tag: caseID, EvidencePath: "/output/terminal"}
 
-	output, launchErr := geminiRunNativeProbe(t, runtime, surface, catalog[inputID].Prompt)
+	output, launchErr := geminiRunNativeProbe(t, runtime, surface, catalog[inputID].Prompt, catalog[inputID].Stdin)
 	nativeSession := geminiNativeSessionID(surface, output)
+	observation.SessionID = nativeSession
 	ledger.add(surface, geminiScanNativeTokenOutput(surface, output, nativeSession)...)
 	outcome, structured := geminiNativeTerminal(surface, output, launchErr)
 	observation.Structured = structured
@@ -1457,6 +1757,74 @@ func geminiInduceNativeCase(t *testing.T, runtime geminiQualificationRuntime, su
 	}
 	// The text surface is characterized as unstructured residue; every
 	// induced text case grades gap through Structured=false.
+	return observation
+}
+
+// geminiInduceNativeLimitCase drives limit_reached's live induction on
+// one structured native surface: a treatment run carrying the full
+// filler and a control run differing from it in only the filler's
+// length, both under the same instruction, workspace, argv,
+// environment, and policy file. The case occurred on this surface if
+// and only if the treatment reports a completed turn in which the
+// runtime made no model request, while the control reports the marker
+// and at least one model request on the same surface. It reads no
+// message text and no runtime version, only each structured
+// recognizer's own terminal shape and the model-request reading beside
+// it. Neither capture feeds the token ledger: both traverse terminal
+// shapes the surface's disposition probes already traverse, and
+// feeding the treatment in would let a run that made no model request
+// contribute a token-bearing path.
+func geminiInduceNativeLimitCase(t *testing.T, runtime geminiQualificationRuntime, surface qualification.Surface, catalog map[qualification.InputID]geminiInputSpec) geminiSemanticObservation {
+	t.Helper()
+
+	observation := geminiSemanticObservation{Tag: qualification.CaseLimitReached, EvidencePath: "/output/terminal"}
+	spec := catalog[qualification.InputDispositionLimitReached]
+
+	treatmentOutput, treatmentErr := geminiRunNativeProbe(t, runtime, surface, spec.Prompt, spec.Stdin)
+	controlOutput, controlErr := geminiRunNativeProbe(t, runtime, surface, spec.Prompt, geminiLimitFiller(geminiLimitControlFillerChars))
+
+	switch {
+	case errors.Is(treatmentErr, errNativeProbeLaunchFailed) || errors.Is(controlErr, errNativeProbeLaunchFailed):
+		observation.Failure = qualification.OutcomePrerequisiteFailed
+		return observation
+	case errors.Is(treatmentErr, errNativeProbeBoundExceeded) || errors.Is(controlErr, errNativeProbeBoundExceeded):
+		observation.Failure = qualification.OutcomeRuntimeFailed
+		return observation
+	}
+
+	controlModelRequest := geminiNativeModelRequestReading(surface, controlOutput)
+	if controlErr != nil || !strings.Contains(controlOutput, geminiInstructionMarker(spec.Prompt)) || controlModelRequest != modelRequestAtLeastOne {
+		observation.Failure = qualification.OutcomePrerequisiteFailed
+		return observation
+	}
+
+	if treatmentErr != nil {
+		observation.Structured = true
+		observation.Failure = qualification.OutcomeRuntimeFailed
+		return observation
+	}
+	observation.SessionID = geminiNativeSessionID(surface, treatmentOutput)
+
+	treatmentOutcome, treatmentStructured := geminiNativeTerminal(surface, treatmentOutput, nil)
+	treatmentModelRequest := geminiNativeModelRequestReading(surface, treatmentOutput)
+	completedTurn := treatmentStructured && treatmentOutcome.StopReason == stopReasonEndTurn && treatmentOutcome.ErrKind == ""
+	mapped, distinct := geminiProtocolCase(treatmentOutcome)
+
+	switch {
+	case treatmentStructured && distinct && mapped == qualification.CaseLimitReached:
+		observation.Induced = true
+		observation.Distinct = true
+		observation.Structured = true
+	case completedTurn && treatmentModelRequest == modelRequestNone:
+		observation.Induced = true
+		observation.Structured = true
+		observation.Detail = "the terminal reported a completed turn with no model request"
+	case completedTurn && treatmentModelRequest == modelRequestAtLeastOne:
+		observation.Structured = true
+		observation.Failure = qualification.OutcomeFixtureInductionFailed
+	default:
+		observation.Failure = qualification.OutcomeRuntimeFailed
+	}
 	return observation
 }
 
@@ -1589,11 +1957,11 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 			groupClean = false
 		}
 	}
-	sessionID := ""
-	if ids := harness.Agent().SessionIDs(); len(ids) > 0 {
-		sessionID = ids[0]
+	ids := harness.Agent().SessionIDs()
+	if len(ids) == 0 {
+		t.Fatalf("end-to-end run: the harness observed no protocol session")
 	}
-	return e2e.TerminalRecord(condition, groupClean, sessionID, agentName, runtime.Version)
+	return e2e.TerminalRecord(condition, groupClean, ids[0], agentName, runtime.Version)
 }
 
 // geminiHandshakeAgentName reports the runtime's handshake-reported
@@ -1624,7 +1992,7 @@ func TestGeminiNativeProbeClassification(t *testing.T) {
 			Config: geminiQualificationConfig{CommandPath: filepath.Join(t.TempDir(), "does-not-exist"), Model: "fixture-model"},
 			Env:    []string{"PATH=" + os.Getenv("PATH")},
 		}
-		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt")
+		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt", "")
 		if !errors.Is(err, errNativeProbeLaunchFailed) {
 			t.Fatalf("geminiRunNativeProbe() error = %v, want it to satisfy errNativeProbeLaunchFailed", err)
 		}
@@ -1655,7 +2023,7 @@ func TestGeminiNativeProbeClassification(t *testing.T) {
 			Env:       []string{"PATH=" + os.Getenv("PATH")},
 		}
 
-		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt")
+		_, err := geminiRunNativeProbe(t, runtime, qualification.SurfaceNativeJSON, "prompt", "")
 		if err == nil {
 			t.Fatal("geminiRunNativeProbe() = nil error, want a non-zero-exit run failure")
 		}
@@ -1673,7 +2041,7 @@ func TestGeminiNativeProbeClassification(t *testing.T) {
 		if !repaired.Induced || !repaired.Distinct || !repaired.Structured {
 			t.Errorf("retryable_transport observation = %+v, want Induced, Distinct, and Structured all true", repaired)
 		}
-		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, repaired, qualification.DeclaredGapSet{})
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, repaired, qualification.DeclarationSet{})
 		if rec.Grade != qualification.GradeUsable || rec.Outcome != qualification.OutcomePass {
 			t.Errorf("retryable_transport record = %s/%s, want usable/pass", rec.Grade, rec.Outcome)
 		}
@@ -1685,7 +2053,7 @@ func TestGeminiNativeProbeClassification(t *testing.T) {
 		if unmatched.Failure != qualification.OutcomeRuntimeFailed {
 			t.Errorf("success observation.Failure = %s, want runtime_failed for a run failure whose outcome does not map to the case", unmatched.Failure)
 		}
-		unmatchedRec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, unmatched, qualification.DeclaredGapSet{})
+		unmatchedRec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, unmatched, qualification.DeclarationSet{})
 		if unmatchedRec.Grade != qualification.GradeNotObserved {
 			t.Errorf("success record = %s, want not_observed", unmatchedRec.Grade)
 		}
@@ -1708,6 +2076,375 @@ func TestGeminiNativeProbeClassification(t *testing.T) {
 			t.Error("DeclarableSurfaces contains SurfaceNativeText, want it excluded to match geminiNativeTerminal's non-recognition")
 		}
 	})
+}
+
+// TestLineBoundedWriter confirms the per-stream capture bound: every
+// line at or below the limit is retained, a line above it is dropped
+// and counted, and a trailing line with no final newline is still
+// classified correctly once Flush runs.
+func TestLineBoundedWriter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("every line at or below the limit is retained", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 16}
+		if _, err := w.Write([]byte("short line\nanother\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if w.dropped != 0 {
+			t.Errorf("dropped = %d, want 0", w.dropped)
+		}
+		if got := w.String(); got != "short line\nanother\n" {
+			t.Errorf("String() = %q, want both lines retained", got)
+		}
+	})
+
+	t.Run("a line above the limit is dropped and counted, and the bound fired", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 8}
+		oversize := strings.Repeat("x", 100) + "\n"
+		if _, err := w.Write([]byte("ok\n" + oversize + "ok2\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want exactly 1", w.dropped)
+		}
+		if got := w.String(); got != "ok\nok2\n" {
+			t.Errorf("String() = %q, want the oversize line dropped and both others retained", got)
+		}
+	})
+
+	t.Run("a trailing line within the limit is retained once Flush runs", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 16}
+		if _, err := w.Write([]byte("short")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := w.String(); got != "" {
+			t.Errorf("String() before Flush = %q, want empty: the line has no newline yet", got)
+		}
+		w.Flush()
+		if w.dropped != 0 {
+			t.Errorf("dropped = %d, want 0", w.dropped)
+		}
+		if got := w.String(); got != "short" {
+			t.Errorf("String() = %q, want the trailing partial line retained", got)
+		}
+	})
+
+	t.Run("an oversize line is counted and abandoned as soon as the bound is passed", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 4}
+		if _, err := w.Write([]byte("toolong")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want 1 as soon as the buffer passes the limit", w.dropped)
+		}
+		if w.peak > w.limit {
+			t.Errorf("pending peaked at %d bytes, want at most the %d-byte limit: an over-limit line must never be buffered while waiting for its newline", w.peak, w.limit)
+		}
+		w.Flush()
+		if w.dropped != 1 {
+			t.Errorf("dropped after Flush = %d, want the same single drop", w.dropped)
+		}
+		if got := w.String(); got != "" {
+			t.Errorf("String() = %q, want empty: the only line was dropped", got)
+		}
+	})
+
+	t.Run("one oversize write never grows the buffer past the bound", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 64}
+		if _, err := w.Write([]byte(strings.Repeat("x", 1<<20))); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if w.peak > w.limit {
+			t.Errorf("pending peaked at %d bytes on one write, want at most the %d-byte limit", w.peak, w.limit)
+		}
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want 1", w.dropped)
+		}
+		if _, err := w.Write([]byte("\nkept\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if got := w.String(); got != "kept\n" {
+			t.Errorf("String() = %q, want only the line after the dropped one", got)
+		}
+	})
+
+	t.Run("an oversize line arriving in chunks never grows the buffer past the bound", func(t *testing.T) {
+		t.Parallel()
+
+		w := &lineBoundedWriter{limit: 64}
+		chunk := strings.Repeat("x", 32)
+		for range 100 {
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			if w.peak > w.limit {
+				t.Fatalf("pending peaked at %d bytes, want at most the %d-byte limit", w.peak, w.limit)
+			}
+		}
+		if _, err := w.Write([]byte("\nkept\n")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		w.Flush()
+		if w.dropped != 1 {
+			t.Errorf("dropped = %d, want exactly 1 for the one oversize line", w.dropped)
+		}
+		if got := w.String(); got != "kept\n" {
+			t.Errorf("String() = %q, want only the line after the dropped one", got)
+		}
+	})
+}
+
+// TestErrNativeProbeBoundExceededDistinguishable confirms the bounded-
+// wait sentinel is distinguishable from a non-zero-exit run failure and
+// from a launch failure via errors.Is, exactly as errNativeProbeLaunchFailed
+// already is at its own two use sites.
+func TestErrNativeProbeBoundExceededDistinguishable(t *testing.T) {
+	t.Parallel()
+
+	wrapped := fmt.Errorf("native probe: %w", errNativeProbeBoundExceeded)
+	if !errors.Is(wrapped, errNativeProbeBoundExceeded) {
+		t.Error("errors.Is(wrapped, errNativeProbeBoundExceeded) = false, want true")
+	}
+	if errors.Is(wrapped, errNativeProbeLaunchFailed) {
+		t.Error("errors.Is(wrapped, errNativeProbeLaunchFailed) = true, want false: the two sentinels must stay distinguishable")
+	}
+
+	runFailure := errors.New("exit status 7")
+	if errors.Is(runFailure, errNativeProbeBoundExceeded) {
+		t.Error("errors.Is(runFailure, errNativeProbeBoundExceeded) = true, want false for an unrelated non-zero-exit error")
+	}
+}
+
+// TestGeminiNativeModelRequestReading covers the three-way model-request
+// reading on both structured native surfaces: an absent or undecodable
+// stats.models object is unreadable, an empty object is none, and a
+// populated object is at least one. It reads no message text.
+func TestGeminiNativeModelRequestReading(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		surface qualification.Surface
+		output  string
+		want    nativeModelRequestReading
+	}{
+		{
+			name:    "native_json with no stats member is unreadable",
+			surface: qualification.SurfaceNativeJSON,
+			output:  `{"session_id":"sess","response":{"text":"hi"}}`,
+			want:    modelRequestUnreadable,
+		},
+		{
+			name:    "native_json with an empty models object is none",
+			surface: qualification.SurfaceNativeJSON,
+			output:  `{"session_id":"sess","response":{"text":"hi"},"stats":{"models":{}}}`,
+			want:    modelRequestNone,
+		},
+		{
+			name:    "native_json with a populated models object is at least one",
+			surface: qualification.SurfaceNativeJSON,
+			output:  `{"session_id":"sess","response":{"text":"hi"},"stats":{"models":{"gemini-pro":{}}}}`,
+			want:    modelRequestAtLeastOne,
+		},
+		{
+			name:    "native_stream_json with no terminal result event is unreadable",
+			surface: qualification.SurfaceNativeStreamJSON,
+			output:  `{"type":"init"}`,
+			want:    modelRequestUnreadable,
+		},
+		{
+			name:    "native_stream_json with an empty models object is none",
+			surface: qualification.SurfaceNativeStreamJSON,
+			output:  `{"type":"result","status":"success","stats":{"models":{}}}`,
+			want:    modelRequestNone,
+		},
+		{
+			name:    "native_stream_json with a populated models object is at least one",
+			surface: qualification.SurfaceNativeStreamJSON,
+			output:  `{"type":"result","status":"success","stats":{"models":{"gemini-pro":{}}}}`,
+			want:    modelRequestAtLeastOne,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := geminiNativeModelRequestReading(tt.surface, tt.output); got != tt.want {
+				t.Errorf("geminiNativeModelRequestReading(%s, %q) = %d, want %d", tt.surface, tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
+// geminiLimitProbeScript renders a fake native runtime that reads its
+// combined standard input's byte count and answers with treatmentBody
+// for an input above 100000 bytes (the treatment filler is
+// geminiLimitFillerChars long) or controlBody otherwise (the control
+// filler is geminiLimitControlFillerChars long), so the one script
+// distinguishes geminiInduceNativeLimitCase's two launches without
+// reading either prompt.
+func geminiLimitProbeScript(treatmentBody, controlBody string) string {
+	return fmt.Sprintf(`len=$(wc -c)
+if [ "$len" -gt 100000 ]; then
+%s
+else
+%s
+fi
+`, treatmentBody, controlBody)
+}
+
+// TestGeminiInduceNativeLimitCase drives geminiInduceNativeLimitCase's
+// classification table against fake local scripts, distinguishing the
+// treatment and control launches by their standard input length alone,
+// so every row is reached without a live runtime.
+func TestGeminiInduceNativeLimitCase(t *testing.T) {
+	t.Parallel()
+
+	catalog := map[qualification.InputID]geminiInputSpec{
+		qualification.InputDispositionLimitReached: {
+			Prompt: geminiLimitInstruction,
+			Stdin:  geminiLimitFiller(geminiLimitFillerChars),
+			Launch: true,
+		},
+	}
+
+	newRuntime := func(t *testing.T, script string) geminiQualificationRuntime {
+		t.Helper()
+		workspace := t.TempDir()
+		path := agenttest.WriteScript(t, workspace, "native-limit-probe", script)
+		return geminiQualificationRuntime{
+			Config:    geminiQualificationConfig{CommandPath: path, Model: "fixture-model"},
+			Workspace: geminiQualificationWorkspace{Checkout: workspace},
+			Env:       []string{"PATH=" + os.Getenv("PATH")},
+		}
+	}
+
+	t.Run("prerequisite_failed when the binary never launches", func(t *testing.T) {
+		t.Parallel()
+
+		runtime := geminiQualificationRuntime{
+			Config: geminiQualificationConfig{CommandPath: filepath.Join(t.TempDir(), "does-not-exist"), Model: "fixture-model"},
+			Env:    []string{"PATH=" + os.Getenv("PATH")},
+		}
+		obs := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseLimitReached, catalog, newGeminiTokenLedger())
+		if obs.Failure != qualification.OutcomePrerequisiteFailed {
+			t.Errorf("observation.Failure = %s, want prerequisite_failed", obs.Failure)
+		}
+		if obs.Induced || obs.Distinct || obs.Structured {
+			t.Errorf("observation = %+v, want every flag false for a launch failure", obs)
+		}
+	})
+
+	t.Run("prerequisite_failed when the control never reaches the model", func(t *testing.T) {
+		t.Parallel()
+
+		// Every launch answers identically: no marker, no model
+		// request, regardless of input length, so the control fails
+		// its own prerequisite check.
+		script := `printf '%s\n' '{"session_id":"sess","response":{"text":""},"stats":{"models":{}}}'` + "\n"
+		runtime := newRuntime(t, script)
+		obs := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseLimitReached, catalog, newGeminiTokenLedger())
+		if obs.Failure != qualification.OutcomePrerequisiteFailed {
+			t.Errorf("observation.Failure = %s, want prerequisite_failed", obs.Failure)
+		}
+	})
+
+	t.Run("runtime_failed when the treatment run fails", func(t *testing.T) {
+		t.Parallel()
+
+		script := geminiLimitProbeScript(
+			"exit 3",
+			`printf '%s\n' '{"session_id":"sess-ctrl","response":{"text":"SORTIE_LIMIT_OK"},"stats":{"models":{"gemini-pro":{}}}}'`,
+		)
+		runtime := newRuntime(t, script)
+		obs := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseLimitReached, catalog, newGeminiTokenLedger())
+		if obs.Failure != qualification.OutcomeRuntimeFailed {
+			t.Errorf("observation.Failure = %s, want runtime_failed", obs.Failure)
+		}
+		if !obs.Structured {
+			t.Error("observation.Structured = false, want true: the treatment run reached the case's own launch")
+		}
+	})
+
+	t.Run("runtime_failed when the treatment terminal is unrecognized", func(t *testing.T) {
+		t.Parallel()
+
+		script := geminiLimitProbeScript(
+			"printf '%s\\n' 'not json at all'",
+			`printf '%s\n' '{"session_id":"sess-ctrl","response":{"text":"SORTIE_LIMIT_OK"},"stats":{"models":{"gemini-pro":{}}}}'`,
+		)
+		runtime := newRuntime(t, script)
+		obs := geminiInduceNativeCase(t, runtime, qualification.SurfaceNativeJSON, qualification.CaseLimitReached, catalog, newGeminiTokenLedger())
+		if obs.Failure != qualification.OutcomeRuntimeFailed {
+			t.Errorf("observation.Failure = %s, want runtime_failed", obs.Failure)
+		}
+	})
+
+	for _, surface := range []qualification.Surface{qualification.SurfaceNativeJSON, qualification.SurfaceNativeStreamJSON} {
+		t.Run(string(surface)+" gap when the treatment completes with no model request", func(t *testing.T) {
+			t.Parallel()
+
+			var treatment, control string
+			if surface == qualification.SurfaceNativeJSON {
+				treatment = `printf '%s\n' '{"session_id":"sess-treat","response":{"text":""},"stats":{"models":{}}}'`
+				control = `printf '%s\n' '{"session_id":"sess-ctrl","response":{"text":"SORTIE_LIMIT_OK"},"stats":{"models":{"gemini-pro":{}}}}'`
+			} else {
+				treatment = `printf '%s\n' '{"type":"result","status":"success","stats":{"models":{}}}'`
+				control = `printf '%s\n' 'SORTIE_LIMIT_OK'
+printf '%s\n' '{"type":"result","status":"success","stats":{"models":{"gemini-pro":{}}}}'`
+			}
+			script := geminiLimitProbeScript(treatment, control)
+			runtime := newRuntime(t, script)
+			ledger := newGeminiTokenLedger()
+			obs := geminiInduceNativeCase(t, runtime, surface, qualification.CaseLimitReached, catalog, ledger)
+			if obs.Failure != "" {
+				t.Errorf("observation.Failure = %q, want empty", obs.Failure)
+			}
+			if !obs.Induced || obs.Distinct || !obs.Structured {
+				t.Errorf("observation = %+v, want Induced and Structured true, Distinct false", obs)
+			}
+			if len(ledger.sorted(surface)) != 0 {
+				t.Error("the limit-case capture fed the token ledger, want neither capture to contribute a token-bearing path")
+			}
+		})
+
+		t.Run(string(surface)+" fixture_induction_failed when the treatment completes with a model request", func(t *testing.T) {
+			t.Parallel()
+
+			var body string
+			if surface == qualification.SurfaceNativeJSON {
+				body = `printf '%s\n' '{"session_id":"sess","response":{"text":"SORTIE_LIMIT_OK"},"stats":{"models":{"gemini-pro":{}}}}'`
+			} else {
+				body = `printf '%s\n' 'SORTIE_LIMIT_OK'
+printf '%s\n' '{"type":"result","status":"success","stats":{"models":{"gemini-pro":{}}}}'`
+			}
+			// Treatment and control answer identically: both reach the
+			// model, so the payload never induced an overflow.
+			script := geminiLimitProbeScript(body, body)
+			runtime := newRuntime(t, script)
+			obs := geminiInduceNativeCase(t, runtime, surface, qualification.CaseLimitReached, catalog, newGeminiTokenLedger())
+			if obs.Failure != qualification.OutcomeFixtureInductionFailed {
+				t.Errorf("observation.Failure = %s, want fixture_induction_failed", obs.Failure)
+			}
+			if !obs.Structured {
+				t.Error("observation.Structured = false, want true")
+			}
+		})
+	}
 }
 
 // geminiTestHelperProcessEnv gates the re-exec branch
@@ -1739,6 +2476,134 @@ func TestGeminiCollectSemanticCaseMissingEntryGuard(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "carries no CaseInputs entry") {
 		t.Errorf("subprocess output = %s, want it to name the missing CaseInputs entry", output)
+	}
+}
+
+// geminiCorroborationRuntime builds a fake local geminiQualificationRuntime
+// whose CommandPath answers with script, for driving
+// geminiCorroborateAbsentSurface without a live runtime.
+func geminiCorroborationRuntime(t *testing.T, script string) geminiQualificationRuntime {
+	t.Helper()
+	workspace := t.TempDir()
+	path := agenttest.WriteScript(t, workspace, "corroboration-probe", script)
+	return geminiQualificationRuntime{
+		Config:    geminiQualificationConfig{CommandPath: path, Model: "fixture-model"},
+		Workspace: geminiQualificationWorkspace{Checkout: workspace},
+		Env:       []string{"PATH=" + os.Getenv("PATH")},
+	}
+}
+
+// TestGeminiCorroborateAbsentSurfaceMarkerPromptIsPinned confirms the
+// corroboration check reads InputDispositionSuccess's own prompt rather
+// than restating it, and that the rendered prompt is the exact string a
+// live run sends.
+func TestGeminiCorroborateAbsentSurfaceMarkerPromptIsPinned(t *testing.T) {
+	t.Parallel()
+
+	catalog := geminiSemanticInputCatalog(geminiQualificationProbes{}, "nonce")
+	prompt := catalog[qualification.InputDispositionSuccess].Prompt
+	if prompt != "Reply with exactly SORTIE_BASELINE_OK and do not call any tool." {
+		t.Errorf("baseline catalog prompt = %q, want the exact pinned string", prompt)
+	}
+	if got := geminiInstructionMarker(prompt); got != "SORTIE_BASELINE_OK" {
+		t.Errorf("geminiInstructionMarker(baseline prompt) = %q, want %q", got, "SORTIE_BASELINE_OK")
+	}
+}
+
+// TestGeminiCorroborateAbsentSurfacePasses confirms the declaration
+// stands, and the run continues with no failure, when the declared-
+// absent surface's own launch produces a capture carrying neither a
+// recognized terminal nor the marker.
+func TestGeminiCorroborateAbsentSurfacePasses(t *testing.T) {
+	t.Parallel()
+
+	runtime := geminiCorroborationRuntime(t, "printf '%s\\n' 'garbage output, not json and no marker'\n")
+	geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+}
+
+// TestGeminiCorroborateAbsentSurfacePassesOnNonZeroExit confirms the
+// ordinary shape of a surface the runtime does not offer: its entry
+// point rejects the flag, writes a diagnostic and exits non-zero. That
+// is absence, not a recognized terminal, so the declaration stands.
+func TestGeminiCorroborateAbsentSurfacePassesOnNonZeroExit(t *testing.T) {
+	t.Parallel()
+
+	runtime := geminiCorroborationRuntime(t, "printf '%s\\n' 'unknown flag: --output-format' >&2\nexit 2\n")
+	geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+}
+
+// TestGeminiCorroborateAbsentSurfaceFailsOnLaunchFailure confirms row 1:
+// a declared-absent surface whose own entry point never launches fails
+// the run naming the launch failure, run in a re-exec'd subprocess
+// since geminiCorroborateAbsentSurface calls t.Fatalf.
+func TestGeminiCorroborateAbsentSurfaceFailsOnLaunchFailure(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		runtime := geminiQualificationRuntime{
+			Config: geminiQualificationConfig{CommandPath: filepath.Join(t.TempDir(), "does-not-exist"), Model: "fixture-model"},
+			Env:    []string{"PATH=" + os.Getenv("PATH")},
+		}
+		geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiCorroborateAbsentSurfaceFailsOnLaunchFailure$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want a launch-failure rejection; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "failed to launch") {
+		t.Errorf("subprocess output = %s, want it to name the launch failure", output)
+	}
+}
+
+// TestGeminiCorroborateAbsentSurfaceFailsOnRecognizedTerminal confirms
+// row 2: a declared-absent surface whose own entry point returns a
+// recognized terminal fails the run naming the surface, its declared
+// reason, and the contradiction, run in a re-exec'd subprocess.
+func TestGeminiCorroborateAbsentSurfaceFailsOnRecognizedTerminal(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		runtime := geminiCorroborationRuntime(t, `printf '%s\n' '{"session_id":"sess","response":{"text":"hi"},"stats":{}}'`+"\n")
+		geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiCorroborateAbsentSurfaceFailsOnRecognizedTerminal$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want a recognized-terminal rejection; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "returned a recognized terminal") {
+		t.Errorf("subprocess output = %s, want it to name the recognized-terminal contradiction", output)
+	}
+}
+
+// TestGeminiCorroborateAbsentSurfaceFailsOnMarkerPresent confirms row
+// 3: a declared-absent surface whose entry point answers with the
+// marker in a shape neither recognizer reads fails the run naming the
+// surface unmeasured rather than absent, run in a re-exec'd subprocess.
+func TestGeminiCorroborateAbsentSurfaceFailsOnMarkerPresent(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
+		runtime := geminiCorroborationRuntime(t, "printf '%s\\n' 'SORTIE_BASELINE_OK but not a recognized document shape'\n")
+		geminiCorroborateAbsentSurface(t, runtime, qualification.SurfaceNativeJSON, qualification.SurfaceNotOffered)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGeminiCorroborateAbsentSurfaceFailsOnMarkerPresent$", "-test.v")
+	cmd.Env = append(os.Environ(), geminiTestHelperProcessEnv+"=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited successfully, want a marker-present rejection; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "neither recognizer reads") {
+		t.Errorf("subprocess output = %s, want it to name the unmeasured-rather-than-absent contradiction", output)
 	}
 }
 
@@ -1851,7 +2716,7 @@ func TestGeminiNativeJSONCaseSuccessGradesUsableLive(t *testing.T) {
 
 	catalog := geminiSemanticInputCatalog(runtime.Probes, geminiNonce(t))
 	obs := geminiCollectSemanticCase(t, runtime, &geminiProcessGroupTracker{}, qualification.SurfaceNativeJSON, qualification.CaseSuccess, catalog, newGeminiTokenLedger())
-	rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclaredGapSet{})
+	rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclarationSet{})
 	if rec.Grade != qualification.GradeUsable {
 		t.Errorf("native_json CaseSuccess record = %s, want usable", rec.Grade)
 	}

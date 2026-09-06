@@ -21,7 +21,7 @@ const (
 	qualificationCommandEnv          = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND"
 	qualificationModelEnv            = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_MODEL"
 	qualificationAuthNamesEnv        = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_AUTH_ENV_NAMES"
-	qualificationDeclaredGapsEnv     = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_DECLARED_GAPS"
+	qualificationDeclarationsEnv     = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_DECLARATIONS"
 	geminiQualificationRunHomeEnv    = "HOME"
 	geminiQualificationRunCLIHomeEnv = "GEMINI_CLI_HOME"
 	geminiQualificationExecPathEnv   = "PATH"
@@ -67,7 +67,7 @@ type geminiQualificationConfig struct {
 	// coordinate is unset, a deliberate state distinct from the other
 	// coordinates: this one records a claim rather than naming what to
 	// measure.
-	DeclaredGaps qualification.DeclaredGapSet
+	DeclaredGaps qualification.DeclarationSet
 }
 
 // requireGeminiQualification skips the test when the qualification
@@ -142,14 +142,14 @@ func geminiResolveQualificationCoordinates(env func(string) (string, bool)) (gem
 // variable to an empty value gets the same fail-closed load error as
 // any other unreadable path, naming the empty path, rather than a
 // silent empty declaration set.
-func geminiResolveDeclaredGaps(env func(string) (string, bool)) (qualification.DeclaredGapSet, error) {
-	path, present := env(qualificationDeclaredGapsEnv)
+func geminiResolveDeclaredGaps(env func(string) (string, bool)) (qualification.DeclarationSet, error) {
+	path, present := env(qualificationDeclarationsEnv)
 	if !present {
-		return qualification.DeclaredGapSet{}, nil
+		return qualification.DeclarationSet{}, nil
 	}
-	declarations, err := qualification.ReadDeclaredGapFile(path)
+	declarations, err := qualification.ReadDeclarationFile(path)
 	if err != nil {
-		return qualification.DeclaredGapSet{}, fmt.Errorf("%s names %q, which failed to load: %w", qualificationDeclaredGapsEnv, path, err)
+		return qualification.DeclarationSet{}, fmt.Errorf("%s names %q, which failed to load: %w", qualificationDeclarationsEnv, path, err)
 	}
 	return declarations, nil
 }
@@ -507,8 +507,8 @@ func TestGeminiResolveDeclaredGaps(t *testing.T) {
 		if err == nil {
 			t.Fatal("geminiResolveDeclaredGaps() = nil error, want a load failure: a present value is a claim, never silently absent")
 		}
-		if !strings.Contains(err.Error(), qualificationDeclaredGapsEnv) {
-			t.Errorf("geminiResolveDeclaredGaps() error = %v, want it to name %s", err, qualificationDeclaredGapsEnv)
+		if !strings.Contains(err.Error(), qualificationDeclarationsEnv) {
+			t.Errorf("geminiResolveDeclaredGaps() error = %v, want it to name %s", err, qualificationDeclarationsEnv)
 		}
 	})
 
@@ -545,7 +545,7 @@ func TestGeminiResolveDeclaredGaps(t *testing.T) {
 		t.Parallel()
 
 		path := filepath.Join(t.TempDir(), "declared-gaps.json")
-		doc := fmt.Sprintf(`{"schema_version":1,"declarations":[{"capability":%q,"case":%q,"reason":%q}]}`,
+		doc := fmt.Sprintf(`{"schema_version":2,"declarations":[{"capability":%q,"case":%q,"reason":%q}],"absent_surfaces":[]}`,
 			qualification.CapabilityTurnDisposition, qualification.CaseCancellation, qualification.DeclaredGapNeverProduced)
 		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 			t.Fatalf("write declaration file: %v", err)
@@ -554,8 +554,8 @@ func TestGeminiResolveDeclaredGaps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("geminiResolveDeclaredGaps() error = %v, want nil for a valid document", err)
 		}
-		want := qualification.DeclaredGapSet{
-			SchemaVersion: 1,
+		want := qualification.DeclarationSet{
+			SchemaVersion: 2,
 			Declarations: []qualification.DeclaredGap{
 				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseCancellation, Reason: qualification.DeclaredGapNeverProduced},
 			},

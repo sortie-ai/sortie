@@ -303,7 +303,7 @@ func TestValidateObservationsWithDeclarations(T *testing.T) {
 		if err != nil {
 			T.Fatalf("ValidateObservations() error = %v, want nil", err)
 		}
-		withEmptyDeclarations, err := ValidateObservationsWithDeclarations(path, DeclaredGapSet{})
+		withEmptyDeclarations, err := ValidateObservationsWithDeclarations(path, DeclarationSet{})
 		if err != nil {
 			T.Fatalf("ValidateObservationsWithDeclarations() error = %v, want nil", err)
 		}
@@ -312,6 +312,183 @@ func TestValidateObservationsWithDeclarations(T *testing.T) {
 		}
 		if plain != VerdictQualified {
 			T.Errorf("ValidateObservations() = %s, want qualified", plain)
+		}
+	})
+}
+
+// TestExplainEligibilityNoStructuredNativeSurface confirms a runtime
+// with no structured native surface measured reaches a verdict that is
+// not unmeasured on any comparison row. Every row's native
+// reference resolves to the "no reference" state, so
+// explainComparisonRow's new arm reports it satisfied rather than
+// unmeasured, and NativeReferenceAbsent is set.
+func TestExplainEligibilityNoStructuredNativeSurface(T *testing.T) {
+	T.Parallel()
+
+	absent := []AbsentSurface{
+		{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered},
+		{Surface: SurfaceNativeStreamJSON, Reason: SurfaceNotOffered},
+	}
+	fixture := NewFixture(FixtureQualified, absent...)
+	fixture.Finalize()
+	declarations := fixture.Declarations()
+
+	report := ExplainEligibility(fixture.Records, declarations)
+	if !report.NativeReferenceAbsent {
+		T.Error("ExplainEligibility() NativeReferenceAbsent = false, want true when both structured native surfaces are declared absent")
+	}
+	for _, row := range report.Rows {
+		if row.Standing == StandingUnmeasured {
+			T.Errorf("row %s Standing = %s, Cause = %q, want a comparison row never unmeasured for lack of a native reference", row.Label, row.Standing, row.Cause)
+		}
+	}
+	if report.Verdict == VerdictUnmeasured {
+		T.Errorf("ExplainEligibility() Verdict = %s, want a verdict other than unmeasured", report.Verdict)
+	}
+
+	if got := ComputeEligibility(fixture.Records, declarations); got != report.Verdict {
+		T.Errorf("ComputeEligibility() = %s, want it to agree with ExplainEligibility().Verdict = %s", got, report.Verdict)
+	}
+}
+
+// TestExplainEligibilityOneStructuredNativeSurfaceAbsent confirms a
+// single declared-absent structured native surface still yields a
+// native reference from the one remaining structured surface, so the
+// comparison rows are measured against it rather than treated as
+// absent.
+func TestExplainEligibilityOneStructuredNativeSurfaceAbsent(T *testing.T) {
+	T.Parallel()
+
+	fixture := NewFixture(FixtureQualified, AbsentSurface{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered})
+	fixture.Finalize()
+	declarations := fixture.Declarations()
+
+	report := ExplainEligibility(fixture.Records, declarations)
+	if report.NativeReferenceAbsent {
+		T.Error("ExplainEligibility() NativeReferenceAbsent = true, want false: native_stream_json is still measured")
+	}
+	for _, row := range report.Rows {
+		if row.Standing == StandingUnmeasured {
+			T.Errorf("row %s Standing = %s, Cause = %q, want every row measured against the one remaining structured native surface", row.Label, row.Standing, row.Cause)
+		}
+	}
+}
+
+// TestValidateEvidenceWithDeclarationsAbsentSurface confirms the second
+// half of the absent-surface acceptance criterion, at the builder
+// level rather than through the pure eligibility functions alone: a
+// declared-absent evidence set survives the strict decoder,
+// checkDeclaredAbsentSurfaces, the derived cardinality formula, and the
+// aggregate recomputation, and the verdict ValidateEvidenceWithDeclarations
+// returns agrees exactly with an independent recomputation over the
+// same records. It also confirms, by driving the builder rather than by
+// searching its source, that a surface named absent contributes zero
+// token-inventory records.
+func TestValidateEvidenceWithDeclarationsAbsentSurface(T *testing.T) {
+	T.Parallel()
+
+	tests := []struct {
+		name   string
+		absent []AbsentSurface
+	}{
+		{
+			name:   "one structured native surface declared absent",
+			absent: []AbsentSurface{{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered}},
+		},
+		{
+			name: "both structured native surfaces declared absent",
+			absent: []AbsentSurface{
+				{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered},
+				{Surface: SurfaceNativeStreamJSON, Reason: SurfaceNotOffered},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		T.Run(tt.name, func(T *testing.T) {
+			T.Parallel()
+
+			fixture := NewFixture(FixtureQualified, tt.absent...)
+			fixture.Finalize()
+			declarations := fixture.Declarations()
+
+			wantVerdict := ComputeEligibility(fixture.Records, declarations)
+			if wantVerdict == VerdictUnmeasured {
+				T.Fatalf("ComputeEligibility() = %s, want a runtime missing a structured native surface not to land on unmeasured", wantVerdict)
+			}
+
+			path := WriteFinalEvidenceFile(T, fixture.Records, AggregateGradeFor(wantVerdict))
+			gotVerdict, err := ValidateEvidenceWithDeclarations(path, declarations)
+			if err != nil {
+				T.Fatalf("ValidateEvidenceWithDeclarations() error = %v, want nil", err)
+			}
+			if gotVerdict != wantVerdict {
+				T.Errorf("ValidateEvidenceWithDeclarations() = %s, want %s: it must agree with the eligibility functions' own independent recomputation over the same records", gotVerdict, wantVerdict)
+			}
+
+			for _, decl := range tt.absent {
+				for _, rec := range fixture.Records {
+					if rec.Scenario == ScenarioTokenSource && rec.Surface == decl.Surface {
+						T.Errorf("fixture carries a token-inventory record for declared-absent surface %s: %+v", decl.Surface, rec)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestValidateEvidenceWithDeclarationsAbsentSurfaceMalformed confirms
+// the malformed side of the same acceptance criterion: a record on a
+// declared-absent surface is still rejected by name, and a perturbed
+// record count is still caught by the derived cardinality formula,
+// naming the row and the count it expected.
+func TestValidateEvidenceWithDeclarationsAbsentSurfaceMalformed(T *testing.T) {
+	T.Parallel()
+
+	absent := []AbsentSurface{
+		{Surface: SurfaceNativeJSON, Reason: SurfaceNotOffered},
+		{Surface: SurfaceNativeStreamJSON, Reason: SurfaceNotOffered},
+	}
+
+	T.Run("a record for a declared-absent surface is rejected", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified, absent...)
+		fixture.Add(fixture.semanticRecord(SurfaceNativeJSON, CapabilityTurnDisposition, CaseSuccess))
+		fixture.Finalize()
+		declarations := fixture.Declarations()
+		verdict := ComputeEligibility(fixture.Records, declarations)
+		path := WriteFinalEvidenceFile(T, fixture.Records, AggregateGradeFor(verdict))
+
+		_, err := ValidateEvidenceWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateEvidenceWithDeclarations() = nil error, want rejection of a record on a declared-absent surface")
+		}
+		if !strings.Contains(err.Error(), string(SurfaceNativeJSON)) || !strings.Contains(err.Error(), "declared absent") {
+			T.Errorf("ValidateEvidenceWithDeclarations() error = %v, want it to name %q and the declared-absent cause", err, SurfaceNativeJSON)
+		}
+	})
+
+	T.Run("a missing singleton record is rejected by the derived cardinality check", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified, absent...)
+		target := fixture.FindFirst(func(rec *Record) bool { return rec.Scenario == ScenarioToolServer })
+		if target == nil {
+			T.Fatal("fixture carries no tool server delivery record to remove")
+		}
+		fixture.Remove(target)
+		fixture.Finalize()
+		declarations := fixture.Declarations()
+		verdict := ComputeEligibility(fixture.Records, declarations)
+		path := WriteFinalEvidenceFile(T, fixture.Records, AggregateGradeFor(verdict))
+
+		_, err := ValidateEvidenceWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateEvidenceWithDeclarations() = nil error, want rejection of a perturbed record count")
+		}
+		if !strings.Contains(err.Error(), "tool server delivery") || !strings.Contains(err.Error(), "want exactly 1") {
+			T.Errorf("ValidateEvidenceWithDeclarations() error = %v, want it to name the row and the derived count", err)
 		}
 	})
 }

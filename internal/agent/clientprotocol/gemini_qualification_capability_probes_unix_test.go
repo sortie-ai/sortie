@@ -305,6 +305,50 @@ func TestGeminiTokenInventoryClassificationControls(t *testing.T) {
 	})
 }
 
+// TestGeminiScanNativeTokenOutputAttribution confirms
+// geminiScanNativeTokenOutput never records a source it cannot
+// attribute to a session: a token-bearing structured surface with an
+// empty sessionID returns no source at all, driven by the code rather
+// than shown by a search over the two literal patterns a hand-built
+// token value could otherwise match.
+func TestGeminiScanNativeTokenOutputAttribution(t *testing.T) {
+	t.Parallel()
+
+	tokenBearingOutput := `{"session_id":"sess-fixture","response":{"text":"hi"},"stats":{"total_tokens":42}}`
+
+	t.Run("an attributable session returns the token-bearing source", func(t *testing.T) {
+		t.Parallel()
+
+		sources := geminiScanNativeTokenOutput(qualification.SurfaceNativeJSON, tokenBearingOutput, "sess-fixture")
+		if len(sources) == 0 {
+			t.Fatal("geminiScanNativeTokenOutput() = no sources, want the token-bearing stats member")
+		}
+		for _, source := range sources {
+			if source.SessionID != "sess-fixture" {
+				t.Errorf("source.SessionID = %q, want %q", source.SessionID, "sess-fixture")
+			}
+		}
+	})
+
+	t.Run("an empty sessionID returns no source at all for the same output", func(t *testing.T) {
+		t.Parallel()
+
+		sources := geminiScanNativeTokenOutput(qualification.SurfaceNativeJSON, tokenBearingOutput, "")
+		if sources != nil {
+			t.Errorf("geminiScanNativeTokenOutput() = %+v, want nil: a capture with no attributable session must not be recorded", sources)
+		}
+	})
+
+	t.Run("native_text never scans regardless of session attribution", func(t *testing.T) {
+		t.Parallel()
+
+		sources := geminiScanNativeTokenOutput(qualification.SurfaceNativeText, tokenBearingOutput, "sess-fixture")
+		if sources != nil {
+			t.Errorf("geminiScanNativeTokenOutput(native_text) = %+v, want nil", sources)
+		}
+	})
+}
+
 // geminiContinuationRelation is one surface's continuation evidence:
 // the seed's actual identifier, the identifier the recall attempted to
 // continue, the actual identifier the recall session held, and whether
@@ -526,9 +570,13 @@ var geminiTokenBearingKeys = []string{
 // output for token-bearing structured members and the runtime-observed
 // session identifier, and reports the members as vendor sources for
 // classification against the shared usage contract. The text surface
-// never scans: unstructured residue yields no token path.
+// never scans: unstructured residue yields no token path. A capture the
+// scan cannot attribute to a session yields no source at all, rather
+// than one carrying an empty session_id: the ledger's own per-path
+// dedup still lets a later, attributable capture on the same surface
+// supply that path.
 func geminiScanNativeTokenOutput(surface qualification.Surface, output string, sessionID string) []geminiTokenSource {
-	if surface == qualification.SurfaceNativeText {
+	if surface == qualification.SurfaceNativeText || sessionID == "" {
 		return nil
 	}
 	var sources []geminiTokenSource

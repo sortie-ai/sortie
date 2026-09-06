@@ -7,7 +7,7 @@ import (
 
 // TestFixtureDeclarationsRoundTrip confirms Fixture.Declarations
 // produces a document the operator's own decode path would accept: it
-// marshals to JSON and back through DecodeDeclaredGapSet without
+// marshals to JSON and back through DecodeDeclarationSet without
 // error, and the decoded set carries the same entries the fixture's
 // declared_gap records were built from. A fixture that authorized a
 // document the decoder would refuse would let every control that
@@ -45,27 +45,27 @@ func TestFixtureDeclarationsRoundTrip(t *testing.T) {
 }
 
 // requireDeclarationsRoundTrip fails t unless declarations marshals and
-// decodes back through DecodeDeclaredGapSet to an equal set.
-func requireDeclarationsRoundTrip(t *testing.T, declarations DeclaredGapSet) {
+// decodes back through DecodeDeclarationSet to an equal set.
+func requireDeclarationsRoundTrip(t *testing.T, declarations DeclarationSet) {
 	t.Helper()
 
 	data, err := json.Marshal(declarations)
 	if err != nil {
 		t.Fatalf("json.Marshal(%+v) error = %v, want nil", declarations, err)
 	}
-	decoded, err := DecodeDeclaredGapSet(data)
+	decoded, err := DecodeDeclarationSet(data)
 	if err != nil {
-		t.Fatalf("DecodeDeclaredGapSet(%s) error = %v, want the fixture's own declarations to decode", data, err)
+		t.Fatalf("DecodeDeclarationSet(%s) error = %v, want the fixture's own declarations to decode", data, err)
 	}
 	if decoded.SchemaVersion != declarations.SchemaVersion {
-		t.Errorf("DecodeDeclaredGapSet() SchemaVersion = %d, want %d", decoded.SchemaVersion, declarations.SchemaVersion)
+		t.Errorf("DecodeDeclarationSet() SchemaVersion = %d, want %d", decoded.SchemaVersion, declarations.SchemaVersion)
 	}
 	if len(decoded.Declarations) != len(declarations.Declarations) {
-		t.Fatalf("DecodeDeclaredGapSet() = %d declarations, want %d", len(decoded.Declarations), len(declarations.Declarations))
+		t.Fatalf("DecodeDeclarationSet() = %d declarations, want %d", len(decoded.Declarations), len(declarations.Declarations))
 	}
 	for i := range declarations.Declarations {
 		if decoded.Declarations[i] != declarations.Declarations[i] {
-			t.Errorf("DecodeDeclaredGapSet() entry %d = %+v, want %+v", i, decoded.Declarations[i], declarations.Declarations[i])
+			t.Errorf("DecodeDeclarationSet() entry %d = %+v, want %+v", i, decoded.Declarations[i], declarations.Declarations[i])
 		}
 	}
 }

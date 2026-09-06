@@ -26,6 +26,42 @@ import (
 // local probe control performs.
 const geminiSemanticProbeTimeout = 10 * time.Second
 
+// geminiLimitInstruction is the instruction half of the limit_reached
+// inducer's input: a short prompt whose answer is a fixed marker, sent
+// alongside an inert filler large enough to overflow the runtime's
+// context estimate before any model request.
+const geminiLimitInstruction = "Reply with exactly SORTIE_LIMIT_OK and do not call any tool."
+
+// geminiInstructionMarker extracts the fixed marker word from an
+// instruction of the shape "Reply with exactly <MARKER> and do not
+// call any tool.", so the instruction and any check for its marker are
+// both derived from the one sentence and cannot drift apart.
+func geminiInstructionMarker(instruction string) string {
+	const prefix = "Reply with exactly "
+	marker, _, _ := strings.Cut(strings.TrimPrefix(instruction, prefix), " ")
+	return marker
+}
+
+// geminiLimitFillerChars is the treatment filler size: MAX_STDIN_SIZE,
+// the largest standard input the runtime accepts before truncating it,
+// which is comfortably above the smallest input the runtime's
+// pre-emptive context-overflow predictor reports as overflowing.
+const geminiLimitFillerChars = 8 * 1024 * 1024
+
+// geminiLimitControlFillerChars is the control filler size: small
+// enough that the estimated input stays well under the runtime's
+// context limit, so the control run reaches the model.
+const geminiLimitControlFillerChars = 1024
+
+// geminiLimitFiller generates n characters of inert ASCII filler text.
+// It is generated at call time rather than stored as a fixture, and it
+// instructs nothing, which keeps the context-overflow estimate
+// deterministic even if a future runtime lowers its per-part
+// estimation threshold.
+func geminiLimitFiller(n int) string {
+	return strings.Repeat("x", n)
+}
+
 // geminiQualificationRuntime is everything one qualification run
 // resolves exactly once: the executable and its self-reported version,
 // the one operator-selected model, the controlled workspace and its
@@ -112,7 +148,11 @@ func geminiCaptureVersion(t *testing.T, config geminiQualificationConfig, env []
 		}
 		t.Fatalf("capture the version coordinate: %v; stderr: %q", err, diagnostic)
 	}
-	return strings.TrimSpace(stdout.String())
+	version := strings.TrimSpace(stdout.String())
+	if version == "" {
+		t.Fatal("capture the version coordinate: --version exited zero but printed nothing")
+	}
+	return version
 }
 
 // geminiProtocolTurnOutcome is one bounded protocol turn's normalized
@@ -146,7 +186,7 @@ func geminiProtocolCase(outcome geminiProtocolTurnOutcome) (qualification.Case, 
 		return qualification.CaseRuntimeFailure, true
 	case outcome.StopReason == stopReasonEndTurn:
 		return qualification.CaseSuccess, true
-	case outcome.StopReason == stopReasonMaxTokens || outcome.StopReason == stopReasonMaxTurnRequests:
+	case outcome.ErrKind == domain.ErrTurnTokenLimit || outcome.ErrKind == domain.ErrTurnRequestLimit:
 		return qualification.CaseLimitReached, true
 	}
 	return "", false
@@ -186,6 +226,18 @@ type geminiSemanticObservation struct {
 	Detail       string
 }
 
+// geminiOptionalSessionID reports the identifier a capture observed, or
+// nil when the capture reported none. A zero-value observation field
+// MUST NOT become an empty non-null session_id: the evidence contract
+// rejects one, since it would attest to a value that was never
+// observed.
+func geminiOptionalSessionID(sessionID string) *string {
+	if sessionID == "" {
+		return nil
+	}
+	return &sessionID
+}
+
 // geminiSemanticRecordFor builds one semantic probe record from an
 // observation, consulting declarations only when surface is a
 // declarable one. The classification follows the evidence contract in
@@ -200,11 +252,14 @@ type geminiSemanticObservation struct {
 //
 // On a structured native surface a recognized and mapped terminal
 // outcome already implies a distinct, structured observation, so the
-// conflated-or-unstructured arm below is unreachable there; gap stays
-// reachable only through native_text, characterized as unstructured
-// residue, and through the protocol surface's cancellation and
-// transport branches, which set Induced before checking distinctness.
-func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capability qualification.Capability, caseID qualification.Case, obs geminiSemanticObservation, declarations qualification.DeclaredGapSet) qualification.Record {
+// conflated-or-unstructured arm below is reachable there only through
+// limit_reached: a structured native surface that completes a turn
+// with no model request is induced but not distinct, by design. Gap is
+// otherwise reachable only through native_text, characterized as
+// unstructured residue, and through the protocol surface's
+// cancellation and transport branches, which set Induced before
+// checking distinctness.
+func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capability qualification.Capability, caseID qualification.Case, obs geminiSemanticObservation, declarations qualification.DeclarationSet) qualification.Record {
 	t.Helper()
 
 	rec := qualification.Record{
@@ -248,7 +303,7 @@ func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capabi
 			rec.Outcome = qualification.OutcomeNotProducible
 			rec.Grade = qualification.GradeDeclaredGap
 			rec.Detail = reason
-			rec.SessionID = new(obs.SessionID)
+			rec.SessionID = geminiOptionalSessionID(obs.SessionID)
 			rec.EvidencePath = new(obs.EvidencePath)
 		} else {
 			rec.Outcome = qualification.OutcomeNotObserved
@@ -260,7 +315,7 @@ func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capabi
 		}
 		rec.Outcome = qualification.OutcomePass
 		rec.Grade = qualification.GradeUsable
-		rec.SessionID = new(obs.SessionID)
+		rec.SessionID = geminiOptionalSessionID(obs.SessionID)
 		rec.EvidencePath = new(obs.EvidencePath)
 	default:
 		if declared {
@@ -268,7 +323,7 @@ func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capabi
 		}
 		rec.Outcome = qualification.OutcomePass
 		rec.Grade = qualification.GradeGap
-		rec.SessionID = new(obs.SessionID)
+		rec.SessionID = geminiOptionalSessionID(obs.SessionID)
 		rec.EvidencePath = new(obs.EvidencePath)
 	}
 
@@ -286,18 +341,21 @@ func geminiSemanticRecordFor(t *testing.T, surface qualification.Surface, capabi
 }
 
 // geminiInputSpec is one fixed input's catalog entry: the exact prompt
-// the collector sends, whether the probe launches at all, and, when a
+// the collector sends, an optional standard-input payload composed
+// ahead of it, whether the probe launches at all, and, when a
 // substitution exists, the probe whose absolute path is the only
 // substituted value.
 type geminiInputSpec struct {
 	Prompt string
+	Stdin  string
 	Launch bool
 	Probe  *string
 }
 
 // geminiSemanticInputCatalog builds the fixed input catalog for one
-// run. Fixed prompts are exact; every substitution input varies only by
-// the single substituted value its contract names.
+// run. Fixed inputs are exact: one exact input per case, expressed as
+// Stdin plus Prompt rather than Prompt alone; every substitution input
+// varies only by the single substituted value its contract names.
 func geminiSemanticInputCatalog(probes geminiQualificationProbes, nonce string) map[qualification.InputID]geminiInputSpec {
 	probeInput := func(format string, probePath string) geminiInputSpec {
 		return geminiInputSpec{
@@ -321,8 +379,9 @@ func geminiSemanticInputCatalog(probes geminiQualificationProbes, nonce string) 
 		qualification.InputDispositionCancellation: probeInput(
 			"Invoke the test-owned probe at %s exactly once.", probes.Cancellation),
 		qualification.InputDispositionLimitReached: {
-			// No documented deterministic inducer: no separate launch.
-			Launch: false,
+			Prompt: geminiLimitInstruction,
+			Stdin:  geminiLimitFiller(geminiLimitFillerChars),
+			Launch: true,
 		},
 		qualification.InputRetryableTransport: probeInput(
 			"Invoke the test-owned probe at %s exactly once.", probes.Transport),
@@ -362,11 +421,144 @@ func geminiSemanticInputCatalog(probes geminiQualificationProbes, nonce string) 
 	}
 }
 
+// TestGeminiInstructionMarker binds geminiInstructionMarker in both
+// directions. It confirms the cut-at-first-space extraction for an
+// instruction carrying the fixed prefix, and it pins the derivation
+// against the two production instruction constants by their own known
+// marker literal rather than by deriving the expected value from the
+// same instruction the function reads: strings.TrimPrefix is a no-op
+// on a mismatch, so an instruction reworded without the fixed prefix
+// would otherwise silently yield the sentence's first word instead of
+// failing this test.
+func TestGeminiInstructionMarker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extracts the marker after the fixed prefix, cutting at the first space", func(t *testing.T) {
+		t.Parallel()
+
+		got := geminiInstructionMarker("Reply with exactly SORTIE_FIXTURE_OK and do not call any tool.")
+		if got != "SORTIE_FIXTURE_OK" {
+			t.Errorf("geminiInstructionMarker(%q) = %q, want %q", "Reply with exactly SORTIE_FIXTURE_OK and do not call any tool.", got, "SORTIE_FIXTURE_OK")
+		}
+	})
+
+	t.Run("the limit instruction's marker is pinned against its own known literal", func(t *testing.T) {
+		t.Parallel()
+
+		if got := geminiInstructionMarker(geminiLimitInstruction); got != "SORTIE_LIMIT_OK" {
+			t.Errorf("geminiInstructionMarker(geminiLimitInstruction) = %q, want %q", got, "SORTIE_LIMIT_OK")
+		}
+	})
+
+	t.Run("the baseline catalog entry's marker is pinned against its own known literal", func(t *testing.T) {
+		t.Parallel()
+
+		probes := geminiQualificationProbes{}
+		catalog := geminiSemanticInputCatalog(probes, "nonce")
+		if got := geminiInstructionMarker(catalog[qualification.InputDispositionSuccess].Prompt); got != "SORTIE_BASELINE_OK" {
+			t.Errorf("geminiInstructionMarker(catalog baseline prompt) = %q, want %q", got, "SORTIE_BASELINE_OK")
+		}
+	})
+
+	t.Run("TrimPrefix is a no-op on a mismatch, so a reworded instruction yields the sentence's first word", func(t *testing.T) {
+		t.Parallel()
+
+		got := geminiInstructionMarker("Answer with exactly SORTIE_FIXTURE_OK and do not call any tool.")
+		if got != "Answer" {
+			t.Errorf("geminiInstructionMarker() on an instruction missing the fixed prefix = %q, want %q (the sentence's first word, demonstrating why the production constants must be pinned by literal rather than compared to themselves)", got, "Answer")
+		}
+	})
+}
+
+// TestGeminiOptionalSessionID confirms the empty-to-null mapping the
+// evidence contract requires: an empty observed value becomes a nil
+// pointer, and a non-empty observed value round trips unchanged.
+func TestGeminiOptionalSessionID(t *testing.T) {
+	t.Parallel()
+
+	if got := geminiOptionalSessionID(""); got != nil {
+		t.Errorf("geminiOptionalSessionID(\"\") = %v, want nil", got)
+	}
+	if got := geminiOptionalSessionID("sess-observed"); got == nil || *got != "sess-observed" {
+		t.Errorf("geminiOptionalSessionID(%q) = %v, want a pointer to the same value", "sess-observed", got)
+	}
+}
+
+// TestGeminiSemanticRecordForEmptySessionIDMapping confirms the
+// empty-to-null mapping holds on each of geminiSemanticRecordFor's
+// three geminiOptionalSessionID call sites: the declared_gap arm, the
+// distinct-and-structured pass arm, and the conflated-or-unstructured
+// gap arm. An empty observed SessionID must never reach the record as
+// an empty non-null string, since the evidence decoder now rejects
+// one.
+func TestGeminiSemanticRecordForEmptySessionIDMapping(t *testing.T) {
+	t.Parallel()
+
+	declarations := qualification.DeclarationSet{
+		SchemaVersion: 2,
+		Declarations: []qualification.DeclaredGap{
+			{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
+		},
+	}
+
+	t.Run("the declared_gap arm maps an empty observed session to nil", func(t *testing.T) {
+		t.Parallel()
+
+		obs := geminiSemanticObservation{Tag: qualification.CaseRuntimeRefusal, EvidencePath: "/turn/stop_reason"}
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, declarations)
+		if rec.Grade != qualification.GradeDeclaredGap {
+			t.Fatalf("record grade = %s, want declared_gap", rec.Grade)
+		}
+		if rec.SessionID != nil {
+			t.Errorf("declared_gap record SessionID = %v, want nil for an empty observed value", *rec.SessionID)
+		}
+	})
+
+	t.Run("the pass arm maps an empty observed session to nil and round trips a non-empty one", func(t *testing.T) {
+		t.Parallel()
+
+		empty := geminiSemanticObservation{
+			Tag: qualification.CaseSuccess, Induced: true, Distinct: true, Structured: true,
+			EvidencePath: "/output/terminal",
+		}
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, empty, qualification.DeclarationSet{})
+		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeUsable {
+			t.Fatalf("record = %s/%s, want pass/usable", rec.Outcome, rec.Grade)
+		}
+		if rec.SessionID != nil {
+			t.Errorf("pass record SessionID = %v, want nil for an empty observed value", *rec.SessionID)
+		}
+
+		observed := empty
+		observed.SessionID = "sess-observed"
+		withSession := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, observed, qualification.DeclarationSet{})
+		if withSession.SessionID == nil || *withSession.SessionID != "sess-observed" {
+			t.Errorf("pass record SessionID = %v, want a pointer to %q", withSession.SessionID, "sess-observed")
+		}
+	})
+
+	t.Run("the conflated-or-unstructured gap arm maps an empty observed session to nil", func(t *testing.T) {
+		t.Parallel()
+
+		obs := geminiSemanticObservation{
+			Tag: qualification.CaseSuccess, Induced: true, Distinct: false, Structured: false,
+			EvidencePath: "/text/final",
+		}
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeText, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclarationSet{})
+		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeGap {
+			t.Fatalf("record = %s/%s, want pass/gap", rec.Outcome, rec.Grade)
+		}
+		if rec.SessionID != nil {
+			t.Errorf("gap record SessionID = %v, want nil for an empty observed value", *rec.SessionID)
+		}
+	})
+}
+
 // TestGeminiSemanticProbeCatalog confirms the fixed input catalog: the
 // exact prompts match the input table verbatim, every substitution
 // input varies by exactly its one substituted value, limit_reached
-// launches no process, and each semantic case resolves to its own
-// input.
+// launches its instruction and filler, and each semantic case resolves
+// to its own input.
 func TestGeminiSemanticProbeCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -445,11 +637,18 @@ func TestGeminiSemanticProbeCatalog(t *testing.T) {
 		}
 	})
 
-	t.Run("limit reached launches no process", func(t *testing.T) {
+	t.Run("limit reached launches with an instruction and a filler", func(t *testing.T) {
 		t.Parallel()
 
-		if catalog[qualification.InputDispositionLimitReached].Launch {
-			t.Error("limit_reached catalog entry launches, want no separate launch")
+		spec := catalog[qualification.InputDispositionLimitReached]
+		if !spec.Launch {
+			t.Error("limit_reached catalog entry does not launch, want it to launch a treatment probe")
+		}
+		if spec.Prompt != geminiLimitInstruction {
+			t.Errorf("limit_reached catalog entry Prompt = %q, want %q", spec.Prompt, geminiLimitInstruction)
+		}
+		if len(spec.Stdin) != geminiLimitFillerChars {
+			t.Errorf("limit_reached catalog entry Stdin length = %d, want %d", len(spec.Stdin), geminiLimitFillerChars)
 		}
 	})
 
@@ -519,7 +718,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			EvidencePath: "/turn/stop_reason",
 			Detail:       "bounded probe cancellation completed with a distinct outcome",
 		}
-		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseCancellation, obs, qualification.DeclaredGapSet{})
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityTurnDisposition, qualification.CaseCancellation, obs, qualification.DeclarationSet{})
 		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeUsable {
 			t.Errorf("cancellation record = %s/%s, want pass/usable", rec.Outcome, rec.Grade)
 		}
@@ -598,8 +797,14 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 				wantMapped: true,
 			},
 			{
-				name:       "max tokens is a naturally occurring limit",
-				outcome:    geminiProtocolTurnOutcome{StopReason: stopReasonMaxTokens, ErrKind: domain.ErrTurnFailed},
+				name:       "a reached token limit is a naturally occurring limit",
+				outcome:    geminiProtocolTurnOutcome{ErrKind: domain.ErrTurnTokenLimit},
+				wantCase:   qualification.CaseLimitReached,
+				wantMapped: true,
+			},
+			{
+				name:       "a reached request limit is a naturally occurring limit",
+				outcome:    geminiProtocolTurnOutcome{ErrKind: domain.ErrTurnRequestLimit},
 				wantCase:   qualification.CaseLimitReached,
 				wantMapped: true,
 			},
@@ -648,7 +853,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			EvidencePath: "session/request_permission",
 			Detail:       "permission request answered",
 		}
-		rec := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, permissionObservation, qualification.DeclaredGapSet{})
+		rec := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, permissionObservation, qualification.DeclarationSet{})
 		if rec.Outcome != qualification.OutcomeNotObserved || rec.Grade != qualification.GradeNotObserved {
 			t.Errorf("mismatched-tag record = %s/%s, want not_observed/not_observed", rec.Outcome, rec.Grade)
 		}
@@ -657,7 +862,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 		}
 
 		// An uninduced case stays not_observed, never gap.
-		uninduced := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseUnknownOutcome, geminiSemanticObservation{Tag: qualification.CaseUnknownOutcome}, qualification.DeclaredGapSet{})
+		uninduced := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseUnknownOutcome, geminiSemanticObservation{Tag: qualification.CaseUnknownOutcome}, qualification.DeclarationSet{})
 		if uninduced.Outcome != qualification.OutcomeNotObserved || uninduced.Grade != qualification.GradeNotObserved {
 			t.Errorf("uninduced record = %s/%s, want not_observed/not_observed", uninduced.Outcome, uninduced.Grade)
 		}
@@ -667,7 +872,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 		failed := geminiSemanticRecordFor(t, qualification.SurfaceNativeJSON, qualification.CapabilityRetryClassification, qualification.CaseRetryableTransport, geminiSemanticObservation{
 			Tag:     qualification.CaseRetryableTransport,
 			Failure: qualification.OutcomePrerequisiteFailed,
-		}, qualification.DeclaredGapSet{})
+		}, qualification.DeclarationSet{})
 		if failed.Outcome != qualification.OutcomePrerequisiteFailed || failed.Grade != qualification.GradeNotObserved {
 			t.Errorf("failure record = %s/%s, want prerequisite_failed/not_observed", failed.Outcome, failed.Grade)
 		}
@@ -684,7 +889,7 @@ func TestGeminiSemanticProbeClassificationControls(t *testing.T) {
 			SessionID:    "sess-native-text",
 			EvidencePath: "/text/final",
 			Detail:       "unstructured residue only",
-		}, qualification.DeclaredGapSet{})
+		}, qualification.DeclarationSet{})
 		if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeGap {
 			t.Errorf("unstructured record = %s/%s, want pass/gap", rec.Outcome, rec.Grade)
 		}
@@ -829,8 +1034,8 @@ func geminiAwaitGroupDrain(t *testing.T, pgid int, within time.Duration) bool {
 func TestGeminiSemanticRecordForDeclarationArms(t *testing.T) {
 	t.Parallel()
 
-	declarations := qualification.DeclaredGapSet{
-		SchemaVersion: 1,
+	declarations := qualification.DeclarationSet{
+		SchemaVersion: 2,
 		Declarations: []qualification.DeclaredGap{
 			{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 		},
@@ -848,7 +1053,7 @@ func TestGeminiSemanticRecordForDeclarationArms(t *testing.T) {
 			t.Errorf("declared record detail = %q, want %q", declared.Detail, qualification.DeclaredGapNeverProduced)
 		}
 
-		undeclared := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, qualification.DeclaredGapSet{})
+		undeclared := geminiSemanticRecordFor(t, qualification.SurfaceProtocol, qualification.CapabilityTurnDisposition, qualification.CaseRuntimeRefusal, obs, qualification.DeclarationSet{})
 		if undeclared.Grade != qualification.GradeNotObserved || undeclared.Outcome != qualification.OutcomeNotObserved {
 			t.Errorf("undeclared record = %s/%s, want not_observed/not_observed", undeclared.Grade, undeclared.Outcome)
 		}
@@ -873,8 +1078,8 @@ func TestGeminiSemanticRecordForArm5FailsUnderDeclaration(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
-		declarations := qualification.DeclaredGapSet{
-			SchemaVersion: 1,
+		declarations := qualification.DeclarationSet{
+			SchemaVersion: 2,
 			Declarations: []qualification.DeclaredGap{
 				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 			},
@@ -906,8 +1111,8 @@ func TestGeminiSemanticRecordForArm6FailsUnderDeclaration(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv(geminiTestHelperProcessEnv) == "1" {
-		declarations := qualification.DeclaredGapSet{
-			SchemaVersion: 1,
+		declarations := qualification.DeclarationSet{
+			SchemaVersion: 2,
 			Declarations: []qualification.DeclaredGap{
 				{Capability: qualification.CapabilityTurnDisposition, Case: qualification.CaseRuntimeRefusal, Reason: qualification.DeclaredGapNeverProduced},
 			},
@@ -971,7 +1176,7 @@ func TestGeminiInduceNativeCaseInducedImpliesDistinctAndStructured(t *testing.T)
 				t.Fatalf("observation = %+v, want Induced to imply Distinct and Structured together on a structured native surface", obs)
 			}
 
-			rec := geminiSemanticRecordFor(t, tt.surface, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclaredGapSet{})
+			rec := geminiSemanticRecordFor(t, tt.surface, qualification.CapabilityTurnDisposition, qualification.CaseSuccess, obs, qualification.DeclarationSet{})
 			if rec.Grade != qualification.GradeUsable {
 				t.Errorf("record = %s, want usable, never gap, for an Induced observation on a structured native surface", rec.Grade)
 			}
