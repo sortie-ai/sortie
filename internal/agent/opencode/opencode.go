@@ -225,11 +225,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		allArgs := append(slices.Clone(state.target.Args), cmdArgs...)
 		cmd = exec.CommandContext(ctx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		return procutil.SignalGraceful(cmd.Process.Pid)
-	}
-	cmd.WaitDelay = 5 * time.Second
+	procutil.SetGroupCancel(cmd)
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
 

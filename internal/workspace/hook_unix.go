@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"syscall"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
 // RunHook executes a shell hook script in the specified workspace
@@ -45,15 +46,14 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 
 	// Place the shell and all descendants in a new process group so
 	// timeout termination kills the entire tree, not just the shell.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	procutil.SetProcessGroup(cmd)
 
 	// Kill the entire process group when the context expires instead
-	// of only the direct child, preventing orphaned grandchildren.
+	// of only the direct child, preventing orphaned grandchildren. A
+	// hook that overran its timeout has already had its whole budget,
+	// so this path force-kills rather than signalling gracefully first.
 	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
+		return procutil.KillProcessGroup(cmd.Process.Pid)
 	}
 	// Allow child processes time to exit and release I/O pipes after
 	// the group signal before Go forcibly closes pipes.

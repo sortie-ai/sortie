@@ -251,7 +251,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetProcessGroup(cmd)
+	procutil.SetGroupCancel(cmd)
 	cmd.Dir = target.WorkspacePath
 	cmd.Env = os.Environ()
 

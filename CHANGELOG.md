@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `agent-client-protocol` transport now sends its subprocess a catchable termination signal and waits a bounded grace period for it to exit on its own before force-terminating its process group, instead of terminating the group immediately with no graceful phase at all; a runtime that flushes state on a clean exit now gets a chance to reach that exit path. Every adapter kind's stop deadline no longer follows `agent.read_timeout_ms` below a full teardown: a stop against an agent that ignores its termination signal can now hold a worker or a shutdown for up to 20 seconds, where the shipping default previously gave it 5.
   ([#1006](https://github.com/sortie-ai/sortie/issues/1006))
 
+- Cancelling a `codex` run now shuts down the whole process tree the agent started, instead of force-killing the agent alone and leaving its child processes running against the workspace. The agent first receives a catchable termination signal and a bounded grace period to exit on its own, so a runtime that flushes state on a clean exit reaches that path. Stopping a run already behaved this way; cancelling one did not.
+  ([#1013](https://github.com/sortie-ai/sortie/issues/1013))
+
+- A self-review verification command now stops the process it started when the command exceeds `self_review.verification_timeout_ms` or the run is cancelled. Previously only the shell wrapping the command was killed, so a build or test suite kept running against the workspace after the run had moved on, and a run cancelled rather than timed out left it running with nothing to stop it.
+  ([PR #1020](https://github.com/sortie-ai/sortie/pull/1020))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added

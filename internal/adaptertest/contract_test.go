@@ -99,6 +99,7 @@ const (
 	ruleMETRICS  contractRule = "METRICS"
 	ruleHOOK     contractRule = "HOOK"
 	ruleIMPORT   contractRule = "IMPORT"
+	ruleTEARDOWN contractRule = "TEARDOWN"
 	ruleBLOCKER  contractRule = "BLOCKER"
 	ruleIDENTITY contractRule = "IDENTITY"
 )
@@ -178,6 +179,9 @@ var contractPackageBannedImports = map[string]map[string]string{
 var contractAllowlist = map[string]map[contractRule]string{
 	"file": {
 		ruleHOOK: "no HTTP, no credential, no remote project, and no config to validate",
+	},
+	"procutil": {
+		ruleTEARDOWN: "owns SetGroupCancel, the helper every other launcher calls",
 	},
 }
 
@@ -443,6 +447,49 @@ func checkContractBan(fset *token.FileSet, file *ast.File) []contractViolation {
 	return violations
 }
 
+// contractTeardownFields names the exec.Cmd fields a launcher must not
+// wire by hand. Assigning either one rebuilds, at a new call site, the
+// process-group teardown contractTeardownOwner already owns. The two
+// fields have to agree, and a launcher that sets one and forgets the
+// other silently keeps the os/exec default for it: a cancelled context
+// then force-kills the direct child alone and every descendant it
+// started outlives the cancellation.
+var contractTeardownFields = map[string]bool{
+	"Cancel":    true,
+	"WaitDelay": true,
+}
+
+// contractTeardownOwner is the helper rule TEARDOWN directs a launcher to.
+const contractTeardownOwner = "procutil.SetGroupCancel"
+
+// checkContractTeardown reports a violation for every assignment to an
+// exec.Cmd teardown field in file. It reads file only when file imports
+// os/exec, so a same-named field on an unrelated type is never matched.
+func checkContractTeardown(fset *token.FileSet, file *ast.File) []contractViolation {
+	if resolveContractImportName(file, "os/exec") == "" {
+		return nil
+	}
+	var violations []contractViolation
+	ast.Inspect(file, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			sel, isSel := lhs.(*ast.SelectorExpr)
+			if !isSel || !contractTeardownFields[sel.Sel.Name] {
+				continue
+			}
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(sel.Pos()),
+				text: "assigns exec.Cmd." + sel.Sel.Name + " directly; call " + contractTeardownOwner,
+			})
+		}
+		return true
+	})
+	return violations
+}
+
 // bodyCallsTrackermetricsTrack reports whether body contains a call
 // resolving to trackermetrics.Track, with the qualifier resolved from
 // file's own imports.
@@ -637,6 +684,9 @@ func checkCoreContractPackage(fset *token.FileSet, pkg contractPackage) []contra
 	var violations []contractViolation
 	for _, file := range pkg.files {
 		violations = append(violations, checkContractCoreImports(fset, file, false)...)
+		if !contractExempt(pkg.dirName, ruleTEARDOWN) {
+			violations = append(violations, checkContractTeardown(fset, file)...)
+		}
 	}
 	for _, file := range pkg.testFiles {
 		violations = append(violations, checkContractCoreImports(fset, file, true)...)
@@ -1088,6 +1138,12 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 		}
 	}
 
+	if !contractExempt(pkg.dirName, ruleTEARDOWN) {
+		for _, file := range pkg.files {
+			violations = append(violations, checkContractTeardown(fset, file)...)
+		}
+	}
+
 	registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, factsPos := contractRegistrationFacts(fset, pkg.files)
 
 	if !contractExempt(pkg.dirName, ruleMETRICS) {
@@ -1308,6 +1364,57 @@ func TestCheckAdapterContract_DetectsViolations(t *testing.T) {
 		// right count.
 		wantSubstr string
 	}{
+		{
+			name:       "a hand-wired exec.Cmd cancellation is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import "os/exec"
+
+func launch(cmd *exec.Cmd) {
+	cmd.Cancel = func() error { return nil }
+}
+`,
+			wantCount:  1,
+			wantSubstr: "call procutil.SetGroupCancel",
+		},
+		{
+			name:       "a hand-wired exec.Cmd wait delay is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"os/exec"
+	"time"
+)
+
+func launch(cmd *exec.Cmd) {
+	cmd.WaitDelay = 5 * time.Second
+}
+`,
+			wantCount:  1,
+			wantSubstr: "call procutil.SetGroupCancel",
+		},
+		{
+			name:       "a same-named field in a package that never touches os/exec is accepted",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+type request struct {
+	Cancel    func() error
+	WaitDelay int
+}
+
+func configure(r *request) {
+	r.Cancel = func() error { return nil }
+	r.WaitDelay = 5
+}
+`,
+			wantCount: 0,
+		},
 		{
 			name:       "a re-declared ban-table name is rejected",
 			dirName:    "fixture",
