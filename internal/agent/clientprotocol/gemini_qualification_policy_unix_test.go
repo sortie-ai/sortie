@@ -198,11 +198,16 @@ func geminiUniqueMarker() string {
 }
 
 // geminiWriteQualificationPolicy writes the run-scoped policy file with
-// exactly the five high-priority rules the qualification contract
-// defines: deny with a unique marker on the policy-load probe,
+// exactly six high-priority rules: the five the qualification contract
+// defines (deny with a unique marker on the policy-load probe,
 // ask_user on the permission probe, and allow on the failing,
-// cancellation, and transport probes. No other command is allowed by
-// this policy. It returns the policy path and the deny marker.
+// cancellation, and transport probes) plus a sixth allow rule naming
+// the tool-server probe's own qualified name. Without that sixth rule
+// a call to the probe tool matches no rule, so the runtime asks about
+// it rather than allowing it, and Sortie's own refusal posture means
+// the client refuses the request and the call never reaches the
+// server. No other command is allowed by this policy. It returns the
+// policy path and the deny marker.
 func geminiWriteQualificationPolicy(t *testing.T, dir string, probes geminiQualificationProbes) (path string, denyMarker string) {
 	t.Helper()
 
@@ -219,7 +224,7 @@ func geminiWriteQualificationPolicy(t *testing.T, dir string, probes geminiQuali
 	}
 
 	var body strings.Builder
-	body.WriteString("# Run-scoped qualification policy: five high-priority rules and nothing else.\n")
+	body.WriteString("# Run-scoped qualification policy: six high-priority rules and nothing else.\n")
 	for _, rule := range rules {
 		fmt.Fprintf(&body,
 			"\n[[rule]]\ntoolName = \"run_shell_command\"\ncommandPrefix = %q\ndecision = %q\npriority = 100\n",
@@ -228,6 +233,7 @@ func geminiWriteQualificationPolicy(t *testing.T, dir string, probes geminiQuali
 			fmt.Fprintf(&body, "denyMessage = %q\n", denyMarker)
 		}
 	}
+	fmt.Fprintf(&body, "\n[[rule]]\ntoolName = %q\ndecision = \"allow\"\npriority = 100\n", geminiQualifiedMCPToolName())
 
 	path = filepath.Join(dir, "qualification-policy.toml")
 	if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
@@ -270,11 +276,24 @@ func geminiQualificationVersionArgv(config geminiQualificationConfig) []string {
 	return []string{config.CommandPath, "--version"}
 }
 
+// geminiPolicyRuleBlock returns the [[rule]] block naming toolName, and
+// whether one was found. Blocks are delimited by the literal marker
+// geminiWriteQualificationPolicy writes before every rule.
+func geminiPolicyRuleBlock(content string, toolName string) (string, bool) {
+	for block := range strings.SplitSeq(content, "[[rule]]") {
+		if strings.Contains(block, fmt.Sprintf("toolName = %q", toolName)) {
+			return block, true
+		}
+	}
+	return "", false
+}
+
 // TestGeminiQualificationPolicyFixture confirms the run-scoped policy
-// file carries exactly the five high-priority rules, with the unique
+// file carries exactly the six high-priority rules, with the unique
 // deny marker on the policy-load probe, ask_user on the permission
-// probe, allow on the three behavioral probes, and no rule for any
-// other command. It also pins the qualification launch argv shape.
+// probe, allow on the three behavioral probes plus the tool-server
+// probe's own qualified name, and no rule for any other command. It
+// also pins the qualification launch argv shape.
 func TestGeminiQualificationPolicyFixture(t *testing.T) {
 	t.Parallel()
 
@@ -282,7 +301,7 @@ func TestGeminiQualificationPolicyFixture(t *testing.T) {
 	probes := geminiWriteProbeExecutables(t, workspace.Checkout)
 	policyPath, denyMarker := geminiWriteQualificationPolicy(t, t.TempDir(), probes)
 
-	t.Run("policy carries exactly the five rules", func(t *testing.T) {
+	t.Run("policy carries exactly the six rules", func(t *testing.T) {
 		t.Parallel()
 
 		raw, err := os.ReadFile(policyPath)
@@ -290,8 +309,8 @@ func TestGeminiQualificationPolicyFixture(t *testing.T) {
 			t.Fatalf("read policy fixture: %v", err)
 		}
 		content := string(raw)
-		if got := strings.Count(content, "[[rule]]"); got != 5 {
-			t.Errorf("policy rule count = %d, want exactly 5", got)
+		if got := strings.Count(content, "[[rule]]"); got != 6 {
+			t.Errorf("policy rule count = %d, want exactly 6", got)
 		}
 		for i, prefix := range []string{probes.PolicyLoad, probes.Permission, probes.Failing, probes.Cancellation, probes.Transport} {
 			if !strings.Contains(content, fmt.Sprintf("commandPrefix = %q", prefix)) {
@@ -304,17 +323,35 @@ func TestGeminiQualificationPolicyFixture(t *testing.T) {
 		if got := strings.Count(content, `decision = "ask_user"`); got != 1 {
 			t.Errorf("ask_user decision count = %d, want exactly 1", got)
 		}
-		if got := strings.Count(content, `decision = "allow"`); got != 3 {
-			t.Errorf("allow decision count = %d, want exactly 3", got)
+		if got := strings.Count(content, `decision = "allow"`); got != 4 {
+			t.Errorf("allow decision count = %d, want exactly 4", got)
 		}
-		if got := strings.Count(content, "priority = 100"); got != 5 {
-			t.Errorf("high-priority rule count = %d, want 5", got)
+		if got := strings.Count(content, "priority = 100"); got != 6 {
+			t.Errorf("high-priority rule count = %d, want 6", got)
 		}
 		if !strings.Contains(content, fmt.Sprintf("denyMessage = %q", denyMarker)) {
 			t.Errorf("policy carries no deny message equal to the generated marker")
 		}
 		if strings.Count(content, denyMarker) != 1 {
 			t.Errorf("deny marker appears %d times, want one unique marker", strings.Count(content, denyMarker))
+		}
+
+		qualifiedToolName := geminiQualifiedMCPToolName()
+		if got := strings.Count(content, fmt.Sprintf("toolName = %q", qualifiedToolName)); got != 1 {
+			t.Errorf("rules naming toolName = %q count = %d, want exactly 1", qualifiedToolName, got)
+		}
+		block, ok := geminiPolicyRuleBlock(content, qualifiedToolName)
+		if !ok {
+			t.Fatalf("policy carries no rule block for toolName = %q", qualifiedToolName)
+		}
+		if strings.Contains(block, "commandPrefix") {
+			t.Errorf("the tool-server rule block %q carries a commandPrefix, want none", block)
+		}
+		if !strings.Contains(block, `decision = "allow"`) {
+			t.Errorf("the tool-server rule block %q does not carry decision = \"allow\"", block)
+		}
+		if !strings.Contains(block, "priority = 100") {
+			t.Errorf("the tool-server rule block %q does not carry priority = 100", block)
 		}
 	})
 
