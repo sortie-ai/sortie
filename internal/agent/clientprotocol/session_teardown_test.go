@@ -606,7 +606,7 @@ func TestStopSessionTeardownGracefulHandler(t *testing.T) {
 			{name: "answer_open", run: signalAnswerOpen},
 			{name: "kill_process_group", run: killProcessGroup},
 			{name: "close_stdin", run: closeStdin},
-			{name: "await_exit", run: awaitExit(callerCtx, graceCtx)},
+			{name: "await_exit", run: awaitExit(callerCtx, graceCtx, procutil.DefaultStopGrace)},
 			{name: "signal_graceful", run: signalGraceful},
 			{name: "close_stdout", run: closeStdout},
 			{name: "close_connection", run: closeConnection},
@@ -750,13 +750,18 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		if !strings.Contains(output, `outcome="caller deadline"`) {
 			t.Errorf("teardown's Warn record did not carry outcome=\"caller deadline\": %s", output)
 		}
-		// The record reports the wait that actually elapsed, not the
-		// ceiling: a caller deadline shorter than the grace ends the
-		// wait early, and reporting the ceiling here would tell an
-		// operator the adapter waited five seconds when it waited a
-		// fraction of one.
-		if strings.Contains(output, "grace="+procutil.DefaultStopGrace.String()) {
-			t.Errorf("teardown's Warn record reported the full grace ceiling for a wait cut short by the caller's deadline: %s", output)
+		// The record carries both the configured ceiling and the wait
+		// that actually elapsed. A caller deadline shorter than the
+		// grace ends the wait early, so elapsed must not be the whole
+		// ceiling: reporting only the ceiling would tell an operator
+		// the adapter waited five seconds when it waited a fraction of
+		// one, and reporting only the elapsed time would hide what the
+		// operator configured.
+		if strings.Contains(output, "elapsed="+procutil.DefaultStopGrace.String()) {
+			t.Errorf("teardown's Warn record reported the full grace ceiling as elapsed for a wait cut short by the caller's deadline: %s", output)
+		}
+		if !strings.Contains(output, "grace=") {
+			t.Errorf("teardown's Warn record did not carry the configured grace ceiling: %s", output)
 		}
 	})
 

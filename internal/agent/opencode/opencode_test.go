@@ -638,7 +638,10 @@ sleep 60`)
 			t.Errorf(`stopActiveTurn()'s Warn record missing outcome="grace elapsed": %s`, output)
 		}
 		if !strings.Contains(output, "grace=") {
-			t.Errorf("stopActiveTurn()'s Warn record missing the grace attribute: %s", output)
+			t.Errorf("stopActiveTurn()'s Warn record missing the configured grace ceiling: %s", output)
+		}
+		if !strings.Contains(output, "elapsed=") {
+			t.Errorf("stopActiveTurn()'s Warn record missing the elapsed wait: %s", output)
 		}
 	})
 

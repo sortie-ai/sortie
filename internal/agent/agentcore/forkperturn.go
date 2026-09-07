@@ -497,12 +497,14 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 		return nil
 	case <-time.After(s.stopGrace):
 		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-			slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
+			slog.String("outcome", "grace elapsed"), slog.Duration("grace", s.stopGrace),
+			slog.Duration("elapsed", time.Since(started)))
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return nil
 	case <-ctx.Done():
 		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-			slog.String("outcome", "caller deadline"), slog.Duration("grace", time.Since(started)))
+			slog.String("outcome", "caller deadline"), slog.Duration("grace", s.stopGrace),
+			slog.Duration("elapsed", time.Since(started)))
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}

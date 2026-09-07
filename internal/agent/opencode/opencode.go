@@ -785,12 +785,14 @@ func stopActiveTurn(ctx context.Context, runtime *turnRuntime, grace time.Durati
 		return nil
 	case <-graceTimer.C:
 		logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-			slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
+			slog.String("outcome", "grace elapsed"), slog.Duration("grace", grace),
+			slog.Duration("elapsed", time.Since(started)))
 		killTurnProcess(runtime)
 		return nil
 	case <-ctx.Done():
 		logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-			slog.String("outcome", "caller deadline"), slog.Duration("grace", time.Since(started)))
+			slog.String("outcome", "caller deadline"), slog.Duration("grace", grace),
+			slog.Duration("elapsed", time.Since(started)))
 		killTurnProcess(runtime)
 		return ctx.Err()
 	}
