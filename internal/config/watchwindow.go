@@ -2,13 +2,11 @@ package config
 
 import (
 	"fmt"
-	"math"
-	"time"
 )
 
 // MaxWatchWindowMS is the largest watch_window_ms value whose conversion to
 // a time.Duration stays positive.
-const MaxWatchWindowMS int64 = math.MaxInt64 / int64(time.Millisecond)
+const MaxWatchWindowMS int64 = MaxDurationMS
 
 // ValidateWatchWindowMS reports why ms is not a usable watch window in
 // milliseconds, and nil when it is.

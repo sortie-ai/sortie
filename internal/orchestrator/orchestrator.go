@@ -212,6 +212,14 @@ type OrchestratorParams struct {
 	// unread list is never read as an empty one. The production
 	// binary always populates this field.
 	BlockerResolver BlockerResolver
+
+	// AbandonCh, once closed, ends every in-flight shutdown wait at
+	// once: the worker drain, the triage drain, and the tracker-ops
+	// drain each return immediately instead of waiting out their
+	// bound. A nil channel means no abort is wired; a receive on a
+	// nil channel blocks forever, which is exactly the behavior an
+	// unwired abort needs. Read only during shutdown.
+	AbandonCh <-chan struct{}
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -229,6 +237,7 @@ type Orchestrator struct {
 	store              OrchestratorStore
 	metrics            domain.Metrics
 	blockerResolver    BlockerResolver
+	abandonCh          <-chan struct{}
 
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
@@ -237,8 +246,13 @@ type Orchestrator struct {
 	snapshotCh   chan snapshotRequest
 	refreshCh    chan struct{}
 
-	preflightParams                   PreflightParams
-	observers                         []Observer
+	preflightParams PreflightParams
+	observers       []Observer
+
+	// drainTimeout overrides the worker-drain wait when positive. A
+	// non-positive value, its zero value, resolves to the ceiling
+	// [Orchestrator.drainRunningWorkers] derives from the current
+	// configuration.
 	drainTimeout                      time.Duration
 	toolRegistry                      *domain.ToolRegistry
 	sessionToolRegistryFunc           SessionToolRegistryFunc
@@ -370,7 +384,6 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		refreshCh:                         make(chan struct{}, 1),
 		preflightParams:                   params.PreflightParams,
 		observers:                         observers,
-		drainTimeout:                      defaultDrainTimeout,
 		toolRegistry:                      params.ToolRegistry,
 		sessionToolRegistryFunc:           params.SessionToolRegistryFunc,
 		hostPool:                          hostPool,
@@ -394,6 +407,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		handoffParkingLabel:               handoffParkingLabel,
 		ciTriage:                          ciTriage,
 		blockerResolver:                   params.BlockerResolver,
+		abandonCh:                         params.AbandonCh,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -958,9 +972,11 @@ func (o *Orchestrator) activateReconstructedRetries() {
 	}
 }
 
-// defaultDrainTimeout is the maximum duration the orchestrator waits for
-// running workers to exit during graceful shutdown.
-const defaultDrainTimeout = 30 * time.Second
+// drainExitMargin is the budget for the post-stop teardown bookkeeping
+// that runs after [domain.AgentAdapter.StopSession] returns: persisting
+// the run history, releasing the workspace, and the other steps
+// [HandleWorkerExit] performs for one worker.
+const drainExitMargin = 30 * time.Second
 
 // sessionMetadataWriteInterval bounds how often the event loop writes an
 // in-flight session's token totals to session_metadata. At most one
@@ -1354,7 +1370,13 @@ func (o *Orchestrator) drainRunningWorkers() {
 		}
 	}
 
-	deadline := time.NewTimer(o.drainTimeout)
+	cfg := o.workflowManager.Config()
+	ceiling := stopSessionDeadline(cfg) + drainExitMargin
+	waitFor := o.drainTimeout
+	if waitFor <= 0 {
+		waitFor = ceiling
+	}
+	deadline := time.NewTimer(waitFor)
 	defer deadline.Stop()
 
 	// The parent ctx is already cancelled; SQLite writes in
@@ -1411,6 +1433,12 @@ func (o *Orchestrator) drainRunningWorkers() {
 				slog.Int("remaining", len(o.state.Running)),
 			)
 			return
+
+		case <-o.abandonCh:
+			o.logger.Warn("worker drain abandoned at the operator's request",
+				slog.Int("remaining", len(o.state.Running)),
+			)
+			return
 		}
 	}
 
@@ -1436,6 +1464,8 @@ func (o *Orchestrator) drainTrackerOps() {
 	case <-done:
 	case <-time.After(trackerOpsDrainTimeout):
 		o.logger.Warn("tracker ops drain timeout exceeded, abandoning in-flight calls")
+	case <-o.abandonCh:
+		o.logger.Warn("tracker ops drain abandoned at the operator's request")
 	}
 }
 
@@ -1456,6 +1486,8 @@ func (o *Orchestrator) drainTriageRuns() {
 	case <-done:
 	case <-time.After(trackerOpsDrainTimeout):
 		o.logger.Warn("reaction triage drain timeout exceeded, abandoning in-flight runs")
+	case <-o.abandonCh:
+		o.logger.Warn("reaction triage drain abandoned at the operator's request")
 	}
 }
 

@@ -40,6 +40,7 @@ agent:
   turn_timeout_ms: 1800000
   read_timeout_ms: 10000
   stall_timeout_ms: 300000
+  stop_grace_ms: 5000
   max_retry_backoff_ms: 120000
 
 claude-code:

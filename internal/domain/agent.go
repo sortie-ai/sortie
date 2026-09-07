@@ -181,6 +181,13 @@ type AgentConfig struct {
 	// milliseconds before the orchestrator considers the session
 	// stalled. Non-positive values disable stall detection.
 	StallTimeoutMS int
+
+	// StopGraceMS is the period an adapter waits, after sending a
+	// catchable termination signal, for the agent to exit on its own
+	// before it force-terminates the process group. The value is
+	// always positive: the configuration layer rejects a
+	// non-positive one rather than treating it as a sentinel.
+	StopGraceMS int
 }
 
 // Session is an opaque handle returned by [AgentAdapter.StartSession].

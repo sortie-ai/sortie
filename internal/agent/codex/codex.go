@@ -251,7 +251,8 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetGroupCancel(cmd)
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	procutil.SetGroupCancel(cmd, grace)
 	cmd.Dir = target.WorkspacePath
 	cmd.Env = os.Environ()
 
@@ -922,11 +923,20 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		procutil.SignalGraceful(pid) //nolint:errcheck,gosec // best-effort graceful shutdown
 	}
 
-	// Wait for process exit with a 5-second grace period.
+	logger := logging.WithSession(
+		slog.Default().With(slog.String("component", "codex-adapter")),
+		state.threadID,
+	)
+
+	// Wait for process exit within the configured grace period.
 	if waitCh != nil {
+		started := time.Now()
 		select {
 		case <-waitCh:
-		case <-time.After(5 * time.Second):
+			logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
+		case <-time.After(procutil.StopGrace(state.agentConfig.StopGraceMS)):
+			logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+				slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
 			if pid > 0 {
 				procutil.KillProcessGroup(pid) //nolint:errcheck,gosec // best-effort force kill
 			}
@@ -943,10 +953,6 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		select {
 		case <-state.readerDone:
 		case <-time.After(2 * time.Second):
-			logger := logging.WithSession(
-				slog.Default().With(slog.String("component", "codex-adapter")),
-				state.threadID,
-			)
 			logger.Warn("reader goroutine did not exit after process termination")
 		}
 	}

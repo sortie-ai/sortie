@@ -150,6 +150,13 @@ type ForkPerTurnSession struct {
 	// cmd.Wait call. Set by NewForkPerTurnSession; overridden only by
 	// tests in this package.
 	drainGrace time.Duration
+
+	// stopGrace bounds the graceful phase Stop waits before it force-
+	// terminates the process group, and the wait cmd.WaitDelay allows
+	// a cancelled turn before RunTurn's SetGroupCancel setup escalates
+	// to a force kill. Set by NewForkPerTurnSession from the operator's
+	// configured stop grace.
+	stopGrace time.Duration
 }
 
 // NewForkPerTurnSession constructs a ForkPerTurnSession. target must be a
@@ -159,10 +166,15 @@ type ForkPerTurnSession struct {
 // non-nil. All function fields in hooks except EmitSessionStartID are
 // required; NewForkPerTurnSession panics if any required field is nil or if
 // logger is nil.
+//
+// stopGraceMS is the operator's configured agent.stop_grace_ms, resolved
+// through [procutil.StopGrace]; a non-positive value therefore resolves
+// to [procutil.DefaultStopGrace].
 func NewForkPerTurnSession(
 	target *LaunchTarget,
 	hooks ForkPerTurnHooks,
 	logger *slog.Logger,
+	stopGraceMS int,
 ) *ForkPerTurnSession {
 	if hooks.BuildArgs == nil {
 		panic("agentcore: ForkPerTurnHooks.BuildArgs must be non-nil")
@@ -187,6 +199,7 @@ func NewForkPerTurnSession(
 		hooks:      hooks,
 		logger:     logger,
 		drainGrace: procutil.DefaultDrainGrace,
+		stopGrace:  procutil.StopGrace(stopGraceMS),
 	}
 }
 
@@ -203,8 +216,8 @@ func (s *ForkPerTurnSession) SetLogger(logger *slog.Logger) {
 // stdout via the ten-armed decision tree, and returns the outcome.
 //
 // ctx controls the turn lifetime. Cancellation triggers a graceful
-// shutdown (SIGTERM to the process group) followed by a 5-second grace
-// period before force-kill.
+// shutdown (SIGTERM to the process group) followed by the session's
+// configured stop grace before force-kill.
 //
 // prompt is passed verbatim to hooks.BuildArgs.
 //
@@ -244,7 +257,7 @@ func (s *ForkPerTurnSession) RunTurn(
 		allArgs := append(slices.Clip(s.target.Args), cmdArgs...)       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
 		cmd = exec.CommandContext(cmdCtx, s.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetGroupCancel(cmd)
+	procutil.SetGroupCancel(cmd, s.stopGrace)
 	cmd.Dir = s.target.WorkspacePath
 	cmd.Env = os.Environ()
 
@@ -460,8 +473,8 @@ func (s *ForkPerTurnSession) RunTurn(
 //
 // Shutdown sequence:
 //  1. SIGTERM to process group ([procutil.SignalGraceful])
-//  2. Wait up to 5 seconds for RunTurn to close waitCh
-//  3. If timeout elapses: SIGKILL to process group
+//  2. Wait up to the session's configured stop grace for RunTurn to close waitCh
+//  3. If the grace elapses: SIGKILL to process group
 //  4. If ctx is cancelled before waitCh closes: SIGKILL and return ctx.Err()
 func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
@@ -476,13 +489,20 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 
 	_ = procutil.SignalGraceful(proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
 
+	started := time.Now()
+
 	select {
 	case <-waitCh:
+		s.logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
 		return nil
-	case <-time.After(procutil.DefaultStopGrace):
+	case <-time.After(s.stopGrace):
+		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+			slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return nil
 	case <-ctx.Done():
+		s.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+			slog.String("outcome", "caller deadline"), slog.Duration("grace", time.Since(started)))
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}

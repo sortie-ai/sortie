@@ -27,6 +27,11 @@ const contractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registr
 // Track is caught regardless of the local import alias.
 const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/trackermetrics"
 
+// contractProcutilImportPath is the import path the checker resolves
+// the "procutil" package qualifier from, per file, so an aliased
+// import cannot evade rule STOPGRACE.
+const contractProcutilImportPath = "github.com/sortie-ai/sortie/internal/agent/procutil"
+
 // contractBanTable maps a name this work extracted into a shared package
 // to the owner that received it. A top-level function re-declaring one of
 // these names is a violation; the banned name is the rule. The owner
@@ -95,13 +100,14 @@ var contractTrackerAdapterMethods = map[string]bool{
 type contractRule string
 
 const (
-	ruleBAN      contractRule = "BAN"
-	ruleMETRICS  contractRule = "METRICS"
-	ruleHOOK     contractRule = "HOOK"
-	ruleIMPORT   contractRule = "IMPORT"
-	ruleTEARDOWN contractRule = "TEARDOWN"
-	ruleBLOCKER  contractRule = "BLOCKER"
-	ruleIDENTITY contractRule = "IDENTITY"
+	ruleBAN       contractRule = "BAN"
+	ruleMETRICS   contractRule = "METRICS"
+	ruleHOOK      contractRule = "HOOK"
+	ruleIMPORT    contractRule = "IMPORT"
+	ruleTEARDOWN  contractRule = "TEARDOWN"
+	ruleBLOCKER   contractRule = "BLOCKER"
+	ruleIDENTITY  contractRule = "IDENTITY"
+	ruleSTOPGRACE contractRule = "STOPGRACE"
 )
 
 // Family roots and the orchestrator path rule IMPORT matches an import
@@ -181,7 +187,8 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleHOOK: "no HTTP, no credential, no remote project, and no config to validate",
 	},
 	"procutil": {
-		ruleTEARDOWN: "owns SetGroupCancel, the helper every other launcher calls",
+		ruleTEARDOWN:  "owns SetGroupCancel, the helper every other launcher calls",
+		ruleSTOPGRACE: "owns DefaultStopGrace, the fallback every other family reaches through StopGrace",
 	},
 }
 
@@ -485,6 +492,39 @@ func checkContractTeardown(fset *token.FileSet, file *ast.File) []contractViolat
 				text: "assigns exec.Cmd." + sel.Sel.Name + " directly; call " + contractTeardownOwner,
 			})
 		}
+		return true
+	})
+	return violations
+}
+
+// contractStopGraceOwner is the helper rule STOPGRACE directs a family
+// to resolve a stop-grace duration through, instead of reading
+// [procutil.DefaultStopGrace] directly.
+const contractStopGraceOwner = "procutil.StopGrace"
+
+// checkContractStopGrace reports a violation for every reference to
+// procutil.DefaultStopGrace in file, with the procutil qualifier
+// resolved from file's own imports so an aliased import cannot evade
+// it.
+func checkContractStopGrace(fset *token.FileSet, file *ast.File) []contractViolation {
+	procutilIdent := resolveContractImportName(file, contractProcutilImportPath)
+	if procutilIdent == "" {
+		return nil
+	}
+	var violations []contractViolation
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "DefaultStopGrace" {
+			return true
+		}
+		ident, isIdent := sel.X.(*ast.Ident)
+		if !isIdent || ident.Name != procutilIdent {
+			return true
+		}
+		violations = append(violations, contractViolation{
+			pos:  fset.Position(sel.Pos()),
+			text: "references procutil.DefaultStopGrace directly; call " + contractStopGraceOwner,
+		})
 		return true
 	})
 	return violations
@@ -1118,10 +1158,10 @@ func contractExempt(dirName string, rule contractRule) bool {
 }
 
 // checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK,
-// IMPORT, and, for a package under the agent family root, IDENTITY
-// against pkg, honoring the allowlist entries for pkg.dirName. Rules
-// BAN, METRICS, HOOK, and IDENTITY read pkg.files only; rule IMPORT
-// reads pkg.files and pkg.testFiles.
+// IMPORT, and, for a package under the agent family root, IDENTITY and
+// STOPGRACE, against pkg, honoring the allowlist entries for
+// pkg.dirName. Rules BAN, METRICS, HOOK, IDENTITY, and STOPGRACE read
+// pkg.files only; rule IMPORT reads pkg.files and pkg.testFiles.
 //
 // A ruleIMPORT entry in contractAllowlist is all-or-nothing: it lifts the
 // orchestrator ban, the sibling-adapter ban, and the package's own
@@ -1187,6 +1227,12 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 
 	if contractPathIsUnder(pkg.importPath, contractAgentFamilyPath) && !contractExempt(pkg.dirName, ruleIDENTITY) {
 		violations = append(violations, checkContractIdentity(fset, pkg)...)
+	}
+
+	if contractPathIsUnder(pkg.importPath, contractAgentFamilyPath) && !contractExempt(pkg.dirName, ruleSTOPGRACE) {
+		for _, file := range pkg.files {
+			violations = append(violations, checkContractStopGrace(fset, file)...)
+		}
 	}
 
 	return violations
@@ -1411,6 +1457,43 @@ type request struct {
 func configure(r *request) {
 	r.Cancel = func() error { return nil }
 	r.WaitDelay = 5
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a non-test file referencing procutil.DefaultStopGrace directly is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+)
+
+func grace() time.Duration {
+	return procutil.DefaultStopGrace
+}
+`,
+			wantCount:  1,
+			wantSubstr: "call procutil.StopGrace",
+		},
+		{
+			name:       "a package resolving its grace through procutil.StopGrace is accepted",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+)
+
+func grace(ms int) time.Duration {
+	return procutil.StopGrace(ms)
 }
 `,
 			wantCount: 0,
@@ -1909,6 +1992,33 @@ func contractCheckIdentityAllowlist(r contractIdentityReporter, found map[string
 	}
 }
 
+// contractCheckStopGraceEvaluated reports when rule STOPGRACE was
+// evaluated for no package under the agent family root.
+func contractCheckStopGraceEvaluated(r contractIdentityReporter, walked []contractWalkedPackage) {
+	evaluated := 0
+	for _, w := range walked {
+		if contractPathIsUnder(w.pkg.importPath, contractAgentFamilyPath) && !contractExempt(w.pkg.dirName, ruleSTOPGRACE) {
+			evaluated++
+		}
+	}
+	if evaluated == 0 {
+		r.Errorf("rule %s was evaluated for no package under %s, want at least one", ruleSTOPGRACE, contractAgentFamilyPath)
+	}
+}
+
+// contractCheckStopGraceAllowlist reports each contractAllowlist entry
+// that exempts rule STOPGRACE for a directory the walk did not find.
+func contractCheckStopGraceAllowlist(r contractIdentityReporter, found map[string]bool) {
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleSTOPGRACE]; !exempt {
+			continue
+		}
+		if !found[dirName] {
+			r.Errorf("contractAllowlist[%q] exempts %s, but the walk under %s did not find a directory named %q", dirName, ruleSTOPGRACE, contractAgentFamilyPath, dirName)
+		}
+	}
+}
+
 // TestContractIdentityRule_AppliesAndStaysCurrent guards rule IDENTITY
 // against going stale: it fails when the rule was evaluated for no
 // package under the agent family root, when the rule's own token
@@ -1979,6 +2089,65 @@ func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 
 		reporter := &contractStalenessFakeReporter{}
 		contractCheckIdentityAllowlist(reporter, found)
+
+		if len(reporter.errors) == 0 {
+			t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")
+		}
+	})
+}
+
+// TestContractStopGraceRule_AppliesAndStaysCurrent guards rule
+// STOPGRACE against going stale: it fails when the rule was evaluated
+// for no package under the agent family root, or when a
+// contractAllowlist entry naming ruleSTOPGRACE names a directory the
+// walk did not find.
+func TestContractStopGraceRule_AppliesAndStaysCurrent(t *testing.T) {
+	fset := token.NewFileSet()
+	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "agent"), contractAgentFamilyPath)
+
+	found := map[string]bool{}
+	for _, w := range walked {
+		found[w.pkg.dirName] = true
+	}
+
+	contractCheckStopGraceEvaluated(t, walked)
+	contractCheckStopGraceAllowlist(t, found)
+}
+
+// TestContractStopGraceRule_StalenessGuardCatchesRealBreaks proves the
+// two checks TestContractStopGraceRule_AppliesAndStaysCurrent performs
+// are themselves capable of failing, not merely capable of passing
+// against the current tree: fed a walk that evaluated rule STOPGRACE
+// for no package under the agent family root, or an allowlist naming a
+// directory that walk did not find, each check must record a failure.
+// The second subtest temporarily replaces the package-level
+// contractAllowlist, which a concurrently-running fixture test also
+// reads, so neither subtest runs in parallel.
+func TestContractStopGraceRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
+	t.Run("zero packages evaluated under the agent family root", func(t *testing.T) {
+		walked := []contractWalkedPackage{
+			{pkg: contractPackage{dirName: "fixture", importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture"}},
+		}
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckStopGraceEvaluated(reporter, walked)
+
+		if len(reporter.errors) == 0 {
+			t.Fatalf("staleness guard recorded no failure for a walk carrying no package under %s, want at least one", contractAgentFamilyPath)
+		}
+	})
+
+	t.Run("an allowlist entry names a directory the walk did not find", func(t *testing.T) {
+		original := contractAllowlist
+		contractAllowlist = map[string]map[contractRule]string{
+			"ghost-adapter": {ruleSTOPGRACE: "does not exist on disk"},
+		}
+		t.Cleanup(func() { contractAllowlist = original })
+
+		found := map[string]bool{"claude": true, "codex": true, "mock": true}
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckStopGraceAllowlist(reporter, found)
 
 		if len(reporter.errors) == 0 {
 			t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")

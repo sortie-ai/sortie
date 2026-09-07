@@ -215,7 +215,8 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 		cmd.Dir = target.WorkspacePath
 	}
-	procutil.SetGroupCancel(cmd)
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	procutil.SetGroupCancel(cmd, grace)
 	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -275,7 +276,7 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 	go runPump(state)
 
 	teardownOnFailure := func() {
-		graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+		graceCtx, cancel := context.WithTimeout(ctx, grace)
 		defer cancel()
 		runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
 	}
@@ -518,7 +519,7 @@ func stopSession(ctx context.Context, session domain.Session) error {
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+	graceCtx, cancel := context.WithTimeout(ctx, procutil.StopGrace(state.agentConfig.StopGraceMS))
 	defer cancel()
 	runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
 	return nil

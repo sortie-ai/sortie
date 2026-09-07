@@ -544,6 +544,8 @@ Timeouts:
 - `agent.read_timeout_ms`: request/response timeout during startup and sync requests
 - `agent.turn_timeout_ms`: enforced by orchestrator based on wall-clock duration
 - `agent.stall_timeout_ms`: enforced by orchestrator based on event inactivity
+- `agent.stop_grace_ms`: the graceful-shutdown period a local subprocess launch spends before a
+  force-terminate; see [Section 10.7](#107-local-subprocess-launch-contract)
 
 Error mapping (recommended normalized categories):
 
@@ -617,8 +619,9 @@ Graceful shutdown sequence:
   shutdown signal to the process group:
   - POSIX: `SIGTERM` to the process group (`kill(-pgid, SIGTERM)`).
   - Windows: `CTRL_BREAK_EVENT` via `GenerateConsoleCtrlEvent` to the process group.
-- The grace period that follows (default 5 seconds) is a ceiling: a shorter caller deadline
-  shortens it. When the grace period or the caller's deadline elapses, whichever comes first,
+- The grace period that follows (`agent.stop_grace_ms`, default 5 seconds) is a ceiling: a
+  shorter caller deadline shortens it. When the grace period or the caller's deadline elapses,
+  whichever comes first,
   the adapter force-terminates the process tree:
   - POSIX: `SIGKILL` to the process group.
   - Windows: `TerminateJobObject` to kill all processes in the Job Object.
@@ -638,10 +641,12 @@ Standard-error drain before reap:
   a marker, and an adapter whose success evidence lives on standard error reports the turn
   failed rather than succeeded.
 - Teardown can spend time in up to four separately bounded waits: the graceful wait before the
-  force-terminate, the standard-error drain before the reap, the reap wait where an adapter
-  bounds it, and a second standard-error drain after that reap wait. Each defaults to five
-  seconds, so a teardown that runs all four spends at most 20 seconds in them at those defaults,
-  less whenever the caller's deadline is shorter.
+  force-terminate (`agent.stop_grace_ms`), the standard-error drain before the reap, the reap wait
+  where an adapter bounds it, and a second standard-error drain after that reap wait. The three
+  drain-related waits default to five seconds each; at the default `agent.stop_grace_ms` of 5000,
+  a teardown that runs all four spends at most 20 seconds in them, and raising
+  `agent.stop_grace_ms` lengthens that total by the same amount, less whenever the caller's
+  deadline is shorter.
 
 Recommended additional process settings:
 

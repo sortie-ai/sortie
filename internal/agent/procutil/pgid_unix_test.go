@@ -172,7 +172,7 @@ func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", leader)
-	SetGroupCancel(cmd)
+	SetGroupCancel(cmd, DefaultStopGrace)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v, want nil", err)
 	}

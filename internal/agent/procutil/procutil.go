@@ -89,6 +89,21 @@ func WithScannerMax(n int) CollectorOption {
 	}
 }
 
+// StopGrace resolves a configured millisecond count to the duration an
+// adapter's graceful phase spends waiting for the agent to exit before
+// it force-terminates the process group. A non-positive ms resolves to
+// [DefaultStopGrace].
+//
+// Every adapter family reaches a stop-grace duration through StopGrace
+// rather than converting a millisecond count inline, so the
+// non-positive fallback cannot disagree between families.
+func StopGrace(ms int) time.Duration {
+	if ms <= 0 {
+		return DefaultStopGrace
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // ExtractExitCode returns the process exit code from an
 // [*exec.ExitError], or -1 if the error is not an ExitError.
 //

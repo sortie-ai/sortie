@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSetGroupCancel_Wiring covers what is observable without starting a
@@ -25,7 +26,7 @@ func TestSetGroupCancel_Wiring(t *testing.T) {
 	defaultCancel := reflect.ValueOf(exec.CommandContext(ctx, os.Args[0]).Cancel).Pointer()
 
 	cmd := exec.CommandContext(ctx, os.Args[0])
-	SetGroupCancel(cmd)
+	SetGroupCancel(cmd, DefaultStopGrace)
 
 	if cmd.SysProcAttr == nil {
 		t.Error("SetGroupCancel() SysProcAttr = nil, want non-nil (the command must join its own process group)")
@@ -35,6 +36,39 @@ func TestSetGroupCancel_Wiring(t *testing.T) {
 	}
 	if cmd.WaitDelay != DefaultStopGrace {
 		t.Errorf("SetGroupCancel() WaitDelay = %v, want %v", cmd.WaitDelay, DefaultStopGrace)
+	}
+}
+
+// TestSetGroupCancel_GraceResolution asserts WaitDelay is set to
+// the grace passed when it is positive, and falls back to
+// DefaultStopGrace when it is non-positive, so a cancelled turn never
+// loses its escalation to a force kill by inheriting os/exec's
+// zero-WaitDelay "no limit" reading.
+func TestSetGroupCancel_GraceResolution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		grace time.Duration
+		want  time.Duration
+	}{
+		{"PositiveGraceHonored", 250 * time.Millisecond, 250 * time.Millisecond},
+		{"ZeroGraceFallsBackToDefault", 0, DefaultStopGrace},
+		{"NegativeGraceFallsBackToDefault", -5 * time.Second, DefaultStopGrace},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			cmd := exec.CommandContext(ctx, os.Args[0])
+			SetGroupCancel(cmd, tt.grace)
+
+			if cmd.WaitDelay != tt.want {
+				t.Errorf("SetGroupCancel(cmd, %v) WaitDelay = %v, want %v", tt.grace, cmd.WaitDelay, tt.want)
+			}
+		})
 	}
 }
 
@@ -50,7 +84,7 @@ func TestSetGroupCancel_RequiresCommandContext(t *testing.T) {
 	// Start reaches the Cancel precondition instead of failing earlier
 	// on lookup. It is never executed, because that check returns first.
 	cmd := exec.Command(os.Args[0])
-	SetGroupCancel(cmd)
+	SetGroupCancel(cmd, DefaultStopGrace)
 
 	err := cmd.Start()
 	if err == nil {

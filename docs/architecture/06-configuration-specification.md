@@ -286,6 +286,12 @@ This section is intentionally redundant so a coding agent can implement the conf
   lifetime effort: any run that produces evidence of work resets the count to zero. Unreachable
   under `tracker.handoff_evidence: off`, since no verdict is computed and no absence is ever
   recorded. The separate `agent.max_sessions` governs the total per-issue session budget
+- `agent.stop_grace_ms`: positive integer, default `5000`; the period an adapter waits, after
+  sending a catchable termination signal, for the agent to exit on its own before it
+  force-terminates the process group. `0`, a negative value, and a value above `MaxDurationMS`
+  (the largest millisecond count whose conversion to a duration stays positive, about 292 years)
+  are rejected as a configuration error at parse time; `SORTIE_AGENT_STOP_GRACE_MS` overrides it.
+  Takes effect for future worker attempts, not an in-flight session
 - `ci_feedback.kind`: string, optional, **deprecated**; identifies the CI status provider adapter;
   presence activates CI feedback; use `reactions.ci_failure` instead
 - `ci_feedback.max_retries`: integer, default `2`; CI-fix continuation attempts before escalation

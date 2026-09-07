@@ -97,6 +97,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "max_sessions", Type: FieldInt},
 			{Name: "max_tokens", Type: FieldInt},
 			{Name: "max_consecutive_absences", Type: FieldInt},
+			{Name: "stop_grace_ms", Type: FieldInt},
 		},
 		AllowAdapterPassthrough: true,
 	},

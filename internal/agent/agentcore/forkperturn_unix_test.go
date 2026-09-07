@@ -113,7 +113,7 @@ func TestForkPerTurnSession_ProcessGroupIsolation(t *testing.T) {
 	script := writePgidScript(t, tmpDir, pidFile)
 
 	target := newTestTarget(tmpDir, script)
-	sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+	sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -157,7 +157,7 @@ func TestForkPerTurnSession_DescendantHoldsStderrOnly(t *testing.T) {
 	}
 
 	target := newTestTarget(tmpDir, script)
-	sess := NewForkPerTurnSession(target, hooks, slog.Default())
+	sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 	sess.drainGrace = 200 * time.Millisecond
 
 	emit, events := sinkEvents()

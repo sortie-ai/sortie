@@ -784,3 +784,27 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		}
 	})
 }
+
+// TestStopSessionGrace_ConfiguredValueBoundsTheWait asserts that
+// stopSession's graceCtx expires at a configured agent.stop_grace_ms,
+// not at the built-in five-second default: a small configured grace
+// against an agent that ignores the graceful signal entirely must force
+// the process well short of the default's ceiling.
+func TestStopSessionGrace_ConfiguredValueBoundsTheWait(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, nil)
+	state.agentConfig.StopGraceMS = 200
+
+	start := time.Now()
+	if err := stopSession(context.Background(), fakeSession(state)); err != nil {
+		t.Fatalf("stopSession() error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("stopSession() force-terminated after %v, want well under the built-in 5s default (proves the configured 200ms grace bounded graceCtx, not DefaultStopGrace)", elapsed)
+	}
+}

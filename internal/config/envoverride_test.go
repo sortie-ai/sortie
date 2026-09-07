@@ -559,6 +559,60 @@ func TestApplyEnvOverrides(t *testing.T) {
 		assertEnvOverrideError(t, err, "agent.max_consecutive_absences", "must be greater than 0")
 	})
 
+	t.Run("agent stop grace override reaches config with no YAML key", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_STOP_GRACE_MS", "1500")
+
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.StopGraceMS != 1500 {
+			t.Errorf("Agent.StopGraceMS = %d, want 1500", cfg.Agent.StopGraceMS)
+		}
+	})
+
+	t.Run("agent stop grace override replaces a file-supplied value", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_STOP_GRACE_MS", "1500")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"stop_grace_ms": 3000},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.StopGraceMS != 1500 {
+			t.Errorf("Agent.StopGraceMS = %d, want 1500 (env overrides the file value)", cfg.Agent.StopGraceMS)
+		}
+	})
+
+	t.Run("agent stop grace override unset leaves file value", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_STOP_GRACE_MS", "")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"stop_grace_ms": 9000},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Agent.StopGraceMS != 9000 {
+			t.Errorf("Agent.StopGraceMS = %d, want 9000 (file value retained when unset)", cfg.Agent.StopGraceMS)
+		}
+	})
+
+	t.Run("agent stop grace override zero fails config construction", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_STOP_GRACE_MS", "0")
+
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "agent.stop_grace_ms", "must be greater than 0")
+	})
+
+	t.Run("agent stop grace override non-coercible value names the field and the variable", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_STOP_GRACE_MS", "abc")
+
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "agent.stop_grace_ms", "SORTIE_AGENT_STOP_GRACE_MS")
+	})
+
 	t.Run("top-level SORTIE_DB_PATH", func(t *testing.T) {
 		t.Setenv("SORTIE_DB_PATH", "/data/sortie.db")
 

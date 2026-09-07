@@ -225,7 +225,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		allArgs := append(slices.Clone(state.target.Args), cmdArgs...)
 		cmd = exec.CommandContext(ctx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetGroupCancel(cmd)
+	procutil.SetGroupCancel(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS))
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
 
@@ -519,7 +519,7 @@ func (a *OpenCodeAdapter) StopSession(ctx context.Context, session domain.Sessio
 	state.active = nil
 	state.mu.Unlock()
 
-	return stopActiveTurn(ctx, active)
+	return stopActiveTurn(ctx, active, procutil.StopGrace(state.agentConfig.StopGraceMS), state.logger())
 }
 
 // finalizeExitedTurn builds and emits the turn's terminal disposition once
@@ -760,7 +760,10 @@ func closeStop(runtime *turnRuntime) {
 	})
 }
 
-func stopActiveTurn(ctx context.Context, runtime *turnRuntime) error {
+// stopActiveTurn signals runtime's subprocess to exit gracefully and
+// waits up to grace for it to do so on its own before force-terminating
+// its process group. logger receives the graceful phase's outcome.
+func stopActiveTurn(ctx context.Context, runtime *turnRuntime, grace time.Duration, logger *slog.Logger) error {
 	if runtime == nil {
 		return nil
 	}
@@ -772,16 +775,22 @@ func stopActiveTurn(ctx context.Context, runtime *turnRuntime) error {
 
 	_ = procutil.SignalGraceful(runtime.proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
 
-	graceTimer := time.NewTimer(5 * time.Second)
+	started := time.Now()
+	graceTimer := time.NewTimer(grace)
 	defer stopTimer(graceTimer)
 
 	select {
 	case <-runtime.waitCh:
+		logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
 		return nil
 	case <-graceTimer.C:
+		logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+			slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
 		killTurnProcess(runtime)
 		return nil
 	case <-ctx.Done():
+		logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+			slog.String("outcome", "caller deadline"), slog.Duration("grace", time.Since(started)))
 		killTurnProcess(runtime)
 		return ctx.Err()
 	}

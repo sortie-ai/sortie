@@ -193,7 +193,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		},
 	}
 
-	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger())
+	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger(), state.agentConfig.StopGraceMS)
 
 	return domain.Session{
 		ID:       state.sessionID,

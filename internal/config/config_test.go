@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2677,6 +2678,65 @@ func TestNewServiceConfig_AgentTurnTimeoutMS(t *testing.T) {
 	})
 }
 
+// TestNewServiceConfig_AgentStopGraceMS mirrors
+// TestNewServiceConfig_AgentTurnTimeoutMS for agent.stop_grace_ms: a
+// non-positive value is rejected, an absent key defaults to
+// procutil.DefaultStopGrace's millisecond equivalent, a non-integer
+// value is rejected, and a value above MaxDurationMS is rejected with
+// a message naming the ceiling.
+func TestNewServiceConfig_AgentStopGraceMS(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Zero", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"stop_grace_ms": 0}})
+		assertConfigErrorField(t, err, "agent.stop_grace_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+	})
+
+	t.Run("Negative", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"stop_grace_ms": -1}})
+		assertConfigErrorField(t, err, "agent.stop_grace_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be greater than 0", ce.Message)
+	})
+
+	t.Run("AbsentKeyDefaults", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.StopGraceMS", 5000, cfg.Agent.StopGraceMS)
+	})
+
+	t.Run("NonInteger", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"stop_grace_ms": "abc"}})
+		assertConfigErrorField(t, err, "agent.stop_grace_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		if !strings.Contains(ce.Message, "invalid integer value") {
+			t.Errorf("ConfigError.Message = %q, want it to contain %q", ce.Message, "invalid integer value")
+		}
+	})
+
+	t.Run("AboveCeiling", func(t *testing.T) {
+		t.Parallel()
+		over := int(MaxDurationMS) + 1
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"stop_grace_ms": over}})
+		assertConfigErrorField(t, err, "agent.stop_grace_ms")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		wantMsg := fmt.Sprintf("must not exceed %d (about 292 years), got %d", MaxDurationMS, over)
+		assertStringEqual(t, "ConfigError.Message", wantMsg, ce.Message)
+	})
+}
+
 // TestPopulateCIFeedbackFromReactions exercises the bridge function that
 // maps a ReactionConfig for the "ci_failure" kind into a CIFeedbackConfig.
 func TestPopulateCIFeedbackFromReactions(t *testing.T) {
@@ -3392,10 +3452,10 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 
 // --- AgentAdapterConfig tests ---
 
-// TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions asserts that
-// AgentAdapterConfig returns exactly the five documented keys when
+// TestAgentAdapterConfig_ExactlySixKeysWithNoExtensions asserts that
+// AgentAdapterConfig returns exactly the six documented keys when
 // cfg.extensions carries no sub-object for kind.
-func TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions(t *testing.T) {
+func TestAgentAdapterConfig_ExactlySixKeysWithNoExtensions(t *testing.T) {
 	t.Parallel()
 
 	cfg := ServiceConfig{
@@ -3405,6 +3465,7 @@ func TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions(t *testing.T) {
 			TurnTimeoutMS:  3600000,
 			ReadTimeoutMS:  5000,
 			StallTimeoutMS: 300000,
+			StopGraceMS:    5000,
 		},
 	}
 
@@ -3416,6 +3477,7 @@ func TestAgentAdapterConfig_ExactlyFiveKeysWithNoExtensions(t *testing.T) {
 		"turn_timeout_ms":  3600000,
 		"read_timeout_ms":  5000,
 		"stall_timeout_ms": 300000,
+		"stop_grace_ms":    5000,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("AgentAdapterConfig() = %v (len %d), want exactly %d keys: %v", got, len(got), len(want), want)
@@ -3474,9 +3536,9 @@ func TestAgentAdapterConfig_ExtensionCollisionWithOrchestratorOnlyFieldSurvives(
 		t.Errorf(`AgentAdapterConfig()["approval_policy"] = %v, want "never"`, got["approval_policy"])
 	}
 
-	// The exact key set: the five documented keys plus the two merged
+	// The exact key set: the six documented keys plus the two merged
 	// extension keys, nothing else.
-	wantKeys := []string{"kind", "command", "turn_timeout_ms", "read_timeout_ms", "stall_timeout_ms", "max_turns", "approval_policy"}
+	wantKeys := []string{"kind", "command", "turn_timeout_ms", "read_timeout_ms", "stall_timeout_ms", "stop_grace_ms", "max_turns", "approval_policy"}
 	if len(got) != len(wantKeys) {
 		t.Fatalf("AgentAdapterConfig() = %v (len %d), want exactly the keys %v", got, len(got), wantKeys)
 	}
