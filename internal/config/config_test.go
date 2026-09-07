@@ -2680,10 +2680,13 @@ func TestNewServiceConfig_AgentTurnTimeoutMS(t *testing.T) {
 
 // TestNewServiceConfig_AgentStopGraceMS mirrors
 // TestNewServiceConfig_AgentTurnTimeoutMS for agent.stop_grace_ms: a
-// non-positive value is rejected, an absent key defaults to
-// procutil.DefaultStopGrace's millisecond equivalent, a non-integer
-// value is rejected, and a value above MaxDurationMS is rejected with
-// a message naming the ceiling.
+// non-positive value is rejected, an absent key defaults to 5000, a
+// non-integer value is rejected, and a value above MaxDurationMS is
+// rejected with a message naming the ceiling.
+//
+// The default is a literal here because this layer cannot import the
+// package that owns the built-in grace. That the two agree is asserted
+// where both are in scope, in the orchestrator's tests.
 func TestNewServiceConfig_AgentStopGraceMS(t *testing.T) {
 	t.Parallel()
 

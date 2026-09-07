@@ -7699,3 +7699,25 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseNoChangeNeeded(t *testing.T) {
 		t.Errorf("status file still present after an in-phase no-change-needed declaration, want removed: err=%v", err)
 	}
 }
+
+// TestStopGraceDefaultMatchesBuiltIn pins the one invariant the two
+// layers cannot state to each other. The configuration layer defaults
+// agent.stop_grace_ms to a literal because it must not import the
+// package that owns the built-in grace, so nothing makes the two agree
+// at compile time. This package imports both, and a change to either
+// side alone fails here rather than silently shifting every adapter's
+// default teardown.
+func TestStopGraceDefaultMatchesBuiltIn(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewServiceConfig(map[string]any{
+		"agent": map[string]any{"kind": "mock"},
+	})
+	if err != nil {
+		t.Fatalf("config.NewServiceConfig() = %v, want nil", err)
+	}
+	got := time.Duration(cfg.Agent.StopGraceMS) * time.Millisecond
+	if got != procutil.DefaultStopGrace {
+		t.Errorf("agent.stop_grace_ms default = %v, want %v (procutil.DefaultStopGrace)", got, procutil.DefaultStopGrace)
+	}
+}
