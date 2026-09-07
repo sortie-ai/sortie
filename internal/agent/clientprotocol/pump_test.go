@@ -1,16 +1,22 @@
 package clientprotocol
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -292,5 +298,142 @@ func TestAnsweredIDEcho(t *testing.T) {
 				t.Errorf("response = %+v, want a %d error for an unimplemented method", resp, jsonrpcMethodNotFound)
 			}
 		})
+	}
+}
+
+// TestToolDeliveryReportSkippedDuringWindDownAndTeardown confirms the
+// uncallable-tool report never fires for a permission request answered
+// by a path other than handlePermissionRequest's own non-winding-down
+// branch: neither a request a winding-down turn cancels immediately,
+// nor one teardown's handleAnswerOpen answers directly.
+func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a turn winding down toward cancellation answers a permission request without reporting", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes, logger)
+		out := newOutboundReader(outPr)
+		state.itemCh <- pumpItem{control: &pumpControl{handshake: &handshakeFacts{toolServersDelivered: true}}}
+		markSessionKnown(state)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var events []domain.AgentEvent
+		outcomeCh := runTurnAsyncCtx(ctx, state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+
+		promptID := out.awaitMethod(t, methodSessionPrompt)
+		cancel()
+		out.awaitMethod(t, methodSessionCancel)
+
+		sendLine(t, inPw, `{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"sess-test","options":[{"kind":"reject_once","name":"reject","optionId":"reject-id"}],"toolCall":{"toolCallId":"tc-1","title":"do a thing"}}}`)
+
+		respLine := out.next(t)
+		resp := decodeResponse(t, respLine)
+		if resp.Result.Outcome.Outcome != outcomeCancelled {
+			t.Errorf("permission reply outcome during wind-down = %q, want %q", resp.Result.Outcome.Outcome, outcomeCancelled)
+		}
+
+		respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonCancelled})
+		awaitOutcome(t, outcomeCh)
+
+		if got := countToolDeliveryNotifications(events); got != 0 {
+			t.Errorf("tool delivery uncallable notifications during wind-down = %d, want 0", got)
+		}
+		if strings.Contains(buf.String(), toolDeliveryUncallableLog) {
+			t.Errorf("unexpected tool delivery uncallable Warn record during wind-down: %s", buf.String())
+		}
+	})
+
+	// openRequests holds an entry only for the duration of the
+	// handlePermissionRequest (or answerMethodNotFound) call that
+	// created it: both delete their own entry via defer before
+	// returning, and the pump processes one item from its input
+	// channel to completion before the next, so a live pump driven
+	// only through that channel can never observe handleAnswerOpen's
+	// defensive walk find anything but an empty map (see pump.go's own
+	// "ordinary case" comment on handleAnswerOpen). Proving
+	// handleAnswerOpen's own cancellation path never reports therefore
+	// needs a pumpState with a still-open entry constructed directly,
+	// the same way newPumpForCapabilityTests in capability_test.go
+	// exercises a pump method in isolation from a live pump goroutine.
+	t.Run("handleAnswerOpen answers a still-open permission request without reporting", func(t *testing.T) {
+		t.Parallel()
+
+		outPr, outPw := io.Pipe()
+		inPr, _ := io.Pipe()
+		var buf bytes.Buffer
+		state := &sessionState{
+			caps:   newCapabilityRecord(false),
+			itemCh: make(chan pumpItem, pumpChannelCapacity),
+			stopCh: make(chan struct{}),
+			logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		}
+		state.conn = jsonrpc.NewConn(outPw, inPr, pumpHandler(state.itemCh, state.stopCh),
+			jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
+		t.Cleanup(func() {
+			_ = outPr.Close()
+			_ = outPw.Close()
+			_ = inPr.Close()
+		})
+		go func() { _, _ = io.Copy(io.Discard, outPr) }()
+
+		p := &pumpState{
+			state:                state,
+			toolServersDelivered: true,
+			openRequests:         map[jsonrpc.ID]string{jsonrpc.NumberID(1): methodSessionRequestPermission},
+		}
+
+		p.handleAnswerOpen()
+
+		if len(p.openRequests) != 0 {
+			t.Errorf("openRequests after handleAnswerOpen() = %+v, want empty", p.openRequests)
+		}
+		if len(p.queued) != 0 {
+			t.Errorf("events queued by handleAnswerOpen() = %+v, want none", p.queued)
+		}
+		if strings.Contains(buf.String(), toolDeliveryUncallableLog) {
+			t.Errorf("unexpected tool delivery uncallable Warn record from handleAnswerOpen(): %s", buf.String())
+		}
+	})
+}
+
+// TestHandshakeToolServersDeliveredReachesPump confirms
+// toolServersDelivered reaches pumpState only through the handshake
+// control message handleControl applies, not from a value set on the
+// struct some other way: publishing that control message directly is
+// enough, on its own, for a later permission request to trigger the
+// uncallable-tool report.
+func TestHandshakeToolServersDeliveredReachesPump(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes, logger)
+	out := newOutboundReader(outPr)
+
+	state.itemCh <- pumpItem{control: &pumpControl{handshake: &handshakeFacts{toolServersDelivered: true}}}
+	markSessionKnown(state)
+
+	var events []domain.AgentEvent
+	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+
+	sendLine(t, inPw, `{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"sess-test","options":[{"kind":"reject_once","name":"reject","optionId":"reject-id"}],"toolCall":{"toolCallId":"tc-1","title":"do a thing"}}}`)
+	out.next(t)
+
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+	outcome := awaitOutcome(t, outcomeCh)
+	if outcome.err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
+	}
+
+	if got := countToolDeliveryNotifications(events); got != 1 {
+		t.Errorf("tool delivery uncallable notifications = %d, want 1", got)
+	}
+	if !strings.Contains(buf.String(), toolDeliveryUncallableLog) {
+		t.Errorf("log output missing %q: %s", toolDeliveryUncallableLog, buf.String())
 	}
 }

@@ -29,6 +29,8 @@ const (
 	elicitationDetail                = "an answer to a question"
 	turnAlreadyInFlightMessage       = "a turn is already in flight for this session"
 	sessionEndedBeforeTurnMessage    = "the agent connection ended before this turn could start"
+	toolDeliveryUncallableNotice     = "this session delivered tool servers and the agent runtime asked for consent before running a tool; an unattended run grants no consent, so any delivered tool the runtime gates the same way cannot be called unless that runtime's own configuration allows it"
+	toolDeliveryUncallableLog        = "a tool call was gated by consent in a session that delivered tool servers"
 )
 
 // jsonrpcMethodNotFound is the JSON-RPC error code for a method the
@@ -101,6 +103,16 @@ type pumpState struct {
 	// session's first turn. A lowering observed after that point is
 	// logged at warn level instead of producing a second notice.
 	capabilityNoticeSent bool
+
+	// toolServersDelivered mirrors the handshake fact for the session:
+	// whether the session-creation request carried at least one tool
+	// server.
+	toolServersDelivered bool
+
+	// toolDeliveryReported latches the once-per-session uncallable-tool
+	// report so a later permission request in the same session does not
+	// repeat it.
+	toolDeliveryReported bool
 
 	// openRequests records the request the pump is answering while it is
 	// answering it. The pump answers each request inside the call that
@@ -211,6 +223,7 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		p.agentInfo = ctrl.handshake.agentInfo
 		p.agentInfoPresent = ctrl.handshake.agentInfoPresent
 		p.caps = ctrl.handshake.caps
+		p.toolServersDelivered = ctrl.handshake.toolServersDelivered
 		p.applyHandshakeCapabilityLowering(ctrl.handshake)
 
 	case ctrl.sessionID != "":
@@ -741,6 +754,8 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 		agentcore.EmitNotification(p.emitOrQueue, posture.NoticeWithDetail(""))
 	}
 
+	p.reportUncallableToolDelivery()
+
 	if posture.Transmit {
 		p.respondSelected(msg.ID, optionID)
 	} else {
@@ -750,6 +765,24 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 	if posture.EndAttempt {
 		p.latchOrBeginEndAttempt("")
 	}
+}
+
+// reportUncallableToolDelivery reports, once per session, that a session
+// which delivered tool servers has met a permission request the shared
+// refusal posture answered, so any delivered tool the runtime gates the
+// same way cannot be called. It does nothing when the session delivered
+// no tool server or has already reported this.
+func (p *pumpState) reportUncallableToolDelivery() {
+	if !p.toolServersDelivered {
+		return
+	}
+	if p.toolDeliveryReported {
+		return
+	}
+	p.toolDeliveryReported = true
+
+	agentcore.EmitNotification(p.emitOrQueue, toolDeliveryUncallableNotice)
+	p.state.logger.Warn(toolDeliveryUncallableLog, slog.String("reason", "permission_refused"))
 }
 
 // answerMethodNotFound answers any request naming a method this client

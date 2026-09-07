@@ -155,6 +155,10 @@ Policy requirements:
 - Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely. A
   configuration value that would let the agent stop and wait for a person is refused before the
   run, rather than satisfied when it arrives mid-turn.
+- Where an adapter kind delivers the tool-registry execution channel (§10.4.3) per session and
+  its runtime asks for consent before invoking a tool, the refusal makes the delivered tools
+  uncallable, and the adapter reports that once per session rather than letting the turn end as
+  an ordinary success.
 
 Unsupported tool calls:
 

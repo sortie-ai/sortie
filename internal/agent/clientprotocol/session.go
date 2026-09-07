@@ -130,6 +130,10 @@ type handshakeFacts struct {
 	// declared an HTTP tool server that this handshake's advertised MCP
 	// capabilities do not support, so it was omitted from session/new.
 	toolServersWithheld bool
+
+	// toolServersDelivered reports whether the session-creation request
+	// carried at least one tool server.
+	toolServersDelivered bool
 }
 
 // turnStart is what RunTurn publishes to start one turn.
@@ -297,7 +301,7 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		return domain.Session{}, agentErr
 	}
 
-	facts := &handshakeFacts{toolServersWithheld: withheld, caps: caps}
+	facts := &handshakeFacts{toolServersWithheld: withheld, toolServersDelivered: len(wireServers) > 0, caps: caps}
 	if initResp.AgentInfo != nil {
 		facts.agentInfo = *initResp.AgentInfo
 		facts.agentInfoPresent = true
