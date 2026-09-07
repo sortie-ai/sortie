@@ -649,8 +649,8 @@ Standard-error drain before reap:
   a teardown that runs all four spends at most 20 seconds in them, and raising
   `agent.stop_grace_ms` lengthens that total by the same amount, less whenever the caller's
   deadline is shorter. Where a session-close attempt runs, per the graceful shutdown sequence
-  above, it is spent inside the graceful wait rather than beside it, bounded at half that wait,
-  so the total and the count of four bounded waits both stand.
+  above, it is bounded at half the graceful wait and spent inside it rather than beside it, so
+  it adds nothing to that total.
 
 Recommended additional process settings:
 
