@@ -512,6 +512,25 @@ func checkContractStopGrace(fset *token.FileSet, file *ast.File) []contractViola
 		return nil
 	}
 	var violations []contractViolation
+	// A dot import binds the constant to a bare identifier, so no
+	// selector node exists to match and the qualifier check below can
+	// never fire. Nothing in this repository dot-imports a non-test
+	// package, and no linter here forbids it, so the rule closes the
+	// hole itself rather than resting on a convention.
+	if procutilIdent == "." {
+		ast.Inspect(file, func(n ast.Node) bool {
+			ident, isIdent := n.(*ast.Ident)
+			if !isIdent || ident.Name != "DefaultStopGrace" {
+				return true
+			}
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(ident.Pos()),
+				text: "references procutil.DefaultStopGrace directly; call " + contractStopGraceOwner,
+			})
+			return true
+		})
+		return violations
+	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "DefaultStopGrace" {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -850,14 +851,14 @@ func TestShippedWorkflowsCarryStopGraceMS(t *testing.T) {
 			if err != nil {
 				t.Fatalf("workflow.Load: %v", err)
 			}
-			cfg, err := config.NewServiceConfig(wf.Config)
-			if err != nil {
-				t.Fatalf("config.NewServiceConfig: %v", err)
-			}
-			if cfg.Agent.StopGraceMS != 5000 {
-				t.Errorf("Agent.StopGraceMS = %d, want 5000", cfg.Agent.StopGraceMS)
-			}
 
+			// Both the kind and the value come from the front matter
+			// rather than from a resolved ServiceConfig.
+			// NewServiceConfig applies the SORTIE_* overrides, so an
+			// inherited SORTIE_AGENT_STOP_GRACE_MS would replace the
+			// file's own value and fail this test for every workflow
+			// even when every file on disk is correct. That the files
+			// still load is covered separately.
 			agentExt, ok := wf.Config["agent"]
 			if !ok {
 				t.Fatal("workflow front matter missing 'agent' block")
@@ -868,7 +869,7 @@ func TestShippedWorkflowsCarryStopGraceMS(t *testing.T) {
 			}
 			value, present := agentMap["stop_grace_ms"]
 
-			if cfg.Agent.Kind == "mock" {
+			if kind, _ := agentMap["kind"].(string); kind == "mock" {
 				if present {
 					t.Errorf("agent.stop_grace_ms present at %v for the mock kind, want absent: mock launches no process and has no graceful phase for the field to bound", value)
 				}
@@ -877,6 +878,9 @@ func TestShippedWorkflowsCarryStopGraceMS(t *testing.T) {
 
 			if !present {
 				t.Fatal("agent: block missing stop_grace_ms, want an explicit stop_grace_ms: 5000")
+			}
+			if got := fmt.Sprint(value); got != "5000" {
+				t.Errorf("agent.stop_grace_ms = %s, want 5000", got)
 			}
 		})
 	}

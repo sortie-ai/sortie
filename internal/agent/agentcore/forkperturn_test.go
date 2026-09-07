@@ -6,7 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +21,36 @@ import (
 )
 
 // --- helpers ---
+
+// writeTrapScript writes an agent script that installs a TERM trap,
+// touches a readiness marker, then runs body. It returns the script
+// path and the marker path. trap is the trap body quoted as the shell
+// expects it; body is the command the script blocks in afterwards.
+//
+// The marker exists because a fixed sleep cannot prove the trap is
+// installed. If the signal wins that race the shell exits on TERM's
+// default disposition, and the test then passes without exercising the
+// escalation it is named for.
+func writeTrapScript(t *testing.T, dir, trap, body string) (script, marker string) {
+	t.Helper()
+	marker = filepath.Join(dir, "trap-ready")
+	return agenttest.WriteScript(t, dir, "agent",
+		fmt.Sprintf("trap %s TERM\n: > %q\n%s", trap, marker, body)), marker
+}
+
+// waitForTrap blocks until the marker [writeTrapScript] returns appears,
+// so a caller signals the subprocess only once its trap is in place.
+func waitForTrap(t *testing.T, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("subprocess did not install its TERM trap within 5s (marker %q absent)", marker)
+}
 
 // newTestTarget builds a minimal LaunchTarget pointing at absCmd with
 // tmpDir as the workspace directory.
@@ -538,8 +571,7 @@ echo 'second stderr line' >&2`)
 	t.Run("Stop_ConfiguredGraceBoundsTheWait", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
-		script := agenttest.WriteScript(t, tmpDir, "agent", `trap '' TERM
-sleep 60`)
+		script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
 		target := newTestTarget(tmpDir, script)
 		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
 
@@ -550,7 +582,7 @@ sleep 60`)
 			sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing Stop's timing, not RunTurn's outcome
 		}()
 
-		time.Sleep(100 * time.Millisecond) // let the subprocess install its own TERM trap
+		waitForTrap(t, ready)
 
 		start := time.Now()
 		if err := sess.Stop(context.Background()); err != nil {
@@ -579,8 +611,7 @@ sleep 60`)
 		// os/exec's own WaitDelay escalation kills only the direct child,
 		// which would hang the scanner forever instead of exercising the
 		// bounded escalation this test measures.
-		script := agenttest.WriteScript(t, tmpDir, "agent", `trap '' TERM
-while :; do :; done`)
+		script, ready := writeTrapScript(t, tmpDir, `''`, "while :; do :; done")
 		target := newTestTarget(tmpDir, script)
 		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
 
@@ -592,7 +623,7 @@ while :; do :; done`)
 			done <- err
 		}()
 
-		time.Sleep(100 * time.Millisecond) // let the subprocess install its own TERM trap
+		waitForTrap(t, ready)
 		start := time.Now()
 		cancel()
 
@@ -616,8 +647,7 @@ while :; do :; done`)
 		t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script := agenttest.WriteScript(t, tmpDir, "agent", `trap 'exit 0' TERM
-sleep 60`)
+			script, ready := writeTrapScript(t, tmpDir, `'exit 0'`, "sleep 60")
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -633,7 +663,7 @@ sleep 60`)
 				defer close(done)
 				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
 			}()
-			time.Sleep(100 * time.Millisecond)
+			waitForTrap(t, ready)
 
 			if err := sess.Stop(context.Background()); err != nil {
 				t.Errorf("Stop() = %v, want nil", err)
@@ -655,8 +685,7 @@ sleep 60`)
 		t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script := agenttest.WriteScript(t, tmpDir, "agent", `trap '' TERM
-sleep 60`)
+			script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -668,7 +697,7 @@ sleep 60`)
 				defer close(done)
 				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
 			}()
-			time.Sleep(100 * time.Millisecond)
+			waitForTrap(t, ready)
 
 			if err := sess.Stop(context.Background()); err != nil {
 				t.Errorf("Stop() = %v, want nil", err)
@@ -683,15 +712,17 @@ sleep 60`)
 				t.Errorf(`Stop()'s Warn record missing outcome="grace elapsed": %s`, output)
 			}
 			if !strings.Contains(output, "grace=") {
-				t.Errorf("Stop()'s Warn record missing the grace attribute: %s", output)
+				t.Errorf("Stop()'s Warn record missing the configured grace ceiling: %s", output)
+			}
+			if !strings.Contains(output, "elapsed=") {
+				t.Errorf("Stop()'s Warn record missing the elapsed wait: %s", output)
 			}
 		})
 
 		t.Run("caller_deadline_emits_warn_with_that_outcome", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script := agenttest.WriteScript(t, tmpDir, "agent", `trap '' TERM
-sleep 60`)
+			script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -703,7 +734,7 @@ sleep 60`)
 				defer close(done)
 				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
 			}()
-			time.Sleep(100 * time.Millisecond)
+			waitForTrap(t, ready)
 
 			stopCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
