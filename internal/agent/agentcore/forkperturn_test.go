@@ -23,19 +23,28 @@ import (
 // --- helpers ---
 
 // writeTrapScript writes an agent script that installs a TERM trap,
-// touches a readiness marker, then runs body. It returns the script
-// path and the marker path. trap is the trap body quoted as the shell
-// expects it; body is the command the script blocks in afterwards.
+// touches a readiness marker, then blocks. It returns the script path
+// and the marker path. trap is the trap body quoted as the shell
+// expects it.
 //
 // The marker exists because a fixed sleep cannot prove the trap is
 // installed. If the signal wins that race the shell exits on TERM's
 // default disposition, and the test then passes without exercising the
 // escalation it is named for.
-func writeTrapScript(t *testing.T, dir, trap, body string) (script, marker string) {
+//
+// The script blocks in a shell builtin loop rather than in sleep, so
+// the shell is the only process in the group. A forked child reopens
+// the race the marker closes: the signal can reach the group in the
+// window between the marker and the fork, leaving a child that never
+// received it, that holds the output pipe open, and that therefore
+// keeps cmd.Wait from returning for the child's whole lifetime. The
+// loop costs a few microseconds on the arm where the trap exits, and
+// at most the configured grace on the arms that ignore the signal.
+func writeTrapScript(t *testing.T, dir, trap string) (script, marker string) {
 	t.Helper()
 	marker = filepath.Join(dir, "trap-ready")
 	return agenttest.WriteScript(t, dir, "agent",
-		fmt.Sprintf("trap %s TERM\n: > %q\n%s", trap, marker, body)), marker
+		fmt.Sprintf("trap %s TERM\n: > %q\nwhile :; do :; done", trap, marker)), marker
 }
 
 // waitForTrap blocks until the marker [writeTrapScript] returns appears,
@@ -571,7 +580,7 @@ echo 'second stderr line' >&2`)
 	t.Run("Stop_ConfiguredGraceBoundsTheWait", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
-		script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
+		script, ready := writeTrapScript(t, tmpDir, `''`)
 		target := newTestTarget(tmpDir, script)
 		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
 
@@ -611,7 +620,7 @@ echo 'second stderr line' >&2`)
 		// os/exec's own WaitDelay escalation kills only the direct child,
 		// which would hang the scanner forever instead of exercising the
 		// bounded escalation this test measures.
-		script, ready := writeTrapScript(t, tmpDir, `''`, "while :; do :; done")
+		script, ready := writeTrapScript(t, tmpDir, `''`)
 		target := newTestTarget(tmpDir, script)
 		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
 
@@ -647,7 +656,7 @@ echo 'second stderr line' >&2`)
 		t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script, ready := writeTrapScript(t, tmpDir, `'exit 0'`, "sleep 60")
+			script, ready := writeTrapScript(t, tmpDir, `'exit 0'`)
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -685,7 +694,7 @@ echo 'second stderr line' >&2`)
 		t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
+			script, ready := writeTrapScript(t, tmpDir, `''`)
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -722,7 +731,7 @@ echo 'second stderr line' >&2`)
 		t.Run("caller_deadline_emits_warn_with_that_outcome", func(t *testing.T) {
 			t.Parallel()
 			tmpDir := t.TempDir()
-			script, ready := writeTrapScript(t, tmpDir, `''`, "sleep 60")
+			script, ready := writeTrapScript(t, tmpDir, `''`)
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
