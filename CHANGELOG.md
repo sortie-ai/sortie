@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An `agent-client-protocol` turn that ends because the runtime reached a token limit no longer schedules a retry that resumes the same oversized context into the same limit; the claim is released instead. A turn that ends because the runtime's own request or turn budget was exhausted keeps its existing retryable classification, since a fresh session can complete within it.
   ([#1023](https://github.com/sortie-ai/sortie/issues/1023))
 
+- Stopping a `codex` session now honors the caller's deadline, as every other agent kind already did. `StopSession` ignored the deadline it was given, so a stop asked to finish sooner than the configured stop grace waited out the whole grace anyway and then reported success. It now ends the graceful phase when the deadline expires, force-terminates the process group, and reports the deadline back to its caller.
+  ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
+
 ### Changed
 
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.

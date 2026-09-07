@@ -829,7 +829,10 @@ sleep 60`, 150)
 			t.Errorf(`StopSession()'s Warn record missing outcome="grace elapsed": %s`, output)
 		}
 		if !strings.Contains(output, "grace=") {
-			t.Errorf("StopSession()'s Warn record missing the grace attribute: %s", output)
+			t.Errorf("StopSession()'s Warn record missing the configured grace ceiling: %s", output)
+		}
+		if !strings.Contains(output, "elapsed=") {
+			t.Errorf("StopSession()'s Warn record missing the elapsed wait: %s", output)
 		}
 	})
 }

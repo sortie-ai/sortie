@@ -895,8 +895,12 @@ func reroutedMessage(toModel string) string {
 	return "model rerouted to " + toModel
 }
 
-// StopSession terminates the persistent app-server subprocess.
-func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) error {
+// StopSession terminates the persistent app-server subprocess. The
+// configured stop grace is a ceiling on the wait for a clean exit; a
+// caller deadline that expires first ends the graceful phase and is
+// reported back, so the caller learns the stop did not complete on its
+// own terms.
+func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
@@ -928,15 +932,16 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		state.threadID,
 	)
 
-	// Wait for process exit within the configured grace period.
+	// Wait for process exit within the configured grace period, or
+	// until the caller's deadline ends it first.
+	var stopErr error
 	if waitCh != nil {
+		grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 		started := time.Now()
-		select {
-		case <-waitCh:
-			logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
-		case <-time.After(procutil.StopGrace(state.agentConfig.StopGraceMS)):
+		escalate := func(outcome string) {
 			logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-				slog.String("outcome", "grace elapsed"), slog.Duration("grace", time.Since(started)))
+				slog.String("outcome", outcome), slog.Duration("grace", grace),
+				slog.Duration("elapsed", time.Since(started)))
 			if pid > 0 {
 				procutil.KillProcessGroup(pid) //nolint:errcheck,gosec // best-effort force kill
 			}
@@ -945,6 +950,15 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 			case <-waitCh:
 			case <-time.After(2 * time.Second):
 			}
+		}
+		select {
+		case <-waitCh:
+			logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
+		case <-time.After(grace):
+			escalate("grace elapsed")
+		case <-ctx.Done():
+			escalate("caller deadline")
+			stopErr = ctx.Err()
 		}
 	}
 
@@ -964,7 +978,7 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 	state.waitCh = nil
 	state.mu.Unlock()
 
-	return nil
+	return stopErr
 }
 
 // isAgentError extracts an *[domain.AgentError] from err using type
