@@ -42,6 +42,18 @@ The Claude Code CLI exposes no protocol entry point in its own help output. Ther
 
 Codex exposes no protocol entry point either. Its `app-server` speaks a different JSON-RPC dialect, the one this project's separate `codex` adapter already drives, and that dialect is not the Agent Client Protocol.
 
+## Session load spacing
+
+The adapter holds a `session/load` call until the clock leaves the UTC minute in which this process created the session being loaded. The wait is spent on the open connection, after the handshake and the negative control, and is bounded at one minute.
+
+The wait exists because one runtime's `session/load` issued inside that minute fails and permanently destroys the session's resumability, including every later attempt to load it. `docs/gemini-adapter-notes.md` records the measured evidence for that defect; these notes cover only the spacing built to answer it.
+
+The session continuation capability record cannot be the mechanism here, because the call that would observe the defect is the same call that causes it: a `session/load` sent to measure whether continuation works is the load that destroys the session if it lands in the wrong minute. A per-process ledger of when this adapter created each session, and a deferral computed from that instant, is the only way to keep the observing call out of the window it cannot survive.
+
+This wait is load-bearing. It must not be trimmed as dead time by a later change: removing it restores the defect silently, because nothing else in the adapter or the orchestrator notices a lost session until the run comes back with no history.
+
+Three limits apply. A session created by a previous process is not covered, because the ledger lives in process memory and starts empty on every restart. A wall-clock step backward larger than the deferral can still leave the load inside the session's creation minute, because the deferral clamps at one minute rather than re-reading the clock until the boundary passes. On a launch through the SSH worker, the wait is measured on the orchestrator host's clock, not on the clock of the host actually running the runtime, so a skew between the two hosts larger than the deferral can still land the load inside the runtime host's own creation minute.
+
 ## What a delivered tool server needs to be callable
 
 Delivery and discovery are not the question: the session-creation request carries the declaration, and the runtime launches the server and reads its tool list. A runtime that asks the client for consent before invoking a tool gets a refusal, and the tool is not invoked. The protocol's stdio server declaration carries no trust or approval field, so a declared server cannot be marked pre-authorized on the wire. The only lever is the runtime's own configuration, reached through the operator's `agent.command` and whatever configuration that runtime reads: an approval mode that does not ask, or a rule pre-authorizing the tools of the server Sortie declares.
