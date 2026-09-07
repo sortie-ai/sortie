@@ -5,9 +5,12 @@ import (
 	"time"
 )
 
-// originRetention bounds how long a recorded creation instant is kept.
-// It exceeds loadDeferral's maximum output so an entry is never evicted
-// while it could still require a deferral.
+// originRetention is the age at which record evicts a creation
+// instant. Only record evicts, so a process that stops creating
+// sessions keeps whatever its last calls left behind: that residue is
+// bounded by one window's creates, and costs less than owning a
+// ticker. The value exceeds loadDeferral's maximum output so an entry
+// is never evicted while it could still require a deferral.
 const originRetention = 2 * time.Minute
 
 // originKey identifies one session this process created. The session
