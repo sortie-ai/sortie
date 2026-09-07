@@ -50,8 +50,9 @@ const pumpChannelCapacity = 64
 // instead, so nothing outside the pump's goroutine can reach it. A
 // third class holds a field written once on the StartSession goroutine
 // after the pump has already started: safe because the pump never
-// reads it and teardown, its only reader, runs only after StartSession
-// returns.
+// reads it, and its only reader is teardown, which runs either on that
+// same goroutine while the field still holds its zero value or after
+// StartSession has returned.
 type sessionState struct {
 	target      agentcore.LaunchTarget
 	agentConfig domain.AgentConfig
@@ -551,10 +552,11 @@ type closeCallOutcome struct {
 // the connection's write mutex across the write itself, where no
 // context can reach it, and closing the connection does not release
 // such a write either. The goroutine reads only the connection and the
-// identifier hoisted into its closure, never state, and always exits
-// on its own through the buffered outcome channel; the two teardown
-// steps that follow the graceful signal release it if it is still
-// parked.
+// identifier hoisted into its closure, never state, and reports
+// through a buffered channel whose send never blocks. A goroutine
+// still parked on that write is released by close_stdin, which closes
+// the pipe the write is blocked on; the process-group termination
+// later in the order is the backstop if it is not.
 func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func(state *sessionState) {
 	return func(state *sessionState) {
 		if state.closeSessionID == "" || state.conn == nil {
