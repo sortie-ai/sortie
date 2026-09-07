@@ -79,8 +79,6 @@ homebrew_casks:
     homepage: "https://github.com/sortie-ai/sortie"
     description: "Spec-first orchestration service for coding agents"
     skip_upload: "auto"
-    url:
-      verified: "github.com/sortie-ai/sortie/"
     hooks:
       post:
         install: |
