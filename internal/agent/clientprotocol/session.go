@@ -645,7 +645,7 @@ type teardownStep struct {
 // when they are not met, so StopSession never panics on a
 // partially-constructed session.
 //
-// close_session runs first, immediately after answer_open, and issues
+// close_session runs immediately after answer_open and issues
 // a bounded session/close call when the handshake advertised the
 // capability: it precedes the graceful signal because closing the
 // session is only worth attempting while the runtime is still running
