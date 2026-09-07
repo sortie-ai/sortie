@@ -549,7 +549,7 @@ func (f *Fixture) addContinuation() {
 		recall.EvidencePath = new("/continuation/recall")
 		recall.SessionID = new(seedSession)
 		recall.PriorSessionID = new(seedSession)
-		recall.Detail = recallConfirmedSameSession
+		recall.Detail = RecallConfirmedSameSession
 		if Surface == SurfaceProtocol {
 			recall.AgentName = new(FixtureAgentName)
 			recall.AgentVersion = new(FixtureAgentVer)
