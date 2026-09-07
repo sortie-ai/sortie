@@ -48,7 +48,7 @@ Delivery and discovery are not the question: the session-creation request carrie
 
 This was measured on `gemini`, the one runtime above the gated suite drives end to end; the other runtimes in these notes are unmeasured on this point, and an absent probe is never read as a measured negative.
 
-When the situation arises, the adapter reports it once per session on two surfaces. The notification reaches the orchestrator's generic event handling and is recorded at `Debug`, its message overwritten by the next message-carrying event. The `Warn` record is the only surface that outlives the run, for as long as the run's log is kept.
+When the situation arises, the adapter reports it once per session on two surfaces. The notification reaches the orchestrator's generic event handling, which records the event type at `Debug` and carries the message itself nowhere but the running entry's last agent message, where the next message-carrying event overwrites it. The `Warn` record is the only surface that outlives the run, for as long as the run's log is kept.
 
 ## Verifying a change
 
