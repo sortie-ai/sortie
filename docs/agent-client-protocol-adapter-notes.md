@@ -42,6 +42,10 @@ The Claude Code CLI exposes no protocol entry point in its own help output. Ther
 
 Codex exposes no protocol entry point either. Its `app-server` speaks a different JSON-RPC dialect, the one this project's separate `codex` adapter already drives, and that dialect is not the Agent Client Protocol.
 
+## Session close
+
+Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. Of the runtimes recorded above, `copilot` and `opencode` advertise it; `gemini` does not. This path carries fixture coverage only, because both advertising runtimes above were probed at handshake alone.
+
 ## Session load spacing
 
 The adapter holds a `session/load` call until the clock leaves the UTC minute in which this process created the session being loaded. The wait is spent on the open connection, after the handshake and the negative control, and is bounded at one minute.
