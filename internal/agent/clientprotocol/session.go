@@ -529,8 +529,8 @@ func runTurn(ctx context.Context, session domain.Session, params domain.RunTurnP
 }
 
 // closeCallBound returns the ceiling the close_session teardown step
-// spends waiting for a session/close response: half of grace,
-// truncated toward zero.
+// spends waiting for a session/close response: half of the window it
+// is given, truncated toward zero.
 func closeCallBound(grace time.Duration) time.Duration {
 	return grace / 2
 }
@@ -543,9 +543,9 @@ type closeCallOutcome struct {
 }
 
 // closeSession returns a teardown step that issues one session/close
-// call for state.closeSessionID, bounded by closeCallBound(grace) and
-// by graceCtx's own deadline. It does nothing when no identifier was
-// recorded or the connection is already gone.
+// call for state.closeSessionID, bounded by half of whatever remains
+// on graceCtx. It does nothing when no identifier was recorded or the
+// connection is already gone.
 //
 // The call runs on a goroutine the step never joins beyond its own
 // bound: a write already parked on a full standard-input pipe holds
@@ -564,7 +564,16 @@ func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func
 		}
 		conn, id := state.conn, state.closeSessionID
 
+		// Half of what remains on graceCtx rather than half of the
+		// configured grace: a caller deadline nearer than that grace
+		// would otherwise let this one call spend the whole graceful
+		// window and starve the signal behind it.
 		bound := closeCallBound(grace)
+		if deadline, ok := graceCtx.Deadline(); ok {
+			if half := closeCallBound(max(time.Until(deadline), 0)); half < bound {
+				bound = half
+			}
+		}
 		callCtx, cancel := context.WithTimeout(graceCtx, bound)
 		defer cancel()
 

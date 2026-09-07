@@ -874,6 +874,51 @@ func TestStopSessionTeardownCloseAndAwaitExitShareGrace(t *testing.T) {
 	}
 }
 
+// TestStopSessionTeardownCloseHalvesTheCallerWindow asserts that the
+// session/close bound follows whatever remains on the graceful context
+// rather than the configured grace. With a caller deadline nearer than
+// that grace, a runtime that never answers must not cost the whole
+// remaining window: the graceful signal behind the call needs its
+// share of it.
+func TestStopSessionTeardownCloseHalvesTheCallerWindow(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, nil)
+	state.closeSessionID = "sess-caller-window"
+
+	const (
+		grace        = 10 * time.Second
+		callerWindow = 2 * time.Second
+	)
+	callerCtx, cancelCaller := context.WithTimeout(context.Background(), callerWindow)
+	defer cancelCaller()
+	graceCtx, cancel := context.WithTimeout(callerCtx, grace)
+	defer cancel()
+
+	signalAnswerOpen(state)
+
+	start := time.Now()
+	closeSession(callerCtx, graceCtx, grace)(state)
+	elapsed := time.Since(start)
+
+	runTeardown(state, []teardownStep{
+		{name: "kill_process_group", run: killProcessGroup},
+		{name: "close_stdin", run: closeStdin},
+		{name: "close_stdout", run: closeStdout},
+		{name: "close_connection", run: closeConnection},
+		{name: "stop_pump", run: stopPump},
+		{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
+	})
+	assertSessionGoroutinesExited(t, state)
+
+	const schedulingOverhead = 400 * time.Millisecond
+	if bound := callerWindow - schedulingOverhead; elapsed >= bound {
+		t.Errorf("close_session spent %v of the caller's %v window, want under %v so the graceful signal keeps a share", elapsed, callerWindow, bound)
+	}
+}
+
 // TestStopSessionGrace_ConfiguredValueBoundsTheWait asserts that
 // stopSession's graceCtx expires at a configured agent.stop_grace_ms,
 // not at the built-in five-second default: a small configured grace
