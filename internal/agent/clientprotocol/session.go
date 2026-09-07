@@ -71,6 +71,10 @@ type sessionState struct {
 	pumpDone chan struct{}
 
 	logger *slog.Logger
+
+	// origins is the adapter-wide creation ledger, shared by every
+	// session the adapter starts.
+	origins *sessionOrigins
 }
 
 // pumpItem is either a message routed from the connection's handler or
@@ -178,7 +182,7 @@ func readTimeout(state *sessionState) time.Duration {
 // stage-one states before the pump starts, and the pump applies
 // handshake- and continuation-based lowering to it once the
 // corresponding control message arrives.
-func startSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+func startSession(ctx context.Context, origins *sessionOrigins, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -198,6 +202,7 @@ func startSession(ctx context.Context, params domain.StartSessionParams) (domain
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      slog.Default().With(slog.String("component", "clientprotocol-adapter")),
+		origins:     origins,
 	}
 
 	var cmd *exec.Cmd

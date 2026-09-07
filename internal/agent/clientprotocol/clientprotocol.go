@@ -29,10 +29,14 @@ func init() {
 var _ domain.AgentAdapter = (*ClientProtocolAdapter)(nil)
 
 // ClientProtocolAdapter satisfies [domain.AgentAdapter] for the Agent
-// Client Protocol. One adapter instance serves every concurrent session;
-// it holds no mutable state of its own, and all per-session state lives
-// in [sessionState], reached through [domain.Session.Internal].
-type ClientProtocolAdapter struct{}
+// Client Protocol. One adapter instance serves every concurrent
+// session; per-session state lives in [sessionState], reached through
+// [domain.Session.Internal], while origins is the adapter's own
+// mutable state, shared by every session the adapter starts and
+// outliving any one of them.
+type ClientProtocolAdapter struct {
+	origins sessionOrigins
+}
 
 // NewClientProtocolAdapter constructs a [ClientProtocolAdapter] from the
 // kind's own configuration block. It reads exactly one key, mcp_config,
@@ -51,7 +55,7 @@ func NewClientProtocolAdapter(config map[string]any) (domain.AgentAdapter, error
 // StartSession launches the runtime, performs the initialize handshake,
 // and creates a session with session/new.
 func (a *ClientProtocolAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	return startSession(ctx, params)
+	return startSession(ctx, &a.origins, params)
 }
 
 // RunTurn runs one prompt turn on an existing session.
