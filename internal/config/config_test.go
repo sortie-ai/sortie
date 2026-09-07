@@ -2727,7 +2727,10 @@ func TestNewServiceConfig_AgentStopGraceMS(t *testing.T) {
 
 	t.Run("AboveCeiling", func(t *testing.T) {
 		t.Parallel()
-		over := int(MaxDurationMS) + 1
+		// int64 throughout: int(MaxDurationMS) is a constant conversion
+		// that does not fit a 32-bit int, so it fails to compile on such a
+		// target rather than at run time. coerceInt accepts int64.
+		over := MaxDurationMS + 1
 		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"stop_grace_ms": over}})
 		assertConfigErrorField(t, err, "agent.stop_grace_ms")
 		var ce *ConfigError
