@@ -3,12 +3,15 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -21,6 +24,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -693,4 +697,179 @@ func TestStopSession_ReturnsWhileWriteParked(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("StopSession() did not return while a write was parked, want it to return well short of its own 5-second graceful-wait ceiling")
 	}
+}
+
+// startFakeCodexProcess writes scriptBody, touching a readiness marker
+// right after its leading trap statement so a caller's subsequent
+// SignalGraceful cannot race the shell installing the trap, starts it
+// in its own process group, and wires a minimal sessionState around it
+// with an already-closed readerDone (this harness has no reader
+// goroutine for StopSession to wait for).
+func startFakeCodexProcess(t *testing.T, scriptBody string, stopGraceMS int) *sessionState {
+	t.Helper()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	trapLine, rest, ok := strings.Cut(scriptBody, "\n")
+	if !ok || !strings.HasPrefix(trapLine, "trap ") {
+		t.Fatalf("startFakeCodexProcess: scriptBody must start with a trap statement, got %q", scriptBody)
+	}
+	script := trapLine + "\ntouch '" + readyPath + "'\n" + rest
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
+
+	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
+	procutil.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	t.Cleanup(func() { procutil.KillProcessGroup(cmd.Process.Pid) }) //nolint:errcheck // best-effort cleanup
+
+	readerDone := make(chan struct{})
+	close(readerDone)
+
+	state := &sessionState{
+		agentConfig: domain.AgentConfig{StopGraceMS: stopGraceMS},
+		proc:        cmd.Process,
+		waitCh:      make(chan struct{}),
+		readerDone:  readerDone,
+		stopCh:      make(chan struct{}),
+	}
+	go func() {
+		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit state is irrelevant here
+		close(state.waitCh)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			return state
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("startFakeCodexProcess: readiness marker %q did not appear within 5s", readyPath)
+	return nil
+}
+
+// TestStopSession_ConfiguredGraceBoundsTheWait asserts that a
+// configured agent.stop_grace_ms bounds StopSession's graceful wait,
+// not the built-in five-second default.
+func TestStopSession_ConfiguredGraceBoundsTheWait(t *testing.T) {
+	t.Parallel()
+
+	state := startFakeCodexProcess(t, `trap '' TERM
+while :; do :; done`, 200)
+
+	start := time.Now()
+	err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Errorf("StopSession() = %v, want nil", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("StopSession() force-terminated after %v, want well under the built-in 5s default (proves the configured 200ms grace bounded the wait, not DefaultStopGrace)", elapsed)
+	}
+}
+
+// TestStopSession_EscalationLogging asserts the escalation records
+// codex's StopSession emits: Debug on an exit inside the grace, and
+// Warn naming the outcome, the configured ceiling and the elapsed wait
+// when the phase ends without one. Both escalation outcomes are
+// reachable here, because StopSession ends the phase on whichever of
+// the grace and the caller's deadline arrives first.
+func TestStopSession_EscalationLogging(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+
+	t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
+		var buf bytes.Buffer
+		orig := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { slog.SetDefault(orig) })
+
+		// The grace is far longer than this exit needs. The subtest proves
+		// which record the clean-exit path emits, not that the grace bounds
+		// anything, and a tight bound races the runner's scheduler instead
+		// of testing the code.
+		state := startFakeCodexProcess(t, `trap 'exit 0' TERM
+while :; do :; done`, 30000)
+
+		if err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
+			t.Errorf("StopSession() = %v, want nil", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "agent exited during the graceful phase") {
+			t.Errorf("StopSession() did not log the exited-inside-grace Debug record: %s", output)
+		}
+		if !strings.Contains(output, `outcome=exited`) {
+			t.Errorf("StopSession()'s Debug record missing outcome=exited: %s", output)
+		}
+		if strings.Contains(output, "level=WARN") {
+			t.Errorf("StopSession() logged a Warn record for a clean exit, want none: %s", output)
+		}
+	})
+
+	t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
+		var buf bytes.Buffer
+		orig := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { slog.SetDefault(orig) })
+
+		state := startFakeCodexProcess(t, `trap '' TERM
+while :; do :; done`, 150)
+
+		if err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
+			t.Errorf("StopSession() = %v, want nil", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "agent did not exit inside the graceful period and was force-terminated") {
+			t.Errorf("StopSession() did not log the grace-elapsed Warn record: %s", output)
+		}
+		if !strings.Contains(output, `outcome="grace elapsed"`) {
+			t.Errorf(`StopSession()'s Warn record missing outcome="grace elapsed": %s`, output)
+		}
+		if !strings.Contains(output, "grace=") {
+			t.Errorf("StopSession()'s Warn record missing the configured grace ceiling: %s", output)
+		}
+		if !strings.Contains(output, "elapsed=") {
+			t.Errorf("StopSession()'s Warn record missing the elapsed wait: %s", output)
+		}
+	})
+
+	t.Run("caller_deadline_ends_the_phase_and_is_reported", func(t *testing.T) {
+		var buf bytes.Buffer
+		orig := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { slog.SetDefault(orig) })
+
+		// The grace is far longer than the deadline, so only a
+		// StopSession that reads its context can end this phase. When
+		// it ignored the context, this arm waited out the whole grace
+		// and then reported success.
+		state := startFakeCodexProcess(t, `trap '' TERM
+while :; do :; done`, 30000)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		err := (&CodexAdapter{}).StopSession(ctx, domain.Session{Internal: state})
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("StopSession() = %v, want context.DeadlineExceeded", err)
+		}
+		if elapsed > 10*time.Second {
+			t.Errorf("StopSession() returned after %v, want the caller's deadline to end the phase far below the 30s grace", elapsed)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, `outcome="caller deadline"`) {
+			t.Errorf(`StopSession()'s Warn record missing outcome="caller deadline": %s`, output)
+		}
+		if !strings.Contains(output, "grace=30s") {
+			t.Errorf("StopSession()'s Warn record did not report the configured 30s ceiling: %s", output)
+		}
+	})
 }

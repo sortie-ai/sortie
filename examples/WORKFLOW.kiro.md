@@ -43,6 +43,7 @@ agent:
   # wall-clock bound; stall_timeout_ms below catches a silent turn.
   turn_timeout_ms: 1800000
   stall_timeout_ms: 300000
+  stop_grace_ms: 5000
   max_retry_backoff_ms: 300000
 
 kiro:

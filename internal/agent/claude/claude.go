@@ -345,7 +345,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
 	}
 
-	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger())
+	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger(), state.agentConfig.StopGraceMS)
 
 	return domain.Session{
 		ID:       sessionUUID,

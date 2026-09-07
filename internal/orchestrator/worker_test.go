@@ -2261,6 +2261,76 @@ func TestRunWorkerAttempt_AfterRunHookCannotReachWorkerResult(t *testing.T) {
 
 // --- stopSessionBestEffort unit tests ---
 
+// TestStopSessionDeadline asserts the pure formula directly: the
+// resolved grace plus three drain periods, tracking a configured
+// agent.stop_grace_ms rather than a fixed value.
+func TestStopSessionDeadline(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		stopGraceMS int
+	}{
+		{"AbsentDefaultsToBuiltIn", 0},
+		{"SmallConfiguredValue", 1000},
+		{"LargeConfiguredValue", 60000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.ServiceConfig{Agent: config.AgentConfig{StopGraceMS: tt.stopGraceMS}}
+			want := procutil.StopGrace(tt.stopGraceMS) + 3*procutil.DefaultDrainGrace
+
+			if got := stopSessionDeadline(cfg); got != want {
+				t.Errorf("stopSessionDeadline(cfg with StopGraceMS=%d) = %v, want %v", tt.stopGraceMS, got, want)
+			}
+		})
+	}
+}
+
+// TestStopSessionBestEffort_DeadlineTracksConfiguredStopGrace asserts
+// the complement of "deadline_does_not_follow_read_timeout_ms": with
+// agent.read_timeout_ms held fixed, raising agent.stop_grace_ms raises
+// the deadline stopSessionBestEffort hands StopSession, proving the
+// deadline is derived from the configured grace rather than from a
+// constant that merely happens to be insensitive to read_timeout_ms.
+func TestStopSessionBestEffort_DeadlineTracksConfiguredStopGrace(t *testing.T) {
+	t.Parallel()
+
+	measureDeadline := func(t *testing.T, stopGraceMS int) time.Time {
+		t.Helper()
+		var deadlineReceived time.Time
+		adapter := &mockAgentAdapter{
+			stopSessionFn: func(ctx context.Context, _ domain.Session) error {
+				dl, _ := ctx.Deadline()
+				deadlineReceived = dl
+				return nil
+			},
+		}
+		cfg := config.ServiceConfig{
+			Agent: config.AgentConfig{ReadTimeoutMS: 5000, StopGraceMS: stopGraceMS},
+		}
+		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
+		return deadlineReceived
+	}
+
+	shortDeadline := measureDeadline(t, 1000)
+	longDeadline := measureDeadline(t, 60000)
+
+	if !longDeadline.After(shortDeadline) {
+		t.Errorf("deadline at stop_grace_ms=60000 (%v) is not after the deadline at stop_grace_ms=1000 (%v), want the configured grace to raise it", longDeadline, shortDeadline)
+	}
+
+	cfg := config.ServiceConfig{Agent: config.AgentConfig{ReadTimeoutMS: 5000, StopGraceMS: 60000}}
+	wantGrowth := stopSessionDeadline(cfg) - (procutil.StopGrace(1000) + 3*procutil.DefaultDrainGrace)
+	gotGrowth := longDeadline.Sub(shortDeadline)
+	if gotGrowth < wantGrowth-2*time.Second || gotGrowth > wantGrowth+2*time.Second {
+		t.Errorf("deadline grew by %v between stop_grace_ms=1000 and stop_grace_ms=60000, want ~%v", gotGrowth, wantGrowth)
+	}
+}
+
 func TestStopSessionBestEffort(t *testing.T) {
 	t.Parallel()
 
@@ -2378,7 +2448,7 @@ func TestStopSessionBestEffort(t *testing.T) {
 		}
 	})
 
-	t.Run("deadline_above_the_floor_follows_the_field", func(t *testing.T) {
+	t.Run("deadline_does_not_follow_read_timeout_ms", func(t *testing.T) {
 		t.Parallel()
 
 		var deadlineReceived time.Time
@@ -2390,6 +2460,10 @@ func TestStopSessionBestEffort(t *testing.T) {
 			},
 		}
 
+		// agent.read_timeout_ms no longer contributes to the deadline
+		// at all: stopSessionDeadline derives it from agent.stop_grace_ms
+		// alone, so a read timeout well above the floor still lands on
+		// the same deadline an absent one would.
 		cfg := config.ServiceConfig{
 			Agent: config.AgentConfig{ReadTimeoutMS: 25000},
 		}
@@ -2397,9 +2471,9 @@ func TestStopSessionBestEffort(t *testing.T) {
 		before := time.Now()
 		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
 
-		wantDeadline := before.Add(25 * time.Second)
+		wantDeadline := before.Add(stopSessionDeadline(cfg))
 		if deadlineReceived.Before(wantDeadline.Add(-2*time.Second)) || deadlineReceived.After(wantDeadline.Add(2*time.Second)) {
-			t.Errorf("deadline = %v, want ~%v: agent.read_timeout_ms=25000 sits above the floor and must reach the caller", deadlineReceived, wantDeadline)
+			t.Errorf("deadline = %v, want ~%v: agent.read_timeout_ms=25000 must not reach the caller", deadlineReceived, wantDeadline)
 		}
 	})
 
@@ -6746,7 +6820,7 @@ func TestRunWorkerAttempt_CancellationNotReportedAsTimeout(t *testing.T) {
 	}
 }
 
-func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
+func TestRunWorkerAttempt_TurnTimeoutTeardownIgnoresReadTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("after_run hook uses touch command")
 	}
@@ -6757,9 +6831,9 @@ func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
 
 	cfg := defaultWorkerConfig(tmpDir)
 	cfg.Agent.TurnTimeoutMS = 150
-	// Above the floor stopSessionBestEffort now applies (20s at
-	// defaults), so the deadline it builds still follows this field
-	// rather than the floor.
+	// stopSessionDeadline no longer reads agent.read_timeout_ms at all,
+	// so a value well above the deadline it derives from
+	// agent.stop_grace_ms must not reach the caller.
 	cfg.Agent.ReadTimeoutMS = 25000
 	cfg.Agent.StallTimeoutMS = 0
 	cfg.Agent.MaxTurns = 1
@@ -6816,8 +6890,9 @@ func TestRunWorkerAttempt_TurnTimeoutTeardownUsesReadTimeout(t *testing.T) {
 	if !hadDeadline {
 		t.Fatal("StopSession context has no deadline")
 	}
-	if remaining := time.Until(deadline); remaining <= 23*time.Second || remaining > 25*time.Second {
-		t.Errorf("StopSession context deadline = %v from now, want in (23s, 25s], reflecting read_timeout_ms=25000 rather than the 150ms turn bound", remaining)
+	wantDeadline := stopSessionDeadline(cfg)
+	if remaining := time.Until(deadline); remaining <= wantDeadline-2*time.Second || remaining > wantDeadline {
+		t.Errorf("StopSession context deadline = %v from now, want in (%v, %v], derived from agent.stop_grace_ms rather than agent.read_timeout_ms=25000", remaining, wantDeadline-2*time.Second, wantDeadline)
 	}
 
 	if _, err := os.Stat(markerPath); err != nil {
@@ -7622,5 +7697,27 @@ func TestRunWorkerAttempt_TurnBudgetInPhaseNoChangeNeeded(t *testing.T) {
 	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
 	if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
 		t.Errorf("status file still present after an in-phase no-change-needed declaration, want removed: err=%v", err)
+	}
+}
+
+// TestStopGraceDefaultMatchesBuiltIn pins the one invariant the two
+// layers cannot state to each other. The configuration layer defaults
+// agent.stop_grace_ms to a literal because it must not import the
+// package that owns the built-in grace, so nothing makes the two agree
+// at compile time. This package imports both, and a change to either
+// side alone fails here rather than silently shifting every adapter's
+// default teardown.
+func TestStopGraceDefaultMatchesBuiltIn(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.NewServiceConfig(map[string]any{
+		"agent": map[string]any{"kind": "mock"},
+	})
+	if err != nil {
+		t.Fatalf("config.NewServiceConfig() = %v, want nil", err)
+	}
+	got := time.Duration(cfg.Agent.StopGraceMS) * time.Millisecond
+	if got != procutil.DefaultStopGrace {
+		t.Errorf("agent.stop_grace_ms default = %v, want %v (procutil.DefaultStopGrace)", got, procutil.DefaultStopGrace)
 	}
 }

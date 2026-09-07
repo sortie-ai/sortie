@@ -271,6 +271,17 @@ Fields:
   - Changes are re-applied at runtime and affect every lane that evaluates the ceiling: future
     worker exits, retry timer evaluations, and the poll tick's park sweep.
   - The separate `max_sessions` governs the total per-issue session budget.
+- `stop_grace_ms` (integer)
+  - Default: `5000`.
+  - The period an adapter waits, after sending a catchable termination signal, for the agent to
+    exit on its own before it force-terminates the process group.
+  - `0`, a negative value, and a value above the largest millisecond count whose conversion to a
+    duration stays positive are rejected as a configuration error at parse time, so startup,
+    `sortie validate`, and the reload fail-safe path all reject them.
+  - Overridable through `SORTIE_AGENT_STOP_GRACE_MS`.
+  - Takes effect for future worker attempts, not an in-flight session.
+  - In `claude-code`, `copilot-cli`, `kiro`, and `opencode`, the same value also bounds a
+    cancelled turn's escalation to a force kill.
 
 Adapter-specific pass-through config:
 

@@ -215,7 +215,8 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 		cmd.Dir = target.WorkspacePath
 	}
-	procutil.SetGroupCancel(cmd)
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	procutil.SetGroupCancel(cmd, grace)
 	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -275,9 +276,9 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 	go runPump(state)
 
 	teardownOnFailure := func() {
-		graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+		graceCtx, cancel := context.WithTimeout(ctx, grace)
 		defer cancel()
-		runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
+		runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
 	}
 
 	initResp, agentErr := doInitialize(ctx, state)
@@ -518,9 +519,10 @@ func stopSession(ctx context.Context, session domain.Session) error {
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	graceCtx, cancel := context.WithTimeout(ctx, procutil.DefaultStopGrace)
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	graceCtx, cancel := context.WithTimeout(ctx, grace)
 	defer cancel()
-	runTeardown(state, defaultTeardownOrder(ctx, graceCtx))
+	runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
 	return nil
 }
 
@@ -559,12 +561,12 @@ type teardownStep struct {
 // before the pump's answer would be written. Closing that gap needs a
 // synchronization point between teardown and the pump that this order
 // does not add.
-func defaultTeardownOrder(callerCtx, graceCtx context.Context) []teardownStep {
+func defaultTeardownOrder(callerCtx, graceCtx context.Context, grace time.Duration) []teardownStep {
 	return []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
 		{name: "signal_graceful", run: signalGraceful},
 		{name: "close_stdin", run: closeStdin},
-		{name: "await_exit", run: awaitExit(callerCtx, graceCtx)},
+		{name: "await_exit", run: awaitExit(callerCtx, graceCtx, grace)},
 		{name: "kill_process_group", run: killProcessGroup},
 		{name: "close_stdout", run: closeStdout},
 		{name: "close_connection", run: closeConnection},
@@ -624,7 +626,7 @@ func signalGraceful(state *sessionState) {
 // was already signalled and reaped ahead of StopSession, and treating
 // that race as an escalation would warn about a state loss that never
 // happened.
-func awaitExit(callerCtx, graceCtx context.Context) func(state *sessionState) {
+func awaitExit(callerCtx, graceCtx context.Context, grace time.Duration) func(state *sessionState) {
 	return func(state *sessionState) {
 		if state.pid <= 0 || state.waitCh == nil {
 			return
@@ -648,7 +650,8 @@ func awaitExit(callerCtx, graceCtx context.Context) func(state *sessionState) {
 				outcome = "caller deadline"
 			}
 			state.logger.Warn("agent did not exit inside the graceful period and was force-terminated",
-				slog.String("outcome", outcome), slog.Duration("grace", time.Since(started)))
+				slog.String("outcome", outcome), slog.Duration("grace", grace),
+				slog.Duration("elapsed", time.Since(started)))
 		}
 	}
 }

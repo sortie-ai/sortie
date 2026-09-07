@@ -218,6 +218,13 @@ type AgentConfig struct {
 	MaxConcurrentByState map[string]int
 	MaxSessions          int
 
+	// StopGraceMS is the period an adapter waits, after sending a
+	// catchable termination signal, for the agent to exit on its own
+	// before it force-terminates the process group. Always positive:
+	// the configuration layer rejects a non-positive value rather than
+	// reading it as a sentinel that removes the grace.
+	StopGraceMS int
+
 	// MaxTokens is the cumulative per-issue token ceiling enforced at
 	// dispatch preflight. 0 means unlimited.
 	MaxTokens int
@@ -261,17 +268,18 @@ const (
 // preflight validator and the adapter constructor read, so the two can
 // never disagree about what an adapter of that kind would see.
 //
-// The map carries exactly five keys derived from cfg.Agent's typed
+// The map carries exactly six keys derived from cfg.Agent's typed
 // fields: kind (set to the kind parameter rather than cfg.Agent.Kind,
 // so a dispatch-rule-routed kind resolves correctly), command,
-// turn_timeout_ms, read_timeout_ms, and stall_timeout_ms. Every other
+// turn_timeout_ms, read_timeout_ms, stall_timeout_ms, and
+// stop_grace_ms. Every other
 // [AgentConfig] field is intentionally excluded: those fields are
 // orchestrator-only, consumed through the typed [AgentConfig] before
 // this map reaches a constructor, and including them would shadow an
 // adapter extension key of the same name during the merge below.
 //
 // The kind-named sub-object under cfg.extensions, if present, is
-// merged in without overwriting any of the five keys above. The
+// merged in without overwriting any of the six keys above. The
 // returned map is freshly allocated on every call.
 func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
 	m, _, _ := agentAdapterConfig(cfg, kind)
@@ -292,6 +300,7 @@ func agentAdapterConfig(cfg ServiceConfig, kind string) (m map[string]any, prese
 		"turn_timeout_ms":  cfg.Agent.TurnTimeoutMS,
 		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
 		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
+		"stop_grace_ms":    cfg.Agent.StopGraceMS,
 	}
 	presence, description = mergeExtensionSection(m, cfg.extensions, kind)
 	return m, presence, description
@@ -315,7 +324,7 @@ type AgentSettings struct {
 
 	// BlockPresence reports what the front matter carries under the
 	// top-level key named Kind. Passthrough is never empty and cannot
-	// answer this: AgentAdapterConfig seeds five keys before any
+	// answer this: AgentAdapterConfig seeds six keys before any
 	// merge.
 	BlockPresence ExtensionBlockPresence
 
@@ -879,6 +888,30 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		stallTimeoutMS = parsed
 	}
 
+	stopGraceMS := 5000
+	if v, exists := m["stop_grace_ms"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return AgentConfig{}, &ConfigError{
+				Field:   "agent.stop_grace_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		stopGraceMS = parsed
+	}
+	if stopGraceMS <= 0 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.stop_grace_ms",
+			Message: "must be greater than 0",
+		}
+	}
+	if int64(stopGraceMS) > MaxDurationMS {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.stop_grace_ms",
+			Message: fmt.Sprintf("must not exceed %d (about 292 years), got %d", MaxDurationMS, stopGraceMS),
+		}
+	}
+
 	maxConcurrent, err := coerceIntField(m, "max_concurrent_agents", "agent.max_concurrent_agents")
 	if err != nil {
 		return AgentConfig{}, err
@@ -955,6 +988,7 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		TurnTimeoutMS:          turnTimeoutMS,
 		ReadTimeoutMS:          readTimeoutMS,
 		StallTimeoutMS:         stallTimeoutMS,
+		StopGraceMS:            stopGraceMS,
 		MaxConcurrentAgents:    maxConcurrent,
 		MaxTurns:               maxTurns,
 		MaxRetryBackoffMS:      maxRetryBackoff,

@@ -425,15 +425,22 @@ func toDomainAgentConfig(c config.AgentConfig, kind string) domain.AgentConfig {
 		TurnTimeoutMS:  c.TurnTimeoutMS,
 		ReadTimeoutMS:  c.ReadTimeoutMS,
 		StallTimeoutMS: c.StallTimeoutMS,
+		StopGraceMS:    c.StopGraceMS,
 	}
+}
+
+// stopSessionDeadline returns the duration a session stop is allowed to
+// spend: the configured agent.stop_grace_ms plus three full graceful
+// teardown periods, one for each bounded drain wait the teardown can
+// spend.
+func stopSessionDeadline(cfg config.ServiceConfig) time.Duration {
+	return procutil.StopGrace(cfg.Agent.StopGraceMS) + 3*procutil.DefaultDrainGrace
 }
 
 // stopSessionBestEffort terminates the agent session using a detached
 // context so that teardown proceeds even when the worker's ctx is
-// cancelled. The timeout is the agent's ReadTimeoutMS config, floored
-// at the duration a full graceful teardown can take: a value above the
-// floor still lengthens the deadline, and no value shortens it below a
-// full teardown. Errors are logged and swallowed.
+// cancelled. The timeout is [stopSessionDeadline]. Errors are logged
+// and swallowed.
 func stopSessionBestEffort(
 	ctx context.Context,
 	adapter domain.AgentAdapter,
@@ -443,10 +450,7 @@ func stopSessionBestEffort(
 ) {
 	detachedCtx := context.WithoutCancel(ctx)
 
-	floor := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace
-	timeout := max(time.Duration(cfg.Agent.ReadTimeoutMS)*time.Millisecond, floor)
-
-	stopCtx, cancel := context.WithTimeout(detachedCtx, timeout)
+	stopCtx, cancel := context.WithTimeout(detachedCtx, stopSessionDeadline(cfg))
 	defer cancel()
 
 	if err := adapter.StopSession(stopCtx, session); err != nil {

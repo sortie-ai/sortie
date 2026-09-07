@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -819,6 +820,67 @@ func TestShippedWorkflowsProduceNoMissingBlockDiagnostic(t *testing.T) {
 				if e.Check == "dispatch.agent.missing_block" {
 					t.Errorf("ValidateDispatchConfig() reported dispatch.agent.missing_block: %s", e.Message)
 				}
+			}
+		})
+	}
+}
+
+// TestShippedWorkflowsCarryStopGraceMS verifies that every shipped
+// WORKFLOW*.md carries an explicit stop_grace_ms: 5000 in its agent:
+// block, except the one kind with no graceful phase for the field to
+// bound. Presence is checked against the raw front-matter map rather
+// than the resolved config, because the default the config layer
+// applies to an absent key is the same 5000 the shipped value uses: a
+// resolved-value check alone would not fail if a file's key were
+// dropped. A workflow file added later without the key fails this
+// test, which is what keeps the shipped configurations from drifting
+// apart.
+func TestShippedWorkflowsCarryStopGraceMS(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range shippedWorkflowPaths(t) {
+		name, err := filepath.Rel(repoRoot(t), path)
+		if err != nil {
+			name = filepath.Base(path)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wf, err := workflow.Load(path)
+			if err != nil {
+				t.Fatalf("workflow.Load: %v", err)
+			}
+
+			// Both the kind and the value come from the front matter
+			// rather than from a resolved ServiceConfig.
+			// NewServiceConfig applies the SORTIE_* overrides, so an
+			// inherited SORTIE_AGENT_STOP_GRACE_MS would replace the
+			// file's own value and fail this test for every workflow
+			// even when every file on disk is correct. That the files
+			// still load is covered separately.
+			agentExt, ok := wf.Config["agent"]
+			if !ok {
+				t.Fatal("workflow front matter missing 'agent' block")
+			}
+			agentMap, ok := agentExt.(map[string]any)
+			if !ok {
+				t.Fatalf("agent block type = %T, want map[string]any", agentExt)
+			}
+			value, present := agentMap["stop_grace_ms"]
+
+			if kind, _ := agentMap["kind"].(string); kind == "mock" {
+				if present {
+					t.Errorf("agent.stop_grace_ms present at %v for the mock kind, want absent: mock launches no process and has no graceful phase for the field to bound", value)
+				}
+				return
+			}
+
+			if !present {
+				t.Fatal("agent: block missing stop_grace_ms, want an explicit stop_grace_ms: 5000")
+			}
+			if got := fmt.Sprint(value); got != "5000" {
+				t.Errorf("agent.stop_grace_ms = %s, want 5000", got)
 			}
 		})
 	}

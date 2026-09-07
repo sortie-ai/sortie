@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -5597,6 +5598,275 @@ func TestDrainRunningWorkers_AbsenceCeiling(t *testing.T) {
 		if !strings.Contains(buf.String(), "absence_ceiling=5") {
 			t.Errorf("issue-parked log missing absence_ceiling=5, want the configured ceiling rather than the built-in default 3\nlogs: %s", buf.String())
 		}
+	})
+}
+
+// TestDrainRunningWorkers_CeilingFormula pins the exact ceiling value
+// drainRunningWorkers derives when o.drainTimeout carries no override:
+// 50s at the default configuration, and the configured grace plus
+// drainExitMargin for any other grace. Asserted against the formula
+// directly rather than by letting drainRunningWorkers actually run to
+// that bound, which the derived ceiling's own floor (agent.stop_grace_ms's
+// smallest admissible value plus three fixed drain periods) puts at
+// no less than 45s of real wait.
+func TestDrainRunningWorkers_CeilingFormula(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		stopGraceMS int
+		want        time.Duration
+	}{
+		{"DefaultConfiguration", 0, 50 * time.Second},
+		{"ConfiguredGraceRaisesTheCeiling", 60000, 60*time.Second + 3*procutil.DefaultDrainGrace + drainExitMargin},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.ServiceConfig{Agent: config.AgentConfig{StopGraceMS: tt.stopGraceMS}}
+			got := stopSessionDeadline(cfg) + drainExitMargin
+			if got != tt.want {
+				t.Errorf("stopSessionDeadline(cfg) + drainExitMargin at StopGraceMS=%d = %v, want %v", tt.stopGraceMS, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDrainRunningWorkers_AbandonChannel covers each of the three
+// shutdown drains: a closed AbandonCh ends the wait promptly and logs
+// its own abandon warning, distinguishable from the timeout arm's
+// message; a nil AbandonCh (the zero value) leaves the existing bound
+// in force, asserted without spending it in wall clock.
+func TestDrainRunningWorkers_AbandonChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closed AbandonCh ends drainRunningWorkers promptly", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.Running["id-1"] = &RunningEntry{
+			Identifier: "PROJ-1",
+			Issue:      domain.Issue{ID: "id-1", Identifier: "PROJ-1", State: "In Progress"},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: func() {},
+		}
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		abandonCh := make(chan struct{})
+		close(abandonCh)
+		var buf bytes.Buffer
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, slog.New(slog.NewTextHandler(&buf, nil)), abandonCh)
+		o.drainTimeout = time.Hour // would time out long after the test itself, if the abandon arm did not fire first
+
+		done := make(chan struct{})
+		go func() {
+			o.drainRunningWorkers()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainRunningWorkers did not return promptly with a closed AbandonCh")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "worker drain abandoned at the operator's request") {
+			t.Errorf("drainRunningWorkers() did not log the abandon warning: %s", output)
+		}
+		if strings.Contains(output, "drain timeout exceeded") {
+			t.Errorf("drainRunningWorkers() logged the timeout message for an operator abort, want the two distinguishable: %s", output)
+		}
+	})
+
+	t.Run("nil AbandonCh leaves the existing bound in force", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.Running["id-1"] = &RunningEntry{
+			Identifier: "PROJ-1",
+			Issue:      domain.Issue{ID: "id-1", Identifier: "PROJ-1", State: "In Progress"},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: func() {},
+		}
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, discardLogger(), nil)
+		o.drainTimeout = 300 * time.Millisecond // short override so the timeout arm, not the 50s default ceiling, ends this test
+
+		start := time.Now()
+		done := make(chan struct{})
+		go func() {
+			o.drainRunningWorkers()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainRunningWorkers did not return within 5s")
+		}
+		elapsed := time.Since(start)
+
+		if elapsed < 300*time.Millisecond {
+			t.Errorf("drainRunningWorkers() with a nil AbandonCh returned after %v, want it to have honored the 300ms drainTimeout override rather than returning early through a nil-channel receive", elapsed)
+		}
+	})
+}
+
+// TestDrainTrackerOps_AbandonChannel and TestDrainTriageRuns_AbandonChannel
+// cover the two remaining shutdown drains the same way
+// TestDrainRunningWorkers_AbandonChannel covers the worker drain: a
+// closed AbandonCh ends the wait promptly with its own warning, and a
+// nil AbandonCh leaves the existing bound in force. Both drains wait on
+// their own WaitGroup rather than o.state.Running, so in-flight work is
+// simulated by holding that WaitGroup open rather than by populating
+// Running.
+func TestDrainTrackerOps_AbandonChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closed AbandonCh ends drainTrackerOps promptly", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.TrackerOpsWg.Add(1)
+		t.Cleanup(state.TrackerOpsWg.Done)
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		abandonCh := make(chan struct{})
+		close(abandonCh)
+		var buf bytes.Buffer
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, slog.New(slog.NewTextHandler(&buf, nil)), abandonCh)
+
+		done := make(chan struct{})
+		go func() {
+			o.drainTrackerOps()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainTrackerOps did not return promptly with a closed AbandonCh")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "tracker ops drain abandoned at the operator's request") {
+			t.Errorf("drainTrackerOps() did not log the abandon warning: %s", output)
+		}
+		if strings.Contains(output, "drain timeout exceeded") {
+			t.Errorf("drainTrackerOps() logged the timeout message for an operator abort, want the two distinguishable: %s", output)
+		}
+	})
+
+	t.Run("nil AbandonCh leaves the wait entered rather than returning early", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.TrackerOpsWg.Add(1)
+		t.Cleanup(state.TrackerOpsWg.Done)
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, discardLogger(), nil)
+
+		done := make(chan struct{})
+		go func() {
+			o.drainTrackerOps()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			t.Fatal("drainTrackerOps returned with a nil AbandonCh and in-flight work still pending, want it to keep waiting")
+		case <-time.After(300 * time.Millisecond):
+			// Still waiting after 300ms, well short of the 35s
+			// trackerOpsDrainTimeout: this is the entered-the-wait
+			// evidence the nil arm must not have short-circuited past.
+		}
+	})
+}
+
+func TestDrainTriageRuns_AbandonChannel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closed AbandonCh ends drainTriageRuns promptly", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.TriageWg.Add(1)
+		t.Cleanup(state.TriageWg.Done)
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		abandonCh := make(chan struct{})
+		close(abandonCh)
+		var buf bytes.Buffer
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, slog.New(slog.NewTextHandler(&buf, nil)), abandonCh)
+
+		done := make(chan struct{})
+		go func() {
+			o.drainTriageRuns()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drainTriageRuns did not return promptly with a closed AbandonCh")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "reaction triage drain abandoned at the operator's request") {
+			t.Errorf("drainTriageRuns() did not log the abandon warning: %s", output)
+		}
+		if strings.Contains(output, "drain timeout exceeded") {
+			t.Errorf("drainTriageRuns() logged the timeout message for an operator abort, want the two distinguishable: %s", output)
+		}
+	})
+
+	t.Run("nil AbandonCh leaves the wait entered rather than returning early", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		state.TriageWg.Add(1)
+		t.Cleanup(state.TriageWg.Done)
+		store := &stubStore{}
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+		o := drainTestOrchestrator(state, budgetTickConfig(0), store, tracker, discardLogger(), nil)
+
+		done := make(chan struct{})
+		go func() {
+			o.drainTriageRuns()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			t.Fatal("drainTriageRuns returned with a nil AbandonCh and in-flight work still pending, want it to keep waiting")
+		case <-time.After(300 * time.Millisecond):
+			// Still waiting after 300ms, well short of the 35s
+			// trackerOpsDrainTimeout: this is the entered-the-wait
+			// evidence the nil arm must not have short-circuited past.
+		}
+	})
+}
+
+// drainTestOrchestrator mirrors budgetOrchestrator but wires an
+// explicit logger and AbandonCh, for the shutdown-drain abort tests.
+func drainTestOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger, abandonCh <-chan struct{}) *Orchestrator {
+	regs := passingPreflightRegistries()
+	regs.ReloadWorkflow = func() error { return nil }
+	regs.ConfigFunc = wm.Config
+	return NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          logger,
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: regs,
+		AbandonCh:       abandonCh,
 	})
 }
 

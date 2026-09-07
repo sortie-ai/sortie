@@ -3,18 +3,63 @@
 package agentcore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // --- helpers ---
+
+// writeTrapScript writes an agent script that installs a TERM trap,
+// touches a readiness marker, then blocks. It returns the script path
+// and the marker path. trap is the trap body quoted as the shell
+// expects it.
+//
+// The marker exists because a fixed sleep cannot prove the trap is
+// installed. If the signal wins that race the shell exits on TERM's
+// default disposition, and the test then passes without exercising the
+// escalation it is named for.
+//
+// The script blocks in a shell builtin loop rather than in sleep, so
+// the shell is the only process in the group. A forked child reopens
+// the race the marker closes: the signal can reach the group in the
+// window between the marker and the fork, leaving a child that never
+// received it, that holds the output pipe open, and that therefore
+// keeps cmd.Wait from returning for the child's whole lifetime. The
+// loop costs a few microseconds on the arm where the trap exits, and
+// at most the configured grace on the arms that ignore the signal.
+func writeTrapScript(t *testing.T, dir, trap string) (script, marker string) {
+	t.Helper()
+	marker = filepath.Join(dir, "trap-ready")
+	return agenttest.WriteScript(t, dir, "agent",
+		fmt.Sprintf("trap %s TERM\n: > %q\nwhile :; do :; done", trap, marker)), marker
+}
+
+// waitForTrap blocks until the marker [writeTrapScript] returns appears,
+// so a caller signals the subprocess only once its trap is in place.
+func waitForTrap(t *testing.T, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("subprocess did not install its TERM trap within 5s (marker %q absent)", marker)
+}
 
 // newTestTarget builds a minimal LaunchTarget pointing at absCmd with
 // tmpDir as the workspace directory.
@@ -94,7 +139,7 @@ func TestForkPerTurnSession(t *testing.T) {
 		tmpDir := t.TempDir()
 		script := agenttest.WriteScript(t, tmpDir, "agent", `sleep 60`)
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		emit, events := sinkEvents()
@@ -119,7 +164,7 @@ func TestForkPerTurnSession(t *testing.T) {
 		stubUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
 		hooks := noopHooks()
 		hooks.GetUsage = func() domain.TokenUsage { return stubUsage }
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		emit, events := sinkEvents()
@@ -156,7 +201,7 @@ func TestForkPerTurnSession(t *testing.T) {
 		tmpDir := t.TempDir()
 		script := agenttest.WriteScript(t, tmpDir, "agent", `sleep 60`)
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -181,7 +226,7 @@ printf '\n'
 `)
 		spy := &agenttest.LogSpy{}
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.New(spy))
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.New(spy), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -203,7 +248,7 @@ printf '\n'
 		stubUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
 		hooks := noopHooks()
 		hooks.GetUsage = func() domain.TokenUsage { return stubUsage }
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		emit, events := sinkEvents()
 		result, err := sess.RunTurn(context.Background(), "p", emit)
@@ -229,7 +274,7 @@ printf '\n'
 		// the context deadline fires.
 		script := agenttest.WriteScript(t, tmpDir, "agent", `while true; do echo '{}'; done`)
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		defer cancel()
@@ -246,7 +291,7 @@ printf '\n'
 exit 127`)
 		spy := &agenttest.LogSpy{}
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.New(spy))
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.New(spy), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -265,7 +310,7 @@ exit 127`)
 		script := agenttest.WriteScript(t, tmpDir, "agent", `kill -TERM $$
 sleep 60`)
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -294,7 +339,7 @@ sleep 60`)
 			EmitTurnCompleted(emit, "success", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -322,7 +367,7 @@ sleep 60`)
 				Message: "arm7 error",
 			}
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.New(spy))
+		sess := NewForkPerTurnSession(target, hooks, slog.New(spy), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -350,7 +395,7 @@ exit 1`)
 				Message: "exit code 1",
 			}
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.New(spy))
+		sess := NewForkPerTurnSession(target, hooks, slog.New(spy), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -377,7 +422,7 @@ exit 1`)
 				Message: "agent exited without output",
 			}
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.New(spy))
+		sess := NewForkPerTurnSession(target, hooks, slog.New(spy), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -403,7 +448,7 @@ exit 1`)
 				Usage:      domain.TokenUsage{OutputTokens: 10},
 			}, nil
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		emit, events := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -437,7 +482,7 @@ exit 0`)
 			EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.New(spy))
+		sess := NewForkPerTurnSession(target, hooks, slog.New(spy), 0)
 		sess.drainGrace = 50 * time.Millisecond // ten times shorter than the subprocess lifetime
 
 		emit, _ := sinkEvents()
@@ -473,7 +518,7 @@ echo 'second stderr line' >&2`)
 			EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		emit, _ := sinkEvents()
 		_, err := sess.RunTurn(context.Background(), "p", emit)
@@ -493,7 +538,7 @@ echo 'second stderr line' >&2`)
 		tmpDir := t.TempDir()
 		script := agenttest.WriteScript(t, tmpDir, "agent", `sleep 60`)
 		target := newTestTarget(tmpDir, script)
-		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default())
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
 
 		emit, _ := sinkEvents()
 		done := make(chan struct{})
@@ -514,6 +559,212 @@ echo 'second stderr line' >&2`)
 		}
 	})
 
+	t.Run("StopGrace_ConfiguredValueResolved", func(t *testing.T) {
+		t.Parallel()
+		sess := NewForkPerTurnSession(&LaunchTarget{}, noopHooks(), slog.Default(), 250)
+
+		if sess.stopGrace != 250*time.Millisecond {
+			t.Errorf("NewForkPerTurnSession(..., 250).stopGrace = %v, want %v", sess.stopGrace, 250*time.Millisecond)
+		}
+	})
+
+	t.Run("StopGrace_AbsentDefaultsToBuiltIn", func(t *testing.T) {
+		t.Parallel()
+		sess := NewForkPerTurnSession(&LaunchTarget{}, noopHooks(), slog.Default(), 0)
+
+		if sess.stopGrace != procutil.DefaultStopGrace {
+			t.Errorf("NewForkPerTurnSession(..., 0).stopGrace = %v, want %v", sess.stopGrace, procutil.DefaultStopGrace)
+		}
+	})
+
+	t.Run("Stop_ConfiguredGraceBoundsTheWait", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		script, ready := writeTrapScript(t, tmpDir, `''`)
+		target := newTestTarget(tmpDir, script)
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
+
+		emit, _ := sinkEvents()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing Stop's timing, not RunTurn's outcome
+		}()
+
+		waitForTrap(t, ready)
+
+		start := time.Now()
+		if err := sess.Stop(context.Background()); err != nil {
+			t.Errorf("Stop() = %v, want nil", err)
+		}
+		elapsed := time.Since(start)
+
+		if elapsed > 2*time.Second {
+			t.Errorf("Stop() force-terminated after %v, want well under the built-in 5s default (proves the configured 200ms grace bounded the wait, not DefaultStopGrace)", elapsed)
+		}
+
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Fatal("RunTurn did not return within 6s after Stop")
+		}
+	})
+
+	t.Run("RunTurn_CancelledTurnEscalatesOnConfiguredGrace", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		// A shell builtin busy-loop rather than "sleep 60": forking a
+		// separate sleep process would inherit the shell's ignored TERM
+		// disposition across exec (POSIX: SIG_IGN survives exec, unlike a
+		// caught handler) and keep the stdout pipe's write end open after
+		// os/exec's own WaitDelay escalation kills only the direct child,
+		// which would hang the scanner forever instead of exercising the
+		// bounded escalation this test measures.
+		script, ready := writeTrapScript(t, tmpDir, `''`)
+		target := newTestTarget(tmpDir, script)
+		sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 200)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		emit, _ := sinkEvents()
+		done := make(chan error, 1)
+		go func() {
+			_, err := sess.RunTurn(ctx, "p", emit)
+			done <- err
+		}()
+
+		waitForTrap(t, ready)
+		start := time.Now()
+		cancel()
+
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(6 * time.Second):
+			t.Fatal("RunTurn did not return within 6s of cancellation")
+		}
+		elapsed := time.Since(start)
+
+		requireAgentError(t, err, domain.ErrTurnCancelled)
+		if elapsed > 2*time.Second {
+			t.Errorf("RunTurn's cancelled-turn escalation took %v, want well under the built-in 5s default (proves the configured 200ms grace bounded cmd.WaitDelay, not DefaultStopGrace)", elapsed)
+		}
+	})
+
+	t.Run("Stop_EscalationLogging", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+			script, ready := writeTrapScript(t, tmpDir, `'exit 0'`)
+			target := newTestTarget(tmpDir, script)
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			// The grace is far longer than this exit needs. The subtest proves
+			// which record the clean-exit path emits, not that the grace bounds
+			// anything, and a tight bound races the runner's scheduler instead
+			// of testing the code.
+			sess := NewForkPerTurnSession(target, noopHooks(), logger, 30000)
+
+			emit, _ := sinkEvents()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
+			}()
+			waitForTrap(t, ready)
+
+			if err := sess.Stop(context.Background()); err != nil {
+				t.Errorf("Stop() = %v, want nil", err)
+			}
+			<-done
+
+			output := buf.String()
+			if !strings.Contains(output, "agent exited during the graceful phase") {
+				t.Errorf("Stop() did not log the exited-inside-grace Debug record: %s", output)
+			}
+			if !strings.Contains(output, `outcome=exited`) {
+				t.Errorf("Stop()'s Debug record missing outcome=exited: %s", output)
+			}
+			if strings.Contains(output, "level=WARN") {
+				t.Errorf("Stop() logged a Warn record for a clean exit, want none: %s", output)
+			}
+		})
+
+		t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+			script, ready := writeTrapScript(t, tmpDir, `''`)
+			target := newTestTarget(tmpDir, script)
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			sess := NewForkPerTurnSession(target, noopHooks(), logger, 150)
+
+			emit, _ := sinkEvents()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
+			}()
+			waitForTrap(t, ready)
+
+			if err := sess.Stop(context.Background()); err != nil {
+				t.Errorf("Stop() = %v, want nil", err)
+			}
+			<-done
+
+			output := buf.String()
+			if !strings.Contains(output, "agent did not exit inside the graceful period and was force-terminated") {
+				t.Errorf("Stop() did not log the grace-elapsed Warn record: %s", output)
+			}
+			if !strings.Contains(output, `outcome="grace elapsed"`) {
+				t.Errorf(`Stop()'s Warn record missing outcome="grace elapsed": %s`, output)
+			}
+			if !strings.Contains(output, "grace=") {
+				t.Errorf("Stop()'s Warn record missing the configured grace ceiling: %s", output)
+			}
+			if !strings.Contains(output, "elapsed=") {
+				t.Errorf("Stop()'s Warn record missing the elapsed wait: %s", output)
+			}
+		})
+
+		t.Run("caller_deadline_emits_warn_with_that_outcome", func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+			script, ready := writeTrapScript(t, tmpDir, `''`)
+			target := newTestTarget(tmpDir, script)
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			sess := NewForkPerTurnSession(target, noopHooks(), logger, 5000)
+
+			emit, _ := sinkEvents()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				sess.RunTurn(context.Background(), "p", emit) //nolint:errcheck // testing log output, not the outcome
+			}()
+			waitForTrap(t, ready)
+
+			stopCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+			defer cancel()
+			err := sess.Stop(stopCtx)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("Stop() error = %v, want %v", err, context.DeadlineExceeded)
+			}
+
+			select {
+			case <-done:
+			case <-time.After(6 * time.Second):
+				t.Fatal("RunTurn did not return within 6s")
+			}
+
+			output := buf.String()
+			if !strings.Contains(output, `outcome="caller deadline"`) {
+				t.Errorf(`Stop()'s Warn record missing outcome="caller deadline": %s`, output)
+			}
+		})
+	})
+
 	t.Run("TurnCount_NotIncrementedOnStartFailure", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
@@ -527,7 +778,7 @@ echo 'second stderr line' >&2`)
 			lastTurn = turn
 			return nil
 		}
-		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
 		// First call: cmd.Start() fails → s.turns must stay 0.
 		_, err := sess.RunTurn(context.Background(), "p", func(domain.AgentEvent) {})

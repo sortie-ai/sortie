@@ -60,6 +60,16 @@ import (
 // exercise the shutdown-error path without a 5-second wait.
 var serverShutdownTimeout = 5 * time.Second
 
+// abandonCh is created by main before [run] is called, and the signal
+// goroutine closes it on a second interrupt so every in-flight shutdown
+// wait ends at once. Every path through main gets a live channel,
+// including validate, resolve, and --dry-run; those construct no
+// orchestrator, so nothing ever reads it. It stays nil only for a
+// caller that invokes [run] directly, which is what tests do, and a
+// receive on a nil channel blocks forever, so an unwired abort never
+// fires.
+var abandonCh chan struct{}
+
 // buildAgentAdapterCache eagerly constructs every registered agent
 // adapter so dispatch-rule routing can resolve any referenced kind
 // without per-issue construction. The workflow default kind reuses
@@ -223,25 +233,57 @@ func labelFixCommandActive(cfg config.ServiceConfig) bool {
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
+	abandonCh = make(chan struct{})
+
 	// Log the signal that triggers shutdown. signal.NotifyContext
 	// cancels ctx but discards the signal identity, so a parallel
-	// channel captures it for operator diagnostics.
-	sigCh := make(chan os.Signal, 1)
+	// channel captures it for operator diagnostics. The buffer holds
+	// two: signal.Notify sends without blocking, and a buffer of one
+	// would drop the second interrupt whenever the goroutine is
+	// between receives, which is exactly the moment it arrives.
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig, ok := <-sigCh
-		if ok {
-			slog.Info("signal received, initiating shutdown",
-				slog.String("signal", sig.String()),
-				slog.Int("pid", os.Getpid()),
-			)
-		}
-	}()
+	go handleSignals(sigCh, abandonCh)
 
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
 	signal.Stop(sigCh)
+	// Closing is safe only after signal.Stop returns, which guarantees
+	// the channel receives no further signals. It lets handleSignals
+	// drain and return rather than parking on a receive for the life of
+	// the process.
+	close(sigCh)
 	os.Exit(code)
+}
+
+// handleSignals reports shutdown progress and gives a repeated interrupt
+// an effect. The first signal only records that shutdown began: the
+// cancellation that starts it already reached the orchestrator through
+// the notified context. The second closes abandon, which ends every
+// in-flight shutdown wait at once. Later signals are ignored, because
+// the channel is already closed and there is nothing further to give up.
+// Returns when sigCh is closed.
+//
+// It reads the default logger on each signal instead of capturing one,
+// because it starts before the configured handler is installed.
+func handleSignals(sigCh <-chan os.Signal, abandon chan struct{}) {
+	received := 0
+	for sig := range sigCh {
+		received++
+		switch received {
+		case 1:
+			slog.Info("signal received, initiating shutdown",
+				slog.String("signal", sig.String()),
+				slog.Int("pid", os.Getpid()),
+			)
+		case 2:
+			slog.Warn("second signal received, abandoning in-flight shutdown work",
+				slog.String("signal", sig.String()),
+				slog.Int("pid", os.Getpid()),
+			)
+			close(abandon)
+		}
+	}
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -806,6 +848,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		MergeCompletionConfig:             mergeCompletionConfig,
 		MergeCompletionReactionConfigured: mergeCompletionConfigured,
 		BlockerResolver:                   br.blockerResolver,
+		AbandonCh:                         abandonCh,
 	})
 
 	var srv *server.Server

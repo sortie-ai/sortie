@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -2115,5 +2116,85 @@ func TestRunFiveKindsWiring_AllEnablementRecordsLogged(t *testing.T) {
 		if !strings.Contains(logs, record) {
 			t.Errorf("expected %q in log, got:\n%s", record, logs)
 		}
+	}
+}
+
+// lockedBuffer serializes writes so the signal goroutine and the test
+// goroutine can share one log sink under the race detector.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestHandleSignals pins what a repeated interrupt does: the first
+// signal reports shutdown and closes nothing, the second closes the
+// abandon channel, and a third neither panics nor closes it again.
+// Without the third-signal case a later refactor could reintroduce a
+// double close, which panics in the goroutine and takes the process down
+// during the very shutdown the operator asked to hurry.
+func TestHandleSignals(t *testing.T) {
+	sink := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	waitForLog := func(substr string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if strings.Contains(sink.String(), substr) {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("handleSignals() log = %q, want it to contain %q", sink.String(), substr)
+	}
+
+	sigCh := make(chan os.Signal, 3)
+	abandon := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		handleSignals(sigCh, abandon)
+		close(done)
+	}()
+
+	sigCh <- syscall.SIGINT
+	waitForLog("initiating shutdown")
+	select {
+	case <-abandon:
+		t.Fatal("handleSignals() closed the abandon channel on the first signal, want it left open")
+	default:
+	}
+
+	sigCh <- syscall.SIGINT
+	waitForLog("abandoning in-flight shutdown work")
+	select {
+	case <-abandon:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSignals() left the abandon channel open after the second signal, want it closed")
+	}
+
+	sigCh <- syscall.SIGTERM
+	close(sigCh)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSignals() did not return after sigCh closed")
+	}
+
+	if got := strings.Count(sink.String(), "abandoning in-flight shutdown work"); got != 1 {
+		t.Errorf("handleSignals() logged the abandon warning %d times, want 1", got)
 	}
 }

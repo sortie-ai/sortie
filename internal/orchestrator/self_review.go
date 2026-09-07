@@ -117,7 +117,7 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	// cmd.Wait return when Go's internal I/O goroutines are still blocked
 	// on a pipe read, which they can be on Windows after the subprocess is
 	// killed.
-	procutil.SetGroupCancel(cmd)
+	procutil.SetGroupCancel(cmd, procutil.DefaultStopGrace)
 
 	// Use cappedWriter for stdout/stderr instead of StdoutPipe/StderrPipe.
 	// On Windows, ReadFile on a pipe can remain blocked after the subprocess

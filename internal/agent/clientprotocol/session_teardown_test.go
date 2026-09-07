@@ -606,7 +606,7 @@ func TestStopSessionTeardownGracefulHandler(t *testing.T) {
 			{name: "answer_open", run: signalAnswerOpen},
 			{name: "kill_process_group", run: killProcessGroup},
 			{name: "close_stdin", run: closeStdin},
-			{name: "await_exit", run: awaitExit(callerCtx, graceCtx)},
+			{name: "await_exit", run: awaitExit(callerCtx, graceCtx, procutil.DefaultStopGrace)},
 			{name: "signal_graceful", run: signalGraceful},
 			{name: "close_stdout", run: closeStdout},
 			{name: "close_connection", run: closeConnection},
@@ -750,13 +750,18 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		if !strings.Contains(output, `outcome="caller deadline"`) {
 			t.Errorf("teardown's Warn record did not carry outcome=\"caller deadline\": %s", output)
 		}
-		// The record reports the wait that actually elapsed, not the
-		// ceiling: a caller deadline shorter than the grace ends the
-		// wait early, and reporting the ceiling here would tell an
-		// operator the adapter waited five seconds when it waited a
-		// fraction of one.
-		if strings.Contains(output, "grace="+procutil.DefaultStopGrace.String()) {
-			t.Errorf("teardown's Warn record reported the full grace ceiling for a wait cut short by the caller's deadline: %s", output)
+		// The record carries both the configured ceiling and the wait
+		// that actually elapsed. A caller deadline shorter than the
+		// grace ends the wait early, so elapsed must not be the whole
+		// ceiling: reporting only the ceiling would tell an operator
+		// the adapter waited five seconds when it waited a fraction of
+		// one, and reporting only the elapsed time would hide what the
+		// operator configured.
+		if strings.Contains(output, "elapsed="+procutil.DefaultStopGrace.String()) {
+			t.Errorf("teardown's Warn record reported the full grace ceiling as elapsed for a wait cut short by the caller's deadline: %s", output)
+		}
+		if !strings.Contains(output, "grace=") {
+			t.Errorf("teardown's Warn record did not carry the configured grace ceiling: %s", output)
 		}
 	})
 
@@ -783,4 +788,28 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 			t.Errorf("teardown logged a Warn record for an agent that had already exited, want none (the re-read on the graceCtx arm must classify this as exited): %s", buf.String())
 		}
 	})
+}
+
+// TestStopSessionGrace_ConfiguredValueBoundsTheWait asserts that
+// stopSession's graceCtx expires at a configured agent.stop_grace_ms,
+// not at the built-in five-second default: a small configured grace
+// against an agent that ignores the graceful signal entirely must force
+// the process well short of the default's ceiling.
+func TestStopSessionGrace_ConfiguredValueBoundsTheWait(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, nil)
+	state.agentConfig.StopGraceMS = 200
+
+	start := time.Now()
+	if err := stopSession(context.Background(), fakeSession(state)); err != nil {
+		t.Fatalf("stopSession() error = %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("stopSession() force-terminated after %v, want well under the built-in 5s default (proves the configured 200ms grace bounded graceCtx, not DefaultStopGrace)", elapsed)
+	}
 }

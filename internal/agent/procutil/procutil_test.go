@@ -64,6 +64,37 @@ func TestExtractExitCode(t *testing.T) {
 	}
 }
 
+// TestStopGrace asserts a non-positive ms resolves to
+// DefaultStopGrace, and a positive one resolves to the exact
+// millisecond-to-duration conversion.
+func TestStopGrace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ms   int
+		want time.Duration
+	}{
+		{"Zero", 0, DefaultStopGrace},
+		{"NegativeOne", -1, DefaultStopGrace},
+		{"LargeNegative", -60000, DefaultStopGrace},
+		{"OneMillisecond", 1, time.Millisecond},
+		{"OneSecond", 1000, time.Second},
+		{"ExactBuiltInDefaultInMS", 5000, DefaultStopGrace},
+		{"ArbitraryPositive", 1500, 1500 * time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := StopGrace(tt.ms)
+			if got != tt.want {
+				t.Errorf("StopGrace(%d) = %v, want %v", tt.ms, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStderrCollector(t *testing.T) {
 	t.Parallel()
 

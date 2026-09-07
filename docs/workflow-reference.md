@@ -779,6 +779,7 @@ agent:
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
+  stop_grace_ms: 5000
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     in progress: 3
@@ -792,6 +793,7 @@ agent:
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Wall-clock bound on a single agent turn, enforced by the orchestrator. Must be positive.                                                                                         |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
 | `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
+| `stop_grace_ms`                  | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | The period an adapter waits, after sending a catchable termination signal, for the agent to exit on its own before it force-terminates the process group. Must be positive; overridable through `SORTIE_AGENT_STOP_GRACE_MS`. In `claude-code`, `copilot-cli`, `kiro`, and `opencode`, the same value also bounds a cancelled turn's escalation to a force kill; `mock` launches no process, so it has no such period. The per-session stop deadline derives from this field alone, no longer from `agent.read_timeout_ms`, which shortens that deadline for a deployment that had set `read_timeout_ms` above `20000`. Raising this field also lengthens graceful shutdown by the same amount: a session still stopping when Sortie is asked to shut down is waited for rather than abandoned, and at the default the worker drain alone is 50s. A second Ctrl-C during shutdown ends every remaining shutdown wait at once, so a raised grace never strands the operator without an escape. |
 | `max_concurrent_agents`          | integer or string integer         | No                                  | `10`            | **Yes** — affects subsequent dispatch      | Global concurrency limit across all issues.                                                                                                                                      |
 | `max_turns`                      | integer                           | No                                  | `20`            | Future dispatches                          | Maximum coding-agent turns per worker session. The worker re-checks tracker state after each turn and starts another turn if the issue is still active, up to this limit.        |
 | `max_retry_backoff_ms`           | integer or string integer         | No                                  | `300000` (5m)   | **Yes** — affects future retry scheduling  | Maximum delay cap for exponential backoff on retries.                                                                                                                            |
@@ -1921,6 +1923,7 @@ Each variable maps to exactly one config field. The naming convention is
 | `SORTIE_AGENT_TURN_TIMEOUT_MS`       | `agent.turn_timeout_ms`       | int    |       |
 | `SORTIE_AGENT_READ_TIMEOUT_MS`       | `agent.read_timeout_ms`       | int    |       |
 | `SORTIE_AGENT_STALL_TIMEOUT_MS`      | `agent.stall_timeout_ms`      | int    |       |
+| `SORTIE_AGENT_STOP_GRACE_MS`         | `agent.stop_grace_ms`         | int    |       |
 | `SORTIE_AGENT_MAX_CONCURRENT_AGENTS` | `agent.max_concurrent_agents` | int    |       |
 | `SORTIE_AGENT_MAX_TURNS`             | `agent.max_turns`             | int    |       |
 | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`  | `agent.max_retry_backoff_ms`  | int    |       |
@@ -3543,6 +3546,7 @@ re-applies configuration and prompt template without restart.
 | `agent.turn_timeout_ms`                | Future worker attempts, not in-flight sessions.                                                |
 | `agent.read_timeout_ms`                | Future worker attempts, not in-flight sessions.                                                |
 | `agent.stall_timeout_ms`               | Future worker attempts, not in-flight sessions.                                                |
+| `agent.stop_grace_ms`                  | Future worker attempts, not in-flight sessions.                                                |
 | `agent.max_concurrent_agents`          | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_turns`                      | Future dispatches.                                                                             |
 | `agent.max_retry_backoff_ms`           | **Immediate** — affects future retry scheduling.                                               |
@@ -3793,6 +3797,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.turn_timeout_ms`                 | integer          | `3600000`                    | `SORTIE_AGENT_TURN_TIMEOUT_MS`           | 1 hour; wall-clock bound per turn; `≤ 0` rejected                                      |
 | `agent.read_timeout_ms`                 | integer          | `5000`                       | `SORTIE_AGENT_READ_TIMEOUT_MS`           | 5 seconds                                                                              |
 | `agent.stall_timeout_ms`               | integer          | `300000`                     | `SORTIE_AGENT_STALL_TIMEOUT_MS`          | 5 min; `≤ 0` disables                                                                  |
+| `agent.stop_grace_ms`                    | integer          | `5000`                       | `SORTIE_AGENT_STOP_GRACE_MS`             | 5 seconds; graceful-shutdown period before a force kill; `≤ 0` rejected                |
 | `agent.max_concurrent_agents`           | integer          | `10`                         | `SORTIE_AGENT_MAX_CONCURRENT_AGENTS`     | Dynamic reload                                                                         |
 | `agent.max_turns`                       | integer          | `20`                         | `SORTIE_AGENT_MAX_TURNS`                 |                                                                                        |
 | `agent.max_retry_backoff_ms`            | integer          | `300000`                     | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`      | 5 min; dynamic reload                                                                  |
@@ -3955,6 +3960,7 @@ agent:
   turn_timeout_ms: 1800000 # 30-minute turn timeout
   read_timeout_ms: 10000 # 10-second startup timeout
   stall_timeout_ms: 300000 # 5-minute stall detection
+  stop_grace_ms: 5000 # 5-second graceful-shutdown period before a force kill
   max_retry_backoff_ms: 120000 # 2-minute max retry delay
   max_concurrent_agents_by_state:
     in progress: 3 # Reserve 1 slot for new issues

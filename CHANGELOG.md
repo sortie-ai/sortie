@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The new `agent-client-protocol` agent kind runs Agent Client Protocol-compatible runtimes over stdio and resumes previous sessions when supported by the runtime. Locally launched runtimes can use workflow-configured MCP servers, while requests requiring human input are refused or end the attempt rather than waiting indefinitely. Token-based budgets do not apply because the protocol does not report token usage.
   ([#976](https://github.com/sortie-ai/sortie/issues/976))
 
+- A new `agent.stop_grace_ms` field, default `5000`, sets the period an adapter waits for an agent to exit on its own before it force-terminates the process group, and now reaches every adapter kind that has such a period instead of leaving it fixed at a five-second built-in constant. The orchestrator's per-session stop deadline no longer follows `agent.read_timeout_ms` at all: it derives from `agent.stop_grace_ms` alone. The shutdown-drain ceiling now derives from the same field, which lengthens the worker drain at the default configuration from 30 s to 50 s.
+  ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.
@@ -34,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An `agent-client-protocol` turn that ends because the runtime reached a token limit no longer schedules a retry that resumes the same oversized context into the same limit; the claim is released instead. A turn that ends because the runtime's own request or turn budget was exhausted keeps its existing retryable classification, since a fresh session can complete within it.
   ([#1023](https://github.com/sortie-ai/sortie/issues/1023))
+
+- Stopping a `codex` session now honors the caller's deadline, as every other agent kind already did. `StopSession` ignored the deadline it was given, so a stop asked to finish sooner than the configured stop grace waited out the whole grace anyway and then reported success. It now ends the graceful phase when the deadline expires, force-terminates the process group, and reports the deadline back to its caller.
+  ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
+
+### Changed
+
+- A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.
+  ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
 ## [1.23.0] - 2026-08-31
 

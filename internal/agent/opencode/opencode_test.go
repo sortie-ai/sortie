@@ -508,6 +508,237 @@ while :; do sleep 1; done`)
 	}
 }
 
+// startTurnRuntimeProcess starts script as a real subprocess in its own
+// process group and wires a minimal turnRuntime around it, wiring
+// waitCh to close once the process is reaped. Used to exercise
+// stopActiveTurn directly, without the rest of RunTurn's JSONL parsing.
+// startTurnRuntimeProcess writes scriptBody with a leading trap
+// statement, starts it, and waits for it to touch a readiness marker
+// before returning, so the caller's subsequent SignalGraceful cannot
+// race the shell installing its trap. scriptBody's first line MUST be
+// a "trap ..." statement; the marker touch is inserted right after it.
+func startTurnRuntimeProcess(t *testing.T, scriptBody string) *turnRuntime {
+	t.Helper()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	trapLine, rest, ok := strings.Cut(scriptBody, "\n")
+	if !ok || !strings.HasPrefix(trapLine, "trap ") {
+		t.Fatalf("startTurnRuntimeProcess: scriptBody must start with a trap statement, got %q", scriptBody)
+	}
+	script := trapLine + "\ntouch '" + readyPath + "'\n" + rest
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
+
+	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
+	procutil.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	t.Cleanup(func() { procutil.KillProcessGroup(cmd.Process.Pid) }) //nolint:errcheck // best-effort cleanup
+
+	runtime := &turnRuntime{
+		proc:   cmd.Process,
+		waitCh: make(chan waitResult),
+		stopCh: make(chan struct{}),
+	}
+	go func() {
+		waitErr := cmd.Wait()
+		runtime.waitMu.Lock()
+		runtime.waitRes = waitResult{exitCode: procutil.ExtractExitCode(waitErr), err: waitErr}
+		runtime.waitMu.Unlock()
+		close(runtime.waitCh)
+	}()
+
+	waitForReady(t, readyPath)
+	return runtime
+}
+
+// waitForReady polls until path exists, failing t after 5 seconds. Used
+// to synchronize with a script that touches path only after installing
+// a signal trap, so a caller's subsequent signal cannot race the trap
+// installation.
+func waitForReady(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("waitForReady(%q): marker did not appear within 5s", path)
+}
+
+// TestStopActiveTurn_GraceCoverage calls stopActiveTurn directly so the
+// configured grace and its escalation log records can be asserted
+// without spending the built-in five-second default in wall clock.
+func TestStopActiveTurn_GraceCoverage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("configured_grace_bounds_the_wait", func(t *testing.T) {
+		t.Parallel()
+		runtime := startTurnRuntimeProcess(t, `trap '' TERM
+while :; do :; done`)
+
+		start := time.Now()
+		err := stopActiveTurn(context.Background(), runtime, 200*time.Millisecond, slog.Default())
+		elapsed := time.Since(start)
+
+		if err != nil {
+			t.Errorf("stopActiveTurn() = %v, want nil", err)
+		}
+		if elapsed > 2*time.Second {
+			t.Errorf("stopActiveTurn() force-terminated after %v, want well under the built-in 5s default (proves the configured 200ms grace bounded the wait, not DefaultStopGrace)", elapsed)
+		}
+	})
+
+	t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
+		t.Parallel()
+		runtime := startTurnRuntimeProcess(t, `trap 'exit 0' TERM
+while :; do :; done`)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		// The grace is far longer than this exit needs. The subtest proves
+		// which record the clean-exit path emits, not that the grace bounds
+		// anything, and a tight bound races the runner's scheduler instead
+		// of testing the code.
+		if err := stopActiveTurn(context.Background(), runtime, 30*time.Second, logger); err != nil {
+			t.Errorf("stopActiveTurn() = %v, want nil", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "agent exited during the graceful phase") {
+			t.Errorf("stopActiveTurn() did not log the exited-inside-grace Debug record: %s", output)
+		}
+		if !strings.Contains(output, `outcome=exited`) {
+			t.Errorf("stopActiveTurn()'s Debug record missing outcome=exited: %s", output)
+		}
+		if strings.Contains(output, "level=WARN") {
+			t.Errorf("stopActiveTurn() logged a Warn record for a clean exit, want none: %s", output)
+		}
+	})
+
+	t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
+		t.Parallel()
+		runtime := startTurnRuntimeProcess(t, `trap '' TERM
+while :; do :; done`)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		if err := stopActiveTurn(context.Background(), runtime, 150*time.Millisecond, logger); err != nil {
+			t.Errorf("stopActiveTurn() = %v, want nil", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "agent did not exit inside the graceful period and was force-terminated") {
+			t.Errorf("stopActiveTurn() did not log the grace-elapsed Warn record: %s", output)
+		}
+		if !strings.Contains(output, `outcome="grace elapsed"`) {
+			t.Errorf(`stopActiveTurn()'s Warn record missing outcome="grace elapsed": %s`, output)
+		}
+		if !strings.Contains(output, "grace=") {
+			t.Errorf("stopActiveTurn()'s Warn record missing the configured grace ceiling: %s", output)
+		}
+		if !strings.Contains(output, "elapsed=") {
+			t.Errorf("stopActiveTurn()'s Warn record missing the elapsed wait: %s", output)
+		}
+	})
+
+	t.Run("caller_deadline_emits_warn_with_that_outcome", func(t *testing.T) {
+		t.Parallel()
+		runtime := startTurnRuntimeProcess(t, `trap '' TERM
+while :; do :; done`)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+		if err := stopActiveTurn(ctx, runtime, 5*time.Second, logger); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("stopActiveTurn() = %v, want %v", err, context.DeadlineExceeded)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, `outcome="caller deadline"`) {
+			t.Errorf(`stopActiveTurn()'s Warn record missing outcome="caller deadline": %s`, output)
+		}
+	})
+}
+
+// TestRunTurn_CancelledTurnEscalatesOnConfiguredGrace asserts that a
+// cancelled turn's process-group cancellation, wired through
+// procutil.SetGroupCancel inside RunTurn, escalates on the session's
+// configured grace rather than the built-in five-second default.
+func TestRunTurn_CancelledTurnEscalatesOnConfiguredGrace(t *testing.T) {
+	t.Parallel()
+
+	testCtx, testCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer testCancel()
+
+	tmpDir := t.TempDir()
+	// A shell builtin busy-loop rather than a forked "sleep": a forked
+	// child would inherit the shell's ignored TERM disposition across
+	// exec and keep the stdout pipe open after os/exec's own WaitDelay
+	// escalation kills only the direct child, hanging the reader
+	// instead of exercising the bounded escalation this test measures.
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+trap '' TERM
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
+while :; do :; done`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(testCtx, domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, StopGraceMS: 200},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	gotEvent := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := a.RunTurn(ctx, session, domain.RunTurnParams{
+			Prompt: "work",
+			OnEvent: func(_ domain.AgentEvent) {
+				select {
+				case gotEvent <- struct{}{}:
+				default:
+				}
+			},
+		})
+		done <- runErr
+	}()
+
+	select {
+	case <-gotEvent:
+	case <-testCtx.Done():
+		t.Fatal("timed out waiting for first event")
+	}
+
+	start := time.Now()
+	cancel()
+
+	var runErr error
+	select {
+	case runErr = <-done:
+	case <-time.After(6 * time.Second):
+		t.Fatal("RunTurn did not return within 6s of cancellation")
+	}
+	elapsed := time.Since(start)
+
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrTurnCancelled {
+		t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q}", runErr, domain.ErrTurnCancelled)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("RunTurn's cancelled-turn escalation took %v, want well under the built-in 5s default (proves the configured 200ms grace bounded cmd.WaitDelay, not DefaultStopGrace)", elapsed)
+	}
+}
+
 func TestStopSession_WrongInternalType(t *testing.T) {
 	t.Parallel()
 

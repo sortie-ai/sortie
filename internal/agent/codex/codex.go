@@ -251,7 +251,8 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
-	procutil.SetGroupCancel(cmd)
+	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+	procutil.SetGroupCancel(cmd, grace)
 	cmd.Dir = target.WorkspacePath
 	cmd.Env = os.Environ()
 
@@ -894,8 +895,12 @@ func reroutedMessage(toModel string) string {
 	return "model rerouted to " + toModel
 }
 
-// StopSession terminates the persistent app-server subprocess.
-func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) error {
+// StopSession terminates the persistent app-server subprocess. The
+// configured stop grace is a ceiling on the wait for a clean exit; a
+// caller deadline that expires first ends the graceful phase and is
+// reported back, so the caller learns the stop did not complete on its
+// own terms.
+func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
@@ -922,11 +927,21 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		procutil.SignalGraceful(pid) //nolint:errcheck,gosec // best-effort graceful shutdown
 	}
 
-	// Wait for process exit with a 5-second grace period.
+	logger := logging.WithSession(
+		slog.Default().With(slog.String("component", "codex-adapter")),
+		state.threadID,
+	)
+
+	// Wait for process exit within the configured grace period, or
+	// until the caller's deadline ends it first.
+	var stopErr error
 	if waitCh != nil {
-		select {
-		case <-waitCh:
-		case <-time.After(5 * time.Second):
+		grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
+		started := time.Now()
+		escalate := func(outcome string) {
+			logger.Warn("agent did not exit inside the graceful period and was force-terminated",
+				slog.String("outcome", outcome), slog.Duration("grace", grace),
+				slog.Duration("elapsed", time.Since(started)))
 			if pid > 0 {
 				procutil.KillProcessGroup(pid) //nolint:errcheck,gosec // best-effort force kill
 			}
@@ -936,6 +951,15 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 			case <-time.After(2 * time.Second):
 			}
 		}
+		select {
+		case <-waitCh:
+			logger.Debug("agent exited during the graceful phase", slog.String("outcome", "exited"))
+		case <-time.After(grace):
+			escalate("grace elapsed")
+		case <-ctx.Done():
+			escalate("caller deadline")
+			stopErr = ctx.Err()
+		}
 	}
 
 	// Wait for the reader goroutine to finish after process exit.
@@ -943,10 +967,6 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		select {
 		case <-state.readerDone:
 		case <-time.After(2 * time.Second):
-			logger := logging.WithSession(
-				slog.Default().With(slog.String("component", "codex-adapter")),
-				state.threadID,
-			)
 			logger.Warn("reader goroutine did not exit after process termination")
 		}
 	}
@@ -958,7 +978,7 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 	state.waitCh = nil
 	state.mu.Unlock()
 
-	return nil
+	return stopErr
 }
 
 // isAgentError extracts an *[domain.AgentError] from err using type
