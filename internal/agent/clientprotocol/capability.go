@@ -110,6 +110,13 @@ func advertisesSessionContinuation(caps agentCapabilities) bool {
 	return chooseContinuationMethod(caps) != continuationNone
 }
 
+// advertisesSessionClose reports whether caps advertises support for
+// closing a session through session/close. It reads no other
+// capability state.
+func advertisesSessionClose(caps agentCapabilities) bool {
+	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Close != nil
+}
+
 // lower moves *entry to the gap state and reports whether it actually
 // changed. Lowering an entry already at gap is idempotent: an entry
 // never rises back to protocol within a session.

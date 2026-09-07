@@ -47,7 +47,12 @@ const pumpChannelCapacity = 64
 // domain.Session.Internal. Fields set once during StartSession, before
 // the pump starts, are read-only afterward from every other goroutine;
 // every field the pump itself owns lives on the pump's own local state
-// instead, so nothing outside the pump's goroutine can reach it.
+// instead, so nothing outside the pump's goroutine can reach it. A
+// third class holds a field written once on the StartSession goroutine
+// after the pump has already started: safe because the pump never
+// reads it, and its only reader is teardown, which runs either on that
+// same goroutine while the field still holds its zero value or after
+// StartSession has returned.
 type sessionState struct {
 	target      agentcore.LaunchTarget
 	agentConfig domain.AgentConfig
@@ -69,6 +74,13 @@ type sessionState struct {
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	pumpDone chan struct{}
+
+	// closeSessionID is written once, on the StartSession goroutine,
+	// immediately after resolveSession returns a session identifier and
+	// before StartSession returns. It is left at its zero value when the
+	// handshake does not advertise session/close. Teardown is its only
+	// reader.
+	closeSessionID string
 
 	logger *slog.Logger
 
@@ -306,6 +318,9 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 		teardownOnFailure()
 		return domain.Session{}, agentErr
 	}
+	if advertisesSessionClose(caps) {
+		state.closeSessionID = sessionID
+	}
 
 	facts := &handshakeFacts{toolServersWithheld: withheld, toolServersDelivered: len(wireServers) > 0, caps: caps}
 	if initResp.AgentInfo != nil {
@@ -513,6 +528,107 @@ func runTurn(ctx context.Context, session domain.Session, params domain.RunTurnP
 	}
 }
 
+// closeCallBound returns the ceiling the close_session teardown step
+// spends waiting for a session/close response: half of the window it
+// is given, truncated toward zero.
+func closeCallBound(grace time.Duration) time.Duration {
+	return grace / 2
+}
+
+// closeCallOutcome carries a session/close call's raw result from the
+// goroutine that issues it to the step that classifies it.
+type closeCallOutcome struct {
+	resp jsonrpc.Response
+	err  error
+}
+
+// closeSession returns a teardown step that issues one session/close
+// call for state.closeSessionID, bounded by half of whatever remains
+// on graceCtx. It does nothing when no identifier was recorded or the
+// connection is already gone.
+//
+// The call runs on a goroutine the step never joins beyond its own
+// bound: a write already parked on a full standard-input pipe holds
+// the connection's write mutex across the write itself, where no
+// context can reach it, and closing the connection does not release
+// such a write either. The goroutine reads only the connection and the
+// identifier hoisted into its closure, never state, and reports
+// through a buffered channel whose send never blocks. A goroutine
+// still parked on that write is released by close_stdin, which closes
+// the pipe the write is blocked on; the process-group termination
+// later in the order is the backstop if it is not.
+func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func(state *sessionState) {
+	return func(state *sessionState) {
+		if state.closeSessionID == "" || state.conn == nil {
+			return
+		}
+		conn, id := state.conn, state.closeSessionID
+
+		// Half of what remains on graceCtx rather than half of the
+		// configured grace: a caller deadline nearer than that grace
+		// would otherwise let this one call spend the whole graceful
+		// window and starve the signal behind it.
+		bound := closeCallBound(grace)
+		if deadline, ok := graceCtx.Deadline(); ok {
+			if half := closeCallBound(max(time.Until(deadline), 0)); half < bound {
+				bound = half
+			}
+		}
+		callCtx, cancel := context.WithTimeout(graceCtx, bound)
+		defer cancel()
+
+		outcomeCh := make(chan closeCallOutcome, 1)
+		go func() {
+			resp, err := conn.Call(callCtx, methodSessionClose, closeSessionRequest{SessionID: sessionId(id)})
+			outcomeCh <- closeCallOutcome{resp: resp, err: err}
+		}()
+
+		select {
+		case got := <-outcomeCh:
+			logCloseSessionOutcome(state, got)
+		case <-callCtx.Done():
+			select {
+			case got := <-outcomeCh:
+				logCloseSessionOutcome(state, got)
+			default:
+				logCloseSessionDeadline(state, callerCtx, bound)
+			}
+		}
+	}
+}
+
+// logCloseSessionOutcome classifies a completed session/close call. A
+// response with no error member logs at Debug with no fields; a
+// response carrying a JSON-RPC error logs at Warn with the numeric
+// code only, never the peer's message text, matching
+// logContinuationFailure's own precedent; any other call failure
+// (closed connection, stream end, write failure) logs at Debug with no
+// fields, because the process is already going away.
+func logCloseSessionOutcome(state *sessionState, got closeCallOutcome) {
+	if got.err != nil {
+		state.logger.Debug("session/close call did not complete")
+		return
+	}
+	if got.resp.Error != nil {
+		state.logger.Warn("session/close returned an error", slog.Int("code", got.resp.Error.Code))
+		return
+	}
+	state.logger.Debug("session closed through the protocol")
+}
+
+// logCloseSessionDeadline logs the case where bound elapsed with no
+// outcome observed, distinguishing the step's own bound from
+// callerCtx's own deadline so the record names which one actually
+// ended the wait.
+func logCloseSessionDeadline(state *sessionState, callerCtx context.Context, bound time.Duration) {
+	outcome := "bound elapsed"
+	if callerCtx.Err() != nil {
+		outcome = "caller deadline"
+	}
+	state.logger.Warn("session/close did not complete before the wait ended",
+		slog.Duration("bound", bound), slog.String("outcome", outcome))
+}
+
 // stopSession runs teardown's fixed step order.
 func stopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
@@ -537,6 +653,13 @@ type teardownStep struct {
 // running state: each guards its own preconditions and does nothing
 // when they are not met, so StopSession never panics on a
 // partially-constructed session.
+//
+// close_session runs immediately after answer_open and issues
+// a bounded session/close call when the handshake advertised the
+// capability: it precedes the graceful signal because closing the
+// session is only worth attempting while the runtime is still running
+// normally. It never delays the signal past its own bound, and the
+// rest of the order is unchanged.
 //
 // The order gives the agent a bounded graceful phase before the
 // unconditional group kill: signal_graceful sends a catchable
@@ -564,6 +687,7 @@ type teardownStep struct {
 func defaultTeardownOrder(callerCtx, graceCtx context.Context, grace time.Duration) []teardownStep {
 	return []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
+		{name: "close_session", run: closeSession(callerCtx, graceCtx, grace)},
 		{name: "signal_graceful", run: signalGraceful},
 		{name: "close_stdin", run: closeStdin},
 		{name: "await_exit", run: awaitExit(callerCtx, graceCtx, grace)},

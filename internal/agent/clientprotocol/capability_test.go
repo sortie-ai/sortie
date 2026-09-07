@@ -1,6 +1,7 @@
 package clientprotocol
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -461,6 +462,63 @@ func TestAdvertisesSessionContinuation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdvertisesSessionClose confirms the predicate over the shapes
+// that matter: a handshake carrying close as {} advertises it, an
+// absent sessionCapabilities object does not, a sessionCapabilities
+// object present with no close member does not, and a close member
+// decoded from an explicit JSON null does not either, leaving the
+// pointer nil exactly as an absent member would.
+func TestAdvertisesSessionClose(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		caps agentCapabilities
+		want bool
+	}{
+		{
+			name: "sessionCapabilities.close present as an empty object advertises close",
+			caps: agentCapabilities{SessionCapabilities: &sessionCapabilities{Close: &sessionCloseCapabilities{}}},
+			want: true,
+		},
+		{
+			name: "absent sessionCapabilities does not advertise close",
+			caps: agentCapabilities{},
+			want: false,
+		},
+		{
+			name: "sessionCapabilities present with resume but no close does not advertise close",
+			caps: agentCapabilities{SessionCapabilities: &sessionCapabilities{Resume: &sessionResumeCapabilities{}}},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := advertisesSessionClose(tt.caps)
+
+			if got != tt.want {
+				t.Errorf("advertisesSessionClose(%+v) = %v, want %v", tt.caps, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("a close member decoded from an explicit JSON null does not advertise close", func(t *testing.T) {
+		t.Parallel()
+
+		var caps agentCapabilities
+		if err := json.Unmarshal([]byte(`{"sessionCapabilities":{"close":null}}`), &caps); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+
+		if got := advertisesSessionClose(caps); got {
+			t.Errorf("advertisesSessionClose(%+v) = %v, want false for a close member decoded from JSON null", caps, got)
+		}
+	})
 }
 
 // TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod

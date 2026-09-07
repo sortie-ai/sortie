@@ -620,8 +620,10 @@ Graceful shutdown sequence:
   - POSIX: `SIGTERM` to the process group (`kill(-pgid, SIGTERM)`).
   - Windows: `CTRL_BREAK_EVENT` via `GenerateConsoleCtrlEvent` to the process group.
 - The grace period that follows (`agent.stop_grace_ms`, default 5 seconds) is a ceiling: a
-  shorter caller deadline shortens it. When the grace period or the caller's deadline elapses,
-  whichever comes first,
+  shorter caller deadline shortens it. Where an adapter's transport defines a session-close
+  method the runtime advertised, part of that period is spent ahead of the signal, closing the
+  session through the protocol before it is sent. When the grace period or the caller's deadline
+  elapses, whichever comes first,
   the adapter force-terminates the process tree:
   - POSIX: `SIGKILL` to the process group.
   - Windows: `TerminateJobObject` to kill all processes in the Job Object.
@@ -646,7 +648,9 @@ Standard-error drain before reap:
   drain-related waits default to five seconds each; at the default `agent.stop_grace_ms` of 5000,
   a teardown that runs all four spends at most 20 seconds in them, and raising
   `agent.stop_grace_ms` lengthens that total by the same amount, less whenever the caller's
-  deadline is shorter.
+  deadline is shorter. Where a session-close attempt runs, per the graceful shutdown sequence
+  above, it is bounded at half the graceful wait and spent inside it rather than beside it, so
+  it adds nothing to that total.
 
 Recommended additional process settings:
 

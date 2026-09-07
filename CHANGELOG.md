@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The new `agent-client-protocol` agent kind runs Agent Client Protocol-compatible runtimes over stdio and resumes previous sessions when supported by the runtime. Locally launched runtimes can use workflow-configured MCP servers, while requests requiring human input are refused or end the attempt rather than waiting indefinitely. Token-based budgets do not apply because the protocol does not report token usage.
-  ([#976](https://github.com/sortie-ai/sortie/issues/976))
+- The new `agent-client-protocol` agent kind runs Agent Client Protocol-compatible runtimes over stdio and resumes previous sessions when supported by the runtime. Locally launched runtimes can use workflow-configured MCP servers, while requests requiring human input are refused or end the attempt rather than waiting indefinitely. Token-based budgets do not apply because the protocol does not report token usage; when the runtime itself ends a turn at its own token limit the claim is released rather than retried into the same limit, while a turn that exhausts the runtime's request or turn budget is retried on a fresh session. Stopping a session closes it through the protocol when the runtime advertised that capability at handshake. A runtime running over SSH gets no other clean close, because the termination signal reaches the local relay rather than the runtime itself.
+  ([#976](https://github.com/sortie-ai/sortie/issues/976),
+  [#1012](https://github.com/sortie-ai/sortie/issues/1012),
+  [#1023](https://github.com/sortie-ai/sortie/issues/1023))
 
-- A new `agent.stop_grace_ms` field, default `5000`, sets the period an adapter waits for an agent to exit on its own before it force-terminates the process group, and now reaches every adapter kind that has such a period instead of leaving it fixed at a five-second built-in constant. The orchestrator's per-session stop deadline no longer follows `agent.read_timeout_ms` at all: it derives from `agent.stop_grace_ms` alone. The shutdown-drain ceiling now derives from the same field, which lengthens the worker drain at the default configuration from 30 s to 50 s.
-  ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
+- A new `agent.stop_grace_ms` field, default `5000`, sets the period an adapter waits for an agent to exit on its own before it force-terminates the process group, and now reaches every adapter kind that has such a period instead of leaving it fixed at a five-second built-in constant. The orchestrator's per-session stop deadline no longer follows `agent.read_timeout_ms` at all: it derives from `agent.stop_grace_ms` alone. The shutdown-drain ceiling now derives from the same field, which lengthens the worker drain at the default configuration from 30 s to 50 s. A stop against an agent that ignores its termination signal now runs the full teardown before force-termination, so at the default configuration it can hold a worker or a shutdown for up to 20 s where the previous release gave it 5.
+  ([#1006](https://github.com/sortie-ai/sortie/issues/1006),
+  [#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
 ### Fixed
 
@@ -26,17 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copilot-cli` and `codex` runs now report `model_name` and a per-model request count, carried on the `token_usage` events each adapter already emits, instead of leaving both fields blank for every run on those two adapter kinds. `kiro`'s inability to report an effective model is now documented rather than left as an unexplained blank.
   ([#972](https://github.com/sortie-ai/sortie/issues/972))
 
-- The `agent-client-protocol` transport now sends its subprocess a catchable termination signal and waits a bounded grace period for it to exit on its own before force-terminating its process group, instead of terminating the group immediately with no graceful phase at all; a runtime that flushes state on a clean exit now gets a chance to reach that exit path. Every adapter kind's stop deadline no longer follows `agent.read_timeout_ms` below a full teardown: a stop against an agent that ignores its termination signal can now hold a worker or a shutdown for up to 20 seconds, where the shipping default previously gave it 5.
-  ([#1006](https://github.com/sortie-ai/sortie/issues/1006))
-
 - Cancelling a `codex` run now shuts down the whole process tree the agent started, instead of force-killing the agent alone and leaving its child processes running against the workspace. The agent first receives a catchable termination signal and a bounded grace period to exit on its own, so a runtime that flushes state on a clean exit reaches that path. Stopping a run already behaved this way; cancelling one did not.
   ([#1013](https://github.com/sortie-ai/sortie/issues/1013))
 
 - A self-review verification command now stops the process it started when the command exceeds `self_review.verification_timeout_ms` or the run is cancelled. Previously only the shell wrapping the command was killed, so a build or test suite kept running against the workspace after the run had moved on, and a run cancelled rather than timed out left it running with nothing to stop it.
   ([PR #1020](https://github.com/sortie-ai/sortie/pull/1020))
-
-- An `agent-client-protocol` turn that ends because the runtime reached a token limit no longer schedules a retry that resumes the same oversized context into the same limit; the claim is released instead. A turn that ends because the runtime's own request or turn budget was exhausted keeps its existing retryable classification, since a fresh session can complete within it.
-  ([#1023](https://github.com/sortie-ai/sortie/issues/1023))
 
 - Stopping a `codex` session now honors the caller's deadline, as every other agent kind already did. `StopSession` ignored the deadline it was given, so a stop asked to finish sooner than the configured stop grace waited out the whole grace anyway and then reported success. It now ends the graceful phase when the deadline expires, force-terminates the process group, and reports the deadline back to its caller.
   ([#1014](https://github.com/sortie-ai/sortie/issues/1014))

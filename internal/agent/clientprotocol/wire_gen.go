@@ -170,6 +170,17 @@ type clientSessionCapabilities struct {
 	ConfigOptions *sessionConfigOptionsCapabilities `json:"configOptions,omitempty"`
 }
 
+// closeSessionRequest is generated from the CloseSessionRequest definition of the pinned schema.
+type closeSessionRequest struct {
+	Meta      json.RawMessage `json:"_meta,omitempty"`
+	SessionID sessionId       `json:"sessionId"`
+}
+
+// closeSessionResponse is generated from the CloseSessionResponse definition of the pinned schema.
+type closeSessionResponse struct {
+	Meta json.RawMessage `json:"_meta,omitempty"`
+}
+
 // configOptionUpdate is generated from the ConfigOptionUpdate definition of the pinned schema.
 type configOptionUpdate struct {
 	Meta          json.RawMessage       `json:"_meta,omitempty"`
@@ -1053,6 +1064,8 @@ var wireTypeByDefinition = map[string]string{
 	"CancelNotification":                       "cancelNotification",
 	"ClientCapabilities":                       "clientCapabilities",
 	"ClientSessionCapabilities":                "clientSessionCapabilities",
+	"CloseSessionRequest":                      "closeSessionRequest",
+	"CloseSessionResponse":                     "closeSessionResponse",
 	"ConfigOptionUpdate":                       "configOptionUpdate",
 	"Content":                                  "content",
 	"ContentBlock":                             "contentBlock",
