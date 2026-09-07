@@ -39,6 +39,14 @@ func discardLogger() *slog.Logger {
 // itself already ended the stream, so no test leaks the goroutine.
 func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
+	return newTestSessionWithLogger(t, agentConfig, maxLineBytes, discardLogger())
+}
+
+// newTestSessionWithLogger behaves like newTestSession, but wires
+// state's logger to logger instead of one that discards everything,
+// for a test that needs to observe what the pump logs.
+func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int, logger *slog.Logger) (*sessionState, *io.PipeReader, *io.PipeWriter) {
+	t.Helper()
 
 	outPr, outPw := io.Pipe()
 	inPr, inPw := io.Pipe()
@@ -49,7 +57,7 @@ func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes i
 		itemCh:      make(chan pumpItem, pumpChannelCapacity),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
-		logger:      discardLogger(),
+		logger:      logger,
 	}
 	state.conn = jsonrpc.NewConn(outPw, inPr, pumpHandler(state.itemCh, state.stopCh),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(maxLineBytes))

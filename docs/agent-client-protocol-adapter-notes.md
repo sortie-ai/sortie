@@ -22,7 +22,7 @@ The entry point is the `acp` subcommand. The handshake advertises `loadSession` 
 
 The entry point is the `--acp` flag; a `--experimental-acp` spelling also exists and is deprecated. The handshake advertises `loadSession` true and both `mcpCapabilities.http` and `mcpCapabilities.sse` true, and it advertises no `sessionCapabilities` object at all.
 
-This is the one runtime the gated suite was driven against end to end: a session starts, a turn runs to a completed outcome, a `session/request_permission` request arrives mid-turn and the adapter refuses it inside the protocol with the turn continuing past the refusal to completion, and the session stops cleanly afterward.
+This is the one runtime the gated suite was driven against end to end: a session starts, a turn runs to a completed outcome, a `session/request_permission` request arrives mid-turn and the adapter refuses it inside the protocol with the turn continuing past the refusal to completion, and the session stops cleanly afterward. `What a delivered tool server needs to be callable` below states what that refusal means for the tool servers this session delivered.
 
 Session continuation was probed by hand against this runtime, not through the gated suite. `session/load` replays the prior turn's messages, observed as `user_message_chunk` notifications arriving before the load response itself returns, when the workspace directory already carries earlier session history. Against a workspace used for the first time, whose only session was ended by a process-group kill with no graceful phase ahead of it, a reload of that session answers a JSON-RPC error reporting no prior session for the workspace instead of replaying anything; the adapter observes this exactly as it observes any other unconfirmed load, lowering the session continuation entry and falling back to a fresh session without failing the run. That probe predates the graceful phase teardown now runs, and it has not been repeated against it. `session/resume` is not exercised: this runtime advertises no `sessionCapabilities` object at all, so the adapter never selects it.
 
@@ -41,6 +41,14 @@ The Claude Code CLI exposes no protocol entry point in its own help output. Ther
 ### `codex`
 
 Codex exposes no protocol entry point either. Its `app-server` speaks a different JSON-RPC dialect, the one this project's separate `codex` adapter already drives, and that dialect is not the Agent Client Protocol.
+
+## What a delivered tool server needs to be callable
+
+Delivery and discovery are not the question: the session-creation request carries the declaration, and the runtime launches the server and reads its tool list. A runtime that asks the client for consent before invoking a tool gets a refusal, and the tool is not invoked. The protocol's stdio server declaration carries no trust or approval field, so a declared server cannot be marked pre-authorized on the wire. The only lever is the runtime's own configuration, reached through the operator's `agent.command` and whatever configuration that runtime reads: an approval mode that does not ask, or a rule pre-authorizing the tools of the server Sortie declares.
+
+This was measured on `gemini`, the one runtime above the gated suite drives end to end; the other runtimes in these notes are unmeasured on this point, and an absent probe is never read as a measured negative.
+
+When the situation arises, the adapter reports it once per session on two surfaces. The notification reaches the orchestrator's generic event handling and is recorded at `Debug`, its message overwritten by the next message-carrying event. The `Warn` record is the only surface that outlives the run, for as long as the run's log is kept.
 
 ## Verifying a change
 
