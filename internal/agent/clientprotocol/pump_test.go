@@ -320,6 +320,7 @@ func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 		markSessionKnown(state)
 
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		var events []domain.AgentEvent
 		outcomeCh := runTurnAsyncCtx(ctx, state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
 
