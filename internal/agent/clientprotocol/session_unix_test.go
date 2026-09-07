@@ -56,7 +56,7 @@ func TestStartSessionMCPInjectionWire(t *testing.T) {
 		MCPConfigPath: mcpConfigPath,
 	}
 
-	session, err := startSession(context.Background(), params)
+	session, err := startSession(context.Background(), &sessionOrigins{}, params)
 	if err != nil {
 		t.Fatalf("startSession() error = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeThenGracefulExitScript(evidencePath, "0.4"))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	session, err := startSession(ctx, domain.StartSessionParams{
+	session, err := startSession(ctx, &sessionOrigins{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})

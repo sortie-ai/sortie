@@ -1,9 +1,11 @@
 package clientprotocol
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -590,4 +592,326 @@ func TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpda
 		}
 	}
 	t.Errorf("events = %+v, want the session/update observed once the fallback session/new was answered to have reached the turn", events)
+}
+
+// TestResolveLoadDefersUntilCreationMinuteElapses confirms property 1
+// of the same-minute guard: a session/load for an identifier this
+// process created in the current UTC minute does not reach the
+// connection before the guard's clock leaves that minute. It also
+// exercises property 9: a fake clock placed a few milliseconds before
+// the minute boundary keeps the whole test's wall-clock cost in the
+// milliseconds, never the full minute. This test must fail if the
+// prologue is removed from resolveLoad, since the guarded session/load
+// would then reach the connection immediately, inside the check window
+// below.
+//
+// It also covers property 5 by way of assertSessionContinuationEntry:
+// once the deferred load is confirmed by observed replay, the
+// sessionContinuation capability is not lowered, so the deferral
+// itself is not treated as a failed observation.
+func TestResolveLoadDefersUntilCreationMinuteElapses(t *testing.T) {
+	t.Parallel()
+
+	const deferralMS = 150
+	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
+	fakeNow := boundary.Add(-deferralMS * time.Millisecond)
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	state.origins.now = func() time.Time { return fakeNow }
+	state.origins.record("", "prior-session")
+
+	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+
+	probeID := out.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+	select {
+	case line := <-out.ch:
+		t.Fatalf("resolveLoad wrote %s to the connection before the guard's deferral elapsed", line)
+	case <-time.After(deferralMS * time.Millisecond / 2):
+	}
+
+	loadID := out.awaitMethod(t, methodSessionLoad)
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed from history"}}}}`)
+	respondLine(t, inPw, loadID, loadSessionResponse{})
+
+	outcome := awaitResolveSessionOutcome(t, outcomeCh)
+	if outcome.err != nil {
+		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
+	}
+	if outcome.sessionID != "prior-session" {
+		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
+	}
+
+	assertSessionContinuationEntry(t, state, out, inPw, false)
+}
+
+// TestResolveLoadDeferralLogsDebugRecord confirms the deferral's
+// exact log shape: a Debug record on state.logger with the message
+// the spec pins and exactly the two typed attributes session_id and
+// wait_ms.
+func TestResolveLoadDeferralLogsDebugRecord(t *testing.T) {
+	t.Parallel()
+
+	const deferralMS = 200
+	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
+	fakeNow := boundary.Add(-deferralMS * time.Millisecond)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes, logger)
+	out := newOutboundReader(outPr)
+	state.origins.now = func() time.Time { return fakeNow }
+	state.origins.record("", "prior-session")
+
+	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+
+	probeID := out.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+	loadID := out.awaitMethod(t, methodSessionLoad)
+	respondErrorLine(t, inPw, loadID, jsonrpcMethodNotFound, "method not found")
+
+	newID := out.awaitMethod(t, methodSessionNew)
+	respondLine(t, inPw, newID, newSessionResponse{SessionID: sessionId("fallback-session")})
+
+	awaitResolveSessionOutcome(t, outcomeCh)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "level=DEBUG") {
+		t.Fatalf("log output = %q, want a level=DEBUG record for the deferral", logged)
+	}
+	if !strings.Contains(logged, "session load deferred past the session's creation minute") {
+		t.Errorf("log output = %q, want the exact deferral message the spec pins", logged)
+	}
+	if !strings.Contains(logged, `session_id=prior-session`) {
+		t.Errorf("log output = %q, want a session_id=prior-session attribute", logged)
+	}
+	if !strings.Contains(logged, "wait_ms=") {
+		t.Errorf("log output = %q, want a wait_ms attribute", logged)
+	}
+}
+
+// TestResolveLoadNoDeferralWhenNotInCreationMinute confirms property 2:
+// a session/load for an identifier with no ledger entry, and one
+// recorded in an earlier UTC minute, both reach the connection with no
+// delay the guard added.
+func TestResolveLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setUp func(o *sessionOrigins)
+	}{
+		{
+			name:  "no ledger entry for the identifier",
+			setUp: func(o *sessionOrigins) {},
+		},
+		{
+			name: "recorded in an earlier UTC minute",
+			setUp: func(o *sessionOrigins) {
+				earlier := time.Date(2026, 3, 4, 5, 4, 30, 0, time.UTC)
+				o.now = func() time.Time { return earlier }
+				o.record("", "prior-session")
+				o.now = func() time.Time { return earlier.Add(90 * time.Second) }
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const noDelayBudget = 200 * time.Millisecond
+
+			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+			out := newOutboundReader(outPr)
+			tt.setUp(state.origins)
+
+			outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingLoad())
+
+			probeID := out.awaitMethod(t, negativeControlMethod)
+			respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+			start := time.Now()
+			line := out.next(t)
+			if elapsed := time.Since(start); elapsed > noDelayBudget {
+				t.Errorf("session/load reached the connection after %v, want under %v: the guard must not delay this case", elapsed, noDelayBudget)
+			}
+			var h wireHeader
+			if err := json.Unmarshal(line, &h); err != nil {
+				t.Fatalf("decode line %s: %v", line, err)
+			}
+			if h.Method != methodSessionLoad {
+				t.Fatalf("first outbound method after the negative control = %q, want %q", h.Method, methodSessionLoad)
+			}
+
+			sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"prior-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed from history"}}}}`)
+			respondLine(t, inPw, h.ID, loadSessionResponse{})
+
+			outcome := awaitResolveSessionOutcome(t, outcomeCh)
+			if outcome.err != nil {
+				t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
+			}
+			if outcome.sessionID != "prior-session" {
+				t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
+			}
+		})
+	}
+}
+
+// TestResolveResumeIgnoresCreationLedger confirms property 3: a
+// session/resume reaches the connection with no delay the guard
+// added, even when the ledger holds a current-minute entry for the
+// same identifier. The guard is scoped to session/load alone.
+func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
+	t.Parallel()
+
+	const noDelayBudget = 200 * time.Millisecond
+	deepInMinute := time.Date(2026, 3, 4, 5, 6, 30, 0, time.UTC)
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	state.origins.now = func() time.Time { return deepInMinute }
+	state.origins.record("", "prior-session")
+
+	outcomeCh := runResolveSessionAsync(context.Background(), state, "prior-session", capsAdvertisingResume())
+
+	probeID := out.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+	start := time.Now()
+	resumeID := out.awaitMethod(t, methodSessionResume)
+	if elapsed := time.Since(start); elapsed > noDelayBudget {
+		t.Errorf("session/resume reached the connection after %v, want under %v even though the ledger holds a current-minute entry for this identifier", elapsed, noDelayBudget)
+	}
+	respondLine(t, inPw, resumeID, resumeSessionResponse{})
+
+	outcome := awaitResolveSessionOutcome(t, outcomeCh)
+	if outcome.err != nil {
+		t.Fatalf("resolveSession() error = %v, want nil", outcome.err)
+	}
+	if outcome.sessionID != "prior-session" {
+		t.Errorf("resolveSession() session id = %q, want %q", outcome.sessionID, "prior-session")
+	}
+}
+
+// TestResolveLoadContextCancelDuringDeferralReturnsPortExit confirms
+// property 4: when the caller's context ends while the deferral is
+// being spent, no session/load and no session/new reaches the
+// connection, and resolveSession returns a domain.AgentError of kind
+// domain.ErrPortExit.
+func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
+	t.Parallel()
+
+	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
+	fakeNow := boundary.Add(-30 * time.Second)
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	state.origins.now = func() time.Time { return fakeNow }
+	state.origins.record("", "prior-session")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	outcomeCh := make(chan resolveSessionOutcome, 1)
+	go func() {
+		sessionID, err := resolveSession(ctx, state, "prior-session", capsAdvertisingLoad(), "", nil)
+		outcomeCh <- resolveSessionOutcome{sessionID: sessionID, err: err}
+	}()
+
+	probeID := out.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, inPw, probeID, jsonrpcMethodNotFound, "method not found")
+
+	cancel()
+
+	outcome := awaitResolveSessionOutcome(t, outcomeCh)
+	if outcome.err == nil {
+		t.Fatal("resolveSession() error = nil, want a port-exit error for a context ended during the deferral")
+	}
+	if outcome.err.Kind != domain.ErrPortExit {
+		t.Errorf("resolveSession() error kind = %q, want %q", outcome.err.Kind, domain.ErrPortExit)
+	}
+	if outcome.sessionID != "" {
+		t.Errorf("resolveSession() session id = %q, want empty on a cancelled deferral", outcome.sessionID)
+	}
+
+	select {
+	case line := <-out.ch:
+		t.Fatalf("resolveSession() wrote %s to the connection, want no session/load or session/new after the context ended during the deferral", line)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestFallbackSessionRecordedIsGuardedOnLaterLoad confirms property 6:
+// the identifier a fallback session/new creates is recorded in the
+// shared ledger, so a later attempt loading it, on another session
+// sharing the same *sessionOrigins the way ClientProtocolAdapter's own
+// value is shared across sessions, is guarded exactly as a
+// first-attempt session would be.
+func TestFallbackSessionRecordedIsGuardedOnLaterLoad(t *testing.T) {
+	t.Parallel()
+
+	const deferralMS = 150
+	boundary := time.Date(2026, 3, 4, 5, 6, 0, 0, time.UTC)
+	fakeNow := boundary.Add(-deferralMS * time.Millisecond)
+	origins := &sessionOrigins{now: func() time.Time { return fakeNow }}
+
+	firstState, firstOutPr, firstInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	firstOut := newOutboundReader(firstOutPr)
+	firstState.origins = origins
+
+	firstOutcomeCh := runResolveSessionAsync(context.Background(), firstState, "prior-session", capsAdvertisingLoad())
+
+	firstProbeID := firstOut.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, firstInPw, firstProbeID, jsonrpcMethodNotFound, "method not found")
+
+	firstLoadID := firstOut.awaitMethod(t, methodSessionLoad)
+	respondErrorLine(t, firstInPw, firstLoadID, jsonrpcMethodNotFound, "method not found")
+
+	firstNewID := firstOut.awaitMethod(t, methodSessionNew)
+	respondLine(t, firstInPw, firstNewID, newSessionResponse{SessionID: sessionId("fallback-session")})
+
+	firstOutcome := awaitResolveSessionOutcome(t, firstOutcomeCh)
+	if firstOutcome.err != nil {
+		t.Fatalf("resolveSession() error = %v, want nil", firstOutcome.err)
+	}
+	if firstOutcome.sessionID != "fallback-session" {
+		t.Fatalf("resolveSession() session id = %q, want %q", firstOutcome.sessionID, "fallback-session")
+	}
+
+	recordedAt, known := origins.createdAt("", "fallback-session")
+	if !known {
+		t.Fatalf("createdAt(%q) known = false, want true: createNewSession must record the fallback session's own identifier", "fallback-session")
+	}
+	if !recordedAt.Equal(fakeNow) {
+		t.Errorf("createdAt(%q) = %v, want %v", "fallback-session", recordedAt, fakeNow)
+	}
+
+	secondState, secondOutPr, secondInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+	secondOut := newOutboundReader(secondOutPr)
+	secondState.origins = origins
+
+	secondOutcomeCh := runResolveSessionAsync(context.Background(), secondState, "fallback-session", capsAdvertisingLoad())
+
+	secondProbeID := secondOut.awaitMethod(t, negativeControlMethod)
+	respondErrorLine(t, secondInPw, secondProbeID, jsonrpcMethodNotFound, "method not found")
+
+	select {
+	case line := <-secondOut.ch:
+		t.Fatalf("session/load for the fallback session reached the connection before the guard's deferral elapsed: %s", line)
+	case <-time.After(deferralMS * time.Millisecond / 2):
+	}
+
+	secondLoadID := secondOut.awaitMethod(t, methodSessionLoad)
+	sendLine(t, secondInPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fallback-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"replayed"}}}}`)
+	respondLine(t, secondInPw, secondLoadID, loadSessionResponse{})
+
+	secondOutcome := awaitResolveSessionOutcome(t, secondOutcomeCh)
+	if secondOutcome.err != nil {
+		t.Fatalf("resolveSession() error = %v, want nil", secondOutcome.err)
+	}
+	if secondOutcome.sessionID != "fallback-session" {
+		t.Errorf("resolveSession() session id = %q, want %q", secondOutcome.sessionID, "fallback-session")
+	}
 }

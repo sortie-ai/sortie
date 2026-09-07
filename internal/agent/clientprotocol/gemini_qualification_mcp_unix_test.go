@@ -649,7 +649,7 @@ func TestGeminiQualificationMCPFixtureReceipt(t *testing.T) {
 		capturePath := filepath.Join(dir, "session_new.jsonl")
 		scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeScript(capturePath))
 
-		session, err := startSession(context.Background(), domain.StartSessionParams{
+		session, err := startSession(context.Background(), &sessionOrigins{}, domain.StartSessionParams{
 			WorkspacePath: t.TempDir(),
 			AgentConfig:   domain.AgentConfig{Command: scriptPath},
 			MCPConfigPath: fixture.ConfigPath,

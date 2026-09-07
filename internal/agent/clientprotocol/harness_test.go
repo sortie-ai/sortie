@@ -58,6 +58,7 @@ func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxL
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      logger,
+		origins:     &sessionOrigins{},
 	}
 	state.conn = jsonrpc.NewConn(outPw, inPr, pumpHandler(state.itemCh, state.stopCh),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(maxLineBytes))
