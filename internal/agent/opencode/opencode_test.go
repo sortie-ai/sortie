@@ -599,7 +599,11 @@ sleep 60`)
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-		if err := stopActiveTurn(context.Background(), runtime, 2*time.Second, logger); err != nil {
+		// The grace is far longer than this exit needs. The subtest proves
+		// which record the clean-exit path emits, not that the grace bounds
+		// anything, and a tight bound races the runner's scheduler instead
+		// of testing the code.
+		if err := stopActiveTurn(context.Background(), runtime, 30*time.Second, logger); err != nil {
 			t.Errorf("stopActiveTurn() = %v, want nil", err)
 		}
 

@@ -621,7 +621,11 @@ sleep 60`)
 			target := newTestTarget(tmpDir, script)
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			sess := NewForkPerTurnSession(target, noopHooks(), logger, 2000)
+			// The grace is far longer than this exit needs. The subtest proves
+			// which record the clean-exit path emits, not that the grace bounds
+			// anything, and a tight bound races the runner's scheduler instead
+			// of testing the code.
+			sess := NewForkPerTurnSession(target, noopHooks(), logger, 30000)
 
 			emit, _ := sinkEvents()
 			done := make(chan struct{})

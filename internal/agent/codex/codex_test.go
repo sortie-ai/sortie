@@ -785,8 +785,12 @@ func TestStopSession_EscalationLogging(t *testing.T) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		t.Cleanup(func() { slog.SetDefault(orig) })
 
+		// The grace is far longer than this exit needs. The subtest proves
+		// which record the clean-exit path emits, not that the grace bounds
+		// anything, and a tight bound races the runner's scheduler instead
+		// of testing the code.
 		state := startFakeCodexProcess(t, `trap 'exit 0' TERM
-sleep 60`, 2000)
+sleep 60`, 30000)
 
 		if err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
 			t.Errorf("StopSession() = %v, want nil", err)
