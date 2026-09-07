@@ -502,6 +502,18 @@ func checkContractTeardown(fset *token.FileSet, file *ast.File) []contractViolat
 // [procutil.DefaultStopGrace] directly.
 const contractStopGraceOwner = "procutil.StopGrace"
 
+// importPos returns the position of file's import of importPath, or
+// the file's own start when the import is absent, so a violation always
+// carries a position a reader can open.
+func importPos(file *ast.File, importPath string) token.Pos {
+	for _, imp := range file.Imports {
+		if path, err := strconv.Unquote(imp.Path.Value); err == nil && path == importPath {
+			return imp.Pos()
+		}
+	}
+	return file.Pos()
+}
+
 // checkContractStopGrace reports a violation for every reference to
 // procutil.DefaultStopGrace in file, with the procutil qualifier
 // resolved from file's own imports so an aliased import cannot evade
@@ -513,23 +525,19 @@ func checkContractStopGrace(fset *token.FileSet, file *ast.File) []contractViola
 	}
 	var violations []contractViolation
 	// A dot import binds the constant to a bare identifier, so no
-	// selector node exists to match and the qualifier check below can
-	// never fire. Nothing in this repository dot-imports a non-test
-	// package, and no linter here forbids it, so the rule closes the
-	// hole itself rather than resting on a convention.
+	// selector node exists for the qualifier check below to match and
+	// the rule would silently pass. Reporting the import itself is the
+	// precise answer: chasing bare identifiers instead would also flag
+	// a local that shadows the name and the selector half of an
+	// unrelated other.DefaultStopGrace, and telling those apart needs
+	// type information this check does not have. Nothing here
+	// dot-imports a non-test package and no linter forbids it, so the
+	// rule states the prohibition rather than resting on a convention.
 	if procutilIdent == "." {
-		ast.Inspect(file, func(n ast.Node) bool {
-			ident, isIdent := n.(*ast.Ident)
-			if !isIdent || ident.Name != "DefaultStopGrace" {
-				return true
-			}
-			violations = append(violations, contractViolation{
-				pos:  fset.Position(ident.Pos()),
-				text: "references procutil.DefaultStopGrace directly; call " + contractStopGraceOwner,
-			})
-			return true
-		})
-		return violations
+		return []contractViolation{{
+			pos:  fset.Position(importPos(file, contractProcutilImportPath)),
+			text: "dot-imports procutil, which hides a DefaultStopGrace reference from this rule; import it by name and call " + contractStopGraceOwner,
+		}}
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		sel, ok := n.(*ast.SelectorExpr)
@@ -1498,6 +1506,77 @@ func grace() time.Duration {
 `,
 			wantCount:  1,
 			wantSubstr: "call procutil.StopGrace",
+		},
+		{
+			// The file also shadows the name and names it on an
+			// unrelated package. Reporting the import rather than every
+			// identifier is what keeps those from counting: an
+			// identifier walk cannot tell them apart without type
+			// information, so it would report three violations here
+			// instead of one.
+			name:       "a non-test file dot-importing procutil is rejected once, on the import",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"time"
+
+	. "github.com/sortie-ai/sortie/internal/agent/procutil"
+	other "github.com/sortie-ai/sortie/internal/agent/agentcore"
+)
+
+func grace(ms int) time.Duration {
+	DefaultStopGrace := StopGrace(ms)
+	_ = other.DefaultStopGrace
+	return DefaultStopGrace
+}
+
+func plain() time.Duration {
+	return DefaultStopGrace
+}
+`,
+			wantCount:  1,
+			wantSubstr: "dot-imports procutil",
+		},
+		{
+			name:       "a shadowing local named DefaultStopGrace is not a violation",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+)
+
+func grace(ms int) time.Duration {
+	DefaultStopGrace := procutil.StopGrace(ms)
+	return DefaultStopGrace
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "an unrelated package's DefaultStopGrace is not a violation",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import (
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	other "github.com/sortie-ai/sortie/internal/agent/agentcore"
+)
+
+func grace(ms int) time.Duration {
+	_ = other.DefaultStopGrace
+	return procutil.StopGrace(ms)
+}
+`,
+			wantCount: 0,
 		},
 		{
 			name:       "a package resolving its grace through procutil.StopGrace is accepted",
