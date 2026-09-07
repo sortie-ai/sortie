@@ -38,6 +38,7 @@ var rootMethods = map[string]bool{
 	"session/cancel":             true,
 	"session/update":             true,
 	"session/request_permission": true,
+	"session/close":              true,
 }
 
 // Generate reads the pinned schema assets under assetsDir, verifies them

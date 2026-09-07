@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -135,6 +136,8 @@ var goTypeRegistry = map[string]reflect.Type{
 	"cancelNotification":                       reflect.TypeFor[cancelNotification](),
 	"clientCapabilities":                       reflect.TypeFor[clientCapabilities](),
 	"clientSessionCapabilities":                reflect.TypeFor[clientSessionCapabilities](),
+	"closeSessionRequest":                      reflect.TypeFor[closeSessionRequest](),
+	"closeSessionResponse":                     reflect.TypeFor[closeSessionResponse](),
 	"configOptionUpdate":                       reflect.TypeFor[configOptionUpdate](),
 	"content":                                  reflect.TypeFor[content](),
 	"contentChunk":                             reflect.TypeFor[contentChunk](),
@@ -974,6 +977,18 @@ func TestSchemaConformance(t *testing.T) {
 		respondLine(t, resumeInPw, resumeReqID, resumeSessionResponse{})
 		awaitResolveSessionOutcome(t, resumeOutcomeCh)
 
+		closeState, closeOutPr, closeInPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+		closeOut := newOutboundReader(closeOutPr)
+		closeState.closeSessionID = "sess-close-conformance"
+		closeDone := make(chan struct{})
+		go func() {
+			defer close(closeDone)
+			closeSession(context.Background(), context.Background(), 2*time.Second)(closeState)
+		}()
+		closeRaw, closeReqID := nextRequestLine(t, closeOut, methodSessionClose)
+		respondLine(t, closeInPw, closeReqID, closeSessionResponse{})
+		<-closeDone
+
 		for _, tc := range []struct {
 			label   string
 			defName string
@@ -987,6 +1002,7 @@ func TestSchemaConformance(t *testing.T) {
 			{"permission cancelled", "RequestPermissionResponse", cancelledPermissionRaw, responseResult},
 			{"session/load", "LoadSessionRequest", loadRaw, requestParams},
 			{"session/resume", "ResumeSessionRequest", resumeRaw, requestParams},
+			{"session/close", "CloseSessionRequest", closeRaw, requestParams},
 		} {
 			t.Run(tc.label, func(t *testing.T) {
 				body := tc.body(t, tc.raw)

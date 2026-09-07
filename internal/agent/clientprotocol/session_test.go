@@ -1,8 +1,10 @@
 package clientprotocol
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -309,6 +311,102 @@ func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 
 	agenttest.AssertUsageContract(t, events)
 	agenttest.AssertMeasurementAbsent(t, events, outcome.result)
+}
+
+// indexOfStepName returns the index of name in names, failing t if it
+// is not present.
+func indexOfStepName(t *testing.T, names []string, name string) int {
+	t.Helper()
+	for i, n := range names {
+		if n == name {
+			return i
+		}
+	}
+	t.Fatalf("defaultTeardownOrder() step names = %v, want %q present", names, name)
+	return -1
+}
+
+// TestDefaultTeardownOrderIncludesCloseSession confirms the fixed step
+// order places close_session immediately after answer_open and before
+// both signal_graceful and kill_process_group, asserted on the
+// returned step names rather than on timing: a reversal of the order
+// fails this assertion structurally.
+func TestDefaultTeardownOrderIncludesCloseSession(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	steps := defaultTeardownOrder(ctx, ctx, time.Second)
+
+	names := make([]string, len(steps))
+	for i, step := range steps {
+		names[i] = step.name
+	}
+
+	answerOpenIdx := indexOfStepName(t, names, "answer_open")
+	closeSessionIdx := indexOfStepName(t, names, "close_session")
+	signalGracefulIdx := indexOfStepName(t, names, "signal_graceful")
+	killIdx := indexOfStepName(t, names, "kill_process_group")
+
+	if closeSessionIdx != answerOpenIdx+1 {
+		t.Errorf("defaultTeardownOrder() step names = %v, want close_session immediately after answer_open", names)
+	}
+	if closeSessionIdx >= signalGracefulIdx {
+		t.Errorf("defaultTeardownOrder() step names = %v, want close_session before signal_graceful", names)
+	}
+	if closeSessionIdx >= killIdx {
+		t.Errorf("defaultTeardownOrder() step names = %v, want close_session before kill_process_group", names)
+	}
+}
+
+// TestCloseSessionSkipsWhenIdentifierEmpty confirms the step returns
+// immediately, writing nothing and logging nothing, when
+// closeSessionID is left at its zero value: the handshake never
+// advertised session/close, so there is nothing to close.
+func TestCloseSessionSkipsWhenIdentifierEmpty(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	state, outPr, _ := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes, logger)
+	out := newOutboundReader(outPr)
+
+	closeSession(context.Background(), context.Background(), time.Second)(state)
+
+	select {
+	case line := <-out.ch:
+		t.Errorf("closeSession() wrote %s, want no bytes written when closeSessionID is empty", line)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if buf.Len() != 0 {
+		t.Errorf("closeSession() logged %q, want no record when closeSessionID is empty", buf.String())
+	}
+}
+
+// TestCloseSessionBoundedWhenAgentNeverAnswers confirms an agent that
+// reads the session/close request and never answers it cannot hold
+// the step past closeCallBound(grace): grace is configured well below
+// the default so the property costs no default-length wait.
+func TestCloseSessionBoundedWhenAgentNeverAnswers(t *testing.T) {
+	t.Parallel()
+
+	state, outPr, _ := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	state.closeSessionID = "sess-test"
+
+	const grace = 200 * time.Millisecond
+	bound := closeCallBound(grace)
+
+	start := time.Now()
+	closeSession(context.Background(), context.Background(), grace)(state)
+	elapsed := time.Since(start)
+
+	out.awaitMethod(t, methodSessionClose)
+
+	const schedulingOverhead = time.Second
+	if wantBound := bound + schedulingOverhead; elapsed > wantBound {
+		t.Errorf("closeSession() step took %v, want at most %v (closeCallBound(%v) plus scheduling overhead)", elapsed, wantBound, grace)
+	}
 }
 
 // TestDoInitializeVersionPin confirms the version pin: a response

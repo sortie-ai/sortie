@@ -790,6 +790,90 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 	})
 }
 
+// TestStopSessionTeardownParkedWriteBoundsCloseSession confirms
+// close_session against a real parked write: the pump has a
+// permission reply parked on a full standard-input pipe, so the close
+// call can never reach the wire, yet the step still returns inside
+// its own bound, the process group is signalled no later than that
+// bound after teardown starts, teardown itself still returns inside
+// the existing parked-teardown ceiling, and no session goroutine
+// outlives the return.
+func TestStopSessionTeardownParkedWriteBoundsCloseSession(t *testing.T) {
+	t.Parallel()
+
+	fx := newParkedTeardownSession(t, pipeWiringAutoClosing)
+	fx.state.closeSessionID = "sess-parked-close"
+	fx.state.agentConfig.StopGraceMS = 400
+	grace := procutil.StopGrace(fx.state.agentConfig.StopGraceMS)
+	bound := closeCallBound(grace)
+
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		done <- stopSession(context.Background(), fakeSession(fx.state))
+	}()
+
+	assertProcessGone(t, fx.state.pid, bound+teardownReturnOverhead)
+
+	ceiling := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace + teardownReturnOverhead
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("stopSession() error = %v", err)
+		}
+	case <-time.After(ceiling):
+		t.Fatal("stopSession() did not return inside the parked-teardown ceiling")
+	}
+
+	if elapsed := time.Since(start); elapsed >= ceiling {
+		t.Errorf("stopSession() took %v, want under %v (the parked-teardown ceiling)", elapsed, ceiling)
+	}
+
+	assertSessionGoroutinesExited(t, fx.state)
+}
+
+// TestStopSessionTeardownCloseAndAwaitExitShareGrace confirms
+// close_session and await_exit spend no more than the resolved grace
+// combined: both are bounded by the same graceCtx, so an agent that
+// answers neither the close call nor the graceful signal cannot push
+// their sum past grace, only up to it. teardown's stated total is
+// therefore unchanged by adding the close_session step.
+func TestStopSessionTeardownCloseAndAwaitExitShareGrace(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	readyPath := filepath.Join(dir, "ready")
+	state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, nil)
+	state.closeSessionID = "sess-combined-budget"
+
+	const grace = 1 * time.Second
+	callerCtx := context.Background()
+	graceCtx, cancel := context.WithTimeout(callerCtx, grace)
+	defer cancel()
+
+	signalAnswerOpen(state)
+
+	start := time.Now()
+	closeSession(callerCtx, graceCtx, grace)(state)
+	awaitExit(callerCtx, graceCtx, grace)(state)
+	combinedElapsed := time.Since(start)
+
+	runTeardown(state, []teardownStep{
+		{name: "kill_process_group", run: killProcessGroup},
+		{name: "close_stdin", run: closeStdin},
+		{name: "close_stdout", run: closeStdout},
+		{name: "close_connection", run: closeConnection},
+		{name: "stop_pump", run: stopPump},
+		{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
+	})
+	assertSessionGoroutinesExited(t, state)
+
+	const schedulingOverhead = 400 * time.Millisecond
+	if bound := grace + schedulingOverhead; combinedElapsed >= bound {
+		t.Errorf("close_session and await_exit together took %v, want under %v (the resolved grace, shared by one deadline)", combinedElapsed, bound)
+	}
+}
+
 // TestStopSessionGrace_ConfiguredValueBoundsTheWait asserts that
 // stopSession's graceCtx expires at a configured agent.stop_grace_ms,
 // not at the built-in five-second default: a small configured grace
