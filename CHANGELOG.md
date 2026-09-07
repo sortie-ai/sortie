@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopping a `codex` session now honors the caller's deadline, as every other agent kind already did. `StopSession` ignored the deadline it was given, so a stop asked to finish sooner than the configured stop grace waited out the whole grace anyway and then reported success. It now ends the graceful phase when the deadline expires, force-terminates the process group, and reports the deadline back to its caller.
   ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
+- A `brew` command that loads the sortie tap no longer prints Homebrew's deprecation warning for the `verified` parameter in the cask's `url` stanza. Homebrew does not honor that parameter and verifies cask download URLs through its own default behavior instead.
+  ([#1036](https://github.com/sortie-ai/sortie/issues/1036))
+
 ### Changed
 
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.
