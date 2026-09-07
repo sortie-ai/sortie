@@ -757,7 +757,7 @@ func TestStopSession_ConfiguredGraceBoundsTheWait(t *testing.T) {
 	t.Parallel()
 
 	state := startFakeCodexProcess(t, `trap '' TERM
-sleep 60`, 200)
+while :; do :; done`, 200)
 
 	start := time.Now()
 	err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state})
@@ -790,7 +790,7 @@ func TestStopSession_EscalationLogging(t *testing.T) {
 		// anything, and a tight bound races the runner's scheduler instead
 		// of testing the code.
 		state := startFakeCodexProcess(t, `trap 'exit 0' TERM
-sleep 60`, 30000)
+while :; do :; done`, 30000)
 
 		if err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
 			t.Errorf("StopSession() = %v, want nil", err)
@@ -815,7 +815,7 @@ sleep 60`, 30000)
 		t.Cleanup(func() { slog.SetDefault(orig) })
 
 		state := startFakeCodexProcess(t, `trap '' TERM
-sleep 60`, 150)
+while :; do :; done`, 150)
 
 		if err := (&CodexAdapter{}).StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
 			t.Errorf("StopSession() = %v, want nil", err)
@@ -833,6 +833,42 @@ sleep 60`, 150)
 		}
 		if !strings.Contains(output, "elapsed=") {
 			t.Errorf("StopSession()'s Warn record missing the elapsed wait: %s", output)
+		}
+	})
+
+	t.Run("caller_deadline_ends_the_phase_and_is_reported", func(t *testing.T) {
+		var buf bytes.Buffer
+		orig := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		t.Cleanup(func() { slog.SetDefault(orig) })
+
+		// The grace is far longer than the deadline, so only a
+		// StopSession that reads its context can end this phase. When
+		// it ignored the context, this arm waited out the whole grace
+		// and then reported success.
+		state := startFakeCodexProcess(t, `trap '' TERM
+while :; do :; done`, 30000)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		err := (&CodexAdapter{}).StopSession(ctx, domain.Session{Internal: state})
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("StopSession() = %v, want context.DeadlineExceeded", err)
+		}
+		if elapsed > 10*time.Second {
+			t.Errorf("StopSession() returned after %v, want the caller's deadline to end the phase far below the 30s grace", elapsed)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, `outcome="caller deadline"`) {
+			t.Errorf(`StopSession()'s Warn record missing outcome="caller deadline": %s`, output)
+		}
+		if !strings.Contains(output, "grace=30s") {
+			t.Errorf("StopSession()'s Warn record did not report the configured 30s ceiling: %s", output)
 		}
 	})
 }

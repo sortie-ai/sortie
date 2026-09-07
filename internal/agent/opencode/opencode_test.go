@@ -578,7 +578,7 @@ func TestStopActiveTurn_GraceCoverage(t *testing.T) {
 	t.Run("configured_grace_bounds_the_wait", func(t *testing.T) {
 		t.Parallel()
 		runtime := startTurnRuntimeProcess(t, `trap '' TERM
-sleep 60`)
+while :; do :; done`)
 
 		start := time.Now()
 		err := stopActiveTurn(context.Background(), runtime, 200*time.Millisecond, slog.Default())
@@ -595,7 +595,7 @@ sleep 60`)
 	t.Run("exit_inside_grace_emits_debug_and_no_warn", func(t *testing.T) {
 		t.Parallel()
 		runtime := startTurnRuntimeProcess(t, `trap 'exit 0' TERM
-sleep 60`)
+while :; do :; done`)
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -622,7 +622,7 @@ sleep 60`)
 	t.Run("grace_elapsed_emits_warn_with_outcome_and_grace", func(t *testing.T) {
 		t.Parallel()
 		runtime := startTurnRuntimeProcess(t, `trap '' TERM
-sleep 60`)
+while :; do :; done`)
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -648,7 +648,7 @@ sleep 60`)
 	t.Run("caller_deadline_emits_warn_with_that_outcome", func(t *testing.T) {
 		t.Parallel()
 		runtime := startTurnRuntimeProcess(t, `trap '' TERM
-sleep 60`)
+while :; do :; done`)
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
