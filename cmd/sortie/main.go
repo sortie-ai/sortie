@@ -62,9 +62,12 @@ var serverShutdownTimeout = 5 * time.Second
 
 // abandonCh is created by main before [run] is called, and the signal
 // goroutine closes it on a second interrupt so every in-flight shutdown
-// wait ends at once. It stays nil for the validate, resolve, and
-// --dry-run paths, and for tests, none of which construct an
-// orchestrator through this package's main.
+// wait ends at once. Every path through main gets a live channel,
+// including validate, resolve, and --dry-run; those construct no
+// orchestrator, so nothing ever reads it. It stays nil only for a
+// caller that invokes [run] directly, which is what tests do, and a
+// receive on a nil channel blocks forever, so an unwired abort never
+// fires.
 var abandonCh chan struct{}
 
 // buildAgentAdapterCache eagerly constructs every registered agent
@@ -245,6 +248,11 @@ func main() {
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
 	signal.Stop(sigCh)
+	// Closing is safe only after signal.Stop returns, which guarantees
+	// the channel receives no further signals. It lets handleSignals
+	// drain and return rather than parking on a receive for the life of
+	// the process.
+	close(sigCh)
 	os.Exit(code)
 }
 
