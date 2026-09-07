@@ -771,11 +771,12 @@ while :; do :; done`, 200)
 	}
 }
 
-// TestStopSession_EscalationLogging asserts the escalation record pair
+// TestStopSession_EscalationLogging asserts the escalation records
 // codex's StopSession emits: Debug on an exit inside the grace, and
-// Warn naming the outcome and elapsed grace when it expires.
-// StopSession ignores its ctx parameter, so "grace elapsed" is the
-// only escalation outcome this family can report.
+// Warn naming the outcome, the configured ceiling and the elapsed wait
+// when the phase ends without one. Both escalation outcomes are
+// reachable here, because StopSession ends the phase on whichever of
+// the grace and the caller's deadline arrives first.
 func TestStopSession_EscalationLogging(t *testing.T) {
 	// No t.Parallel(): installs a global slog default.
 
