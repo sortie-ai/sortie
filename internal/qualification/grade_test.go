@@ -358,13 +358,28 @@ func TestEligibilityPredicates(T *testing.T) {
 			mutate: func(f *Fixture) {
 				recall := f.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
 				recall.SessionID = new(FixtureSession(SurfaceProtocol, "fallback"))
-				recall.Detail = recallFreshFallback
+				recall.Detail = RecallFreshFallback
 				recall.Grade = GradeGap
 				if baseline := f.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
 					baseline.Grade = GradeGap
 				}
 			},
 			want: VerdictNotQualified,
+		},
+		{
+			name: "protocol continuation recall precondition unmet",
+			mutate: func(f *Fixture) {
+				recall := f.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+				recall.SessionID = nil
+				recall.Detail = RecallPreconditionUnmet
+				recall.Grade = GradeNotObserved
+				recall.Outcome = OutcomePrerequisiteFailed
+				if baseline := f.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
+					baseline.Grade = GradeNotObserved
+					baseline.Outcome = OutcomeNotObserved
+				}
+			},
+			want: VerdictUnmeasured,
 		},
 	}
 
