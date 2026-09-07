@@ -312,6 +312,19 @@ const (
 // declaration may carry.
 var DeclaredGapReasons = []string{DeclaredGapNeverProduced, DeclaredGapFolded}
 
+// The closed recall detail set. A continuation recall record carries
+// exactly one of these; every other value is invalid.
+const (
+	RecallConfirmedSameSession = "confirmed_same_session"
+	RecallFreshFallback        = "fresh_session_fallback"
+	RecallUnobservedActual     = "unobserved_actual_session"
+	// RecallPreconditionUnmet states that the probe could not
+	// establish the condition its observation requires, so no
+	// continuation was tried and nothing about the runtime was
+	// observed.
+	RecallPreconditionUnmet = "recall_precondition_unmet"
+)
+
 // DeclaredGapPeers pairs the two semantic cases whose outcomes derive
 // from one physical run, so a declaration of one without the other is
 // incoherent.

@@ -86,13 +86,6 @@ var scenarioWriteOrder = []Scenario{
 	ScenarioProcessCleanup, ScenarioQualification,
 }
 
-// The closed recall detail set for continuation recall records.
-const (
-	recallConfirmedSameSession = "confirmed_same_session"
-	recallFreshFallback        = "fresh_session_fallback"
-	recallUnobservedActual     = "unobserved_actual_session"
-)
-
 // ClassifyRecord matches one record against the closed tuple table
 // and returns its row class, rejecting any tuple the table does not
 // declare.
@@ -967,26 +960,36 @@ func (v *setValidation) checkRecallRecord(rec *Record) error {
 		return fmt.Errorf("continuation recall record must carry prior_session_id")
 	}
 	switch rec.Detail {
-	case recallConfirmedSameSession:
+	case RecallConfirmedSameSession:
 		if rec.SessionID == nil || *rec.SessionID != *rec.PriorSessionID {
 			return fmt.Errorf("confirmed_same_session requires equal non-null actual and prior session ids")
 		}
 		if rec.Grade != GradeUsable {
 			return fmt.Errorf("confirmed_same_session requires classification usable, got %s", rec.Grade)
 		}
-	case recallFreshFallback:
+	case RecallFreshFallback:
 		if rec.SessionID == nil || *rec.SessionID == *rec.PriorSessionID {
 			return fmt.Errorf("fresh_session_fallback requires a non-null actual session id distinct from prior_session_id")
 		}
 		if rec.Grade != GradeGap {
 			return fmt.Errorf("fresh_session_fallback requires classification gap, got %s", rec.Grade)
 		}
-	case recallUnobservedActual:
+	case RecallUnobservedActual:
 		if rec.SessionID != nil {
 			return fmt.Errorf("unobserved_actual_session requires a null session_id")
 		}
 		if rec.Grade != GradeNotObserved {
 			return fmt.Errorf("unobserved_actual_session requires classification not_observed, got %s", rec.Grade)
+		}
+	case RecallPreconditionUnmet:
+		if rec.SessionID != nil {
+			return fmt.Errorf("recall_precondition_unmet requires a null session_id")
+		}
+		if rec.Grade != GradeNotObserved {
+			return fmt.Errorf("recall_precondition_unmet requires classification not_observed, got %s", rec.Grade)
+		}
+		if rec.Outcome != OutcomePrerequisiteFailed {
+			return fmt.Errorf("recall_precondition_unmet requires verdict prerequisite_failed, got %s", rec.Outcome)
 		}
 	default:
 		return fmt.Errorf("recall detail %q is outside the closed set", rec.Detail)

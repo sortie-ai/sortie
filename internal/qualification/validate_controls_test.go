@@ -485,7 +485,7 @@ func TestValidatorContinuationControls(T *testing.T) {
 			T.Fatal("fixture carries no protocol recall Record")
 		}
 		recall.SessionID = new(FixtureSession(SurfaceProtocol, "fallback"))
-		recall.Detail = recallFreshFallback
+		recall.Detail = RecallFreshFallback
 		recall.Grade = GradeGap
 		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
 			baseline.Grade = GradeGap
@@ -537,7 +537,7 @@ func TestValidatorContinuationControls(T *testing.T) {
 			T.Fatal("fixture carries no protocol recall Record")
 		}
 		recall.SessionID = new(FixtureSession(SurfaceProtocol, "fallback"))
-		recall.Detail = recallFreshFallback
+		recall.Detail = RecallFreshFallback
 		recall.Grade = GradeGap
 		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
 			baseline.Grade = GradeGap
@@ -563,6 +563,115 @@ func TestValidatorContinuationControls(T *testing.T) {
 			T.Error("ValidateObservations() = nil error, want rejection of an identity record no other evidence references")
 		} else if !strings.Contains(err.Error(), "references no non-final evidence") {
 			T.Errorf("ValidateObservations() error = %v, want it to name the unreferenced identity record", err)
+		}
+	})
+
+	T.Run("a well-formed recall_precondition_unmet record validates", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+		if recall == nil {
+			T.Fatal("fixture carries no protocol recall Record")
+		}
+		recall.SessionID = nil
+		recall.Detail = RecallPreconditionUnmet
+		recall.Grade = GradeNotObserved
+		recall.Outcome = OutcomePrerequisiteFailed
+		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
+			baseline.Grade = GradeNotObserved
+			baseline.Outcome = OutcomeNotObserved
+		}
+		path := WriteEvidenceFile(T, fixture.Records)
+		RequireObservationVerdict(T, path, VerdictUnmeasured)
+	})
+
+	T.Run("recall_precondition_unmet rejects a non-null session_id", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+		if recall == nil {
+			T.Fatal("fixture carries no protocol recall Record")
+		}
+		recall.Detail = RecallPreconditionUnmet
+		recall.Grade = GradeNotObserved
+		recall.Outcome = OutcomePrerequisiteFailed
+		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
+			baseline.Grade = GradeNotObserved
+			baseline.Outcome = OutcomeNotObserved
+		}
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err == nil {
+			T.Error("ValidateObservations() = nil error, want rejection of recall_precondition_unmet paired with a non-null session_id")
+		} else if !strings.Contains(err.Error(), "recall_precondition_unmet requires a null session_id") {
+			T.Errorf("ValidateObservations() error = %v, want the recall arm's session rejection", err)
+		}
+	})
+
+	T.Run("recall_precondition_unmet rejects a grade other than not_observed", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+		if recall == nil {
+			T.Fatal("fixture carries no protocol recall Record")
+		}
+		recall.SessionID = nil
+		recall.Detail = RecallPreconditionUnmet
+		recall.Grade = GradeUsable
+		recall.Outcome = OutcomePass
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err == nil {
+			T.Error("ValidateObservations() = nil error, want rejection of recall_precondition_unmet paired with a grade other than not_observed")
+		} else if !strings.Contains(err.Error(), "recall_precondition_unmet requires classification not_observed") {
+			T.Errorf("ValidateObservations() error = %v, want the recall arm's grade rejection", err)
+		}
+	})
+
+	T.Run("recall_precondition_unmet rejects an outcome other than prerequisite_failed", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+		if recall == nil {
+			T.Fatal("fixture carries no protocol recall Record")
+		}
+		recall.SessionID = nil
+		recall.Detail = RecallPreconditionUnmet
+		recall.Grade = GradeNotObserved
+		recall.Outcome = OutcomeNotObserved
+		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
+			baseline.Grade = GradeNotObserved
+			baseline.Outcome = OutcomeNotObserved
+		}
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err == nil {
+			T.Error("ValidateObservations() = nil error, want rejection of recall_precondition_unmet paired with an outcome other than prerequisite_failed")
+		} else if !strings.Contains(err.Error(), "recall_precondition_unmet requires verdict prerequisite_failed") {
+			T.Errorf("ValidateObservations() error = %v, want the recall arm's verdict rejection", err)
+		}
+	})
+
+	T.Run("a recall detail outside the closed set is still rejected", func(T *testing.T) {
+		T.Parallel()
+
+		fixture := NewFixture(FixtureQualified)
+		fixture.Finalize()
+		recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
+		if recall == nil {
+			T.Fatal("fixture carries no protocol recall Record")
+		}
+		recall.Detail = "fabricated_recall_detail"
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservations(path); err == nil {
+			T.Error("ValidateObservations() = nil error, want rejection of a recall detail outside the closed set")
+		} else if !strings.Contains(err.Error(), "outside the closed set") {
+			T.Errorf("ValidateObservations() error = %v, want it to name the closed set rejection", err)
 		}
 	})
 }

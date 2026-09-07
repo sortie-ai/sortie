@@ -819,6 +819,172 @@ func geminiCollectContinuationRecords(t *testing.T, runtime geminiQualificationR
 	return records
 }
 
+// geminiClearCreationMinute reports whether now has left createdAt's
+// UTC minute, waiting once for the shortfall when it has not. now and
+// sleep are seams: the live probe passes time.Now and time.Sleep.
+func geminiClearCreationMinute(createdAt time.Time, now func() time.Time, sleep func(time.Duration)) (cleared bool, waited time.Duration) {
+	wait := loadDeferral(createdAt, now())
+	if wait <= 0 {
+		return true, 0
+	}
+	sleep(wait)
+	return loadDeferral(createdAt, now()) <= 0, wait
+}
+
+// geminiStartRecallAfterCreationMinute clears createdAt's UTC minute
+// and only then starts the recall session through startRecall.
+// startRecall is a seam: the live probe passes the recall's own
+// StartSession call.
+func geminiStartRecallAfterCreationMinute(createdAt time.Time, now func() time.Time, sleep func(time.Duration), startRecall func() (domain.Session, error)) (session domain.Session, waited time.Duration, cleared bool, err error) {
+	cleared, waited = geminiClearCreationMinute(createdAt, now, sleep)
+	if !cleared {
+		return domain.Session{}, waited, cleared, nil
+	}
+	session, err = startRecall()
+	return session, waited, cleared, err
+}
+
+// TestGeminiClearCreationMinute confirms the boundary check: an instant
+// already outside the creation minute clears without sleeping, a
+// shortfall sleeps exactly once for exactly the shortfall and clears,
+// and a clock that never advances past the boundary still sleeps
+// exactly once but reports not cleared.
+func TestGeminiClearCreationMinute(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
+	boundary := createdAt.Truncate(time.Minute).Add(time.Minute)
+
+	t.Run("already outside the creation minute never sleeps", func(t *testing.T) {
+		t.Parallel()
+
+		now := func() time.Time { return boundary.Add(time.Second) }
+		sleepCalls := 0
+		sleep := func(time.Duration) { sleepCalls++ }
+
+		cleared, waited := geminiClearCreationMinute(createdAt, now, sleep)
+		if !cleared || waited != 0 {
+			t.Errorf("geminiClearCreationMinute() = %v, %s, want true, 0", cleared, waited)
+		}
+		if sleepCalls != 0 {
+			t.Errorf("sleep called %d times, want 0", sleepCalls)
+		}
+	})
+
+	t.Run("sleeps exactly the millisecond shortfall and clears", func(t *testing.T) {
+		t.Parallel()
+
+		const shortfall = 250 * time.Millisecond
+		readings := []time.Time{boundary.Add(-shortfall), boundary.Add(time.Millisecond)}
+		call := 0
+		now := func() time.Time {
+			reading := readings[call]
+			call++
+			return reading
+		}
+		sleepCalls := 0
+		var sleptFor time.Duration
+		sleep := func(d time.Duration) {
+			sleepCalls++
+			sleptFor = d
+		}
+
+		cleared, waited := geminiClearCreationMinute(createdAt, now, sleep)
+		if !cleared || waited != shortfall {
+			t.Errorf("geminiClearCreationMinute() = %v, %s, want true, %s", cleared, waited, shortfall)
+		}
+		if sleepCalls != 1 || sleptFor != shortfall {
+			t.Errorf("sleep called %d times with %s, want 1 call with %s", sleepCalls, sleptFor, shortfall)
+		}
+	})
+
+	t.Run("a clock that does not advance past the boundary stays uncleared", func(t *testing.T) {
+		t.Parallel()
+
+		const shortfall = 250 * time.Millisecond
+		readings := []time.Time{boundary.Add(-shortfall), boundary.Add(-shortfall)}
+		call := 0
+		now := func() time.Time {
+			reading := readings[call]
+			call++
+			return reading
+		}
+		sleepCalls := 0
+		sleep := func(time.Duration) { sleepCalls++ }
+
+		cleared, _ := geminiClearCreationMinute(createdAt, now, sleep)
+		if cleared {
+			t.Error("geminiClearCreationMinute() cleared = true, want false when the clock never advances past the boundary")
+		}
+		if sleepCalls != 1 {
+			t.Errorf("sleep called %d times, want exactly 1", sleepCalls)
+		}
+	})
+}
+
+// TestGeminiStartRecallAfterCreationMinute confirms that startRecall is
+// never invoked when the boundary does not clear, and is invoked
+// exactly once, with its own results returned unchanged, when it does.
+func TestGeminiStartRecallAfterCreationMinute(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
+	boundary := createdAt.Truncate(time.Minute).Add(time.Minute)
+
+	t.Run("uncleared boundary never calls startRecall", func(t *testing.T) {
+		t.Parallel()
+
+		now := func() time.Time { return boundary.Add(-100 * time.Millisecond) }
+		sleep := func(time.Duration) {}
+		calls := 0
+		startRecall := func() (domain.Session, error) {
+			calls++
+			return domain.Session{}, nil
+		}
+
+		session, _, cleared, err := geminiStartRecallAfterCreationMinute(createdAt, now, sleep, startRecall)
+		if cleared {
+			t.Error("geminiStartRecallAfterCreationMinute() cleared = true, want false")
+		}
+		if calls != 0 {
+			t.Errorf("startRecall called %d times, want 0", calls)
+		}
+		if err != nil {
+			t.Errorf("err = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(session, domain.Session{}) {
+			t.Errorf("session = %+v, want the zero domain.Session", session)
+		}
+	})
+
+	t.Run("cleared boundary calls startRecall exactly once and returns its results unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		now := func() time.Time { return boundary.Add(time.Second) }
+		sleep := func(time.Duration) { t.Fatal("sleep must not be called when the boundary already cleared") }
+		calls := 0
+		wantErr := errors.New("recall start failed")
+		startRecall := func() (domain.Session, error) {
+			calls++
+			return domain.Session{ID: "sess-recall"}, wantErr
+		}
+
+		session, _, cleared, err := geminiStartRecallAfterCreationMinute(createdAt, now, sleep, startRecall)
+		if !cleared {
+			t.Error("geminiStartRecallAfterCreationMinute() cleared = false, want true")
+		}
+		if calls != 1 {
+			t.Errorf("startRecall called %d times, want 1", calls)
+		}
+		if session.ID != "sess-recall" {
+			t.Errorf("session = %+v, want the id startRecall returned", session)
+		}
+		if !errors.Is(err, wantErr) {
+			t.Errorf("err = %v, want %v", err, wantErr)
+		}
+	})
+}
+
 // geminiRunProtocolContinuation runs the protocol surface's
 // continuation relation through the real adapter: a first process
 // stores the generated nonce, that session ends, and a second process
@@ -851,6 +1017,7 @@ func geminiRunProtocolContinuation(t *testing.T, runtime geminiQualificationRunt
 	if err != nil {
 		t.Fatalf("continuation seed on surface %s: StartSession failed: %v", qualification.SurfaceProtocol, err)
 	}
+	seedCreatedAt := time.Now()
 	tracker.register(geminiSessionGroupPID(seedSession))
 	t.Cleanup(func() {
 		_ = adapter.StopSession(context.Background(), seedSession)
@@ -873,7 +1040,17 @@ func geminiRunProtocolContinuation(t *testing.T, runtime geminiQualificationRunt
 		t.Errorf("stop the protocol continuation seed session: %v", err)
 	}
 
-	recallSession, err := adapter.StartSession(context.Background(), startParams(seedSession.ID))
+	startRecall := func() (domain.Session, error) {
+		return adapter.StartSession(context.Background(), startParams(seedSession.ID))
+	}
+	recallSession, waited, cleared, err := geminiStartRecallAfterCreationMinute(seedCreatedAt, time.Now, time.Sleep, startRecall)
+	if waited > 0 {
+		t.Logf("continuation recall waited %s to clear the seed's creation minute", waited)
+	}
+	if !cleared {
+		relation.PreconditionUnmet = true
+		return geminiLiveContinuationRecords(relation, agentName, runtime.Version)
+	}
 	if err != nil {
 		return geminiLiveContinuationRecords(relation, agentName, runtime.Version)
 	}

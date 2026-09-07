@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -23,12 +24,6 @@ import (
 // geminiIdentityLogDeadline bounds the deterministic wait for the
 // structured implementation log record the pump writes.
 const geminiIdentityLogDeadline = 5 * time.Second
-
-const (
-	geminiRecallUnobservedActual     = "unobserved_actual_session"
-	geminiRecallConfirmedSameSession = "confirmed_same_session"
-	geminiRecallFreshFallback        = "fresh_session_fallback"
-)
 
 // geminiTokenSource is one token-bearing path observed on one surface:
 // a standard usage member, a terminal usage field, or a vendor
@@ -358,20 +353,27 @@ type geminiContinuationRelation struct {
 	SeedSessionID   string
 	RecallSessionID string
 	ReplayConfirmed bool
+	// PreconditionUnmet reports that the probe stopped before the
+	// recall because it could not establish the recall's precondition.
+	PreconditionUnmet bool
 }
 
 // geminiRecallDetail maps one continuation relation onto the closed
-// recall detail set: equal non-null actual and prior ids with confirmed
-// replay are a same-session confirmation, a distinct non-null actual id
-// is a fresh fallback, and an unobserved actual id stays unobserved.
+// recall detail set: a precondition failure stops the probe before it
+// ever tries the recall, equal non-null actual and prior ids with
+// confirmed replay are a same-session confirmation, a distinct
+// non-null actual id is a fresh fallback, and an unobserved actual id
+// stays unobserved.
 func geminiRecallDetail(relation geminiContinuationRelation) (detail string, classification qualification.Grade) {
 	switch {
+	case relation.PreconditionUnmet:
+		return qualification.RecallPreconditionUnmet, qualification.GradeNotObserved
 	case relation.RecallSessionID == "":
-		return geminiRecallUnobservedActual, qualification.GradeNotObserved
+		return qualification.RecallUnobservedActual, qualification.GradeNotObserved
 	case relation.RecallSessionID == relation.SeedSessionID && relation.ReplayConfirmed:
-		return geminiRecallConfirmedSameSession, qualification.GradeUsable
+		return qualification.RecallConfirmedSameSession, qualification.GradeUsable
 	default:
-		return geminiRecallFreshFallback, qualification.GradeGap
+		return qualification.RecallFreshFallback, qualification.GradeGap
 	}
 }
 
@@ -414,12 +416,14 @@ func geminiBuildContinuationRecords(relation geminiContinuationRelation) (seed, 
 	recall.Detail = detail
 	recall.Grade = classification
 	switch detail {
-	case geminiRecallConfirmedSameSession:
+	case qualification.RecallConfirmedSameSession:
 		recall.Outcome = qualification.OutcomePass
 		recall.SessionID = new(relation.RecallSessionID)
-	case geminiRecallFreshFallback:
+	case qualification.RecallFreshFallback:
 		recall.Outcome = qualification.OutcomePass
 		recall.SessionID = new(relation.RecallSessionID)
+	case qualification.RecallPreconditionUnmet:
+		recall.Outcome = qualification.OutcomePrerequisiteFailed
 	default:
 		recall.Outcome = qualification.OutcomeNotObserved
 	}
@@ -451,7 +455,7 @@ func TestGeminiContinuationRelationBuilder(t *testing.T) {
 		if seed.PriorSessionID != nil {
 			t.Errorf("seed prior_session_id = %v, want null", seed.PriorSessionID)
 		}
-		if recall.Detail != geminiRecallConfirmedSameSession || recall.Grade != qualification.GradeUsable {
+		if recall.Detail != qualification.RecallConfirmedSameSession || recall.Grade != qualification.GradeUsable {
 			t.Errorf("recall detail/classification = %s/%s, want confirmed_same_session/usable", recall.Detail, recall.Grade)
 		}
 		if recall.SessionID == nil || recall.PriorSessionID == nil || *recall.SessionID != *recall.PriorSessionID {
@@ -469,7 +473,7 @@ func TestGeminiContinuationRelationBuilder(t *testing.T) {
 			ReplayConfirmed: false,
 		}
 		seed, recall := geminiBuildContinuationRecords(relation)
-		if recall.Detail != geminiRecallFreshFallback || recall.Grade != qualification.GradeGap {
+		if recall.Detail != qualification.RecallFreshFallback || recall.Grade != qualification.GradeGap {
 			t.Errorf("recall detail/classification = %s/%s, want fresh_session_fallback/gap", recall.Detail, recall.Grade)
 		}
 		if *recall.SessionID == *recall.PriorSessionID {
@@ -485,7 +489,7 @@ func TestGeminiContinuationRelationBuilder(t *testing.T) {
 
 		relation := geminiContinuationRelation{Surface: qualification.SurfaceNativeText, SeedSessionID: "sess-text-seed"}
 		seed, recall := geminiBuildContinuationRecords(relation)
-		if recall.Detail != geminiRecallUnobservedActual || recall.Grade != qualification.GradeNotObserved {
+		if recall.Detail != qualification.RecallUnobservedActual || recall.Grade != qualification.GradeNotObserved {
 			t.Errorf("recall detail/classification = %s/%s, want unobserved_actual_session/not_observed", recall.Detail, recall.Grade)
 		}
 		if recall.SessionID != nil {
@@ -493,6 +497,55 @@ func TestGeminiContinuationRelationBuilder(t *testing.T) {
 		}
 		if seed.SessionID == nil || *seed.SessionID != relation.SeedSessionID {
 			t.Errorf("seed session id = %v, want the seed's actual identifier", seed.SessionID)
+		}
+	})
+
+	t.Run("precondition unmet stops the recall before it is tried", func(t *testing.T) {
+		t.Parallel()
+
+		// Each case shapes RecallSessionID/ReplayConfirmed to match one of
+		// the three other geminiRecallDetail branches, proving the
+		// PreconditionUnmet case wins regardless of which branch the rest
+		// of the relation would otherwise have matched.
+		tests := []struct {
+			name            string
+			recallSessionID string
+			replayConfirmed bool
+		}{
+			{"would otherwise be unobserved (empty RecallSessionID)", "", false},
+			{"would otherwise be confirmed same session", "sess-seed", true},
+			{"would otherwise be fresh fallback", "sess-fallback", false},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				relation := geminiContinuationRelation{
+					Surface:           qualification.SurfaceProtocol,
+					SeedSessionID:     "sess-seed",
+					RecallSessionID:   tt.recallSessionID,
+					ReplayConfirmed:   tt.replayConfirmed,
+					PreconditionUnmet: true,
+				}
+				seed, recall := geminiBuildContinuationRecords(relation)
+				if recall.Detail != qualification.RecallPreconditionUnmet || recall.Grade != qualification.GradeNotObserved {
+					t.Errorf("recall detail/classification = %s/%s, want recall_precondition_unmet/not_observed", recall.Detail, recall.Grade)
+				}
+				if recall.Outcome != qualification.OutcomePrerequisiteFailed {
+					t.Errorf("recall outcome = %s, want prerequisite_failed", recall.Outcome)
+				}
+				if recall.SessionID != nil {
+					t.Errorf("precondition-unmet recall carries a session id: %v", recall.SessionID)
+				}
+
+				clearedRelation := relation
+				clearedRelation.PreconditionUnmet = false
+				wantSeed, _ := geminiBuildContinuationRecords(clearedRelation)
+				if !reflect.DeepEqual(seed, wantSeed) {
+					t.Errorf("seed record = %+v, want it byte-identical to the seed built with PreconditionUnmet unset: %+v", seed, wantSeed)
+				}
+			})
 		}
 	})
 
