@@ -117,6 +117,20 @@ func resolveSession(ctx context.Context, state *sessionState, resumeID string, c
 // answered with an error: the capability is not confirmed, not the
 // run.
 func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string, servers []mcpServer, control negativeControlVerdict) (string, *domain.AgentError) {
+	if createdAt, known := state.origins.createdAt(cwd, resumeID); known {
+		if wait := loadDeferral(createdAt, state.origins.clock()); wait > 0 {
+			state.logger.Debug("session load deferred past the session's creation minute",
+				slog.String("session_id", resumeID), slog.Int64("wait_ms", wait.Milliseconds()))
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return "", &domain.AgentError{Kind: domain.ErrPortExit, Message: "context ended before the deferred session load reached the agent connection", Err: ctx.Err()}
+			}
+		}
+	}
+
 	if agentErr := sendControl(ctx, state, pumpItem{control: &pumpControl{expectLoad: resumeID}}); agentErr != nil {
 		return "", agentErr
 	}
@@ -225,6 +239,7 @@ func createNewSession(ctx context.Context, state *sessionState, cwd string, serv
 	if agentErr != nil {
 		return "", agentErr
 	}
+	state.origins.record(cwd, string(resp.SessionID))
 	return string(resp.SessionID), nil
 }
 
