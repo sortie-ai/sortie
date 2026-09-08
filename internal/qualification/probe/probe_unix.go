@@ -190,11 +190,23 @@ func defaultOutputDir(t *testing.T) string {
 	return dir
 }
 
-// pathWithin reports whether path is root itself or sits beneath it.
-// A prefix test is not a containment test: it would also match a
-// sibling whose name merely begins with root's.
+// pathWithin reports whether path is root itself or sits beneath it,
+// comparing the two only after resolving both through their symlinks.
+// A prefix test is not a containment test, since it also matches a
+// sibling whose name merely begins with root's, and a textual check on
+// unresolved paths passes a symlink inside the checkout that points
+// outside it. A side that cannot be resolved is reported as not
+// contained rather than assumed safe.
 func pathWithin(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
 	if err != nil {
 		return false
 	}
@@ -208,8 +220,13 @@ func pathWithin(path, root string) bool {
 func repositoryPath(t *testing.T, root, rel string) string {
 	t.Helper()
 	joined := filepath.Join(root, rel)
+	if _, err := os.Lstat(joined); err != nil {
+		// A path that does not exist is the reader's own error to
+		// report, with the name it failed on.
+		return joined
+	}
 	if !pathWithin(joined, root) {
-		t.Fatalf("profile path %q resolves to %s, outside the repository at %s", rel, joined, root)
+		t.Fatalf("profile path %q resolves outside the repository at %s", rel, root)
 	}
 	return joined
 }

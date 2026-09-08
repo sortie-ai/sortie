@@ -401,3 +401,56 @@ func TestRunAuthenticationCanary(t *testing.T) {
 		}
 	})
 }
+
+// TestPathWithin covers the containment check the profile-supplied
+// paths rely on, including the case a textual comparison cannot see: a
+// symlink inside the tree pointing outside it. This repository itself
+// carries such a link, so the case is not hypothetical.
+func TestPathWithin(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{root, outside} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("os.MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	inside := filepath.Join(root, "inside.txt")
+	mustWriteFile(t, inside, "inside\n")
+	target := filepath.Join(outside, "target.txt")
+	mustWriteFile(t, target, "outside\n")
+
+	escaping := filepath.Join(root, "escaping.txt")
+	if err := os.Symlink(target, escaping); err != nil {
+		t.Fatalf("os.Symlink(%q, %q): %v", target, escaping, err)
+	}
+	sibling := root + "-copy"
+	if err := os.MkdirAll(sibling, 0o750); err != nil {
+		t.Fatalf("os.MkdirAll(%q): %v", sibling, err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "the root itself is contained", path: root, want: true},
+		{name: "a file under the root is contained", path: inside, want: true},
+		{name: "a symlink under the root pointing outside is not", path: escaping},
+		{name: "a sibling whose name begins with the root's is not", path: sibling},
+		{name: "a path outside the root is not", path: target},
+		{name: "a path that does not resolve is not", path: filepath.Join(root, "absent.txt")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := pathWithin(tt.path, root); got != tt.want {
+				t.Errorf("pathWithin(%q, %q) = %v, want %v", tt.path, root, got, tt.want)
+			}
+		})
+	}
+}
