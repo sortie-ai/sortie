@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
 - The install scripts for macOS, Linux, and Windows now warn when the `sortie` command still resolves to a different copy than the one just installed, naming that path and the version it reports. An older binary earlier in `PATH`, left by an install run as root or by the Homebrew cask, previously kept winning while the installer reported success. The macOS and Linux script also gains `-f`, `--force`, which reinstalls a release already present in the target directory instead of skipping it.
+  ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
 
 ### Fixed
 
@@ -50,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
 - The macOS and Linux install script now checks for every command it needs, including the SHA-256 tool used to verify the download, before it fetches anything, and names all missing ones in a single message. A missing `sha256sum` or `shasum` previously surfaced only after the release archive had already been downloaded.
+  ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
 
 ## [1.23.0] - 2026-08-31
 
