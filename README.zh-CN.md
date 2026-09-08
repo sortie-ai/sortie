@@ -20,15 +20,19 @@
 
 </div>
 
-你的编程智能体能够修复缺陷或实现功能。但要同时推进多项任务，仍需准备工作区、重新启动失败的任务，并跟进 CI 和评审意见。
+## 要解决的问题
 
-Sortie 负责这些协调工作，让你专注于成果。前提是你的智能体在手动运行时已经能够产出有价值的成果；代码质量仍取决于智能体和你提供的指令。
+编程智能体能够修复缺陷、更新依赖、补充测试和实现功能。但要让你信赖的智能体处理待办任务，仅仅启动会话还不够：隔离工作区、重试机制、工单系统集成和成本追踪需要协同运作。
+
+构建并维护这套基础设施，本身就成了另一个工程项目。
+
+Sortie 就是这套基础设施。
 
 ## 支持的工具
 
 **工单系统：** GitHub Issues、GitLab Issues、Gitea Issues、Linear 和 Jira。
 
-**编程智能体：** Claude Code、Copilot、OpenCode、Codex、Kiro 和 Gemini CLI。
+**编程智能体：** Claude Code、Copilot、OpenCode、Codex、Kiro 和 Gemini CLI，后者通过通用的 `agent-client-protocol` 类型接入（[示例](examples/WORKFLOW.agent-client-protocol.md)）。
 
 ## 安装
 

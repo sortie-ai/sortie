@@ -20,15 +20,19 @@ Run the coding agents you already use on tasks from your issue tracker - in para
 
 </div>
 
-Your coding agent can handle a bug fix or a feature. Running several tasks at once still means preparing workspaces, restarting failed runs, and following up on CI and review comments.
+## The Problem
 
-Sortie handles that coordination, so you can focus on the results. It assumes your agent already produces useful work when run manually; code quality still depends on the agent and your instructions.
+Coding agents can fix bugs, update dependencies, add tests, and build features. But running agents you trust across a backlog takes more than launching sessions: isolated workspaces, retries, tracker integration, and cost tracking all need to work together.
+
+Building and maintaining that infrastructure becomes another engineering project.
+
+Sortie is that infrastructure.
 
 ## Works With
 
 **Issue trackers:** GitHub Issues, GitLab Issues, Gitea Issues, Linear and Jira.
 
-**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro and Gemini CLI.
+**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro and Gemini CLI, the last through the generic `agent-client-protocol` kind ([sample](examples/WORKFLOW.agent-client-protocol.md)).
 
 ## Install
 
