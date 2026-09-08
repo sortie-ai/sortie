@@ -237,8 +237,9 @@ func ValidateNotes(document string, want NotesExpectation) error {
 	}
 
 	tail := trimmed[unobservedHeading:]
+	tailBody := strings.Join(tail, "\n")
 	for _, entry := range want.Excluded {
-		if strings.Contains(strings.Join(tail, "\n"), entry) {
+		if strings.Contains(tailBody, entry) {
 			return fmt.Errorf("excluded capability case %q appears in the Unobserved surfaces section, want only the Excluded capability cases section", entry)
 		}
 	}
