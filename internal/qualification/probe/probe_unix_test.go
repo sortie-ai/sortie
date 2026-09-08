@@ -287,7 +287,7 @@ func TestDefaultOutputDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}
-	if strings.HasPrefix(dir, root) {
+	if pathWithin(dir, root) {
 		t.Errorf("defaultOutputDir() = %q, want a path outside the repository tree %q", dir, root)
 	}
 }
@@ -355,6 +355,15 @@ func TestMustRepositoryRoot(t *testing.T) {
 	}
 }
 
+// canaryStub wraps body in a stub that first asserts it received the
+// sample profile's own version_args. Without that assertion a stub
+// ignoring its arguments would keep the test green even if the canary
+// stopped passing VersionArgs at all.
+func canaryStub(body string) string {
+	return `[ "$1" = "--version" ] || { printf 'unexpected args: %s\n' "$*" 1>&2; exit 9; }
+` + body + "\n"
+}
+
 // TestRunAuthenticationCanary confirms the canary's two outcomes: a
 // runtime that serves version_args lets the run continue, and one that
 // fails them stops it before any graded surface spends a turn.
@@ -367,7 +376,7 @@ func TestRunAuthenticationCanary(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS") == "1" {
-		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, "exit 3\n"))
+		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, canaryStub("exit 3")))
 		t.Fatal("runAuthenticationCanary() returned instead of calling t.Fatalf for a runtime that failed version_args")
 		return
 	}
@@ -375,7 +384,7 @@ func TestRunAuthenticationCanary(t *testing.T) {
 	t.Run("a runtime that serves version_args passes", func(t *testing.T) {
 		t.Parallel()
 
-		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, "printf 'stub 1.0\\n'\n"))
+		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, canaryStub("printf 'stub 1.0\\n'")))
 	})
 
 	t.Run("a runtime that fails version_args stops the run", func(t *testing.T) {
