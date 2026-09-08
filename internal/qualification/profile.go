@@ -376,6 +376,11 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 	}
 	profile.Declarations = declarations
 	profile.AbsentSurfaces = absentSurfaces
+	for _, absent := range profile.AbsentSurfaces {
+		if _, ok := profile.EntryPoints[absent.Surface]; !ok {
+			return RuntimeProfile{}, fmt.Errorf("absent_surfaces: %q is declared absent but carries no entry point, so its absence cannot be corroborated by a launch", absent.Surface)
+		}
+	}
 
 	return profile, nil
 }
@@ -465,6 +470,9 @@ func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 		surface := Surface(key)
 		if !slices.Contains(Surfaces, surface) {
 			return nil, fmt.Errorf("%q is outside qualification.Surfaces", key)
+		}
+		if surface == SurfaceAggregate {
+			return nil, fmt.Errorf("%q carries no entry point: it names a cross-surface observation rather than a launch", key)
 		}
 		for name := range fields {
 			if !entryPointFields[name] {
