@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -41,10 +42,15 @@ type publishedPostureReporter interface {
 // missing from command: the trust switch and the approval-mode
 // posture switch that together make the launch non-interactive.
 func checkPublishedPosture(r publishedPostureReporter, command string) {
-	for _, want := range []string{"--skip-trust", "--approval-mode yolo"} {
-		if !strings.Contains(command, want) {
-			r.Errorf("agent.command = %q, want it to contain %q", command, want)
-		}
+	// Compared as whole arguments, the way the launcher splits them. A
+	// substring test would accept --skip-trust-disabled, which names
+	// the opposite posture.
+	argv := strings.Fields(command)
+	if !slices.Contains(argv, "--skip-trust") {
+		r.Errorf("agent.command = %q, want the argument %q", command, "--skip-trust")
+	}
+	if i := slices.Index(argv, "--approval-mode"); i < 0 || i+1 >= len(argv) || argv[i+1] != "yolo" {
+		r.Errorf("agent.command = %q, want the arguments %q", command, "--approval-mode yolo")
 	}
 }
 
@@ -80,6 +86,10 @@ func TestSampleWorkflowPublishedPosture(t *testing.T) {
 			{"missing trust switch", "gemini --acp --approval-mode yolo"},
 			{"missing posture switch", "gemini --acp --skip-trust"},
 			{"missing both", "gemini --acp"},
+			{"near miss on the trust switch", "gemini --acp --skip-trust-disabled --approval-mode yolo"},
+			{"near miss on the posture value", "gemini --acp --skip-trust --approval-mode yolo-ish"},
+			{"posture flag with no value", "gemini --acp --skip-trust --approval-mode"},
+			{"posture value present but not as this flag's argument", "gemini --acp --skip-trust --approval-mode default yolo"},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
