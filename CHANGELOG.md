@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1006](https://github.com/sortie-ai/sortie/issues/1006),
   [#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
+- The install scripts for macOS, Linux, and Windows now warn when the `sortie` command still resolves to a different copy than the one just installed, naming that path and the version it reports. An older binary earlier in `PATH`, left by an install run as root or by the Homebrew cask, previously kept winning while the installer reported success. The macOS and Linux script also gains `-f`, `--force`, which reinstalls a release already present in the target directory instead of skipping it.
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.

@@ -17,8 +17,7 @@ set -eu
 REPO="sortie-ai/sortie"
 BIN="sortie"
 BINARY=""
-
-# ── Formatting ────────────────────────────────────────────────────────────────
+FORCE=0
 
 setup_colors() {
     if [ -t 1 ] && [ "${TERM-}" != "dumb" ]; then
@@ -32,10 +31,9 @@ setup_colors() {
 
 info() { printf '%b%s\n' "${BOLD}${CYAN}:: ${RESET}" "$*"; }
 ok()   { printf '%b%s\n' "${BOLD}${GREEN}:: ${RESET}" "$*"; }
+warn() { printf '%b%s\n' "${BOLD}${YELLOW}warning: ${RESET}" "$*" >&2; }
 err()  { printf '%b%s\n' "${BOLD}${RED}error: ${RESET}" "$*" >&2; }
 die()  { err "$@"; exit 1; }
-
-# ── Arguments ─────────────────────────────────────────────────────────────────
 
 usage() {
     cat <<EOF
@@ -48,6 +46,7 @@ Options:
   -v, --version <version>   Install a specific release (default: latest)
   -d, --install-dir <dir>   Install into <dir>
   -b, --binary <path>       Install a local binary instead of downloading
+  -f, --force               Reinstall even if that version is already present
       --no-verify           Skip checksum verification
 
 Flags override the SORTIE_VERSION, SORTIE_INSTALL_DIR and SORTIE_NO_VERIFY
@@ -73,6 +72,8 @@ parse_args() {
             -b|--binary)
                 [ $# -ge 2 ] || die "$1 requires an argument"
                 BINARY=$2; shift 2 ;;
+            -f|--force)
+                FORCE=1; shift ;;
             --no-verify)
                 SORTIE_NO_VERIFY=1; shift ;;
             *)
@@ -220,11 +221,22 @@ shell_rc() {
     esac
 }
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# Versions rather than paths are compared: a symlink pointing at the binary
+# just installed is not a shadow.
+warn_if_shadowed() {
+    _found=$(command -v "$BIN" 2>/dev/null) || return 0
+    [ -n "$_found" ] || return 0
+    [ "$_found" != "${_dir}/${BIN}" ] || return 0
+
+    _other=$(installed_version "$_found")
+    [ "$_other" != "$_version" ] || return 0
+
+    warn "${BIN} on PATH is ${_found}${_other:+ (${_other})}, not the copy just installed"
+    printf '  %bRemove that file, or put %s earlier in PATH.%b\n' \
+        "${DIM}" "$_dir" "${RESET}" >&2
+}
 
 cleanup() { [ -d "${TMPDIR_INSTALL-}" ] && rm -rf "$TMPDIR_INSTALL"; }
-
-# ── Install strategies ────────────────────────────────────────────────────────
 
 install_local() {
     [ -f "$BINARY" ] || die "binary not found: ${BINARY}"
@@ -251,7 +263,7 @@ install_release() {
     _tag=$_version
     info "Release:  ${_version}"
 
-    if [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
+    if [ "$FORCE" != 1 ] && [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
         _already_installed=1
         return 0
     fi
@@ -306,8 +318,6 @@ install_release() {
     install -m 755 "${TMPDIR_INSTALL}/${BIN}" "${_dir}/${BIN}"
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 main() {
     setup_colors
     parse_args "$@"
@@ -329,7 +339,7 @@ main() {
     fi
 
     case ":${PATH}:" in
-        *":${_dir}:"*) ;;
+        *":${_dir}:"*) warn_if_shadowed ;;
         *)
             if [ "${GITHUB_ACTIONS-}" = "true" ] && [ -n "${GITHUB_PATH-}" ]; then
                 printf '%s\n' "$_dir" >> "$GITHUB_PATH"
