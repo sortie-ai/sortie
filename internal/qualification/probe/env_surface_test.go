@@ -16,6 +16,13 @@ import (
 // a value outside this set is a violation, whether the value sits
 // outside the transport family entirely or inside it while still
 // carrying a runtime token.
+// envSurfaceAllowlistFile is this file, whose envSurfaceOwnedNames
+// declaration spells every owned name as a string literal. Counting
+// those literals toward the staleness direction would satisfy it from
+// the allowlist itself, so a coordinate deleted from the package would
+// keep the check green.
+const envSurfaceAllowlistFile = "env_surface_test.go"
+
 var envSurfaceOwnedNames = map[string]bool{
 	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST":           true,
 	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND":        true,
@@ -180,6 +187,9 @@ func scanEnvSurface(t *testing.T) ([]envSurfaceViolation, map[string]bool) {
 			t.Fatalf("parse %s: %v", entry.Name(), parseErr)
 		}
 		violations = append(violations, envSurfaceViolations(fset, file)...)
+		if entry.Name() == envSurfaceAllowlistFile {
+			continue
+		}
 		for name := range envSurfaceLiterals(file) {
 			literals[name] = true
 		}
