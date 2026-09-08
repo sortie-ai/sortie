@@ -345,8 +345,10 @@ main() {
         ok "Installed ${BIN} ${_tag} to ${_dir}/${BIN}"
     fi
 
+    warn_if_shadowed
+
     case ":${PATH}:" in
-        *":${_dir}:"*) warn_if_shadowed ;;
+        *":${_dir}:"*) ;;
         *)
             if [ "${GITHUB_ACTIONS-}" = "true" ] && [ -n "${GITHUB_PATH-}" ]; then
                 printf '%s\n' "$_dir" >> "$GITHUB_PATH"
