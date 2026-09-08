@@ -15,6 +15,12 @@ import (
 // environment-name position naming a value outside this set is a
 // violation, whether the value sits outside the transport family
 // entirely or inside it while still carrying a runtime token.
+// envSurfaceAllowlistFile is this file, whose envSurfaceOwnedNames
+// declaration spells every owned name as a string literal. Counting
+// those literals toward the staleness direction would satisfy it from
+// the allowlist itself, leaving a deleted coordinate undetected.
+const envSurfaceAllowlistFile = "env_surface_contract_test.go"
+
 var envSurfaceOwnedNames = map[string]bool{
 	"SORTIE_CLIENTPROTOCOL_TEST":    true,
 	"SORTIE_CLIENTPROTOCOL_COMMAND": true,
@@ -140,10 +146,9 @@ type envSurfaceReporter interface {
 }
 
 // checkEnvSurfaceOwnedNamesCurrent reports the staleness direction: an
-// owned-set entry no literal in literals names. Against the real
-// package and the real envSurfaceOwnedNames this is inert; a synthetic
-// owned set naming a coordinate absent from a fixture literal set
-// proves the direction can fail.
+// owned-set entry no literal in literals names. The scan that supplies
+// literals skips this file, so an entry survives only while some other
+// file in the package still spells it.
 func checkEnvSurfaceOwnedNamesCurrent(r envSurfaceReporter, owned map[string]bool, literals map[string]bool) {
 	for name := range owned {
 		if !literals[name] {
@@ -187,6 +192,9 @@ func scanEnvSurface(t *testing.T) ([]envSurfaceViolation, map[string]bool) {
 			t.Fatalf("parse %s: %v", entry.Name(), parseErr)
 		}
 		violations = append(violations, envSurfaceViolations(fset, file)...)
+		if entry.Name() == envSurfaceAllowlistFile {
+			continue
+		}
 		for name := range envSurfaceLiterals(file) {
 			literals[name] = true
 		}
