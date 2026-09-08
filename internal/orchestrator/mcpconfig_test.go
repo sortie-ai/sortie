@@ -692,6 +692,20 @@ func TestResolveToolServerBinary(t *testing.T) {
 		}
 	})
 
+	t.Run("a_relative_explicit_path_is_refused_rather_than_resolved_against_the_cwd", func(t *testing.T) {
+		t.Parallel()
+		got, err := resolveToolServerBinary("sortie")
+		if err == nil {
+			t.Fatalf("resolveToolServerBinary(%q) = %q, nil error, want an error", "sortie", got)
+		}
+		if !strings.Contains(err.Error(), "absolute") {
+			t.Errorf("error = %q, want it to say the path is not absolute", err)
+		}
+		if got != "" {
+			t.Errorf("resolveToolServerBinary() = %q, want an empty path alongside the error", got)
+		}
+	})
+
 	t.Run("an_absent_explicit_path_is_an_error_not_a_silent_fallback", func(t *testing.T) {
 		t.Parallel()
 		missing := filepath.Join(t.TempDir(), "not-here")

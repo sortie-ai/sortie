@@ -25,6 +25,11 @@ func resolveToolServerBinary(explicit string) (string, error) {
 			return "", fmt.Errorf("resolve executable: %w", err)
 		}
 		path = running
+	} else if !filepath.IsAbs(path) {
+		// The runtime spawns this command from the workspace, not from
+		// the orchestrator's working directory, so a relative path
+		// would resolve against a directory neither of them agreed on.
+		return "", fmt.Errorf("tool server binary %q is not an absolute path", path)
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
