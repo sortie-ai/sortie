@@ -247,3 +247,135 @@ func TestDecodeRuntimeProfileRejectsUnlaunchableDeclarations(t *testing.T) {
 		}
 	})
 }
+
+// validMeasurementDoc returns a decode-clean measurement document as a
+// generic JSON tree, so every field is reachable for targeted mutation.
+func validMeasurementDoc() map[string]any {
+	return map[string]any{
+		"schema_version": 1,
+		"profile_digest": "a-digest",
+		"measured_at":    "2026-01-01",
+		"expectation":    map[string]any{},
+	}
+}
+
+func TestDecodeMeasurementRejections(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "an unknown field", mutate: func(d map[string]any) { d["surprise"] = true }},
+		{name: "a missing schema_version", mutate: func(d map[string]any) { delete(d, "schema_version") }},
+		{name: "a missing profile_digest", mutate: func(d map[string]any) { delete(d, "profile_digest") }},
+		{name: "a missing measured_at", mutate: func(d map[string]any) { delete(d, "measured_at") }},
+		{name: "a missing expectation", mutate: func(d map[string]any) { delete(d, "expectation") }},
+		{name: "a schema_version other than one", mutate: func(d map[string]any) { d["schema_version"] = 2 }},
+		{name: "a non-numeric schema_version", mutate: func(d map[string]any) { d["schema_version"] = "one" }},
+		{name: "an empty profile_digest", mutate: func(d map[string]any) { d["profile_digest"] = "" }},
+		{name: "a non-string profile_digest", mutate: func(d map[string]any) { d["profile_digest"] = 7 }},
+		{name: "an empty measured_at", mutate: func(d map[string]any) { d["measured_at"] = "" }},
+		{name: "a non-string measured_at", mutate: func(d map[string]any) { d["measured_at"] = 7 }},
+		{name: "a non-object expectation", mutate: func(d map[string]any) { d["expectation"] = "no" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			t.Parallel()
+
+			doc := validMeasurementDoc()
+			tt.mutate(doc)
+			data, err := json.Marshal(doc)
+			if err != nil {
+				t.Fatalf("json.Marshal(%v): %v", doc, err)
+			}
+			if _, err := DecodeMeasurement(data); err == nil {
+				t.Errorf("DecodeMeasurement(%s) = _, nil, want a rejection", data)
+			}
+		})
+	}
+
+	t.Run("the valid document decodes", func(t *testing.T) {
+		t.Parallel()
+
+		data, err := json.Marshal(validMeasurementDoc())
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if _, err := DecodeMeasurement(data); err != nil {
+			t.Errorf("DecodeMeasurement(%s) = _, %v, want nil", data, err)
+		}
+	})
+}
+
+func TestReadMeasurementFileRejections(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a path that does not exist is reported", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "absent.json")
+		if _, err := ReadMeasurementFile(path); err == nil {
+			t.Errorf("ReadMeasurementFile(%q) = _, nil, want a rejection", path)
+		}
+	})
+
+	t.Run("a readable but malformed document is reported", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "measurement.json")
+		mustWriteFile(t, path, "{not json")
+		if _, err := ReadMeasurementFile(path); err == nil {
+			t.Errorf("ReadMeasurementFile(%q) = _, nil, want a rejection", path)
+		}
+	})
+}
+
+func TestReadPublishedSampleCommandRejections(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "no front matter at all", content: "# just a document\n"},
+		{name: "no closing delimiter", content: "---\nagent:\n  kind: agent-client-protocol\n"},
+		{name: "front matter that is not YAML", content: "---\n\tagent: [unclosed\n---\n"},
+		{name: "an agent.kind other than the protocol kind", content: "---\nagent:\n  kind: claude-code\n  command: claude --print\n---\n"},
+		{name: "a command with no element past element zero", content: "---\nagent:\n  kind: agent-client-protocol\n  command: gemini\n---\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" is rejected", func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			mustWriteFile(t, path, tt.content)
+			if _, err := ReadPublishedSampleCommand(path); err == nil {
+				t.Errorf("ReadPublishedSampleCommand(%q) = _, nil, want a rejection for %s", path, tt.name)
+			}
+		})
+	}
+
+	t.Run("a path that does not exist is reported", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "absent.md")
+		if _, err := ReadPublishedSampleCommand(path); err == nil {
+			t.Errorf("ReadPublishedSampleCommand(%q) = _, nil, want a rejection", path)
+		}
+	})
+
+	t.Run("carriage returns are normalized before the delimiters are found", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+		mustWriteFile(t, path, "---\r\nagent:\r\n  kind: agent-client-protocol\r\n  command: gemini --acp\r\n---\r\n")
+		command, err := ReadPublishedSampleCommand(path)
+		if err != nil {
+			t.Fatalf("ReadPublishedSampleCommand(%q) = _, %v, want nil", path, err)
+		}
+		if len(command) != 2 {
+			t.Errorf("ReadPublishedSampleCommand(%q) = %v, want two elements", path, command)
+		}
+	})
+}
