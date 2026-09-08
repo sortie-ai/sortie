@@ -227,9 +227,9 @@ canonical_file() {
     printf '%s/%s' "$_cf_dir" "$(basename -- "$1")"
 }
 
-# Paths are compared rather than versions: probing the version would execute a
-# binary an untrusted PATH entry chose, under whatever identity installs, and
-# installing to /usr/local/bin means root.
+# Paths are compared rather than versions: reading the version means running
+# the file a PATH entry resolved to, and that entry may be one the person
+# installing does not control. Installing to /usr/local/bin means root.
 warn_if_shadowed() {
     _found=$(command -v "$BIN" 2>/dev/null) || return 0
     [ -n "$_found" ] || return 0
