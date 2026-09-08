@@ -167,11 +167,21 @@ function Add-ToUserPath {
     return $true
 }
 
-# Paths are compared rather than versions: probing the version would execute a
-# program an untrusted PATH entry chose, under whatever identity installs.
-# Trailing separators are trimmed as Add-ToUserPath trims them, so that two
-# spellings of one location compare equal. Must run before Add-ToUserPath,
-# which prepends $Dir to the session PATH and would hide the conflict.
+# Canonical form of a path, for comparison only. Resolve-Path resolves nothing
+# that does not exist, and $ErrorActionPreference is Stop, so a path that fails
+# to resolve falls back to its own text rather than ending the install.
+function Resolve-FilePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try { return (Resolve-Path -LiteralPath $Path -ErrorAction Stop).ProviderPath.TrimEnd('\') }
+    catch { return $Path.TrimEnd('\') }
+}
+
+# Paths are compared rather than versions: reading the version means running
+# the file a PATH entry resolved to, and that entry may be one the person
+# installing does not control. Both sides are canonicalized first, so that two
+# spellings of one location do not read as a conflict. Must run before
+# Add-ToUserPath, which prepends $Dir to the session PATH and would hide it.
 function Write-ShadowWarning {
     param(
         [Parameter(Mandatory)][string]$Target,
@@ -181,7 +191,7 @@ function Write-ShadowWarning {
     $found = Get-Command $Bin -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $found) { return }
-    if ($found.Source.TrimEnd('\') -ieq $Target.TrimEnd('\')) { return }
+    if ((Resolve-FilePath $found.Source) -ieq (Resolve-FilePath $Target)) { return }
 
     Write-Warn "$Bin on PATH is $($found.Source), not the copy just installed"
     [Console]::Error.WriteLine("  Remove that file, or put $Dir earlier in PATH.")
