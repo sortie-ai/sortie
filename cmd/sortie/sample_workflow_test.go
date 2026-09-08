@@ -238,6 +238,7 @@ var shippedExampleWorkflows = []string{
 	"WORKFLOW.kiro.md",
 	"WORKFLOW.gitea.md",
 	"WORKFLOW.gitlab.md",
+	"WORKFLOW.agent-client-protocol.md",
 }
 
 // TestSampleWorkflowMergeConflictBranch verifies AC13: each shipped example

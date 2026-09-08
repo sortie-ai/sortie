@@ -359,6 +359,11 @@ type WorkerDeps struct {
 	// Tier 1 tool access.
 	DBPath string
 
+	// MCPServerBinary is the absolute path to the sortie binary the
+	// agent runtime spawns as the tool server. Empty resolves to the
+	// running executable.
+	MCPServerBinary string
+
 	// ContinuationContext carries reaction continuation data to inject
 	// into the prompt template on the first turn. Non-nil only for
 	// reaction-triggered continuation dispatches.
@@ -813,7 +818,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	if deps.WorkflowPath == "" {
 		logger.Debug("skipped mcp config generation, workflow path empty")
 	} else {
-		execPath, execErr := os.Executable()
+		execPath, execErr := resolveToolServerBinary(deps.MCPServerBinary)
 		if execErr != nil {
 			finishWorkspace()
 			reported = true
@@ -821,25 +826,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				IssueID:       issue.ID,
 				Identifier:    issue.Identifier,
 				ExitKind:      WorkerExitError,
-				Error:         fmt.Errorf("mcp config generation: resolve executable: %w", execErr),
-				WorkspacePath: wsResult.Path,
-				AgentAdapter:  agentKind,
-				Attempt:       attempt,
-				SSHHost:       deps.SSHHost,
-				UsageMeasured: localMeasured,
-			})
-			return
-		}
-
-		execPath, execErr = filepath.EvalSymlinks(execPath)
-		if execErr != nil {
-			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:       issue.ID,
-				Identifier:    issue.Identifier,
-				ExitKind:      WorkerExitError,
-				Error:         fmt.Errorf("mcp config generation: resolve symlinks: %w", execErr),
+				Error:         fmt.Errorf("mcp config generation: %w", execErr),
 				WorkspacePath: wsResult.Path,
 				AgentAdapter:  agentKind,
 				Attempt:       attempt,

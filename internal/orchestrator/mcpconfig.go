@@ -10,6 +10,34 @@ import (
 	"strings"
 )
 
+// resolveToolServerBinary returns the absolute, symlink-free path to the
+// binary the agent runtime spawns as the tool server. An explicit path
+// wins; otherwise it is the running executable, which is the right
+// answer whenever the runtime runs on the same host and deployment as
+// the orchestrator. Naming the binary rather than relying on a PATH
+// lookup is what lets the runtime spawn it from a working directory
+// that is not the orchestrator's own.
+func resolveToolServerBinary(explicit string) (string, error) {
+	path := explicit
+	if path == "" {
+		running, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("resolve executable: %w", err)
+		}
+		path = running
+	} else if !filepath.IsAbs(path) {
+		// The runtime spawns this command from the workspace, not from
+		// the orchestrator's working directory, so a relative path
+		// would resolve against a directory neither of them agreed on.
+		return "", fmt.Errorf("tool server binary %q is not an absolute path", path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks: %w", err)
+	}
+	return resolved, nil
+}
+
 // MCPConfigParams holds the inputs for [GenerateMCPConfig].
 type MCPConfigParams struct {
 	// BinaryPath is the absolute path to the sortie binary.

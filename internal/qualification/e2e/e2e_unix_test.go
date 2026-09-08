@@ -382,3 +382,55 @@ func TestPromptTemplateByIDRefusesAnUndeclaredID(t *testing.T) {
 		t.Error("PromptTemplateByID() returned a template for an id the fixture never declared, want nil")
 	}
 }
+
+func TestBudgetsWithDefaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the zero value is the deterministic fake agent's contract", func(t *testing.T) {
+		t.Parallel()
+		got := Budgets{}.withDefaults()
+		want := Budgets{
+			ReadTimeoutMS:  5000,
+			TurnTimeoutMS:  10000,
+			StallTimeoutMS: 10000,
+			Observation:    qualification.ShutdownDeadline,
+		}
+		if got != want {
+			t.Errorf("Budgets{}.withDefaults() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("a live caller's bounds survive untouched", func(t *testing.T) {
+		t.Parallel()
+		live := Budgets{
+			ReadTimeoutMS:  30000,
+			TurnTimeoutMS:  300000,
+			StallTimeoutMS: 60000,
+			Observation:    10 * time.Minute,
+		}
+		if got := live.withDefaults(); got != live {
+			t.Errorf("withDefaults() = %+v, want the caller's own bounds %+v", got, live)
+		}
+	})
+
+	t.Run("only the unset bounds are filled", func(t *testing.T) {
+		t.Parallel()
+		got := Budgets{TurnTimeoutMS: 300000}.withDefaults()
+		if got.TurnTimeoutMS != 300000 {
+			t.Errorf("TurnTimeoutMS = %d, want the caller's 300000", got.TurnTimeoutMS)
+		}
+		if got.ReadTimeoutMS != 5000 || got.StallTimeoutMS != 10000 {
+			t.Errorf("unset bounds = read %d stall %d, want the fake agent's 5000 and 10000", got.ReadTimeoutMS, got.StallTimeoutMS)
+		}
+		if got.Observation != qualification.ShutdownDeadline {
+			t.Errorf("Observation = %v, want %v", got.Observation, qualification.ShutdownDeadline)
+		}
+	})
+
+	t.Run("the deterministic harness reports the fake agent's observation bound", func(t *testing.T) {
+		t.Parallel()
+		if got := NewHarness(t).Observation(); got != qualification.ShutdownDeadline {
+			t.Errorf("NewHarness().Observation() = %v, want %v", got, qualification.ShutdownDeadline)
+		}
+	})
+}

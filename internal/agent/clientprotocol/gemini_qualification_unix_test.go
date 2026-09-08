@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -38,6 +40,11 @@ const geminiNativeProbeBound = 5 * time.Minute
 // geminiAdapterNotesRelPath is the tracked durable notes file the rerun
 // compares against, read but never mutated.
 const geminiAdapterNotesRelPath = "../../../docs/gemini-adapter-notes.md"
+
+// geminiNotesExpectationRelPath is the tracked expectation artifact a
+// gated run compares its own fresh expectation against before binding
+// it to the durable notes.
+const geminiNotesExpectationRelPath = "testdata/gemini_qualification_notes/expectation.json"
 
 // geminiQualificationResult is what one qualification collection
 // produced: the validated verdict, the bounded summary, the record
@@ -203,41 +210,71 @@ func geminiRunTwoPassEvidenceFlow(t *testing.T, dir string, records []qualificat
 	return verdict, formatGeminiQualificationSummary(conclusions), len(complete)
 }
 
-// geminiNotesConsistencyError reads the tracked notes without mutating
-// them and compares their bounded conclusions against the freshly
-// validated summary. compared reports whether durable notes existed;
-// err is the mismatch, when the notes exist but disagree.
-func geminiNotesConsistencyError(notesPath string, conclusions geminiSummaryConclusions) (compared bool, err error) {
-	raw, readErr := os.ReadFile(notesPath) //nolint:gosec // the notes path is the operator's tracked documentation file
-	if readErr != nil {
-		return false, nil
-	}
-	return true, validateGeminiAdapterNotes(string(raw), conclusions)
+// notesConsistencyReporter is the subset of *testing.T
+// checkNotesConsistency calls, factored out so
+// TestCheckNotesConsistencyDecisionTable can drive the decision logic
+// against a fake that records a failure instead of reddening its own
+// run.
+type notesConsistencyReporter interface {
+	Fatalf(format string, args ...any)
 }
 
-// geminiRunNotesConsistency performs the rerun's notes-consistency
-// check: it reads the tracked notes, never mutates them, and requires
-// their bounded conclusions and verdict to equal the freshly validated
-// summary. A run without durable notes yet returns false and does not
-// fail: the initial run may stop after the validated summary, and
-// support publication requires the notes-consistent rerun.
-func geminiRunNotesConsistency(t *testing.T, notesPath string, conclusions geminiSummaryConclusions, requireMatch bool) bool {
-	t.Helper()
+// checkNotesConsistency implements the notes-binding decision table
+// over the tracked document's four possible states: absent, unreadable,
+// agreeing, and disagreeing. A verdict that does not require a notes
+// document tolerates one that does not exist yet, so a runtime being
+// onboarded can reach its first measurement before its notes exist. Any
+// other read failure always fails, and a readable document is always
+// compared with qualification.ValidateNotes regardless of verdict, so
+// notes claiming a verdict a run did not reach are rejected on the
+// eligibility line. summary is carried into every failure message so
+// the operator can transcribe the run's own printed summary without a
+// second paid measurement.
+func checkNotesConsistency(r notesConsistencyReporter, readNotes func(string) ([]byte, error), notesPath string, want qualification.NotesExpectation, summary string) {
+	document, readErr := readNotes(notesPath)
+	switch {
+	case os.IsNotExist(readErr):
+		if qualification.NotesBindingRequired(want.Verdict) {
+			r.Fatalf("notes %s do not exist, but a %s verdict requires a notes document to compare against; write the document from this summary, then re-check without the gate\n%s",
+				notesPath, want.Verdict, summary)
+		}
+		return
+	case readErr != nil:
+		r.Fatalf("read notes %s: %v\n%s", notesPath, readErr, summary)
+		return
+	}
+	if mismatch := qualification.ValidateNotes(string(document), want); mismatch != nil {
+		r.Fatalf("notes %s disagree with the validated run: %v\n%s", notesPath, mismatch, summary)
+	}
+}
 
-	compared, err := geminiNotesConsistencyError(notesPath, conclusions)
-	if !compared {
-		if requireMatch {
-			t.Fatalf("the durable adapter notes are missing; the rerun requires the notes-consistency check to pass")
-		}
-		return false
+// enforceNotesConsistency reads notesPath and fails t when it disagrees
+// with want, the expectation derived from a validated run, per the
+// decision table checkNotesConsistency implements. It never mutates
+// notesPath.
+func enforceNotesConsistency(t *testing.T, notesPath string, want qualification.NotesExpectation, summary string) {
+	t.Helper()
+	checkNotesConsistency(t, os.ReadFile, notesPath, want, summary)
+}
+
+// firstDifferingNotesExpectationField compares fresh and tracked field
+// by field, in declaration order, and returns the first field name
+// where they differ along with both of that field's values. It returns
+// an empty field name when every field agrees.
+func firstDifferingNotesExpectationField(fresh, tracked qualification.NotesExpectation) (field string, freshValue, trackedValue any) {
+	if fresh.Verdict != tracked.Verdict {
+		return "Verdict", fresh.Verdict, tracked.Verdict
 	}
-	if err != nil {
-		if requireMatch {
-			t.Fatalf("the durable notes do not match the freshly validated summary: %v", err)
-		}
-		return false
+	if !slices.Equal(fresh.Grades, tracked.Grades) {
+		return "Grades", fresh.Grades, tracked.Grades
 	}
-	return true
+	if !slices.Equal(fresh.Excluded, tracked.Excluded) {
+		return "Excluded", fresh.Excluded, tracked.Excluded
+	}
+	if !slices.Equal(fresh.Unobserved, tracked.Unobserved) {
+		return "Unobserved", fresh.Unobserved, tracked.Unobserved
+	}
+	return "", nil, nil
 }
 
 // TestGeminiQualificationCollectorOrdering confirms the collector's
@@ -343,11 +380,23 @@ func TestGeminiQualificationTwoPassWrite(t *testing.T) {
 	}
 }
 
+// notesRerunControlRecorder implements notesConsistencyReporter by
+// recording every Fatalf call instead of failing the enclosing test, so
+// TestGeminiQualificationNotesRerunControl can drive checkNotesConsistency's
+// rejecting arms without reddening its own run.
+type notesRerunControlRecorder struct {
+	failures []string
+}
+
+func (r *notesRerunControlRecorder) Fatalf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
 // TestGeminiQualificationNotesRerunControl confirms the durable-notes
 // control: a rerun reads but never mutates the tracked notes, matches
-// them against the freshly validated summary, fails on a stale
-// conclusion, and lets the initial run stop after the validated summary
-// when the notes do not exist yet.
+// them against the freshly validated expectation, fails on a stale
+// conclusion, tolerates an absent document below the qualified verdict,
+// and fails an absent document at the qualified verdict.
 func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 	t.Parallel()
 
@@ -357,13 +406,34 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 	}
+	want := geminiNotesExpectationFrom(conclusions)
 
-	t.Run("the initial run may stop after the validated summary", func(t *testing.T) {
+	t.Run("an absent document is tolerated below the qualified verdict", func(t *testing.T) {
+		t.Parallel()
+
+		belowFixture := qualification.NewFixture(qualification.FixtureNotQualified)
+		belowFixture.Finalize()
+		belowConclusions, err := geminiSummaryConclusionsFromRecords(belowFixture.Records, qualification.VerdictNotQualified, belowFixture.Declarations())
+		if err != nil {
+			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
+		}
+
+		notesPath := filepath.Join(t.TempDir(), "gemini-adapter-notes.md")
+		recorder := &notesRerunControlRecorder{}
+		checkNotesConsistency(recorder, os.ReadFile, notesPath, geminiNotesExpectationFrom(belowConclusions), "summary")
+		if len(recorder.failures) != 0 {
+			t.Errorf("checkNotesConsistency() recorded %v, want no failure for an absent document below the qualified verdict", recorder.failures)
+		}
+	})
+
+	t.Run("an absent document fails the qualified verdict", func(t *testing.T) {
 		t.Parallel()
 
 		notesPath := filepath.Join(t.TempDir(), "gemini-adapter-notes.md")
-		if geminiRunNotesConsistency(t, notesPath, conclusions, false) {
-			t.Error("geminiRunNotesConsistency() = true with no notes file, want the initial run to stop after the summary")
+		recorder := &notesRerunControlRecorder{}
+		checkNotesConsistency(recorder, os.ReadFile, notesPath, want, "summary")
+		if len(recorder.failures) == 0 {
+			t.Error("checkNotesConsistency() recorded no failure for an absent document at the qualified verdict")
 		}
 	})
 
@@ -375,9 +445,7 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read notes fixture: %v", err)
 		}
-		if !geminiRunNotesConsistency(t, notesPath, conclusions, true) {
-			t.Error("geminiRunNotesConsistency() = false, want a matching rerun")
-		}
+		checkNotesConsistency(t, os.ReadFile, notesPath, want, "summary")
 		after, err := os.ReadFile(notesPath)
 		if err != nil {
 			t.Fatalf("read notes fixture after comparison: %v", err)
@@ -399,12 +467,10 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 			t.Fatalf("read stale notes fixture: %v", err)
 		}
 
-		compared, mismatch := geminiNotesConsistencyError(notesPath, conclusions)
-		if !compared {
-			t.Fatal("geminiNotesConsistencyError() compared = false, want the stale notes to be compared")
-		}
-		if mismatch == nil {
-			t.Error("geminiNotesConsistencyError() mismatch = nil, want the stale conclusion rejected")
+		recorder := &notesRerunControlRecorder{}
+		checkNotesConsistency(recorder, os.ReadFile, notesPath, want, "summary")
+		if len(recorder.failures) == 0 {
+			t.Error("checkNotesConsistency() recorded no failure, want the stale conclusion rejected")
 		}
 		after, err := os.ReadFile(notesPath)
 		if err != nil {
@@ -416,12 +482,151 @@ func TestGeminiQualificationNotesRerunControl(t *testing.T) {
 	})
 }
 
+// checkNotesConsistencyFixture pairs one verdict's expectation with an
+// agreeing and a disagreeing rendering of it, so
+// TestCheckNotesConsistencyDecisionTable can drive every document
+// state without depending on any other verdict's fixture.
+type checkNotesConsistencyFixture struct {
+	want        qualification.NotesExpectation
+	agreeing    string
+	disagreeing string
+}
+
+// newCheckNotesConsistencyFixture builds the fixture for one closed
+// verdict, deriving the verdict from variant's own records rather than
+// assuming it, so a variant whose records do not actually produce its
+// named verdict fails here instead of silently mislabeling a decision
+// table cell.
+func newCheckNotesConsistencyFixture(t *testing.T, variant string) checkNotesConsistencyFixture {
+	t.Helper()
+
+	fixture := qualification.NewFixture(variant)
+	fixture.Finalize()
+	verdict := qualification.ExplainEligibility(fixture.Records, fixture.Declarations()).Verdict
+	conclusions, err := geminiSummaryConclusionsFromRecords(fixture.Records, verdict, fixture.Declarations())
+	if err != nil {
+		t.Fatalf("geminiSummaryConclusionsFromRecords(%s) error = %v", variant, err)
+	}
+
+	agreeing := geminiAdapterNotesFixture(conclusions)
+	eligibilityLine := "Eligibility: " + string(verdict)
+	disagreeing := strings.Replace(agreeing, eligibilityLine, "Eligibility: not-"+string(verdict), 1)
+	if disagreeing == agreeing {
+		t.Fatalf("constructing a disagreeing document for verdict %s left it unchanged", verdict)
+	}
+
+	return checkNotesConsistencyFixture{
+		want:        geminiNotesExpectationFrom(conclusions),
+		agreeing:    agreeing,
+		disagreeing: disagreeing,
+	}
+}
+
+// TestCheckNotesConsistencyDecisionTable drives checkNotesConsistency
+// against a recording reporter and a synthetic readNotes function,
+// reproducing every cell of the binding decision table: the three
+// closed verdicts crossed with the tracked document's four possible
+// states.
+func TestCheckNotesConsistencyDecisionTable(t *testing.T) {
+	t.Parallel()
+
+	fixtures := map[qualification.Verdict]checkNotesConsistencyFixture{
+		qualification.VerdictQualified:    newCheckNotesConsistencyFixture(t, qualification.FixtureQualified),
+		qualification.VerdictNotQualified: newCheckNotesConsistencyFixture(t, qualification.FixtureNotQualified),
+		qualification.VerdictUnmeasured:   newCheckNotesConsistencyFixture(t, qualification.FixtureUnmeasured),
+	}
+
+	absentErr := &fs.PathError{Op: "open", Path: "notes.md", Err: os.ErrNotExist}
+	unreadableErr := &fs.PathError{Op: "open", Path: "notes.md", Err: errors.New("permission denied")}
+
+	// wantFail is indexed [verdict-is-qualified][document state], per
+	// the binding decision table: the document being absent is the one
+	// cell that depends on the verdict, since NotesBindingRequired is
+	// true for qualified only. Every other document state fails or
+	// passes the same way regardless of verdict.
+	docStates := []struct {
+		name                string
+		readNotes           func(fx checkNotesConsistencyFixture) func(string) ([]byte, error)
+		wantFailAtQualified bool
+		wantFailOtherwise   bool
+	}{
+		{
+			name: "document absent",
+			readNotes: func(checkNotesConsistencyFixture) func(string) ([]byte, error) {
+				return func(string) ([]byte, error) { return nil, absentErr }
+			},
+			wantFailAtQualified: true,
+			wantFailOtherwise:   false,
+		},
+		{
+			name: "document unreadable",
+			readNotes: func(checkNotesConsistencyFixture) func(string) ([]byte, error) {
+				return func(string) ([]byte, error) { return nil, unreadableErr }
+			},
+			wantFailAtQualified: true,
+			wantFailOtherwise:   true,
+		},
+		{
+			name: "document agrees",
+			readNotes: func(fx checkNotesConsistencyFixture) func(string) ([]byte, error) {
+				return func(string) ([]byte, error) { return []byte(fx.agreeing), nil }
+			},
+			wantFailAtQualified: false,
+			wantFailOtherwise:   false,
+		},
+		{
+			name: "document disagrees",
+			readNotes: func(fx checkNotesConsistencyFixture) func(string) ([]byte, error) {
+				return func(string) ([]byte, error) { return []byte(fx.disagreeing), nil }
+			},
+			wantFailAtQualified: true,
+			wantFailOtherwise:   true,
+		},
+	}
+
+	for verdict, fx := range fixtures {
+		for _, ds := range docStates {
+			t.Run(string(verdict)+"/"+ds.name, func(t *testing.T) {
+				t.Parallel()
+
+				wantFail := ds.wantFailOtherwise
+				if verdict == qualification.VerdictQualified {
+					wantFail = ds.wantFailAtQualified
+				}
+
+				recorder := &notesRerunControlRecorder{}
+				checkNotesConsistency(recorder, ds.readNotes(fx), "notes.md", fx.want, "summary")
+
+				switch {
+				case wantFail && len(recorder.failures) == 0:
+					t.Errorf("checkNotesConsistency(verdict=%s, %s) recorded no failure, want one", verdict, ds.name)
+				case !wantFail && len(recorder.failures) != 0:
+					t.Errorf("checkNotesConsistency(verdict=%s, %s) recorded %v, want none", verdict, ds.name, recorder.failures)
+				}
+			})
+		}
+	}
+}
+
 // errNativeProbeLaunchFailed marks a cmd.Start failure. A binary that
 // never launched is a prerequisite the native path never reached, not
 // evidence about what a run produced, so it is reported and recognized
 // differently from a failure of the run itself: a non-zero exit or the
 // bounded-wait timeout.
 var errNativeProbeLaunchFailed = errors.New("native probe failed to launch")
+
+// geminiProbeDiagnostic trims a probe's captured output to a bounded
+// excerpt for a failure message. A launch that failed leaves its reason
+// in that output, and a message carrying only the exit status sends the
+// operator to read code when the runtime already said what was wrong.
+func geminiProbeDiagnostic(output string) string {
+	const limit = 2000
+	trimmed := strings.TrimSpace(output)
+	if len(trimmed) > limit {
+		return trimmed[:limit]
+	}
+	return trimmed
+}
 
 // errNativeProbeBoundExceeded marks a probe that exceeded
 // geminiNativeProbeBound, distinguishable from a non-zero-exit run
@@ -1096,7 +1301,8 @@ func geminiRunNativeContinuation(t *testing.T, runtime geminiQualificationRuntim
 	seedOutput, seedErr := geminiRunNativeProbe(t, runtime, surface, catalog[qualification.InputContinuationSeed].Prompt, "",
 		"--session-id", generated)
 	if seedErr != nil {
-		t.Fatalf("continuation seed on surface %s: launch failed: %v", surface, seedErr)
+		t.Fatalf("continuation seed on surface %s: launch failed: %v; probe output: %q",
+			surface, seedErr, geminiProbeDiagnostic(seedOutput))
 	}
 	seedID := geminiNativeSessionID(surface, seedOutput)
 	if seedID == "" {
@@ -1280,6 +1486,11 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	// The authentication canary is the live credential prerequisite.
 	geminiRunAuthenticationCanary(t, runtime)
 
+	// The published-posture probe gates every graded surface: a lost
+	// posture aborts the run before the graded collection spends
+	// anything past this point.
+	geminiRunPublishedPostureProbe(t, config)
+
 	// A declared-absent surface is corroborated before any probe or
 	// record spends anything else, so a false declaration stops the
 	// run at the coordinate that named it.
@@ -1342,12 +1553,39 @@ func collectGeminiQualification(t *testing.T, config geminiQualificationConfig) 
 	verdict, summary, count := geminiRunTwoPassEvidenceFlow(t, dir, records, runtime.Config.DeclaredGaps)
 	t.Logf("%s", summary)
 
-	// On a rerun the durable notes must match the fresh summary; an
-	// initial run without notes yet stops after the validated summary.
-	notesPath, notesErr := filepath.Abs(geminiAdapterNotesRelPath)
-	if notesErr == nil {
-		geminiRunNotesConsistency(t, notesPath, geminiFreshConclusions(t, dir, verdict, runtime.Config.DeclaredGaps), false)
+	fresh := geminiNotesExpectationFrom(geminiFreshConclusions(t, dir, verdict, runtime.Config.DeclaredGaps))
+
+	// The tracked expectation artifact is compared against the fresh
+	// expectation before it is bound to the durable notes, so a stale
+	// artifact reddens this run rather than sitting undetected. An
+	// absent artifact is the same bootstrap state the notes-binding
+	// decision table's absent-document row covers, and it skips the
+	// comparison rather than failing.
+	artifactPath, artifactPathErr := filepath.Abs(geminiNotesExpectationRelPath)
+	if artifactPathErr != nil {
+		t.Fatalf("resolve the tracked expectation artifact path %s: %v", geminiNotesExpectationRelPath, artifactPathErr)
 	}
+	artifactRaw, artifactErr := os.ReadFile(artifactPath) //nolint:gosec // the artifact path is the tracked documentation file's own coordinate
+	switch {
+	case os.IsNotExist(artifactErr):
+	case artifactErr != nil:
+		t.Fatalf("read the tracked expectation artifact %s: %v\n%s", artifactPath, artifactErr, summary)
+	default:
+		var tracked qualification.NotesExpectation
+		if err := json.Unmarshal(artifactRaw, &tracked); err != nil {
+			t.Fatalf("decode the tracked expectation artifact %s: %v\n%s", artifactPath, err, summary)
+		}
+		if field, freshValue, trackedValue := firstDifferingNotesExpectationField(fresh, tracked); field != "" {
+			t.Fatalf("the tracked expectation artifact %s is stale at field %s: fresh=%v tracked=%v\n%s",
+				artifactPath, field, freshValue, trackedValue, summary)
+		}
+	}
+
+	notesPath, notesPathErr := filepath.Abs(geminiAdapterNotesRelPath)
+	if notesPathErr != nil {
+		t.Fatalf("resolve the tracked adapter notes path %s: %v", geminiAdapterNotesRelPath, notesPathErr)
+	}
+	enforceNotesConsistency(t, notesPath, fresh, summary)
 
 	return geminiQualificationResult{
 		Verdict:         verdict,
@@ -2233,10 +2471,20 @@ func geminiCollectEndToEndRecord(t *testing.T, runtime geminiQualificationRuntim
 
 	adapter := &ClientProtocolAdapter{}
 	command := strings.Join(geminiQualificationLaunchArgv(runtime.Config, qualification.SurfaceProtocol, "", runtime.PolicyPath), " ")
-	harness := e2e.NewHarnessWithAgent(t, adapter, command, "agent-client-protocol")
+	// A live runtime spends model time on every turn, so the harness
+	// runs on this profile's own bounds rather than the deterministic
+	// fake agent's. The observation window adds one turn's slack for
+	// dispatch, the hooks, and the handoff transition around the turn
+	// itself.
+	harness := e2e.NewHarnessWithAgent(t, adapter, command, "agent-client-protocol", e2e.Budgets{
+		ReadTimeoutMS:  runtime.Timeouts.ReadTimeoutMS,
+		TurnTimeoutMS:  runtime.Timeouts.TurnTimeoutMS,
+		StallTimeoutMS: runtime.Timeouts.StallTimeoutMS,
+		Observation:    2 * time.Duration(runtime.Timeouts.TurnTimeoutMS) * time.Millisecond,
+	})
 	cancel, runDone := e2e.StartWorkflow(t, harness)
 
-	deadline := time.Now().Add(qualification.ShutdownDeadline)
+	deadline := time.Now().Add(harness.Observation())
 	var condition e2e.TerminalCondition
 	for {
 		condition = e2e.ObserveTerminalCondition(t, harness)

@@ -26,13 +26,21 @@ This is the one runtime the gated suite was driven against end to end: a session
 
 Session continuation was probed by hand against this runtime, not through the gated suite. `session/load` replays the prior turn's messages, observed as `user_message_chunk` notifications arriving before the load response itself returns, when the workspace directory already carries earlier session history. Against a workspace used for the first time, whose only session was ended by a process-group kill with no graceful phase ahead of it, a reload of that session answers a JSON-RPC error reporting no prior session for the workspace instead of replaying anything; the adapter observes this exactly as it observes any other unconfirmed load, lowering the session continuation entry and falling back to a fresh session without failing the run. That probe predates the graceful phase teardown now runs, and it has not been repeated against it. `session/resume` is not exercised: this runtime advertises no `sessionCapabilities` object at all, so the adapter never selects it.
 
+A locally launched runtime reaches this transport through three command-line slots: one that puts it on the protocol wire, one that grants the workspace the trust a declared tool server's delivery depends on, and one that puts it in a posture that does not ask before running a tool. Only `gemini` has been measured, and its values fill the table below; whether another runtime spells the same three slots, spells fewer, or spells none is unobserved until that runtime is measured. What is fixed on our side is that no shared code branches on which runtime is naming them.
+
+| Slot | What it is for | `gemini`'s value |
+|---|---|---|
+| Protocol switch | Puts the runtime on the protocol wire | `--acp` |
+| Trust switch | Makes the workspace trusted, so declared tool servers are not dropped | `--skip-trust` |
+| Posture switch | Puts the runtime in a mode that does not ask before running a tool | `--approval-mode yolo` |
+
 ## Runtimes not observed
 
 Each of the following has an explicit gap rather than a measured result, so an absent probe is never later read as a measured negative.
 
 ### `kiro-cli`
 
-The `acp` subcommand exists but appears only under `--help-all`, not the default help output. Its protocol surface is not observed here because this host carries no stored login for it, so the probe fails before the handshake completes.
+The `acp` subcommand exists but appears only under `--help-all`, not the default help output. Its protocol surface was not observed on the host that produced these notes, because that host carries no stored login for it, so the probe failed before the handshake completed. This states the gap's scope precisely rather than asserting a measured negative: it says nothing about a host that does carry a login.
 
 ### `claude`
 
@@ -64,7 +72,7 @@ Delivery and discovery are not the question: the session-creation request carrie
 
 This was measured on `gemini`, the one runtime above the gated suite drives end to end; the other runtimes in these notes are unmeasured on this point, and an absent probe is never read as a measured negative.
 
-When the situation arises, the adapter reports it once per session on two surfaces. The notification reaches the orchestrator's generic event handling, which records the event type at `Debug` and carries the message itself nowhere but the running entry's last agent message, where the next message-carrying event overwrites it. The `Warn` record is the only surface that outlives the run, for as long as the run's log is kept.
+When the situation arises, the adapter reports it once per session on two surfaces. The notification reaches the orchestrator's generic event handling, which records the event type at `Debug` and carries the message itself nowhere but the running entry's last agent message, where the next message-carrying event overwrites it. The `Warn` record is the only surface that outlives the run, for as long as the run's log is kept. That record is raised by a refused permission request, so it never fires under a posture switch that puts the runtime in a mode that does not ask: an untrusted workspace silently dropping the declared servers then leaves no signal of its own on this path.
 
 ## Verifying a change
 

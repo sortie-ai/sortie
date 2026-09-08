@@ -2,40 +2,91 @@
 
 Working notes for anyone dealing with Gemini CLI through Sortie's generic Agent Client Protocol adapter in `internal/agent/clientprotocol`: the one fact that follows from Gemini having no adapter code of its own, the two shapes in which token accounting under-reports spend, and what a normal-looking stop reason does not tell you.
 
+Eligibility: unmeasured
+
 ## Where to get the volatile facts
 
 Gemini's own version is never pinned in prose here; the adapter records it per session from that session's own `initialize` handshake, and the account's actual model set comes from Google's model-listing endpoint, which is the only authoritative answer because it depends on the key's subscription. Read the flag surface off `gemini --help` on the binary you are targeting. Upstream source lives in `google-gemini/gemini-cli`; when a symptom looks like a protocol bug rather than a Sortie bug, treat the bundled JavaScript that the installed version actually ships as the source of record, because the TypeScript source tree and the shipped bundle can drift apart between releases.
 
-## The fact everything else follows from
+## Entry points
 
 Gemini has no adapter package, no registered kind, no adapter metadata, and no identity branch anywhere in Sortie. The operator reaches it by pointing the generic `agent-client-protocol` kind's `agent.command` at the `gemini` binary with the `--acp` flag; an older `--experimental-acp` spelling still works but is deprecated. Every behavior described below is therefore a property of this one vendor's protocol implementation meeting the generic adapter, not a Gemini-specific code path in Sortie, and there is nowhere in the codebase to special-case a Gemini quirk short of teaching the generic adapter about it.
 
-## Token accounting misses spend in two shapes
+## Load-bearing capability observations
 
-This runtime never sends the protocol's standard usage notification. Token counts instead ride a vendor extension, `_meta.quota`, attached to the result of a completed turn, which by itself would just mean parsing a vendor-shaped field rather than a standard one. Two gaps sit underneath that. A cancelled turn's result carries no `_meta` at all, so a turn Sortie cancels reports zero tokens spent even though the model was billed for them; Sortie cancels turns on both stall detection and budget decisions, so this undercount is reachable in ordinary operation rather than only in an edge case. And even where `_meta.quota` is present, it carries only input and output token counts: cached and thought tokens never appear in it, so a running total built from this path understates the real cost.
+Token accounting misses spend in two shapes. This runtime never sends the protocol's standard usage notification. Token counts instead ride a vendor extension, `_meta.quota`, attached to the result of a completed turn, which by itself would just mean parsing a vendor-shaped field rather than a standard one. Two gaps sit underneath that. A cancelled turn's result carries no `_meta` at all, so a turn Sortie cancels reports zero tokens spent even though the model was billed for them; Sortie cancels turns on both stall detection and budget decisions, so this undercount is reachable in ordinary operation rather than only in an edge case. And even where `_meta.quota` is present, it carries only input and output token counts: cached and thought tokens never appear in it, so a running total built from this path understates the real cost.
 
-## A stop reason of end_turn does not mean the turn ended cleanly
+- protocol turn_disposition: Not observed: not_observed
+- protocol retry_classification: Not observed: not_observed
+- protocol token_ceiling: Observed: gap
+- protocol tool_server_delivery: Observed: usable
+- protocol session_continuation: Observed: usable
+- protocol permission_handling: Observed: usable
+- native_json turn_disposition: Not observed: not_observed
+- native_json retry_classification: Not observed: not_observed
+- native_json token_ceiling: Observed: gap
+- native_json session_continuation: Observed: usable
+- native_stream_json turn_disposition: Not observed: not_observed
+- native_stream_json retry_classification: Not observed: not_observed
+- native_stream_json token_ceiling: Observed: gap
+- native_stream_json session_continuation: Observed: usable
 
-Of the five stop reasons the protocol defines, this runtime's own code produces four: `end_turn`, `max_turn_requests`, `max_tokens`, and `cancelled`. Loop detection reports as `max_turn_requests`. `max_tokens` is reachable only through the runtime's own pre-emptive context-overflow predictor, which fires before the model's stream is actually exhausted; the stream's own genuine token-limit signal never reaches the protocol layer as `max_tokens`, because the handler that catches an invalid stream folds that signal into `end_turn` alongside the model's safety and recitation blocks. `refusal` is never assigned: no code path in this runtime produces it. So a model declining to answer on safety grounds, and a turn that genuinely ran out of context, both surface as an ordinary, successful-looking `end_turn`, and nothing in the response distinguishes either one from a turn that actually completed as asked. The qualification profile's `limit_reached` inducer measures the pre-emptive predictor specifically, driving `max_tokens` with an oversize input; it does not measure the model's own mid-stream token exhaustion, which stays folded into `end_turn` and is unreachable by any inducer here.
+## Protocol-specific observations
 
-## Session continuation replays history, with two traps
+A stop reason of end_turn does not mean the turn ended cleanly. Of the five stop reasons the protocol defines, this runtime's own code produces four: `end_turn`, `max_turn_requests`, `max_tokens`, and `cancelled`. Loop detection reports as `max_turn_requests`. `max_tokens` is reachable only through the runtime's own pre-emptive context-overflow predictor, which fires before the model's stream is actually exhausted; the stream's own genuine token-limit signal never reaches the protocol layer as `max_tokens`, because the handler that catches an invalid stream folds that signal into `end_turn` alongside the model's safety and recitation blocks. `refusal` is never assigned: no code path in this runtime produces it. So a model declining to answer on safety grounds, and a turn that genuinely ran out of context, both surface as an ordinary, successful-looking `end_turn`, and nothing in the response distinguishes either one from a turn that actually completed as asked. The qualification profile's `limit_reached` inducer measures the pre-emptive predictor specifically, driving `max_tokens` with an oversize input; it does not measure the model's own mid-stream token exhaustion, which stays folded into `end_turn` and is unreachable by any inducer here.
 
-Continuing a session is implemented and does work: `session/load` rebuilds the prior conversation and streams it back as genuine `session/update` notifications, one per historical turn. Two things about that replay need care.
+Session continuation replays history, with two traps. Continuing a session is implemented and does work: `session/load` rebuilds the prior conversation and streams it back as genuine `session/update` notifications, one per historical turn. Two things about that replay need care.
 
 The first is an upstream ordering defect. The `session/load` response can reach the wire before its replay notifications finish sending, because the runtime does not wait for the replay to complete before responding, even though the protocol expects a response only after the full replay has gone out. Sortie's own continuation logic already tolerates this: it starts watching for replayed chunks before issuing the load call, and after the response arrives it waits a bounded interval for any chunk still in flight before deciding there was no replay to see. That wait is load-bearing, not redundant, and must not be trimmed as dead time.
 
 The second trap is more expensive and unrelated to the first. A `session/load` issued in the same UTC minute as the `session/new` that created the session fails and permanently destroys that session's resumability, including every later attempt to load it in a following minute. This is an open upstream defect, confirmed live: moving the load into the following UTC minute, from a separate process, produced a successful load with a full history replay in two independent runs, while a same-minute load reliably failed both times it was tried. A `session/load` issued through the adapter by the process that created the session is now spaced out of that minute; the exposure remains for a load issued by any other process or by hand.
 
-## Tool-server delivery needs a trusted workspace and an authorized call
+This runtime advertises no `sessionCapabilities` object at all in its handshake. Sortie's adapter decides whether to call `session/close` based on that capability being present, so against this runtime there is never a capability to select, and a session here is never closed through the protocol.
 
-Tool servers declared in `session/new` are honored: the runtime merges them over whatever servers its own settings file already configures, matching by name with the request winning on a collision, and stdio, sse, and http transports are all supported. Delivery is gated on whether the runtime considers the workspace trusted. `--skip-trust` grants trust for the session rather than only suppressing a prompt: it sets the runtime's own workspace-trust environment variable, which the trust check reads before the folder-trust setting, the editor state, and the trusted-folder list. An untrusted workspace fails closed with no signal: the create call returns success, the declared servers are dropped without a trace, and nothing in the response or in a later notification marks that anything went wrong. The runtime's trust guard raises an error only in its own headless mode and treats protocol mode as interactive, so the guard that would reject an untrusted workspace on the command line never fires here.
+## Native headless observations
+
+The text surface is characterised as unstructured residue; the structured surfaces carry their own rows above.
+
+- native_text turn_disposition: Observed: gap
+- native_text retry_classification: Observed: gap
+- native_text token_ceiling: Observed: gap
+- native_text session_continuation: Not observed: not_observed
+
+## Workspace trust and process boundary
+
+Tool-server delivery needs a trusted workspace and an authorized call. Tool servers declared in `session/new` are honored: the runtime merges them over whatever servers its own settings file already configures, matching by name with the request winning on a collision, and stdio, sse, and http transports are all supported. Delivery is gated on whether the runtime considers the workspace trusted. `--skip-trust` grants trust for the session rather than only suppressing a prompt: it sets the runtime's own workspace-trust environment variable, which the trust check reads before the folder-trust setting, the editor state, and the trusted-folder list. An untrusted workspace fails closed with no signal: the create call returns success, the declared servers are dropped without a trace, and nothing in the response or in a later notification marks that anything went wrong. The runtime's trust guard raises an error only in its own headless mode and treats protocol mode as interactive, so the guard that would reject an untrusted workspace on the command line never fires here.
 
 A declared server being reachable is not the same as its tools being callable. Protocol mode counting as interactive also decides what happens to a tool call matching no policy rule: the runtime raises a permission request rather than denying or allowing the call outright, and Sortie refuses every such request, so the call never reaches the server while the turn still ends normally. A tool reaches its server when the workspace is trusted and the call is authorized before it is made: a policy rule naming the tool by the qualified name the runtime builds for it (`mcp_` plus the server name plus `_` plus the tool name), or an approval mode that allows a call matching no rule.
 
-## There is nothing to call session/close on
+Our own teardown outruns a graceful exit. For a local launch, Sortie's own teardown sends the process group a catchable termination signal, closes the runtime's standard input so it also sees end-of-input immediately behind that signal, waits a bounded grace period for the process to exit and be reaped on its own, and force-kills the process group only once that wait elapses. Whether Gemini's own history flush completes inside that window has not been measured for this runtime: this file makes no claim about whether a `session/load` against a workspace whose only session ended through this path replays it.
 
-This runtime advertises no `sessionCapabilities` object at all in its handshake. Sortie's adapter decides whether to call `session/close` based on that capability being present, so against this runtime there is never a capability to select, and a session here is never closed through the protocol.
+## Excluded capability cases
 
-## Our own teardown outruns a graceful exit
+none
 
-For a local launch, Sortie's own teardown sends the process group a catchable termination signal, closes the runtime's standard input so it also sees end-of-input immediately behind that signal, waits a bounded grace period for the process to exit and be reaped on its own, and force-kills the process group only once that wait elapses. Whether Gemini's own history flush completes inside that window has not been measured for this runtime: this file makes no claim about whether a `session/load` against a workspace whose only session ended through this path replays it.
+## Unobserved surfaces
+
+Windows live qualification is unobserved.
+
+The run behind this file left these semantic cases unobserved:
+
+- protocol turn_disposition runtime_failure: not_observed
+- protocol turn_disposition runtime_refusal: not_observed
+- protocol retry_classification non_retryable_refusal: not_observed
+- protocol retry_classification human_input: not_observed
+- protocol retry_classification unknown_outcome: not_observed
+- native_json turn_disposition runtime_failure: not_observed
+- native_json turn_disposition runtime_refusal: not_observed
+- native_json turn_disposition cancellation: not_observed
+- native_json retry_classification retryable_runtime_or_transport_failure: not_observed
+- native_json retry_classification non_retryable_refusal: not_observed
+- native_json retry_classification human_input: not_observed
+- native_json retry_classification unknown_outcome: not_observed
+- native_stream_json turn_disposition runtime_failure: not_observed
+- native_stream_json turn_disposition runtime_refusal: not_observed
+- native_stream_json turn_disposition cancellation: not_observed
+- native_stream_json turn_disposition limit_reached: runtime_failed
+- native_stream_json retry_classification retryable_runtime_or_transport_failure: not_observed
+- native_stream_json retry_classification non_retryable_refusal: not_observed
+- native_stream_json retry_classification human_input: not_observed
+- native_stream_json retry_classification unknown_outcome: not_observed

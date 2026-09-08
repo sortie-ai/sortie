@@ -231,6 +231,10 @@ func (a *fakeAgent) StopSession(_ context.Context, session domain.Session) error
 // temporary root, a real orchestrator over a temporary store, and the
 // fake protocol agent.
 type Harness struct {
+	// observation bounds the wait for a terminal condition, from the
+	// budgets this harness was built with.
+	observation time.Duration
+
 	tempRoot      string
 	issueFile     string
 	workspaceRoot string
@@ -240,6 +244,12 @@ type Harness struct {
 	manager       *workflowManager
 	store         *persistence.Store
 	orchestrator  *orchestrator.Orchestrator
+}
+
+// Observation reports how long an observer may wait for a terminal
+// condition on this harness.
+func (h *Harness) Observation() time.Duration {
+	return h.observation
 }
 
 // Agent returns the harness's adapter observer, the only field exposed
@@ -320,12 +330,88 @@ func (o *AdapterObserver) SessionIDs() []string {
 	return append([]string(nil), o.sessionIDs...)
 }
 
+// toolServerBinary builds the sortie binary once per test process and
+// returns its path. The orchestrator writes the tool server's launch
+// command into the workspace's MCP config, and in production that
+// command is the running sortie. Inside a test the running executable
+// is the test binary, which speaks no MCP: a runtime handed that path
+// blocks on a stdio server that never answers, and its session
+// creation times out. Building the real binary is what keeps the
+// harness measuring the operator's path rather than a shape of it.
+//
+// The build directory outlives the test that triggered it, because the
+// binary is shared by every later harness in the same process.
+var toolServerBinary = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "sortie-e2e-toolserver")
+	if err != nil {
+		return "", fmt.Errorf("create the tool server build directory: %w", err)
+	}
+	binary := filepath.Join(dir, "sortie")
+	root, err := filepath.Abs("../../../")
+	if err != nil {
+		return "", fmt.Errorf("resolve the repository root: %w", err)
+	}
+	// Looked up only to fail with the cause rather than with a bare
+	// exec error; the command itself stays a literal so no variable
+	// reaches the process launcher.
+	if _, err := exec.LookPath("go"); err != nil {
+		return "", fmt.Errorf("the Go toolchain is required to build the tool server binary: %w", err)
+	}
+	build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "./cmd/sortie") //nolint:gosec // every argument is a literal except the output path, which this function created under a temporary directory of its own
+	build.Dir = root
+	// The deployment model forbids a C toolchain, so the binary under
+	// test is built the way it ships.
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		return "", fmt.Errorf("build the tool server binary: %w\n%s", buildErr, out)
+	}
+	return binary, nil
+})
+
+// Budgets are the per-run bounds one harness gives the agent it drives,
+// plus how long an observer may wait for a terminal condition. The
+// deterministic harness drives a fake agent that answers in
+// milliseconds and takes the zero value, which resolves to bounds sized
+// for it. A live runtime spends model time on every turn and must state
+// its own: the fake agent's bounds end a real turn before the model has
+// answered, and the run is then recorded as unobserved for a reason
+// that belongs to the harness rather than to the runtime.
+type Budgets struct {
+	ReadTimeoutMS  int
+	TurnTimeoutMS  int
+	StallTimeoutMS int
+
+	// Observation bounds the wait for a terminal condition. It is not a
+	// shutdown bound: qualification.ShutdownDeadline governs that, and
+	// spending one on the other gives a live run a shutdown's worth of
+	// time to do a turn's work.
+	Observation time.Duration
+}
+
+// withDefaults fills every unset bound with the value the deterministic
+// fake agent needs, so the zero value stays the fake agent's contract.
+func (b Budgets) withDefaults() Budgets {
+	if b.ReadTimeoutMS == 0 {
+		b.ReadTimeoutMS = 5000
+	}
+	if b.TurnTimeoutMS == 0 {
+		b.TurnTimeoutMS = 10000
+	}
+	if b.StallTimeoutMS == 0 {
+		b.StallTimeoutMS = 10000
+	}
+	if b.Observation == 0 {
+		b.Observation = qualification.ShutdownDeadline
+	}
+	return b
+}
+
 // NewHarness assembles the deterministic harness: the fake protocol
 // agent behind the same builder the live collector uses, configured
 // under this package's own fixture kind.
 func NewHarness(t *testing.T) *Harness {
 	t.Helper()
-	return NewHarnessWithAgent(t, newFakeAgent(), "sortie-qualification-fake-agent --session-fixture", fixtureAgentKind)
+	return NewHarnessWithAgent(t, newFakeAgent(), "sortie-qualification-fake-agent --session-fixture", fixtureAgentKind, Budgets{})
 }
 
 // NewHarnessWithAgent assembles the harness under t.TempDir() with the
@@ -343,7 +429,8 @@ func NewHarness(t *testing.T) *Harness {
 // fixtureAgentKind, which this package registers itself so the harness
 // needs no adapter package loaded into the binary to satisfy dispatch
 // preflight.
-func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, agentKind string) *Harness {
+func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, agentKind string, budgets Budgets) *Harness {
+	budgets = budgets.withDefaults()
 	t.Helper()
 
 	root := t.TempDir()
@@ -382,9 +469,9 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	sample := effectiveSample{
 		AgentKind:      agentKind,
 		AgentCommand:   agentCommand,
-		ReadTimeoutMS:  5000,
-		TurnTimeoutMS:  10000,
-		StallTimeoutMS: 10000,
+		ReadTimeoutMS:  budgets.ReadTimeoutMS,
+		TurnTimeoutMS:  budgets.TurnTimeoutMS,
+		StallTimeoutMS: budgets.StallTimeoutMS,
 		MaxTurns:       1,
 		MaxSessions:    1,
 		MaxTokens:      0,
@@ -410,8 +497,13 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	})
 
 	observer := &AdapterObserver{inner: agent}
+	toolServer, err := toolServerBinary()
+	if err != nil {
+		t.Fatalf("resolve the tool server binary: %v", err)
+	}
 	state := orchestrator.NewState(20, 1, nil, orchestrator.AgentTotals{})
 	orch := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
+		MCPServerBinary: toolServer,
 		State:           state,
 		Logger:          slog.New(slog.DiscardHandler),
 		TrackerAdapter:  tracker,
@@ -430,6 +522,7 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	})
 
 	return &Harness{
+		observation:   budgets.Observation,
 		tempRoot:      root,
 		issueFile:     issueFile,
 		workspaceRoot: workspaceRoot,

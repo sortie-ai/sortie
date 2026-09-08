@@ -1,10 +1,10 @@
 package clientprotocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -77,42 +77,6 @@ type geminiSummaryConclusions struct {
 	NativeReferenceAbsent bool
 }
 
-// geminiNotesHeadings are the required adapter-notes headings in R8
-// order.
-var geminiNotesHeadings = []string{
-	"# Gemini CLI adapter notes",
-	"## Entry points",
-	"## Load-bearing capability observations",
-	"## Protocol-specific observations",
-	"## Native headless observations",
-	"## Workspace trust and process boundary",
-	"## Excluded capability cases",
-	"## Unobserved surfaces",
-}
-
-// geminiNotesUnixScope is the sentence the notes must carry to state the
-// Unix-only live scope and the unobserved Windows behavior.
-const geminiNotesUnixScope = "Windows live qualification is unobserved"
-
-// geminiStatusLabel maps a grade to the exact notes status label. It
-// returns the empty string for a grade a baseline, tool-server, or
-// permission row never carries.
-func geminiStatusLabel(classification qualification.Grade) string {
-	switch classification {
-	case qualification.GradeUsable, qualification.GradeGap:
-		return "Observed:"
-	case qualification.GradeNotObserved:
-		return "Not observed:"
-	case qualification.GradeNotApplicable:
-		return "Not applicable:"
-	case qualification.GradeDeclaredGap:
-		return "Declared gap:"
-	case qualification.GradeNotInducible:
-		return "Not inducible:"
-	}
-	return ""
-}
-
 // geminiSummaryConclusionsFromRecords derives the bounded conclusions
 // from a validated non-final evidence set and its computed verdict.
 func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict qualification.Verdict, declarations qualification.DeclarationSet) (geminiSummaryConclusions, error) {
@@ -130,14 +94,14 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 				Surface:    rec.Surface,
 				Capability: rec.Capability,
 				Grade:      rec.Grade,
-				Label:      geminiStatusLabel(rec.Grade),
+				Label:      qualification.StatusLabel(rec.Grade),
 			})
 		case qualification.RowMCPDelivery, qualification.RowPermission:
 			conclusions.Grades = append(conclusions.Grades, geminiSummaryGrade{
 				Surface:    rec.Surface,
 				Capability: rec.Capability,
 				Grade:      rec.Grade,
-				Label:      geminiStatusLabel(rec.Grade),
+				Label:      qualification.StatusLabel(rec.Grade),
 			})
 		case qualification.RowSemantic:
 			semantic := geminiSummarySemantic{
@@ -179,7 +143,7 @@ func geminiSummaryConclusionsFromRecords(records []qualification.Record, verdict
 				Grade:   rec.Grade,
 			})
 		case qualification.RowWorkspaceSecurity:
-			conclusions.Workspace = fmt.Sprintf("%s %s", geminiStatusLabel(rec.Grade), rec.Detail)
+			conclusions.Workspace = fmt.Sprintf("%s %s", qualification.StatusLabel(rec.Grade), rec.Detail)
 		}
 	}
 
@@ -313,7 +277,7 @@ func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) stri
 	}
 	fmt.Fprint(&b, "Continuation:\n")
 	for _, continuation := range conclusions.Continuations {
-		fmt.Fprintf(&b, "%s: %s (%s %s)\n", continuation.Surface, continuation.Outcome, geminiStatusLabel(continuation.Grade), continuation.Grade)
+		fmt.Fprintf(&b, "%s: %s (%s %s)\n", continuation.Surface, continuation.Outcome, qualification.StatusLabel(continuation.Grade), continuation.Grade)
 	}
 	fmt.Fprintf(&b, "Workspace security:\n%s\n", conclusions.Workspace)
 	fmt.Fprint(&b, "Unobserved semantic cases:\n")
@@ -326,150 +290,25 @@ func formatGeminiQualificationSummary(conclusions geminiSummaryConclusions) stri
 	return b.String()
 }
 
-// The notes-validation patterns: grade rows with their exact status
-// labels, and the banned version, date, and environment-value shapes.
-var (
-	geminiNotesGradeRowPattern = regexp.MustCompile(`^- (` + geminiNotesAlternation(qualification.Surfaces) + `) ([a-z_]+): (` + geminiNotesStatusLabelAlternation(qualification.RowGrades) + `): (` + geminiNotesAlternation(qualification.RowGrades) + `)\b`)
-	geminiNotesVersionPattern  = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
-	geminiNotesDatePattern     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
-	geminiNotesEnvValuePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*=\S`)
-)
-
-// geminiNotesAlternation renders a closed value set as a regex
-// alternation.
-func geminiNotesAlternation[T ~string](values []T) string {
-	quoted := make([]string, 0, len(values))
-	for _, value := range values {
-		quoted = append(quoted, regexp.QuoteMeta(string(value)))
+// geminiNotesExpectationFrom maps the bounded summary conclusions to
+// the shared runtime-neutral expectation the qualification package
+// compares a notes document against.
+func geminiNotesExpectationFrom(conclusions geminiSummaryConclusions) qualification.NotesExpectation {
+	grades := make([]qualification.NotesGrade, 0, len(conclusions.Grades))
+	for _, grade := range conclusions.Grades {
+		grades = append(grades, qualification.NotesGrade{
+			Surface:    grade.Surface,
+			Capability: grade.Capability,
+			Grade:      grade.Grade,
+			Label:      grade.Label,
+		})
 	}
-	return strings.Join(quoted, "|")
-}
-
-// geminiNotesStatusLabelAlternation renders the status labels
-// geminiStatusLabel maps grades to as a regex alternation, one
-// alternative per grade, skipping a grade whose label is empty (the
-// eligibility-only grades no non-final row can carry).
-func geminiNotesStatusLabelAlternation(grades []qualification.Grade) string {
-	var labels []string
-	for _, grade := range grades {
-		label := geminiStatusLabel(grade)
-		if label == "" {
-			continue
-		}
-		labels = append(labels, regexp.QuoteMeta(strings.TrimSuffix(label, ":")))
+	return qualification.NotesExpectation{
+		Verdict:    conclusions.Verdict,
+		Grades:     grades,
+		Excluded:   conclusions.Excluded,
+		Unobserved: conclusions.Unobserved,
 	}
-	return strings.Join(labels, "|")
-}
-
-// validateGeminiAdapterNotes validates a durable adapter-notes document
-// against the conclusions of a freshly validated summary: heading order,
-// status labels, one matching eligibility line, every unobserved case in
-// the final section, the Unix-only scope statement, and no version,
-// date, or environment value.
-func validateGeminiAdapterNotes(notes string, want geminiSummaryConclusions) error {
-	lines := strings.Split(notes, "\n")
-	trimmed := make([]string, len(lines))
-	for i, line := range lines {
-		trimmed[i] = strings.TrimSpace(line)
-	}
-
-	position := -1
-	for _, heading := range geminiNotesHeadings {
-		next := slices.Index(trimmed[position+1:], heading)
-		if next < 0 {
-			return fmt.Errorf("notes heading %q is missing or out of order", heading)
-		}
-		position += next + 1
-	}
-
-	eligibilityCount := 0
-	for _, line := range trimmed {
-		if !strings.HasPrefix(line, "Eligibility: ") {
-			continue
-		}
-		eligibilityCount++
-		if value := strings.TrimPrefix(line, "Eligibility: "); value != string(want.Verdict) {
-			return fmt.Errorf("notes eligibility %q does not match the validated verdict %q", value, want.Verdict)
-		}
-	}
-	if eligibilityCount != 1 {
-		return fmt.Errorf("notes carry %d Eligibility lines, want exactly 1", eligibilityCount)
-	}
-
-	wantGrades := map[string]geminiSummaryGrade{}
-	for _, grade := range want.Grades {
-		wantGrades[string(grade.Surface)+" "+string(grade.Capability)] = grade
-	}
-	seenGrades := map[string]bool{}
-	for i, line := range trimmed {
-		match := geminiNotesGradeRowPattern.FindStringSubmatch(line)
-		if match == nil {
-			continue
-		}
-		key := match[1] + " " + match[2]
-		wantGrade, known := wantGrades[key]
-		if !known {
-			return fmt.Errorf("notes line %d claims grade %q that the validated summary does not carry", i+1, key)
-		}
-		if seenGrades[key] {
-			return fmt.Errorf("notes line %d duplicates the grade row %q", i+1, key)
-		}
-		seenGrades[key] = true
-		if match[3]+":" != wantGrade.Label {
-			return fmt.Errorf("notes line %d grades %q as %q, want %q", i+1, key, match[3]+":", wantGrade.Label)
-		}
-		if match[4] != string(wantGrade.Grade) {
-			return fmt.Errorf("notes line %d grades %q as %s, want %s", i+1, key, match[4], wantGrade.Grade)
-		}
-	}
-	for key := range wantGrades {
-		if !seenGrades[key] {
-			return fmt.Errorf("notes carry no status-label row for %q", key)
-		}
-	}
-
-	excludedHeading := slices.Index(trimmed, "## Excluded capability cases")
-	if excludedHeading < 0 {
-		return fmt.Errorf("notes heading %q is missing", "## Excluded capability cases")
-	}
-	unobservedHeading := slices.Index(trimmed, "## Unobserved surfaces")
-	if unobservedHeading < 0 {
-		return fmt.Errorf("notes heading %q is missing", "## Unobserved surfaces")
-	}
-	excludedBody := strings.Join(trimmed[excludedHeading:unobservedHeading], "\n")
-	for _, entry := range want.Excluded {
-		if !strings.Contains(excludedBody, entry) {
-			return fmt.Errorf("excluded capability case %q is absent from the Excluded capability cases section", entry)
-		}
-	}
-
-	tail := strings.Join(trimmed[unobservedHeading:], "\n")
-	for _, entry := range want.Excluded {
-		if strings.Contains(tail, entry) {
-			return fmt.Errorf("excluded capability case %q appears in the Unobserved surfaces section, want only the Excluded capability cases section", entry)
-		}
-	}
-	for _, entry := range want.Unobserved {
-		if !strings.Contains(tail, entry) {
-			return fmt.Errorf("unobserved semantic case %q is absent from the Unobserved surfaces section", entry)
-		}
-	}
-
-	if !strings.Contains(notes, geminiNotesUnixScope) {
-		return fmt.Errorf("notes do not state that %s", strings.ToLower(geminiNotesUnixScope))
-	}
-
-	for i, line := range trimmed {
-		switch {
-		case geminiNotesVersionPattern.MatchString(line):
-			return fmt.Errorf("notes line %d carries a binary version value", i+1)
-		case geminiNotesDatePattern.MatchString(line):
-			return fmt.Errorf("notes line %d carries a measurement date", i+1)
-		case geminiNotesEnvValuePattern.MatchString(line):
-			return fmt.Errorf("notes line %d carries an environment variable value", i+1)
-		}
-	}
-	return nil
 }
 
 // geminiAdapterNotesFixture renders a compliant adapter-notes document
@@ -504,7 +343,7 @@ func geminiAdapterNotesFixture(want geminiSummaryConclusions) string {
 	}
 	fmt.Fprint(&b, "\n")
 
-	fmt.Fprintf(&b, "## Workspace trust and process boundary\n\n%s. %s and out of scope for this measurement.\n\n", want.Workspace, geminiNotesUnixScope)
+	fmt.Fprintf(&b, "## Workspace trust and process boundary\n\n%s. %s and out of scope for this measurement.\n\n", want.Workspace, qualification.NotesScopeStatement)
 
 	fmt.Fprint(&b, "## Excluded capability cases\n\n")
 	if len(want.Excluded) == 0 {
@@ -630,16 +469,16 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read notes fixture: %v", err)
 		}
-		if err := validateGeminiAdapterNotes(string(content), qualified); err != nil {
-			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for a compliant transfer", err)
+		if err := qualification.ValidateNotes(string(content), geminiNotesExpectationFrom(qualified)); err != nil {
+			t.Errorf("qualification.ValidateNotes() error = %v, want nil for a compliant transfer", err)
 		}
 	})
 
 	t.Run("compliant unmeasured transfer validates", func(t *testing.T) {
 		t.Parallel()
 
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(unmeasured), unmeasured); err != nil {
-			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for the unmeasured transfer", err)
+		if err := qualification.ValidateNotes(geminiAdapterNotesFixture(unmeasured), geminiNotesExpectationFrom(unmeasured)); err != nil {
+			t.Errorf("qualification.ValidateNotes() error = %v, want nil for the unmeasured transfer", err)
 		}
 	})
 
@@ -726,7 +565,7 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 			name:        "unix-only scope statement missing",
 			conclusions: qualified,
 			doctor: func(notes string) string {
-				return strings.Replace(notes, geminiNotesUnixScope, "Windows live qualification is recorded elsewhere", 1)
+				return strings.Replace(notes, qualification.NotesScopeStatement, "Windows live qualification is recorded elsewhere", 1)
 			},
 		},
 		{
@@ -756,8 +595,8 @@ func TestGeminiQualificationNotesContract(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := validateGeminiAdapterNotes(tt.doctor(geminiAdapterNotesFixture(tt.conclusions)), tt.conclusions); err == nil {
-				t.Errorf("validateGeminiAdapterNotes() = nil error, want rejection when the notes %s", tt.name)
+			if err := qualification.ValidateNotes(tt.doctor(geminiAdapterNotesFixture(tt.conclusions)), geminiNotesExpectationFrom(tt.conclusions)); err == nil {
+				t.Errorf("qualification.ValidateNotes() = nil error, want rejection when the notes %s", tt.name)
 			}
 		})
 	}
@@ -795,16 +634,16 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 		if formatGeminiQualificationSummary(independentConclusions) != formatGeminiQualificationSummary(fresh) {
 			t.Error("two independently built qualified fixtures produced different summaries")
 		}
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(independentConclusions), fresh); err != nil {
-			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for a fresh consistent rerun", err)
+		if err := qualification.ValidateNotes(geminiAdapterNotesFixture(independentConclusions), geminiNotesExpectationFrom(fresh)); err != nil {
+			t.Errorf("qualification.ValidateNotes() error = %v, want nil for a fresh consistent rerun", err)
 		}
 	})
 
 	t.Run("notes for the other verdict mismatch", func(t *testing.T) {
 		t.Parallel()
 
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(other), fresh); err == nil {
-			t.Error("validateGeminiAdapterNotes() = nil error, want mismatch when the eligibility verdict differs")
+		if err := qualification.ValidateNotes(geminiAdapterNotesFixture(other), geminiNotesExpectationFrom(fresh)); err == nil {
+			t.Error("qualification.ValidateNotes() = nil error, want mismatch when the eligibility verdict differs")
 		}
 	})
 
@@ -814,8 +653,8 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 		stale := strings.Replace(geminiAdapterNotesFixture(fresh),
 			"- protocol turn_disposition: Observed: usable with a bounded evidence shape",
 			"- protocol turn_disposition: Not observed: not_observed with a bounded evidence shape", 1)
-		if err := validateGeminiAdapterNotes(stale, fresh); err == nil {
-			t.Error("validateGeminiAdapterNotes() = nil error, want mismatch for a stale status label")
+		if err := qualification.ValidateNotes(stale, geminiNotesExpectationFrom(fresh)); err == nil {
+			t.Error("qualification.ValidateNotes() = nil error, want mismatch for a stale status label")
 		}
 	})
 
@@ -831,8 +670,8 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("geminiSummaryConclusionsFromRecords() error = %v", err)
 		}
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(fresh), fresh); err != nil {
-			t.Fatalf("validateGeminiAdapterNotes() error = %v, want nil for a fresh consistent rerun", err)
+		if err := qualification.ValidateNotes(geminiAdapterNotesFixture(fresh), geminiNotesExpectationFrom(fresh)); err != nil {
+			t.Fatalf("qualification.ValidateNotes() error = %v, want nil for a fresh consistent rerun", err)
 		}
 
 		// stale shares fresh's verdict, grades, and excluded cases, so
@@ -847,8 +686,8 @@ func TestGeminiQualificationNotesMismatch(t *testing.T) {
 			t.Fatalf("stale.Unobserved = %d entries, want exactly one fewer than fresh's %d", len(stale.Unobserved), len(fresh.Unobserved))
 		}
 
-		if err := validateGeminiAdapterNotes(geminiAdapterNotesFixture(stale), fresh); err == nil {
-			t.Error("validateGeminiAdapterNotes() = nil error, want mismatch when the notes omit a case the fresh summary reports unobserved")
+		if err := qualification.ValidateNotes(geminiAdapterNotesFixture(stale), geminiNotesExpectationFrom(fresh)); err == nil {
+			t.Error("qualification.ValidateNotes() = nil error, want mismatch when the notes omit a case the fresh summary reports unobserved")
 		}
 	})
 }
@@ -986,8 +825,8 @@ func TestGeminiQualificationSummarySections(t *testing.T) {
 		}
 
 		notes := geminiAdapterNotesFixture(conclusions)
-		if err := validateGeminiAdapterNotes(notes, conclusions); err != nil {
-			t.Errorf("validateGeminiAdapterNotes() error = %v, want nil for a compliant excluded-case transfer", err)
+		if err := qualification.ValidateNotes(notes, geminiNotesExpectationFrom(conclusions)); err != nil {
+			t.Errorf("qualification.ValidateNotes() error = %v, want nil for a compliant excluded-case transfer", err)
 		}
 	})
 }
@@ -1016,8 +855,8 @@ func TestGeminiQualificationExcludedCaseNeverInUnobserved(t *testing.T) {
 	}
 
 	notes := geminiAdapterNotesFixture(conclusions)
-	if err := validateGeminiAdapterNotes(notes, conclusions); err != nil {
-		t.Fatalf("validateGeminiAdapterNotes() error = %v, want a compliant transfer to validate", err)
+	if err := qualification.ValidateNotes(notes, geminiNotesExpectationFrom(conclusions)); err != nil {
+		t.Fatalf("qualification.ValidateNotes() error = %v, want a compliant transfer to validate", err)
 	}
 
 	trimmed := strings.Split(notes, "\n")
@@ -1038,5 +877,45 @@ func TestGeminiQualificationExcludedCaseNeverInUnobserved(t *testing.T) {
 		if strings.Contains(unobservedBody, entry) {
 			t.Errorf("excluded entry %q appears in the Unobserved surfaces section, want it only under Excluded capability cases", entry)
 		}
+	}
+}
+
+// TestGeminiAdapterNotesMatchesTrackedExpectation confirms
+// docs/gemini-adapter-notes.md, as tracked in the working tree,
+// satisfies qualification.ValidateNotes against the expectation
+// recorded at testdata/gemini_qualification_notes/expectation.json,
+// the JSON encoding of the NotesExpectation a qualifying run produced.
+// It decodes that tracked artifact rather than deriving one from
+// qualification.NewFixture: a fixture-synthesized expectation would
+// prove the fixture generator self-consistent, not that the tracked
+// document matches a real measured run.
+func TestGeminiAdapterNotesMatchesTrackedExpectation(t *testing.T) {
+	t.Parallel()
+
+	notesPath, err := filepath.Abs("../../../docs/gemini-adapter-notes.md")
+	if err != nil {
+		t.Fatalf("resolve the tracked adapter notes path: %v", err)
+	}
+	document, err := os.ReadFile(notesPath)
+	if err != nil {
+		t.Fatalf("read the tracked adapter notes %s: %v", notesPath, err)
+	}
+
+	artifactPath, err := filepath.Abs("testdata/gemini_qualification_notes/expectation.json")
+	if err != nil {
+		t.Fatalf("resolve the tracked expectation artifact path: %v", err)
+	}
+	artifact, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read the tracked expectation artifact %s: %v", artifactPath, err)
+	}
+
+	var want qualification.NotesExpectation
+	if err := json.Unmarshal(artifact, &want); err != nil {
+		t.Fatalf("decode the tracked expectation artifact %s: %v", artifactPath, err)
+	}
+
+	if err := qualification.ValidateNotes(string(document), want); err != nil {
+		t.Errorf("qualification.ValidateNotes() error = %v, want nil for the tracked notes against the tracked expectation", err)
 	}
 }

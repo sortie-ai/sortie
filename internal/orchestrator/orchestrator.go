@@ -121,6 +121,15 @@ type OrchestratorParams struct {
 	// SORTIE_DB_PATH is set to the empty string in the MCP config.
 	DBPath string
 
+	// MCPServerBinary is the absolute path to the sortie binary the
+	// agent runtime spawns as the tool server. Empty resolves to the
+	// running executable, which is the right answer whenever the
+	// runtime runs on the same host and deployment as the
+	// orchestrator. A caller that runs the orchestrator inside another
+	// program must supply the real binary, because the running
+	// executable is then not a sortie.
+	MCPServerBinary string
+
 	// CIProvider is the CI status provider for CI failure detection.
 	// Nil when CI feedback is not configured.
 	CIProvider domain.CIStatusProvider
@@ -261,6 +270,7 @@ type Orchestrator struct {
 	hostPool                          *HostPool
 	workflowFileFunc                  func() string
 	dbPath                            string
+	mcpServerBinary                   string
 	ciProvider                        domain.CIStatusProvider
 	scmAdapter                        domain.SCMAdapter
 	reviewConfig                      ReviewReactionConfig
@@ -389,6 +399,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		hostPool:                          hostPool,
 		workflowFileFunc:                  params.WorkflowFileFunc,
 		dbPath:                            params.DBPath,
+		mcpServerBinary:                   params.MCPServerBinary,
 		ciProvider:                        params.CIProvider,
 		scmAdapter:                        params.SCMAdapter,
 		reviewConfig:                      params.ReviewConfig,
@@ -918,6 +929,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			Metrics:                  o.metrics,
 			WorkflowPath:             o.workflowManager.WorkflowAbsPath(),
 			DBPath:                   o.dbPath,
+			MCPServerBinary:          o.mcpServerBinary,
 			Posture:                  posture,
 		}
 
