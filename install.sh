@@ -221,17 +221,24 @@ shell_rc() {
     esac
 }
 
-# Versions rather than paths are compared: a symlink pointing at the binary
-# just installed is not a shadow.
+# Physical path of a file, so that two spellings of one location compare equal.
+canonical_file() {
+    _cf_dir=$(CDPATH='' cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1
+    printf '%s/%s' "$_cf_dir" "$(basename -- "$1")"
+}
+
+# Paths are compared rather than versions: probing the version would execute a
+# binary an untrusted PATH entry chose, under whatever identity installs, and
+# installing to /usr/local/bin means root.
 warn_if_shadowed() {
     _found=$(command -v "$BIN" 2>/dev/null) || return 0
     [ -n "$_found" ] || return 0
-    [ "$_found" != "${_dir}/${BIN}" ] || return 0
 
-    _other=$(installed_version "$_found")
-    [ "$_other" != "$_version" ] || return 0
+    _found_real=$(canonical_file "$_found") || return 0
+    _target_real=$(canonical_file "${_dir}/${BIN}") || return 0
+    [ "$_found_real" != "$_target_real" ] || return 0
 
-    warn "${BIN} on PATH is ${_found}${_other:+ (${_other})}, not the copy just installed"
+    warn "${BIN} on PATH is ${_found}, not the copy just installed"
     printf '  %bRemove that file, or put %s earlier in PATH.%b\n' \
         "${DIM}" "$_dir" "${RESET}" >&2
 }

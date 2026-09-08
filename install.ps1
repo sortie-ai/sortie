@@ -167,37 +167,23 @@ function Add-ToUserPath {
     return $true
 }
 
-# Versions rather than paths are compared: a copy of the same release elsewhere
-# on PATH changes nothing for the user. Must run before Add-ToUserPath, which
-# prepends $Dir to the session PATH and would hide the conflict.
+# Paths are compared rather than versions: probing the version would execute a
+# program an untrusted PATH entry chose, under whatever identity installs.
+# Trailing separators are trimmed as Add-ToUserPath trims them, so that two
+# spellings of one location compare equal. Must run before Add-ToUserPath,
+# which prepends $Dir to the session PATH and would hide the conflict.
 function Write-ShadowWarning {
     param(
         [Parameter(Mandatory)][string]$Target,
-        [Parameter(Mandatory)][string]$Version,
         [Parameter(Mandatory)][string]$Dir
     )
 
     $found = Get-Command $Bin -CommandType Application -ErrorAction SilentlyContinue |
         Select-Object -First 1
-    if ($null -eq $found -or $found.Source -ieq $Target) { return }
+    if ($null -eq $found) { return }
+    if ($found.Source.TrimEnd('\') -ieq $Target.TrimEnd('\')) { return }
 
-    $other = ''
-    try {
-        $line = & $found.Source --version 2>$null | Select-Object -First 1
-        if (-not [string]::IsNullOrEmpty($line)) {
-            $fields = $line -split '\s+'
-            if ($fields.Count -ge 2) { $other = $fields[1] }
-        }
-    }
-    catch {
-        # An unrunnable binary still shadows; report it without a version.
-    }
-    if ($other -eq $Version) { return }
-
-    $shown = $found.Source
-    if (-not [string]::IsNullOrEmpty($other)) { $shown = "$($found.Source) ($other)" }
-
-    Write-Warn "$Bin on PATH is $shown, not the copy just installed"
+    Write-Warn "$Bin on PATH is $($found.Source), not the copy just installed"
     [Console]::Error.WriteLine("  Remove that file, or put $Dir earlier in PATH.")
 }
 
@@ -339,7 +325,7 @@ function Invoke-Install {
 
         Write-Ok "Installed $Bin $tag to $target"
 
-        Write-ShadowWarning -Target $target -Version $version -Dir $dir
+        Write-ShadowWarning -Target $target -Dir $dir
 
         if (Add-ToUserPath -Dir $dir) {
             Write-Host ''
