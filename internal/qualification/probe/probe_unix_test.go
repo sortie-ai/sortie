@@ -354,3 +354,41 @@ func TestMustRepositoryRoot(t *testing.T) {
 		t.Errorf("mustRepositoryRoot() = %q, want a directory carrying go.mod: %v", got, err)
 	}
 }
+
+// TestRunAuthenticationCanary confirms the canary's two outcomes: a
+// runtime that serves version_args lets the run continue, and one that
+// fails them stops it before any graded surface spends a turn.
+//
+// The failing call runs in a subprocess, matching the idiom the tests
+// above already use: the canary reports its failure through t.Fatalf,
+// which against this test's own *testing.T would fail the package run
+// rather than exercise the behavior under test.
+func TestRunAuthenticationCanary(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv("PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS") == "1" {
+		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, "exit 3\n"))
+		t.Fatal("runAuthenticationCanary() returned instead of calling t.Fatalf for a runtime that failed version_args")
+		return
+	}
+
+	t.Run("a runtime that serves version_args passes", func(t *testing.T) {
+		t.Parallel()
+
+		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, "printf 'stub 1.0\\n'\n"))
+	})
+
+	t.Run("a runtime that fails version_args stops the run", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRunAuthenticationCanary$", "-test.v") //nolint:gosec // re-invokes this package's own compiled test binary
+		cmd.Env = append(os.Environ(), "PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS=1")
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("the helper process exited 0, want a failure; output:\n%s", output)
+		}
+		if !strings.Contains(string(output), "authentication canary") {
+			t.Errorf("helper output does not name the canary; output:\n%s", output)
+		}
+	})
+}

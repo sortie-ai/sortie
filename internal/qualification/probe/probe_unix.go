@@ -3,7 +3,6 @@
 package probe
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -90,13 +89,14 @@ func launchNativeProbe(t *testing.T, commandPath string, argv []string) (string,
 // fails the run before any other cost is spent.
 func runAuthenticationCanary(t *testing.T, coords Coordinates) {
 	t.Helper()
-	argv := append([]string{coords.CommandPath}, coords.Profile.VersionArgs...)
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // the operator-selected executable with the profile's own version args
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("authentication canary %v failed: %v; stderr: %q", argv, err, strings.TrimSpace(stderr.String()))
+	// Through launchNativeProbe rather than its own exec: a runtime that
+	// blocks on an interactive credential prompt while serving
+	// version_args would otherwise hold the run until the whole go test
+	// deadline expires, with no process group to drain it through.
+	output, err := launchNativeProbe(t, coords.CommandPath, coords.Profile.VersionArgs)
+	if err != nil {
+		t.Fatalf("authentication canary %s %v failed: %v; output: %q",
+			coords.CommandPath, coords.Profile.VersionArgs, err, strings.TrimSpace(output))
 	}
 }
 
