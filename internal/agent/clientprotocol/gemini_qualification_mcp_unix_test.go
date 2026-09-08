@@ -805,3 +805,56 @@ func TestGeminiQualificationMCPFixtureReceipt(t *testing.T) {
 		}
 	})
 }
+
+// geminiRunPublishedPostureProbe launches the published sample's own
+// posture, resolved to the profile's command path and model, into a
+// fresh isolated workspace and confirms one turn can both call a
+// declared tool server and run with no permission request raised for
+// it. It writes no qualification.Record, reads no token ledger, and
+// registers no process group with any tracker, so it cannot reach a
+// graded row through either accumulator.
+func geminiRunPublishedPostureProbe(t *testing.T, config geminiQualificationConfig) {
+	t.Helper()
+
+	sampleCommand := geminiPublishedSampleCommand(t)
+	argv, err := geminiPublishedPostureArgv(sampleCommand, config.CommandPath, config.Model)
+	if err != nil {
+		t.Fatalf("build the published-posture probe argv: %v", err)
+	}
+
+	fixture := geminiNewMCPFixture(t, t.TempDir())
+	adapter := &ClientProtocolAdapter{}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig: domain.AgentConfig{
+			Kind:           "agent-client-protocol",
+			Command:        strings.Join(argv, " "),
+			ReadTimeoutMS:  30000,
+			TurnTimeoutMS:  300000,
+			StallTimeoutMS: 60000,
+		},
+		MCPConfigPath: fixture.ConfigPath,
+	})
+	if err != nil {
+		t.Fatalf("published-posture probe argv %v: launch the session: %v; a resolved command that is not the runtime the sample publishes fails here", argv, err)
+	}
+	t.Cleanup(func() {
+		if err := adapter.StopSession(context.Background(), session); err != nil {
+			t.Errorf("stop the published-posture probe session: %v", err)
+		}
+	})
+
+	prompt := fmt.Sprintf("Call the test server's %s tool exactly once with the nonce %s, then reply with exactly the text the tool returned and no other text.", geminiMCPToolName, fixture.Nonce)
+	_, events, turnErr := geminiRunProbeTurn(context.Background(), adapter, session, prompt)
+	if turnErr != nil {
+		t.Fatalf("published-posture probe argv %v: run the turn: %v", argv, turnErr)
+	}
+
+	received := geminiReadMCPReceipt(t, fixture)
+	switch {
+	case geminiPermissionRequested(events):
+		t.Fatalf("published-posture probe argv %v: a permission request was raised, so the posture switch is not in force", argv)
+	case !slices.Contains(received, fixture.Nonce):
+		t.Fatalf("published-posture probe argv %v: the receipt did not carry this turn's nonce, so the tool server was not delivered or the agent did not call its tool", argv)
+	}
+}

@@ -1,0 +1,235 @@
+---
+tracker:
+  kind: github
+  api_key: $GITHUB_TOKEN
+  project: $SORTIE_GITHUB_PROJECT
+  query_filter: "label:agent-ready"
+  active_states: [backlog, in-progress]
+  in_progress_state: in-progress
+  handoff_state: review
+  terminal_states: [done, wontfix]
+
+polling:
+  interval_ms: 120000
+
+workspace:
+  root: $SORTIE_WORKSPACE_ROOT
+
+hooks:
+  after_create: |
+    git clone --depth 1 $SORTIE_REPO_URL .
+  before_run: |
+    git fetch origin main
+    git checkout -B "sortie/$SORTIE_ISSUE_IDENTIFIER" origin/main
+  after_run: |
+    git add -A
+    git diff --cached --quiet || \
+      git commit -m "sortie($SORTIE_ISSUE_IDENTIFIER): automated changes"
+    git push origin "sortie/$SORTIE_ISSUE_IDENTIFIER" --force-with-lease
+  before_remove: |
+    git push origin --delete "sortie/$SORTIE_ISSUE_IDENTIFIER" 2>/dev/null || true
+  timeout_ms: 120000
+
+agent:
+  kind: agent-client-protocol
+  command: gemini --acp --skip-trust --approval-mode yolo
+  max_turns: 15
+  max_concurrent_agents: 4
+  turn_timeout_ms: 1800000
+  stall_timeout_ms: 300000
+  stop_grace_ms: 5000
+  max_retry_backoff_ms: 300000
+
+server:
+  port: 8642
+---
+
+{{/* Sortie sample workflow, GitHub Issues + Gemini CLI (Agent Client Protocol).
+
+     Gemini CLI has no dedicated adapter package; agent.kind above is
+     the generic agent-client-protocol kind, and agent.command puts
+     Gemini into protocol mode with --acp. See
+     docs/agent-client-protocol-adapter-notes.md for the transport and
+     docs/gemini-adapter-notes.md for what this runtime does and does
+     not deliver on it.
+
+     Prerequisites, run before pointing Sortie at a copy of this file:
+       1. Install: npm install -g @google/gemini-cli
+       2. Authenticate: sign in once so a login is stored under
+          ~/.gemini, or export GEMINI_API_KEY below.
+       3. Confirm the credential works under the same variables Sortie
+          will run under:
+            GEMINI_API_KEY=$GEMINI_API_KEY gemini -p "reply with ok"
+
+     Required env vars:
+       GITHUB_TOKEN          Fine-grained PAT with Issues read/write
+                             permission for the tracker adapter.
+       SORTIE_GITHUB_PROJECT Repository in owner/repo format.
+       SORTIE_REPO_URL       Git clone URL for the repository.
+       GEMINI_API_KEY        API key for Gemini CLI, unless a login is
+                             already stored under the configuration
+                             home Gemini reads.
+     Optional env vars:
+       SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
+                             (defaults to system temp).
+       GEMINI_CLI_HOME       Configuration home for the runtime. Unset,
+                             Gemini reads and writes ~/.gemini, which is
+                             why an existing login just works; set it to
+                             a directory the deployment owns and every
+                             file Gemini records lands there instead, at
+                             the cost that a login under one home is
+                             invisible under another.
+
+     max_turns: 15 is this project's sample default (see WORKFLOW.md,
+     WORKFLOW.codex.md, WORKFLOW.opencode.md), not a property of this
+     route.
+     Both switches below are required for a working run, not optional
+     hardening. --skip-trust grants the checkout the trust Gemini needs
+     to load declared tool servers at all; the exposure it opens is
+     bounded by who can place a file in the checked-out tree, so a
+     workflow that builds only the default branch is exposed far less
+     than one that checks out contributor-supplied refs. --approval-mode
+     yolo auto-approves every tool Gemini runs in that trusted checkout,
+     its own shell tool included; dropping it makes every tool call,
+     Sortie's and Gemini's own, wait for an approval an unattended run
+     cannot give. Run this agent inside a hardened sandbox.
+
+     GEMINI_CLI_HOME above is recommended, not required, for narrowing
+     what a run can touch in ~/.gemini; it is not a substitute for
+     either switch.
+
+     No --model is pinned above: this kind has no model configuration
+     key. Qualification was measured against one pinned model; an
+     unpinned run resolves whatever the credential defaults to. To pin
+     one, add --model <id> to agent.command above, and see
+     docs/gemini-adapter-notes.md for how to list the models your
+     credential reaches. */}}
+
+You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
+that manages your session, retries failures, and monitors progress.
+
+## Your task
+
+**#{{ .issue.identifier }}**: {{ .issue.title }}
+
+{{ if .issue.description }}
+
+### Description
+
+{{ .issue.description }}
+{{ end }}
+
+## Context
+
+Before making changes, read:
+
+- `CLAUDE.md` or `CONTRIBUTING.md` for build commands and project conventions
+- Any existing tests in the area you are modifying
+- Related source files to understand current patterns
+
+## Rules
+
+1. Run the project's lint and test commands before finishing. All checks must pass.
+2. Do not modify protected files (LICENSE, CODEOWNERS) unless the task explicitly requires it.
+3. Keep changes minimal, implement exactly what the task requires.
+4. Write tests for new functionality. Cover edge cases, not just the happy path.
+5. If you encounter a problem outside the scope of this task, stop and explain what blocked you.
+
+{{ if not .run.is_continuation }}
+
+## Approach
+
+1. Read the relevant documentation and existing code before writing anything.
+2. Implement the minimal change that satisfies the task requirements.
+3. Write or update tests to cover the new behavior.
+4. Run verification commands and fix any failures.
+5. If the task is complete, confirm by reviewing your changes.
+{{ end }}
+
+{{ if .run.is_continuation }}
+
+## Continuation
+
+You are resuming work on this task (turn {{ .run.turn_number }} of {{ .run.max_turns }}).
+Review the current state of the workspace, check test output, lint results, and any
+partial changes. Do not repeat work already completed. Proceed with the next step.
+{{ end }}
+
+{{ if .merge_conflict }}
+
+## Resolve Merge Conflicts
+
+PR #{{ .merge_conflict.pr_number }} ({{ .merge_conflict.branch }}) has merge conflicts with
+its base branch {{ .merge_conflict.base }}. Resolve them now:
+
+1. Fetch the latest {{ .merge_conflict.base }} from the remote.
+2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
+3. Resolve every conflict, preserving both the intent of this PR and the base changes.
+4. Push the rebased branch.
+{{ end }}
+
+{{ if .label_review }}
+
+## Review This Pull Request
+
+Produce a code review of pull request #{{ .label_review.pr_number }} in
+{{ .label_review.owner }}/{{ .label_review.repo }}, requested by {{ .label_review.actor }}.
+
+1. Fetch the diff for this PR using your SCM tooling.
+2. Review the changes for correctness, clarity, and regressions.
+3. Post your review comments on the PR. Do not modify the branch or push commits.
+{{ end }}
+
+{{ if .label_fix }}
+
+## Fix This Pull Request
+
+Check out {{ .label_fix.branch }} for pull request #{{ .label_fix.pr_number }} in
+{{ .label_fix.owner }}/{{ .label_fix.repo }}, requested by {{ .label_fix.actor }}.
+
+1. Fetch the outstanding review comments for this PR using your SCM tooling.
+2. Address the feedback and push the fixes to {{ .label_fix.branch }}.
+3. Post a summary comment on the PR describing the changes you made.
+4. Write `needs-human-review` to `.sortie/status` to signal completion.
+{{ end }}
+
+{{ if .attempt }}
+
+## Retry
+
+This is retry attempt {{ .attempt }}. A previous run failed or timed out. Check the
+workspace for partial work and do not start from scratch. Review any error output from
+the previous attempt if visible in the workspace.
+{{ end }}
+
+{{ if .issue.url }}
+
+## Reference
+
+Ticket: {{ .issue.url }}
+{{ end }}
+
+{{ if .issue.labels }}
+
+## Labels
+
+{{ .issue.labels | join ", " }}
+{{ end }}
+
+{{ if .issue.parent }}
+
+## Parent issue
+
+{{ .issue.parent.identifier }}
+{{ end }}
+
+{{ if .issue.blocked_by }}
+
+## Blockers
+
+The following issues block this task. If any are unresolved, focus on preparation work
+that does not depend on the blocked functionality (tests, scaffolding, documentation).
+
+{{ range .issue.blocked_by }}- **{{ .identifier }}**{{ if .state }} ({{ .state }}){{ end }}
+{{ end }}
+{{ end }}

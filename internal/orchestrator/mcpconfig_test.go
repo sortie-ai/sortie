@@ -625,3 +625,82 @@ func TestCollectSortieEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveToolServerBinary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("explicit_path_wins_over_the_running_executable", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		explicit := filepath.Join(dir, "sortie")
+		if err := os.WriteFile(explicit, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a fixture the test executes nothing from
+			t.Fatalf("write the fixture binary: %v", err)
+		}
+		got, err := resolveToolServerBinary(explicit)
+		if err != nil {
+			t.Fatalf("resolveToolServerBinary(%q): %v", explicit, err)
+		}
+		want, err := filepath.EvalSymlinks(explicit)
+		if err != nil {
+			t.Fatalf("resolve the fixture path: %v", err)
+		}
+		if got != want {
+			t.Errorf("resolveToolServerBinary() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("explicit_symlink_resolves_to_its_target", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		target := filepath.Join(dir, "sortie-real")
+		if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // a fixture the test executes nothing from
+			t.Fatalf("write the fixture binary: %v", err)
+		}
+		link := filepath.Join(dir, "sortie")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink the fixture binary: %v", err)
+		}
+		got, err := resolveToolServerBinary(link)
+		if err != nil {
+			t.Fatalf("resolveToolServerBinary(%q): %v", link, err)
+		}
+		want, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatalf("resolve the target path: %v", err)
+		}
+		if got != want {
+			t.Errorf("resolveToolServerBinary() = %q, want the symlink target %q", got, want)
+		}
+	})
+
+	t.Run("empty_falls_back_to_the_running_executable", func(t *testing.T) {
+		t.Parallel()
+		running, err := os.Executable()
+		if err != nil {
+			t.Skipf("this platform reports no running executable: %v", err)
+		}
+		want, err := filepath.EvalSymlinks(running)
+		if err != nil {
+			t.Fatalf("resolve the running executable: %v", err)
+		}
+		got, err := resolveToolServerBinary("")
+		if err != nil {
+			t.Fatalf("resolveToolServerBinary(\"\"): %v", err)
+		}
+		if got != want {
+			t.Errorf("resolveToolServerBinary(\"\") = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("an_absent_explicit_path_is_an_error_not_a_silent_fallback", func(t *testing.T) {
+		t.Parallel()
+		missing := filepath.Join(t.TempDir(), "not-here")
+		got, err := resolveToolServerBinary(missing)
+		if err == nil {
+			t.Fatalf("resolveToolServerBinary(%q) = %q, nil error, want an error", missing, got)
+		}
+		if got != "" {
+			t.Errorf("resolveToolServerBinary() = %q, want an empty path alongside the error", got)
+		}
+	})
+}

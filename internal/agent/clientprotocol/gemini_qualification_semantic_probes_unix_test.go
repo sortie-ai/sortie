@@ -142,11 +142,7 @@ func geminiCaptureVersion(t *testing.T, config geminiQualificationConfig, env []
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		diagnostic := strings.TrimSpace(stderr.String())
-		if len(diagnostic) > 2000 {
-			diagnostic = diagnostic[:2000]
-		}
-		t.Fatalf("capture the version coordinate: %v; stderr: %q", err, diagnostic)
+		t.Fatalf("capture the version coordinate: %v; stderr: %q", err, geminiProbeDiagnostic(stderr.String()))
 	}
 	version := strings.TrimSpace(stdout.String())
 	if version == "" {

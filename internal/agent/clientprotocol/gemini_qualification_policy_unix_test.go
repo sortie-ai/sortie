@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/qualification"
+	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
 // geminiProbeMarkerTimeout bounds each deterministic wait for a probe's
@@ -242,12 +243,14 @@ func geminiWriteQualificationPolicy(t *testing.T, dir string, probes geminiQuali
 	return path, denyMarker
 }
 
-// geminiQualificationLaunchArgv builds one qualification launch's argv.
-// Every qualification launch carries exactly the operator-selected
+// geminiQualificationLaunchArgv builds one graded qualification launch's
+// argv. Every graded launch carries exactly the operator-selected
 // model, the default approval mode, the run-scoped policy, and
 // --skip-trust; the protocol surface differs by --acp and the native
 // surfaces by --output-format plus the headless --prompt entry point.
-// No other flag is appended to any qualification launch.
+// No other flag is appended to any graded launch. The published-posture
+// probe launches separately, through geminiPublishedPostureArgv, and
+// carries none of this argv's flags.
 func geminiQualificationLaunchArgv(config geminiQualificationConfig, surface qualification.Surface, prompt string, policyPath string) []string {
 	argv := []string{
 		config.CommandPath,
@@ -274,6 +277,58 @@ func geminiQualificationLaunchArgv(config geminiQualificationConfig, surface qua
 // launch, so it carries none of the qualification flags.
 func geminiQualificationVersionArgv(config geminiQualificationConfig) []string {
 	return []string{config.CommandPath, "--version"}
+}
+
+// geminiPublishedSampleRelPath locates the shipped sample workflow
+// whose agent.command carries the published launch posture, relative
+// to this package directory.
+const geminiPublishedSampleRelPath = "../../../examples/WORKFLOW.agent-client-protocol.md"
+
+// geminiPublishedSampleCommand loads the shipped sample workflow and
+// returns its agent.command split into an argument vector, the field's
+// own documented contract.
+func geminiPublishedSampleCommand(t *testing.T) []string {
+	t.Helper()
+
+	path, err := filepath.Abs(geminiPublishedSampleRelPath)
+	if err != nil {
+		t.Fatalf("resolve published sample path %s: %v", geminiPublishedSampleRelPath, err)
+	}
+	wf, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load published sample %s: %v", path, err)
+	}
+	agentBlock, ok := wf.Config["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("published sample %s carries no agent block", path)
+	}
+	command, ok := agentBlock["command"].(string)
+	if !ok {
+		t.Fatalf("published sample %s carries no string agent.command", path)
+	}
+	return strings.Fields(command)
+}
+
+// geminiPublishedPostureArgv builds the published-posture probe's argv:
+// the sample's own command vector with element zero replaced by the
+// profile's resolved command path and --model, resolvedModel appended.
+// No other flag is added, and element zero's spelling in the sample is
+// not compared against the resolved path: the operator's coordinate is
+// a path, which a version manager or a launcher wrapper renames freely,
+// while what the probe exists to exercise is the sample's flag vector.
+// A resolved command that is not the runtime the sample publishes is
+// caught by the probe, which cannot reach its receipt without one.
+func geminiPublishedPostureArgv(sampleCommand []string, resolvedCommandPath, resolvedModel string) ([]string, error) {
+	if len(sampleCommand) == 0 {
+		return nil, fmt.Errorf("published sample %s carries an empty agent.command", geminiPublishedSampleRelPath)
+	}
+	if len(sampleCommand) == 1 {
+		return nil, fmt.Errorf("published sample %s carries no launch posture past element zero, so the probe would exercise nothing", geminiPublishedSampleRelPath)
+	}
+
+	argv := slices.Clone(sampleCommand)
+	argv[0] = resolvedCommandPath
+	return append(argv, "--model", resolvedModel), nil
 }
 
 // geminiPolicyRuleBlock returns the [[rule]] block naming toolName, and
@@ -425,6 +480,81 @@ func TestGeminiQualificationPolicyFixture(t *testing.T) {
 		argv := geminiQualificationVersionArgv(config)
 		if !slices.Equal(argv, []string{"/opt/gemini", "--version"}) {
 			t.Errorf("version argv = %v, want only the executable and --version", argv)
+		}
+	})
+}
+
+// TestGeminiPublishedPostureArgv confirms geminiPublishedPostureArgv
+// returns the published sample's own command vector with element zero
+// replaced by the resolved command path and --model appended, that the
+// name the sample spells at element zero never constrains which path
+// the operator resolves, and that a sample carrying no posture past
+// element zero fails rather than building an argv that exercises
+// nothing.
+func TestGeminiPublishedPostureArgv(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the tracked sample's command is replayed with the resolved coordinates", func(t *testing.T) {
+		t.Parallel()
+
+		sampleCommand := geminiPublishedSampleCommand(t)
+		if len(sampleCommand) == 0 {
+			t.Fatal("geminiPublishedSampleCommand() returned an empty argv")
+		}
+
+		got, err := geminiPublishedPostureArgv(sampleCommand, "/opt/gemini", "gemini-fixture-model")
+		if err != nil {
+			t.Fatalf("geminiPublishedPostureArgv() error = %v", err)
+		}
+
+		want := slices.Clone(sampleCommand)
+		want[0] = "/opt/gemini"
+		want = append(want, "--model", "gemini-fixture-model")
+		if !slices.Equal(got, want) {
+			t.Errorf("geminiPublishedPostureArgv() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("element zero's spelling never constrains the resolved command path", func(t *testing.T) {
+		t.Parallel()
+
+		// The operator's coordinate is a path. A version manager, a
+		// launcher wrapper, or a versioned install directory renames
+		// the file without changing which runtime it starts, so a
+		// comparison against element zero's spelling rejects working
+		// configurations while accepting any file that happens to
+		// carry the published name.
+		sampleCommand := geminiPublishedSampleCommand(t)
+		for _, resolved := range []string{
+			"/opt/gemini",
+			"/home/operator/.local/libexec/gemini-0.58",
+			"/usr/local/bin/acp-launcher",
+		} {
+			got, err := geminiPublishedPostureArgv(sampleCommand, resolved, "gemini-fixture-model")
+			if err != nil {
+				t.Fatalf("geminiPublishedPostureArgv(_, %q, _) error = %v, want nil", resolved, err)
+			}
+			want := slices.Clone(sampleCommand)
+			want[0] = resolved
+			want = append(want, "--model", "gemini-fixture-model")
+			if !slices.Equal(got, want) {
+				t.Errorf("geminiPublishedPostureArgv(_, %q, _) = %v, want %v", resolved, got, want)
+			}
+		}
+	})
+
+	t.Run("a sample carrying no posture past element zero fails", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := geminiPublishedPostureArgv([]string{"gemini"}, "/opt/gemini", "gemini-fixture-model")
+		if err == nil {
+			t.Fatalf("geminiPublishedPostureArgv() = %v, nil error, want an error naming the empty posture", got)
+		}
+		if got != nil {
+			t.Errorf("geminiPublishedPostureArgv() = %v, want nil argv alongside the error", got)
+		}
+		if !strings.Contains(err.Error(), geminiPublishedSampleRelPath) {
+			t.Errorf("error = %q, want it to mention %q", err, geminiPublishedSampleRelPath)
 		}
 	})
 }
