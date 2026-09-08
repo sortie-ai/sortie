@@ -27,11 +27,6 @@ import (
 // one-gate-per-package rule stays unaffected.
 const capabilityDriftProfileEnv = "SORTIE_CLIENTPROTOCOL_PROFILE"
 
-// workflowWorkspaceExpression is the runner expression the nightly job
-// prefixes the profile coordinate with so the path reaching go test is
-// absolute rather than resolved against the package directory.
-const workflowWorkspaceExpression = "${{ github.workspace }}/"
-
 // capabilityGapLabelSet is the four labels a session's capability-gap
 // notice may report, in the record's own field order.
 var capabilityGapLabelSet = []string{
@@ -77,6 +72,23 @@ func liveCapabilityGapLabels(events []domain.AgentEvent) []string {
 // typo cannot pass green. It carries no Test prefix of its own by
 // design: it is called from the event stream an existing conformance
 // turn already collects, spending no turn of its own.
+// resolveDriftProfilePath returns path unchanged when it is absolute,
+// and otherwise resolves it against the repository root. go test runs
+// with the package directory as its working directory, so a coordinate
+// written relative to the repository, which is the form an operator
+// and a CI job both reach for, would not otherwise resolve.
+func resolveDriftProfilePath(t *testing.T, path string) string {
+	t.Helper()
+	if filepath.IsAbs(path) {
+		return path
+	}
+	root, err := qualification.RepositoryRootFromWD()
+	if err != nil {
+		t.Fatalf("resolve repository root for %s=%q: %v", capabilityDriftProfileEnv, path, err)
+	}
+	return filepath.Join(root, path)
+}
+
 func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEvent) {
 	t.Helper()
 
@@ -87,7 +99,7 @@ func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEv
 		t.Logf("capability-gap drift comparison not run: %s is unset", capabilityDriftProfileEnv)
 		return
 	}
-	profile, err := qualification.ReadRuntimeProfileFile(profilePath)
+	profile, err := qualification.ReadRuntimeProfileFile(resolveDriftProfilePath(t, profilePath))
 	if err != nil {
 		t.Fatalf("%s names %q, which failed to load: %v", capabilityDriftProfileEnv, profilePath, err)
 	}
@@ -280,9 +292,7 @@ func TestNightlyReachability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}
-	// The runner expands github.workspace to the checkout root, which is
-	// what this repository copy is, so the two are interchangeable here.
-	resolved := filepath.Join(root, strings.TrimPrefix(value, workflowWorkspaceExpression))
+	resolved := filepath.Join(root, value)
 	if _, statErr := os.Stat(resolved); statErr != nil {
 		t.Fatalf("%s names %q, which does not resolve to an existing file at %s", capabilityDriftProfileEnv, value, resolved)
 	}
