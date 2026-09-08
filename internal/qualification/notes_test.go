@@ -245,3 +245,65 @@ func TestNotesExpectationJSONRoundTrip(t *testing.T) {
 		t.Errorf("round-tripped NotesExpectation = %+v, want %+v", got, want)
 	}
 }
+
+// TestValidateNotesRejectsDriftTheShapeAlone covers the two ways a
+// document can disagree with its run without omitting anything: a grade
+// row outside the vocabulary, and an entry the run never recorded.
+// Requiring only that expected content is present would accept both.
+func TestValidateNotesRejectsDriftTheShapeAlone(t *testing.T) {
+	t.Parallel()
+
+	want := compliantNotesExpectation()
+
+	t.Run("a grade row outside the vocabulary is rejected rather than skipped", func(t *testing.T) {
+		t.Parallel()
+		document := strings.Replace(compliantNotesDocument(want),
+			"## Protocol-specific observations",
+			"- protocol turn_disposition: Invented: usable\n\n## Protocol-specific observations", 1)
+		err := ValidateNotes(document, want)
+		if err == nil {
+			t.Fatal("ValidateNotes() = nil, want an error naming the row outside the vocabulary")
+		}
+		if !strings.Contains(err.Error(), "outside the vocabulary") {
+			t.Errorf("error = %q, want it to name the vocabulary", err)
+		}
+	})
+
+	t.Run("prose about a capability is not mistaken for a grade row", func(t *testing.T) {
+		t.Parallel()
+		document := strings.Replace(compliantNotesDocument(want),
+			"## Protocol-specific observations",
+			"- protocol token_ceiling: no token-bearing path\n\n## Protocol-specific observations", 1)
+		if err := ValidateNotes(document, want); err != nil {
+			t.Errorf("ValidateNotes() error = %v, want nil for a single-colon prose line", err)
+		}
+	})
+
+	t.Run("an unobserved case the run never recorded is rejected", func(t *testing.T) {
+		t.Parallel()
+		document := strings.Replace(compliantNotesDocument(want),
+			"## Unobserved surfaces\n\n",
+			"## Unobserved surfaces\n\n- protocol session_continuation: invented case\n", 1)
+		err := ValidateNotes(document, want)
+		if err == nil {
+			t.Fatal("ValidateNotes() = nil, want an error naming the unrecorded case")
+		}
+		if !strings.Contains(err.Error(), "does not record") {
+			t.Errorf("error = %q, want it to say the run does not record the case", err)
+		}
+	})
+
+	t.Run("an excluded case the run never recorded is rejected", func(t *testing.T) {
+		t.Parallel()
+		document := strings.Replace(compliantNotesDocument(want),
+			"## Excluded capability cases\n\n",
+			"## Excluded capability cases\n\n- turn_disposition cancellation: invented exclusion\n", 1)
+		err := ValidateNotes(document, want)
+		if err == nil {
+			t.Fatal("ValidateNotes() = nil, want an error naming the unrecorded exclusion")
+		}
+		if !strings.Contains(err.Error(), "does not record") {
+			t.Errorf("error = %q, want it to say the run does not record the case", err)
+		}
+	})
+}

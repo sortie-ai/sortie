@@ -100,10 +100,57 @@ func notesStatusLabelAlternation(grades []Grade) string {
 
 var (
 	notesGradeRowPattern = regexp.MustCompile(`^- (` + notesAlternation(Surfaces) + `) ([a-z_]+): (` + notesStatusLabelAlternation(RowGrades) + `): (` + notesAlternation(RowGrades) + `)\b`)
-	notesVersionPattern  = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
-	notesDatePattern     = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
-	notesEnvValuePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*=\S`)
+	// notesGradeRowCandidate matches the shape of a grade row - a known
+	// surface and capability, then a status label, then a grade -
+	// without constraining the label or the grade to the vocabulary. A
+	// row of this shape is held to the closed pattern rather than
+	// passing unexamined. A single-colon row is prose about a
+	// capability, not a grade, and does not match.
+	notesGradeRowCandidate = regexp.MustCompile(`^- (` + notesAlternation(Surfaces) + `) ([a-z_]+): [^:]+: \S`)
+	notesVersionPattern    = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
+	notesDatePattern       = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
+	notesEnvValuePattern   = regexp.MustCompile(`^[A-Z][A-Z0-9_]*=\S`)
 )
+
+// notesListEntries returns the list entries of one section: every line
+// opening with a list marker, with the marker stripped. Prose lines
+// carry no marker and are not entries, so a section may explain itself
+// without that explanation counting as a recorded case.
+func notesListEntries(section []string) []string {
+	entries := make([]string, 0, len(section))
+	for _, line := range section {
+		if after, found := strings.CutPrefix(line, "- "); found {
+			entries = append(entries, after)
+		}
+	}
+	return entries
+}
+
+// matchSectionEntries reports the first disagreement between a
+// section's own list entries and the entries the validated run
+// produced. The comparison runs both ways on purpose: requiring only
+// that every expected entry is present would let a document add a case
+// the run never recorded and still validate, which is the drift the
+// binding exists to catch.
+func matchSectionEntries(section string, got, want []string) error {
+	present := make(map[string]bool, len(got))
+	for _, entry := range got {
+		present[entry] = true
+	}
+	expected := make(map[string]bool, len(want))
+	for _, entry := range want {
+		expected[entry] = true
+		if !present[entry] {
+			return fmt.Errorf("case %q is absent from the %s section", entry, section)
+		}
+	}
+	for _, entry := range got {
+		if !expected[entry] {
+			return fmt.Errorf("the %s section carries case %q that the validated run does not record", section, entry)
+		}
+	}
+	return nil
+}
 
 // ValidateNotes reports the first disagreement between a notes document
 // and a validated run's expectation, or nil when they agree. It never
@@ -146,6 +193,13 @@ func ValidateNotes(document string, want NotesExpectation) error {
 	for i, line := range trimmed {
 		match := notesGradeRowPattern.FindStringSubmatch(line)
 		if match == nil {
+			// A row shaped like a grade but failing the closed pattern
+			// carries a label or grade outside the vocabulary. Skipping
+			// it would let a document state a contradictory grade and
+			// still validate, so the shape alone is enough to reject.
+			if notesGradeRowCandidate.MatchString(line) {
+				return fmt.Errorf("notes line %d is shaped like a grade row but carries a status label or grade outside the vocabulary: %q", i+1, line)
+			}
 			continue
 		}
 		key := match[1] + " " + match[2]
@@ -178,23 +232,18 @@ func ValidateNotes(document string, want NotesExpectation) error {
 	if unobservedHeading < 0 {
 		return fmt.Errorf("notes heading %q is missing", "## Unobserved surfaces")
 	}
-	excludedBody := strings.Join(trimmed[excludedHeading:unobservedHeading], "\n")
-	for _, entry := range want.Excluded {
-		if !strings.Contains(excludedBody, entry) {
-			return fmt.Errorf("excluded capability case %q is absent from the Excluded capability cases section", entry)
-		}
+	if err := matchSectionEntries("Excluded capability cases", notesListEntries(trimmed[excludedHeading:unobservedHeading]), want.Excluded); err != nil {
+		return err
 	}
 
-	tail := strings.Join(trimmed[unobservedHeading:], "\n")
+	tail := trimmed[unobservedHeading:]
 	for _, entry := range want.Excluded {
-		if strings.Contains(tail, entry) {
+		if strings.Contains(strings.Join(tail, "\n"), entry) {
 			return fmt.Errorf("excluded capability case %q appears in the Unobserved surfaces section, want only the Excluded capability cases section", entry)
 		}
 	}
-	for _, entry := range want.Unobserved {
-		if !strings.Contains(tail, entry) {
-			return fmt.Errorf("unobserved semantic case %q is absent from the Unobserved surfaces section", entry)
-		}
+	if err := matchSectionEntries("Unobserved surfaces", notesListEntries(tail), want.Unobserved); err != nil {
+		return err
 	}
 
 	if !strings.Contains(document, NotesScopeStatement) {
