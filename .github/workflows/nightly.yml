@@ -38,7 +38,7 @@ jobs:
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       SORTIE_CLIENTPROTOCOL_COMMAND: "gemini --acp"
-      SORTIE_CLIENTPROTOCOL_PROFILE: internal/qualification/profiles/gemini-cli.json
+      SORTIE_CLIENTPROTOCOL_PROFILE: ${{ github.workspace }}/internal/qualification/profiles/gemini-cli.json
 
     strategy:
       fail-fast: false

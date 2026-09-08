@@ -27,6 +27,11 @@ import (
 // one-gate-per-package rule stays unaffected.
 const capabilityDriftProfileEnv = "SORTIE_CLIENTPROTOCOL_PROFILE"
 
+// workflowWorkspaceExpression is the runner expression the nightly job
+// prefixes the profile coordinate with so the path reaching go test is
+// absolute rather than resolved against the package directory.
+const workflowWorkspaceExpression = "${{ github.workspace }}/"
+
 // capabilityGapLabelSet is the four labels a session's capability-gap
 // notice may report, in the record's own field order.
 var capabilityGapLabelSet = []string{
@@ -36,14 +41,17 @@ var capabilityGapLabelSet = []string{
 
 // liveCapabilityGapLabels reads the label set out of events' own
 // notification stream: every domain.EventNotification message, joined
-// in arrival order with no separator, searched once per label. The
-// adapter's own gap notice rides this event type, and joining the
-// whole stream rather than reading one event finds a label even when
-// no single notification carries it whole.
+// in arrival order and separated, searched once per label. The
+// separator is what keeps the reading honest: concatenating the
+// messages directly lets one message's suffix and the next one's
+// prefix spell a label no notification ever reported.
 func liveCapabilityGapLabels(events []domain.AgentEvent) []string {
 	var joined strings.Builder
 	for _, event := range events {
 		if event.Type == domain.EventNotification {
+			if joined.Len() > 0 {
+				joined.WriteByte('\n')
+			}
 			joined.WriteString(event.Message)
 		}
 	}
@@ -74,7 +82,10 @@ func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEv
 
 	profilePath, present := os.LookupEnv(capabilityDriftProfileEnv)
 	if !present || strings.TrimSpace(profilePath) == "" {
-		t.Skip("skipping the capability-gap drift comparison: " + capabilityDriftProfileEnv + " is unset")
+		// Returning rather than skipping: this runs inside a caller whose
+		// own assertions follow, and skipping would abort them too.
+		t.Logf("capability-gap drift comparison not run: %s is unset", capabilityDriftProfileEnv)
+		return
 	}
 	profile, err := qualification.ReadRuntimeProfileFile(profilePath)
 	if err != nil {
@@ -269,7 +280,9 @@ func TestNightlyReachability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}
-	resolved := filepath.Join(root, value)
+	// The runner expands github.workspace to the checkout root, which is
+	// what this repository copy is, so the two are interchangeable here.
+	resolved := filepath.Join(root, strings.TrimPrefix(value, workflowWorkspaceExpression))
 	if _, statErr := os.Stat(resolved); statErr != nil {
 		t.Fatalf("%s names %q, which does not resolve to an existing file at %s", capabilityDriftProfileEnv, value, resolved)
 	}
