@@ -101,7 +101,7 @@ func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEv
 	}
 	profile, err := qualification.ReadRuntimeProfileFile(resolveDriftProfilePath(t, profilePath))
 	if err != nil {
-		t.Fatalf("%s names %q, which failed to load: %v", capabilityDriftProfileEnv, profilePath, err)
+		t.Fatalf("load the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
 	}
 
 	live := liveCapabilityGapLabels(events)
@@ -285,7 +285,7 @@ func TestNightlyReachability(t *testing.T) {
 	maps.Copy(env, step.Env)
 	value, ok := env[capabilityDriftProfileEnv]
 	if !ok || strings.TrimSpace(value) == "" {
-		t.Fatalf("%s is absent or empty in the environment job %q's go-test step inherits", capabilityDriftProfileEnv, row.jobName)
+		t.Fatalf("no %s in the environment job %q's go-test step inherits, or it is empty", capabilityDriftProfileEnv, row.jobName)
 	}
 
 	root, err := nightlyRepositoryRoot()
@@ -294,7 +294,7 @@ func TestNightlyReachability(t *testing.T) {
 	}
 	resolved := filepath.Join(root, value)
 	if _, statErr := os.Stat(resolved); statErr != nil {
-		t.Fatalf("%s names %q, which does not resolve to an existing file at %s", capabilityDriftProfileEnv, value, resolved)
+		t.Fatalf("resolve the file %s names, %q: nothing exists at %s", capabilityDriftProfileEnv, value, resolved)
 	}
 
 	callers := callersOfAssertCapabilityGapLabels(t)
