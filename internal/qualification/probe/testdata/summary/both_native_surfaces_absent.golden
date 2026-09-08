@@ -1,0 +1,38 @@
+Eligibility: qualified
+Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it.
+Declared-absent surfaces:
+native_json: declared absent (surface_not_offered); corroborated
+native_stream_json: declared absent (surface_not_offered); corroborated
+no structured native surface was measured: every comparison row stands on the protocol surface alone
+Blocking rows:
+none
+Unmeasured rows:
+none
+Excluded cases:
+none
+Capability grades:
+protocol turn_disposition: Observed: usable
+protocol retry_classification: Observed: usable
+protocol token_ceiling: Observed: usable
+protocol tool_server_delivery: Observed: usable
+protocol session_continuation: Observed: usable
+protocol permission_handling: Observed: usable
+Semantic verdicts:
+protocol turn_disposition success: pass (usable)
+protocol turn_disposition runtime_failure: pass (usable)
+protocol turn_disposition runtime_refusal: pass (usable)
+protocol turn_disposition cancellation: pass (usable)
+protocol turn_disposition limit_reached: pass (usable)
+protocol retry_classification retryable_runtime_or_transport_failure: pass (usable)
+protocol retry_classification non_retryable_refusal: pass (usable)
+protocol retry_classification human_input: pass (usable)
+protocol retry_classification unknown_outcome: pass (usable)
+Token sources:
+protocol session/prompt/result/usage: usable
+protocol session/update/vendor_usage: corroboration_only
+Continuation:
+protocol: confirmed_same_session (Observed: usable)
+Workspace security:
+Observed: controlled checkout without project settings; run-scoped homes; allowlisted environment names only; skip-trust accepted
+Unobserved semantic cases:
+none

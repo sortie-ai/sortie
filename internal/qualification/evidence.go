@@ -49,7 +49,6 @@ type Surface string
 
 const (
 	SurfaceProtocol         Surface = "protocol"
-	SurfaceNativeText       Surface = "native_text"
 	SurfaceNativeJSON       Surface = "native_json"
 	SurfaceNativeStreamJSON Surface = "native_stream_json"
 	SurfaceAggregate        Surface = "aggregate"
@@ -189,7 +188,7 @@ var (
 		ScenarioEndToEnd, ScenarioQualification,
 	}
 	Surfaces = []Surface{
-		SurfaceProtocol, SurfaceNativeText,
+		SurfaceProtocol,
 		SurfaceNativeJSON, SurfaceNativeStreamJSON,
 		SurfaceAggregate,
 	}
@@ -240,9 +239,7 @@ var (
 )
 
 // DeclarableSurfaces are the surfaces whose evidence can confirm or
-// contradict an operator declaration. SurfaceNativeText is absent: it
-// recognizes no terminal outcome, so it can attest to nothing about a
-// specific case.
+// contradict an operator declaration.
 var DeclarableSurfaces = []Surface{
 	SurfaceProtocol, SurfaceNativeJSON, SurfaceNativeStreamJSON,
 }
@@ -256,16 +253,9 @@ const SurfaceNotOffered = "surface_not_offered"
 var AbsentSurfaceReasons = []string{SurfaceNotOffered}
 
 // DeclarableAbsentSurfaces are the surfaces an operator may declare
-// absent. SurfaceNativeText is excluded: it recognizes no terminal
-// outcome, so an absence claim there would be unfalsifiable.
-// SurfaceProtocol is excluded because it is the surface under test,
-// and SurfaceAggregate is excluded because it is not measured.
+// absent. SurfaceProtocol is excluded because it is the surface under
+// test, and SurfaceAggregate is excluded because it is not measured.
 var DeclarableAbsentSurfaces = []Surface{SurfaceNativeJSON, SurfaceNativeStreamJSON}
-
-// SessionlessSurfaces are the surfaces that report no session
-// identifier of their own, so a semantic probe record on them carries
-// a null session_id.
-var SessionlessSurfaces = []Surface{SurfaceNativeText}
 
 // CapabilityCases maps each semantic capability to its closed case set,
 // in the order the evidence contract requires records to be written.
@@ -293,6 +283,14 @@ var CaseInputs = map[Case]InputID{
 	CaseHumanInput:          InputRetryHumanInput,
 	CaseUnknownOutcome:      InputRetryUnknownOutcome,
 }
+
+// CatalogNotInducibleCases is the closed set of cases the input
+// catalog has no deterministic inducer for, on any runtime.
+// CaseUnknownOutcome's inducer would ask the model for a stop reason
+// outside the protocol's closed enum, which no conforming runtime can
+// produce, so a run grades it not_inducible at catalog level instead
+// of launching for it.
+var CatalogNotInducibleCases = []Case{CaseUnknownOutcome}
 
 // The excluded-case detail constants. They occupy the record's
 // existing detail member; no new record field is introduced.

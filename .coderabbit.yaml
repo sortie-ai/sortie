@@ -28,5 +28,10 @@ reviews:
     languagetool:
       enabled: false
 
+  path_filters:
+    - '!internal/agent/clientprotocol/testdata/schema-v*/**'
+    - '!internal/agent/clientprotocol/wire_gen.go'
+    - '!**/testdata/summary/*.golden'
+
 chat:
   art: false

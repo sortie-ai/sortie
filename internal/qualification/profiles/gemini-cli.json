@@ -1,0 +1,66 @@
+{
+  "schema_version": 3,
+  "runtime_id": "gemini-cli",
+  "identity_tokens": ["gemini"],
+  "notes_path": "docs/gemini-adapter-notes.md",
+  "measurement_path": "internal/qualification/probe/testdata/gemini-cli/measurement.json",
+  "published_sample": "examples/WORKFLOW.agent-client-protocol.md",
+  "tool_name_format": "mcp_{server}_{tool}",
+  "project_config_paths": [
+    ".gemini/mcp.json",
+    ".gemini/settings.json",
+    ".gemini/settings.yaml"
+  ],
+  "version_args": ["--version"],
+  "model_args": ["--model", "{model}"],
+  "capability_gap_labels": ["token counts"],
+  "entry_points": {
+    "protocol": {
+      "args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--acp"]
+    },
+    "native_json": {
+      "args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "json", "--prompt", "{prompt}"]
+    },
+    "native_stream_json": {
+      "args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"]
+    }
+  },
+  "recognizers": {
+    "native_json": {
+      "locator": {"mode": "first_value"},
+      "error_members": ["error"],
+      "success_member": "response",
+      "status_member": "",
+      "status_cases": {},
+      "status_end_turn": [],
+      "model_request_path": ["stats", "models"]
+    },
+    "native_stream_json": {
+      "locator": {"mode": "discriminated", "discriminator_key": "type", "discriminator_value": "result"},
+      "error_members": ["error"],
+      "success_member": "",
+      "status_member": "status",
+      "status_cases": {
+        "refusal": "runtime_refusal",
+        "declined": "runtime_refusal",
+        "cancelled": "cancellation",
+        "canceled": "cancellation"
+      },
+      "status_end_turn": ["end_turn", "success", "completed"],
+      "model_request_path": ["stats", "models"]
+    }
+  },
+  "declarations": [
+    {
+      "capability": "turn_disposition",
+      "case": "runtime_refusal",
+      "reason": "outcome_never_produced"
+    },
+    {
+      "capability": "retry_classification",
+      "case": "non_retryable_refusal",
+      "reason": "outcome_never_produced"
+    }
+  ],
+  "absent_surfaces": []
+}
