@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"unicode"
+
+	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
 // contractRegistryImportPath is the import path the checker resolves the
@@ -794,13 +796,17 @@ var contractAgentIdentityFloorTable = []string{
 }
 
 // contractAgentIdentitySnapshot is the identity rule's token set,
-// gathered once from the files under internal/agent: every floor and
+// gathered once from the files under internal/agent and every runtime
+// profile under internal/qualification/profiles: every floor and
 // extracted token, and, for each package that registered a kind, the
 // kinds it registered, keyed by that package's import path.
+// profileDeclaredTokens marks a token as sourced from a profile's
+// identity_tokens, which is what makes an unanchored one wide-scoped.
 type contractAgentIdentitySnapshot struct {
-	tokens           []string
-	kindImportPaths  map[string][]string
-	extractionErrors []contractViolation
+	tokens                []string
+	kindImportPaths       map[string][]string
+	profileDeclaredTokens map[string]bool
+	extractionErrors      []contractViolation
 }
 
 var (
@@ -915,13 +921,57 @@ func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 		extractionErrors = append(extractionErrors, contractViolation{text: "walk " + dir + ": " + walkErr.Error()})
 	}
 
+	profileDeclaredTokens, profileErrors := contractProfileDeclaredTokens(contractRuntimeProfilesGlob, tokenSet)
+	extractionErrors = append(extractionErrors, profileErrors...)
+
 	tokens := make([]string, 0, len(tokenSet))
 	for tok := range tokenSet {
 		tokens = append(tokens, tok)
 	}
 	sort.Strings(tokens)
 
-	return contractAgentIdentitySnapshot{tokens: tokens, kindImportPaths: kindImportPaths, extractionErrors: extractionErrors}
+	return contractAgentIdentitySnapshot{
+		tokens:                tokens,
+		kindImportPaths:       kindImportPaths,
+		profileDeclaredTokens: profileDeclaredTokens,
+		extractionErrors:      extractionErrors,
+	}
+}
+
+// contractRuntimeProfilesGlob is the glob pattern
+// buildContractAgentIdentitySnapshot reads every runtime profile
+// document from. It is a package variable, rather than an inline
+// literal, so a staleness-guard test can point it at a scratch
+// fixture directory without a live profile under
+// internal/qualification/profiles.
+var contractRuntimeProfilesGlob = filepath.Join("..", "qualification", "profiles", "*.json")
+
+// contractProfileDeclaredTokens reads every runtime profile document
+// matching pattern through qualification.ReadRuntimeProfileFile,
+// unioning each profile's identity_tokens into tokenSet and returning
+// the lowercased subset marked profile-declared. A profile that fails
+// to decode contributes an extraction error rather than being
+// skipped, matching how buildContractAgentIdentitySnapshot already
+// handles a kind argument it cannot read.
+func contractProfileDeclaredTokens(pattern string, tokenSet map[string]bool) (profileDeclaredTokens map[string]bool, extractionErrors []contractViolation) {
+	profileDeclaredTokens = map[string]bool{}
+	profilePaths, globErr := filepath.Glob(pattern)
+	if globErr != nil {
+		extractionErrors = append(extractionErrors, contractViolation{text: "glob runtime profiles: " + globErr.Error()})
+	}
+	for _, profilePath := range profilePaths {
+		profile, readErr := qualification.ReadRuntimeProfileFile(profilePath)
+		if readErr != nil {
+			extractionErrors = append(extractionErrors, contractViolation{text: "read runtime profile " + profilePath + ": " + readErr.Error()})
+			continue
+		}
+		for _, tok := range profile.IdentityTokens {
+			lower := strings.ToLower(tok)
+			tokenSet[lower] = true
+			profileDeclaredTokens[lower] = true
+		}
+	}
+	return profileDeclaredTokens, extractionErrors
 }
 
 // contractIdentityWordsFromIdent splits name into lowercase words on
@@ -1171,6 +1221,360 @@ func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractV
 		violations = append(violations, contractIdentityArm2Violations(fset, file)...)
 	}
 	return violations
+}
+
+// contractTokenIsKindAnchored reports whether some entry of
+// kindImportPaths anchors token: token equals, case-insensitively, that
+// kind package's base directory name or one of the kinds it registers.
+// That is exactly the set contractIdentityExcludedTokens can ever
+// exempt for a package under that kind's own subtree, so an unanchored
+// token has no directory anywhere in the tree where its name is legal.
+func contractTokenIsKindAnchored(token string, kindImportPaths map[string][]string) bool {
+	lower := strings.ToLower(token)
+	for kindImportPath, kinds := range kindImportPaths {
+		if lower == strings.ToLower(path.Base(kindImportPath)) {
+			return true
+		}
+		for _, kind := range kinds {
+			if lower == strings.ToLower(kind) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// contractWideScopedTokens returns the members of snapshot.tokens that
+// are profile-declared and that no kind package anchors: the set the
+// wide scope applies to. Every other token keeps today's narrow scope,
+// internal/agent alone.
+func contractWideScopedTokens(snapshot contractAgentIdentitySnapshot) []string {
+	var wide []string
+	for _, tok := range snapshot.tokens {
+		if snapshot.profileDeclaredTokens[tok] && !contractTokenIsKindAnchored(tok, snapshot.kindImportPaths) {
+			wide = append(wide, tok)
+		}
+	}
+	return wide
+}
+
+// contractWideIdentityRoots are the two roots the wide scope walks,
+// relative to this package's own directory, beyond the per-family
+// walks TestCheckAdapterContract and TestCheckOrchestratorContract
+// already cover.
+var contractWideIdentityRoots = []string{filepath.Join("..", "..", "cmd"), filepath.Join("..", "..", "internal")}
+
+// contractWideIdentityNonTestViolations walks every non-test .go file
+// under root, excluding testdata, and applies contractIdentityArm1Violations
+// for the wide-scoped tokens with no exclusion: an unanchored
+// profile-declared token has no directory anywhere that exempts it.
+// It returns the violations and the number of files scanned, so the
+// caller can confirm the walk covered something.
+func contractWideIdentityNonTestViolations(t *testing.T, fset *token.FileSet, root string, tokens []string) (violations []contractViolation, scanned []string) {
+	t.Helper()
+
+	err := filepath.WalkDir(root, func(walkPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(walkPath, ".go") || strings.HasSuffix(walkPath, "_test.go") {
+			return nil
+		}
+		file, parseErr := parser.ParseFile(fset, walkPath, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", walkPath, parseErr)
+		}
+		scanned = append(scanned, walkPath)
+		violations = append(violations, contractIdentityArm1Violations(fset, file, tokens, map[string]bool{})...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return violations, scanned
+}
+
+// contractIdentityTestFileIdentViolations reports every *ast.Ident in
+// file, outside an import declaration, whose word sequence carries a
+// token from tokens. Unlike contractIdentityArm1Violations, it never
+// inspects a *ast.BasicLit: a test file's string literals stay legal,
+// because a testdata path or a notes file name carries a runtime's
+// name by design, and only its bare identifiers do not.
+func contractIdentityTestFileIdentViolations(fset *token.FileSet, file *ast.File, tokens []string) []contractViolation {
+	var violations []contractViolation
+	report := func(pos token.Pos, spelling string, words []string) {
+		for _, tok := range tokens {
+			if contractIdentityTokenMatches(words, contractIdentityWordsFromLiteral(tok)) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(pos),
+					text: "identifier " + spelling + " names agent identity token " + strconv.Quote(tok),
+				})
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.ImportSpec:
+			return false
+		case *ast.Ident:
+			report(v.Pos(), v.Name, contractIdentityWordsFromIdent(v.Name))
+		}
+		return true
+	})
+	return violations
+}
+
+// contractWideIdentityTestViolations walks every _test.go file under
+// root, excluding testdata, parses it in full (unlike contractWalkRoot's
+// imports-only test-file handling, which the identifier-only arm here
+// needs to see past), and applies contractIdentityTestFileIdentViolations
+// for the wide-scoped tokens.
+func contractWideIdentityTestViolations(t *testing.T, fset *token.FileSet, root string, tokens []string) (violations []contractViolation, scanned []string) {
+	t.Helper()
+
+	err := filepath.WalkDir(root, func(walkPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(walkPath, "_test.go") {
+			return nil
+		}
+		file, parseErr := parser.ParseFile(fset, walkPath, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", walkPath, parseErr)
+		}
+		scanned = append(scanned, walkPath)
+		violations = append(violations, contractIdentityTestFileIdentViolations(fset, file, tokens)...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return violations, scanned
+}
+
+// TestContractIdentityWideScope confirms rule IDENTITY's wide scope: an
+// unanchored profile-declared token from
+// internal/qualification/profiles/*.json carries no identifier or
+// string literal in a non-test file, and no bare identifier in a test
+// file, anywhere under cmd/ or internal/. It also confirms the wide
+// walk reaches the three production files
+// TestGeminiQualificationAddsNoProductionIdentityBranch (deleted along
+// with the rest of internal/agent/clientprotocol's vendor-shaped
+// driver) proved it reached, and pins the mechanism's own logic
+// against inline fixtures so it cannot pass vacuously.
+func TestContractIdentityWideScope(t *testing.T) {
+	fset := token.NewFileSet()
+	snapshot := contractAgentIdentitySnapshotData()
+	wideTokens := contractWideScopedTokens(snapshot)
+	if len(wideTokens) == 0 {
+		t.Fatal("contractWideScopedTokens() returned none, want at least one unanchored profile-declared token to check the wide scope against")
+	}
+
+	var allScanned []string
+	for _, root := range contractWideIdentityRoots {
+		violations, scanned := contractWideIdentityNonTestViolations(t, fset, root, wideTokens)
+		for _, v := range violations {
+			t.Errorf("%s: %s", v.pos, v.text)
+		}
+		allScanned = append(allScanned, scanned...)
+
+		testViolations, testScanned := contractWideIdentityTestViolations(t, fset, root, wideTokens)
+		for _, v := range testViolations {
+			t.Errorf("%s: %s", v.pos, v.text)
+		}
+		allScanned = append(allScanned, testScanned...)
+	}
+
+	for _, want := range []string{
+		filepath.Join("cmd", "sortie", "main.go"),
+		filepath.Join("internal", "agent", "clientprotocol", "pump.go"),
+		filepath.Join("internal", "agent", "clientprotocol", "schemagen", "main.go"),
+	} {
+		if !slices.ContainsFunc(allScanned, func(p string) bool { return strings.HasSuffix(p, want) }) {
+			t.Errorf("the wide scan missed the production file %s", want)
+		}
+	}
+
+	t.Run("a fixture carrying an unanchored token as a non-test identifier fails", func(t *testing.T) {
+		fixtureFset := token.NewFileSet()
+		file, err := parser.ParseFile(fixtureFset, "fixture.go", `package fixture
+
+func pickGeminiCommand() string { return "" }
+`, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		violations := contractIdentityArm1Violations(fixtureFset, file, []string{"gemini"}, map[string]bool{})
+		if len(violations) == 0 {
+			t.Fatal("contractIdentityArm1Violations() found no violation for an unanchored token spelled as a non-test identifier, want at least one")
+		}
+	})
+
+	t.Run("a fixture carrying an unanchored token as a bare test-file identifier fails", func(t *testing.T) {
+		fixtureFset := token.NewFileSet()
+		file, err := parser.ParseFile(fixtureFset, "fixture_test.go", `package fixture
+
+func pickGeminiCommand() string { return "" }
+`, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		violations := contractIdentityTestFileIdentViolations(fixtureFset, file, []string{"gemini"})
+		if len(violations) == 0 {
+			t.Fatal("contractIdentityTestFileIdentViolations() found no violation for an unanchored token spelled as a bare identifier, want at least one")
+		}
+	})
+
+	t.Run("a fixture carrying an unanchored token only as a test-file string literal passes", func(t *testing.T) {
+		fixtureFset := token.NewFileSet()
+		file, err := parser.ParseFile(fixtureFset, "fixture_test.go", `package fixture
+
+const cmd = "gemini --acp"
+`, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		violations := contractIdentityTestFileIdentViolations(fixtureFset, file, []string{"gemini"})
+		if len(violations) != 0 {
+			t.Errorf("contractIdentityTestFileIdentViolations() = %v, want none: a test file's string literal stays legal", violations)
+		}
+	})
+
+	t.Run("a kind-anchored profile-declared token in a package outside internal/agent still passes", func(t *testing.T) {
+		anchoredKindImportPaths := map[string][]string{
+			"github.com/sortie-ai/sortie/internal/agent/kiro": {"kiro"},
+		}
+		if !contractTokenIsKindAnchored("kiro", anchoredKindImportPaths) {
+			t.Fatal("contractTokenIsKindAnchored(\"kiro\", ...) = false, want true: kiro's own kind package anchors it")
+		}
+
+		anchoredSnapshot := contractAgentIdentitySnapshot{
+			tokens:                []string{"kiro"},
+			kindImportPaths:       anchoredKindImportPaths,
+			profileDeclaredTokens: map[string]bool{"kiro": true},
+		}
+		if wide := contractWideScopedTokens(anchoredSnapshot); len(wide) != 0 {
+			t.Errorf("contractWideScopedTokens() = %v, want none: kiro is anchored by its own kind package", wide)
+		}
+	})
+}
+
+// TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks proves
+// the three mechanisms TestContractIdentityWideScope depends on are
+// themselves capable of failing, not merely capable of passing against
+// the current tree: a profile that fails to decode must be reported
+// rather than silently skipped, and dropping either the anchoring
+// clause or the profile-source clause of rule IDENTITY's wide scope
+// must redden against a real collision already present in the tree,
+// per verification property 2's kiro and cursor examples. The last two
+// subtests confirm today's real snapshot keeps both collisions green,
+// for the two different reasons the clauses exist.
+func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T) {
+	snapshot := contractAgentIdentitySnapshotData()
+
+	t.Run("a profile file that fails to decode contributes a reported extraction error", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte(`{"schema_version": 3,`), 0o600); err != nil {
+			t.Fatalf("write fixture profile: %v", err)
+		}
+
+		_, extractionErrors := contractProfileDeclaredTokens(filepath.Join(dir, "*.json"), map[string]bool{})
+
+		if len(extractionErrors) == 0 {
+			t.Fatal("contractProfileDeclaredTokens() reported no extraction error for a profile that fails to decode, want at least one")
+		}
+	})
+
+	t.Run("a profile that decodes cleanly reports no extraction error and contributes its token", func(t *testing.T) {
+		tokenSet := map[string]bool{}
+
+		declared, extractionErrors := contractProfileDeclaredTokens(contractRuntimeProfilesGlob, tokenSet)
+
+		if len(extractionErrors) != 0 {
+			t.Fatalf("contractProfileDeclaredTokens(%q) reported %v, want none against the tracked profile tree", contractRuntimeProfilesGlob, extractionErrors)
+		}
+		if !declared["gemini"] {
+			t.Errorf("contractProfileDeclaredTokens(%q) = %v, want it to mark %q profile-declared from the tracked gemini-cli profile", contractRuntimeProfilesGlob, declared, "gemini")
+		}
+	})
+
+	t.Run("dropping the anchoring clause makes an unanchored kiro redden against the real preflight_test.go collision", func(t *testing.T) {
+		fset := token.NewFileSet()
+		unanchored := contractAgentIdentitySnapshot{
+			tokens:                []string{"kiro"},
+			kindImportPaths:       map[string][]string{},
+			profileDeclaredTokens: map[string]bool{"kiro": true},
+		}
+		wide := contractWideScopedTokens(unanchored)
+		if !slices.Contains(wide, "kiro") {
+			t.Fatalf("contractWideScopedTokens() = %v, want it to carry kiro once the anchoring clause is dropped, so this control can prove the clause is load-bearing", wide)
+		}
+
+		var violations []contractViolation
+		for _, root := range contractWideIdentityRoots {
+			v, _ := contractWideIdentityTestViolations(t, fset, root, wide)
+			violations = append(violations, v...)
+		}
+		if len(violations) == 0 {
+			t.Fatal("the wide test-file scan found no violation for an unanchored kiro token, want it to catch var kiroErrors in internal/orchestrator/preflight_test.go")
+		}
+	})
+
+	t.Run("kiro stays kind-anchored against the real snapshot, so today's wide check passes it", func(t *testing.T) {
+		if !contractTokenIsKindAnchored("kiro", snapshot.kindImportPaths) {
+			t.Fatal("contractTokenIsKindAnchored(\"kiro\", ...) = false against the real snapshot, want true: internal/agent/kiro registers kind kiro")
+		}
+		if wide := contractWideScopedTokens(snapshot); slices.Contains(wide, "kiro") {
+			t.Errorf("contractWideScopedTokens() = %v, want no kiro: it is kind-anchored", wide)
+		}
+	})
+
+	t.Run("marking cursor profile-declared makes it redden against the real domain and linear collisions", func(t *testing.T) {
+		fset := token.NewFileSet()
+		hypothetical := contractAgentIdentitySnapshot{
+			tokens:                []string{"cursor"},
+			kindImportPaths:       snapshot.kindImportPaths,
+			profileDeclaredTokens: map[string]bool{"cursor": true},
+		}
+		if contractTokenIsKindAnchored("cursor", hypothetical.kindImportPaths) {
+			t.Fatal("contractTokenIsKindAnchored(\"cursor\", ...) = true against the real snapshot, want false: no kind package anchors cursor")
+		}
+		wide := contractWideScopedTokens(hypothetical)
+		if !slices.Contains(wide, "cursor") {
+			t.Fatalf("contractWideScopedTokens() = %v, want it to carry cursor once profile-declared, so this control can prove the profile-source clause is load-bearing", wide)
+		}
+
+		var violations []contractViolation
+		for _, root := range contractWideIdentityRoots {
+			v, _ := contractWideIdentityNonTestViolations(t, fset, root, wide)
+			violations = append(violations, v...)
+		}
+		if len(violations) == 0 {
+			t.Fatal("the wide non-test scan found no violation for a profile-declared cursor token, want it to catch the domain.ErrTrackerMissingCursor family in internal/domain and internal/tracker/linear")
+		}
+	})
+
+	t.Run("cursor stays unprofiled against the real snapshot, so today's wide check passes it", func(t *testing.T) {
+		if snapshot.profileDeclaredTokens["cursor"] {
+			t.Fatal("the real snapshot marks cursor profile-declared; this control's premise that cursor stays deferred no longer holds")
+		}
+		if wide := contractWideScopedTokens(snapshot); slices.Contains(wide, "cursor") {
+			t.Errorf("contractWideScopedTokens() = %v, want no cursor: it is not profile-declared", wide)
+		}
+	})
 }
 
 // contractExempt reports whether the package named dirName is
