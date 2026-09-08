@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +180,7 @@ func defaultOutputDir(t *testing.T) string {
 		t.Fatalf("create the run-scoped output directory: %v", err)
 	}
 	if root, err := qualification.RepositoryRootFromWD(); err == nil {
-		if strings.HasPrefix(dir, root) {
+		if pathWithin(dir, root) {
 			// The guard fires after the directory exists and before any
 			// caller can register its cleanup, so remove it here.
 			_ = os.RemoveAll(dir)
@@ -191,19 +190,27 @@ func defaultOutputDir(t *testing.T) string {
 	return dir
 }
 
+// pathWithin reports whether path is root itself or sits beneath it.
+// A prefix test is not a containment test: it would also match a
+// sibling whose name merely begins with root's.
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // Run drives one live qualification collection against coords,
 // launching every measured surface, corroborating every declared
 // absence, and writing the validated evidence, the bounded summary,
 // and a fresh measurement artifact to Coordinates.OutputDir.
 //
-// The live tests built on Run MUST NOT call t.Parallel(): Run installs
-// a capturing slog.SetDefault handler for the duration of the call and
-// restores the previous handler in t.Cleanup.
+// The live tests built on Run MUST NOT call t.Parallel(): it launches
+// real processes and spends model quota, so its output stays readable
+// only while it runs alone.
 func Run(t *testing.T, coords Coordinates) Result {
 	t.Helper()
-
-	previous := slog.Default()
-	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	outputDir := coords.OutputDir
 	if outputDir == "" {
@@ -236,7 +243,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 		absentSurfaces = append(absentSurfaces, qualification.AbsentSurface{Surface: surface, Reason: reason})
 	}
 
-	fixture := qualification.NewFixture(qualification.FixtureQualified, absentSurfaces...)
+	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, absentSurfaces...)
 	for _, declaration := range profile.Declarations {
 		fixture.SetSemanticDeclaredGap(declaration.Capability, declaration.Case, declaration.Reason)
 	}

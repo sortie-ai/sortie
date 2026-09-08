@@ -2,6 +2,7 @@ package probe
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -20,8 +21,8 @@ import (
 // outcome is the measurement this run exists to produce, and failing on
 // it would make the instrument report the answer it was built to find.
 //
-// Run installs a capturing log handler for the duration of the call, so
-// this test MUST NOT call t.Parallel().
+// Run launches real processes and spends model quota, so this test MUST
+// NOT call t.Parallel().
 func TestQualificationProfile(t *testing.T) {
 	coords, ok := Gated(t)
 	if !ok {
@@ -58,5 +59,5 @@ func TestQualificationProfile(t *testing.T) {
 		}
 	}
 
-	t.Logf("qualification verdict %s; artifacts under %s", result.Verdict, coords.OutputDir)
+	t.Logf("qualification verdict %s; artifacts under %s", result.Verdict, filepath.Dir(result.EvidencePath))
 }
