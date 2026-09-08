@@ -16,13 +16,9 @@ import (
 // violation, whether the value sits outside the transport family
 // entirely or inside it while still carrying a runtime token.
 var envSurfaceOwnedNames = map[string]bool{
-	"SORTIE_CLIENTPROTOCOL_TEST":                         true,
-	"SORTIE_CLIENTPROTOCOL_COMMAND":                      true,
-	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST":           true,
-	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND":        true,
-	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_MODEL":          true,
-	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_AUTH_ENV_NAMES": true,
-	"SORTIE_CLIENTPROTOCOL_QUALIFICATION_DECLARATIONS":   true,
+	"SORTIE_CLIENTPROTOCOL_TEST":    true,
+	"SORTIE_CLIENTPROTOCOL_COMMAND": true,
+	"SORTIE_CLIENTPROTOCOL_PROFILE": true,
 }
 
 // envSurfaceCallSelectors are the selector names an environment-access
@@ -113,11 +109,65 @@ func envSurfaceViolations(fset *token.FileSet, file *ast.File) []envSurfaceViola
 	return violations
 }
 
+// envSurfaceLiterals returns every SORTIE_-prefixed string literal
+// found anywhere in file, in either environment-name position or not,
+// for the staleness-direction check: an owned name that appears
+// nowhere in the package has moved out from under this allowlist.
+func envSurfaceLiterals(file *ast.File) map[string]bool {
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		value, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		if strings.HasPrefix(value, "SORTIE_") {
+			found[value] = true
+		}
+		return true
+	})
+	return found
+}
+
+// envSurfaceReporter is the subset of *testing.T
+// checkEnvSurfaceOwnedNamesCurrent calls, factored out so it can be
+// driven by a fake reporter against synthetic input.
+type envSurfaceReporter interface {
+	Errorf(format string, args ...any)
+}
+
+// checkEnvSurfaceOwnedNamesCurrent reports the staleness direction: an
+// owned-set entry no literal in literals names. Against the real
+// package and the real envSurfaceOwnedNames this is inert; a synthetic
+// owned set naming a coordinate absent from a fixture literal set
+// proves the direction can fail.
+func checkEnvSurfaceOwnedNamesCurrent(r envSurfaceReporter, owned map[string]bool, literals map[string]bool) {
+	for name := range owned {
+		if !literals[name] {
+			r.Errorf("owned name %q is not found as a literal anywhere in the package", name)
+		}
+	}
+}
+
+// envSurfaceFakeReporter records Errorf calls instead of failing the
+// enclosing test.
+type envSurfaceFakeReporter struct {
+	errors []string
+}
+
+func (f *envSurfaceFakeReporter) Errorf(format string, _ ...any) {
+	f.errors = append(f.errors, format)
+}
+
 // scanEnvSurface parses every .go file directly inside this package's
 // own directory, test files included, and aggregates the violations
-// envSurfaceViolations reports for each. It does not descend into a
+// envSurfaceViolations reports for each and every SORTIE_-prefixed
+// literal envSurfaceLiterals finds. It does not descend into a
 // subdirectory.
-func scanEnvSurface(t *testing.T) []envSurfaceViolation {
+func scanEnvSurface(t *testing.T) ([]envSurfaceViolation, map[string]bool) {
 	t.Helper()
 
 	entries, err := os.ReadDir(".")
@@ -127,6 +177,7 @@ func scanEnvSurface(t *testing.T) []envSurfaceViolation {
 
 	fset := token.NewFileSet()
 	var violations []envSurfaceViolation
+	literals := map[string]bool{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			continue
@@ -136,8 +187,11 @@ func scanEnvSurface(t *testing.T) []envSurfaceViolation {
 			t.Fatalf("parse %s: %v", entry.Name(), parseErr)
 		}
 		violations = append(violations, envSurfaceViolations(fset, file)...)
+		for name := range envSurfaceLiterals(file) {
+			literals[name] = true
+		}
 	}
-	return violations
+	return violations, literals
 }
 
 // envSurfaceScanInline parses src as a single fixture file and returns
@@ -182,8 +236,33 @@ func TestEnvSurfaceIsTransportNamed(t *testing.T) {
 	t.Run("package directory carries no non-owned SORTIE_ literal", func(t *testing.T) {
 		t.Parallel()
 
-		for _, v := range scanEnvSurface(t) {
+		violations, _ := scanEnvSurface(t)
+		for _, v := range violations {
 			t.Errorf("%s: %q is not a member of envSurfaceOwnedNames", v.pos, v.literal)
+		}
+	})
+
+	t.Run("every owned name is found as a literal somewhere in the package", func(t *testing.T) {
+		t.Parallel()
+
+		_, literals := scanEnvSurface(t)
+		reporter := &envSurfaceFakeReporter{}
+		checkEnvSurfaceOwnedNamesCurrent(reporter, envSurfaceOwnedNames, literals)
+		for _, msg := range reporter.errors {
+			t.Error(msg)
+		}
+	})
+
+	t.Run("a synthetic owned-set entry with no matching literal fails the staleness direction", func(t *testing.T) {
+		t.Parallel()
+
+		synthetic := map[string]bool{"SORTIE_CLIENTPROTOCOL_NOT_A_REAL_COORDINATE": true}
+		fixtureLiterals := map[string]bool{"SORTIE_CLIENTPROTOCOL_TEST": true}
+
+		reporter := &envSurfaceFakeReporter{}
+		checkEnvSurfaceOwnedNamesCurrent(reporter, synthetic, fixtureLiterals)
+		if len(reporter.errors) == 0 {
+			t.Fatal("checkEnvSurfaceOwnedNamesCurrent recorded no failure for a synthetic owned-set entry absent from the literal set, want at least one")
 		}
 	})
 
