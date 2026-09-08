@@ -81,8 +81,6 @@ parse_args() {
     done
 }
 
-# ── Platform detection ────────────────────────────────────────────────────────
-
 detect_platform() {
     OS=$(uname -s)
     case "$OS" in
@@ -107,9 +105,24 @@ detect_platform() {
     fi
 }
 
-# ── HTTP abstraction ──────────────────────────────────────────────────────────
-
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+# Checking the checksum tool here rather than at its point of use keeps a
+# missing sha256sum from surfacing only after the archive has been downloaded.
+check_dependencies() {
+    _missing=""
+    for _cmd in uname tar; do
+        command -v "$_cmd" >/dev/null 2>&1 \
+            || _missing="${_missing:+$_missing, }$_cmd"
+    done
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+        || _missing="${_missing:+$_missing, }curl or wget"
+    if [ "${SORTIE_NO_VERIFY-}" != "1" ] && [ -z "$(sha256_cmd)" ]; then
+        _missing="${_missing:+$_missing, }sha256sum or shasum"
+    fi
+
+    [ -z "$_missing" ] || die "required commands not found: ${_missing}"
+}
 
 fetch() {
     _url=$1 _out=${2:-}
@@ -123,8 +136,6 @@ fetch() {
         die "curl or wget is required"
     fi
 }
-
-# ── Version resolution ────────────────────────────────────────────────────────
 
 # The releases/latest HTML endpoint redirects to the tagged release and, unlike
 # the GitHub API, is not rate-limited per IP - which is what breaks on shared
@@ -161,26 +172,27 @@ installed_version() {
     "$1" --version 2>/dev/null | awk 'NR == 1 { print $2 }'
 }
 
-# ── Checksum verification ────────────────────────────────────────────────────
+# Name of the available SHA-256 tool, empty when neither is installed.
+sha256_cmd() {
+    if command -v sha256sum >/dev/null 2>&1; then printf 'sha256sum'
+    elif command -v shasum >/dev/null 2>&1; then printf 'shasum'
+    fi
+}
 
 verify_checksum() {
     _file=$1 _sums=$2
     _want=$(awk -v f="$(basename "$_file")" '$2 == f {print $1}' "$_sums")
     [ -n "$_want" ] || die "no checksum entry for $(basename "$_file")"
 
-    if command -v sha256sum >/dev/null 2>&1; then
-        _got=$(sha256sum "$_file" | awk '{print $1}')
-    elif command -v shasum >/dev/null 2>&1; then
-        _got=$(shasum -a 256 "$_file" | awk '{print $1}')
-    else
-        die "sha256sum or shasum is required"
-    fi
+    case $(sha256_cmd) in
+        sha256sum) _got=$(sha256sum "$_file" | awk '{print $1}') ;;
+        shasum)    _got=$(shasum -a 256 "$_file" | awk '{print $1}') ;;
+        *)         die "sha256sum or shasum is required" ;;
+    esac
 
     [ "$_want" = "$_got" ] \
         || die "checksum mismatch (expected ${_want}, got ${_got})"
 }
-
-# ── Install directory resolution ──────────────────────────────────────────────
 
 resolve_install_dir() {
     if [ -n "${SORTIE_INSTALL_DIR-}" ]; then
@@ -226,8 +238,7 @@ install_local() {
 }
 
 install_release() {
-    need_cmd uname
-    need_cmd tar
+    check_dependencies
 
     detect_platform
     info "Platform: ${OS}/${ARCH}"
