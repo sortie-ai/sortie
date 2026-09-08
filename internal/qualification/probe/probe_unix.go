@@ -182,6 +182,9 @@ func defaultOutputDir(t *testing.T) string {
 	}
 	if root, err := qualification.RepositoryRootFromWD(); err == nil {
 		if strings.HasPrefix(dir, root) {
+			// The guard fires after the directory exists and before any
+			// caller can register its cleanup, so remove it here.
+			_ = os.RemoveAll(dir)
 			t.Fatalf("run-scoped output directory %s resolved inside the repository tree %s", dir, root)
 		}
 	}
