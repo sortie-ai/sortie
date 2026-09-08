@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.jpg" alt="Sortie —— 将工单系统中的工单转化为智能体会话" width="600">
+  <img src="docs/assets/banner.jpg" alt="Sortie —— 将工单系统中的工单转化为智能体会话" width="100%">
 </p>
 
 <div align="center">
@@ -32,7 +32,7 @@ Sortie 就是这套基础设施。
 
 **工单系统：** GitHub Issues、GitLab Issues、Gitea Issues、Linear 和 Jira。
 
-**编程智能体：** Claude Code、Copilot、OpenCode、Codex、Kiro 和 Gemini CLI，后者通过通用的 `agent-client-protocol` 类型接入（[示例](examples/WORKFLOW.agent-client-protocol.md)）。
+**编程智能体：** Claude Code、Copilot、OpenCode、Codex、Kiro 和 Gemini。
 
 ## 安装
 
@@ -65,10 +65,6 @@ Sortie 是一个独立的可执行文件，无需另行部署数据库或任务�
 ## 先前工作
 
 Sortie 的架构借鉴了 [OpenAI Symphony](https://github.com/openai/symphony)。
-
-## 为何取名“Sortie”
-
-法语中的 _sortie_ 意为“出口”或“离开”，在航空领域也指单架飞机执行的一次任务。Sortie 将编程智能体派去执行各自的任务：每个工单都有独立的工作区、明确的目标，以及需要带回的成果。
 
 ## 许可证
 

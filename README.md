@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.jpg" alt="Sortie - Turn tracker tickets into agent sessions" width="600">
+  <img src="docs/assets/banner.jpg" alt="Sortie - Turn tracker tickets into agent sessions" width="100%">
 </p>
 
 <div align="center">
@@ -32,7 +32,7 @@ Sortie is that infrastructure.
 
 **Issue trackers:** GitHub Issues, GitLab Issues, Gitea Issues, Linear and Jira.
 
-**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro and Gemini CLI, the last through the generic `agent-client-protocol` kind ([sample](examples/WORKFLOW.agent-client-protocol.md)).
+**Coding agents:** Claude Code, Copilot, OpenCode, Codex, Kiro and Gemini.
 
 ## Install
 
@@ -65,10 +65,6 @@ Full configuration reference, CLI usage, and getting started guide: [docs.sortie
 ## Prior Art
 
 Sortie's architecture is informed by [OpenAI Symphony](https://github.com/openai/symphony).
-
-## Why "Sortie"
-
-French for "exit" or "departure", a _sortie_ also means a single aircraft mission. Sortie sends coding agents on missions of their own: each issue has an isolated workspace, a clear objective, and a result to bring back.
 
 ## License
 
