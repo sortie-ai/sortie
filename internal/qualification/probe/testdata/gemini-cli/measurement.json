@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "profile_digest": "5c9013e24b708f0a62d6e2aa92b61141363814dc41859d78069c0921ba9e6080",
+  "measured_at": "2026-09-08",
+  "expectation": {
+    "Verdict": "unmeasured",
+    "Grades": [
+      {
+        "Surface": "protocol",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "retry_classification",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "token_ceiling",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "tool_server_delivery",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "permission_handling",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_json",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_json",
+        "Capability": "retry_classification",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_json",
+        "Capability": "token_ceiling",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_json",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "retry_classification",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "token_ceiling",
+        "Grade": "gap",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      }
+    ],
+    "Excluded": [],
+    "Unobserved": [
+      "protocol turn_disposition runtime_failure: not_observed",
+      "protocol retry_classification human_input: not_observed",
+      "native_json turn_disposition runtime_failure: not_observed",
+      "native_json turn_disposition cancellation: not_observed",
+      "native_json retry_classification retryable_runtime_or_transport_failure: not_observed",
+      "native_json retry_classification human_input: not_observed",
+      "native_stream_json turn_disposition runtime_failure: not_observed",
+      "native_stream_json turn_disposition cancellation: not_observed",
+      "native_stream_json turn_disposition limit_reached: runtime_failed",
+      "native_stream_json retry_classification retryable_runtime_or_transport_failure: not_observed",
+      "native_stream_json retry_classification human_input: not_observed"
+    ]
+  }
+}
