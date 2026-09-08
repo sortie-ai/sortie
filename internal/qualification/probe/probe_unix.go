@@ -127,7 +127,7 @@ func corroborateAbsentSurface(t *testing.T, coords Coordinates, surface qualific
 func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 	t.Helper()
 
-	root, err := repositoryRootFromWD()
+	root, err := qualification.RepositoryRootFromWD()
 	if err != nil {
 		t.Fatalf("resolve repository root for the published sample: %v", err)
 	}
@@ -180,7 +180,7 @@ func defaultOutputDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create the run-scoped output directory: %v", err)
 	}
-	if root, err := repositoryRootFromWD(); err == nil {
+	if root, err := qualification.RepositoryRootFromWD(); err == nil {
 		if strings.HasPrefix(dir, root) {
 			t.Fatalf("run-scoped output directory %s resolved inside the repository tree %s", dir, root)
 		}
@@ -210,10 +210,8 @@ func Run(t *testing.T, coords Coordinates) Result {
 	runAuthenticationCanary(t, coords)
 
 	profile := coords.Profile
-	for _, surface := range profile.MeasuredSurfaces() {
-		if _, absent := profile.AbsentSurfaceDeclared(surface); absent {
-			corroborateAbsentSurface(t, coords, surface)
-		}
+	for _, absent := range profile.AbsentSurfaces {
+		corroborateAbsentSurface(t, coords, absent.Surface)
 	}
 
 	// The full live per-case induction catalog (cancellation, refusal,
@@ -290,7 +288,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 // mustRepositoryRoot resolves the repository root or fails t.
 func mustRepositoryRoot(t *testing.T) string {
 	t.Helper()
-	root, err := repositoryRootFromWD()
+	root, err := qualification.RepositoryRootFromWD()
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}

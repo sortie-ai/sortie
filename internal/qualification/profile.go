@@ -702,14 +702,38 @@ func resolveRepositoryRoot(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute path for %s: %w", path, err)
 	}
-	highest := dir
+	root, ok := ascendToRepositoryRoot(dir)
+	if !ok {
+		return "", fmt.Errorf("no ancestor of %s carries %s; searched up to %s", path, repositoryRootMarker, dir)
+	}
+	return root, nil
+}
+
+// RepositoryRootFromWD ascends from the current working directory to
+// the nearest ancestor carrying go.mod, so a reader resolves the paths
+// a profile names independently of where the process was started.
+func RepositoryRootFromWD() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	root, ok := ascendToRepositoryRoot(dir)
+	if !ok {
+		return "", fmt.Errorf("no ancestor of %s carries %s", dir, repositoryRootMarker)
+	}
+	return root, nil
+}
+
+// ascendToRepositoryRoot walks dir and its ancestors, reporting the
+// first that carries repositoryRootMarker.
+func ascendToRepositoryRoot(dir string) (string, bool) {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, repositoryRootMarker)); err == nil {
-			return dir, nil
+			return dir, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no ancestor of %s carries %s; searched up to %s", path, repositoryRootMarker, highest)
+			return "", false
 		}
 		dir = parent
 	}

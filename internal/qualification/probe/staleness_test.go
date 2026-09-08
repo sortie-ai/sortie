@@ -142,7 +142,7 @@ func TestStaleness(t *testing.T) {
 		}
 		profiles[profilePath] = profile
 
-		root, err := repositoryRootFromWD()
+		root, err := qualification.RepositoryRootFromWD()
 		if err != nil {
 			t.Fatalf("resolve repository root: %v", err)
 		}
