@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.
   ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
-- The macOS and Linux install script now checks for every command it needs, including the SHA-256 tool used to verify the download, before it fetches anything, and names all missing ones in a single message. A missing `sha256sum` or `shasum` previously surfaced only after the release archive had already been downloaded.
+- The macOS and Linux install script now checks for the commands it needs to download and verify a release, `uname`, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`, before it fetches anything, and names every missing one in a single message. A missing `sha256sum` or `shasum` previously surfaced only after the release archive had already been downloaded.
   ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
 
 ## [1.23.0] - 2026-08-31
