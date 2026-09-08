@@ -408,7 +408,7 @@ func rejectUnknownPlaceholders(value string, allowed []string) error {
 		}
 		closeIdx := strings.IndexByte(rest[open:], '}')
 		if closeIdx < 0 {
-			return nil
+			return fmt.Errorf("%q carries an unterminated placeholder at %q", value, rest[open:])
 		}
 		token := rest[open : open+closeIdx+1]
 		if !slices.Contains(allowed, token) {
@@ -952,16 +952,24 @@ func (p RuntimeProfile) AbsentSurfaceDeclared(surface Surface) (string, bool) {
 	return "", false
 }
 
-// MeasuredSurfaces returns the key set of p.EntryPoints in the closed
-// vocabulary's own order: exactly the surfaces a run launches and
-// grades. SurfaceAggregate carries no entry point and so is never
-// returned.
+// MeasuredSurfaces returns the surfaces a run launches and grades, in
+// the closed vocabulary's own order: the key set of p.EntryPoints minus
+// every surface p declares absent. SurfaceAggregate carries no entry
+// point and so is never returned.
+//
+// A declared-absent surface keeps its entry point, because corroborating
+// the declaration launches it, but that launch writes no record. Callers
+// sizing an expected record set would over-count if it were returned.
 func (p RuntimeProfile) MeasuredSurfaces() []Surface {
 	var surfaces []Surface
 	for _, surface := range Surfaces {
-		if _, ok := p.EntryPoints[surface]; ok {
-			surfaces = append(surfaces, surface)
+		if _, ok := p.EntryPoints[surface]; !ok {
+			continue
 		}
+		if _, absent := p.AbsentSurfaceDeclared(surface); absent {
+			continue
+		}
+		surfaces = append(surfaces, surface)
 	}
 	return surfaces
 }
