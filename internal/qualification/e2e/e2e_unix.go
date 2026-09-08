@@ -246,14 +246,14 @@ type Harness struct {
 	orchestrator  *orchestrator.Orchestrator
 }
 
-// Agent returns the harness's adapter observer, the only field exposed
-// outside the package.
 // Observation reports how long an observer may wait for a terminal
 // condition on this harness.
 func (h *Harness) Observation() time.Duration {
 	return h.observation
 }
 
+// Agent returns the harness's adapter observer, the only field exposed
+// outside the package.
 func (h *Harness) Agent() *AdapterObserver {
 	return h.agent
 }
