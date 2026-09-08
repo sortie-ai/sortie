@@ -45,13 +45,6 @@ This runtime advertises no `sessionCapabilities` object at all in its handshake.
 
 ## Native headless observations
 
-The text surface is characterised as unstructured residue; the structured surfaces carry their own rows above.
-
-- native_text turn_disposition: Observed: gap
-- native_text retry_classification: Observed: gap
-- native_text token_ceiling: Observed: gap
-- native_text session_continuation: Not observed: not_observed
-
 ## Workspace trust and process boundary
 
 Tool-server delivery needs a trusted workspace and an authorized call. Tool servers declared in `session/new` are honored: the runtime merges them over whatever servers its own settings file already configures, matching by name with the request winning on a collision, and stdio, sse, and http transports are all supported. Delivery is gated on whether the runtime considers the workspace trusted. `--skip-trust` grants trust for the session rather than only suppressing a prompt: it sets the runtime's own workspace-trust environment variable, which the trust check reads before the folder-trust setting, the editor state, and the trusted-folder list. An untrusted workspace fails closed with no signal: the create call returns success, the declared servers are dropped without a trace, and nothing in the response or in a later notification marks that anything went wrong. The runtime's trust guard raises an error only in its own headless mode and treats protocol mode as interactive, so the guard that would reject an untrusted workspace on the command line never fires here.
@@ -71,22 +64,13 @@ Windows live qualification is unobserved.
 The run behind this file left these semantic cases unobserved:
 
 - protocol turn_disposition runtime_failure: not_observed
-- protocol turn_disposition runtime_refusal: not_observed
-- protocol retry_classification non_retryable_refusal: not_observed
 - protocol retry_classification human_input: not_observed
-- protocol retry_classification unknown_outcome: not_observed
 - native_json turn_disposition runtime_failure: not_observed
-- native_json turn_disposition runtime_refusal: not_observed
 - native_json turn_disposition cancellation: not_observed
 - native_json retry_classification retryable_runtime_or_transport_failure: not_observed
-- native_json retry_classification non_retryable_refusal: not_observed
 - native_json retry_classification human_input: not_observed
-- native_json retry_classification unknown_outcome: not_observed
 - native_stream_json turn_disposition runtime_failure: not_observed
-- native_stream_json turn_disposition runtime_refusal: not_observed
 - native_stream_json turn_disposition cancellation: not_observed
 - native_stream_json turn_disposition limit_reached: runtime_failed
 - native_stream_json retry_classification retryable_runtime_or_transport_failure: not_observed
-- native_stream_json retry_classification non_retryable_refusal: not_observed
 - native_stream_json retry_classification human_input: not_observed
-- native_stream_json retry_classification unknown_outcome: not_observed
