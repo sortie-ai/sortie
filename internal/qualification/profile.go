@@ -408,7 +408,7 @@ func rejectUnknownPlaceholders(value string, allowed []string) error {
 		}
 		closeIdx := strings.IndexByte(rest[open:], '}')
 		if closeIdx < 0 {
-			return fmt.Errorf("%q carries an unterminated placeholder at %q", value, rest[open:])
+			return fmt.Errorf("placeholder value %q carries an unterminated token at %q", value, rest[open:])
 		}
 		token := rest[open : open+closeIdx+1]
 		if !slices.Contains(allowed, token) {
