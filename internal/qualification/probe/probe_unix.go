@@ -130,7 +130,7 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 	if err != nil {
 		t.Fatalf("resolve repository root for the published sample: %v", err)
 	}
-	sampleCommand, err := qualification.ReadPublishedSampleCommand(filepath.Join(root, coords.Profile.PublishedSample))
+	sampleCommand, err := qualification.ReadPublishedSampleCommand(repositoryPath(t, root, coords.Profile.PublishedSample))
 	if err != nil {
 		t.Fatalf("read published sample command: %v", err)
 	}
@@ -201,9 +201,22 @@ func pathWithin(path, root string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// repositoryPath joins root and rel and confirms the result stays under
+// root. A profile is operator-supplied data reached through an
+// environment coordinate, so a rel carrying ".." would otherwise read
+// outside the checkout.
+func repositoryPath(t *testing.T, root, rel string) string {
+	t.Helper()
+	joined := filepath.Join(root, rel)
+	if !pathWithin(joined, root) {
+		t.Fatalf("profile path %q resolves to %s, outside the repository at %s", rel, joined, root)
+	}
+	return joined
+}
+
 // Run drives one live qualification collection against coords,
-// launching every measured surface, corroborating every declared
-// absence, and writing the validated evidence, the bounded summary,
+// corroborating every declared absence and writing the validated
+// evidence, the bounded summary,
 // and a fresh measurement artifact to Coordinates.OutputDir.
 //
 // The live tests built on Run MUST NOT call t.Parallel(): it launches
@@ -232,18 +245,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 	// grades each measured surface's own launch classification. A
 	// future pass wires the remaining live inducers without changing
 	// this function's contract.
-	var absentSurfaces []qualification.AbsentSurface
-	for surface, reason := range func() map[qualification.Surface]string {
-		out := map[qualification.Surface]string{}
-		for _, entry := range profile.AbsentSurfaces {
-			out[entry.Surface] = entry.Reason
-		}
-		return out
-	}() {
-		absentSurfaces = append(absentSurfaces, qualification.AbsentSurface{Surface: surface, Reason: reason})
-	}
-
-	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, absentSurfaces...)
+	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, profile.AbsentSurfaces...)
 	for _, declaration := range profile.Declarations {
 		fixture.SetSemanticDeclaredGap(declaration.Capability, declaration.Case, declaration.Reason)
 	}
@@ -282,7 +284,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 
 	t.Logf("qualification artifacts written: evidence=%s summary=%s measurement=%s", evidencePath, summaryPath, measurementPath)
 
-	notesPath := filepath.Join(mustRepositoryRoot(t), profile.NotesPath)
+	notesPath := repositoryPath(t, mustRepositoryRoot(t), profile.NotesPath)
 	enforceNotesConsistency(t, notesPath, measurement.Expectation, summary)
 	runPublishedPostureProbe(t, coords)
 
