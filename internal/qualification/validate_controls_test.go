@@ -685,12 +685,12 @@ func TestValidatorCrossSurfacePriorSessionControl(T *testing.T) {
 	fixture := NewFixture(FixtureQualified)
 	fixture.Finalize()
 	recall := fixture.FindFirst(MatchContinuation(SurfaceProtocol, InputContinuationRecall))
-	nativeSeed := fixture.FindFirst(MatchContinuation(SurfaceNativeText, InputContinuationSeed))
+	nativeSeed := fixture.FindFirst(MatchContinuation(SurfaceNativeJSON, InputContinuationSeed))
 	if recall == nil || nativeSeed == nil {
-		T.Fatal("fixture carries no protocol recall or native_text seed Record")
+		T.Fatal("fixture carries no protocol recall or native_json seed Record")
 	}
 	if nativeSeed.SessionID == nil {
-		T.Fatal("native_text seed carries no session id")
+		T.Fatal("native_json seed carries no session id")
 	}
 	recall.PriorSessionID = new(*nativeSeed.SessionID)
 	path := WriteEvidenceFile(T, fixture.Records)
@@ -817,8 +817,8 @@ func TestValidatorFinalTupleControls(T *testing.T) {
 		if tokenCount < 4 {
 			T.Fatalf("fixture token count = %d, want at least 4", tokenCount)
 		}
-		if got := len(fixture.Records); got != 66+tokenCount+sessionCount {
-			T.Fatalf("fixture Record count = %d, want 66+tokenCount+sessionCount = %d", got, 66+tokenCount+sessionCount)
+		if got := len(fixture.Records); got != 51+tokenCount+sessionCount {
+			T.Fatalf("fixture Record count = %d, want 51+tokenCount+sessionCount = %d", got, 51+tokenCount+sessionCount)
 		}
 		path := WriteFinalEvidenceFile(T, fixture.Records, GradeQualified)
 		RequireFinalVerdict(T, path, VerdictQualified)
@@ -899,9 +899,8 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture.Finalize()
 		declareNotInducible(fixture, SurfaceProtocol, CapabilityRetryClassification, CaseHumanInput)
 		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityRetryClassification, CaseHumanInput)
-		declareNotInducible(fixture, SurfaceNativeStreamJSON, CapabilityRetryClassification, CaseHumanInput)
-		// native_text intentionally left observed: not_inducible must
-		// cover every measured surface, not only the declarable three.
+		// native_stream_json intentionally left observed: not_inducible
+		// must cover every measured surface.
 		path := WriteEvidenceFile(T, fixture.Records)
 		_, err := ValidateObservations(path)
 		if err == nil {
@@ -939,7 +938,7 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		declareSemanticGap(fixture, SurfaceNativeJSON, CaseCancellation, DeclaredGapNeverProduced)
 		declareSemanticGap(fixture, SurfaceNativeStreamJSON, CaseCancellation, DeclaredGapNeverProduced)
 		path := WriteEvidenceFile(T, fixture.Records)
-		_, err := ValidateObservationsWithDeclarations(path, DeclarationSet{})
+		_, err := ValidateObservationsWithDeclarations(path, RuntimeProfile{})
 		if err == nil {
 			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of an unauthorized declared record")
 		}
@@ -954,9 +953,8 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture := NewFixture(FixtureQualified)
 		fixture.Finalize()
 		path := WriteEvidenceFile(T, fixture.Records)
-		declarations := DeclarationSet{
-			SchemaVersion: 2,
-			Declarations:  []DeclaredGap{{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced}},
+		declarations := RuntimeProfile{
+			Declarations: []DeclaredGap{{Capability: CapabilityTurnDisposition, Case: CaseRuntimeRefusal, Reason: DeclaredGapNeverProduced}},
 		}
 		_, err := ValidateObservationsWithDeclarations(path, declarations)
 		if err == nil {
@@ -1017,7 +1015,7 @@ func TestValidatorAllExcludedBaselineControl(T *testing.T) {
 
 	fixture := NewFixture(FixtureQualified)
 	fixture.Finalize()
-	for _, surface := range MeasuredSurfaces(fixture.Declarations()) {
+	for _, surface := range measuredSurfaces(fixture.Declarations()) {
 		declareNotInducible(fixture, surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
 		for _, caseID := range CapabilityCases[CapabilityRetryClassification] {
 			declareNotInducible(fixture, surface, CapabilityRetryClassification, caseID)
@@ -1130,16 +1128,6 @@ func TestValidatorClassifyRecordsExcludedRowControls(T *testing.T) {
 				rec.SessionID = nil
 			},
 			wantSub: "not_inducible record detail",
-		},
-		{
-			name: "declared_gap Surface outside DeclarableSurfaces",
-			mutate: func(f *Fixture) {
-				rec := f.FindFirst(MatchSemantic(SurfaceNativeText, CapabilityTurnDisposition, CaseCancellation))
-				rec.Grade = GradeDeclaredGap
-				rec.Outcome = OutcomeNotProducible
-				rec.Detail = DeclaredGapNeverProduced
-			},
-			wantSub: "must carry a surface in DeclarableSurfaces",
 		},
 		{
 			name: "unmeasured Grade on a non-final row",
@@ -1266,49 +1254,12 @@ func TestValidatorSemanticSessionRelationExemption(T *testing.T) {
 }
 
 // TestCheckSessionRelationSessionlessSurfacePartition confirms
-// checkSessionRelation's three-way RowSemantic rule: a record on a
-// SessionlessSurfaces member must carry a null session_id whatever its
-// grade, the passing-record requirement binds SurfaceProtocol alone,
-// and a structured native passing record is accepted whether its
-// session_id is null or non-null.
+// checkSessionRelation's RowSemantic rule: the passing-record
+// session_id requirement binds SurfaceProtocol alone, and a structured
+// native passing record is accepted whether its session_id is null or
+// non-null.
 func TestCheckSessionRelationSessionlessSurfacePartition(T *testing.T) {
 	T.Parallel()
-
-	T.Run("a sessionless surface's default fixture record already carries a null session_id", func(T *testing.T) {
-		T.Parallel()
-
-		fixture := NewFixture(FixtureQualified)
-		rec := fixture.FindFirst(MatchSemantic(SurfaceNativeText, CapabilityTurnDisposition, CaseSuccess))
-		if rec == nil {
-			T.Fatal("fixture carries no native_text disposition success record")
-		}
-		if rec.SessionID != nil {
-			T.Fatalf("native_text semantic record SessionID = %v, want nil: native_text reports no identifier of its own", *rec.SessionID)
-		}
-		fixture.Finalize()
-		path := WriteEvidenceFile(T, fixture.Records)
-		RequireObservationVerdict(T, path, VerdictQualified)
-	})
-
-	T.Run("a sessionless surface carrying a non-null session_id is rejected regardless of grade", func(T *testing.T) {
-		T.Parallel()
-
-		fixture := NewFixture(FixtureQualified)
-		fixture.Finalize()
-		rec := fixture.FindFirst(MatchSemantic(SurfaceNativeText, CapabilityTurnDisposition, CaseSuccess))
-		if rec == nil {
-			T.Fatal("fixture carries no native_text disposition success record")
-		}
-		rec.SessionID = new(FixtureSession(SurfaceNativeText, "leaked"))
-		path := WriteEvidenceFile(T, fixture.Records)
-		_, err := ValidateObservations(path)
-		if err == nil {
-			T.Fatal("ValidateObservations() = nil error, want rejection of a sessionless surface carrying a session_id")
-		}
-		if !strings.Contains(err.Error(), "sessionless surface must carry a null session_id") {
-			T.Errorf("ValidateObservations() error = %v, want the sessionless-surface cause", err)
-		}
-	})
 
 	T.Run("the protocol surface still requires a session_id on a passing record", func(T *testing.T) {
 		T.Parallel()

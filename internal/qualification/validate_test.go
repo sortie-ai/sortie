@@ -38,8 +38,8 @@ func TestValidateObservations(T *testing.T) {
 		fixture.Finalize()
 		tokenCount := tokenRecordCount(fixture.Records)
 		sessionCount := protocolSessionCount(fixture.Records)
-		if got := len(fixture.Records); got != 66+tokenCount+sessionCount {
-			T.Errorf("qualified fixture Record count = %d, want 66+tokenCount+sessionCount = %d (T=%d, N=%d)", got, 66+tokenCount+sessionCount, tokenCount, sessionCount)
+		if got := len(fixture.Records); got != 51+tokenCount+sessionCount {
+			T.Errorf("qualified fixture Record count = %d, want 51+tokenCount+sessionCount = %d (T=%d, N=%d)", got, 51+tokenCount+sessionCount, tokenCount, sessionCount)
 		}
 		path := WriteEvidenceFile(T, fixture.Records)
 		RequireObservationVerdict(T, path, VerdictQualified)
@@ -52,8 +52,8 @@ func TestValidateObservations(T *testing.T) {
 		fixture.Finalize()
 		tokenCount := tokenRecordCount(fixture.Records)
 		sessionCount := protocolSessionCount(fixture.Records)
-		if got := len(fixture.Records); got != 66+tokenCount+sessionCount {
-			T.Errorf("not_qualified fixture Record count = %d, want 66+tokenCount+sessionCount = %d (T=%d, N=%d)", got, 66+tokenCount+sessionCount, tokenCount, sessionCount)
+		if got := len(fixture.Records); got != 51+tokenCount+sessionCount {
+			T.Errorf("not_qualified fixture Record count = %d, want 51+tokenCount+sessionCount = %d (T=%d, N=%d)", got, 51+tokenCount+sessionCount, tokenCount, sessionCount)
 		}
 		path := WriteEvidenceFile(T, fixture.Records)
 		RequireObservationVerdict(T, path, VerdictNotQualified)
@@ -303,7 +303,7 @@ func TestValidateObservationsWithDeclarations(T *testing.T) {
 		if err != nil {
 			T.Fatalf("ValidateObservations() error = %v, want nil", err)
 		}
-		withEmptyDeclarations, err := ValidateObservationsWithDeclarations(path, DeclarationSet{})
+		withEmptyDeclarations, err := ValidateObservationsWithDeclarations(path, RuntimeProfile{})
 		if err != nil {
 			T.Fatalf("ValidateObservationsWithDeclarations() error = %v, want nil", err)
 		}

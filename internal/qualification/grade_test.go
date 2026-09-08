@@ -135,16 +135,6 @@ func TestSemanticGradeDerivation(T *testing.T) {
 	T.Run("the written variants carry the derived Grades end to end", func(T *testing.T) {
 		T.Parallel()
 
-		qualified := NewFixture(FixtureQualified)
-		qualified.Finalize()
-		textDisposition := qualified.FindFirst(MatchBaseline(SurfaceNativeText, CapabilityTurnDisposition))
-		if textDisposition == nil {
-			T.Fatal("fixture carries no native_text disposition baseline")
-		}
-		if textDisposition.Grade != GradeGap {
-			T.Errorf("native_text disposition baseline = %s, want gap for unstructured residue", textDisposition.Grade)
-		}
-
 		// The redefined not_qualified variant conflates only the protocol
 		// runtime_refusal disposition record; the retry classification
 		// capability is untouched, so its protocol baseline stays usable
@@ -168,7 +158,7 @@ func TestSemanticGradeDerivation(T *testing.T) {
 // TestRichestNativeReference confirms the reference derivation:
 // the higher observed Grade of native JSON and native stream-JSON per
 // Capability, with any not_observed Surface forcing the reference to
-// not_observed, and the native text Surface excluded entirely.
+// not_observed.
 func TestRichestNativeReference(T *testing.T) {
 	T.Parallel()
 
@@ -262,28 +252,6 @@ func TestRichestNativeReference(T *testing.T) {
 		RequireObservationVerdict(T, path, VerdictUnmeasured)
 	})
 
-	T.Run("the native text Surface is excluded from the structured reference", func(T *testing.T) {
-		T.Parallel()
-
-		fixture := NewFixture(FixtureQualified)
-		fixture.Finalize()
-		before := WriteEvidenceFile(T, fixture.Records)
-		RequireObservationVerdict(T, before, VerdictQualified)
-
-		for _, Capability := range comparisonCapabilities[:2] {
-			for _, caseID := range CapabilityCases[Capability] {
-				rec := fixture.FindFirst(MatchSemantic(SurfaceNativeText, Capability, caseID))
-				if rec == nil {
-					T.Fatalf("fixture carries no native_text Record for %s %s", Capability, caseID)
-				}
-				rec.Grade = GradeUsable
-			}
-			fixture.UpdateSemanticBaseline(SurfaceNativeText, Capability)
-		}
-		fixture.Renumber()
-		after := WriteEvidenceFile(T, fixture.Records)
-		RequireObservationVerdict(T, after, VerdictQualified)
-	})
 }
 
 // TestEligibilityPredicates confirms the exact Verdict outcomes: the

@@ -33,7 +33,7 @@ func compliantNotesExpectation() NotesExpectation {
 				Label:      StatusLabel(GradeUsable),
 			},
 			{
-				Surface:    SurfaceNativeText,
+				Surface:    SurfaceNativeStreamJSON,
 				Capability: CapabilityTokenCeiling,
 				Grade:      GradeNotObserved,
 				Label:      StatusLabel(GradeNotObserved),
@@ -54,7 +54,7 @@ func compliantNotesDocument(want NotesExpectation) string {
 		"## Entry points\n\nThe fixture runtime enters through one documented flag.\n\n" +
 		"## Load-bearing capability observations\n\n" +
 		"- protocol turn_disposition: Observed: usable\n" +
-		"- native_text token_ceiling: Not observed: not_observed\n\n" +
+		"- native_stream_json token_ceiling: Not observed: not_observed\n\n" +
 		"## Protocol-specific observations\n\nThe fixture runtime reports one stop reason per turn.\n\n" +
 		"## Native headless observations\n\nThe fixture runtime's headless mode prints unstructured text.\n\n" +
 		"## Workspace trust and process boundary\n\nThe fixture runtime trusts the workspace it is launched against.\n\n" +
@@ -123,7 +123,7 @@ func TestValidateNotes(t *testing.T) {
 		{
 			name: "grade rows: a row is missing",
 			doctor: func(doc string) string {
-				return strings.Replace(doc, "- native_text token_ceiling: Not observed: not_observed\n", "", 1)
+				return strings.Replace(doc, "- native_stream_json token_ceiling: Not observed: not_observed\n", "", 1)
 			},
 		},
 		{

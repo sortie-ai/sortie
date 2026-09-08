@@ -69,8 +69,7 @@ var (
 		CapabilityTokenCeiling, CapabilitySessionContinuation,
 	}
 	measurableSurfaces = []Surface{
-		SurfaceProtocol, SurfaceNativeText,
-		SurfaceNativeJSON, SurfaceNativeStreamJSON,
+		SurfaceProtocol, SurfaceNativeJSON, SurfaceNativeStreamJSON,
 	}
 )
 
@@ -495,8 +494,8 @@ var singletonRowClasses = []RowClass{RowPolicyPrecondition, RowPermission, RowMC
 // under. It is pure and total: it returns a report for any record
 // slice, including an empty one, without panicking on a missing
 // baseline or a missing singleton row.
-func ExplainEligibility(records []Record, declarations DeclarationSet) EligibilityReport {
-	measured := MeasuredSurfaces(declarations)
+func ExplainEligibility(records []Record, declarations RuntimeProfile) EligibilityReport {
+	measured := measuredSurfaces(declarations)
 	grades := baselineGrades(records)
 	report := EligibilityReport{
 		NativeReferenceAbsent: !slices.Contains(measured, SurfaceNativeJSON) && !slices.Contains(measured, SurfaceNativeStreamJSON),
@@ -532,7 +531,7 @@ func ExplainEligibility(records []Record, declarations DeclarationSet) Eligibili
 // non-final records and the declaration set, returning
 // ExplainEligibility(records, declarations).Verdict so the two can
 // never disagree.
-func ComputeEligibility(records []Record, declarations DeclarationSet) Verdict {
+func ComputeEligibility(records []Record, declarations RuntimeProfile) Verdict {
 	return ExplainEligibility(records, declarations).Verdict
 }
 
@@ -590,7 +589,7 @@ func validateOrder(records []Record) error {
 // checks assemble as they walk the file.
 type setValidation struct {
 	records      []Record
-	declarations DeclarationSet
+	declarations RuntimeProfile
 	measured     []Surface
 	seen         map[string]bool
 	counts       map[RowClass]int
@@ -610,11 +609,11 @@ type setValidation struct {
 // relations, token sentinel rules, derived baselines, runtime-identity
 // coverage, and the derived cardinality formula. It returns the
 // eligibility verdict computed from the records.
-func validateNonFinalSet(records []Record, declarations DeclarationSet) (Verdict, error) {
+func validateNonFinalSet(records []Record, declarations RuntimeProfile) (Verdict, error) {
 	v := &setValidation{
 		records:      records,
 		declarations: declarations,
-		measured:     MeasuredSurfaces(declarations),
+		measured:     measuredSurfaces(declarations),
 		seen:         map[string]bool{},
 		counts:       map[RowClass]int{},
 		semantic:     map[Surface]map[Capability]map[Case]*Record{},
@@ -921,11 +920,7 @@ func (v *setValidation) checkSessionRelation(rec *Record, class RowClass) error 
 	case RowContinuationRecall:
 		return nil
 	case RowSemantic:
-		if slices.Contains(SessionlessSurfaces, rec.Surface) {
-			if rec.SessionID != nil {
-				return fmt.Errorf("semantic probe on a sessionless surface must carry a null session_id")
-			}
-		} else if rec.Surface == SurfaceProtocol && rec.Outcome == OutcomePass && rec.SessionID == nil {
+		if rec.Surface == SurfaceProtocol && rec.Outcome == OutcomePass && rec.SessionID == nil {
 			return fmt.Errorf("passing semantic probe must carry its own session_id")
 		}
 		if rec.Grade == GradeDeclaredGap && rec.SessionID == nil {
@@ -1111,7 +1106,7 @@ func intersectSurfaces(want, have []Surface) []Surface {
 // always NotInducibleDetail. It then requires every declaration to
 // match a record, mirroring checkIdentityCoverage's bidirectional
 // shape.
-func (v *setValidation) checkExcludedCases(declarations DeclarationSet) error {
+func (v *setValidation) checkExcludedCases(declarations RuntimeProfile) error {
 	for _, capability := range Capabilities {
 		cases, ok := CapabilityCases[capability]
 		if !ok {
@@ -1141,7 +1136,7 @@ func (v *setValidation) checkExcludedCases(declarations DeclarationSet) error {
 
 // checkExcludedCase enforces the closed excluded-case rules for one
 // (capability, case) pair.
-func (v *setValidation) checkExcludedCase(declarations DeclarationSet, capability Capability, caseID Case) error {
+func (v *setValidation) checkExcludedCase(declarations RuntimeProfile, capability Capability, caseID Case) error {
 	var declared, catalog []Surface
 	var declaredDetail string
 	for _, surface := range v.measured {
@@ -1500,7 +1495,7 @@ func VerdictRationale(verdict Verdict) string {
 // empty declaration set, which rejects every declared_gap record, so
 // an existing caller stays fail-closed without being rewritten.
 func ValidateObservations(path string) (Verdict, error) {
-	return ValidateObservationsWithDeclarations(path, DeclarationSet{})
+	return ValidateObservationsWithDeclarations(path, RuntimeProfile{})
 }
 
 // ValidateObservationsWithDeclarations strictly validates the closed
@@ -1508,7 +1503,7 @@ func ValidateObservations(path string) (Verdict, error) {
 // declaration set the run was collected under, and returns the
 // computed eligibility verdict. It rejects any final qualification
 // record.
-func ValidateObservationsWithDeclarations(path string, declarations DeclarationSet) (Verdict, error) {
+func ValidateObservationsWithDeclarations(path string, declarations RuntimeProfile) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err
@@ -1535,7 +1530,7 @@ var (
 // declaration set, which rejects every declared_gap record, so an
 // existing caller stays fail-closed without being rewritten.
 func ValidateEvidence(path string) (Verdict, error) {
-	return ValidateEvidenceWithDeclarations(path, DeclarationSet{})
+	return ValidateEvidenceWithDeclarations(path, RuntimeProfile{})
 }
 
 // ValidateEvidenceWithDeclarations strictly validates the complete
@@ -1544,7 +1539,7 @@ func ValidateEvidence(path string) (Verdict, error) {
 // aggregate record in the last position, and exact equality between
 // the aggregate's grade and an independent recomputation of
 // eligibility.
-func ValidateEvidenceWithDeclarations(path string, declarations DeclarationSet) (Verdict, error) {
+func ValidateEvidenceWithDeclarations(path string, declarations RuntimeProfile) (Verdict, error) {
 	records, err := readEvidenceFile(path)
 	if err != nil {
 		return "", err
