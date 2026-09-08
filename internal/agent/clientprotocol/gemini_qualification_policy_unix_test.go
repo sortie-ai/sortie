@@ -19,7 +19,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/qualification"
-	"github.com/sortie-ai/sortie/internal/workflow"
+
+	"gopkg.in/yaml.v3"
 )
 
 // geminiProbeMarkerTimeout bounds each deterministic wait for a probe's
@@ -284,9 +285,12 @@ func geminiQualificationVersionArgv(config geminiQualificationConfig) []string {
 // to this package directory.
 const geminiPublishedSampleRelPath = "../../../examples/WORKFLOW.agent-client-protocol.md"
 
-// geminiPublishedSampleCommand loads the shipped sample workflow and
+// geminiPublishedSampleCommand reads the shipped sample workflow and
 // returns its agent.command split into an argument vector, the field's
-// own documented contract.
+// own documented contract. The front matter is decoded here rather than
+// through the workflow loader, which an adapter-family package may not
+// import; that the sample loads through the real loader at all is
+// covered where the shipped samples are validated.
 func geminiPublishedSampleCommand(t *testing.T) []string {
 	t.Helper()
 
@@ -294,19 +298,31 @@ func geminiPublishedSampleCommand(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("resolve published sample path %s: %v", geminiPublishedSampleRelPath, err)
 	}
-	wf, err := workflow.Load(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the tracked sample's own path, resolved from a package-relative constant
 	if err != nil {
-		t.Fatalf("load published sample %s: %v", path, err)
+		t.Fatalf("read published sample %s: %v", path, err)
 	}
-	agentBlock, ok := wf.Config["agent"].(map[string]any)
-	if !ok {
-		t.Fatalf("published sample %s carries no agent block", path)
+	content := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	rest, found := strings.CutPrefix(content, "---\n")
+	if !found {
+		t.Fatalf("published sample %s carries no front matter", path)
 	}
-	command, ok := agentBlock["command"].(string)
-	if !ok {
-		t.Fatalf("published sample %s carries no string agent.command", path)
+	frontMatter, _, found := strings.Cut(rest, "\n---")
+	if !found {
+		t.Fatalf("published sample %s carries no closing front-matter delimiter", path)
 	}
-	return strings.Fields(command)
+	var parsed struct {
+		Agent struct {
+			Command string `yaml:"command"`
+		} `yaml:"agent"`
+	}
+	if err := yaml.Unmarshal([]byte(frontMatter), &parsed); err != nil {
+		t.Fatalf("decode published sample front matter %s: %v", path, err)
+	}
+	if parsed.Agent.Command == "" {
+		t.Fatalf("published sample %s carries no agent.command", path)
+	}
+	return strings.Fields(parsed.Agent.Command)
 }
 
 // geminiPublishedPostureArgv builds the published-posture probe's argv:
