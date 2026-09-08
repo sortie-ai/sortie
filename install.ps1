@@ -27,11 +27,10 @@ $ErrorActionPreference = 'Stop'
 $Repo = 'sortie-ai/sortie'
 $Bin  = 'sortie'
 
-# ── Formatting ──────────────────────────────────────────────────────────────────
-
 # Mirror install.sh: info/ok use a ":: " prefix, err uses "error: ".
 function Write-Info { param([string]$Message) Write-Host ':: ' -ForegroundColor Cyan  -NoNewline; Write-Host $Message }
 function Write-Ok   { param([string]$Message) Write-Host ':: ' -ForegroundColor Green -NoNewline; Write-Host $Message }
+function Write-Warn { param([string]$Message) [Console]::Error.WriteLine("warning: $Message") }
 function Write-Err  { param([string]$Message) [Console]::Error.WriteLine("error: $Message") }
 
 # True when the console can render UTF-8 glyphs (ASCII art, spade).
@@ -43,8 +42,6 @@ function Test-Utf8Console {
     }
     catch { return $false }
 }
-
-# ── Platform detection ──────────────────────────────────────────────────────────
 
 # Map the host processor architecture to a release arch token (amd64|arm64).
 function Get-Architecture {
@@ -73,8 +70,6 @@ function Get-Architecture {
     throw "unsupported architecture: $envArch"
 }
 
-# ── HTTP helpers ────────────────────────────────────────────────────────────────
-
 # Download a URL to a file. -UseBasicParsing is required on 5.1 and harmless on 7.
 function Invoke-Download {
     param(
@@ -83,8 +78,6 @@ function Invoke-Download {
     )
     Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
 }
-
-# ── Version resolution ──────────────────────────────────────────────────────────
 
 # Use $env:SORTIE_VERSION when set, otherwise read the latest release tag from
 # the GitHub API. GitHub requires a User-Agent header.
@@ -109,8 +102,6 @@ function Resolve-Tag {
     }
     return $tagProp.Value
 }
-
-# ── Checksum verification ────────────────────────────────────────────────────────
 
 # Verify the SHA-256 of $FilePath against the entry for its file name in
 # checksums.txt (each line: "<hex-sha256>  <filename>").
@@ -140,8 +131,6 @@ function Test-Checksum {
     }
 }
 
-# ── Install directory resolution ──────────────────────────────────────────────────
-
 # $env:SORTIE_INSTALL_DIR when set, otherwise %LOCALAPPDATA%\Programs\sortie.
 # Never %ProgramFiles% by default - that would require elevation.
 function Resolve-InstallDir {
@@ -150,8 +139,6 @@ function Resolve-InstallDir {
     }
     return (Join-Path $env:LOCALAPPDATA 'Programs\sortie')
 }
-
-# ── PATH update ──────────────────────────────────────────────────────────────────
 
 # Append $Dir to the User-scope PATH if absent (registry-backed, not the merged
 # process PATH). Returns $true when the variable was modified.
@@ -180,7 +167,35 @@ function Add-ToUserPath {
     return $true
 }
 
-# ── Post-install summary ──────────────────────────────────────────────────────────
+# Canonical form of a path, for comparison only. Resolve-Path resolves nothing
+# that does not exist, and $ErrorActionPreference is Stop, so a path that fails
+# to resolve falls back to its own text rather than ending the install.
+function Resolve-FilePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try { return (Resolve-Path -LiteralPath $Path -ErrorAction Stop).ProviderPath.TrimEnd('\') }
+    catch { return $Path.TrimEnd('\') }
+}
+
+# Paths are compared rather than versions: reading the version means running
+# the file a PATH entry resolved to, and that entry may be one the person
+# installing does not control. Both sides are canonicalized first, so that two
+# spellings of one location do not read as a conflict. Must run before
+# Add-ToUserPath, which prepends $Dir to the session PATH and would hide it.
+function Write-ShadowWarning {
+    param(
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][string]$Dir
+    )
+
+    $found = Get-Command $Bin -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $found) { return }
+    if ((Resolve-FilePath $found.Source) -ieq (Resolve-FilePath $Target)) { return }
+
+    Write-Warn "$Bin on PATH is $($found.Source), not the copy just installed"
+    [Console]::Error.WriteLine("  Remove that file, or put $Dir earlier in PATH.")
+}
 
 # Mirror install.sh's summary block exactly (taglines, labels, ordering).
 function Show-Summary {
@@ -225,8 +240,6 @@ function Show-Summary {
     }
     Write-Host ''
 }
-
-# ── Main ──────────────────────────────────────────────────────────────────────────
 
 function Invoke-Install {
     # Force TLS 1.2 for PS 5.1 on older Windows; -bor keeps TLS 1.3 on PS 7.
@@ -321,6 +334,8 @@ function Invoke-Install {
         Unblock-File -LiteralPath $target
 
         Write-Ok "Installed $Bin $tag to $target"
+
+        Write-ShadowWarning -Target $target -Dir $dir
 
         if (Add-ToUserPath -Dir $dir) {
             Write-Host ''

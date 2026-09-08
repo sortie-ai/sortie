@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1006](https://github.com/sortie-ai/sortie/issues/1006),
   [#1014](https://github.com/sortie-ai/sortie/issues/1014))
 
+- The install scripts for macOS, Linux, and Windows now warn when the `sortie` command still resolves to a different copy than the one just installed, naming that path. An older binary earlier in `PATH`, left by an install run as root or by the Homebrew cask, previously kept winning while the installer reported success. The macOS and Linux script also gains `-f`, `--force`, which reinstalls a release already present in the target directory instead of skipping it.
+  ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.
@@ -46,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.
   ([#1014](https://github.com/sortie-ai/sortie/issues/1014))
+
+- The macOS and Linux install script now checks for the commands it needs to download and verify a release, `uname`, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`, before it fetches anything, and names every missing one in a single message. A missing `sha256sum` or `shasum` previously surfaced only after the release archive had already been downloaded.
+  ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
 
 ## [1.23.0] - 2026-08-31
 

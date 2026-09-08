@@ -17,8 +17,7 @@ set -eu
 REPO="sortie-ai/sortie"
 BIN="sortie"
 BINARY=""
-
-# ── Formatting ────────────────────────────────────────────────────────────────
+FORCE=0
 
 setup_colors() {
     if [ -t 1 ] && [ "${TERM-}" != "dumb" ]; then
@@ -32,10 +31,9 @@ setup_colors() {
 
 info() { printf '%b%s\n' "${BOLD}${CYAN}:: ${RESET}" "$*"; }
 ok()   { printf '%b%s\n' "${BOLD}${GREEN}:: ${RESET}" "$*"; }
+warn() { printf '%b%s\n' "${BOLD}${YELLOW}warning: ${RESET}" "$*" >&2; }
 err()  { printf '%b%s\n' "${BOLD}${RED}error: ${RESET}" "$*" >&2; }
 die()  { err "$@"; exit 1; }
-
-# ── Arguments ─────────────────────────────────────────────────────────────────
 
 usage() {
     cat <<EOF
@@ -48,6 +46,7 @@ Options:
   -v, --version <version>   Install a specific release (default: latest)
   -d, --install-dir <dir>   Install into <dir>
   -b, --binary <path>       Install a local binary instead of downloading
+  -f, --force               Reinstall even if that version is already present
       --no-verify           Skip checksum verification
 
 Flags override the SORTIE_VERSION, SORTIE_INSTALL_DIR and SORTIE_NO_VERIFY
@@ -73,6 +72,8 @@ parse_args() {
             -b|--binary)
                 [ $# -ge 2 ] || die "$1 requires an argument"
                 BINARY=$2; shift 2 ;;
+            -f|--force)
+                FORCE=1; shift ;;
             --no-verify)
                 SORTIE_NO_VERIFY=1; shift ;;
             *)
@@ -80,8 +81,6 @@ parse_args() {
         esac
     done
 }
-
-# ── Platform detection ────────────────────────────────────────────────────────
 
 detect_platform() {
     OS=$(uname -s)
@@ -107,9 +106,24 @@ detect_platform() {
     fi
 }
 
-# ── HTTP abstraction ──────────────────────────────────────────────────────────
-
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+# Checking the checksum tool here rather than at its point of use keeps a
+# missing sha256sum from surfacing only after the archive has been downloaded.
+check_dependencies() {
+    _missing=""
+    for _cmd in uname tar; do
+        command -v "$_cmd" >/dev/null 2>&1 \
+            || _missing="${_missing:+$_missing, }$_cmd"
+    done
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+        || _missing="${_missing:+$_missing, }curl or wget"
+    if [ "${SORTIE_NO_VERIFY-}" != "1" ] && [ -z "$(sha256_cmd)" ]; then
+        _missing="${_missing:+$_missing, }sha256sum or shasum"
+    fi
+
+    [ -z "$_missing" ] || die "required commands not found: ${_missing}"
+}
 
 fetch() {
     _url=$1 _out=${2:-}
@@ -123,8 +137,6 @@ fetch() {
         die "curl or wget is required"
     fi
 }
-
-# ── Version resolution ────────────────────────────────────────────────────────
 
 # The releases/latest HTML endpoint redirects to the tagged release and, unlike
 # the GitHub API, is not rate-limited per IP - which is what breaks on shared
@@ -161,26 +173,27 @@ installed_version() {
     "$1" --version 2>/dev/null | awk 'NR == 1 { print $2 }'
 }
 
-# ── Checksum verification ────────────────────────────────────────────────────
+# Name of the available SHA-256 tool, empty when neither is installed.
+sha256_cmd() {
+    if command -v sha256sum >/dev/null 2>&1; then printf 'sha256sum'
+    elif command -v shasum >/dev/null 2>&1; then printf 'shasum'
+    fi
+}
 
 verify_checksum() {
     _file=$1 _sums=$2
     _want=$(awk -v f="$(basename "$_file")" '$2 == f {print $1}' "$_sums")
     [ -n "$_want" ] || die "no checksum entry for $(basename "$_file")"
 
-    if command -v sha256sum >/dev/null 2>&1; then
-        _got=$(sha256sum "$_file" | awk '{print $1}')
-    elif command -v shasum >/dev/null 2>&1; then
-        _got=$(shasum -a 256 "$_file" | awk '{print $1}')
-    else
-        die "sha256sum or shasum is required"
-    fi
+    case $(sha256_cmd) in
+        sha256sum) _got=$(sha256sum "$_file" | awk '{print $1}') ;;
+        shasum)    _got=$(shasum -a 256 "$_file" | awk '{print $1}') ;;
+        *)         die "sha256sum or shasum is required" ;;
+    esac
 
     [ "$_want" = "$_got" ] \
         || die "checksum mismatch (expected ${_want}, got ${_got})"
 }
-
-# ── Install directory resolution ──────────────────────────────────────────────
 
 resolve_install_dir() {
     if [ -n "${SORTIE_INSTALL_DIR-}" ]; then
@@ -208,11 +221,29 @@ shell_rc() {
     esac
 }
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# Physical path of a file, so that two spellings of one location compare equal.
+canonical_file() {
+    _cf_dir=$(CDPATH='' cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1
+    printf '%s/%s' "$_cf_dir" "$(basename -- "$1")"
+}
+
+# Paths are compared rather than versions: reading the version means running
+# the file a PATH entry resolved to, and that entry may be one the person
+# installing does not control. Installing to /usr/local/bin means root.
+warn_if_shadowed() {
+    _found=$(command -v "$BIN" 2>/dev/null) || return 0
+    [ -n "$_found" ] || return 0
+
+    _found_real=$(canonical_file "$_found") || return 0
+    _target_real=$(canonical_file "${_dir}/${BIN}") || return 0
+    [ "$_found_real" != "$_target_real" ] || return 0
+
+    warn "${BIN} on PATH is ${_found}, not the copy just installed"
+    printf '  %bRemove that file, or put %s earlier in PATH.%b\n' \
+        "${DIM}" "$_dir" "${RESET}" >&2
+}
 
 cleanup() { [ -d "${TMPDIR_INSTALL-}" ] && rm -rf "$TMPDIR_INSTALL"; }
-
-# ── Install strategies ────────────────────────────────────────────────────────
 
 install_local() {
     [ -f "$BINARY" ] || die "binary not found: ${BINARY}"
@@ -226,8 +257,7 @@ install_local() {
 }
 
 install_release() {
-    need_cmd uname
-    need_cmd tar
+    check_dependencies
 
     detect_platform
     info "Platform: ${OS}/${ARCH}"
@@ -240,7 +270,7 @@ install_release() {
     _tag=$_version
     info "Release:  ${_version}"
 
-    if [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
+    if [ "$FORCE" != 1 ] && [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
         _already_installed=1
         return 0
     fi
@@ -295,8 +325,6 @@ install_release() {
     install -m 755 "${TMPDIR_INSTALL}/${BIN}" "${_dir}/${BIN}"
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 main() {
     setup_colors
     parse_args "$@"
@@ -316,6 +344,8 @@ main() {
     else
         ok "Installed ${BIN} ${_tag} to ${_dir}/${BIN}"
     fi
+
+    warn_if_shadowed
 
     case ":${PATH}:" in
         *":${_dir}:"*) ;;
