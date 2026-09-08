@@ -7,21 +7,30 @@ import (
 	"testing"
 )
 
-// TestToolDeliveryUncallableNoticeExcludesGeminiRefusalStems confirms
-// the uncallable-tool notice never carries either stem a Gemini
+// permissionRefusalNoticeStem is the fixed fragment a permission-answer
+// notification carries when the operator's own policy refused a
+// request.
+const permissionRefusalNoticeStem = "refused a permission request"
+
+// permissionRefusalUnansweredStem is the fixed fragment a
+// permission-answer notification carries when an unattended run cannot
+// grant the request at all.
+const permissionRefusalUnansweredStem = "needs a permission this unattended run cannot grant"
+
+// TestToolDeliveryUncallableNoticeExcludesPermissionRefusalStems
+// confirms the uncallable-tool notice never carries either stem a
 // permission-refusal notice carries, so an operator reading the two
 // notices side by side never mistakes one for the other. This lives
-// behind the unix build tag because geminiPermissionNoticeStem and
-// geminiPermissionUnansweredStem are declared in a unix-only file;
-// permission_test.go carries no build constraint and must stay
+// behind the unix build tag to mirror where its two stem constants were
+// pinned; permission_test.go carries no build constraint and must stay
 // buildable on every GOOS.
-func TestToolDeliveryUncallableNoticeExcludesGeminiRefusalStems(t *testing.T) {
+func TestToolDeliveryUncallableNoticeExcludesPermissionRefusalStems(t *testing.T) {
 	t.Parallel()
 
-	if strings.Contains(toolDeliveryUncallableNotice, geminiPermissionNoticeStem) {
-		t.Errorf("toolDeliveryUncallableNotice = %q, must not contain %q", toolDeliveryUncallableNotice, geminiPermissionNoticeStem)
+	if strings.Contains(toolDeliveryUncallableNotice, permissionRefusalNoticeStem) {
+		t.Errorf("toolDeliveryUncallableNotice = %q, must not contain %q", toolDeliveryUncallableNotice, permissionRefusalNoticeStem)
 	}
-	if strings.Contains(toolDeliveryUncallableNotice, geminiPermissionUnansweredStem) {
-		t.Errorf("toolDeliveryUncallableNotice = %q, must not contain %q", toolDeliveryUncallableNotice, geminiPermissionUnansweredStem)
+	if strings.Contains(toolDeliveryUncallableNotice, permissionRefusalUnansweredStem) {
+		t.Errorf("toolDeliveryUncallableNotice = %q, must not contain %q", toolDeliveryUncallableNotice, permissionRefusalUnansweredStem)
 	}
 }
