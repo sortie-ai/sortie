@@ -152,6 +152,15 @@ type TerminalLocator struct {
 	Mode               string `json:"mode"`
 	DiscriminatorKey   string `json:"discriminator_key"`
 	DiscriminatorValue string `json:"discriminator_value"`
+
+	// EnvelopePath descends from the located value to the object
+	// carrying the terminal members, for a runtime that wraps its
+	// payload one or more levels below the value the locator selects.
+	// Empty leaves the located value itself as the terminal object,
+	// which is what a runtime with a flat terminal needs, so it is
+	// omitted from the encoded form and never moves such a profile's
+	// digest.
+	EnvelopePath []string `json:"envelope_path,omitempty"`
 }
 
 // Recognizer maps one structured native surface's own output onto a
@@ -247,6 +256,7 @@ var entryPointFields = map[string]bool{"args": true}
 
 var terminalLocatorFields = map[string]bool{
 	"mode": true, "discriminator_key": true, "discriminator_value": true,
+	"envelope_path": true,
 }
 
 var recognizerFieldOrder = []string{
@@ -379,6 +389,17 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 	for _, absent := range profile.AbsentSurfaces {
 		if _, ok := profile.EntryPoints[absent.Surface]; !ok {
 			return RuntimeProfile{}, fmt.Errorf("absent_surfaces: %q is declared absent but carries no entry point, so its absence cannot be corroborated by a launch", absent.Surface)
+		}
+	}
+
+	// The evidence fixture seeds a baseline row for every measurable
+	// surface a profile does not declare absent, while the summary
+	// sizes that same set out of entry_points. A surface left out of
+	// both is counted by one rule and not the other, which surfaces
+	// far downstream as a baseline-count mismatch naming no cause.
+	for _, surface := range measurableSurfaces {
+		if _, ok := profile.EntryPoints[surface]; !ok {
+			return RuntimeProfile{}, fmt.Errorf("entry_points is missing %q: every measurable surface needs one, and a surface the runtime does not offer carries an entry point plus an absent_surfaces declaration rather than being left out", surface)
 		}
 	}
 
@@ -1064,6 +1085,16 @@ func decodeTopLevelJSONValues(output string) []any {
 // locateTerminal applies r.Locator to values, returning the selected
 // terminal object and whether one was found.
 func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
+	located, ok := r.locateEnvelope(values)
+	if !ok {
+		return nil, false
+	}
+	return descend(located, r.Locator.EnvelopePath)
+}
+
+// locateEnvelope selects the top-level value the locator's mode picks,
+// before any envelope descent.
+func (r Recognizer) locateEnvelope(values []any) (map[string]any, bool) {
 	switch r.Locator.Mode {
 	case "first_value":
 		if len(values) == 0 {
@@ -1083,6 +1114,19 @@ func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// descend walks path from object, reporting failure at the first key
+// that is missing or does not carry a further object.
+func descend(object map[string]any, path []string) (map[string]any, bool) {
+	for _, key := range path {
+		next, ok := object[key].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		object = next
+	}
+	return object, true
 }
 
 // Terminal recognizes one native surface's terminal outcome from its
@@ -1142,23 +1186,21 @@ const (
 // message text. An unreadable object is reported rather than defaulted
 // to ModelRequestNone: reading it as "no model request" would
 // manufacture a false positive out of a truncated terminal.
+//
+// An empty path spells a surface whose terminal carries no
+// model-request object at all, and reads unreadable for the same
+// reason: the terminal object's own members are not a model-request
+// object, and counting them as one would manufacture that same false
+// positive.
 func (r Recognizer) ModelRequests(output string) ModelRequestReading {
+	if len(r.ModelRequestPath) == 0 {
+		return ModelRequestUnreadable
+	}
 	terminal, found := r.locateTerminal(decodeTopLevelJSONValues(output))
 	if !found {
 		return ModelRequestUnreadable
 	}
-	var cursor any = terminal
-	for _, key := range r.ModelRequestPath {
-		object, ok := cursor.(map[string]any)
-		if !ok {
-			return ModelRequestUnreadable
-		}
-		cursor, ok = object[key]
-		if !ok {
-			return ModelRequestUnreadable
-		}
-	}
-	models, ok := cursor.(map[string]any)
+	models, ok := descend(terminal, r.ModelRequestPath)
 	if !ok {
 		return ModelRequestUnreadable
 	}

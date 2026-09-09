@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "profile_digest": "998eb4e4a2059aca2c40d2292aff41177a9c80f87e97f107bee8fdff3469f199",
+  "measured_at": "2026-09-08",
+  "expectation": {
+    "Verdict": "unmeasured",
+    "Grades": [
+      {
+        "Surface": "protocol",
+        "Capability": "turn_disposition",
+        "Grade": "not_observed",
+        "Label": "Not observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "retry_classification",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "token_ceiling",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "tool_server_delivery",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "protocol",
+        "Capability": "permission_handling",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "turn_disposition",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "retry_classification",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "token_ceiling",
+        "Grade": "usable",
+        "Label": "Observed:"
+      },
+      {
+        "Surface": "native_stream_json",
+        "Capability": "session_continuation",
+        "Grade": "usable",
+        "Label": "Observed:"
+      }
+    ],
+    "Excluded": null,
+    "Unobserved": [
+      "protocol turn_disposition runtime_refusal: not_observed"
+    ]
+  }
+}

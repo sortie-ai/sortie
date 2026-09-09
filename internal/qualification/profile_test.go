@@ -176,6 +176,15 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			},
 		},
 		{
+			// The recognizer goes with it, so the surface's absence
+			// from entry_points is the only rule left to reject it.
+			name: "entry_points missing a measurable native surface is rejected",
+			mutate: func(doc map[string]any) {
+				delete(doc["entry_points"].(map[string]any), "native_stream_json")
+				delete(doc["recognizers"].(map[string]any), "native_stream_json")
+			},
+		},
+		{
 			name: "entry_points naming a surface outside qualification.Surfaces is rejected",
 			mutate: func(doc map[string]any) {
 				doc["entry_points"].(map[string]any)["not_a_real_surface"] = map[string]any{"args": []string{"--x"}}
@@ -579,6 +588,20 @@ var (
 		},
 		StatusEndTurn: []string{"end_turn", "success", "completed"},
 	}
+
+	// A runtime that discriminates on the outer value and carries the
+	// terminal members one level below it, which is the shape a flat
+	// locator cannot read at all.
+	envelopedRecognizer = Recognizer{
+		Locator: TerminalLocator{
+			Mode:               "discriminated",
+			DiscriminatorKey:   "type",
+			DiscriminatorValue: "runFinished",
+			EnvelopePath:       []string{"data"},
+		},
+		StatusMember:  "status",
+		StatusEndTurn: []string{"success"},
+	}
 )
 
 // TestRecognizerTerminal covers Recognizer.Terminal against both
@@ -672,6 +695,41 @@ func TestRecognizerTerminal(t *testing.T) {
 			want:       Terminal{},
 			wantOK:     false,
 		},
+		{
+			name:       "envelope_path: the status member is read below the discriminated value",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":{"status":"success","finalText":"hi"}}`,
+			want:       Terminal{EndTurn: true},
+			wantOK:     true,
+		},
+		{
+			name:       "envelope_path: a status member left at the outer value is not read",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","status":"success"}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: an envelope member that is not an object recognizes nothing",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":"success"}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: a status the profile does not map recognizes nothing",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":{"status":"error"}}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: a non-terminal line of the same stream is skipped",
+			recognizer: envelopedRecognizer,
+			output:     "{\"type\":\"runStarted\",\"data\":{\"status\":\"success\"}}\n{\"type\":\"runFinished\",\"data\":{\"status\":\"success\"}}",
+			want:       Terminal{EndTurn: true},
+			wantOK:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -683,5 +741,21 @@ func TestRecognizerTerminal(t *testing.T) {
 				t.Errorf("Recognizer.Terminal(%q) = %+v, %v, want %+v, %v", tt.output, got, ok, tt.want, tt.wantOK)
 			}
 		})
+	}
+}
+
+// TestRecognizerModelRequestsEmptyPath confirms a recognizer naming no
+// model-request path reads unreadable, rather than counting the
+// terminal object's own members as model requests.
+func TestRecognizerModelRequestsEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	recognizer := Recognizer{
+		Locator:       TerminalLocator{Mode: "first_value"},
+		SuccessMember: "response",
+	}
+	output := `{"response":"hi","stats":{"models":{"a-model":1}}}`
+	if got := recognizer.ModelRequests(output); got != ModelRequestUnreadable {
+		t.Errorf("Recognizer.ModelRequests(%q) = %v, want %v", output, got, ModelRequestUnreadable)
 	}
 }

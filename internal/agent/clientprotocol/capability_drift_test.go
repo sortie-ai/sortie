@@ -27,6 +27,8 @@ import (
 // one-gate-per-package rule stays unaffected.
 const capabilityDriftProfileEnv = "SORTIE_CLIENTPROTOCOL_PROFILE"
 
+const capabilityDriftCommandEnv = "SORTIE_CLIENTPROTOCOL_COMMAND"
+
 // capabilityGapLabelSet is the four labels a session's capability-gap
 // notice may report, in the record's own field order.
 var capabilityGapLabelSet = []string{
@@ -250,19 +252,39 @@ func callersOfAssertCapabilityGapLabels(t *testing.T) []string {
 	return callers
 }
 
+// nightlyMatrixValue resolves value against row when it is a single
+// "${{ matrix.<key> }}" expression, and returns it unchanged
+// otherwise. A workflow that varies a coordinate per shard writes the
+// expression rather than a literal, and a guard that could not read
+// through it would pass vacuously on exactly the rows it exists to
+// check.
+func nightlyMatrixValue(row map[string]string, value string) string {
+	trimmed := strings.TrimSpace(value)
+	match := nightlyMatrixExpression.FindStringSubmatch(trimmed)
+	if match == nil {
+		return trimmed
+	}
+	return strings.TrimSpace(row[match[1]])
+}
+
+var nightlyMatrixExpression = regexp.MustCompile(`^\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}$`)
+
 // TestNightlyReachability confirms the nightly workflow's own matrix
-// row and go-test step actually reach and arm
-// assertCapabilityGapLabelsMatchProfile, per the five inputs the drift
-// check's binding depends on: exactly one row names this package; the
-// coordinate carries a non-empty value in the environment that row's
-// go-test step inherits (the union of the job-level and step-level env
-// mappings, innermost winning); that value names a file that exists;
-// exactly one top-level Test function in this package calls the
-// comparison helper; and the row's run_filter, compiled as a Go
-// regexp, matches that function's name. A coordinate declared where
-// the step does not inherit it, a coordinate naming a file that does
-// not exist, and an assertion the nightly's -run selector cannot reach
-// each fail here rather than passing green and inert.
+// rows and go-test steps actually reach and arm
+// assertCapabilityGapLabelsMatchProfile, per the inputs the drift
+// check's binding depends on: at least one row names this package;
+// each such row names a distinct runtime command, so a duplicated
+// shard is still caught; the profile coordinate carries a non-empty
+// value in the environment that row's go-test step inherits (the union
+// of the job-level and step-level env mappings, innermost winning,
+// resolved through a matrix expression where the row supplies one);
+// that value names a file that exists; exactly one top-level Test
+// function in this package calls the comparison helper; and each row's
+// run_filter, compiled as a Go regexp, matches that function's name. A
+// coordinate declared where the step does not inherit it, a coordinate
+// naming a file that does not exist, and an assertion the nightly's
+// -run selector cannot reach each fail here rather than passing green
+// and inert.
 func TestNightlyReachability(t *testing.T) {
 	doc, err := readNightlyWorkflow()
 	if err != nil {
@@ -270,31 +292,8 @@ func TestNightlyReachability(t *testing.T) {
 	}
 
 	rows := nightlyMatrixRowsNamingThisPackage(doc)
-	if len(rows) != 1 {
-		t.Fatalf("nightly workflow names this package's test_path in %d matrix rows, want exactly 1", len(rows))
-	}
-	row := rows[0]
-
-	step, found := nightlyGoTestStep(row.job.Steps)
-	if !found {
-		t.Fatalf("job %q carries no step whose run script invokes go test", row.jobName)
-	}
-
-	env := map[string]string{}
-	maps.Copy(env, row.job.Env)
-	maps.Copy(env, step.Env)
-	value, ok := env[capabilityDriftProfileEnv]
-	if !ok || strings.TrimSpace(value) == "" {
-		t.Fatalf("no %s in the environment job %q's go-test step inherits, or it is empty", capabilityDriftProfileEnv, row.jobName)
-	}
-
-	root, err := nightlyRepositoryRoot()
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	resolved := filepath.Join(root, value)
-	if _, statErr := os.Stat(resolved); statErr != nil {
-		t.Fatalf("resolve the file %s names, %q: nothing exists at %s", capabilityDriftProfileEnv, value, resolved)
+	if len(rows) == 0 {
+		t.Fatal("nightly workflow names this package's test_path in no matrix row, want at least one")
 	}
 
 	callers := callersOfAssertCapabilityGapLabels(t)
@@ -302,12 +301,49 @@ func TestNightlyReachability(t *testing.T) {
 		t.Fatalf("%d top-level Test functions in this package call assertCapabilityGapLabelsMatchProfile, want exactly 1: %v", len(callers), callers)
 	}
 
-	runFilter := row.row["run_filter"]
-	pattern, err := regexp.Compile(runFilter)
+	root, err := nightlyRepositoryRoot()
 	if err != nil {
-		t.Fatalf("compile run_filter %q as a Go regexp: %v", runFilter, err)
+		t.Fatalf("resolve repository root: %v", err)
 	}
-	if !pattern.MatchString(callers[0]) {
-		t.Fatalf("run_filter %q does not match the calling test function %s", runFilter, callers[0])
+
+	commands := map[string]string{}
+	for _, row := range rows {
+		name := row.row["name"]
+
+		step, found := nightlyGoTestStep(row.job.Steps)
+		if !found {
+			t.Fatalf("row %q: job %q carries no step whose run script invokes go test", name, row.jobName)
+		}
+
+		env := map[string]string{}
+		maps.Copy(env, row.job.Env)
+		maps.Copy(env, step.Env)
+
+		command := nightlyMatrixValue(row.row, env[capabilityDriftCommandEnv])
+		if command == "" {
+			t.Errorf("row %q: no %s in the environment job %q's go-test step inherits, or it is empty", name, capabilityDriftCommandEnv, row.jobName)
+		}
+		if previous, duplicate := commands[command]; duplicate {
+			t.Errorf("rows %q and %q both drive this package with %s %q, want one row per runtime", previous, name, capabilityDriftCommandEnv, command)
+		}
+		commands[command] = name
+
+		value := nightlyMatrixValue(row.row, env[capabilityDriftProfileEnv])
+		if value == "" {
+			t.Errorf("row %q: no %s in the environment job %q's go-test step inherits, or it is empty", name, capabilityDriftProfileEnv, row.jobName)
+			continue
+		}
+		if _, statErr := os.Stat(filepath.Join(root, value)); statErr != nil {
+			t.Errorf("row %q: resolve the file %s names, %q: nothing exists under %s", name, capabilityDriftProfileEnv, value, root)
+		}
+
+		pattern, compileErr := regexp.Compile(row.row["run_filter"])
+		if compileErr != nil {
+			t.Errorf("row %q: compile run_filter %q as a Go regexp: %v", name, row.row["run_filter"], compileErr)
+			continue
+		}
+		if !pattern.MatchString(callers[0]) {
+			t.Errorf("row %q: run_filter %q does not match the calling test function %s", name, row.row["run_filter"], callers[0])
+		}
 	}
 }

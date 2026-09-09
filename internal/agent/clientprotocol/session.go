@@ -296,6 +296,7 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 	initResp, agentErr := doInitialize(ctx, state)
 	if agentErr != nil {
 		teardownOnFailure()
+		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
 		return domain.Session{}, agentErr
 	}
 
@@ -316,6 +317,7 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 	sessionID, agentErr := resolveSession(ctx, state, params.ResumeSessionID, caps, target.WorkspacePath, wireServers)
 	if agentErr != nil {
 		teardownOnFailure()
+		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
 		return domain.Session{}, agentErr
 	}
 	if advertisesSessionClose(caps) {

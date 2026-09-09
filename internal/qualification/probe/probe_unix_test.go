@@ -454,3 +454,115 @@ func TestPathWithin(t *testing.T) {
 		})
 	}
 }
+
+// gradingWiringProfile is the protocol-only profile step 3.4's wiring
+// runs under: both native surfaces declared absent, matching the
+// plan's own note that a protocol-only profile passes SurfaceProtocol
+// to SetSessionContinuation.
+func gradingWiringProfile() qualification.RuntimeProfile {
+	return qualification.RuntimeProfile{
+		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
+			qualification.SurfaceProtocol: {},
+		},
+		AbsentSurfaces: []qualification.AbsentSurface{
+			{Surface: qualification.SurfaceNativeJSON, Reason: qualification.SurfaceNotOffered},
+			{Surface: qualification.SurfaceNativeStreamJSON, Reason: qualification.SurfaceNotOffered},
+		},
+	}
+}
+
+// buildWiredFixture reproduces Run's own grading wiring (step 3.4)
+// against three independent inducer outcomes, one per wired row,
+// without launching any live process: an unmeasured-variant fixture
+// carries every non-wired row at its scaffolded default, and the
+// three wired rows are set exactly as Run sets them from its own
+// inducers' results.
+func buildWiredFixture(toolGrade, permissionGrade, continuationGrade qualification.Grade) (*qualification.Fixture, qualification.RuntimeProfile) {
+	profile := gradingWiringProfile()
+	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, profile.AbsentSurfaces...)
+	fixture.SetToolServerDelivery(toolGrade, "tool server induction: "+string(toolGrade))
+	fixture.SetPermissionHandling(permissionGrade, "permission induction: "+string(permissionGrade))
+	fixture.SetSessionContinuation(qualification.SurfaceProtocol, continuationGrade, "continuation induction: "+string(continuationGrade))
+	fixture.Finalize()
+	return fixture, profile
+}
+
+// findNotesGrade returns the entry in grades matching surface and
+// capability, or nil.
+func findNotesGrade(grades []qualification.NotesGrade, surface qualification.Surface, capability qualification.Capability) *qualification.NotesGrade {
+	for i := range grades {
+		if grades[i].Surface == surface && grades[i].Capability == capability {
+			return &grades[i]
+		}
+	}
+	return nil
+}
+
+// TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow drives step
+// 3.4's grading wiring, the three fixture setters Run calls with each
+// inducer's own outcome, with each of the three grades an inducer can
+// report, for each of the three rows Run wires, and reads each row's
+// grade back through ExpectationFrom rather than off Fixture.Records
+// directly. A setter that leaves an owning record behind, the way
+// SetSessionContinuation's baseline rewrite and SetPermissionHandling's
+// derivation exist to prevent, either leaves the row's derived grade
+// stale or unbalances ConclusionsFromRecords' own grade-count
+// invariant; either failure reddens this control.
+func TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow(t *testing.T) {
+	t.Parallel()
+
+	grades := []qualification.Grade{qualification.GradeUsable, qualification.GradeGap, qualification.GradeNotObserved}
+
+	rows := []struct {
+		name       string
+		capability qualification.Capability
+	}{
+		{"tool server delivery", qualification.CapabilityToolServerDelivery},
+		{"permission handling", qualification.CapabilityPermissionHandling},
+		{"session continuation", qualification.CapabilitySessionContinuation},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, grade := range grades {
+				t.Run(string(grade), func(t *testing.T) {
+					t.Parallel()
+
+					toolGrade := qualification.GradeUsable
+					permissionGrade := qualification.GradeUsable
+					continuationGrade := qualification.GradeUsable
+					switch row.capability {
+					case qualification.CapabilityToolServerDelivery:
+						toolGrade = grade
+					case qualification.CapabilityPermissionHandling:
+						permissionGrade = grade
+					case qualification.CapabilitySessionContinuation:
+						continuationGrade = grade
+					}
+
+					fixture, profile := buildWiredFixture(toolGrade, permissionGrade, continuationGrade)
+
+					verdict := qualification.ComputeEligibility(fixture.Records, profile)
+					conclusions, err := ConclusionsFromRecords(fixture.Records, verdict, profile)
+					if err != nil {
+						t.Fatalf("ConclusionsFromRecords(...) = _, %v, want nil", err)
+					}
+
+					expectation := ExpectationFrom(conclusions)
+					got := findNotesGrade(expectation.Grades, qualification.SurfaceProtocol, row.capability)
+					if got == nil {
+						t.Fatalf("ExpectationFrom(...).Grades carries no protocol %s entry", row.capability)
+					}
+					if got.Grade != grade {
+						t.Errorf("ExpectationFrom(...) protocol %s grade = %s, want %s", row.capability, got.Grade, grade)
+					}
+					if want := qualification.StatusLabel(grade); got.Label != want {
+						t.Errorf("ExpectationFrom(...) protocol %s label = %q, want %q", row.capability, got.Label, want)
+					}
+				})
+			}
+		})
+	}
+}

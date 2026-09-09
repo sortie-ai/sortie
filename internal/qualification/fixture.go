@@ -741,6 +741,98 @@ func matchTokenSurface(Surface Surface) func(*Record) bool {
 	}
 }
 
+// matchToolServer matches the single protocol MCP delivery Record
+// addToolServer seeded.
+func matchToolServer() func(*Record) bool {
+	return func(rec *Record) bool {
+		return rec.Scenario == ScenarioToolServer && rec.Surface == SurfaceProtocol &&
+			rec.Capability == CapabilityToolServerDelivery
+	}
+}
+
+// matchPermission matches the single protocol permission Record
+// addPermission seeded. It does not match addPolicyPrecondition's
+// record: that record classifies as a policy-precondition row rather
+// than a graded permission-handling row, so ConclusionsFromRecords
+// never reads it as one.
+func matchPermission() func(*Record) bool {
+	return func(rec *Record) bool {
+		return rec.Scenario == ScenarioPermissionRequest && rec.Surface == SurfaceProtocol &&
+			rec.Capability == CapabilityPermissionHandling
+	}
+}
+
+// boundDetail truncates detail to DetailBound Unicode code points, so a
+// caller-supplied observation description cannot make a rewritten
+// Record fail the decoder's own length check.
+func boundDetail(detail string) string {
+	runes := []rune(detail)
+	if len(runes) <= DetailBound {
+		return detail
+	}
+	return string(runes[:DetailBound])
+}
+
+// SetToolServerDelivery rewrites the protocol tool-server-delivery
+// Record to grade and detail, following an observation of whether a
+// declared server actually received a call. Outcome is derived from
+// grade with BaselineVerdictFor's convention.
+func (f *Fixture) SetToolServerDelivery(grade Grade, detail string) {
+	rec := f.FindFirst(matchToolServer())
+	if rec == nil {
+		return
+	}
+	rec.Grade = grade
+	rec.Detail = boundDetail(detail)
+	rec.Outcome = BaselineVerdictFor(grade)
+}
+
+// SetPermissionHandling rewrites the protocol permission-handling
+// Record to grade and detail, following an observation of whether the
+// runtime raised a permission request the client's refusal answered.
+// Outcome is derived from grade with BaselineVerdictFor's convention.
+func (f *Fixture) SetPermissionHandling(grade Grade, detail string) {
+	rec := f.FindFirst(matchPermission())
+	if rec == nil {
+		return
+	}
+	rec.Grade = grade
+	rec.Detail = boundDetail(detail)
+	rec.Outcome = BaselineVerdictFor(grade)
+}
+
+// SetSessionContinuation rewrites surface's session-continuation
+// baseline and recall Records to grade, following a live replay
+// observation. The baseline carries detail, bounded by DetailBound; the
+// recall Record instead carries the closed detail token
+// checkRecallRecord requires for grade, since a recall Record's detail
+// is not free text. Once grade is not GradeUsable, the recall no longer
+// reads RecallConfirmedSameSession.
+func (f *Fixture) SetSessionContinuation(surface Surface, grade Grade, detail string) {
+	if baseline := f.FindFirst(MatchBaseline(surface, CapabilitySessionContinuation)); baseline != nil {
+		baseline.Grade = grade
+		baseline.Detail = boundDetail(detail)
+		baseline.Outcome = BaselineVerdictFor(grade)
+	}
+
+	recall := f.FindFirst(MatchContinuation(surface, InputContinuationRecall))
+	if recall == nil {
+		return
+	}
+	recall.Grade = grade
+	recall.Outcome = BaselineVerdictFor(grade)
+	switch grade {
+	case GradeUsable:
+		recall.Detail = RecallConfirmedSameSession
+	case GradeGap:
+		recall.Detail = RecallFreshFallback
+		recall.SessionID = new(FixtureSession(surface, "recall-fallback"))
+	case GradeNotObserved:
+		recall.Detail = RecallUnobservedActual
+		recall.SessionID = nil
+	}
+}
+
 // SetTokenCorroborationOnly rewrites every non-sentinel token Record of
 // one Surface to corroboration_only and the token baseline to gap, so
 // the inventory completed but supplied no contract-usable Source.
