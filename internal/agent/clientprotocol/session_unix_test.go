@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -234,6 +235,70 @@ while :; do sleep 0.05; done
 `
 }
 
+// killLaunchedGroup signals the process group the launched agent leads,
+// tolerating a pid that has already gone. A child that stayed in that
+// group leads no group of its own, so a kill aimed at the child's own
+// pid reaches nothing; killHelperGroup is right only for the detached
+// child below, which setsid makes a leader.
+func killLaunchedGroup(agentPID string) {
+	pid, err := strconv.Atoi(strings.TrimSpace(agentPID))
+	if err != nil || pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
+// initThenStderrExitScript answers initialize, writes marker to stderr,
+// and exits before answering session/new, so startSession's failure
+// arrives from resolveSession rather than from doInitialize.
+func initThenStderrExitScript(marker string) string {
+	return `while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+      printf '%s\n' '` + marker + `' 1>&2
+      exit 1
+      ;;
+  esac
+done
+`
+}
+
+// TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession is
+// the second half of property 4. startSession emits collected stderr on
+// two failure branches, and a control that reaches only the first lets
+// the second's emission be deleted without a test going red.
+func TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession(t *testing.T) {
+	// No t.Parallel(): installs a process-wide slog default.
+
+	const marker = "distinguishing-stderr-line-resolve-failure"
+
+	dir := t.TempDir()
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", initThenStderrExitScript(marker))
+
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	_, err := startSession(context.Background(), &sessionOrigins{}, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: scriptPath},
+	})
+
+	if _, ok := errors.AsType[*domain.AgentError](err); !ok {
+		t.Fatalf("startSession() error = %v (%T), want a non-nil *domain.AgentError", err, err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, marker) {
+		t.Errorf("startSession() on failed resolveSession did not log the collected stderr line %q at Warn: %s", marker, output)
+	}
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("startSession()'s collected stderr line was logged below Warn: %s", output)
+	}
+}
+
 // TestStopSessionReachesGroupChild is the other half of the property
 // the escaped-member test below evidences. Teardown does reach a
 // descendant that stays in the group it was launched into, so a
@@ -256,7 +321,7 @@ func TestStopSessionReachesGroupChild(t *testing.T) {
 	}
 
 	childPID := waitForPIDFile(t, pidPath, awaitTimeout)
-	t.Cleanup(func() { killHelperGroup(pidPath) })
+	t.Cleanup(func() { killLaunchedGroup(session.AgentPID) })
 
 	if err := stopSession(context.Background(), session); err != nil {
 		t.Fatalf("stopSession() error = %v", err)
