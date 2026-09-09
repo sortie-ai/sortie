@@ -325,6 +325,50 @@ func TestResolveCoordinates(t *testing.T) {
 			t.Errorf("Profile.RuntimeID = %q, want %q", coords.Profile.RuntimeID, "sample-runtime")
 		}
 	})
+
+	t.Run("an empty authentication name list resolves to no forwarded names", func(t *testing.T) {
+		t.Parallel()
+
+		env := func(name string) (string, bool) {
+			switch name {
+			case qualificationCommandEnv:
+				return executable, true
+			case qualificationModelEnv:
+				return "fixture-model", true
+			case qualificationAuthNamesEnv:
+				return "", true
+			case qualificationProfileEnv:
+				return profilePath, true
+			}
+			return "", false
+		}
+		coords, err := ResolveCoordinates(env)
+		if err != nil {
+			t.Fatalf("ResolveCoordinates() error = %v, want a runtime authenticating from a stored login to resolve", err)
+		}
+		if len(coords.AuthEnvNames) != 0 {
+			t.Errorf("AuthEnvNames = %v, want none", coords.AuthEnvNames)
+		}
+	})
+
+	t.Run("an unset authentication name coordinate is still rejected", func(t *testing.T) {
+		t.Parallel()
+
+		env := func(name string) (string, bool) {
+			switch name {
+			case qualificationCommandEnv:
+				return executable, true
+			case qualificationModelEnv:
+				return "fixture-model", true
+			case qualificationProfileEnv:
+				return profilePath, true
+			}
+			return "", false
+		}
+		if _, err := ResolveCoordinates(env); err == nil {
+			t.Fatal("ResolveCoordinates() = nil error, want an unset coordinate to fail rather than read as a stored login")
+		}
+	})
 }
 
 // TestGated confirms the gate skips cleanly when unset, and resolves

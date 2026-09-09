@@ -81,7 +81,7 @@ MADR-format records in [decisions/](decisions/); [decisions/README.md](decisions
 | [codex-adapter-notes.md](codex-adapter-notes.md) | Working notes for the Codex adapter: process model and trust/approval collisions. |
 | [copilot-adapter-notes.md](copilot-adapter-notes.md) | Working notes for the Copilot CLI adapter: session/cost model and hard-to-diagnose failures. |
 | [opencode-adapter-notes.md](opencode-adapter-notes.md) | Working notes for the OpenCode adapter: why it skips the shared subprocess skeleton. |
-| [kiro-adapter-notes.md](kiro-adapter-notes.md) | Working notes for the Kiro adapter: credential failure modes and exit codes. |
+| [kiro-adapter-notes.md](kiro-adapter-notes.md) | Working notes on Kiro CLI over both routes: the native kind and the generic ACP adapter. |
 | [gemini-adapter-notes.md](gemini-adapter-notes.md) | Working notes on Gemini CLI via the generic ACP adapter and its token accounting. |
 | [agent-client-protocol-adapter-notes.md](agent-client-protocol-adapter-notes.md) | Working notes for the generic ACP adapter: pinned schema artifact and runtime selection. |
 

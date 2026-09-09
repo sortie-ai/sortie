@@ -3,8 +3,10 @@ package qualification
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -173,6 +175,27 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			name: "entry_points missing protocol is rejected",
 			mutate: func(doc map[string]any) {
 				delete(doc["entry_points"].(map[string]any), "protocol")
+			},
+		},
+		{
+			name: "an entry_points asking_args that is empty is rejected",
+			mutate: func(doc map[string]any) {
+				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{}
+			},
+		},
+		{
+			name: "an entry_points asking_args entry carrying a placeholder outside the allowed set is rejected",
+			mutate: func(doc map[string]any) {
+				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp", "{bogus}"}
+			},
+		},
+		{
+			// The recognizer goes with it, so the surface's absence
+			// from entry_points is the only rule left to reject it.
+			name: "entry_points missing a measurable native surface is rejected",
+			mutate: func(doc map[string]any) {
+				delete(doc["entry_points"].(map[string]any), "native_stream_json")
+				delete(doc["recognizers"].(map[string]any), "native_stream_json")
 			},
 		},
 		{
@@ -579,6 +602,20 @@ var (
 		},
 		StatusEndTurn: []string{"end_turn", "success", "completed"},
 	}
+
+	// A runtime that discriminates on the outer value and carries the
+	// terminal members one level below it, which is the shape a flat
+	// locator cannot read at all.
+	envelopedRecognizer = Recognizer{
+		Locator: TerminalLocator{
+			Mode:               "discriminated",
+			DiscriminatorKey:   "type",
+			DiscriminatorValue: "runFinished",
+			EnvelopePath:       []string{"data"},
+		},
+		StatusMember:  "status",
+		StatusEndTurn: []string{"success"},
+	}
 )
 
 // TestRecognizerTerminal covers Recognizer.Terminal against both
@@ -672,6 +709,41 @@ func TestRecognizerTerminal(t *testing.T) {
 			want:       Terminal{},
 			wantOK:     false,
 		},
+		{
+			name:       "envelope_path: the status member is read below the discriminated value",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":{"status":"success","finalText":"hi"}}`,
+			want:       Terminal{EndTurn: true},
+			wantOK:     true,
+		},
+		{
+			name:       "envelope_path: a status member left at the outer value is not read",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","status":"success"}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: an envelope member that is not an object recognizes nothing",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":"success"}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: a status the profile does not map recognizes nothing",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":{"status":"error"}}`,
+			want:       Terminal{},
+			wantOK:     false,
+		},
+		{
+			name:       "envelope_path: a non-terminal line of the same stream is skipped",
+			recognizer: envelopedRecognizer,
+			output:     "{\"type\":\"runStarted\",\"data\":{\"status\":\"success\"}}\n{\"type\":\"runFinished\",\"data\":{\"status\":\"success\"}}",
+			want:       Terminal{EndTurn: true},
+			wantOK:     true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -684,4 +756,76 @@ func TestRecognizerTerminal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRecognizerModelRequestsEmptyPath confirms a recognizer naming no
+// model-request path reads unreadable, rather than counting the
+// terminal object's own members as model requests.
+func TestRecognizerModelRequestsEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	recognizer := Recognizer{
+		Locator:       TerminalLocator{Mode: "first_value"},
+		SuccessMember: "response",
+	}
+	output := `{"response":"hi","stats":{"models":{"a-model":1}}}`
+	if got := recognizer.ModelRequests(output); got != ModelRequestUnreadable {
+		t.Errorf("Recognizer.ModelRequests(%q) = %v, want %v", output, got, ModelRequestUnreadable)
+	}
+}
+
+// TestRuntimeProfileAskingArgs confirms the asking posture is read from
+// the profile rather than derived from the graded launch, and that a
+// profile stating none reports so instead of returning a launch the
+// caller would have to guess at.
+func TestRuntimeProfileAskingArgs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a stated asking posture substitutes placeholders", func(t *testing.T) {
+		t.Parallel()
+
+		doc := validProfileDoc()
+		doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp", "--model", "{model}"}
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, doc))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		got, ok := profile.AskingArgs(SurfaceProtocol, "a-model", "", "")
+		if !ok {
+			t.Fatal("AskingArgs() ok = false, want a stated posture to resolve")
+		}
+		want := []string{"--acp", "--model", "a-model"}
+		if !slices.Equal(got, want) {
+			t.Errorf("AskingArgs() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a profile stating no asking posture reports none", func(t *testing.T) {
+		t.Parallel()
+
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		if got, ok := profile.AskingArgs(SurfaceProtocol, "a-model", "", ""); ok {
+			t.Errorf("AskingArgs() = %v, true, want no posture reported", got)
+		}
+	})
+
+	t.Run("omitting asking_args leaves the digest unmoved", func(t *testing.T) {
+		t.Parallel()
+
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		bare := profile
+		bare.EntryPoints = maps.Clone(profile.EntryPoints)
+		entry := bare.EntryPoints[SurfaceProtocol]
+		entry.AskingArgs = nil
+		bare.EntryPoints[SurfaceProtocol] = entry
+		if profile.Digest() != bare.Digest() {
+			t.Errorf("Digest() moved for a profile that states no asking posture: %s vs %s", profile.Digest(), bare.Digest())
+		}
+	})
 }

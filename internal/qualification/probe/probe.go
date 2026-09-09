@@ -107,10 +107,14 @@ func parseCommand(raw string) (string, error) {
 
 // parseAuthEnvNames parses the comma-separated list of authentication
 // environment variable names. Entries are trimmed; an empty entry or a
-// duplicate name is rejected.
+// duplicate name is rejected. An entirely empty list is the runtime
+// that authenticates from state already on the host, such as a stored
+// login, and forwards no credential through the environment; the
+// coordinate must still be set, so a forgotten one is still a failure
+// rather than that declaration.
 func parseAuthEnvNames(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("%s must be a comma-separated list of non-empty environment variable names", qualificationAuthNamesEnv)
+		return nil, nil
 	}
 	var names []string
 	for entry := range strings.SplitSeq(raw, ",") {
@@ -153,7 +157,10 @@ func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 		return Coordinates{}, fmt.Errorf("%s must name one model identifier for every surface", qualificationModelEnv)
 	}
 
-	rawNames := coordinateValue(env, qualificationAuthNamesEnv)
+	rawNames, namesPresent := env(qualificationAuthNamesEnv)
+	if !namesPresent {
+		return Coordinates{}, fmt.Errorf("%s must be set: a comma-separated list of environment variable names, or empty for a runtime that authenticates from a stored login", qualificationAuthNamesEnv)
+	}
 	authNames, err := parseAuthEnvNames(rawNames)
 	if err != nil {
 		return Coordinates{}, err

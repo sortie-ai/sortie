@@ -12,8 +12,10 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
@@ -452,5 +454,258 @@ func TestPathWithin(t *testing.T) {
 				t.Errorf("pathWithin(%q, %q) = %v, want %v", tt.path, root, got, tt.want)
 			}
 		})
+	}
+}
+
+// gradingWiringProfile is the protocol-only profile step 3.4's wiring
+// runs under: both native surfaces declared absent, matching the
+// plan's own note that a protocol-only profile passes SurfaceProtocol
+// to SetSessionContinuation. Every measurable surface still carries its
+// own entry point, matching what a real profile carries: an absent
+// surface is corroborated by launching it, so its entry point is never
+// omitted, only declared absent.
+func gradingWiringProfile() qualification.RuntimeProfile {
+	return qualification.RuntimeProfile{
+		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
+			qualification.SurfaceProtocol:         {Args: []string{"--acp"}},
+			qualification.SurfaceNativeJSON:       {Args: []string{"--output-format", "json", "--prompt", "{prompt}"}},
+			qualification.SurfaceNativeStreamJSON: {Args: []string{"--output-format", "stream-json", "--prompt", "{prompt}"}},
+		},
+		AbsentSurfaces: []qualification.AbsentSurface{
+			{Surface: qualification.SurfaceNativeJSON, Reason: qualification.SurfaceNotOffered},
+			{Surface: qualification.SurfaceNativeStreamJSON, Reason: qualification.SurfaceNotOffered},
+		},
+	}
+}
+
+// buildWiredFixture reproduces Run's own grading wiring (step 3.4)
+// against three independent inducer outcomes, one per wired row,
+// without launching any live process: an unmeasured-variant fixture
+// carries every non-wired row at its scaffolded default, and the
+// three wired rows are set exactly as Run sets them from its own
+// inducers' results.
+func buildWiredFixture(toolGrade, permissionGrade, continuationGrade qualification.Grade) (*qualification.Fixture, qualification.RuntimeProfile) {
+	profile := gradingWiringProfile()
+	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, profile.AbsentSurfaces...)
+	fixture.SetToolServerDelivery(toolGrade, "tool server induction: "+string(toolGrade))
+	fixture.SetPermissionHandling(permissionGrade, "permission induction: "+string(permissionGrade))
+	fixture.SetSessionContinuation(qualification.SurfaceProtocol, continuationGrade, "continuation induction: "+string(continuationGrade))
+	fixture.Finalize()
+	return fixture, profile
+}
+
+// findNotesGrade returns the entry in grades matching surface and
+// capability, or nil.
+func findNotesGrade(grades []qualification.NotesGrade, surface qualification.Surface, capability qualification.Capability) *qualification.NotesGrade {
+	for i := range grades {
+		if grades[i].Surface == surface && grades[i].Capability == capability {
+			return &grades[i]
+		}
+	}
+	return nil
+}
+
+// TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow drives step
+// 3.4's grading wiring, the three fixture setters Run calls with each
+// inducer's own outcome, with each of the three grades an inducer can
+// report, for each of the three rows Run wires, and reads each row's
+// grade back through ExpectationFrom rather than off Fixture.Records
+// directly. A setter that leaves an owning record behind, the way
+// SetSessionContinuation's baseline rewrite and SetPermissionHandling's
+// derivation exist to prevent, either leaves the row's derived grade
+// stale or unbalances ConclusionsFromRecords' own grade-count
+// invariant; either failure reddens this control.
+func TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow(t *testing.T) {
+	t.Parallel()
+
+	grades := []qualification.Grade{qualification.GradeUsable, qualification.GradeGap, qualification.GradeNotObserved}
+
+	rows := []struct {
+		name       string
+		capability qualification.Capability
+	}{
+		{"tool server delivery", qualification.CapabilityToolServerDelivery},
+		{"permission handling", qualification.CapabilityPermissionHandling},
+		{"session continuation", qualification.CapabilitySessionContinuation},
+	}
+
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, grade := range grades {
+				t.Run(string(grade), func(t *testing.T) {
+					t.Parallel()
+
+					toolGrade := qualification.GradeUsable
+					permissionGrade := qualification.GradeUsable
+					continuationGrade := qualification.GradeUsable
+					switch row.capability {
+					case qualification.CapabilityToolServerDelivery:
+						toolGrade = grade
+					case qualification.CapabilityPermissionHandling:
+						permissionGrade = grade
+					case qualification.CapabilitySessionContinuation:
+						continuationGrade = grade
+					}
+
+					fixture, profile := buildWiredFixture(toolGrade, permissionGrade, continuationGrade)
+
+					verdict := qualification.ComputeEligibility(fixture.Records, profile)
+					conclusions, err := ConclusionsFromRecords(fixture.Records, verdict, profile)
+					if err != nil {
+						t.Fatalf("ConclusionsFromRecords(...) = _, %v, want nil", err)
+					}
+
+					expectation := ExpectationFrom(conclusions)
+					got := findNotesGrade(expectation.Grades, qualification.SurfaceProtocol, row.capability)
+					if got == nil {
+						t.Fatalf("ExpectationFrom(...).Grades carries no protocol %s entry", row.capability)
+					}
+					if got.Grade != grade {
+						t.Errorf("ExpectationFrom(...) protocol %s grade = %s, want %s", row.capability, got.Grade, grade)
+					}
+					if want := qualification.StatusLabel(grade); got.Label != want {
+						t.Errorf("ExpectationFrom(...) protocol %s label = %q, want %q", row.capability, got.Label, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// reapedProcessGroupLeaderPID starts and waits out a trivial process
+// group leader, returning its pid once the kernel has reaped it, so a
+// test can assert against a process group that provably no longer
+// exists rather than one merely assumed absent.
+func reapedProcessGroupLeaderPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() error = %v, want nil", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cmd.Wait() error = %v, want nil", err)
+	}
+	return pid
+}
+
+// TestAssertSessionGroupAbsent confirms the ordinary path: a session
+// whose AgentPID names a process group the kernel has already reaped
+// is confirmed absent without failing t, driven against a real
+// subprocess's own pid rather than a canned one.
+func TestAssertSessionGroupAbsent(t *testing.T) {
+	t.Parallel()
+
+	pid := reapedProcessGroupLeaderPID(t)
+	assertSessionGroupAbsent(t, domain.Session{AgentPID: strconv.Itoa(pid)})
+}
+
+// TestAssertSessionGroupAbsentFailsOnUnparsablePID is the function's
+// negative control: an AgentPID that does not parse as a process id
+// must fail t rather than silently skip the liveness check. The
+// failing call runs in a subprocess, matching the idiom already
+// established above: calling t.Fatalf directly against this test's
+// own *testing.T would fail the whole package run rather than exercise
+// the behavior under test.
+func TestAssertSessionGroupAbsentFailsOnUnparsablePID(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv("PROBE_ASSERT_SESSION_GROUP_ABSENT_HELPER_PROCESS") == "1" {
+		assertSessionGroupAbsent(t, domain.Session{AgentPID: "not-a-pid"})
+		t.Fatal("assertSessionGroupAbsent() returned instead of calling t.Fatalf for an unparsable agent pid")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAssertSessionGroupAbsentFailsOnUnparsablePID$", "-test.v") //nolint:gosec // re-invokes this package's own compiled test binary
+	cmd.Env = append(os.Environ(), "PROBE_ASSERT_SESSION_GROUP_ABSENT_HELPER_PROCESS=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the helper process exited 0, want a non-zero exit from assertSessionGroupAbsent() on an unparsable agent pid; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "did not parse as a process id") {
+		t.Errorf("helper process output = %s, want it to name the parse failure", output)
+	}
+}
+
+// TestRepositoryPath covers the two non-fatal outcomes: a rel that
+// does not exist yet, returned unchecked for the caller's own error to
+// report, and one that exists inside root, confirmed contained and
+// returned.
+func TestRepositoryPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a path that does not exist is returned unchecked", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		got := repositoryPath(t, root, "does/not/exist.txt")
+		want := filepath.Join(root, "does/not/exist.txt")
+		if got != want {
+			t.Errorf("repositoryPath(root, %q) = %q, want %q", "does/not/exist.txt", got, want)
+		}
+	})
+
+	t.Run("a file inside the root is confirmed contained and returned", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		mustWriteFile(t, filepath.Join(root, "notes.md"), "hi\n")
+		got := repositoryPath(t, root, "notes.md")
+		want := filepath.Join(root, "notes.md")
+		if got != want {
+			t.Errorf("repositoryPath(root, %q) = %q, want %q", "notes.md", got, want)
+		}
+	})
+}
+
+// TestRepositoryPathFailsOnPathEscapingRoot is the function's negative
+// control: a rel that exists but resolves outside root, through a
+// symlink, must fail t rather than return the escaping path. The
+// failing call runs in a subprocess for the same reason the controls
+// above do.
+func TestRepositoryPathFailsOnPathEscapingRoot(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv("PROBE_REPOSITORY_PATH_HELPER_PROCESS") == "1" {
+		root := t.TempDir()
+		outside := t.TempDir()
+		target := filepath.Join(outside, "target.txt")
+		mustWriteFile(t, target, "outside\n")
+		escaping := filepath.Join(root, "escaping.txt")
+		if err := os.Symlink(target, escaping); err != nil {
+			t.Fatalf("os.Symlink(%q, %q): %v", target, escaping, err)
+		}
+		repositoryPath(t, root, "escaping.txt")
+		t.Fatal("repositoryPath() returned instead of calling t.Fatalf for a path resolving outside the root")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRepositoryPathFailsOnPathEscapingRoot$", "-test.v") //nolint:gosec // re-invokes this package's own compiled test binary
+	cmd.Env = append(os.Environ(), "PROBE_REPOSITORY_PATH_HELPER_PROCESS=1")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the helper process exited 0, want a non-zero exit from repositoryPath() on a path escaping root; output:\n%s", output)
+	}
+	if !strings.Contains(string(output), "resolves outside the repository") {
+		t.Errorf("helper process output = %s, want it to name the escape", output)
+	}
+}
+
+// TestAwaitMinuteBoundaryReturnsImmediatelyOutsideTheCurrentMinute
+// covers the loop-not-entered path: a createdAt whose own UTC minute
+// already differs from the current one needs no wait at all. The
+// waiting path itself is not exercised here - it would need the real
+// wall clock to cross a minute boundary mid-test, which is not a bound
+// a unit test should depend on.
+func TestAwaitMinuteBoundaryReturnsImmediatelyOutsideTheCurrentMinute(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	awaitMinuteBoundary(time.Now().Add(-time.Hour))
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("awaitMinuteBoundary(createdAt outside the current minute) took %v, want an immediate return", elapsed)
 	}
 }

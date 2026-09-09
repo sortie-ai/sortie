@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The install scripts for macOS, Linux, and Windows now warn when the `sortie` command still resolves to a different copy than the one just installed, naming that path. An older binary earlier in `PATH`, left by an install run as root or by the Homebrew cask, previously kept winning while the installer reported success. The macOS and Linux script also gains `-f`, `--force`, which reinstalls a release already present in the target directory instead of skipping it.
   ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
 
+- Kiro CLI is now published on the `agent-client-protocol` route, with a ready-to-copy sample workflow at `examples/WORKFLOW.agent-client-protocol.kiro.md`. This route delivers Sortie's own tool servers and session continuation, neither of which the native `kiro` kind delivers; both kinds stay available and neither retires the other. The runtime spells workspace trust and tool-approval posture with a single switch, `-a`, which the sample sets and states the cost of. One credential caveat decides whether the route is worth taking at all: with `KIRO_API_KEY` the runtime's backend refuses it a governance profile and the runtime then disables tool servers for the session, silently and with no error Sortie can see, so a stored device login on the machine running Sortie is what makes Sortie's tools reach the agent.
+  ([#989](https://github.com/sortie-ai/sortie/issues/989))
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.
@@ -52,6 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The macOS and Linux install script now checks for the commands it needs to download and verify a release, `uname`, `tar`, `curl` or `wget`, and `sha256sum` or `shasum`, before it fetches anything, and names every missing one in a single message. A missing `sha256sum` or `shasum` previously surfaced only after the release archive had already been downloaded.
   ([PR #1046](https://github.com/sortie-ai/sortie/pull/1046))
+
+- A protocol session that fails to start now reports the runtime's own standard error at `Warn`, where it previously reached `Debug` only. A runtime that exits before answering the handshake, which is what a missing or rejected credential looks like on this route, reported just `agent connection ended before responding` and discarded the runtime's own explanation of why.
+  ([#989](https://github.com/sortie-ai/sortie/issues/989))
 
 ## [1.23.0] - 2026-08-31
 

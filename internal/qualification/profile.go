@@ -143,6 +143,17 @@ func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, er
 // instead and carries none of these args.
 type EntryPoint struct {
 	Args []string `json:"args"`
+
+	// AskingArgs is the same launch under the posture that asks before
+	// running a tool, for the surface whose permission handling is
+	// induced. It is stated rather than derived from Args: which
+	// element is the posture switch is not recoverable from an argument
+	// vector, a runtime may spell it in several tokens or not last, and
+	// on one shipped profile the trailing element is the protocol
+	// switch itself. Empty means the runtime's asking posture is
+	// unknown, and permission handling is then unmeasured rather than
+	// induced against a launch nobody verified.
+	AskingArgs []string `json:"asking_args,omitempty"`
 }
 
 // TerminalLocator selects the terminal object out of a native
@@ -152,6 +163,15 @@ type TerminalLocator struct {
 	Mode               string `json:"mode"`
 	DiscriminatorKey   string `json:"discriminator_key"`
 	DiscriminatorValue string `json:"discriminator_value"`
+
+	// EnvelopePath descends from the located value to the object
+	// carrying the terminal members, for a runtime that wraps its
+	// payload one or more levels below the value the locator selects.
+	// Empty leaves the located value itself as the terminal object,
+	// which is what a runtime with a flat terminal needs, so it is
+	// omitted from the encoded form and never moves such a profile's
+	// digest.
+	EnvelopePath []string `json:"envelope_path,omitempty"`
 }
 
 // Recognizer maps one structured native surface's own output onto a
@@ -243,10 +263,11 @@ var runtimeProfileFields = func() map[string]bool {
 	return fields
 }()
 
-var entryPointFields = map[string]bool{"args": true}
+var entryPointFields = map[string]bool{"args": true, "asking_args": true}
 
 var terminalLocatorFields = map[string]bool{
 	"mode": true, "discriminator_key": true, "discriminator_value": true,
+	"envelope_path": true,
 }
 
 var recognizerFieldOrder = []string{
@@ -382,6 +403,17 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 		}
 	}
 
+	// The evidence fixture seeds a baseline row for every measurable
+	// surface a profile does not declare absent, while the summary
+	// sizes that same set out of entry_points. A surface left out of
+	// both is counted by one rule and not the other, which surfaces
+	// far downstream as a baseline-count mismatch naming no cause.
+	for _, surface := range measurableSurfaces {
+		if _, ok := profile.EntryPoints[surface]; !ok {
+			return RuntimeProfile{}, fmt.Errorf("entry_points is missing %q: every measurable surface needs one, and a surface the runtime does not offer carries an entry point plus an absent_surfaces declaration rather than being left out", surface)
+		}
+	}
+
 	return profile, nil
 }
 
@@ -492,6 +524,17 @@ func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 		}
 		if err := validatePlaceholderArgsAllowed(entry.Args); err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		if askingRaw, hasAsking := fields["asking_args"]; hasAsking {
+			if err := json.Unmarshal(askingRaw, &entry.AskingArgs); err != nil {
+				return nil, fmt.Errorf("%s: asking_args: %w", key, err)
+			}
+			if len(entry.AskingArgs) == 0 {
+				return nil, fmt.Errorf("%s: asking_args must be non-empty when present", key)
+			}
+			if err := validatePlaceholderArgsAllowed(entry.AskingArgs); err != nil {
+				return nil, fmt.Errorf("%s: asking_args: %w", key, err)
+			}
 		}
 		entries[surface] = entry
 	}
@@ -997,6 +1040,18 @@ func (p RuntimeProfile) EntryArgs(surface Surface, model, policy, prompt string)
 	return substitutePlaceholders(entry.Args, model, policy, prompt), nil
 }
 
+// AskingArgs substitutes the same placeholders into surface's own
+// EntryPoint.AskingArgs. It reports false when the profile states no
+// asking posture for that surface, which is the caller's signal to
+// record the row unmeasured rather than to launch something else.
+func (p RuntimeProfile) AskingArgs(surface Surface, model, policy, prompt string) ([]string, bool) {
+	entry, ok := p.EntryPoints[surface]
+	if !ok || len(entry.AskingArgs) == 0 {
+		return nil, false
+	}
+	return substitutePlaceholders(entry.AskingArgs, model, policy, prompt), true
+}
+
 // PublishedPostureArgs builds the published-posture probe's argv: the
 // sample command with element zero replaced by commandPath, and
 // p.ModelArgs appended with {model} substituted.
@@ -1064,6 +1119,16 @@ func decodeTopLevelJSONValues(output string) []any {
 // locateTerminal applies r.Locator to values, returning the selected
 // terminal object and whether one was found.
 func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
+	located, ok := r.locateEnvelope(values)
+	if !ok {
+		return nil, false
+	}
+	return descend(located, r.Locator.EnvelopePath)
+}
+
+// locateEnvelope selects the top-level value the locator's mode picks,
+// before any envelope descent.
+func (r Recognizer) locateEnvelope(values []any) (map[string]any, bool) {
 	switch r.Locator.Mode {
 	case "first_value":
 		if len(values) == 0 {
@@ -1083,6 +1148,19 @@ func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// descend walks path from object, reporting failure at the first key
+// that is missing or does not carry a further object.
+func descend(object map[string]any, path []string) (map[string]any, bool) {
+	for _, key := range path {
+		next, ok := object[key].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		object = next
+	}
+	return object, true
 }
 
 // Terminal recognizes one native surface's terminal outcome from its
@@ -1142,23 +1220,21 @@ const (
 // message text. An unreadable object is reported rather than defaulted
 // to ModelRequestNone: reading it as "no model request" would
 // manufacture a false positive out of a truncated terminal.
+//
+// An empty path spells a surface whose terminal carries no
+// model-request object at all, and reads unreadable for the same
+// reason: the terminal object's own members are not a model-request
+// object, and counting them as one would manufacture that same false
+// positive.
 func (r Recognizer) ModelRequests(output string) ModelRequestReading {
+	if len(r.ModelRequestPath) == 0 {
+		return ModelRequestUnreadable
+	}
 	terminal, found := r.locateTerminal(decodeTopLevelJSONValues(output))
 	if !found {
 		return ModelRequestUnreadable
 	}
-	var cursor any = terminal
-	for _, key := range r.ModelRequestPath {
-		object, ok := cursor.(map[string]any)
-		if !ok {
-			return ModelRequestUnreadable
-		}
-		cursor, ok = object[key]
-		if !ok {
-			return ModelRequestUnreadable
-		}
-	}
-	models, ok := cursor.(map[string]any)
+	models, ok := descend(terminal, r.ModelRequestPath)
 	if !ok {
 		return ModelRequestUnreadable
 	}

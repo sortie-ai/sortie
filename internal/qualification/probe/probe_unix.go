@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -41,6 +42,20 @@ func signalProcessGroup(pid int, sig syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+// assertSessionGroupAbsent confirms the process group session's own
+// launch produced is gone, per the rule that a survivor is a leak
+// rather than a slow exit. Every live session Run starts calls this
+// after its own StopSession returns, never conditioned on which
+// runtime answered the session.
+func assertSessionGroupAbsent(t *testing.T, session domain.Session) {
+	t.Helper()
+	pid, err := strconv.Atoi(session.AgentPID)
+	if err != nil {
+		t.Fatalf("session agent_pid %q did not parse as a process id: %v", session.AgentPID, err)
+	}
+	qualification.AwaitProcessGroupAbsence(t, pid)
 }
 
 // nativeProbeBound bounds every native surface launch.
@@ -160,6 +175,7 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 		if err := adapter.StopSession(context.Background(), session); err != nil {
 			t.Errorf("stop the published-posture probe session: %v", err)
 		}
+		assertSessionGroupAbsent(t, session)
 	})
 
 	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -169,6 +185,101 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 	if err != nil {
 		t.Fatalf("published-posture probe argv %v: run the turn: %v", argv, err)
 	}
+}
+
+// continuationInductionTurnBound bounds one continuation induction
+// turn.
+const continuationInductionTurnBound = 3 * time.Minute
+
+// awaitMinuteBoundary blocks until the wall clock leaves the UTC
+// minute createdAt falls in, or a bounded deadline passes, per the
+// protection this runtime family gives a session/load issued inside
+// its own creation minute.
+func awaitMinuteBoundary(createdAt time.Time) {
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().UTC().Truncate(time.Minute).Equal(createdAt.Truncate(time.Minute)) {
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// induceSessionContinuation drives one harness process throughout: a
+// first session that leaves history, stopped, then a second session
+// against the same workspace naming the first session's identifier as
+// ResumeSessionID. resolveSession's own negative control fires
+// automatically on this same path, before either continuation method
+// it might attempt, so an unimplemented method and a broken one are
+// already distinguished at the adapter's own error classification. The
+// row is graded from what the replay did: a second session that
+// returns the first session's own identifier confirms a replayed
+// continuation; any other identifier is an unconfirmed fallback.
+func induceSessionContinuation(t *testing.T, coords Coordinates) (qualification.Grade, string) {
+	t.Helper()
+
+	argv, err := coords.Profile.EntryArgs(qualification.SurfaceProtocol, coords.Model, "", "")
+	if err != nil {
+		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction could not resolve the protocol entry point: %v", err)
+	}
+
+	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
+	if err != nil {
+		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction could not construct the adapter: %v", err)
+	}
+
+	fullCommand := append([]string{coords.CommandPath}, argv...)
+	launchConfig := domain.AgentConfig{
+		Kind:           "agent-client-protocol",
+		Command:        strings.Join(fullCommand, " "),
+		ReadTimeoutMS:  30000,
+		TurnTimeoutMS:  int(continuationInductionTurnBound / time.Millisecond),
+		StallTimeoutMS: 60000,
+	}
+
+	workspace := t.TempDir()
+	firstSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   launchConfig,
+	})
+	if err != nil {
+		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction first session failed to start: %v", err)
+	}
+	createdAt := time.Now().UTC()
+
+	_, runErr := adapter.RunTurn(context.Background(), firstSession, domain.RunTurnParams{
+		Prompt:  "Reply with exactly one word: acknowledged.",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if stopErr := adapter.StopSession(context.Background(), firstSession); stopErr != nil {
+		t.Errorf("stop the continuation induction's first session: %v", stopErr)
+	}
+	assertSessionGroupAbsent(t, firstSession)
+	if runErr != nil {
+		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction first turn did not complete: %v", runErr)
+	}
+
+	awaitMinuteBoundary(createdAt)
+
+	secondSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:   workspace,
+		AgentConfig:     launchConfig,
+		ResumeSessionID: firstSession.ID,
+	})
+	if err != nil {
+		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction second session failed to start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := adapter.StopSession(context.Background(), secondSession); err != nil {
+			t.Errorf("stop the continuation induction's second session: %v", err)
+		}
+		assertSessionGroupAbsent(t, secondSession)
+	})
+
+	if secondSession.ID == firstSession.ID {
+		return qualification.GradeUsable, "the second session returned the first session's own identifier, confirming a replayed continuation"
+	}
+	return qualification.GradeGap, "the second session returned a fresh identifier; continuation was not confirmed and the run fell back"
 }
 
 // defaultOutputDir returns a fresh run-scoped directory under the OS
@@ -254,18 +365,28 @@ func Run(t *testing.T, coords Coordinates) Result {
 		corroborateAbsentSurface(t, coords, absent.Surface)
 	}
 
-	// The full live per-case induction catalog (cancellation, refusal,
-	// oversize-input limit_reached, permission handling, tool-server
-	// delivery, session continuation replay) is not reproduced here;
+	// The full per-case semantic induction catalog (cancellation,
+	// refusal, oversize-input limit_reached) is not reproduced here;
 	// this collection scaffolds a schema-valid evidence set from the
-	// declared and catalog-level state the profile itself carries, and
-	// grades each measured surface's own launch classification. A
-	// future pass wires the remaining live inducers without changing
-	// this function's contract.
+	// declared and catalog-level state the profile itself carries for
+	// those cases, and grades each measured surface's own launch
+	// classification. The three load-bearing rows below are graded
+	// from this run's own observation instead: tool-server delivery,
+	// permission handling, and session continuation.
 	fixture := qualification.NewFixture(qualification.FixtureUnmeasured, profile.AbsentSurfaces...)
 	for _, declaration := range profile.Declarations {
 		fixture.SetSemanticDeclaredGap(declaration.Capability, declaration.Case, declaration.Reason)
 	}
+
+	toolGrade, toolDetail := induceToolServerCall(t, coords)
+	fixture.SetToolServerDelivery(toolGrade, toolDetail)
+
+	permissionGrade, permissionDetail := inducePermissionRequest(t, coords)
+	fixture.SetPermissionHandling(permissionGrade, permissionDetail)
+
+	continuationGrade, continuationDetail := induceSessionContinuation(t, coords)
+	fixture.SetSessionContinuation(qualification.SurfaceProtocol, continuationGrade, continuationDetail)
+
 	fixture.Finalize()
 
 	verdict, err := qualification.ValidateObservationsWithDeclarations(qualification.WriteEvidenceFile(t, fixture.Records), profile)
