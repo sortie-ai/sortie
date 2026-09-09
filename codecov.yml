@@ -15,6 +15,6 @@ comment:
   require_changes: true
 
 ignore:
-  - "internal/adaptertest"
+  - "internal/adaptertest/**"
   - "internal/qualification/probe/toolserver_unix.go"
   - "**/*_gen.go"
