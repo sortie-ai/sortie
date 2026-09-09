@@ -404,6 +404,24 @@ func TestOnFinalize_NoTokenEvent(t *testing.T) {
 	}
 }
 
+// TestAssertUsageReporting proves kiro's registered usage-reporting
+// declaration (none, none) against a real event stream from a
+// successful headless run: the runtime reports credits, never token
+// counts, so the turn's measurement contract stays empty.
+func TestAssertUsageReporting(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	bin := fakeChatScript(t, t.TempDir(), "\x1b[0mPONG", creditsLine, 0)
+	adapter, session, _ := mustStartSession(t, bin)
+
+	events, result, _ := runChatTurn(t, adapter, session, "ping")
+
+	agenttest.AssertUsageReporting(t, "kiro", []agenttest.UsageReportingCase{
+		{Name: "successful headless run reports credits, not tokens", Events: events, Result: result},
+	})
+}
+
 // TestOnFinalize_ResumeRequestedOnSecondTurn pins the resumeRequested
 // side effect against being dropped in the move to the shared decision:
 // a successful turn sets it, and the next turn's argument list carries

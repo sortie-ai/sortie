@@ -1274,6 +1274,164 @@ func TestValidateDispatchConfig_NoToolChannelWarning(t *testing.T) {
 	})
 }
 
+// TestValidateDispatchConfig_UsageReportingWarnings covers both
+// preflight diagnostics a kind resolving to no usage figure draws:
+// agent.kind.no_usage_reporting when agent.max_tokens is set, and
+// agent.kind.no_cost_estimate when token_rates prices that kind. Each
+// arm's negative control proves the warning is scoped to the kind
+// under test, not to the setting's mere presence.
+func TestValidateDispatchConfig_UsageReportingWarnings(t *testing.T) {
+	t.Parallel()
+
+	noneMeta := func(string) (registry.AgentMeta, bool) {
+		return registry.AgentMeta{
+			MCPInjection:     registry.MCPInjectionSupported,
+			UsageArrival:     registry.UsageArrivalNone,
+			UsageAttribution: registry.UsageAttributionNone,
+		}, true
+	}
+	reportingMeta := func(string) (registry.AgentMeta, bool) {
+		return registry.AgentMeta{
+			MCPInjection:     registry.MCPInjectionSupported,
+			UsageArrival:     registry.UsageArrivalIncremental,
+			UsageAttribution: registry.UsageAttributionPerModel,
+		}, true
+	}
+
+	t.Run("agent.max_tokens set against a kind resolving to no usage produces the warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent", MaxTokens: 50000},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: noneMeta,
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.kind.no_usage_reporting")
+		if !strings.Contains(warnMessageForCheck(t, result, "agent.kind.no_usage_reporting"), "test-agent") {
+			t.Errorf("warning message does not name the agent kind %q", "test-agent")
+		}
+	})
+
+	t.Run("a reporting kind with agent.max_tokens set draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent", MaxTokens: 50000},
+			}
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: reportingMeta,
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.kind.no_usage_reporting")
+	})
+
+	t.Run("token_rates entry keyed to a kind resolving to no usage produces the warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("token_rates", map[string]any{
+				"test-agent": map[string]any{"input_per_mtok": 3.0},
+			})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: noneMeta,
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireWarnCheck(t, result, "agent.kind.no_cost_estimate")
+		if !strings.Contains(warnMessageForCheck(t, result, "agent.kind.no_cost_estimate"), "test-agent") {
+			t.Errorf("warning message does not name the agent kind %q", "test-agent")
+		}
+	})
+
+	t.Run("token_rates pricing only other kinds while this kind resolves to no usage draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		// The noise control: the section's mere presence must not
+		// trigger the warning for a kind it does not price.
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("token_rates", map[string]any{
+				"some-other-kind": map[string]any{"input_per_mtok": 3.0},
+			})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: noneMeta,
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.kind.no_cost_estimate")
+	})
+
+	t.Run("token_rates entry keyed to a reporting kind draws no warning", func(t *testing.T) {
+		t.Parallel()
+
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+				Agent:   config.AgentConfig{Kind: "test-agent", Command: "/usr/bin/agent"},
+			}
+			cfg.SetExtensionSection("token_rates", map[string]any{
+				"test-agent": map[string]any{"input_per_mtok": 3.0},
+			})
+			return cfg
+		}
+		params.AgentRegistry = &stubAgentRegistry{
+			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+			metaFunc: reportingMeta,
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		requireNoWarnCheck(t, result, "agent.kind.no_cost_estimate")
+	})
+}
+
+// warnMessageForCheck returns the message of the first warning
+// carrying check, failing the test if none is present.
+func warnMessageForCheck(t *testing.T, result PreflightResult, check string) string {
+	t.Helper()
+	for _, w := range result.Warnings {
+		if w.Check == check {
+			return w.Message
+		}
+	}
+	t.Fatalf("ValidateDispatchConfig() has no warning with check %q", check)
+	return ""
+}
+
 // assertMissingBlockMessage fails the test unless result carries exactly
 // one dispatch.agent.missing_block error whose message equals want
 // verbatim, and asserts that message never names a workflow filename.

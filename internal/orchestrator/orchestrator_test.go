@@ -7061,6 +7061,132 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	}
 }
 
+// TestHandleTick_DispatchFreezesUsageDisposition dispatches two issues
+// through the normal poll-tick path in one handleTick call: one
+// routed to the workflow default kind, whose registered meta carries
+// no UsageSessionRules, and one routed by a dispatch rule to a second
+// kind whose one rule always matches. It asserts the resulting
+// RunningEntry for each carries the pair its kind resolves to: the
+// declared pair for the unrouted kind, the rule's narrowed pair for
+// the routed one.
+func TestHandleTick_DispatchFreezesUsageDisposition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+	cfg.Agent.Kind = "mock"
+	cfg.Dispatch = config.DispatchConfig{
+		Rules: []config.DispatchRule{
+			{
+				Name:      "narrowed-router",
+				Match:     config.DispatchMatch{Labels: []string{"narrowed"}},
+				Selection: config.DispatchSelection{AgentKind: "narrowed-kind"},
+			},
+		},
+	}
+	cfg.SetExtensionSection("narrowed-kind", map[string]any{})
+
+	narrowedIssue := domain.Issue{
+		ID: "id-narrowed", Identifier: "USG-1", Title: "Narrowed", State: "To Do",
+		Labels: []string{"narrowed"},
+	}
+	defaultIssue := domain.Issue{
+		ID: "id-default", Identifier: "USG-2", Title: "Default", State: "To Do",
+	}
+
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return []domain.Issue{narrowedIssue, defaultIssue}, nil
+		},
+	}
+
+	// Each dispatched worker runs in its own goroutine; RunTurn fires
+	// only after workspace preparation for that issue has completed.
+	// Waiting for both signals before returning avoids a race between
+	// that background filesystem activity and t.TempDir()'s cleanup
+	// at the end of the test.
+	var runTurnStarted sync.WaitGroup
+	runTurnStarted.Add(2)
+	trackedAdapter := &mockAgentAdapter{
+		runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+			runTurnStarted.Done()
+			return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl, absPath: filepath.Join(tmpDir, "WORKFLOW.md")}
+	store := &stubStore{}
+
+	agentRegistry := &stubAgentRegistry{
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(kind string) (registry.AgentMeta, bool) {
+			switch kind {
+			case "mock":
+				return registry.AgentMeta{
+					UsageArrival:     registry.UsageArrivalIncremental,
+					UsageAttribution: registry.UsageAttributionPerModel,
+				}, true
+			case "narrowed-kind":
+				return registry.AgentMeta{
+					UsageArrival:     registry.UsageArrivalTurnEnd,
+					UsageAttribution: registry.UsageAttributionSessionTotal,
+					UsageSessionRules: []registry.UsageSessionRule{
+						{
+							When:        func(map[string]any, bool) bool { return true },
+							Arrival:     registry.UsageArrivalNone,
+							Attribution: registry.UsageAttributionNone,
+						},
+					},
+				}, true
+			default:
+				return registry.AgentMeta{}, false
+			}
+		},
+	}
+
+	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:          state,
+		Logger:         discardLogger(),
+		TrackerAdapter: tracker,
+		AgentAdapter:   trackedAdapter,
+		AgentAdapterByKind: func(string) (domain.AgentAdapter, error) {
+			return trackedAdapter, nil
+		},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: passingPreflightRegistries().TrackerRegistry,
+			AgentRegistry:   agentRegistry,
+		},
+	})
+
+	o.handleTick(context.Background())
+	runTurnStarted.Wait()
+
+	defaultEntry := state.Running[defaultIssue.ID]
+	if defaultEntry == nil {
+		t.Fatal("no RunningEntry for the default-kind issue")
+	}
+	if defaultEntry.UsageArrival != registry.UsageArrivalIncremental || defaultEntry.UsageAttribution != registry.UsageAttributionPerModel {
+		t.Errorf("default-kind entry (UsageArrival, UsageAttribution) = (%q, %q), want (%q, %q)",
+			defaultEntry.UsageArrival, defaultEntry.UsageAttribution, registry.UsageArrivalIncremental, registry.UsageAttributionPerModel)
+	}
+
+	narrowedEntry := state.Running[narrowedIssue.ID]
+	if narrowedEntry == nil {
+		t.Fatal("no RunningEntry for the rule-routed issue")
+	}
+	if narrowedEntry.UsageArrival != registry.UsageArrivalNone || narrowedEntry.UsageAttribution != registry.UsageAttributionNone {
+		t.Errorf("rule-routed entry (UsageArrival, UsageAttribution) = (%q, %q), want (%q, %q)",
+			narrowedEntry.UsageArrival, narrowedEntry.UsageAttribution, registry.UsageArrivalNone, registry.UsageAttributionNone)
+	}
+}
+
 // writeMarkerMCPConfig writes an operator MCP config file at path
 // declaring a single stdio server named marker, so a test can tell
 // apart the generated config produced from that block versus another.

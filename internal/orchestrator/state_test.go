@@ -2132,3 +2132,129 @@ func TestRuntimeSnapshot_ParkedFields(t *testing.T) {
 		}
 	})
 }
+
+// TestRuntimeSnapshot_UsageDispositionFields proves RuntimeSnapshot
+// copies the frozen UsageArrival and UsageAttribution pair verbatim,
+// and that TokensPending is true only when the frozen arrival is
+// turn_end, the session is measured, and the last processed agent
+// event is not one of the five turn-terminal types.
+func TestRuntimeSnapshot_UsageDispositionFields(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		arrival          registry.UsageArrival
+		attribution      registry.UsageAttribution
+		usageMeasured    bool
+		lastAgentEvent   domain.AgentEventType
+		wantTokenPending bool
+	}{
+		{
+			name:             "turn_end, measured, turn in flight: pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventNotification,
+			wantTokenPending: true,
+		},
+		{
+			name:             "turn_end, measured, turn completed: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventTurnCompleted,
+			wantTokenPending: false,
+		},
+		{
+			name:             "turn_end, measured, turn failed: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventTurnFailed,
+			wantTokenPending: false,
+		},
+		{
+			name:             "turn_end, measured, turn cancelled: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventTurnCancelled,
+			wantTokenPending: false,
+		},
+		{
+			name:             "turn_end, measured, turn ended with error: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventTurnEndedWithError,
+			wantTokenPending: false,
+		},
+		{
+			name:             "turn_end, measured, turn input required: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventTurnInputRequired,
+			wantTokenPending: false,
+		},
+		{
+			name:             "turn_end, not measured, turn in flight: not pending",
+			arrival:          registry.UsageArrivalTurnEnd,
+			attribution:      registry.UsageAttributionSessionTotal,
+			usageMeasured:    false,
+			lastAgentEvent:   domain.EventNotification,
+			wantTokenPending: false,
+		},
+		{
+			name:             "incremental, measured, turn in flight: not pending",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionPerModel,
+			usageMeasured:    true,
+			lastAgentEvent:   domain.EventNotification,
+			wantTokenPending: false,
+		},
+		{
+			name:             "none, not measured, turn in flight: not pending",
+			arrival:          registry.UsageArrivalNone,
+			attribution:      registry.UsageAttributionNone,
+			usageMeasured:    false,
+			lastAgentEvent:   domain.EventNotification,
+			wantTokenPending: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, nil, AgentTotals{})
+			state.Running["ISS-USAGE"] = &RunningEntry{
+				Identifier:       "PROJ-1",
+				Issue:            domain.Issue{ID: "ISS-USAGE", State: "In Progress"},
+				StartedAt:        fixedNow.Add(-time.Minute),
+				UsageArrival:     tt.arrival,
+				UsageAttribution: tt.attribution,
+				UsageMeasured:    tt.usageMeasured,
+				LastAgentEvent:   tt.lastAgentEvent,
+			}
+
+			result := RuntimeSnapshot(state, fixedNow)
+
+			if len(result.Running) != 1 {
+				t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+			}
+			got := result.Running[0]
+			if got.UsageArrival != tt.arrival {
+				t.Errorf("UsageArrival = %q, want %q", got.UsageArrival, tt.arrival)
+			}
+			if got.UsageAttribution != tt.attribution {
+				t.Errorf("UsageAttribution = %q, want %q", got.UsageAttribution, tt.attribution)
+			}
+			if got.TokensPending != tt.wantTokenPending {
+				t.Errorf("TokensPending = %v, want %v", got.TokensPending, tt.wantTokenPending)
+			}
+		})
+	}
+}

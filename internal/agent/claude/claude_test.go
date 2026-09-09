@@ -1007,6 +1007,46 @@ exit 0
 	agenttest.AssertModelReported(t, events, "claude-haiku-4-5-20251001")
 }
 
+// TestAssertUsageReporting proves claude-code's registered
+// usage-reporting declaration (incremental, per_model) against its
+// own real event stream: two token_usage events, one per first-seen
+// assistant message id, with a tool result between the two.
+func TestAssertUsageReporting(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "tool_use_result_user_event.jsonl")
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "Read the file",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertUsageReporting(t, "claude-code", []agenttest.UsageReportingCase{
+		{Name: "two assistant messages around one tool result", Events: events, Result: result},
+	})
+}
+
 // TestRunTurn_SubAgentUsage exercises R15's sub-agent accounting rule
 // using a fixture whose result event carries a two-model modelUsage map
 // and a top-level usage object whose output_tokens is zero, the shape a

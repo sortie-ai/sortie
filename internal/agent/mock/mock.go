@@ -19,7 +19,33 @@ import (
 
 func init() {
 	registry.Agents.RegisterWithMeta("mock", NewMockAdapter, registry.AgentMeta{
-		MCPInjection: registry.MCPInjectionUnsupported,
+		MCPInjection:     registry.MCPInjectionUnsupported,
+		UsageArrival:     registry.UsageArrivalIncremental,
+		UsageAttribution: registry.UsageAttributionSessionTotal,
+		UsageSessionRules: []registry.UsageSessionRule{
+			{
+				// Reuses the constructor's own boolFromConfig read so
+				// the declaration and NewMockAdapter cannot read
+				// report_token_usage two ways.
+				When: func(passthrough map[string]any, remote bool) bool {
+					return !boolFromConfig(passthrough, "report_token_usage", true)
+				},
+				Arrival:     registry.UsageArrivalNone,
+				Attribution: registry.UsageAttributionNone,
+			},
+			{
+				// Reuses the constructor's own string-assertion read
+				// of model_name; ordered after the report_token_usage
+				// rule, because no usage event is emitted for a model
+				// to ride on when both keys are set.
+				When: func(passthrough map[string]any, remote bool) bool {
+					v, ok := passthrough["model_name"].(string)
+					return ok && v != ""
+				},
+				Arrival:     registry.UsageArrivalIncremental,
+				Attribution: registry.UsageAttributionPerModel,
+			},
+		},
 	})
 }
 

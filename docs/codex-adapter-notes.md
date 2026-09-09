@@ -66,6 +66,8 @@ The runtime reports a declared server's startup outcome on `mcpServer/startupSta
 
 Usage does not ride on the turn's completion payload; it arrives on its own notification, and if you go looking for a usage member on the completion event you will not find one.
 
+The registered kind declares `incremental` arrival and `per_model` attribution: the app-server sends one `thread/tokenUsage/updated` notification per model API request, each carrying `Model: state.model`. Reconfirmed live against codex-cli 0.153.4, which still emits two notifications for a turn that makes two requests, matching the cadence `testdata/token_usage_updated.jsonl` captured against 0.121.0.
+
 The totals on that notification are thread-cumulative, spanning every turn of the thread including turns from an earlier run that resumed it. The adapter recovers this run's own contribution by capturing a baseline at the first notification belonging to the current turn and subtracting it thereafter. A notification belonging to a different turn does not emit anything; it raises the baseline instead.
 
 One subtlety to preserve: a payload that carries no usage object at all is distinguishable from one reporting zeroes, because the field is a pointer. The absent case emits nothing and leaves the measurement flag alone, which is what keeps "we do not know" different from "it cost nothing". Flatten that to a value type and the distinction dies silently.

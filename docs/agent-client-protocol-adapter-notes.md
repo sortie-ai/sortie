@@ -58,6 +58,10 @@ The Claude Code CLI exposes no protocol entry point in its own help output. Ther
 
 Codex exposes no protocol entry point either. Its `app-server` speaks a different JSON-RPC dialect, the one this project's separate `codex` adapter already drives, and that dialect is not the Agent Client Protocol.
 
+## Usage reporting
+
+The registered kind declares `none` arrival and `none` attribution. `normalize.go`'s `updateUsage` folds a `usage_update` session update into the debug-log-only arm of the normalization table; no `token_usage` event is ever emitted for it. `capability.go`'s `newCapabilityRecord` initializes `tokenCounts` to `capabilityGap` unconditionally, for both a local and a remote launch, so the declaration holds for every session regardless of launch mode.
+
 ## Session close
 
 Teardown sends `session/close` when the handshake advertises `sessionCapabilities.close`. Of the runtimes recorded above, `copilot` and `opencode` advertise it; `gemini` does not. This path carries fixture coverage only, because both advertising runtimes above were probed at handshake alone.

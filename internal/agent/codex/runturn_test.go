@@ -529,6 +529,32 @@ func TestRunTurn_TokenUsageUpdated(t *testing.T) {
 	agenttest.AssertUsageContract(t, events)
 }
 
+// TestAssertUsageReporting proves codex's registered usage-reporting
+// declaration (incremental, per_model) against the same fixture
+// TestRunTurn_TokenUsageUpdated pins: two thread/tokenUsage/updated
+// notifications for one turn, one per model API request, each
+// carrying the thread's resolved model.
+func TestAssertUsageReporting(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(t, loadFixture(t, "token_usage_updated.jsonl"))
+	state.model = "gpt-6-astra"
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertUsageReporting(t, "codex", []agenttest.UsageReportingCase{
+		{Name: "two notifications, one per model API request", Events: events, Result: result},
+	})
+}
+
 // TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline drives a thread
 // whose first matching notification already reports a non-zero
 // total.totalTokens because the thread resumed from a prior run. It

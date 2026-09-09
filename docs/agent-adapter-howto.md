@@ -8,7 +8,7 @@ This guide is the ordered procedure for two situations: adding a new agent adapt
 
 2. **Implement `domain.AgentAdapter`.** Implement `StartSession`, `RunTurn`, and `StopSession` against `domain.Session`, `domain.StartSessionParams`, `domain.RunTurnParams`, and `domain.TurnResult`. Parse the runtime's actual wire format inside this package only, and normalize every result to `domain.AgentEvent`, `domain.TurnResult`, and `domain.AgentError` before returning it. Add a compile-time assertion, `var _ domain.AgentAdapter = (*YourAdapter)(nil)`, next to the type definition.
 
-3. **Reuse shared helpers instead of writing your own.** Check `internal/agent/agentcore` (session, event, and disposition helpers, including binary resolution via `agentcore.ResolveBinary`), `internal/agent/procutil` (subprocess group handling and graceful shutdown), `internal/agent/mcpconfig` (MCP configuration parsing), `internal/agent/sshutil` (SSH invocation), and `internal/agent/jsonrpc` (newline-delimited JSON-RPC framing, for a persistent-session protocol) before writing an equivalent. A helper this task needs that does not exist yet belongs in a new package named for the concern it serves, not folded into `internal/domain` or duplicated per adapter.
+3. **Reuse shared helpers instead of writing your own.** Check `internal/agent/agentcore` (session, event, and disposition helpers, including binary resolution via `agentcore.ResolveBinary`), `internal/agent/procutil` (subprocess group handling and graceful shutdown), `internal/agent/mcpconfig` (MCP configuration parsing), `internal/agent/sshutil` (SSH invocation), `internal/agent/jsonrpc` (newline-delimited JSON-RPC framing, for a persistent-session protocol), and `internal/agent/agenttest` (shared conformance assertions every adapter's own tests call, including `agenttest.AssertMCPInjection` and `agenttest.AssertUsageReporting`) before writing an equivalent. A helper this task needs that does not exist yet belongs in a new package named for the concern it serves, not folded into `internal/domain` or duplicated per adapter.
 
 4. **Register the kind in `init()`.** Call `registry.Agents.RegisterWithMeta` (or the bare `Register` when the adapter needs no declared metadata) with the adapter's kind string and constructor:
 
@@ -18,15 +18,17 @@ This guide is the ordered procedure for two situations: adding a new agent adapt
            RequiresCommand:     true,
            ValidateAgentConfig: validateConfig,
            MCPInjection:        registry.MCPInjectionSupported, // or Translated, or Unsupported
+           UsageArrival:        registry.UsageArrivalIncremental, // or TurnEnd, or None
+           UsageAttribution:    registry.UsageAttributionPerModel, // or SessionTotal, or None
        })
    }
    ```
 
-   Set `MCPInjection` to what the adapter actually does with the worker-generated MCP configuration path today, not what the underlying CLI could in principle support. Add `SessionResumeBlockedBy` only if some config key of this adapter's own can block session resume under a given passthrough.
+   Set `MCPInjection`, `UsageArrival`, and `UsageAttribution` to what the adapter actually does today, not what the underlying CLI could in principle support. Derive `UsageArrival` and `UsageAttribution` from the adapter's own emission code, not from the CLI's documentation: re-read the symbol that decides when a `token_usage` event fires and whether it carries a model before writing the literal. Add a `UsageSessionRules` entry only when some passthrough setting or launch mode narrows the pair for part of this kind's configuration space, and add `SessionResumeBlockedBy` only if some config key of this adapter's own can block session resume under a given passthrough.
 
 5. **Blank-import the package from `cmd/sortie`.** Add `_ "github.com/sortie-ai/sortie/internal/agent/<name>"` to the import block in `cmd/sortie/main.go`, alongside the existing kind packages. This is the only place a kind package is imported outside its own tests; nothing else needs to change to make the kind resolvable through `registry.Agents.Get`.
 
-6. **Add an env-gated integration test.** Gate the adapter's live-runtime test behind `SORTIE_<ADAPTER>_TEST=1`, one gate for the whole package. Skip cleanly, with `t.Skip` and a message naming the variable, when it is unset or not `1`. Do not add a second gate for a specific operation inside the same package. Run the shared conformance helpers against the adapter's own event stream: `agenttest.AssertMCPInjection`, `agenttest.AssertUsageContract`, and `agenttest.AssertMeasurementAbsent` where the adapter reports no token usage.
+6. **Add an env-gated integration test.** Gate the adapter's live-runtime test behind `SORTIE_<ADAPTER>_TEST=1`, one gate for the whole package. Skip cleanly, with `t.Skip` and a message naming the variable, when it is unset or not `1`. Do not add a second gate for a specific operation inside the same package. Run the shared conformance helpers against the adapter's own event stream: `agenttest.AssertMCPInjection`, `agenttest.AssertUsageContract`, `agenttest.AssertMeasurementAbsent` where the adapter reports no token usage, and `agenttest.AssertUsageReporting` for the adapter's own usage disposition.
 
 7. **Run the contract tests.** `make test` runs `go test -race ./...`, which includes `internal/adaptertest`. Its checks catch a cross-adapter import, an orchestrator import of the new package, a vendor name leaking outside the new package's own directory (rule IDENTITY), and a duplicated helper the ban table already names an owner for. Fix a violation there before moving on; it is enforced independently of whether the code otherwise compiles and runs.
 

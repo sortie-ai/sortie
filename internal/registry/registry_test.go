@@ -743,3 +743,174 @@ func TestMCPInjection_DeliversTools(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageArrival_ReportsDuringTurn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		arrival UsageArrival
+		want    bool
+	}{
+		{"incremental", UsageArrivalIncremental, true},
+		{"turn_end", UsageArrivalTurnEnd, false},
+		{"none", UsageArrivalNone, false},
+		{"undeclared", UsageArrivalUndeclared, false},
+		{"unrecognized value", UsageArrival("bogus"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.arrival.ReportsDuringTurn()
+			if got != tt.want {
+				t.Errorf("UsageArrival(%q).ReportsDuringTurn() = %v, want %v", tt.arrival, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsageArrival_ReportsAnyFigure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		arrival UsageArrival
+		want    bool
+	}{
+		{"incremental", UsageArrivalIncremental, true},
+		{"turn_end", UsageArrivalTurnEnd, true},
+		{"none", UsageArrivalNone, false},
+		{"undeclared", UsageArrivalUndeclared, false},
+		{"unrecognized value", UsageArrival("bogus"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.arrival.ReportsAnyFigure()
+			if got != tt.want {
+				t.Errorf("UsageArrival(%q).ReportsAnyFigure() = %v, want %v", tt.arrival, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsageAttribution_NamesModel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		attribution UsageAttribution
+		want        bool
+	}{
+		{"per_model", UsageAttributionPerModel, true},
+		{"session_total", UsageAttributionSessionTotal, false},
+		{"none", UsageAttributionNone, false},
+		{"undeclared", UsageAttributionUndeclared, false},
+		{"unrecognized value", UsageAttribution("bogus"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tt.attribution.NamesModel()
+			if got != tt.want {
+				t.Errorf("UsageAttribution(%q).NamesModel() = %v, want %v", tt.attribution, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentMeta_UsageDisposition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no rules returns declared pair", func(t *testing.T) {
+		t.Parallel()
+
+		meta := AgentMeta{
+			UsageArrival:     UsageArrivalIncremental,
+			UsageAttribution: UsageAttributionPerModel,
+		}
+
+		arrival, attribution := meta.UsageDisposition(map[string]any{"model_name": "gpt"}, false)
+		if arrival != UsageArrivalIncremental || attribution != UsageAttributionPerModel {
+			t.Errorf("UsageDisposition() = (%q, %q), want (%q, %q)",
+				arrival, attribution, UsageArrivalIncremental, UsageAttributionPerModel)
+		}
+	})
+
+	t.Run("nil passthrough returns declared pair", func(t *testing.T) {
+		t.Parallel()
+
+		meta := AgentMeta{
+			UsageArrival:     UsageArrivalTurnEnd,
+			UsageAttribution: UsageAttributionSessionTotal,
+			UsageSessionRules: []UsageSessionRule{
+				{
+					When:        func(passthrough map[string]any, remote bool) bool { return remote },
+					Arrival:     UsageArrivalNone,
+					Attribution: UsageAttributionNone,
+				},
+			},
+		}
+
+		arrival, attribution := meta.UsageDisposition(nil, false)
+		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
+			t.Errorf("UsageDisposition(nil, false) = (%q, %q), want (%q, %q)",
+				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
+		}
+	})
+
+	t.Run("no rule matches returns declared pair", func(t *testing.T) {
+		t.Parallel()
+
+		meta := AgentMeta{
+			UsageArrival:     UsageArrivalTurnEnd,
+			UsageAttribution: UsageAttributionSessionTotal,
+			UsageSessionRules: []UsageSessionRule{
+				{
+					When:        func(passthrough map[string]any, remote bool) bool { return remote },
+					Arrival:     UsageArrivalNone,
+					Attribution: UsageAttributionNone,
+				},
+			},
+		}
+
+		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
+		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
+			t.Errorf("UsageDisposition(local) = (%q, %q), want (%q, %q)",
+				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
+		}
+	})
+
+	t.Run("first matching rule wins over later matching rules", func(t *testing.T) {
+		t.Parallel()
+
+		meta := AgentMeta{
+			UsageArrival:     UsageArrivalIncremental,
+			UsageAttribution: UsageAttributionSessionTotal,
+			UsageSessionRules: []UsageSessionRule{
+				{
+					When:        func(passthrough map[string]any, remote bool) bool { return true },
+					Arrival:     UsageArrivalNone,
+					Attribution: UsageAttributionNone,
+				},
+				{
+					When:        func(passthrough map[string]any, remote bool) bool { return true },
+					Arrival:     UsageArrivalIncremental,
+					Attribution: UsageAttributionPerModel,
+				},
+			},
+		}
+
+		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
+		if arrival != UsageArrivalNone || attribution != UsageAttributionNone {
+			t.Errorf("UsageDisposition() = (%q, %q), want first rule's (%q, %q)",
+				arrival, attribution, UsageArrivalNone, UsageAttributionNone)
+		}
+	})
+}

@@ -36,7 +36,7 @@ This is the same server-side profile check that already blocks MCP on the native
 
 Whether the check fails for every API key or only for keys on some plans is unestablished; one key was available to try. An operator seeing tools go missing should read the runtime log first, because that line is the only place the cause is stated.
 
-Token accounting has no source here. The runtime reports an abstract credits figure rather than token counts, so every run is reported unmeasured, token-based budget enforcement is inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn as a vendor extension on its metadata notifications; that is a cost reading, not a token count, and nothing converts one into the other.
+Token accounting has no source here. The runtime reports an abstract credits figure rather than token counts, so every run is reported unmeasured, token-based budget enforcement is inert, and only the turn timeout and cancellation bound a turn. The protocol route reports credits per turn as a vendor extension on its metadata notifications; that is a cost reading, not a token count, and nothing converts one into the other. The registered `kiro` kind declares `none` arrival and `none` attribution, matching this absence directly.
 
 - protocol turn_disposition: Not observed: not_observed
 - protocol retry_classification: Observed: usable

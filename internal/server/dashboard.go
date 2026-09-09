@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 //go:embed dashboard.html
@@ -78,6 +79,125 @@ type dashboardRunningEntry struct {
 	WorkflowFile     string
 	EstimatedCostUSD string
 	UsageMeasured    bool
+
+	// UsageReportingRow, ModelRow, APIRequestsRow, TokensRow, and
+	// EstCostRow are the pre-formatted usage-disposition panel rows;
+	// the template prints each verbatim and performs no computation.
+	UsageReportingRow string
+	ModelRow          string
+	APIRequestsRow    string
+	TokensRow         string
+	EstCostRow        string
+}
+
+// dashPlaceholder is the panel's established idiom for a value that
+// is not available.
+const dashPlaceholder = "—"
+
+// usageReportingRow renders the Usage reporting row: the one place
+// the reason a session reports nothing is stated, per the panel-level
+// rule that a fact is stated once. arrival == undeclared is
+// unreachable in a shipped binary by the syntactic contract test's
+// own argument; the arm exists only to keep this function total.
+func usageReportingRow(arrival registry.UsageArrival, attribution registry.UsageAttribution) string {
+	switch arrival {
+	case registry.UsageArrivalNone:
+		return "this session reports no token usage"
+	case registry.UsageArrivalIncremental:
+		return "figures arrive during each turn" + usageAttributionClause(attribution)
+	case registry.UsageArrivalTurnEnd:
+		return "figures arrive when a turn ends" + usageAttributionClause(attribution)
+	default:
+		return "not declared"
+	}
+}
+
+// usageAttributionClause names what a declared, non-none arrival's
+// figures attribute to, appended to the Usage reporting row.
+func usageAttributionClause(attribution registry.UsageAttribution) string {
+	switch attribution {
+	case registry.UsageAttributionPerModel:
+		return ", per model"
+	case registry.UsageAttributionSessionTotal:
+		return ", as a session total"
+	default:
+		return ""
+	}
+}
+
+// usageModelRow renders the Model row. A none or undeclared
+// attribution reaches the panel's existing dash rather than
+// restating the Usage reporting row's reason.
+func usageModelRow(attribution registry.UsageAttribution, modelName string) string {
+	switch {
+	case attribution == registry.UsageAttributionNone:
+		return dashPlaceholder
+	case attribution == registry.UsageAttributionSessionTotal:
+		return "not attributed to a model"
+	case attribution.NamesModel():
+		if modelName == "" {
+			return "not reported yet"
+		}
+		return modelName
+	default:
+		return dashPlaceholder
+	}
+}
+
+// usageAPIRequestsRow renders the API Requests row. A count is shown
+// only for an arrival whose figures arrive per API request during the
+// turn; every other declared arrival's count is not a request count.
+func usageAPIRequestsRow(arrival registry.UsageArrival, apiRequestCount int) string {
+	switch {
+	case arrival == registry.UsageArrivalNone:
+		return dashPlaceholder
+	case arrival.ReportsDuringTurn():
+		return FormatInt(int64(apiRequestCount))
+	default:
+		return "not measured"
+	}
+}
+
+// usageTokensRow renders the Tokens row. tokensStr is the
+// pre-formatted figure (with its cached-tokens suffix already
+// applied, when present); arrival == none reaches the panel's
+// existing dash rather than restating the Usage reporting row's
+// reason.
+func usageTokensRow(arrival registry.UsageArrival, usageMeasured, tokensPending bool, tokensStr string) string {
+	switch {
+	case arrival == registry.UsageArrivalNone:
+		return dashPlaceholder
+	case !usageMeasured:
+		return "not reported yet"
+	case tokensPending:
+		return tokensStr + ", excludes the turn in progress"
+	case arrival == registry.UsageArrivalIncremental || arrival == registry.UsageArrivalTurnEnd:
+		return tokensStr
+	default:
+		return tokensStr + ", usage reporting not declared"
+	}
+}
+
+// usageEstCostRow renders the Est. Cost row. costStr is the
+// pre-formatted cost figure, or the empty string when no cost was
+// computed. arrival == none is evaluated ahead of the
+// rates-unconfigured arm, per the fixed arm order that makes their
+// shared dash output unobservable rather than contradictory.
+func usageEstCostRow(arrival registry.UsageArrival, hasRates, tokensPending bool, costStr string) string {
+	display := costStr
+	if display == "" {
+		display = dashPlaceholder
+	}
+	switch {
+	case arrival == registry.UsageArrivalNone:
+		return dashPlaceholder
+	case !hasRates:
+		return dashPlaceholder
+	case tokensPending:
+		return display + ", excludes the turn in progress"
+	default:
+		return display
+	}
 }
 
 type dashboardRetryEntry struct {
@@ -271,12 +391,12 @@ func buildDashboardData(
 			displayID = e.DisplayID
 		}
 
-		if !e.UsageMeasured {
+		if e.UsageArrival.ReportsAnyFigure() && !e.UsageMeasured {
 			unmeasuredCount++
 		}
 
 		var entryCostStr string
-		if hasRates && e.AgentKind != "" && e.UsageMeasured {
+		if hasRates && e.UsageMeasured {
 			if rc, ok := tokenRates[e.AgentKind]; ok {
 				if c := EstimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
 					entryCostStr = FormatCost(*c)
@@ -286,23 +406,33 @@ func buildDashboardData(
 			}
 		}
 
+		tokensStr := FormatInt(e.AgentTotalTokens)
+		if e.CacheReadTokens != 0 {
+			tokensStr += " (" + FormatInt(e.CacheReadTokens) + " cached)"
+		}
+
 		running[i] = dashboardRunningEntry{
-			Identifier:       displayID,
-			State:            e.State,
-			TurnCount:        e.TurnCount,
-			Duration:         FormatDuration(dur),
-			LastEvent:        string(e.LastAgentEvent),
-			TotalTokens:      e.AgentTotalTokens,
-			CacheReadTokens:  e.CacheReadTokens,
-			ModelName:        e.ModelName,
-			APIRequestCount:  e.APIRequestCount,
-			DetailURL:        "/api/v1/" + url.PathEscape(e.Identifier),
-			Host:             e.SSHHost,
-			ToolTimePct:      toolPct,
-			APITimePct:       apiPct,
-			WorkflowFile:     e.WorkflowFile,
-			EstimatedCostUSD: entryCostStr,
-			UsageMeasured:    e.UsageMeasured,
+			Identifier:        displayID,
+			State:             e.State,
+			TurnCount:         e.TurnCount,
+			Duration:          FormatDuration(dur),
+			LastEvent:         string(e.LastAgentEvent),
+			TotalTokens:       e.AgentTotalTokens,
+			CacheReadTokens:   e.CacheReadTokens,
+			ModelName:         e.ModelName,
+			APIRequestCount:   e.APIRequestCount,
+			DetailURL:         "/api/v1/" + url.PathEscape(e.Identifier),
+			Host:              e.SSHHost,
+			ToolTimePct:       toolPct,
+			APITimePct:        apiPct,
+			WorkflowFile:      e.WorkflowFile,
+			EstimatedCostUSD:  entryCostStr,
+			UsageMeasured:     e.UsageMeasured,
+			UsageReportingRow: usageReportingRow(e.UsageArrival, e.UsageAttribution),
+			ModelRow:          usageModelRow(e.UsageAttribution, e.ModelName),
+			APIRequestsRow:    usageAPIRequestsRow(e.UsageArrival, e.APIRequestCount),
+			TokensRow:         usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensPending, tokensStr),
+			EstCostRow:        usageEstCostRow(e.UsageArrival, hasRates, e.TokensPending, entryCostStr),
 		}
 	}
 	data.Running = running

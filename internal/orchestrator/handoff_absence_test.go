@@ -14,6 +14,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 type handoffLabelCall struct {
@@ -1028,9 +1029,12 @@ func TestParkRetryLaneBackfillAndRelease(t *testing.T) {
 			return func(context.Context, domain.Issue, *int) {}
 		},
 		AgentAdapterByKind: func(string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		OnRetryFire:        noopRetryFire,
-		Ctx:                context.Background(),
-		Logger:             discardLogger(),
+		ResolveUsageDisposition: func(_, _ string) (registry.UsageArrival, registry.UsageAttribution) {
+			return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+		},
+		OnRetryFire: noopRetryFire,
+		Ctx:         context.Background(),
+		Logger:      discardLogger(),
 	}
 	retryParams.MaxSessions = 0
 

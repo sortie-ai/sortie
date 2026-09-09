@@ -42,6 +42,11 @@ func ParseTokenRates(rawSection any, present bool) (TokenRates, []string) {
 	rates := make(TokenRates, len(topMap))
 
 	for kind, val := range topMap {
+		if kind == "" {
+			warnings = append(warnings, "token_rates: entry keyed to the empty string is dropped")
+			continue
+		}
+
 		kindMap, ok := val.(map[string]any)
 		if !ok {
 			warnings = append(warnings, fmt.Sprintf("token_rates.%s: expected map, got %T", kind, val))

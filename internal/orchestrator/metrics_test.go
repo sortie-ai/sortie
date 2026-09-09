@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // --- Test doubles ---
@@ -868,6 +869,9 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 			},
 			AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) {
 				return &mockAgentAdapter{}, nil
+			},
+			ResolveUsageDisposition: func(_, _ string) (registry.UsageArrival, registry.UsageAttribution) {
+				return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
 			},
 			OnRetryFire: noopRetryFire,
 			Logger:      discardLogger(),
