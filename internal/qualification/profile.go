@@ -143,6 +143,17 @@ func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, er
 // instead and carries none of these args.
 type EntryPoint struct {
 	Args []string `json:"args"`
+
+	// AskingArgs is the same launch under the posture that asks before
+	// running a tool, for the surface whose permission handling is
+	// induced. It is stated rather than derived from Args: which
+	// element is the posture switch is not recoverable from an argument
+	// vector, a runtime may spell it in several tokens or not last, and
+	// on one shipped profile the trailing element is the protocol
+	// switch itself. Empty means the runtime's asking posture is
+	// unknown, and permission handling is then unmeasured rather than
+	// induced against a launch nobody verified.
+	AskingArgs []string `json:"asking_args,omitempty"`
 }
 
 // TerminalLocator selects the terminal object out of a native
@@ -252,7 +263,7 @@ var runtimeProfileFields = func() map[string]bool {
 	return fields
 }()
 
-var entryPointFields = map[string]bool{"args": true}
+var entryPointFields = map[string]bool{"args": true, "asking_args": true}
 
 var terminalLocatorFields = map[string]bool{
 	"mode": true, "discriminator_key": true, "discriminator_value": true,
@@ -513,6 +524,17 @@ func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 		}
 		if err := validatePlaceholderArgsAllowed(entry.Args); err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		if askingRaw, hasAsking := fields["asking_args"]; hasAsking {
+			if err := json.Unmarshal(askingRaw, &entry.AskingArgs); err != nil {
+				return nil, fmt.Errorf("%s: asking_args: %w", key, err)
+			}
+			if len(entry.AskingArgs) == 0 {
+				return nil, fmt.Errorf("%s: asking_args must be non-empty when present", key)
+			}
+			if err := validatePlaceholderArgsAllowed(entry.AskingArgs); err != nil {
+				return nil, fmt.Errorf("%s: asking_args: %w", key, err)
+			}
 		}
 		entries[surface] = entry
 	}
@@ -1016,6 +1038,18 @@ func (p RuntimeProfile) EntryArgs(surface Surface, model, policy, prompt string)
 		return nil, fmt.Errorf("runtime profile %s carries no entry point for surface %s", p.RuntimeID, surface)
 	}
 	return substitutePlaceholders(entry.Args, model, policy, prompt), nil
+}
+
+// AskingArgs substitutes the same placeholders into surface's own
+// EntryPoint.AskingArgs. It reports false when the profile states no
+// asking posture for that surface, which is the caller's signal to
+// record the row unmeasured rather than to launch something else.
+func (p RuntimeProfile) AskingArgs(surface Surface, model, policy, prompt string) ([]string, bool) {
+	entry, ok := p.EntryPoints[surface]
+	if !ok || len(entry.AskingArgs) == 0 {
+		return nil, false
+	}
+	return substitutePlaceholders(entry.AskingArgs, model, policy, prompt), true
 }
 
 // PublishedPostureArgs builds the published-posture probe's argv: the

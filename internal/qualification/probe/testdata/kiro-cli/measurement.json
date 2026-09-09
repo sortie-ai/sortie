@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile_digest": "998eb4e4a2059aca2c40d2292aff41177a9c80f87e97f107bee8fdff3469f199",
-  "measured_at": "2026-09-08",
+  "profile_digest": "302b7ad876dce4077b08e23e827e23d94e8aeaa619360b482244c76b96d167a9",
+  "measured_at": "2026-09-09",
   "expectation": {
     "Verdict": "unmeasured",
     "Grades": [

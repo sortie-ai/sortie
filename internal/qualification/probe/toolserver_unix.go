@@ -199,20 +199,20 @@ func induceToolServerCall(t *testing.T, coords Coordinates) (qualification.Grade
 	}
 }
 
-// permissionAskingArgs removes the protocol entry point's own trailing
-// argument, which this project's tracked profiles use as the posture
-// switch step 4 finds (the flag that puts the runtime in a mode that
-// does not ask), restoring the runtime's default asking behavior for
-// this induction. It never reads which runtime it launches.
+// permissionAskingArgs reads the protocol entry point's own stated
+// asking posture. It is read rather than derived from the graded
+// launch: which element of an argument vector is the posture switch is
+// not recoverable from the vector, and a profile whose trailing element
+// is the protocol switch would be relaunched out of protocol mode
+// entirely by any positional rule. A profile that states no asking
+// posture leaves the row unmeasured, which is the honest outcome, and
+// nothing here reads which runtime it launches.
 func permissionAskingArgs(coords Coordinates) ([]string, error) {
-	argv, err := coords.Profile.EntryArgs(qualification.SurfaceProtocol, coords.Model, "", "")
-	if err != nil {
-		return nil, err
+	argv, ok := coords.Profile.AskingArgs(qualification.SurfaceProtocol, coords.Model, "", "")
+	if !ok {
+		return nil, fmt.Errorf("runtime %s's protocol entry point states no asking posture", coords.Profile.RuntimeID)
 	}
-	if len(argv) == 0 {
-		return nil, fmt.Errorf("runtime %s's protocol entry point carries no posture switch to remove", coords.Profile.RuntimeID)
-	}
-	return argv[:len(argv)-1], nil
+	return argv, nil
 }
 
 // containsNotification reports whether events carries a notification

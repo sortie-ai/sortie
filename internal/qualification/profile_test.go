@@ -3,8 +3,10 @@ package qualification
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -173,6 +175,18 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			name: "entry_points missing protocol is rejected",
 			mutate: func(doc map[string]any) {
 				delete(doc["entry_points"].(map[string]any), "protocol")
+			},
+		},
+		{
+			name: "an entry_points asking_args that is empty is rejected",
+			mutate: func(doc map[string]any) {
+				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{}
+			},
+		},
+		{
+			name: "an entry_points asking_args entry carrying a placeholder outside the allowed set is rejected",
+			mutate: func(doc map[string]any) {
+				doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp", "{bogus}"}
 			},
 		},
 		{
@@ -758,4 +772,60 @@ func TestRecognizerModelRequestsEmptyPath(t *testing.T) {
 	if got := recognizer.ModelRequests(output); got != ModelRequestUnreadable {
 		t.Errorf("Recognizer.ModelRequests(%q) = %v, want %v", output, got, ModelRequestUnreadable)
 	}
+}
+
+// TestRuntimeProfileAskingArgs confirms the asking posture is read from
+// the profile rather than derived from the graded launch, and that a
+// profile stating none reports so instead of returning a launch the
+// caller would have to guess at.
+func TestRuntimeProfileAskingArgs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a stated asking posture substitutes placeholders", func(t *testing.T) {
+		t.Parallel()
+
+		doc := validProfileDoc()
+		doc["entry_points"].(map[string]any)["protocol"].(map[string]any)["asking_args"] = []string{"--acp", "--model", "{model}"}
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, doc))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		got, ok := profile.AskingArgs(SurfaceProtocol, "a-model", "", "")
+		if !ok {
+			t.Fatal("AskingArgs() ok = false, want a stated posture to resolve")
+		}
+		want := []string{"--acp", "--model", "a-model"}
+		if !slices.Equal(got, want) {
+			t.Errorf("AskingArgs() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a profile stating no asking posture reports none", func(t *testing.T) {
+		t.Parallel()
+
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		if got, ok := profile.AskingArgs(SurfaceProtocol, "a-model", "", ""); ok {
+			t.Errorf("AskingArgs() = %v, true, want no posture reported", got)
+		}
+	})
+
+	t.Run("omitting asking_args leaves the digest unmoved", func(t *testing.T) {
+		t.Parallel()
+
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		if err != nil {
+			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
+		}
+		bare := profile
+		bare.EntryPoints = maps.Clone(profile.EntryPoints)
+		entry := bare.EntryPoints[SurfaceProtocol]
+		entry.AskingArgs = nil
+		bare.EntryPoints[SurfaceProtocol] = entry
+		if profile.Digest() != bare.Digest() {
+			t.Errorf("Digest() moved for a profile that states no asking posture: %s vs %s", profile.Digest(), bare.Digest())
+		}
+	})
 }

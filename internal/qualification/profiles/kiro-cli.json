@@ -15,7 +15,8 @@
   "capability_gap_labels": ["token counts"],
   "entry_points": {
     "protocol": {
-      "args": ["acp", "--model", "{model}", "-a"]
+      "args": ["acp", "--model", "{model}", "-a"],
+      "asking_args": ["acp", "--model", "{model}"]
     },
     "native_json": {
       "args": ["chat", "--model", "{model}", "--no-interactive", "--trust-tools=", "{prompt}"]
