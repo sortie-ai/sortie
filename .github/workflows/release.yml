@@ -582,11 +582,7 @@ jobs:
       - test-integration-opencode
       - test-integration-kiro
       - test-integration-acp-gemini
-      # test-integration-acp-kiro is deliberately absent. A shard joins this
-      # list only after it has run green once on a real runner, and this one
-      # never has: the runtime fetches its own worker runtime on first use, and
-      # whether that fits a fresh runner's budget is unobserved. Adding it
-      # before that blocks every release on a shard nobody has seen pass.
+      - test-integration-acp-kiro
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
