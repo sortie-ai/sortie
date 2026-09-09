@@ -472,9 +472,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   run-cumulative scope and monotonicity contract of Section 10.3
 - Each coding-agent adapter carries a test proving it emits no `token_usage` event and reports
   the run unmeasured when its runtime supplies no usage figure for that run
-- Each coding-agent adapter carries a test asserting one of: its `token_usage` events carry the
-  model when the runtime names one, they carry an empty model when it does not, or it emits no
-  `token_usage` event at all
+- Each coding-agent adapter declares its usage arrival and attribution on registration, and
+  carries a test calling the shared usage-reporting conformance assertion against its own real
+  event stream, proving the declared disposition matches what the adapter's own emission code
+  produces
 - The token-accounting regression test's captured-output requirement admits two fixture
   exceptions, kept apart rather than merged into one permission: a protocol-shape fixture for a
   surface no probe can reach, derived from the schema the runtime's own binary generates, naming

@@ -11,6 +11,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // pausedRetryMaxDwell bounds how long a known-reaction retry may be
@@ -145,6 +146,12 @@ type HandleRetryTimerParams struct {
 	// WorkflowFile is the base filename of the active WORKFLOW.md file.
 	// Recorded on the RunningEntry for observability.
 	WorkflowFile string
+
+	// ResolveUsageDisposition resolves the usage-reporting disposition
+	// for the given agent kind and SSH host (empty for a local
+	// launch). Required; HandleRetryTimer freezes the resolved pair
+	// onto the running entry alongside AgentKind.
+	ResolveUsageDisposition func(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution)
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -616,6 +623,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil AgentAdapterByKind")
 	}
 
+	if params.ResolveUsageDisposition == nil {
+		panic("HandleRetryTimer: nil ResolveUsageDisposition")
+	}
+
 	// Legacy retry rows persisted before dispatch rule routing was
 	// added carry an empty AgentKind. Coalesce to the workflow-wide
 	// default so adapter resolution, worker construction, and the
@@ -662,6 +673,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.TemplateID = popped.TemplateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
+		entry.UsageArrival, entry.UsageAttribution = params.ResolveUsageDisposition(agentKind, host)
 	}
 	metrics.IncDispatches(outcomeSuccess)
 

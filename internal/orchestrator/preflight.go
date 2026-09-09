@@ -211,6 +211,26 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
+	// remote decides the launch mode every kind's usage disposition is
+	// resolved under: worker.ssh_hosts is the one configuration key
+	// that can produce a remote session, so its presence decides the
+	// mode for every session this configuration can produce.
+	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker")).SSHHosts) > 0
+
+	// tokenRatePricedKinds is the set of kind strings token_rates
+	// prices, read once per validation call. Only the key set is
+	// needed here; the rate values themselves belong to internal/server,
+	// which internal/orchestrator must not import.
+	var tokenRatePricedKinds map[string]struct{}
+	if raw, present := cfg.ExtensionValue("token_rates"); present {
+		if topMap, ok := raw.(map[string]any); ok {
+			tokenRatePricedKinds = make(map[string]struct{}, len(topMap))
+			for kind := range topMap {
+				tokenRatePricedKinds[kind] = struct{}{}
+			}
+		}
+	}
+
 	// Adapter-specific agent config validation, for every distinct kind
 	// this configuration can reach. A registered kind the configuration
 	// never references is skipped, because that would report a fault in
@@ -261,6 +281,30 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 				Check:   "agent.kind.no_tool_channel",
 				Message: "agent kind " + strconv.Quote(ref.Kind) + " has no tool execution channel: Sortie's tools are neither advertised nor callable for it",
 			})
+		}
+
+		// A kind whose disposition reports no usage figure for the
+		// sessions this configuration produces makes a configured
+		// token ceiling inert and a priced rate un-billable. Each
+		// setting has its own remedy, so each earns its own check key.
+		if registered {
+			arrival, _ := agentMeta.UsageDisposition(settings.Passthrough, remote)
+			if !arrival.ReportsAnyFigure() {
+				if cfg.Agent.MaxTokens != 0 {
+					warns = append(warns, PreflightWarning{
+						Check: "agent.kind.no_usage_reporting",
+						Message: "agent.max_tokens is set but agent kind " + strconv.Quote(ref.Kind) +
+							" reports no token usage for the sessions this configuration produces: the per-issue token ceiling can never be reached for it",
+					})
+				}
+				if _, priced := tokenRatePricedKinds[ref.Kind]; priced {
+					warns = append(warns, PreflightWarning{
+						Check: "agent.kind.no_cost_estimate",
+						Message: "token_rates prices agent kind " + strconv.Quote(ref.Kind) +
+							", which reports no token usage for the sessions this configuration produces: no cost can be estimated for it",
+					})
+				}
+			}
 		}
 
 		// A kind whose declaration reports a blocking key under this

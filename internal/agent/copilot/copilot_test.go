@@ -1124,6 +1124,59 @@ func writeJournal(t *testing.T, path, content string) {
 	}
 }
 
+// TestAssertUsageReporting proves copilot-cli's registered
+// usage-reporting declaration (turn_end, session_total) and its
+// remote session rule (none, none) against real event streams: a
+// local turn whose journal read supplies the only figure, and a
+// remote turn whose read is skipped entirely. Both cases run in one
+// call to AssertUsageReporting so the assertion's own rule-coverage
+// check confirms the declared pair and the remote rule are each
+// reached exactly once.
+func TestAssertUsageReporting(t *testing.T) {
+	// No t.Parallel(): t.Setenv is incompatible with it.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
+	fixture := loadTestFixture(t, "session_shutdown.jsonl")
+	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
+	if len(lines) < 1 {
+		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 1", len(lines))
+	}
+
+	runTurn := func(remote bool) (events []domain.AgentEvent, result domain.TurnResult) {
+		copilotHome := t.TempDir()
+		t.Setenv("COPILOT_HOME", copilotHome)
+		writeJournal(t, journalPath(copilotHome, sessionID), lines[0]+"\n")
+
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_no_output_tokens.jsonl"), 0)
+		if remote {
+			// Simulate SSH mode without spawning a real ssh subprocess:
+			// recoverUsage's remote gate reads only RemoteCommand, and
+			// the command stays the fake local binary above.
+			state.target.RemoteCommand = "copilot"
+		}
+
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "read main.go",
+			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+		return events, result
+	}
+
+	localEvents, localResult := runTurn(false)
+	remoteEvents, remoteResult := runTurn(true)
+
+	agenttest.AssertUsageReporting(t, "copilot-cli", []agenttest.UsageReportingCase{
+		{Name: "local, journal supplies the only figure", Events: localEvents, Result: localResult},
+		{Name: "remote, journal read skipped", Remote: true, Events: remoteEvents, Result: remoteResult},
+	})
+}
+
 // TestRunTurn_SessionStateRecovery_FirstRecord drives RunTurn with a
 // temporary session-state root containing one session.shutdown record
 // captured from Copilot CLI 1.0.78, whose modelMetrics reports

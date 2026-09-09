@@ -49,6 +49,15 @@ type runningEntryResponse struct {
 	ToolTimePercent   *float64       `json:"tool_time_percent"`
 	APITimePercent    *float64       `json:"api_time_percent"`
 	TokensMeasured    bool           `json:"tokens_measured"`
+
+	// UsageArrival and UsageAttribution mirror
+	// [orchestrator.SnapshotRunningEntry]'s frozen pair verbatim, as
+	// their string values. TokensPending and APIRequestsMeasured are
+	// derived from the same pair.
+	UsageArrival        string `json:"usage_arrival"`
+	UsageAttribution    string `json:"usage_attribution"`
+	TokensPending       bool   `json:"tokens_pending"`
+	APIRequestsMeasured bool   `json:"api_requests_measured"`
 }
 
 type tokenInfo struct {
@@ -141,10 +150,14 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 			TotalTokens:     e.AgentTotalTokens,
 			CacheReadTokens: e.CacheReadTokens,
 		},
-		ModelName:       e.ModelName,
-		APIRequestCount: e.APIRequestCount,
-		RequestsByModel: e.RequestsByModel,
-		TokensMeasured:  e.UsageMeasured,
+		ModelName:           e.ModelName,
+		APIRequestCount:     e.APIRequestCount,
+		RequestsByModel:     e.RequestsByModel,
+		TokensMeasured:      e.UsageMeasured,
+		UsageArrival:        string(e.UsageArrival),
+		UsageAttribution:    string(e.UsageAttribution),
+		TokensPending:       e.TokensPending,
+		APIRequestsMeasured: e.UsageArrival.ReportsDuringTurn(),
 	}
 
 	if len(nowArgs) > 0 && !e.StartedAt.IsZero() {
@@ -226,7 +239,7 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRa
 		var total float64
 		anySet := false
 		for _, e := range snap.Running {
-			if e.AgentKind == "" || !e.UsageMeasured {
+			if !e.UsageMeasured {
 				continue
 			}
 			if rc, ok := tokenRates[e.AgentKind]; ok {

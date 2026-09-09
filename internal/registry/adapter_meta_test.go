@@ -10,6 +10,7 @@ import (
 
 	// Trigger adapter init() registrations.
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
+	_ "github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	_ "github.com/sortie-ai/sortie/internal/agent/codex"
 	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
 	_ "github.com/sortie-ai/sortie/internal/agent/kiro"
@@ -117,47 +118,69 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			kind                  string
 			wantCommand           bool
 			wantMCPInjection      registry.MCPInjection
+			wantUsageArrival      registry.UsageArrival
+			wantUsageAttribution  registry.UsageAttribution
 			declaresResumeBlocker bool
 			samplePassthrough     map[string]any
 			wantKey               string
 		}{
 			{
-				name:                  "claude-code requires command, declares MCP injection supported, and declares session_persistence as a resume blocker",
+				name:                 "agent-client-protocol requires command, declares MCP injection translated, declares none/none usage, and declares no resume blocker",
+				kind:                 "agent-client-protocol",
+				wantCommand:          true,
+				wantMCPInjection:     registry.MCPInjectionTranslated,
+				wantUsageArrival:     registry.UsageArrivalNone,
+				wantUsageAttribution: registry.UsageAttributionNone,
+			},
+			{
+				name:                  "claude-code requires command, declares MCP injection supported, declares incremental/per_model usage, and declares session_persistence as a resume blocker",
 				kind:                  "claude-code",
 				wantCommand:           true,
 				wantMCPInjection:      registry.MCPInjectionSupported,
+				wantUsageArrival:      registry.UsageArrivalIncremental,
+				wantUsageAttribution:  registry.UsageAttributionPerModel,
 				declaresResumeBlocker: true,
 				samplePassthrough:     map[string]any{"session_persistence": false},
 				wantKey:               "session_persistence",
 			},
 			{
-				name:             "copilot-cli requires command, declares MCP injection supported, and declares no resume blocker",
-				kind:             "copilot-cli",
-				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionSupported,
+				name:                 "copilot-cli requires command, declares MCP injection supported, declares turn_end/session_total usage, and declares no resume blocker",
+				kind:                 "copilot-cli",
+				wantCommand:          true,
+				wantMCPInjection:     registry.MCPInjectionSupported,
+				wantUsageArrival:     registry.UsageArrivalTurnEnd,
+				wantUsageAttribution: registry.UsageAttributionSessionTotal,
 			},
 			{
-				name:             "codex requires command, declares MCP injection translated, and declares no resume blocker",
-				kind:             "codex",
-				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionTranslated,
+				name:                 "codex requires command, declares MCP injection translated, declares incremental/per_model usage, and declares no resume blocker",
+				kind:                 "codex",
+				wantCommand:          true,
+				wantMCPInjection:     registry.MCPInjectionTranslated,
+				wantUsageArrival:     registry.UsageArrivalIncremental,
+				wantUsageAttribution: registry.UsageAttributionPerModel,
 			},
 			{
-				name:             "kiro requires command, declares MCP injection unsupported, and declares no resume blocker",
-				kind:             "kiro",
-				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionUnsupported,
+				name:                 "kiro requires command, declares MCP injection unsupported, declares none/none usage, and declares no resume blocker",
+				kind:                 "kiro",
+				wantCommand:          true,
+				wantMCPInjection:     registry.MCPInjectionUnsupported,
+				wantUsageArrival:     registry.UsageArrivalNone,
+				wantUsageAttribution: registry.UsageAttributionNone,
 			},
 			{
-				name:             "opencode requires command, declares MCP injection translated, and declares no resume blocker",
-				kind:             "opencode",
-				wantCommand:      true,
-				wantMCPInjection: registry.MCPInjectionTranslated,
+				name:                 "opencode requires command, declares MCP injection translated, declares turn_end/per_model usage, and declares no resume blocker",
+				kind:                 "opencode",
+				wantCommand:          true,
+				wantMCPInjection:     registry.MCPInjectionTranslated,
+				wantUsageArrival:     registry.UsageArrivalTurnEnd,
+				wantUsageAttribution: registry.UsageAttributionPerModel,
 			},
 			{
-				name:             "mock requires nothing, declares MCP injection unsupported, and declares no resume blocker",
-				kind:             "mock",
-				wantMCPInjection: registry.MCPInjectionUnsupported,
+				name:                 "mock requires nothing, declares MCP injection unsupported, declares incremental/session_total usage, and declares no resume blocker",
+				kind:                 "mock",
+				wantMCPInjection:     registry.MCPInjectionUnsupported,
+				wantUsageArrival:     registry.UsageArrivalIncremental,
+				wantUsageAttribution: registry.UsageAttributionSessionTotal,
 			},
 		}
 
@@ -199,6 +222,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				}
 				if meta.MCPInjection != tt.wantMCPInjection {
 					t.Errorf("Agents.Meta(%q).MCPInjection = %q, want %q", tt.kind, meta.MCPInjection, tt.wantMCPInjection)
+				}
+				if meta.UsageArrival != tt.wantUsageArrival {
+					t.Errorf("Agents.Meta(%q).UsageArrival = %q, want %q", tt.kind, meta.UsageArrival, tt.wantUsageArrival)
+				}
+				if meta.UsageAttribution != tt.wantUsageAttribution {
+					t.Errorf("Agents.Meta(%q).UsageAttribution = %q, want %q", tt.kind, meta.UsageAttribution, tt.wantUsageAttribution)
 				}
 
 				if !tt.declaresResumeBlocker {

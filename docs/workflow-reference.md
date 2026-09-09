@@ -2198,7 +2198,11 @@ aggregate token/runtime totals, and rate limits.
       "api_request_count": 3,
       "requests_by_model": {"claude-sonnet-4-20250514": 3},
       "tool_time_percent": 12.3,
-      "api_time_percent": 45.6
+      "api_time_percent": 45.6,
+      "usage_arrival": "incremental",
+      "usage_attribution": "per_model",
+      "tokens_pending": false,
+      "api_requests_measured": true
     }
   ],
   "retrying": [
@@ -2241,10 +2245,14 @@ aggregate token/runtime totals, and rate limits.
 | `tokens`                  | object            | Token counts for this session: `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`.                                      |
 | `tokens.cache_read_tokens` | integer          | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. Zero when the agent adapter does not report cache data. |
 | `model_name`              | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model.         |
-| `api_request_count` | integer           | Number of LLM API requests made during this session. Incremented once per `token_usage` event from the agent adapter.                     |
+| `api_request_count` | integer           | Number of `token_usage` events received during this session. It is a count of actual API requests only when `usage_arrival` is `incremental`; for `turn_end` it settles at most once per turn and is not a request count. |
 | `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when no model data is available. Enables tracking model usage when the agent switches models mid-session. |
 | `tool_time_percent` | number or `null`  | Cumulative tool call execution time as a percentage of session wall-clock time. Computed at response time. `null` when no tool timing data has been received. |
 | `api_time_percent`  | number or `null`  | Cumulative LLM API response wait time as a percentage of session wall-clock time. Computed at response time. `null` when no API timing data has been received. |
+| `usage_arrival`      | string            | The session's kind's declared usage-reporting arrival, frozen at dispatch: `incremental`, `turn_end`, `none`, or `""` when undeclared.    |
+| `usage_attribution`  | string            | The session's kind's declared usage-reporting attribution, frozen at dispatch: `per_model`, `session_total`, `none`, or `""` when undeclared. |
+| `tokens_pending`     | boolean           | True only when `usage_arrival` is `turn_end`, the session is measured, and the turn that figure would settle for is still in flight.      |
+| `api_requests_measured` | boolean        | True only when `usage_arrival` is `incremental`, the one disposition under which `api_request_count` counts actual API requests.          |
 
 **Aggregate totals:**
 
@@ -2293,7 +2301,11 @@ not in current orchestrator state.
     "api_request_count": 3,
     "requests_by_model": {"claude-sonnet-4-20250514": 3},
     "tool_time_percent": 12.3,
-    "api_time_percent": 45.6
+    "api_time_percent": 45.6,
+    "usage_arrival": "incremental",
+    "usage_attribution": "per_model",
+    "tokens_pending": false,
+    "api_requests_measured": true
   },
   "retry": null,
   "budget_exhausted": null,
@@ -2553,11 +2565,11 @@ aggregates from run history. Keys are agent adapter kind strings (e.g., `"claude
 When `token_rates` is absent or empty, the dashboard shows raw token counts without
 cost estimates and `sortie stats` reports no cost figures.
 
-The `kiro` adapter reports no token counts on the headless path, so a `token_rates.kiro`
-entry has no effect. Cost is surfaced only through the abstract credits figure in the
-`kiro-cli` stderr trailer, which the orchestrator does not aggregate.
-
-The `agent-client-protocol` adapter reports no token counts on the pinned wire version, so a `token_rates.agent-client-protocol` entry has no effect.
+An entry keyed to a kind whose usage-reporting declaration resolves to no token usage for the
+sessions a configuration produces has no effect: no cost can be estimated for it. `sortie validate`
+reports this under the check `agent.kind.no_cost_estimate`, naming the kind, so an operator who
+prices a non-reporting kind learns why the dashboard's Est. Cost column stays blank rather than
+discovering it by reading source.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -2576,6 +2588,7 @@ The `agent-client-protocol` adapter reports no token counts on the pinned wire v
 - Missing rate fields within a kind are valid. Partial rates (e.g., only
   `output_per_mtok`) compute cost from the configured fields only.
 - Zero-valued rates are valid and produce `$0.00` for that token type.
+- An entry keyed to the empty string is dropped and produces a warning; it prices no kind.
 
 **Reload behavior:** Token rates do not reload dynamically. Changes require a process
 restart, consistent with `server.port` and `server.host`.

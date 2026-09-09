@@ -180,6 +180,30 @@ func TestParseTokenRates(t *testing.T) {
 			},
 		},
 		{
+			name: "entry keyed to the empty string is dropped with one warning",
+			extensions: map[string]any{
+				"token_rates": map[string]any{
+					"": map[string]any{"input_per_mtok": 3.0},
+				},
+			},
+			wantNil:      true,
+			wantWarnings: 1,
+		},
+		{
+			name: "entry keyed to the empty string is dropped, a populated kind beside it is unaffected",
+			extensions: map[string]any{
+				"token_rates": map[string]any{
+					"":       map[string]any{"input_per_mtok": 3.0},
+					"claude": map[string]any{"input_per_mtok": 5.0},
+				},
+			},
+			wantNil:      false,
+			wantWarnings: 1,
+			wantRates: TokenRates{
+				"claude": TokenRateConfig{InputPerMtok: fptr(5.0)},
+			},
+		},
+		{
 			name: "missing individual field yields nil pointer for that field",
 			extensions: map[string]any{
 				"token_rates": map[string]any{
@@ -250,6 +274,25 @@ func assertRateField(t *testing.T, kind, field string, got, want *float64) {
 	}
 	if *got != *want {
 		t.Errorf("token_rates.%s.%s = %v, want %v", kind, field, *got, *want)
+	}
+}
+
+// TestParseTokenRates_EmptyKeyWarningMessage pins the exact warning
+// text an empty-keyed entry produces, so tokenRates[""] never
+// resolves for any of the three callers that share this type.
+func TestParseTokenRates_EmptyKeyWarningMessage(t *testing.T) {
+	t.Parallel()
+
+	rates, warnings := ParseTokenRates(map[string]any{
+		"": map[string]any{"input_per_mtok": 3.0},
+	}, true)
+
+	if rates != nil {
+		t.Errorf("ParseTokenRates rates = %v, want nil (empty-keyed entry dropped)", rates)
+	}
+	want := "token_rates: entry keyed to the empty string is dropped"
+	if len(warnings) != 1 || warnings[0] != want {
+		t.Errorf("ParseTokenRates warnings = %v, want [%q]", warnings, want)
 	}
 }
 

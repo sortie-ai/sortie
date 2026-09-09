@@ -6,7 +6,25 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// isTurnTerminalEvent reports whether t is one of the five event
+// types that end a turn. Shared by HandleAgentEvent's Debug-log
+// routing and its per-turn API-request baseline reset, so the set is
+// asserted in exactly one place.
+func isTurnTerminalEvent(t domain.AgentEventType) bool {
+	switch t {
+	case domain.EventTurnCompleted,
+		domain.EventTurnFailed,
+		domain.EventTurnCancelled,
+		domain.EventTurnEndedWithError,
+		domain.EventTurnInputRequired:
+		return true
+	default:
+		return false
+	}
+}
 
 // HandleAgentEvent applies an incoming agent event from the worker's
 // OnEvent relay to the running map entry for issueID and, for
@@ -59,8 +77,10 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	}
 
 	// Increment TurnCount on session_started — the signal that a new
-	// turn has begun. Each adapter emits exactly one session_started
-	// per turn.
+	// turn has begun. claude-code and copilot-cli emit session_started
+	// once per turn (a fresh subprocess or fork per turn); codex and
+	// opencode emit it once per session, on the first turn only, so
+	// TurnCount undercounts the true turn count for those two kinds.
 	if event.Type == domain.EventSessionStarted {
 		entry.TurnCount++
 
@@ -133,11 +153,33 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.UsageMeasured = true
 	}
 
+	// A token_usage event for a kind whose frozen declaration says it
+	// reports no usage contradicts that declaration: a runtime release
+	// started feeding a path the declaration assumed starved.
+	if event.Type == domain.EventTokenUsage && entry.UsageArrival == registry.UsageArrivalNone {
+		log.Debug("token_usage event contradicts the declared usage arrival",
+			slog.String("usage_arrival", string(entry.UsageArrival)),
+		)
+	}
+
 	if event.Type == domain.EventTokenUsage {
 		// Increment API request count unconditionally — each
 		// token_usage event represents one API round-trip, including
 		// one whose reported usage is entirely zero.
 		entry.APIRequestCount++
+
+		// A turn_end kind settles at most one figure per turn; more
+		// than one within the current turn contradicts that
+		// declaration. The comparison is scoped to the turn via the
+		// per-turn baseline, not via TurnCount, which undercounts for
+		// a kind emitting session_started once per session rather
+		// than once per turn.
+		if entry.UsageArrival == registry.UsageArrivalTurnEnd &&
+			entry.APIRequestCount-entry.APIRequestCountAtLastTurnEnd > 1 {
+			log.Debug("turn_end arrival reported more than one usage figure within a turn",
+				slog.Int("excess_count", entry.APIRequestCount-entry.APIRequestCountAtLastTurnEnd-1),
+			)
+		}
 
 		// Track model: prefer the event's model, fall back to last known.
 		model := event.Model
@@ -175,13 +217,13 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	// Emit a Debug-level summary for observability. Handlers skip
 	// formatting at higher log levels; attribute construction here is
 	// cheap enough that no additional log.Enabled guard is required.
-	switch event.Type {
-	case domain.EventSessionStarted:
+	switch {
+	case event.Type == domain.EventSessionStarted:
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 			slog.String("session_id", event.SessionID),
 		)
-	case domain.EventTokenUsage:
+	case event.Type == domain.EventTokenUsage:
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 			slog.Int64("delta_input", usageDelta.InputTokens),
@@ -190,11 +232,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			slog.Int64("delta_cache_read", usageDelta.CacheReadTokens),
 		)
 
-	case domain.EventTurnCompleted,
-		domain.EventTurnFailed,
-		domain.EventTurnCancelled,
-		domain.EventTurnEndedWithError,
-		domain.EventTurnInputRequired:
+	case isTurnTerminalEvent(event.Type):
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 			slog.Int("turn_count", entry.TurnCount),
@@ -203,6 +241,13 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 		)
+	}
+
+	// Reset the per-turn API-request baseline on every turn-terminal
+	// event, so the turn_end drift check above compares against the
+	// current turn only, never against a session-wide total.
+	if isTurnTerminalEvent(event.Type) {
+		entry.APIRequestCountAtLastTurnEnd = entry.APIRequestCount
 	}
 }
 

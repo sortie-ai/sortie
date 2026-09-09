@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/server"
@@ -1343,4 +1344,34 @@ func TestRunStatsDBPathResolution(t *testing.T) {
 			t.Errorf("DBPath = %q, want %q (from SORTIE_DB_PATH)", report.DBPath, dbPath)
 		}
 	})
+}
+
+// TestPriceOf_EmptyAgentAdapterNotPricedAfterEmptyKeyDrop pins the
+// behavior server.ParseTokenRates's empty-key drop causes at this
+// call site: a token_rates entry keyed to the empty string never
+// reaches the parsed TokenRates map, so a recovered legacy row whose
+// AgentAdapter is also empty (per internal/orchestrator/recovery.go)
+// can never match it and is priced nil rather than by accident.
+func TestPriceOf_EmptyAgentAdapterNotPricedAfterEmptyKeyDrop(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.ServiceConfig{}
+	cfg.SetExtensionSection("token_rates", map[string]any{
+		"": map[string]any{"input_per_mtok": 3.0},
+	})
+
+	rawTokenRates, tokenRatesPresent := cfg.ExtensionValue("token_rates")
+	rates, warnings := server.ParseTokenRates(rawTokenRates, tokenRatesPresent)
+	if len(warnings) != 1 {
+		t.Fatalf("ParseTokenRates warnings = %v, want exactly 1", warnings)
+	}
+
+	row := persistence.RunStatsRow{
+		AgentAdapter: "",
+		InputTokens:  1_000_000,
+	}
+
+	if got := priceOf(row, rates); got != nil {
+		t.Errorf("priceOf(row with empty AgentAdapter) = %v, want nil after the empty-key drop", *got)
+	}
 }

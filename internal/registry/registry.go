@@ -199,6 +199,130 @@ type AgentMeta struct {
 	// adapter construction, no process launch - deterministic, and
 	// safe for concurrent use.
 	SessionResumeBlockedBy func(passthrough map[string]any) string
+
+	// UsageArrival and UsageAttribution declare the disposition of a
+	// locally launched session of this kind, constructed from an
+	// empty passthrough. The empty values mean undeclared.
+	UsageArrival     UsageArrival
+	UsageAttribution UsageAttribution
+
+	// UsageSessionRules are evaluated in order; the first rule whose
+	// When reports true supplies the pair. Empty means the declared
+	// pair holds for every session of this kind. UsageSessionRules
+	// MUST leave the declared pair reachable: at least one
+	// (passthrough, remote) combination MUST match none of the
+	// rules. This is what keeps a conformance assertion's coverage
+	// requirement satisfiable for every registry-conformant kind,
+	// including one whose rules are numerous.
+	UsageSessionRules []UsageSessionRule
+}
+
+// UsageArrival declares when a usage figure for the agent session
+// becomes available to the orchestrator. The empty value means
+// undeclared.
+type UsageArrival string
+
+const (
+	// UsageArrivalUndeclared is the zero value: the adapter has not
+	// declared when its usage figures arrive.
+	UsageArrivalUndeclared UsageArrival = ""
+
+	// UsageArrivalIncremental declares that the adapter emits one
+	// domain.EventTokenUsage carrying the run-cumulative figure per
+	// model API request the turn makes, while the turn's work is
+	// still in flight. A turn making N requests delivers N events,
+	// so api_request_count counts observed model API requests.
+	UsageArrivalIncremental UsageArrival = "incremental"
+
+	// UsageArrivalTurnEnd declares that the adapter emits at most
+	// one domain.EventTokenUsage per turn, and only after the
+	// turn's work is over. api_request_count is not a count of API
+	// requests for a kind declaring this value.
+	UsageArrivalTurnEnd UsageArrival = "turn_end"
+
+	// UsageArrivalNone declares that no usage figure is ever
+	// produced: no domain.EventTokenUsage event, no non-zero
+	// domain.TokenUsage on any event, domain.TurnResult.UsageMeasured
+	// false on every turn.
+	UsageArrivalNone UsageArrival = "none"
+)
+
+// UsageAttribution declares what a usage figure from this adapter
+// attributes to. The empty value means undeclared.
+type UsageAttribution string
+
+const (
+	// UsageAttributionUndeclared is the zero value: the adapter has
+	// not declared what its usage figures attribute to.
+	UsageAttributionUndeclared UsageAttribution = ""
+
+	// UsageAttributionPerModel declares that at least one event
+	// carrying a non-zero Usage also carries a non-empty Model, so a
+	// figure can be attributed to the model that produced it.
+	UsageAttributionPerModel UsageAttribution = "per_model"
+
+	// UsageAttributionSessionTotal declares that no event carrying a
+	// non-zero Usage carries a Model: figures are session-level
+	// totals with no model attribution.
+	UsageAttributionSessionTotal UsageAttribution = "session_total"
+
+	// UsageAttributionNone declares that there is no figure to
+	// attribute.
+	UsageAttributionNone UsageAttribution = "none"
+)
+
+// UsageSessionRule states the pair in force for a session that meets
+// a condition the declared pair does not describe. When reads only
+// the resolved adapter passthrough and the launch mode; it reaches no
+// adapter state and performs no I/O, MUST NOT retain or mutate the
+// passthrough map, and MUST NOT close over adapter state.
+type UsageSessionRule struct {
+	When        func(passthrough map[string]any, remote bool) bool
+	Arrival     UsageArrival
+	Attribution UsageAttribution
+}
+
+// UsageDisposition returns the arrival and attribution in force for
+// one session of this kind, given its launch mode and its resolved
+// adapter passthrough. remote is true when the session runs over SSH.
+// It applies the first UsageSessionRules entry whose When reports
+// true, and returns the declared pair when no rule matches.
+//
+// A resolved pair MUST satisfy INV-1 (arrival is UsageArrivalNone if
+// and only if attribution is UsageAttributionNone) and MUST satisfy
+// INV-3 (every resolvable pair, declared or ruled, names a value
+// inside the declared set). A declaration reflects the code path
+// that always runs, not one a runtime release can starve (INV-2).
+func (m AgentMeta) UsageDisposition(passthrough map[string]any, remote bool) (UsageArrival, UsageAttribution) {
+	for _, rule := range m.UsageSessionRules {
+		if rule.When != nil && rule.When(passthrough, remote) {
+			return rule.Arrival, rule.Attribution
+		}
+	}
+	return m.UsageArrival, m.UsageAttribution
+}
+
+// ReportsDuringTurn reports whether a figure of this arrival reaches
+// the orchestrator while a turn is running. True for
+// UsageArrivalIncremental; false for every other value, including a
+// value outside the declared set.
+func (a UsageArrival) ReportsDuringTurn() bool {
+	return a == UsageArrivalIncremental
+}
+
+// ReportsAnyFigure reports whether a session of this arrival ever
+// produces a usage figure. True for UsageArrivalIncremental and
+// UsageArrivalTurnEnd; false for every other value, including a value
+// outside the declared set.
+func (a UsageArrival) ReportsAnyFigure() bool {
+	return a == UsageArrivalIncremental || a == UsageArrivalTurnEnd
+}
+
+// NamesModel reports whether a figure of this attribution names the
+// model that produced it. True for UsageAttributionPerModel; false
+// for every other value, including a value outside the declared set.
+func (t UsageAttribution) NamesModel() bool {
+	return t == UsageAttributionPerModel
 }
 
 // MCPInjection declares what an agent adapter does with the

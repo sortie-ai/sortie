@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // newStateWithEntry returns a *State containing a single RunningEntry under
@@ -1476,6 +1477,132 @@ func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
 		out := buf.String()
 		if strings.Contains(out, "tool call completed") {
 			t.Errorf("log output contains 'tool call completed' for empty ToolName\ngot: %s", out)
+		}
+	})
+}
+
+// TestHandleAgentEvent_UsageDeclarationDriftLog proves the corrected
+// declaration-drift log: a none-arrival entry logs on any token_usage
+// event; a turn_end-arrival entry logs only when a turn reports more
+// than one figure, scoped to the current turn via the per-turn
+// baseline rather than via TurnCount, which the r3 review found
+// produces a false positive for a kind emitting session_started once
+// per session (opencode-shaped) rather than once per turn; an
+// incremental-arrival entry never logs regardless of figure count.
+func TestHandleAgentEvent_UsageDeclarationDriftLog(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "DRIFT-1"
+	const driftNoneMessage = "token_usage event contradicts the declared usage arrival"
+	const driftTurnEndMessage = "turn_end arrival reported more than one usage figure within a turn"
+
+	t.Run("none-arrival entry receiving a token_usage event logs", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.UsageArrival = registry.UsageArrivalNone
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+			Usage:     domain.TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
+		}, logger, nil)
+
+		if !strings.Contains(buf.String(), driftNoneMessage) {
+			t.Errorf("log output missing %q\ngot: %s", driftNoneMessage, buf.String())
+		}
+	})
+
+	t.Run("turn_end-arrival entry, one figure per turn across two opencode-shaped turns, never logs", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.UsageArrival = registry.UsageArrivalTurnEnd
+
+		now := time.Now().UTC()
+
+		// Turn 1: session_started fires (first turn only, opencode's
+		// shape), one usage figure, then the turn-terminal event that
+		// resets the per-turn baseline.
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventSessionStarted, Timestamp: now, SessionID: "sess-drift",
+		}, logger, nil)
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTokenUsage, Timestamp: now, Usage: domain.TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
+		}, logger, nil)
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTurnCompleted, Timestamp: now,
+		}, logger, nil)
+
+		// Turn 2: no session_started (opencode emits it once per
+		// session, not once per turn), one usage figure, then completed.
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTokenUsage, Timestamp: now, Usage: domain.TokenUsage{InputTokens: 2, OutputTokens: 2, TotalTokens: 4},
+		}, logger, nil)
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTurnCompleted, Timestamp: now,
+		}, logger, nil)
+
+		if strings.Contains(buf.String(), driftTurnEndMessage) {
+			t.Errorf("log output unexpectedly contains %q for one figure per turn\ngot: %s", driftTurnEndMessage, buf.String())
+		}
+	})
+
+	t.Run("turn_end-arrival entry, two figures within one turn, logs", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.UsageArrival = registry.UsageArrivalTurnEnd
+
+		now := time.Now().UTC()
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventSessionStarted, Timestamp: now, SessionID: "sess-drift",
+		}, logger, nil)
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTokenUsage, Timestamp: now, Usage: domain.TokenUsage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
+		}, logger, nil)
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type: domain.EventTokenUsage, Timestamp: now, Usage: domain.TokenUsage{InputTokens: 2, OutputTokens: 2, TotalTokens: 4},
+		}, logger, nil)
+
+		if !strings.Contains(buf.String(), driftTurnEndMessage) {
+			t.Errorf("log output missing %q\ngot: %s", driftTurnEndMessage, buf.String())
+		}
+	})
+
+	t.Run("incremental-arrival entry, many figures across many turns, never logs", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.UsageArrival = registry.UsageArrivalIncremental
+
+		now := time.Now().UTC()
+		for turn := range 3 {
+			HandleAgentEvent(state, issueID, domain.AgentEvent{
+				Type: domain.EventSessionStarted, Timestamp: now, SessionID: "sess-drift",
+			}, logger, nil)
+			for range 2 {
+				HandleAgentEvent(state, issueID, domain.AgentEvent{
+					Type: domain.EventTokenUsage, Timestamp: now,
+					Usage: domain.TokenUsage{InputTokens: int64(turn + 1), OutputTokens: 1, TotalTokens: int64(turn + 2)},
+				}, logger, nil)
+			}
+			HandleAgentEvent(state, issueID, domain.AgentEvent{
+				Type: domain.EventTurnCompleted, Timestamp: now,
+			}, logger, nil)
+		}
+
+		if strings.Contains(buf.String(), driftNoneMessage) || strings.Contains(buf.String(), driftTurnEndMessage) {
+			t.Errorf("log output unexpectedly contains a drift message for an incremental-arrival entry\ngot: %s", buf.String())
 		}
 	})
 }

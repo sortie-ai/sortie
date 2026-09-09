@@ -12,6 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // --- Test doubles ---
@@ -243,9 +244,12 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 			return func(_ context.Context, _ domain.Issue, _ *int) {}
 		},
 		AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		OnRetryFire:        noopRetryFire,
-		Ctx:                context.Background(),
-		Logger:             discardLogger(),
+		ResolveUsageDisposition: func(_, _ string) (registry.UsageArrival, registry.UsageAttribution) {
+			return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+		},
+		OnRetryFire: noopRetryFire,
+		Ctx:         context.Background(),
+		Logger:      discardLogger(),
 	}
 }
 
@@ -1866,6 +1870,49 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	}
 	if running.WorkflowFile != "infra.WORKFLOW.md" {
 		t.Errorf("Running[ISS-WF].WorkflowFile = %q, want %q", running.WorkflowFile, "infra.WORKFLOW.md")
+	}
+}
+
+// TestHandleRetryTimer_UsageDispositionFrozen proves the retry-dispatch
+// path freezes the pair ResolveUsageDisposition resolves onto the
+// RunningEntry, mirroring the initial-dispatch freeze.
+func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
+	t.Parallel()
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue("ISS-UD", "ISS-UD", "To Do"),
+	}
+
+	state := retryState(t, "ISS-UD", "ISS-UD", 1)
+
+	params := defaultRetryParams(t, store, tracker)
+	params.ResolveUsageDisposition = func(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution) {
+		return registry.UsageArrivalTurnEnd, registry.UsageAttributionSessionTotal
+	}
+
+	workerCalled := make(chan struct{}, 1)
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			workerCalled <- struct{}{}
+		}
+	}
+
+	HandleRetryTimer(state, "ISS-UD", params)
+
+	select {
+	case <-workerCalled:
+	case <-time.After(time.Second):
+		t.Fatal("worker goroutine did not execute within 1 second")
+	}
+
+	running, ok := state.Running["ISS-UD"]
+	if !ok {
+		t.Fatal("Running[ISS-UD] missing after dispatch")
+	}
+	if running.UsageArrival != registry.UsageArrivalTurnEnd || running.UsageAttribution != registry.UsageAttributionSessionTotal {
+		t.Errorf("Running[ISS-UD] (UsageArrival, UsageAttribution) = (%q, %q), want (%q, %q)",
+			running.UsageArrival, running.UsageAttribution, registry.UsageArrivalTurnEnd, registry.UsageAttributionSessionTotal)
 	}
 }
 

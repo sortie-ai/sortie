@@ -42,6 +42,18 @@ func init() {
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionSupported,
+		UsageArrival:        registry.UsageArrivalTurnEnd,
+		UsageAttribution:    registry.UsageAttributionSessionTotal,
+		UsageSessionRules: []registry.UsageSessionRule{
+			{
+				// Mirrors sessionState.recoverUsage's own remote
+				// condition: over SSH, the post-exit journal read is
+				// skipped entirely, so nothing ever arrives.
+				When:        func(passthrough map[string]any, remote bool) bool { return remote },
+				Arrival:     registry.UsageArrivalNone,
+				Attribution: registry.UsageAttributionNone,
+			},
+		},
 	})
 }
 

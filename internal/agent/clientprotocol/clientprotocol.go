@@ -22,6 +22,8 @@ func init() {
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionTranslated,
+		UsageArrival:        registry.UsageArrivalNone,
+		UsageAttribution:    registry.UsageAttributionNone,
 	})
 }
 

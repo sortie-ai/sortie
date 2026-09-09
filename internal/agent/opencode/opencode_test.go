@@ -1390,6 +1390,46 @@ cat '`+runPath+`'`)
 	}
 }
 
+// TestAssertUsageReporting proves opencode's registered
+// usage-reporting declaration (turn_end, per_model) against a real
+// event stream: one usage figure, carrying the exported model,
+// arriving after the run's tool_result, since finalizeExitedTurn
+// queries the export only after the subprocess exits.
+func TestAssertUsageReporting(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	runFixture := loadFixture(t, "tool_success.jsonl")
+	runPath := filepath.Join(tmpDir, "run.jsonl")
+	if err := os.WriteFile(runPath, runFixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exportPath := filepath.Join(tmpDir, "export.json")
+	exportFixture := loadFixture(t, "export_usage.json")
+	if err := os.WriteFile(exportPath, exportFixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) cat '`+exportPath+`'; exit 0;;
+esac
+cat '`+runPath+`'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertUsageReporting(t, "opencode", []agenttest.UsageReportingCase{
+		{Name: "one figure after the tool result, carrying the exported model", Events: events, Result: result},
+	})
+}
+
 func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 	t.Parallel()
 

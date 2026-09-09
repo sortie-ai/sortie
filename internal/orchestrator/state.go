@@ -271,6 +271,18 @@ type RunningEntry struct {
 	// reported so far in this running session. Monotone: set true by
 	// [HandleAgentEvent] and never cleared.
 	UsageMeasured bool
+
+	// UsageArrival and UsageAttribution are the usage-reporting
+	// disposition resolved for this session's kind, passthrough, and
+	// launch mode, frozen at dispatch alongside AgentKind. Owned
+	// exclusively by the single-writer event loop.
+	UsageArrival     registry.UsageArrival
+	UsageAttribution registry.UsageAttribution
+
+	// APIRequestCountAtLastTurnEnd is the value of APIRequestCount as
+	// of the most recent turn-terminal event. Zero until the first
+	// turn ends. Owned exclusively by the single-writer event loop.
+	APIRequestCountAtLastTurnEnd int
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -1110,33 +1122,36 @@ func RunningCountByState(running map[string]*RunningEntry, state string) int {
 // SnapshotRunningEntry is a read-only view of a single running session
 // for observability consumers. Produced by [RuntimeSnapshot].
 type SnapshotRunningEntry struct {
-	IssueID             string                `json:"issue_id"`
-	Identifier          string                `json:"issue_identifier"`
-	DisplayID           string                `json:"display_identifier,omitempty"`
-	State               string                `json:"state"`
-	SessionID           string                `json:"session_id"`
-	TurnCount           int                   `json:"turn_count"`
-	LastAgentEvent      domain.AgentEventType `json:"last_event"`
-	LastAgentTimestamp  time.Time             `json:"last_event_at"`
-	LastAgentMessage    string                `json:"last_message"`
-	StartedAt           time.Time             `json:"started_at"`
-	AgentInputTokens    int64                 `json:"input_tokens"`
-	AgentOutputTokens   int64                 `json:"output_tokens"`
-	AgentTotalTokens    int64                 `json:"total_tokens"`
-	CacheReadTokens     int64                 `json:"cache_read_tokens"`
-	ModelName           string                `json:"model_name,omitempty"`
-	APIRequestCount     int                   `json:"api_request_count"`
-	RequestsByModel     map[string]int        `json:"requests_by_model,omitempty"`
-	WorkspacePath       string                `json:"workspace_path"`
-	SSHHost             string                `json:"ssh_host,omitempty"`
-	ToolTimeMs          int64                 `json:"tool_time_ms"`
-	APITimeMs           int64                 `json:"api_time_ms"`
-	WorkflowFile        string                `json:"workflow_file,omitempty"`
-	SelfReviewActive    bool                  `json:"self_review_active,omitempty"`
-	SelfReviewIteration int                   `json:"self_review_iteration,omitempty"`
-	AgentKind           string                `json:"agent_kind,omitempty"`
-	RuleName            string                `json:"rule_name,omitempty"`
-	UsageMeasured       bool                  `json:"tokens_measured"`
+	IssueID             string                    `json:"issue_id"`
+	Identifier          string                    `json:"issue_identifier"`
+	DisplayID           string                    `json:"display_identifier,omitempty"`
+	State               string                    `json:"state"`
+	SessionID           string                    `json:"session_id"`
+	TurnCount           int                       `json:"turn_count"`
+	LastAgentEvent      domain.AgentEventType     `json:"last_event"`
+	LastAgentTimestamp  time.Time                 `json:"last_event_at"`
+	LastAgentMessage    string                    `json:"last_message"`
+	StartedAt           time.Time                 `json:"started_at"`
+	AgentInputTokens    int64                     `json:"input_tokens"`
+	AgentOutputTokens   int64                     `json:"output_tokens"`
+	AgentTotalTokens    int64                     `json:"total_tokens"`
+	CacheReadTokens     int64                     `json:"cache_read_tokens"`
+	ModelName           string                    `json:"model_name,omitempty"`
+	APIRequestCount     int                       `json:"api_request_count"`
+	RequestsByModel     map[string]int            `json:"requests_by_model,omitempty"`
+	WorkspacePath       string                    `json:"workspace_path"`
+	SSHHost             string                    `json:"ssh_host,omitempty"`
+	ToolTimeMs          int64                     `json:"tool_time_ms"`
+	APITimeMs           int64                     `json:"api_time_ms"`
+	WorkflowFile        string                    `json:"workflow_file,omitempty"`
+	SelfReviewActive    bool                      `json:"self_review_active,omitempty"`
+	SelfReviewIteration int                       `json:"self_review_iteration,omitempty"`
+	AgentKind           string                    `json:"agent_kind,omitempty"`
+	RuleName            string                    `json:"rule_name,omitempty"`
+	UsageMeasured       bool                      `json:"tokens_measured"`
+	UsageArrival        registry.UsageArrival     `json:"usage_arrival"`
+	UsageAttribution    registry.UsageAttribution `json:"usage_attribution"`
+	TokensPending       bool                      `json:"tokens_pending"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -1270,6 +1285,10 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
 			UsageMeasured:       entry.UsageMeasured,
+			UsageArrival:        entry.UsageArrival,
+			UsageAttribution:    entry.UsageAttribution,
+			TokensPending: entry.UsageArrival == registry.UsageArrivalTurnEnd &&
+				entry.UsageMeasured && !isTurnTerminalEvent(entry.LastAgentEvent),
 		})
 
 		if !entry.StartedAt.IsZero() {

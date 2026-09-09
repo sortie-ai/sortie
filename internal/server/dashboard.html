@@ -445,19 +445,20 @@
                     </div>
                     {{end}}
                     <div class="detail-item">
+                      <dt>Usage reporting</dt>
+                      <dd>{{$e.UsageReportingRow}}</dd>
+                    </div>
+                    <div class="detail-item">
                       <dt>Model</dt>
-                      <dd>
-                        {{if
-                        $e.ModelName}}{{$e.ModelName}}{{else}}&mdash;{{end}}
-                      </dd>
+                      <dd>{{$e.ModelRow}}</dd>
                     </div>
                     <div class="detail-item">
                       <dt>API Requests</dt>
-                      <dd>{{$e.APIRequestCount}}</dd>
+                      <dd>{{$e.APIRequestsRow}}</dd>
                     </div>
                     <div class="detail-item">
                       <dt>Tokens</dt>
-                      <dd>{{if $e.UsageMeasured}}{{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}} <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}{{else}}<span title="the coding agent has reported no token usage for this session yet">not reported</span>{{end}}</dd>
+                      <dd>{{$e.TokensRow}}</dd>
                     </div>
                     <div class="detail-item">
                       <dt>Tool Time</dt>
@@ -467,12 +468,10 @@
                       <dt>API Time</dt>
                       <dd>{{$e.APITimePct}}</dd>
                     </div>
-                    {{if $.HasTokenRates}}
                     <div class="detail-item">
                       <dt>Est. Cost</dt>
-                      <dd>{{if $e.EstimatedCostUSD}}{{$e.EstimatedCostUSD}}{{else}}&mdash;{{end}}</dd>
+                      <dd>{{$e.EstCostRow}}</dd>
                     </div>
-                    {{end}}
                   </dl>
                 </div>
               </td>

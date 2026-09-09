@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // WorkflowManager provides access to the current workflow config and
@@ -490,26 +492,27 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:                  o.store,
-				TrackerAdapter:         o.trackerAdapter,
-				ActiveStates:           cfg.Tracker.ActiveStates,
-				TerminalStates:         cfg.Tracker.TerminalStates,
-				HandoffState:           cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS:      cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:           o.makeWorkerFn,
-				AgentAdapterByKind:     o.agentAdapterByKind,
-				DefaultAgentKind:       cfg.Agent.Kind,
-				OnRetryFire:            o.onRetryFire,
-				Ctx:                    ctx,
-				Logger:                 o.logger,
-				MaxSessions:            cfg.Agent.MaxSessions,
-				MaxConsecutiveAbsences: cfg.Agent.MaxConsecutiveAbsences,
-				HandoffParkingLabel:    o.handoffParkingLabel,
-				HandoffEvidencePolicy:  cfg.Tracker.HandoffEvidence,
-				MaxTokens:              cfg.Agent.MaxTokens,
-				Metrics:                o.metrics,
-				HostPool:               o.hostPool,
-				WorkflowFile:           o.workflowFile(),
+				Store:                   o.store,
+				TrackerAdapter:          o.trackerAdapter,
+				ActiveStates:            cfg.Tracker.ActiveStates,
+				TerminalStates:          cfg.Tracker.TerminalStates,
+				HandoffState:            cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:       cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:            o.makeWorkerFn,
+				AgentAdapterByKind:      o.agentAdapterByKind,
+				ResolveUsageDisposition: o.resolveUsageDisposition,
+				DefaultAgentKind:        cfg.Agent.Kind,
+				OnRetryFire:             o.onRetryFire,
+				Ctx:                     ctx,
+				Logger:                  o.logger,
+				MaxSessions:             cfg.Agent.MaxSessions,
+				MaxConsecutiveAbsences:  cfg.Agent.MaxConsecutiveAbsences,
+				HandoffParkingLabel:     o.handoffParkingLabel,
+				HandoffEvidencePolicy:   cfg.Tracker.HandoffEvidence,
+				MaxTokens:               cfg.Agent.MaxTokens,
+				Metrics:                 o.metrics,
+				HostPool:                o.hostPool,
+				WorkflowFile:            o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -776,6 +779,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
 			entry.TemplateID = resolution.TemplateID
+			entry.UsageArrival, entry.UsageAttribution = o.resolveUsageDisposition(resolution.AgentKind, host)
 		}
 		o.metrics.IncDispatches(outcomeSuccess)
 		o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
@@ -944,6 +948,20 @@ func (o *Orchestrator) workflowFile() string {
 		return o.workflowFileFunc()
 	}
 	return ""
+}
+
+// resolveUsageDisposition resolves the usage-reporting disposition
+// for a session of the given agent kind and SSH host (empty for a
+// local launch), reading the registered kind's declaration and the
+// passthrough config in force at the moment of the call. An unknown
+// kind returns the undeclared pair.
+func (o *Orchestrator) resolveUsageDisposition(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution) {
+	meta, registered := o.preflightParams.AgentRegistry.Meta(kind)
+	if !registered {
+		return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+	}
+	settings := config.ResolveAgentSettings(o.workflowManager.Config(), kind, filepath.Dir(o.workflowManager.WorkflowAbsPath()))
+	return meta.UsageDisposition(settings.Passthrough, sshHost != "")
 }
 
 // onRetryFire delivers a retry timer event to the event loop channel.

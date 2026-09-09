@@ -313,6 +313,34 @@ func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 	agenttest.AssertMeasurementAbsent(t, events, outcome.result)
 }
 
+// TestAssertUsageReporting proves agent-client-protocol's registered
+// usage-reporting declaration (none, none) against its own real event
+// stream: a usage_update mid-turn is a debug-log-only normalization
+// arm, so the turn's measurement contract stays empty.
+func TestAssertUsageReporting(t *testing.T) {
+	t.Parallel()
+
+	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
+	out := newOutboundReader(outPr)
+	markSessionKnown(state)
+
+	var events []domain.AgentEvent
+	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
+
+	promptID := out.awaitMethod(t, methodSessionPrompt)
+	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"usage_update","used":12000,"size":200000}}}`)
+	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+
+	outcome := awaitOutcome(t, outcomeCh)
+	if outcome.err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
+	}
+
+	agenttest.AssertUsageReporting(t, "agent-client-protocol", []agenttest.UsageReportingCase{
+		{Name: "usage_update observed mid-turn reports no measurement", Events: events, Result: outcome.result},
+	})
+}
+
 // indexOfStepName returns the index of name in names, failing t if it
 // is not present.
 func indexOfStepName(t *testing.T, names []string, name string) int {

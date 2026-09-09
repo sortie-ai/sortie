@@ -133,6 +133,11 @@ should return:
 - each running row should include `turn_count`
 - each running row should include `tokens_measured`, meaning at least one usage measurement has
   been reported so far in that session
+- each running row should include `usage_arrival` and `usage_attribution`, the usage-reporting
+  disposition resolved for that session's kind, passthrough, and launch mode, frozen at dispatch
+- each running row should include `tokens_pending`, true only when the frozen arrival settles at
+  most one figure per turn, the session is measured, and the turn that figure would settle for is
+  still in flight
 - `retrying` (list of retry queue rows)
 - `agent_totals`
   - `input_tokens`
@@ -210,7 +215,14 @@ Token accounting rules:
   usage payload, not only `token_usage` events, so an adapter can attach the authoritative
   run-cumulative snapshot to a turn-finalization event without losing it.
 - `api_request_count` is incremented monotonically, and only, per `token_usage` event; a
-  usage-bearing terminal event does not count as an additional request.
+  usage-bearing terminal event does not count as an additional request. It counts actual API
+  requests only when the session's kind resolves a `usage_arrival` of `incremental`; for a kind
+  resolving `turn_end`, the count settles at most once per turn and is not a request count.
+- `tokens_pending` distinguishes a settled figure from one still in flight: it is true only when
+  the resolved `usage_arrival` is `turn_end`, the session is measured, and the turn that figure
+  would settle for has not yet reached a terminal event. A consumer presenting the current token
+  total alongside this flag can tell an operator the figure excludes the turn in progress, rather
+  than presenting a stale total as final.
 - Accumulate aggregate totals in orchestrator state (`agent_totals`).
 - At session exit, the session's token totals are written to the `run_history` row alongside
   the aggregate update. The run's final usage is reconciled from the worker result before that
@@ -326,7 +338,11 @@ Minimum endpoints:
           "requests_by_model": {"claude-sonnet-4-20250514": 3},
           "tool_time_percent": 12.3,
           "api_time_percent": 45.6,
-          "tokens_measured": true
+          "tokens_measured": true,
+          "usage_arrival": "incremental",
+          "usage_attribution": "per_model",
+          "tokens_pending": false,
+          "api_requests_measured": true
         }
       ],
       "retrying": [
@@ -391,7 +407,11 @@ Minimum endpoints:
           "input_tokens": 1200,
           "output_tokens": 800,
           "total_tokens": 2000
-        }
+        },
+        "usage_arrival": "incremental",
+        "usage_attribution": "per_model",
+        "tokens_pending": false,
+        "api_requests_measured": true
       },
       "retry": null,
       "budget_exhausted": null,

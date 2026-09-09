@@ -117,6 +117,31 @@ native protocol events to this normalized set:
   false on every turn and emits no `token_usage` event. An adapter whose ability to measure
   depends on the run, rather than being permanently absent, reports the property per run rather
   than as a static adapter property.
+
+  Each registered agent kind declares this disposition, rather than leaving a consumer to infer
+  it. `UsageArrival` states when a `token_usage` event becomes available: `incremental` (one event
+  per observed model API request, while the turn's work is still in flight), `turn_end` (at most
+  one event per turn, settled only after the turn's work is over), or `none` (no event is ever
+  produced). `UsageAttribution` states what a figure attributes to: `per_model` (at least one
+  usage-bearing event also names the model that produced it) or `session_total` (no usage-bearing
+  event names a model) or `none` (there is no figure to attribute). Both vocabularies carry an
+  empty, undeclared zero value distinct from every declared member.
+
+  A kind's declaration MAY be conditional. A `UsageSessionRule` states the pair in force for a
+  session whose resolved passthrough configuration or launch mode (local or remote) meets a
+  condition the kind's own declared pair does not describe; the first matching rule supplies the
+  pair, and the declared pair holds when none matches. The rule set MUST leave the declared pair
+  reachable: at least one passthrough-and-launch-mode combination MUST match none of the rules.
+
+  Three invariants bind every declared pair and every rule pair a kind states:
+
+  - MUST: `UsageArrival` is `none` if and only if `UsageAttribution` is `none`.
+  - MUST: a declaration reflects the code path that always runs, not an opportunistic path a
+    runtime release can starve. A kind whose authoritative figure comes from a fallback read that
+    the current runtime rarely or never feeds declares against the path that does run, not the
+    one that does not.
+  - MUST: every value a kind's declaration or rule set can resolve to lies inside the declared
+    vocabulary, so a consumer never receives a pair no test could have covered.
 - `tool_result`: a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
 - `notification`: informational message from the agent
 - `other_message`: unclassified message

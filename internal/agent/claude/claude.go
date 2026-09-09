@@ -29,6 +29,8 @@ func init() {
 		ValidateAgentConfig:    validateConfig,
 		MCPInjection:           registry.MCPInjectionSupported,
 		SessionResumeBlockedBy: sessionResumeBlockedBy,
+		UsageArrival:           registry.UsageArrivalIncremental,
+		UsageAttribution:       registry.UsageAttributionPerModel,
 	})
 }
 

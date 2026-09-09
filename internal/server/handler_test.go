@@ -15,6 +15,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // --- Test helpers ---
@@ -216,6 +217,99 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 	rbm := decoded["requests_by_model"].(map[string]any)
 	if rbm["test-model"] != float64(7) {
 		t.Errorf("JSON requests_by_model[test-model] = %v, want 7", rbm["test-model"])
+	}
+}
+
+// TestToRunningEntryResponse_UsageDispositionFields proves the four
+// new members are additive (P10): every member the JSON response
+// carried before this change keeps its name, type, and value. It
+// covers one incremental entry, whose APIRequestsMeasured is true and
+// TokensPending is always false, and one turn_end entry, whose
+// APIRequestsMeasured is false and TokensPending reflects the frozen
+// snapshot's own TokensPending field.
+func TestToRunningEntryResponse_UsageDispositionFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                    string
+		arrival                 registry.UsageArrival
+		attribution             registry.UsageAttribution
+		tokensPending           bool
+		wantAPIRequestsMeasured bool
+	}{
+		{
+			name:                    "incremental arrival reports during the turn",
+			arrival:                 registry.UsageArrivalIncremental,
+			attribution:             registry.UsageAttributionPerModel,
+			tokensPending:           false,
+			wantAPIRequestsMeasured: true,
+		},
+		{
+			name:                    "turn_end arrival, tokens pending",
+			arrival:                 registry.UsageArrivalTurnEnd,
+			attribution:             registry.UsageAttributionSessionTotal,
+			tokensPending:           true,
+			wantAPIRequestsMeasured: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := orchestrator.SnapshotRunningEntry{
+				IssueID:          "issue-usage",
+				Identifier:       "MT-USAGE",
+				State:            "In Progress",
+				UsageArrival:     tt.arrival,
+				UsageAttribution: tt.attribution,
+				TokensPending:    tt.tokensPending,
+			}
+
+			got := toRunningEntryResponse(entry)
+
+			if got.UsageArrival != string(tt.arrival) {
+				t.Errorf("UsageArrival = %q, want %q", got.UsageArrival, tt.arrival)
+			}
+			if got.UsageAttribution != string(tt.attribution) {
+				t.Errorf("UsageAttribution = %q, want %q", got.UsageAttribution, tt.attribution)
+			}
+			if got.TokensPending != tt.tokensPending {
+				t.Errorf("TokensPending = %v, want %v", got.TokensPending, tt.tokensPending)
+			}
+			if got.APIRequestsMeasured != tt.wantAPIRequestsMeasured {
+				t.Errorf("APIRequestsMeasured = %v, want %v", got.APIRequestsMeasured, tt.wantAPIRequestsMeasured)
+			}
+
+			// Additivity: an existing member's name, type, and value
+			// survive JSON round-tripping unchanged.
+			data, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			if decoded["issue_id"] != "issue-usage" {
+				t.Errorf("JSON issue_id = %v, want %q (existing member unaffected)", decoded["issue_id"], "issue-usage")
+			}
+			if decoded["state"] != "In Progress" {
+				t.Errorf("JSON state = %v, want %q (existing member unaffected)", decoded["state"], "In Progress")
+			}
+			if decoded["usage_arrival"] != string(tt.arrival) {
+				t.Errorf("JSON usage_arrival = %v, want %q", decoded["usage_arrival"], tt.arrival)
+			}
+			if decoded["usage_attribution"] != string(tt.attribution) {
+				t.Errorf("JSON usage_attribution = %v, want %q", decoded["usage_attribution"], tt.attribution)
+			}
+			if decoded["tokens_pending"] != tt.tokensPending {
+				t.Errorf("JSON tokens_pending = %v, want %v", decoded["tokens_pending"], tt.tokensPending)
+			}
+			if decoded["api_requests_measured"] != tt.wantAPIRequestsMeasured {
+				t.Errorf("JSON api_requests_measured = %v, want %v", decoded["api_requests_measured"], tt.wantAPIRequestsMeasured)
+			}
+		})
 	}
 }
 

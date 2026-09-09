@@ -3,6 +3,7 @@ package mock
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -459,6 +460,74 @@ func TestRunTurn_ReportTokenUsage(t *testing.T) {
 		if !result.UsageMeasured {
 			t.Error("RunTurn().UsageMeasured = false, want true (unrecognized config value type falls back to true)")
 		}
+	})
+}
+
+// runMockTurnWithToolCall runs one turn against a MockAdapter built
+// from config, configuring one tool call so the token_usage event (if
+// any) precedes a tool_result: the shape the shared conformance
+// assertion needs to tell an incremental arrival apart from a
+// turn-end one.
+func runMockTurnWithToolCall(t *testing.T, config map[string]any) ([]domain.AgentEvent, domain.TurnResult) {
+	t.Helper()
+
+	merged := map[string]any{
+		"tool_calls": []any{
+			map[string]any{"tool_name": "Read", "duration_ms": float64(10)},
+		},
+	}
+	maps.Copy(merged, config)
+
+	adapter, err := NewMockAdapter(merged)
+	if err != nil {
+		t.Fatalf("NewMockAdapter(%v) error = %v", merged, err)
+	}
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	result, err := adapter.RunTurn(context.Background(), sess, params)
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	return *events, result
+}
+
+// TestAssertUsageReporting proves mock's registered usage-reporting
+// declaration (incremental, session_total) and both session rules
+// against real event streams: default construction, report_token_usage
+// false, model_name set, and both keys set together (rule order).
+func TestAssertUsageReporting(t *testing.T) {
+	t.Parallel()
+
+	defaultEvents, defaultResult := runMockTurnWithToolCall(t, nil)
+	falseUsageEvents, falseUsageResult := runMockTurnWithToolCall(t, map[string]any{"report_token_usage": false})
+	modelNameEvents, modelNameResult := runMockTurnWithToolCall(t, map[string]any{"model_name": "mock-model-1"})
+	bothKeysEvents, bothKeysResult := runMockTurnWithToolCall(t, map[string]any{
+		"report_token_usage": false,
+		"model_name":         "mock-model-1",
+	})
+
+	agenttest.AssertUsageReporting(t, "mock", []agenttest.UsageReportingCase{
+		{Name: "default construction resolves the declared pair", Events: defaultEvents, Result: defaultResult},
+		{
+			Name:        "report_token_usage false resolves rule 1 (none, none)",
+			Passthrough: map[string]any{"report_token_usage": false},
+			Events:      falseUsageEvents,
+			Result:      falseUsageResult,
+		},
+		{
+			Name:        "model_name set resolves rule 2 (incremental, per_model)",
+			Passthrough: map[string]any{"model_name": "mock-model-1"},
+			Events:      modelNameEvents,
+			Result:      modelNameResult,
+		},
+		{
+			Name:        "both keys set resolves rule 1, rule order",
+			Passthrough: map[string]any{"report_token_usage": false, "model_name": "mock-model-1"},
+			Events:      bothKeysEvents,
+			Result:      bothKeysResult,
+		},
 	})
 }
 

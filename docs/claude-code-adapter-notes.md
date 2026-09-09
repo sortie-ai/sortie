@@ -34,6 +34,8 @@ Classification of any such request goes through `agentcore.DecideHumanRequest`. 
 
 This is where the day goes. Three things are true at once and none of them is obvious.
 
+The registered kind declares `incremental` arrival and `per_model` attribution: `ParseLine` emits one `token_usage` event per first-seen assistant message id, each carrying `Model: state.lastModel`.
+
 Streamed assistant usage is a snapshot, not a final count. The CLI repeats one message identifier across every event of the same model request, and a later event of that identifier can report a larger usage object than an earlier one as generation continues. Deduplicate by that identifier and keep the componentwise maximum; sum the per-identifier maxima to get the turn's provisional figure. Adding the events up as they arrive multiplies the count.
 
 The terminal event's top-level usage object excludes sub-agent activity, while its per-model breakdown includes it. The adapter prefers the per-model breakdown, summed across models, and falls back to the top-level object only when the breakdown is absent. Reading the top-level object first silently undercounts any turn that spawned a subagent.
