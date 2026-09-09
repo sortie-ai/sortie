@@ -20,3 +20,13 @@ ignore:
   # tests. `go test ./...` instruments the package under test, so these
   # lines are always reported as uncovered no matter how often they run.
   - "internal/adaptertest"
+
+  # Live-induction scaffolding for the qualification profile. Every
+  # function here takes *testing.T and launches a real runtime, and the
+  # only caller is a test gated on SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST,
+  # which spends a paid subscription and is never set in CI. The file
+  # cannot become a _test.go: the package's own Run calls it, and a test
+  # file's symbols are invisible to non-test code. Its sibling
+  # probe_unix.go is deliberately not listed, because it mixes this
+  # scaffolding with logic the ungated tests do cover.
+  - "internal/qualification/probe/toolserver_unix.go"
