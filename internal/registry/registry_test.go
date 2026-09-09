@@ -887,6 +887,32 @@ func TestAgentMeta_UsageDisposition(t *testing.T) {
 		}
 	})
 
+	t.Run("rule without a predicate is skipped", func(t *testing.T) {
+		t.Parallel()
+
+		meta := AgentMeta{
+			UsageArrival:     UsageArrivalTurnEnd,
+			UsageAttribution: UsageAttributionSessionTotal,
+			UsageSessionRules: []UsageSessionRule{
+				{
+					Arrival:     UsageArrivalIncremental,
+					Attribution: UsageAttributionPerModel,
+				},
+				{
+					When:        func(passthrough map[string]any, remote bool) bool { return remote },
+					Arrival:     UsageArrivalNone,
+					Attribution: UsageAttributionNone,
+				},
+			},
+		}
+
+		arrival, attribution := meta.UsageDisposition(map[string]any{}, false)
+		if arrival != UsageArrivalTurnEnd || attribution != UsageAttributionSessionTotal {
+			t.Errorf("UsageDisposition(local) = (%q, %q), want (%q, %q)",
+				arrival, attribution, UsageArrivalTurnEnd, UsageAttributionSessionTotal)
+		}
+	})
+
 	t.Run("first matching rule wins over later matching rules", func(t *testing.T) {
 		t.Parallel()
 
