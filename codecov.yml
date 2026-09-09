@@ -1,32 +1,20 @@
-# Codecov configuration
-# https://docs.codecov.com/docs/codecov-yaml
+# yaml-language-server: $schema=https://www.schemastore.org/codecov.json
 
 coverage:
   status:
     project:
       default:
-        target: auto    # use the coverage of the base commit
-        threshold: 1%   # allow 1% drop before failing
+        target: auto
+        threshold: 1%
     patch:
       default:
-        target: 75%     # new code must have ≥75% coverage
+        target: 75%
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
-  require_changes: true   # only comment when coverage changes
+  require_changes: true
 
 ignore:
-  # Shared test-support assertions, called only from sibling packages'
-  # tests. `go test ./...` instruments the package under test, so these
-  # lines are always reported as uncovered no matter how often they run.
   - "internal/adaptertest"
-
-  # Live-induction scaffolding for the qualification profile. Every
-  # function here takes *testing.T and launches a real runtime, and the
-  # only caller is a test gated on SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST,
-  # which spends a paid subscription and is never set in CI. The file
-  # cannot become a _test.go: the package's own Run calls it, and a test
-  # file's symbols are invisible to non-test code. Its sibling
-  # probe_unix.go is deliberately not listed, because it mixes this
-  # scaffolding with logic the ungated tests do cover.
   - "internal/qualification/probe/toolserver_unix.go"
+  - "**/*_gen.go"
