@@ -415,7 +415,10 @@ func TestAssertUsageReporting(t *testing.T) {
 	bin := fakeChatScript(t, t.TempDir(), "\x1b[0mPONG", creditsLine, 0)
 	adapter, session, _ := mustStartSession(t, bin)
 
-	events, result, _ := runChatTurn(t, adapter, session, "ping")
+	events, result, err := runChatTurn(t, adapter, session, "ping")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
 
 	agenttest.AssertUsageReporting(t, "kiro", []agenttest.UsageReportingCase{
 		{Name: "successful headless run reports credits, not tokens", Events: events, Result: result},
