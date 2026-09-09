@@ -21,10 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # The per-test guard variable is exported per shard inside the check step.
-    # All API credentials are provided here as the union of every adapter's
-    # needs; only the targeted adapter's test actually runs in a given shard
-    # (gated by its SORTIE_*_TEST variable), so unused keys are inert.
     env:
       SORTIE_JIRA_ENDPOINT: ${{ secrets.SORTIE_JIRA_ENDPOINT }}
       SORTIE_JIRA_API_KEY: ${{ secrets.SORTIE_JIRA_API_KEY }}
@@ -37,8 +33,6 @@ jobs:
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      SORTIE_CLIENTPROTOCOL_COMMAND: "gemini --acp"
-      SORTIE_CLIENTPROTOCOL_PROFILE: internal/qualification/profiles/gemini-cli.json
 
     strategy:
       fail-fast: false
@@ -105,7 +99,7 @@ jobs:
             source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
 
           - name: Gemini - ACP
-            adapter: clientprotocol
+            adapter: acp-gemini
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
             run_filter: Integration
@@ -115,6 +109,22 @@ jobs:
             install: npm install -g @google/gemini-cli
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
+            clientprotocol_command: "gemini --acp"
+            clientprotocol_profile: internal/qualification/profiles/gemini-cli.json
+
+          - name: Kiro - ACP
+            adapter: acp-kiro
+            kind: agent
+            guard: SORTIE_CLIENTPROTOCOL_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/clientprotocol/...
+            timeout: 900s
+            node: false
+            install: curl -fsSL https://cli.kiro.dev/install | bash
+            version_cmd: kiro-cli --version
+            source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
+            clientprotocol_command: "kiro-cli acp -a"
+            clientprotocol_profile: internal/qualification/profiles/kiro-cli.json
 
           - name: Jira
             adapter: jira
@@ -265,6 +275,13 @@ jobs:
           RUN_FILTER: ${{ matrix.run_filter }}
           TEST_PATH: ${{ matrix.test_path }}
           TIMEOUT: ${{ matrix.timeout }}
+          # Empty on every shard but the client-protocol ones, which name a
+          # runtime each. Two shards drive that one adapter against two
+          # different binaries, so the coordinates belong to the shard rather
+          # than to the job, and they are declared under their real names here
+          # so the reachability guard can still read them out of the workflow.
+          SORTIE_CLIENTPROTOCOL_COMMAND: ${{ matrix.clientprotocol_command }}
+          SORTIE_CLIENTPROTOCOL_PROFILE: ${{ matrix.clientprotocol_profile }}
           # Consumed only by the copilot adapter's test, which reads GH_TOKEN.
           # The issue-reporting steps override GH_TOKEN with CICDBOT_TOKEN.
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
