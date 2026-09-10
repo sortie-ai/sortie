@@ -396,7 +396,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// an ordinary cancellation.
 	if workerResult.ExitKind == WorkerExitCancelled && entry.TokenCeilingStopped {
 		status = "budget_stopped"
-		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, state.MaxTokens)
+		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, entry.TokenCeilingAtStop)
 	}
 
 	// A needs-a-person ending is reported as its own status only when the

@@ -159,6 +159,37 @@ func TestFreezeIssueTokenBaseline(t *testing.T) {
 	})
 }
 
+func TestFreezeIssueTokenBaselineRecordsOnePerDispatch(t *testing.T) {
+	t.Parallel()
+
+	// A run whose arrival reports no figure is unbounded whatever the
+	// baseline read did, so the two records must never both fire: the
+	// second one would tell the operator the ceiling bounds a session
+	// the first one just said it cannot bound.
+	lb, logger := textLogger()
+	state := NewState(5000, 4, 100, nil, AgentTotals{})
+	state.Running["ISS-BOTH"] = &RunningEntry{
+		Identifier:   "ISS-BOTH-ident",
+		AgentKind:    "mock",
+		UsageArrival: registry.UsageArrivalNone,
+	}
+	readErr := errors.New("db unavailable")
+	store := &fakeTokenStore{responses: []tokenStoreResponse{{err: readErr}}}
+
+	freezeIssueTokenBaseline(context.Background(), state, "ISS-BOTH", store, logger)
+
+	if strings.Contains(lb.String(), "prior token spend unknown") {
+		t.Errorf("logged that the ceiling bounds this session for a run it had just called unboundable:\n%s", lb.String())
+	}
+	line := lineWith(t, lb.String(), "token ceiling cannot bound this run")
+	if !strings.Contains(line, "error=") {
+		t.Errorf("the one record does not carry the read failure it absorbed:\n%s", line)
+	}
+	if len(store.calls) != 1 {
+		t.Errorf("TokenUsageByIssue calls = %v, want exactly one", store.calls)
+	}
+}
+
 func TestEnforceInFlightTokenCeiling(t *testing.T) {
 	t.Parallel()
 

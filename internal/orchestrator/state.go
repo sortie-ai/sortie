@@ -300,6 +300,13 @@ type RunningEntry struct {
 	// confirming read has failed for this run and been reported. Owned
 	// exclusively by the single-writer event loop.
 	TokenCeilingQueryWarned bool
+
+	// TokenCeilingAtStop is the ceiling in force when this run was
+	// stopped. A reload can move the configured ceiling between the
+	// stop and the worker's exit, and the durable record must name the
+	// ceiling the run actually hit rather than whichever one is
+	// current. Meaningful only while TokenCeilingStopped is true.
+	TokenCeilingAtStop int
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted

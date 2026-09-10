@@ -38,19 +38,31 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 		return
 	}
 	log := issueTokenCeilingLogger(logger, issueID, entry)
-	if !entry.UsageArrival.ReportsAnyFigure() {
-		log.Warn("token ceiling cannot bound this run",
+	usage, err := store.TokenUsageByIssue(ctx, issueID)
+
+	// One record per dispatch. A run whose arrival reports no figure is
+	// unbounded whatever the baseline read did, so a failed read rides
+	// on that record instead of claiming, one line later, that the
+	// ceiling bounds this session.
+	switch {
+	case !entry.UsageArrival.ReportsAnyFigure():
+		attrs := []any{
 			slog.String("agent_kind", entry.AgentKind),
 			slog.String("usage_arrival", string(entry.UsageArrival)),
 			slog.Int("budget_tokens", state.MaxTokens),
-		)
-	}
-	usage, err := store.TokenUsageByIssue(ctx, issueID)
-	if err != nil {
+		}
+		if err != nil {
+			attrs = append(attrs, slog.Any("error", err))
+		}
+		log.Warn("token ceiling cannot bound this run", attrs...)
+	case err != nil:
 		log.Warn("prior token spend unknown, token ceiling bounds this session only",
 			slog.Any("error", err),
 			slog.Int("budget_tokens", state.MaxTokens),
 		)
+	}
+
+	if err != nil {
 		return
 	}
 	entry.IssueTokensCompleted = usage.TotalTokens
@@ -130,6 +142,7 @@ const (
 // and the attribute is then absent rather than reported as zero.
 func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slog.Logger, ceiling int, unmeasuredSessions *int, sumSource string) {
 	entry.TokenCeilingStopped = true
+	entry.TokenCeilingAtStop = ceiling
 	metrics.IncRunsStoppedByBudget(budgetReasonToken)
 
 	attrs := []any{

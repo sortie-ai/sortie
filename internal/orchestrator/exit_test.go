@@ -1076,9 +1076,13 @@ func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testi
 
 	store := &mockExitStore{}
 	state := exitState(t, "ISSUE-CEIL", nil)
-	state.MaxTokens = 500
+	// A reload moved the configured ceiling between the stop and this
+	// exit. The record must name the ceiling the run actually hit, not
+	// whichever one is current.
+	state.MaxTokens = 900
 	entry := state.Running["ISSUE-CEIL"]
 	entry.TokenCeilingStopped = true
+	entry.TokenCeilingAtStop = 500
 	entry.IssueTokensCompleted = 300
 	entry.AgentTotalTokens = 250
 
@@ -1099,6 +1103,9 @@ func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testi
 	}
 	if run.Error == nil || !strings.Contains(*run.Error, "550") || !strings.Contains(*run.Error, "500") {
 		t.Errorf("RunHistory.Error = %v, want it to name used tokens 550 and budgeted tokens 500", run.Error)
+	}
+	if run.Error != nil && strings.Contains(*run.Error, "900") {
+		t.Errorf("RunHistory.Error = %q names the reloaded ceiling instead of the one the run hit", *run.Error)
 	}
 	if len(store.retryEntries) != 0 {
 		t.Errorf("SaveRetryEntry called %d times, want 0 (a ceiling stop schedules no retry of its own)", len(store.retryEntries))
