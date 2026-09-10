@@ -384,6 +384,16 @@ func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testi
 			wantMeasured:     true,
 			wantBreakdownKey: true,
 		},
+		{
+			name:             "verdict true, zero turns and zero requests: genuine zero, not unmeasured",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionSessionTotal,
+			turnCount:        0,
+			apiRequestCount:  0,
+			requestsByModel:  nil,
+			wantMeasured:     true,
+			wantBreakdownKey: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -428,6 +438,18 @@ func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testi
 			_, hasKey := decoded["requests_by_model"]
 			if hasKey != tt.wantBreakdownKey {
 				t.Errorf("JSON has requests_by_model key = %v, want %v", hasKey, tt.wantBreakdownKey)
+			}
+
+			// The wire must carry the count itself, not merely agree on
+			// its nullity: a measured genuine zero must reach the wire
+			// as 0, never as null.
+			wantAPIRequestCount := decoded["api_request_count"]
+			if tt.wantMeasured {
+				if wantAPIRequestCount != float64(tt.apiRequestCount) {
+					t.Errorf("JSON api_request_count = %#v, want %v", wantAPIRequestCount, tt.apiRequestCount)
+				}
+			} else if wantAPIRequestCount != nil {
+				t.Errorf("JSON api_request_count = %#v, want null", wantAPIRequestCount)
 			}
 		})
 	}
@@ -2439,10 +2461,12 @@ func TestLivez200_Readyz503_DBDown(t *testing.T) {
 // TestStateRouteNullsUnmeasuredFigures locks the wire contract at the
 // route rather than at the constructor: a figure no measurement
 // produced serializes as JSON null, and a measured one serializes as a
-// number. It decodes into map[string]any rather than into
-// runningEntryResponse so a wrong or missing struct tag cannot
-// round-trip through the same types and hide the defect, which is the
-// whole failure this change exists to prevent.
+// number - a genuine zero included, beside its true qualifier, never
+// suppressed into a null alongside the unmeasured figures. It decodes
+// into map[string]any rather than into runningEntryResponse so a wrong
+// or missing struct tag cannot round-trip through the same types and
+// hide the defect, which is the whole failure this change exists to
+// prevent.
 func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
 	t.Parallel()
 
@@ -2469,6 +2493,19 @@ func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
 				UsageArrival:     registry.UsageArrivalNone,
 				UsageAttribution: registry.UsageAttributionNone,
 			},
+			{
+				IssueID:             "measured-zero",
+				Identifier:          "MT-3",
+				AgentInputTokens:    0,
+				AgentOutputTokens:   0,
+				AgentTotalTokens:    0,
+				CacheReadTokens:     0,
+				APIRequestCount:     0,
+				APIRequestsMeasured: true,
+				UsageMeasured:       true,
+				UsageArrival:        registry.UsageArrivalIncremental,
+				UsageAttribution:    registry.UsageAttributionSessionTotal,
+			},
 		},
 	}
 
@@ -2482,8 +2519,8 @@ func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
 
 	body := decodeJSON[map[string]any](t, resp)
 	running, ok := body["running"].([]any)
-	if !ok || len(running) != 2 {
-		t.Fatalf("running = %#v, want two entries", body["running"])
+	if !ok || len(running) != 3 {
+		t.Fatalf("running = %#v, want three entries", body["running"])
 	}
 
 	byID := map[string]map[string]any{}
@@ -2525,6 +2562,12 @@ func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
 	if got := measured["api_request_count"]; got != float64(12) {
 		t.Errorf("measured api_request_count = %#v, want 12", got)
 	}
+	if got := measured["api_requests_measured"]; got != true {
+		t.Errorf("measured api_requests_measured = %#v, want true", got)
+	}
+	if got := measured["tokens_measured"]; got != true {
+		t.Errorf("measured tokens_measured = %#v, want true", got)
+	}
 	measuredTokens, ok := measured["tokens"].(map[string]any)
 	if !ok {
 		t.Fatalf("measured tokens = %#v, want an object", measured["tokens"])
@@ -2538,5 +2581,25 @@ func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
 	}
 	if _, present := measured["requests_by_model"]; !present {
 		t.Error("measured requests_by_model absent, want the breakdown present")
+	}
+
+	measuredZero := byID["measured-zero"]
+	if got, present := measuredZero["api_request_count"]; !present || got != float64(0) {
+		t.Errorf("measured-zero api_request_count = %#v (present=%v), want present and 0, not null", got, present)
+	}
+	if got := measuredZero["api_requests_measured"]; got != true {
+		t.Errorf("measured-zero api_requests_measured = %#v, want true", got)
+	}
+	if got := measuredZero["tokens_measured"]; got != true {
+		t.Errorf("measured-zero tokens_measured = %#v, want true", got)
+	}
+	measuredZeroTokens, ok := measuredZero["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("measured-zero tokens = %#v, want an object", measuredZero["tokens"])
+	}
+	for _, key := range tokenKeys {
+		if got, present := measuredZeroTokens[key]; !present || got != float64(0) {
+			t.Errorf("measured-zero tokens.%s = %#v (present=%v), want present and 0, not null", key, got, present)
+		}
 	}
 }

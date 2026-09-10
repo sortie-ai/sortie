@@ -1289,8 +1289,9 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 
 // TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip proves P6 at
 // the storage boundary: a row written with the verdict true round-trips
-// its raw count, and a row written with the verdict false round-trips
-// the zero count the two orchestrator writers store for it, so the
+// its raw count, including a genuine zero the measurement itself
+// produced, and a row written with the verdict false round-trips the
+// zero count the two orchestrator writers store for it, so the
 // persisted row can never contradict its own qualifier.
 func TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -1301,6 +1302,7 @@ func TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip(t *testing.T) {
 		apiRequestCount int
 	}{
 		{"measured row round-trips its raw count", true, 9},
+		{"measured row round-trips a genuine zero count", true, 0},
 		{"unmeasured row round-trips a zero count", false, 0},
 	}
 
@@ -2200,6 +2202,15 @@ func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 	if got.APIRequestCount != 42 {
 		t.Errorf("APIRequestCount = %d, want 42", got.APIRequestCount)
 	}
+	// The fixture never sets APIRequestsMeasured, so it round-trips
+	// false beside the non-zero count - the same false-qualifier shape
+	// migration 016 leaves a pre-migration row in, and by design here
+	// too, since the store applies no invariant between the two
+	// columns of its own. A regression that let the qualifier drift
+	// from what was written would still pass on the count alone.
+	if got.APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
+	}
 }
 
 // TestUpsertSessionMetadata_ExtendedFieldsUpdate verifies that updating
@@ -2248,6 +2259,9 @@ func TestUpsertSessionMetadata_ExtendedFieldsUpdate(t *testing.T) {
 	if got.APIRequestCount != 18 {
 		t.Errorf("APIRequestCount = %d, want 18", got.APIRequestCount)
 	}
+	if got.APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
+	}
 }
 
 // TestLoadAllSessionMetadata_ExtendedFields verifies that extended fields
@@ -2285,6 +2299,9 @@ func TestLoadAllSessionMetadata_ExtendedFields(t *testing.T) {
 	}
 	if all[0].APIRequestCount != 3 {
 		t.Errorf("APIRequestCount = %d, want 3", all[0].APIRequestCount)
+	}
+	if all[0].APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
 	}
 }
 

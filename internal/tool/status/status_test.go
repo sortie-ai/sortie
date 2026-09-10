@@ -246,6 +246,53 @@ func TestStatusTool_TokenCounts(t *testing.T) {
 	}
 }
 
+// TestStatusTool_TokenCounts_GenuineZero proves the third state the
+// tokens_measured qualifier exists to distinguish: a session that has
+// measured usage but accumulated no tokens yet reports zero numbers,
+// not a null, beside tokens_measured: true. A gate that treats a
+// zero-valued figure as absent would collapse this into the
+// unmeasured shape TestStatusTool_ExplicitlyUnmeasuredStateFile locks
+// down, erasing the distinction between "measured zero" and "never
+// measured".
+func TestStatusTool_TokenCounts_GenuineZero(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeStateFile(t, dir, stateFile{
+		TurnNumber:      1,
+		MaxTurns:        20,
+		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		InputTokens:     new(int64(0)),
+		OutputTokens:    new(int64(0)),
+		TotalTokens:     new(int64(0)),
+		CacheReadTokens: new(int64(0)),
+		TokensMeasured:  true,
+	})
+
+	tool := New(dir)
+	m := executeOK(t, tool)
+	assertSuccessEnvelope(t, m)
+	d := dataFields(t, m)
+
+	if got, ok := d["tokens_measured"].(bool); !ok || !got {
+		t.Errorf("data.tokens_measured = %v, want true", d["tokens_measured"])
+	}
+	tokens, ok := d["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tokens is not an object: %v", d["tokens"])
+	}
+	for _, field := range []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"} {
+		got, present := tokens[field]
+		if !present {
+			t.Errorf("data.tokens.%s key missing from response", field)
+			continue
+		}
+		if got != float64(0) {
+			t.Errorf("data.tokens.%s = %v, want 0 (not null)", field, got)
+		}
+	}
+}
+
 func TestStatusTool_TurnsRemainingFloor(t *testing.T) {
 	t.Parallel()
 
