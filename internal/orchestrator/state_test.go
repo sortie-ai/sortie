@@ -3,7 +3,10 @@ package orchestrator
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -565,6 +568,12 @@ func TestRuntimeSnapshot(t *testing.T) {
 			ModelName:       "claude-sonnet-4-20250514",
 			APIRequestCount: 7,
 			RequestsByModel: map[string]int{"claude-sonnet-4-20250514": 5, "claude-opus-4-20250514": 2},
+
+			// The breakdown reaches the snapshot only for a session
+			// whose request count is a measurement and whose
+			// attribution names a model.
+			UsageArrival:     registry.UsageArrivalIncremental,
+			UsageAttribution: registry.UsageAttributionPerModel,
 		}
 
 		result := RuntimeSnapshot(state, fixedNow)
@@ -601,10 +610,13 @@ func TestRuntimeSnapshot(t *testing.T) {
 		rbm := map[string]int{"model-a": 3}
 		state := NewState(5000, 10, nil, AgentTotals{})
 		state.Running["iso-1"] = &RunningEntry{
-			Identifier:      "MT-ISO",
-			Issue:           domain.Issue{ID: "iso-1", State: "In Progress"},
-			StartedAt:       fixedNow.Add(-5 * time.Second),
-			RequestsByModel: rbm,
+			Identifier:       "MT-ISO",
+			Issue:            domain.Issue{ID: "iso-1", State: "In Progress"},
+			StartedAt:        fixedNow.Add(-5 * time.Second),
+			RequestsByModel:  rbm,
+			APIRequestCount:  3,
+			UsageArrival:     registry.UsageArrivalIncremental,
+			UsageAttribution: registry.UsageAttributionPerModel,
 		}
 
 		result := RuntimeSnapshot(state, fixedNow)
@@ -638,6 +650,61 @@ func TestRuntimeSnapshot(t *testing.T) {
 		snap := result.Running[0]
 		if snap.RequestsByModel != nil {
 			t.Errorf("RequestsByModel = %v, want nil", snap.RequestsByModel)
+		}
+	})
+
+	// P5: the breakdown is gated in RuntimeSnapshot itself, the one
+	// site that resolves the request verdict, so these two cases must
+	// run through RuntimeSnapshot rather than assert on a hand-built
+	// SnapshotRunningEntry, which would bypass the gate entirely.
+	t.Run("RequestsByModel absent when the request verdict is false", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["unmeasured"] = &RunningEntry{
+			Identifier:       "MT-UNMEASURED",
+			Issue:            domain.Issue{ID: "unmeasured", State: "In Progress"},
+			StartedAt:        fixedNow.Add(-1 * time.Second),
+			TurnCount:        2,
+			APIRequestCount:  0,
+			RequestsByModel:  map[string]int{"claude-sonnet-4-20250514": 5},
+			UsageArrival:     registry.UsageArrivalIncremental,
+			UsageAttribution: registry.UsageAttributionPerModel,
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		snap := result.Running[0]
+		if snap.APIRequestsMeasured {
+			t.Fatal("APIRequestsMeasured = true, want false (turns began, count is zero)")
+		}
+		if snap.RequestsByModel != nil {
+			t.Errorf("RequestsByModel = %v, want nil when the request verdict is false", snap.RequestsByModel)
+		}
+	})
+
+	t.Run("RequestsByModel absent when attribution does not name a model", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["session-total"] = &RunningEntry{
+			Identifier:       "MT-SESSTOTAL",
+			Issue:            domain.Issue{ID: "session-total", State: "In Progress"},
+			StartedAt:        fixedNow.Add(-1 * time.Second),
+			APIRequestCount:  4,
+			RequestsByModel:  map[string]int{"claude-sonnet-4-20250514": 4},
+			UsageArrival:     registry.UsageArrivalIncremental,
+			UsageAttribution: registry.UsageAttributionSessionTotal,
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		snap := result.Running[0]
+		if !snap.APIRequestsMeasured {
+			t.Fatal("APIRequestsMeasured = false, want true (count above zero)")
+		}
+		if snap.RequestsByModel != nil {
+			t.Errorf("RequestsByModel = %v, want nil when attribution does not name a model", snap.RequestsByModel)
 		}
 	})
 
@@ -2256,5 +2323,126 @@ func TestRuntimeSnapshot_UsageDispositionFields(t *testing.T) {
 				t.Errorf("TokensPending = %v, want %v", got.TokensPending, tt.wantTokenPending)
 			}
 		})
+	}
+}
+
+// TestApiRequestsMeasured walks section 3.3's rule table (P1, P2): an
+// arrival that does not report during the turn is always unmeasured,
+// and for incremental a positive raw count is always measured while a
+// zero count depends only on whether a turn began. The last two cases
+// prove totality (P8's counterpart for this function) over a value
+// outside the declared UsageArrival set.
+func TestApiRequestsMeasured(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		arrival         registry.UsageArrival
+		turnCount       int
+		apiRequestCount int
+		want            bool
+	}{
+		{"incremental, no turn, zero count: measured", registry.UsageArrivalIncremental, 0, 0, true},
+		{"incremental, no turn, positive count: measured", registry.UsageArrivalIncremental, 0, 5, true},
+		{"incremental, one turn, zero count: unmeasured", registry.UsageArrivalIncremental, 1, 0, false},
+		{"incremental, many turns, zero count: unmeasured", registry.UsageArrivalIncremental, 3, 0, false},
+		{"incremental, turns began, positive count: measured", registry.UsageArrivalIncremental, 1, 7, true},
+		{"turn_end, no turn, zero count: unmeasured", registry.UsageArrivalTurnEnd, 0, 0, false},
+		{"turn_end, turns began, positive count: unmeasured", registry.UsageArrivalTurnEnd, 5, 9, false},
+		{"none, no turn, zero count: unmeasured", registry.UsageArrivalNone, 0, 0, false},
+		{"none, turns began, positive count: unmeasured", registry.UsageArrivalNone, 3, 4, false},
+		{"undeclared arrival: unmeasured", registry.UsageArrivalUndeclared, 0, 0, false},
+		{"arrival outside the declared set: unmeasured", registry.UsageArrival("bogus"), 0, 9, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := apiRequestsMeasured(tt.arrival, tt.turnCount, tt.apiRequestCount)
+			if got != tt.want {
+				t.Errorf("apiRequestsMeasured(%q, %d, %d) = %v, want %v",
+					tt.arrival, tt.turnCount, tt.apiRequestCount, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApiRequestsMeasuredSingleDerivationSite proves P3:
+// apiRequestsMeasured is the only site that derives the request
+// verdict. It walks every non-test source file under cmd and internal
+// for a call to UsageArrival's ReportsDuringTurn, the frozen
+// declaration-only predicate the rule composes with the two session
+// counters, and requires exactly one call site, inside state.go. A
+// reimplementation that reuses the predicate needs that same call, so
+// a second call site is evidence the rule was reproduced rather than
+// reused.
+//
+// What this does not catch: a reimplementation that spells the
+// predicate out as a direct comparison against UsageArrivalIncremental
+// rather than calling it. That spelling is live in the tree for
+// presentation wording, so it cannot be banned outright, and no
+// syntactic rule separates the two uses. The scanned-file count below
+// is the negative control, so a walk that reaches nothing fails here
+// rather than passing in silence.
+func TestApiRequestsMeasuredSingleDerivationSite(t *testing.T) {
+	t.Parallel()
+
+	const needle = "ReportsDuringTurn("
+	type callSite struct {
+		file  string
+		count int
+	}
+	var sites []callSite
+	scanned := 0
+
+	for _, root := range []string{
+		filepath.Join("..", "..", "cmd"),
+		filepath.Join("..", "..", "internal"),
+	} {
+		err := filepath.WalkDir(root, func(walkPath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				if d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(walkPath, ".go") || strings.HasSuffix(walkPath, "_test.go") {
+				return nil
+			}
+			data, readErr := os.ReadFile(walkPath)
+			if readErr != nil {
+				return readErr
+			}
+			scanned++
+			count := 0
+			for line := range strings.SplitSeq(string(data), "\n") {
+				// The method's own declaration carries the needle
+				// and is not a call site.
+				if strings.Contains(line, ") "+needle) {
+					continue
+				}
+				count += strings.Count(line, needle)
+			}
+			if count > 0 {
+				sites = append(sites, callSite{file: filepath.ToSlash(walkPath), count: count})
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("WalkDir(%q): %v", root, err)
+		}
+	}
+
+	if scanned < 100 {
+		t.Fatalf("scanned %d non-test files, want the walk to reach the whole tree", scanned)
+	}
+
+	want := filepath.ToSlash(filepath.Join("..", "..", "internal", "orchestrator", "state.go"))
+	if len(sites) != 1 || sites[0].file != want || sites[0].count != 1 {
+		t.Errorf("ReportsDuringTurn call sites = %+v, want exactly one call, in %s", sites, want)
 	}
 }

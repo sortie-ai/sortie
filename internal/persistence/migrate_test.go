@@ -224,6 +224,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"cache_read_tokens", "INTEGER", true, 0},
 				{"model_name", "TEXT", true, 0},
 				{"api_request_count", "INTEGER", true, 0},
+				{"api_requests_measured", "INTEGER", true, 0},
 			},
 		},
 		{
@@ -470,6 +471,43 @@ func TestMigrate_Migration012_TokensMeasuredDefault(t *testing.T) {
 	}
 	if tokensMeasured != 1 {
 		t.Errorf("tokens_measured for a pre-migration-012 row = %d, want 1 (the column default)", tokensMeasured)
+	}
+}
+
+// TestMigrate_Migration016_APIRequestsMeasuredDefault verifies that a
+// session_metadata row written before migration 016 stays readable
+// once the database is migrated to the current schema, with its
+// pre-existing api_request_count intact and api_requests_measured
+// reading 0, the column's default: a row written by the unconditional
+// rule this change removes has no recorded measurement state, and 0
+// states that honestly rather than presuming it was a measurement.
+func TestMigrate_Migration016_APIRequestsMeasuredDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 15)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, api_request_count, updated_at)
+		 VALUES ('sm-pre016', 'sess-pre016', 42, '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-016 session_metadata row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var apiRequestCount, apiRequestsMeasured int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT api_request_count, api_requests_measured FROM session_metadata WHERE issue_id = 'sm-pre016'`,
+	).Scan(&apiRequestCount, &apiRequestsMeasured); err != nil {
+		t.Fatalf("query api_request_count, api_requests_measured: %v", err)
+	}
+	if apiRequestCount != 42 {
+		t.Errorf("api_request_count for a pre-migration-016 row = %d, want 42 (unchanged)", apiRequestCount)
+	}
+	if apiRequestsMeasured != 0 {
+		t.Errorf("api_requests_measured for a pre-migration-016 row = %d, want 0 (the column default)", apiRequestsMeasured)
 	}
 }
 

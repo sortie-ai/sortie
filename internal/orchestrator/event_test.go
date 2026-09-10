@@ -954,6 +954,85 @@ func TestHandleAgentEvent_UsageMeasured(t *testing.T) {
 	})
 }
 
+// zeroTokenCounters returns the four token counters on entry, so a test
+// can assert on them as a single comparable value.
+func zeroTokenCounters(entry *RunningEntry) [4]int64 {
+	return [4]int64{
+		entry.AgentInputTokens,
+		entry.AgentOutputTokens,
+		entry.AgentTotalTokens,
+		entry.CacheReadTokens,
+	}
+}
+
+// TestHandleAgentEvent_UnmeasuredEntryCountersStayZero proves that an
+// entry whose UsageMeasured is false always carries four zero token
+// counters, which is what makes the wire's null-when-unmeasured gate
+// lossless: it drives the two event classes that separate the
+// conditions HandleAgentEvent applies. A token_usage event carrying an
+// all-zero payload raises the flag and mutates nothing, because
+// applyUsageDelta only runs when the event carries a non-zero usage
+// component. An event with no usage component does neither.
+func TestHandleAgentEvent_UnmeasuredEntryCountersStayZero(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all-zero token_usage event raises the flag and mutates nothing", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("ZC-1")
+
+		HandleAgentEvent(state, "ZC-1", domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+		}, slog.Default(), nil)
+
+		if !entry.UsageMeasured {
+			t.Fatal("entry.UsageMeasured = false, want true for an all-zero token_usage event")
+		}
+		if got := zeroTokenCounters(entry); got != ([4]int64{}) {
+			t.Errorf("token counters = %+v, want all zero after an all-zero token_usage event", got)
+		}
+	})
+
+	t.Run("an event with no usage component raises no flag and mutates nothing", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("ZC-2")
+
+		HandleAgentEvent(state, "ZC-2", domain.AgentEvent{
+			Type:      domain.EventNotification,
+			Timestamp: time.Now().UTC(),
+		}, slog.Default(), nil)
+
+		if entry.UsageMeasured {
+			t.Fatal("entry.UsageMeasured = true, want false for an event with no usage component")
+		}
+		if got := zeroTokenCounters(entry); got != ([4]int64{}) {
+			t.Errorf("token counters = %+v, want all zero after an event with no usage component", got)
+		}
+	})
+
+	t.Run("invariant: unmeasured implies zero counters, over both classes", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct {
+			name  string
+			event domain.AgentEvent
+		}{
+			{"all-zero token_usage", domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC()}},
+			{"no usage component", domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC()}},
+		} {
+			state, entry := newStateWithEntry("ZC-INV")
+			HandleAgentEvent(state, "ZC-INV", tt.event, slog.Default(), nil)
+
+			if entry.UsageMeasured {
+				continue
+			}
+			if got := zeroTokenCounters(entry); got != ([4]int64{}) {
+				t.Errorf("%s: UsageMeasured = false but token counters = %+v, want all zero", tt.name, got)
+			}
+		}
+	})
+}
+
 // TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount
 // verifies that a turn_completed event carrying a usage payload larger
 // than the last token_usage event's payload still advances the entry's

@@ -5408,6 +5408,54 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		}
 	})
 
+	// P6: this site's persisted row must carry the same
+	// measured-implies-count discipline HandleWorkerExit applies.
+	t.Run("unmeasured entry persists a zero count despite a non-zero raw count", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+		// turn_end never reports during the turn, so the verdict is
+		// false regardless of the pre-set raw count of 2.
+		entry.UsageArrival = registry.UsageArrivalTurnEnd
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		writes := store.sessionWrites()
+		if len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1", len(writes))
+		}
+		if writes[0].APIRequestsMeasured {
+			t.Fatal("SessionMetadata.APIRequestsMeasured = true, want false (turn_end never reports during the turn)")
+		}
+		if writes[0].APIRequestCount != 0 {
+			t.Errorf("SessionMetadata.APIRequestCount = %d, want 0 for an unmeasured row", writes[0].APIRequestCount)
+		}
+	})
+
+	t.Run("measured entry persists the raw count", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+		entry.UsageArrival = registry.UsageArrivalIncremental
+		entry.TurnCount = 1
+		entry.APIRequestCount = 4
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		writes := store.sessionWrites()
+		if len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1", len(writes))
+		}
+		if !writes[0].APIRequestsMeasured {
+			t.Fatal("SessionMetadata.APIRequestsMeasured = false, want true (a request arrived)")
+		}
+		if writes[0].APIRequestCount != 4 {
+			t.Errorf("SessionMetadata.APIRequestCount = %d, want 4 for a measured row", writes[0].APIRequestCount)
+		}
+	})
+
 	t.Run("store error does not advance the throttle timestamp", func(t *testing.T) {
 		t.Parallel()
 

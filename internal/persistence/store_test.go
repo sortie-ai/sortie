@@ -1287,6 +1287,59 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 	}
 }
 
+// TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip proves P6 at
+// the storage boundary: a row written with the verdict true round-trips
+// its raw count, and a row written with the verdict false round-trips
+// the zero count the two orchestrator writers store for it, so the
+// persisted row can never contradict its own qualifier.
+func TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		measured        bool
+		apiRequestCount int
+	}{
+		{"measured row round-trips its raw count", true, 9},
+		{"unmeasured row round-trips a zero count", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openTestStore(t)
+			migrateOrFatal(t, s)
+			ctx := context.Background()
+
+			meta := SessionMetadata{
+				IssueID:             "ISS-REQV",
+				SessionID:           "sess-reqv",
+				APIRequestCount:     tt.apiRequestCount,
+				APIRequestsMeasured: tt.measured,
+				UpdatedAt:           "2026-03-19T10:00:00Z",
+			}
+			if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+				t.Fatalf("UpsertSessionMetadata: %v", err)
+			}
+
+			got, found, err := s.LoadSessionMetadata(ctx, "ISS-REQV")
+			if err != nil {
+				t.Fatalf("LoadSessionMetadata: %v", err)
+			}
+			if !found {
+				t.Fatal("expected found=true, got false")
+			}
+			if got.APIRequestsMeasured != tt.measured {
+				t.Errorf("APIRequestsMeasured = %v, want %v", got.APIRequestsMeasured, tt.measured)
+			}
+			if got.APIRequestCount != tt.apiRequestCount {
+				t.Errorf("APIRequestCount = %d, want %d", got.APIRequestCount, tt.apiRequestCount)
+			}
+		})
+	}
+}
+
 func TestLoadSessionMetadata_NotFound(t *testing.T) {
 	t.Parallel()
 
