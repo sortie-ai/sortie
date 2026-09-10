@@ -1100,11 +1100,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// Fold TurnResult.Usage into the local mirror on both the success
 		// and the error path, so a run-cumulative figure the adapter
 		// reported only on TurnResult (not through an event) is not lost.
+		// A figure the adapter reports here is a measurement whether or
+		// not it also sets the flag, which is how the event path above
+		// already reads a non-zero payload.
 		resultCarriesMeasurement := hasUsage(turnResult.Usage) || turnResult.UsageMeasured
 		if hasUsage(turnResult.Usage) {
 			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
 		}
-		if turnResult.UsageMeasured {
+		if resultCarriesMeasurement {
 			localMeasured = true
 		}
 

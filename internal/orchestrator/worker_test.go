@@ -7974,6 +7974,63 @@ func TestStopGraceDefaultMatchesBuiltIn(t *testing.T) {
 	}
 }
 
+// TestRunWorkerAttempt_StateFileMeasuresResultUsageWithoutFlag covers an
+// adapter that reports a figure on TurnResult without also setting the
+// flag. The figure is the measurement, so nulling it would write over a
+// real number with an absence.
+func TestRunWorkerAttempt_StateFileMeasuresResultUsageWithoutFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				return domain.TurnResult{
+					SessionID:  session.ID,
+					ExitReason: domain.EventTurnCompleted,
+					Usage:      domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600},
+					// UsageMeasured deliberately left false.
+				}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		WorkflowPath:           "/fake/WORKFLOW.md",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if !result.UsageMeasured {
+		t.Error("WorkerResult.UsageMeasured = false, want true when the result carried a figure")
+	}
+
+	got := readWorkerStateFile(t, wsPath())
+	if !got.TokensMeasured {
+		t.Error("TokensMeasured = false, want true")
+	}
+	if got.TotalTokens == nil {
+		t.Fatal("TotalTokens = nil, want the figure the result carried")
+	}
+	if *got.TotalTokens != 600 {
+		t.Errorf("TotalTokens = %d, want 600", *got.TotalTokens)
+	}
+}
+
 // TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement covers the
 // adapter that reports its measurement on TurnResult rather than through
 // an event. On a one-turn run no later write exists to carry it, so
