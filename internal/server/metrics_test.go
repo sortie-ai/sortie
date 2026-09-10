@@ -139,6 +139,7 @@ func TestNewPromMetrics(t *testing.T) {
 	m.IncDispatchRuleMatch("rule", "bug-rule")
 	m.IncCandidateHolds("blocked_by")
 	m.IncBudgetExhaustions("session_budget")
+	m.IncRunsStoppedByBudget("token_budget")
 	m.SetBudgetExhaustedIssues("session_budget", 1)
 	m.IncSelfReviewIterations("pass")
 	m.IncSelfReviewSessions("pass")

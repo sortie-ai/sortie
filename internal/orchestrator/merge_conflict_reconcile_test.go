@@ -205,7 +205,7 @@ func newMergeConflictPending(issueID string, prNumber int) *PendingReaction {
 // PendingReaction entry.
 func stateWithMergeConflict(t *testing.T, issueID string, prNumber int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
 	s.PendingReactions[rkey] = newMergeConflictPending(issueID, prNumber)
 	s.Claimed[issueID] = struct{}{}
@@ -694,7 +694,7 @@ func TestReconcileMergeConflicts_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "MC-ISO"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	ciKey := ReactionKey(issueID, ReactionKindCI)
 	state.PendingReactions[ciKey] = &PendingReaction{
@@ -1188,7 +1188,7 @@ func TestReconcileMergeConflicts_Coexists(t *testing.T) {
 	t.Parallel()
 
 	issueID := "MC-COEXIST"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	// An auto-merge slot for the same PR, alongside the merge-conflict slot.
 	mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)

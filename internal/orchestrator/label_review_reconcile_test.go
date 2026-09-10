@@ -212,7 +212,7 @@ func newLabelReviewPending(issueID string, prNumber int) *PendingReaction {
 // PendingReaction entry.
 func stateWithLabelReviewPending(t *testing.T, issueID string, prNumber int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindLabelReview)
 	s.PendingReactions[rkey] = newLabelReviewPending(issueID, prNumber)
 	return s

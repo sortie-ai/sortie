@@ -306,7 +306,7 @@ var terminalReleaseFixtureKinds = []string{ReactionKindCI, ReactionKindReview, R
 func stateWithTerminalReleaseFixture(t *testing.T, cc *cancelCounter) *State {
 	t.Helper()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running[terminalReleaseIssueID] = &RunningEntry{
 		Identifier: terminalReleaseIssueID + "-ident",
 		StartedAt:  reconcileBaseTime,
@@ -342,7 +342,7 @@ func TestReconcileStalled_Disabled(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0 // disabled
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -371,7 +371,7 @@ func TestReconcileStalled_NoStalls(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 	// Now = reconcileBaseTime; entry started 30s ago → not stalled.
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
 		StartedAt:  reconcileBaseTime.Add(-30 * time.Second),
@@ -398,7 +398,7 @@ func TestReconcileStalled_ViaLastAgentTimestamp(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:         "ISSUE-1-ident",
@@ -446,7 +446,7 @@ func TestReconcileStalled_ReactionRetryPreservesContext(t *testing.T) {
 	contContext := map[string]any{
 		"review_comments": map[string]any{"count": 2},
 	}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-R"] = &RunningEntry{
 		Identifier:          "ISSUE-R-ident",
@@ -502,7 +502,7 @@ func TestReconcileStalled_ViaStartedAtFallback(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	// LastAgentTimestamp is zero → falls back to StartedAt.
 	state.Running["ISSUE-1"] = &RunningEntry{
@@ -533,7 +533,7 @@ func TestReconcileStalled_SelectiveStallingMultipleEntries(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	ccStale := &cancelCounter{}
 	ccFresh := &cancelCounter{}
 
@@ -577,7 +577,7 @@ func TestReconcileStalled_PersistenceError(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -611,7 +611,7 @@ func TestReconcileTrackerState_NoRunningEntries(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0 // disable stall detection for Part B isolation
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	ReconcileRunningIssues(state, params)
 
@@ -632,7 +632,7 @@ func TestReconcileTrackerState_FetchFailure(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
 		StartedAt:  reconcileBaseTime,
@@ -661,7 +661,7 @@ func TestReconcileTrackerState_TerminalSetsPendingCleanup(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -711,7 +711,7 @@ func TestReconcileTrackerState_ActiveUpdatesState(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
 		StartedAt:  reconcileBaseTime,
@@ -740,7 +740,7 @@ func TestReconcileTrackerState_NonActiveNonTerminalCancelsWithoutCleanup(t *test
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -782,7 +782,7 @@ func TestReconcileTrackerState_NonActiveNonTerminalPreservesIncumbent(t *testing
 	params.StallTimeoutMS = 0
 	params.Metrics = metrics
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:   "ISSUE-1-ident",
@@ -834,7 +834,7 @@ func TestReconcileTrackerState_OmittedIssueKeptRunning(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -873,7 +873,7 @@ func TestReconcileTrackerState_TerminalCaseInsensitive(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -903,7 +903,7 @@ func TestReconcileTrackerState_DeleteRetryEntryError(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -977,7 +977,7 @@ func TestReconcileTrackerState_PendingOnlyIssueReleasesReactionState(t *testing.
 	params.StallTimeoutMS = 0
 	params.Logger = log
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	key := ReactionKey(issueID, ReactionKindCI)
 	state.PendingReactions[key] = &PendingReaction{
 		IssueID:    issueID,
@@ -1021,7 +1021,7 @@ func TestReconcileTrackerState_PendingOnlyIssueReleasesReactionState(t *testing.
 func TestTrackerObservationIDs_DeduplicatedUnion(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	state.Running["I1"] = &RunningEntry{Identifier: "I1-ident"}
 	state.PendingReactions[ReactionKey("I1", ReactionKindCI)] = &PendingReaction{IssueID: "I1", Identifier: "I1-ident", Kind: ReactionKindCI}
@@ -1097,7 +1097,7 @@ func TestReconcileTrackerState_NonTerminalPendingOnlyReleasesNothing(t *testing.
 			params.StallTimeoutMS = 0
 			params.HandoffState = "In Review"
 
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			key := ReactionKey(issueID, ReactionKindCI)
 			state.PendingReactions[key] = &PendingReaction{
 				IssueID:    issueID,
@@ -1126,7 +1126,7 @@ func TestReconcileTrackerState_NonTerminalPendingOnlyReleasesNothing(t *testing.
 func TestReleaseTerminalIssueState_IssueIsolation(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	keyI := ReactionKey("I", ReactionKindCI)
 	state.PendingReactions[keyI] = &PendingReaction{IssueID: "I", Identifier: "I-ident", Kind: ReactionKindCI, CreatedAt: reconcileBaseTime}
@@ -1188,7 +1188,7 @@ func TestReconcileTrackerState_NilTrackerAdapterPendingOnly(t *testing.T) {
 	t.Parallel()
 
 	issueID := "REL-NIL"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	key := ReactionKey(issueID, ReactionKindCI)
 	state.PendingReactions[key] = &PendingReaction{
 		IssueID:    issueID,
@@ -1242,7 +1242,7 @@ func TestReconcile_StalledAndTerminal(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	ccStale := &cancelCounter{}
 	ccTerminal := &cancelCounter{}
 
@@ -1292,7 +1292,7 @@ func TestReconcile_SameIssueStalledAndTerminal(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -1343,7 +1343,7 @@ func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -1437,7 +1437,7 @@ func TestReconcileTerminal_PendingCleanupSkipsSecondTick(t *testing.T) {
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0 // disable stall detection for Part B isolation
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -1497,7 +1497,7 @@ func TestReconcileTerminal_PendingCleanupSkipsLogAndRetryDeletion(t *testing.T) 
 		Logger:            slog.New(handler),
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	// Pre-set PendingCleanup to simulate prior terminal detection.
 	state.Running["ISSUE-1"] = &RunningEntry{
@@ -1537,7 +1537,7 @@ func TestReconcileStalled_WarnLogEveryStalledTick(t *testing.T) {
 	params.StallTimeoutMS = 60_000
 	params.Logger = slog.New(handler)
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -1591,7 +1591,7 @@ func TestReconcileStalled_DeferralSkipsMutations(t *testing.T) {
 	params.StallTimeoutMS = 60_000
 	params.Metrics = metrics
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -1690,7 +1690,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		t.Parallel()
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		SweepWorkspaces(state, SweepWorkspacesParams{
 			WorkspaceRoot:  "",
 			TrackerAdapter: tracker,
@@ -1710,7 +1710,7 @@ func TestSweepWorkspaces(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
@@ -1726,7 +1726,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-1"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id1"] = &RunningEntry{Identifier: "PROJ-1"}
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
@@ -1744,7 +1744,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-2"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id2"] = &RetryEntry{Identifier: "PROJ-2"}
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
@@ -1762,7 +1762,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-3"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.PendingReactions["id3:ci"] = &PendingReaction{Identifier: "PROJ-3"}
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
@@ -1784,7 +1784,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{
 			statesByKey: map[string]string{"PROJ-4": "Done"},
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id1"] = &RunningEntry{Identifier: ""}
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
@@ -1811,7 +1811,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{
 			statesByKey: map[string]string{"PROJ-6": "Done"},
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id5"] = &RunningEntry{Identifier: "PROJ-5"}
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
@@ -1833,7 +1833,7 @@ func TestSweepWorkspaces(t *testing.T) {
 				"PROJ-8": "In Progress",
 			},
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
@@ -1850,7 +1850,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{
 			fetchErr: errors.New("tracker unavailable"),
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
@@ -1867,7 +1867,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{
 			statesByKey: map[string]string{},
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
@@ -1883,7 +1883,7 @@ func TestSweepWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{
 			statesByKey: map[string]string{"PROJ-10": "Done"},
 		}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		spy := &spyMetrics{}
 		params := defaultSweepParams(t, tmpDir, tracker)
@@ -1922,7 +1922,7 @@ func TestReconcileRunningIssues_ReactionContinuationInHandoffStateKeepsRunning(t
 	params.HandoffState = "Ready For Review"
 	// defaultReconcileParams ActiveStates = ["In Progress", "In Review"] — handoff excluded.
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:   "ISSUE-1-ident",
@@ -1963,7 +1963,7 @@ func TestReconcileRunningIssues_NonReactionInHandoffStateCancels(t *testing.T) {
 	params.StallTimeoutMS = 0
 	params.HandoffState = "Ready For Review"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:   "ISSUE-1-ident",
@@ -2001,7 +2001,7 @@ func TestReconcileRunningIssues_ReactionInTerminalStateCancelsAndCleans(t *testi
 	params.StallTimeoutMS = 0
 	params.HandoffState = "Ready For Review"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:   "ISSUE-1-ident",
@@ -2040,7 +2040,7 @@ func TestReconcileRunningIssues_ReactionInUnrelatedStateCancels(t *testing.T) {
 	params.StallTimeoutMS = 0
 	params.HandoffState = "Ready For Review"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier:   "ISSUE-1-ident",
@@ -2242,7 +2242,7 @@ func TestSweepWorkspaces_NarrowedReactionExclusion(t *testing.T) {
 	mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RV"))
 
 	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-LR": "In Progress"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions["id-lr:label-review"] = &PendingReaction{Identifier: "PROJ-LR", Kind: ReactionKindLabelReview}
 	state.PendingReactions["id-rv:review"] = &PendingReaction{Identifier: "PROJ-RV", Kind: ReactionKindReview}
 
@@ -2266,7 +2266,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.Logger = slog.New(handler)
@@ -2292,7 +2292,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-REACT"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-RUN"}
 		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-RETRY"}
 		state.PendingReactions["id-react:ci"] = &PendingReaction{Identifier: "PROJ-REACT", Kind: ReactionKindCI}
@@ -2328,7 +2328,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-FAIL"))
 
 		tracker := &sweepTracker{fetchErr: errors.New("tracker unavailable")}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.Logger = slog.New(handler)
@@ -2357,7 +2357,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 			"PROJ-CAND1": "In Progress",
 			"PROJ-CAND2": "In Progress",
 		}}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id-excl"] = &RunningEntry{Identifier: "PROJ-EXCL"}
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker) // RetentionDays zero value: bound off
@@ -2383,7 +2383,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-NILSTORE"))
 
 		tracker := &sweepTracker{statesByKey: map[string]string{}}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2409,7 +2409,7 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-STOREERR"))
 
 		tracker := &sweepTracker{statesByKey: map[string]string{}}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2440,7 +2440,7 @@ func TestSweepWorkspaces_TerminalAndOldCountedOnceUnderTerminal(t *testing.T) {
 	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
 
 	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-BOTH": "Done"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	handler := &sweepLogHandler{}
 	params := defaultSweepParams(t, tmpDir, tracker)
 	params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2478,7 +2478,7 @@ func TestSweepWorkspaces_AgeRemovalUsesIdentifierAndIssueIDAsKey(t *testing.T) {
 	script := `printf "%s\n%s" "$SORTIE_ISSUE_ID" "$SORTIE_ISSUE_IDENTIFIER" > "` + envFile + `"`
 
 	tracker := &sweepTracker{statesByKey: map[string]string{}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	params := defaultSweepParams(t, tmpDir, tracker)
 	params.RetentionDays = config.WorkspaceRetentionMinDays
 	params.Store = &sweepStoreDouble{}
@@ -2509,7 +2509,7 @@ func TestSweepWorkspaces_AgePassRemovesOnTrackerReadFailure(t *testing.T) {
 	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
 
 	tracker := &sweepTracker{fetchErr: errors.New("tracker unavailable")}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	handler := &sweepLogHandler{}
 	params := defaultSweepParams(t, tmpDir, tracker)
 	params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2559,7 +2559,7 @@ func TestSweepWorkspaces_RemovedByAgeRegardlessOfTrackerCondition(t *testing.T) 
 				statesByKey[key] = tc.stateName
 			}
 			tracker := &sweepTracker{statesByKey: statesByKey}
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			params := defaultSweepParams(t, tmpDir, tracker)
 			params.RetentionDays = config.WorkspaceRetentionMinDays
 			params.Store = &sweepStoreDouble{}
@@ -2584,7 +2584,7 @@ func TestSweepWorkspaces_RetainedNoActivity(t *testing.T) {
 		mustMkdirSweep(t, wsPath)
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2609,7 +2609,7 @@ func TestSweepWorkspaces_RetainedNoActivity(t *testing.T) {
 		mustMkdirSweep(t, wsPath)
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2641,7 +2641,7 @@ func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
 		writeSweepSCMMetadata(t, wsPath, recentSweepTimestamp())
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
 		params.Store = &sweepStoreDouble{completions: map[string]string{key: oldSweepTimestamp()}}
@@ -2661,7 +2661,7 @@ func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
 		writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
 		params.Store = &sweepStoreDouble{completions: map[string]string{key: recentSweepTimestamp()}}
@@ -2681,7 +2681,7 @@ func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
 		writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.RetentionDays = config.WorkspaceRetentionMinDays
 		params.Store = &sweepStoreDouble{completions: map[string]string{key: oldSweepTimestamp()}}
@@ -2704,7 +2704,7 @@ func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RUNONLY"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-RUNONLY"}
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
@@ -2728,7 +2728,7 @@ func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RETRYONLY"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-RETRYONLY"}
 		handler := &sweepLogHandler{}
 		params := defaultSweepParams(t, tmpDir, tracker)
@@ -2752,7 +2752,7 @@ func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-BOTHFLIGHT"))
 
 		tracker := &sweepTracker{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-BOTHFLIGHT"}
 		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-BOTHFLIGHT"}
 		handler := &sweepLogHandler{}
@@ -2787,7 +2787,7 @@ func TestSweepWorkspaces_AgeRemovalLeavesPendingReactionsAndFingerprintsUnchange
 		t.Fatalf("UpsertReactionFingerprint: %v", err)
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions["other:ci"] = &PendingReaction{Identifier: "OTHER-1", Kind: ReactionKindCI}
 
 	tracker := &sweepTracker{}
@@ -2824,7 +2824,7 @@ func TestSweepWorkspaces_MetricsRecordBothMechanismsInSamePass(t *testing.T) {
 	writeSweepSCMMetadata(t, ageWsPath, oldSweepTimestamp())
 
 	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-METRIC-TERM": "Done"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	spy := &spyMetrics{}
 	params := defaultSweepParams(t, tmpDir, tracker)
 	params.Metrics = spy
@@ -2869,7 +2869,7 @@ func TestSweepWorkspaces_AgeRemovalLogCarriesRequiredAttributes(t *testing.T) {
 	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
 
 	tracker := &sweepTracker{}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	handler := &sweepLogHandler{}
 	params := defaultSweepParams(t, tmpDir, tracker)
 	params.RetentionDays = config.WorkspaceRetentionMinDays
@@ -2927,7 +2927,7 @@ func TestReconcileOverdueRetries_ReArmsOverdueEntry(t *testing.T) {
 		Logger:            slog.New(handler),
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	oldTimer := time.AfterFunc(time.Hour, func() {})
 	overdueDue := reconcileBaseTime.Add(-2 * time.Minute).UnixMilli()
 	state.RetryAttempts["OVERDUE-1"] = &RetryEntry{
@@ -3045,7 +3045,7 @@ func TestReconcileOverdueRetries_FutureDueAtMSUntouched(t *testing.T) {
 		Logger:            slog.New(handler),
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	timer := time.AfterFunc(time.Hour, func() {})
 	t.Cleanup(func() { timer.Stop() })
 	futureDue := reconcileBaseTime.Add(5 * time.Minute).UnixMilli()
@@ -3098,7 +3098,7 @@ func TestReconcileOverdueRetries_StartupReconstructedEntrySkipped(t *testing.T) 
 		Logger:            slog.New(handler),
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
 	PopulateRetries(state, []persistence.PendingRetry{
 		{
@@ -3155,7 +3155,7 @@ func TestReconcileOverdueRetries_LargeStartupBatchFiresNothing(t *testing.T) {
 		Logger:            slog.New(handler),
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
 	entries := make([]persistence.PendingRetry, 0, 200)
 	for i := range 200 {

@@ -126,7 +126,7 @@ func newAutoMergePending(issueID string, prNumber int) *PendingReaction {
 // stateWithAutoMergePending creates a State with one auto-merge PendingReaction.
 func stateWithAutoMergePending(t *testing.T, issueID string, prNumber int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindAutoMerge)
 	s.PendingReactions[rkey] = newAutoMergePending(issueID, prNumber)
 	return s

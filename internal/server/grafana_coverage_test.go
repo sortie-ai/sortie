@@ -43,6 +43,7 @@ var knownSortieMetrics = []string{
 	"sortie_dispatch_rule_match_total",
 	"sortie_candidate_holds_total",
 	"sortie_budget_exhaustions_total",
+	"sortie_runs_stopped_by_budget_total",
 	"sortie_budget_exhausted_issues",
 	"sortie_self_review_iterations_total",
 	"sortie_self_review_sessions_total",

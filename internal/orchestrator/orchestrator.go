@@ -520,6 +520,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
 			o.maybeWriteIncrementalMetadata(ctx, msg.IssueID, msg.Event)
+			enforceInFlightTokenCeiling(ctx, o.state, msg.IssueID, msg.Event, o.store, o.metrics, o.logger)
 
 		case msg := <-o.selfReviewCh:
 			if entry, ok := o.state.Running[msg.IssueID]; ok {
@@ -602,6 +603,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// success.
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
+	o.state.MaxTokens = cfg.Agent.MaxTokens
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	// Update host pool from config extensions.
@@ -780,6 +782,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			entry.RuleName = resolution.RuleName
 			entry.TemplateID = resolution.TemplateID
 			entry.UsageArrival, entry.UsageAttribution = o.resolveUsageDisposition(resolution.AgentKind, host)
+			freezeIssueTokenBaseline(ctx, o.state, issue.ID, o.store, o.logger)
 		}
 		o.metrics.IncDispatches(outcomeSuccess)
 		o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
@@ -1288,12 +1291,14 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 						UsedTokens:         &usage.TotalTokens,
 						BudgetTokens:       int64(cfg.Agent.MaxTokens),
 						UnmeasuredSessions: &usage.UnmeasuredSessions,
+						StoppedInFlight:    &usage.StoppedInFlight,
 					}
 					continue
 				}
 				if entry, held := fresh[id]; held {
 					entry.UsedTokens = &usage.TotalTokens
 					entry.UnmeasuredSessions = &usage.UnmeasuredSessions
+					entry.StoppedInFlight = &usage.StoppedInFlight
 				}
 				if usage.UnmeasuredSessions == 0 {
 					continue

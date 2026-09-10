@@ -45,6 +45,7 @@ type PromMetrics struct {
 	dispatchRuleMatchTotal        *prometheus.CounterVec
 	candidateHoldsTotal           *prometheus.CounterVec
 	budgetExhaustionsTotal        *prometheus.CounterVec
+	runsStoppedByBudgetTotal      *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -279,6 +280,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Issue entries into the budget-exhausted set, by reason.",
 	}, []string{"reason"})
 
+	runsStoppedByBudgetTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "runs_stopped_by_budget_total",
+		Help:      "Runs stopped in flight by a budget ceiling, by reason.",
+	}, []string{"reason"})
+
 	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "self_review_iterations_total",
@@ -338,6 +345,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		dispatchRuleMatchTotal,
 		candidateHoldsTotal,
 		budgetExhaustionsTotal,
+		runsStoppedByBudgetTotal,
 		budgetExhaustedIssues,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
@@ -380,6 +388,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
 		candidateHoldsTotal:            candidateHoldsTotal,
 		budgetExhaustionsTotal:         budgetExhaustionsTotal,
+		runsStoppedByBudgetTotal:       runsStoppedByBudgetTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
 		selfReviewVerificationDuration: selfReviewVerificationDuration,
@@ -574,6 +583,12 @@ func (p *PromMetrics) IncCandidateHolds(reason string) {
 // per-issue budget exhausted set, by reason.
 func (p *PromMetrics) IncBudgetExhaustions(reason string) {
 	p.budgetExhaustionsTotal.WithLabelValues(reason).Inc()
+}
+
+// IncRunsStoppedByBudget increments the counter of runs stopped in
+// flight by a budget ceiling, by reason.
+func (p *PromMetrics) IncRunsStoppedByBudget(reason string) {
+	p.runsStoppedByBudgetTotal.WithLabelValues(reason).Inc()
 }
 
 // SetBudgetExhaustedIssues records how many issues are currently held out

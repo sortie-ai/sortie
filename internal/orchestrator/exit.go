@@ -390,6 +390,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	status := mapExitKindToStatus(workerResult.ExitKind)
 	runError := workerResult.Error
 
+	// The token ceiling's own cancel is reported as its own status,
+	// distinct from a stall, terminal-state, or shutdown cancel, so the
+	// durable record attributes the stop to the budget rather than to
+	// an ordinary cancellation.
+	if workerResult.ExitKind == WorkerExitCancelled && entry.TokenCeilingStopped {
+		status = "budget_stopped"
+		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, state.MaxTokens)
+	}
+
 	// A needs-a-person ending is reported as its own status only when the
 	// worker's own error, not a shutdown racing it, is what stopped the
 	// run. mapExitKindToStatus already reports a live-context cancel as

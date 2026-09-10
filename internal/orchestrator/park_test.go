@@ -25,7 +25,7 @@ func TestObserveParkedStateReleaseRule(t *testing.T) {
 		t.Parallel()
 
 		store := &stubStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		entry := &ParkedEntry{Identifier: "PROJ-1", Reason: parkReasonAgentBlocked, ParkedState: "In Progress"}
 		state.Parked["ISS-1"] = entry
 
@@ -46,7 +46,7 @@ func TestObserveParkedStateReleaseRule(t *testing.T) {
 		t.Parallel()
 
 		store := &stubStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		entry := &ParkedEntry{Identifier: "PROJ-2", Reason: parkReasonAgentBlocked}
 		state.Parked["ISS-2"] = entry
 
@@ -74,7 +74,7 @@ func TestObserveParkedLabelsReleaseRule(t *testing.T) {
 		t.Parallel()
 
 		store := &stubStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		entry := &ParkedEntry{Identifier: "PROJ-3", Reason: parkReasonAgentBlocked, Label: "needs-human"}
 		state.Parked["ISS-3"] = entry
 
@@ -95,7 +95,7 @@ func TestObserveParkedLabelsReleaseRule(t *testing.T) {
 		t.Parallel()
 
 		store := &stubStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		entry := &ParkedEntry{Identifier: "PROJ-4", Reason: parkReasonAgentBlocked, Label: "needs-human", LabelApplied: true}
 		state.Parked["ISS-4"] = entry
 
@@ -113,7 +113,7 @@ func TestObserveParkedLabelsReleaseRule(t *testing.T) {
 		t.Parallel()
 
 		store := &stubStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		entry := &ParkedEntry{Identifier: "PROJ-5", Reason: parkReasonAgentBlocked, Label: "needs-human"}
 		state.Parked["ISS-5"] = entry
 
@@ -139,7 +139,7 @@ func TestParkIssueFailedLabelWriteLeavesLabelUnconfirmed(t *testing.T) {
 	store := &stubStore{}
 	tracker := newRecordingHandoffTracker()
 	tracker.addLabelErr = errors.New("label service unavailable")
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	var logs bytes.Buffer
 
 	parkIssue(state, parkIssueParams{
@@ -189,7 +189,7 @@ func TestParkIssueSuccessfulLabelWriteDoesNotConfirmWithoutObservation(t *testin
 	store := &stubStore{}
 	tracker := newRecordingHandoffTracker() // AddLabel returns nil by default.
 
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 
 	parkIssue(state, parkIssueParams{
 		IssueID:        issueID,
@@ -285,7 +285,7 @@ func TestParkSurvivesRestart(t *testing.T) {
 		t.Fatalf("ListParkedIssues: %v", err)
 	}
 
-	fresh := NewState(1000, 4, nil, AgentTotals{})
+	fresh := NewState(1000, 4, 0, nil, AgentTotals{})
 	PopulateParked(fresh, rows, discardLogger())
 
 	if _, ok := fresh.Parked[issueID]; !ok {
@@ -312,7 +312,7 @@ func TestRefreshParkedIssuesNonCandidateStateRead(t *testing.T) {
 		t.Parallel()
 
 		const parkedID, candidateID = "MISS-1", "CAND-1"
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		state.Parked[parkedID] = &ParkedEntry{Identifier: "PROJ-MISS-1", Reason: parkReasonAgentBlocked, ParkedState: "In Progress"}
 
 		var fetchedIDs []string
@@ -350,7 +350,7 @@ func TestRefreshParkedIssuesNonCandidateStateRead(t *testing.T) {
 		t.Parallel()
 
 		const parkedID = "MISS-2"
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		state.Parked[parkedID] = &ParkedEntry{Identifier: "PROJ-MISS-2", Reason: parkReasonAgentBlocked, ParkedState: "In Progress"}
 		tracker := &mockTrackerAdapter{
 			fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
@@ -381,7 +381,7 @@ func TestRefreshParkedIssuesNonCandidateStateRead(t *testing.T) {
 		t.Parallel()
 
 		const parkedID = "MISS-3"
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		state.Parked[parkedID] = &ParkedEntry{Identifier: "PROJ-MISS-3", Reason: parkReasonAgentBlocked, ParkedState: "In Progress"}
 		tracker := &mockTrackerAdapter{
 			fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
@@ -409,7 +409,7 @@ func TestRefreshParkedIssuesNonCandidateStateRead(t *testing.T) {
 		t.Parallel()
 
 		const parkedID1, parkedID2 = "ERR-1", "ERR-2"
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		state.Parked[parkedID1] = &ParkedEntry{Identifier: "PROJ-ERR-1", Reason: parkReasonAgentBlocked, ParkedState: "In Progress"}
 		state.Parked[parkedID2] = &ParkedEntry{Identifier: "PROJ-ERR-2", Reason: parkReasonHandoffAbsence, ParkedState: "In Progress"}
 		tracker := &mockTrackerAdapter{

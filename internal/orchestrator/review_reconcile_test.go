@@ -216,7 +216,7 @@ func newReviewPendingEntry(issueID string, prNumber int) *PendingReaction {
 // stateWithReviewReaction creates a State with one review PendingReaction.
 func stateWithReviewReaction(t *testing.T, issueID string, prNumber int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindReview)
 	s.PendingReactions[rkey] = newReviewPendingEntry(issueID, prNumber)
 	s.Claimed[issueID] = struct{}{}
@@ -314,7 +314,7 @@ func TestReconcileReviewComments_NilAdapter(t *testing.T) {
 func TestReconcileReviewComments_NoPendingReviewEntries(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	// Add a CI reaction entry — should not be processed by review reconcile.
 	rkey := ReactionKey("ISS-R-CI", ReactionKindCI)
 	state.PendingReactions[rkey] = &PendingReaction{

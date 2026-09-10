@@ -24,7 +24,7 @@ func TestPopulateRetries(t *testing.T) {
 	t.Run("populates state maps from persisted entries", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		entries := []persistence.PendingRetry{
 			{
@@ -111,7 +111,7 @@ func TestPopulateRetries(t *testing.T) {
 	t.Run("empty entries is no-op", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		PopulateRetries(state, nil, nil)
 
 		if len(state.RetryAttempts) != 0 {
@@ -128,7 +128,7 @@ func TestPopulateRetries(t *testing.T) {
 func TestRetryTimerChBuffer_AccountsForPrePopulatedRetries(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	// Pre-populate 100 retry entries.
 	for i := range 100 {
@@ -155,7 +155,7 @@ func TestRetryTimerChBuffer_AccountsForPrePopulatedRetries(t *testing.T) {
 func TestRetryTimerChBuffer_DefaultWithoutRetries(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	o := NewOrchestrator(OrchestratorParams{
 		State:           state,
@@ -180,7 +180,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 	t.Run("delay-0 entries sent to channel", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id-1"] = &RetryEntry{
 			IssueID:          "id-1",
 			TimerHandle:      nil,
@@ -212,7 +212,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 	t.Run("future-delay entries get timer handle", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id-2"] = &RetryEntry{
 			IssueID:          "id-2",
 			TimerHandle:      nil,
@@ -248,7 +248,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 	t.Run("mixed entries handled correctly", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id-now"] = &RetryEntry{
 			IssueID:          "id-now",
 			TimerHandle:      nil,
@@ -297,7 +297,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 		existingTimer := time.NewTimer(time.Hour)
 		defer existingTimer.Stop()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.RetryAttempts["id-active"] = &RetryEntry{
 			IssueID:          "id-active",
 			TimerHandle:      existingTimer,
@@ -332,7 +332,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 	t.Run("empty RetryAttempts is no-op", func(t *testing.T) {
 		t.Parallel()
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		o := NewOrchestrator(OrchestratorParams{
 			State:           state,
@@ -351,13 +351,78 @@ func TestActivateReconstructedRetries(t *testing.T) {
 		default:
 		}
 	})
+
+	t.Run("a past-due retry fired before the first tick is bounded by the startup ceiling", func(t *testing.T) {
+		t.Parallel()
+
+		const startupMaxTokens = 5000
+		state := NewState(5000, 4, startupMaxTokens, nil, AgentTotals{})
+		state.RetryAttempts["id-startup"] = &RetryEntry{
+			IssueID:          "id-startup",
+			Identifier:       "id-startup-ident",
+			TimerHandle:      nil,
+			scheduledDelayMS: 0,
+		}
+		state.Claimed["id-startup"] = struct{}{}
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+		})
+
+		// activateReconstructedRetries runs during startup recovery,
+		// before handleTick has ever refreshed state.MaxTokens from
+		// config; only the value NewState seeded is available to bound
+		// this dispatch.
+		o.activateReconstructedRetries()
+
+		var issueID string
+		select {
+		case issueID = <-o.retryTimerCh:
+		default:
+			t.Fatal("retryTimerCh is empty, expected the delay-0 entry to fire before the first tick")
+		}
+
+		store := &mockRetryStore{tokenSum: 1200}
+		tracker := &mockRetryTracker{fetchedIssue: candidateIssue("id-startup", "id-startup-ident", "To Do")}
+		params := defaultRetryParams(t, store, tracker)
+		// The retry lane's own budget gate stays disabled here; only the
+		// freeze helper, reading state.MaxTokens, must bound this run.
+		params.MaxTokens = 0
+
+		workerCalled := make(chan struct{}, 1)
+		params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+			return func(_ context.Context, _ domain.Issue, _ *int) { workerCalled <- struct{}{} }
+		}
+
+		HandleRetryTimer(state, issueID, params)
+
+		select {
+		case <-workerCalled:
+		case <-time.After(time.Second):
+			t.Fatal("worker goroutine did not execute within 1 second")
+		}
+
+		entry, ok := state.Running["id-startup"]
+		if !ok {
+			t.Fatal("Running[id-startup] missing after dispatch")
+		}
+		if entry.IssueTokensCompleted != 1200 {
+			t.Errorf("Running[id-startup].IssueTokensCompleted = %d, want %d (frozen from the NewState-seeded ceiling, not a post-tick refresh)",
+				entry.IssueTokensCompleted, 1200)
+		}
+	})
 }
 
 func TestPopulateRetries_SessionID(t *testing.T) {
 	t.Parallel()
 
 	sessID := "sess-abc"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	entries := []persistence.PendingRetry{
 		{
 			Entry: persistence.RetryEntry{
@@ -385,7 +450,7 @@ func TestPopulateRetries_SessionID(t *testing.T) {
 func TestPopulateRetries_SessionID_Nil(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	entries := []persistence.PendingRetry{
 		{
 			Entry: persistence.RetryEntry{
@@ -630,7 +695,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-1", "PROJ-1", "owner/repo#42", 2)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -695,7 +760,7 @@ func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-2", "PROJ-2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -779,7 +844,7 @@ func TestRecoverPendingReactions_CIMissingPRIdentity_NoPendingReaction(t *testin
 			})
 
 			tracker := &recoveryTrackerStub{states: map[string]string{"ISS-CINOPR": "In Review"}}
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			run := freshRun("ISS-CINOPR", "PROJ-CINOPR", "", 1)
 			params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -802,7 +867,7 @@ func TestRecoverPendingReactions_SkipsWhenHandoffStateEmpty(t *testing.T) {
 
 	wsRoot := t.TempDir()
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-3": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-3", "PROJ-3", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.HandoffState = ""
@@ -828,7 +893,7 @@ func TestRecoverPendingReactions_SkipsWhenProvidersNil(t *testing.T) {
 
 	wsRoot := t.TempDir()
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-4": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-4", "PROJ-4", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.SCMAdapter = nil
@@ -861,7 +926,7 @@ func TestRecoverPendingReactions_SkipsNonHandoffState(t *testing.T) {
 
 	// Tracker returns "In Progress" — not the handoff state "In Review".
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-5": "In Progress"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-5", "PROJ-5", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -891,7 +956,7 @@ func TestRecoverPendingReactions_SkipsTerminalState(t *testing.T) {
 
 	// Tracker returns "Done" — a configured terminal state.
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-6": "Done"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-6", "PROJ-6", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -922,7 +987,7 @@ func TestRecoverPendingReactions_SkipsClaimedOrRetryingIssue(t *testing.T) {
 		"ISS-RETRY":   "In Review",
 		"ISS-RUNNING": "In Review",
 	}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	// Seed claimed, retry, and running.
 	state.Claimed["ISS-CLAIMED"] = struct{}{}
 	state.RetryAttempts["ISS-RETRY"] = &RetryEntry{IssueID: "ISS-RETRY", Identifier: "PROJ-8"}
@@ -975,7 +1040,7 @@ func TestRecoverPendingReactions_LimitsTrackerFetchCandidates(t *testing.T) {
 	}
 
 	tracker := &recoveryTrackerStub{states: stateMap}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	result, err := RecoverPendingReactions(context.Background(), state, runs, params)
@@ -1027,7 +1092,7 @@ func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
 		"ISS-MALFORMED":       "In Review",
 		"ISS-STALE-COMPLETED": "In Review",
 	}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	runs := []persistence.RunHistory{
 		freshRun("ISS-STALE", "PROJ-STALE", "", 1),
 		freshRun("ISS-MALFORMED", "PROJ-MALFORMED", "", 1),
@@ -1060,7 +1125,7 @@ func TestRecoverPendingReactions_DoesNotOverwriteExistingReview(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-EXISTING": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	// Pre-populate a pending reaction — recovery must not overwrite it.
 	existing := &PendingReaction{
 		IssueID: "ISS-EXISTING", Kind: ReactionKindReview,
@@ -1103,7 +1168,7 @@ func TestRecoverPendingReactions_ProviderFetchesNotCalled(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-NOFETCH": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-NOFETCH", "PROJ-NOFETCH", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	// Use panic adapters to assert no fetch methods are called during recovery.
@@ -1124,7 +1189,7 @@ func TestRecoverPendingReactions_InvalidSCMMetadataSkips(t *testing.T) {
 	// No .sortie/scm.json written — ReadSCMMetadata returns zero value.
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-NOMETA": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-NOMETA", "PROJ-NOMETA", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -1155,7 +1220,7 @@ func TestRecoverPendingReactions_TrackerFetchError(t *testing.T) {
 
 	fetchErr := errors.New("tracker unavailable")
 	tracker := &recoveryTrackerStub{err: fetchErr}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-FETCHERR", "PROJ-FETCHERR", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -1188,7 +1253,7 @@ func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) 
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-DEDUP": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-DEDUP", "PROJ-DEDUP", "owner/repo#7", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -1242,7 +1307,7 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-DISPATCH": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-DISPATCH", "PROJ-DISPATCH", "owner/repo#11", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
@@ -1312,7 +1377,7 @@ func TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured(t *testing.
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-AM1", "PROJ-AM1", "corp/api#77", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = true
@@ -1367,7 +1432,7 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-AM2", "PROJ-AM2", "corp/api#88", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = false // not configured
@@ -1402,7 +1467,7 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata(t *testing.
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM3": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-AM3", "PROJ-AM3", "no-pr", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.AutoMergeReactionConfigured = true
@@ -1442,7 +1507,7 @@ func TestRecoverPendingReactions_RecreatesBotReviewAfterRestart(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BR1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BR1", "PROJ-BR1", "botowner/botrepo#55", 3)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
@@ -1511,7 +1576,7 @@ func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BR2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BR2", "PROJ-BR2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = false // not configured
@@ -1546,7 +1611,7 @@ func TestRecoverPendingReactions_BotReviewMissingPRNumber(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNPR": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BRNPR", "PROJ-BRNPR", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
@@ -1581,7 +1646,7 @@ func TestRecoverPendingReactions_BotReviewMissingOwner(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNOWN": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BRNOWN", "PROJ-BRNOWN", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
@@ -1616,7 +1681,7 @@ func TestRecoverPendingReactions_BotReviewMissingRepo(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNREP": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BRNREP", "PROJ-BRNREP", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
@@ -1651,7 +1716,7 @@ func TestRecoverPendingReactions_BotReviewMissingBranch(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNBRA": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-BRNBRA", "PROJ-BRNBRA", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.BotReviewReactionConfigured = true
@@ -1686,7 +1751,7 @@ func TestRecoverPendingReactions_MergeConflict(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MC1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-MC1", "PROJ-MC1", "mcowner/mcrepo#55", 3)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeConflictReactionConfigured = true
@@ -1752,7 +1817,7 @@ func TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse(t *testi
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MC2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-MC2", "PROJ-MC2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeConflictReactionConfigured = false // not configured
@@ -1797,7 +1862,7 @@ func TestRecoverPendingReactions_LabelReview(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LR1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-LR1", "PROJ-LR1", "lrowner/lrrepo#55", 2)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelReviewReactionConfigured = true
@@ -1859,7 +1924,7 @@ func TestRecoverPendingReactions_LabelReviewNotRecoveredWhenFlagFalse(t *testing
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LR2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-LR2", "PROJ-LR2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelReviewReactionConfigured = false
@@ -1918,7 +1983,7 @@ func TestRecoverPendingReactions_LabelReviewMissingPRMetadata(t *testing.T) {
 			writeRecoverySCM(t, wsRoot, tt.identifier, tt.meta)
 
 			tracker := &recoveryTrackerStub{states: map[string]string{tt.issueID: "In Review"}}
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			run := freshRun(tt.issueID, tt.identifier, "", 1)
 			params := defaultRecoveryParams(wsRoot, tracker)
 			params.LabelReviewReactionConfigured = true
@@ -1952,7 +2017,7 @@ func TestRecoverPendingReactions_LabelFix(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LF1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-LF1", "PROJ-LF1", "lfowner/lfrepo#66", 2)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelFixReactionConfigured = true
@@ -2017,7 +2082,7 @@ func TestRecoverPendingReactions_LabelFixNotRecoveredWhenFlagFalse(t *testing.T)
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LF2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-LF2", "PROJ-LF2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.LabelFixReactionConfigured = false
@@ -2085,7 +2150,7 @@ func TestRecoverPendingReactions_LabelFixMissingPRMetadata(t *testing.T) {
 			writeRecoverySCM(t, wsRoot, tt.identifier, tt.meta)
 
 			tracker := &recoveryTrackerStub{states: map[string]string{tt.issueID: "In Review"}}
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			run := freshRun(tt.issueID, tt.identifier, "", 1)
 			params := defaultRecoveryParams(wsRoot, tracker)
 			params.LabelFixReactionConfigured = true
@@ -2124,7 +2189,7 @@ func TestRecoverPendingReactions_MergeCompletion(t *testing.T) {
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC1": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-MGC1", "PROJ-MGC1", "mgcowner/mgcrepo#66", 3)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeCompletionReactionConfigured = true
@@ -2186,7 +2251,7 @@ func TestRecoverPendingReactions_MergeCompletionNotRecoveredWhenFlagFalse(t *tes
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC2": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-MGC2", "PROJ-MGC2", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.MergeCompletionReactionConfigured = false
@@ -2224,7 +2289,7 @@ func TestRecoverPendingReactions_MergeCompletionSkipsWhenHandoffStateUnset(t *te
 	})
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC3": "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-MGC3", "PROJ-MGC3", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 	params.HandoffState = ""

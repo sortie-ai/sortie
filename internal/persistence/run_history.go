@@ -30,7 +30,7 @@ type RunHistory struct {
 	Workspace      string  // Workspace path used for this run.
 	StartedAt      string  // ISO-8601 timestamp of run start.
 	CompletedAt    string  // ISO-8601 timestamp of run completion.
-	Status         string  // Terminal status: "succeeded", "failed", "cancelled", "ci_failed", or "needs_person".
+	Status         string  // Terminal status: "succeeded", "failed", "cancelled", "ci_failed", "needs_person", or "budget_stopped".
 	Error          *string // Error message if failed; nil on success.
 	WorkflowFile   string  // Base filename of the WORKFLOW.md file; empty for pre-migration rows.
 	TurnsCompleted int     // Number of coding turns completed in this run.
@@ -449,30 +449,39 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 }
 
 // IssueTokenUsage is the per-issue token spend read by the token
-// ceiling and by the cost_budget tool: a summed total, a row count,
-// and a count of rows whose spend is unknown rather than zero.
+// ceiling and by the cost_budget tool: a summed total, a row count, a
+// count of rows whose spend is unknown rather than zero, and a count
+// of rows recording a session the in-flight token ceiling stopped
+// while it was running.
 type IssueTokenUsage struct {
 	TotalTokens        int64
 	Sessions           int
 	UnmeasuredSessions int
+
+	// StoppedInFlight counts the issue's rows recording a session the
+	// token ceiling stopped while it was running.
+	StoppedInFlight int
 }
 
-// TokenUsageByIssue returns the summed total_tokens, the row count, and
-// the count of unmeasured rows across all run_history rows for the
-// issue. Returns the zero [IssueTokenUsage] and a nil error when the
-// issue has no rows. The summed total is exact even though an
-// unmeasured row's token columns are always zero.
+// TokenUsageByIssue returns the summed total_tokens, the row count, the
+// count of unmeasured rows, and the count of rows the token ceiling
+// stopped in flight, across all run_history rows for the issue.
+// Returns the zero [IssueTokenUsage] and a nil error when the issue has
+// no rows. The summed total is exact even though an unmeasured row's
+// token columns are always zero.
 func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTokenUsage, error) {
 	var usage IssueTokenUsage
 	row := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END)
+		`SELECT COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END),
+		SUM(CASE WHEN status = 'budget_stopped' THEN 1 ELSE 0 END)
 		FROM run_history WHERE issue_id = ?`, issueID,
 	)
-	var unmeasured sql.NullInt64
-	if err := row.Scan(&usage.TotalTokens, &usage.Sessions, &unmeasured); err != nil {
+	var unmeasured, stoppedInFlight sql.NullInt64
+	if err := row.Scan(&usage.TotalTokens, &usage.Sessions, &unmeasured, &stoppedInFlight); err != nil {
 		return IssueTokenUsage{}, fmt.Errorf("token usage by issue %q: %w", issueID, err)
 	}
 	usage.UnmeasuredSessions = int(unmeasured.Int64)
+	usage.StoppedInFlight = int(stoppedInFlight.Int64)
 	return usage, nil
 }
 
@@ -539,7 +548,7 @@ func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers
 // QueryTokenBudgetUsage returns one [IssueTokenUsage] per candidate in
 // candidateIDs that has at least one run_history row. A candidate with
 // no rows is absent from the returned map; the caller reads that as
-// zero spend and zero unmeasured sessions. An empty candidateIDs
+// zero on every count the shape carries. An empty candidateIDs
 // returns an empty non-nil map without querying. The threshold
 // comparison against a token ceiling is the caller's responsibility.
 func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]IssueTokenUsage, error) {
@@ -557,7 +566,8 @@ func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string
 	}
 
 	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(candidateIDs); no user data in format string
-		`SELECT issue_id, COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END)
+		`SELECT issue_id, COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END),
+		SUM(CASE WHEN status = 'budget_stopped' THEN 1 ELSE 0 END)
 		FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id`,
 		placeholders,
 	)
@@ -571,11 +581,12 @@ func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string
 	for rows.Next() {
 		var issueID string
 		var issueUsage IssueTokenUsage
-		var unmeasured sql.NullInt64
-		if err := rows.Scan(&issueID, &issueUsage.TotalTokens, &issueUsage.Sessions, &unmeasured); err != nil {
+		var unmeasured, stoppedInFlight sql.NullInt64
+		if err := rows.Scan(&issueID, &issueUsage.TotalTokens, &issueUsage.Sessions, &unmeasured, &stoppedInFlight); err != nil {
 			return nil, fmt.Errorf("scan token budget usage: %w", err)
 		}
 		issueUsage.UnmeasuredSessions = int(unmeasured.Int64)
+		issueUsage.StoppedInFlight = int(stoppedInFlight.Int64)
 		usage[issueID] = issueUsage
 	}
 	if err := rows.Err(); err != nil {

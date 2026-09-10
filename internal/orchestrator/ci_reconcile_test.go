@@ -304,7 +304,7 @@ func defaultCIFeedback() config.CIFeedbackConfig {
 // stateWithPendingReaction creates a State with one CI PendingReaction entry.
 func stateWithPendingReaction(t *testing.T, issueID, branch string, attempt int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindCI)
 	s.PendingReactions[rkey] = newPendingEntry(issueID, issueID+"-ident", branch, attempt)
 	s.Claimed[issueID] = struct{}{}
@@ -1413,7 +1413,7 @@ func TestReconcileCIStatus_BackoffUsesStatePollInterval(t *testing.T) {
 	entry := newPendingEntry("ISS-PPI-1", "ISS-PPI-1-ident", "feature/ppi", 1)
 	entry.PendingAttempts = 1
 
-	state := NewState(30000, 4, nil, AgentTotals{})
+	state := NewState(30000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions[ReactionKey("ISS-PPI-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-PPI-1"] = struct{}{}
 
@@ -1459,7 +1459,7 @@ func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
 	entry.PendingAttempts = 2
 	entry.PendingRetryAt = futureRetry
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions[ReactionKey("ISS-SKIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-SKIP-1"] = struct{}{}
 
@@ -1503,7 +1503,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
 	entry := newPendingEntry("ISS-BIP-1", "ISS-BIP-1-ident", "feature/wip", 1)
 	entry.PendingAttempts = 2
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions[ReactionKey("ISS-BIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIP-1"] = struct{}{}
 
@@ -1543,7 +1543,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 	entry := newPendingEntry("ISS-BIE-1", "ISS-BIE-1-ident", "feature/err", 1)
 	entry.PendingAttempts = 1
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions[ReactionKey("ISS-BIE-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIE-1"] = struct{}{}
 
@@ -1592,7 +1592,7 @@ func TestReconcileCIStatus_WatchWindow_MeasuredFromHeadRecordedAt(t *testing.T) 
 		entry.HeadRecordedAt = ciBaseTime
 		entry.CreatedAt = ciBaseTime.Add(-10 * 24 * time.Hour) // far older than HeadRecordedAt
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
 		state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 1
 		state.Claimed[issueID] = struct{}{}
@@ -1626,7 +1626,7 @@ func TestReconcileCIStatus_WatchWindow_MeasuredFromHeadRecordedAt(t *testing.T) 
 		entry.HeadRecordedAt = ciBaseTime
 		entry.CreatedAt = ciBaseTime.Add(-10 * 24 * time.Hour)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
 		state.Claimed[issueID] = struct{}{}
 
@@ -1658,7 +1658,7 @@ func TestReconcileCIStatus_WatchWindow_ZeroNeverDrops(t *testing.T) {
 	entry := newPendingEntry(issueID, issueID+"-ident", "main", 1)
 	entry.CreatedAt = ciBaseTime.Add(-365 * 24 * time.Hour)
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.PendingReactions[ReactionKey(issueID, ReactionKindCI)] = entry
 	state.Claimed[issueID] = struct{}{}
 

@@ -400,7 +400,7 @@ func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state := orchestrator.NewState(5000, 10, nil, orchestrator.AgentTotals{})
+			state := orchestrator.NewState(5000, 10, 0, nil, orchestrator.AgentTotals{})
 			state.Running["issue-1"] = &orchestrator.RunningEntry{
 				Identifier:       "MT-RBM",
 				Issue:            domain.Issue{ID: "issue-1", State: "In Progress"},

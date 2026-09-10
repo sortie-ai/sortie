@@ -284,6 +284,22 @@ type RunningEntry struct {
 	// of the most recent turn-terminal event. Zero until the first
 	// turn ends. Owned exclusively by the single-writer event loop.
 	APIRequestCountAtLastTurnEnd int
+
+	// IssueTokensCompleted is the issue's summed run_history total_tokens
+	// across completed sessions, read at dispatch and replaced by a
+	// confirming read. 0 when the dispatch read failed. Owned
+	// exclusively by the single-writer event loop.
+	IssueTokensCompleted int64
+
+	// TokenCeilingStopped latches once the in-flight token ceiling has
+	// stopped this run. Owned exclusively by the single-writer event
+	// loop.
+	TokenCeilingStopped bool
+
+	// TokenCeilingQueryWarned latches once the in-flight token ceiling's
+	// confirming read has failed for this run and been reported. Owned
+	// exclusively by the single-writer event loop.
+	TokenCeilingQueryWarned bool
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -843,6 +859,7 @@ type BudgetExhaustedEntry struct {
 	UsedTokens         *int64 // nil when the token ceiling was not evaluated for this issue
 	BudgetTokens       int64  // configured agent.max_tokens; 0 means unlimited
 	UnmeasuredSessions *int   // nil exactly when UsedTokens is nil; else runs whose spend is unknown
+	StoppedInFlight    *int   // nil exactly when UsedTokens is nil; else sessions the token ceiling stopped mid-run
 	ExhaustedAt        time.Time
 }
 
@@ -908,6 +925,12 @@ type State struct {
 	// normalized to lowercase. An absent key means the state falls back to
 	// the global limit.
 	MaxConcurrentByState map[string]int
+
+	// MaxTokens mirrors config.Agent.MaxTokens for the in-flight token
+	// ceiling. Seeded by NewState and refreshed on every poll tick
+	// beside PollIntervalMS and MaxConcurrentAgents. 0 means unlimited.
+	// Written only on the single-writer event-loop goroutine.
+	MaxTokens int
 
 	// Running maps issue ID to the live session entry for that issue.
 	// Only the orchestrator's event loop may mutate this map.
@@ -1079,13 +1102,14 @@ func ContinuationFromContext(ctx context.Context) map[string]any {
 // SQLite recovery, pass them in; otherwise pass a zero-value AgentTotals.
 // Keys in maxConcurrentByState must be pre-normalized to lowercase by the
 // caller; the config layer does this during parsing.
-func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[string]int, totals AgentTotals) *State {
+func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentByState map[string]int, totals AgentTotals) *State {
 	if maxConcurrentByState == nil {
 		maxConcurrentByState = make(map[string]int)
 	}
 	return &State{
 		PollIntervalMS:        pollIntervalMS,
 		MaxConcurrentAgents:   maxConcurrentAgents,
+		MaxTokens:             maxTokens,
 		MaxConcurrentByState:  maxConcurrentByState,
 		Running:               make(map[string]*RunningEntry),
 		Claimed:               make(map[string]struct{}),

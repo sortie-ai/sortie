@@ -37,6 +37,7 @@ type mockRetryStore struct {
 	tokenSum                 int64
 	tokenSessionCount        int
 	tokenUnmeasured          int
+	tokenStoppedInFlight     int
 	sumTotalTokensByIssueErr error
 	summedTokenIssueIDs      []string
 
@@ -91,6 +92,7 @@ func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (p
 		TotalTokens:        m.tokenSum,
 		Sessions:           m.tokenSessionCount,
 		UnmeasuredSessions: m.tokenUnmeasured,
+		StoppedInFlight:    m.tokenStoppedInFlight,
 	}, m.sumTotalTokensByIssueErr
 }
 
@@ -210,7 +212,7 @@ func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) e
 // issue. The retry entry has the specified attempt number.
 func retryState(t *testing.T, id, identifier string, attempt int) *State {
 	t.Helper()
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
 		Identifier: identifier,
@@ -278,7 +280,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			state: func(t *testing.T, _ string) *State {
 				t.Helper()
 				// No retry entry for the issue — simulates race/cancelled timer.
-				return NewState(5000, 4, nil, AgentTotals{})
+				return NewState(5000, 4, 0, nil, AgentTotals{})
 			},
 			store:   func() *mockRetryStore { return &mockRetryStore{} },
 			tracker: func(_ string) *mockRetryTracker { return &mockRetryTracker{} },
@@ -300,7 +302,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			issueID: "ISS-5",
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
-				state := NewState(5000, 4, nil, AgentTotals{})
+				state := NewState(5000, 4, 0, nil, AgentTotals{})
 				// Simulate a replaced entry: scheduledAt is recent and
 				// scheduledDelayMS hasn't elapsed yet (monotonic stale check).
 				state.RetryAttempts[id] = &RetryEntry{
@@ -344,7 +346,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			issueID: "ISS-7",
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
-				state := NewState(5000, 4, nil, AgentTotals{})
+				state := NewState(5000, 4, 0, nil, AgentTotals{})
 				// Simulate startup recovery: zero scheduledAt, DueAtMS in
 				// the future. Old wall-clock code would have treated this as
 				// stale and returned early. New code proceeds normally.
@@ -2202,7 +2204,7 @@ func TestHandleRetryTimer_ContinuationContextPropagated(t *testing.T) {
 		},
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2247,7 +2249,7 @@ func TestHandleRetryTimer_NilContinuationContext_NotPropagated(t *testing.T) {
 	// must not have one set either (field stays nil; no accidental injection).
 	const id = "ISS-NO-CI"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2282,7 +2284,7 @@ func TestHandleRetryTimer_ContinuationDispatch_MarksReactionDispatched(t *testin
 	// after successful dispatch, recording the correct issue ID and kind.
 	const id = "ISS-CI-1"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2322,7 +2324,7 @@ func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
 	// call MarkReactionDispatched even when dispatch succeeds.
 	const id = "ISS-ERR-1"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -2356,7 +2358,7 @@ func TestHandleRetryTimer_ReschedulePreservesReactionKind(t *testing.T) {
 	// eventual dispatch can call MarkReactionDispatched.
 	const id = "ISS-CI-2"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:      id,
@@ -2400,7 +2402,7 @@ func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 	// rolled back — the issue remains in Running and the error is non-fatal.
 	const id = "ISS-CI-3"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2551,7 +2553,7 @@ func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
 	}
 
 	// No claim set — simulates post-handoff state.
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
 		Identifier:          id,
@@ -2612,7 +2614,7 @@ func TestHandleRetryTimer_ReactionCIInHandoffStateDispatches(t *testing.T) {
 		"ci_failure": map[string]any{"status": "failing"},
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
 		Identifier:          id,
@@ -2657,7 +2659,7 @@ func TestHandleRetryTimer_NonReactionInHandoffStateReleasesClaim(t *testing.T) {
 
 	const id = "HANDOFF-NONREACTION"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -2700,7 +2702,7 @@ func TestHandleRetryTimer_ReactionInUnrelatedStateReschedules(t *testing.T) {
 		"review_comments": map[string]any{"count": 1},
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2763,7 +2765,7 @@ func TestHandleRetryTimer_NonReactionInUnrelatedStateReleasesClaim(t *testing.T)
 
 	const id = "UNRELATED-NONREACTION"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -2803,7 +2805,7 @@ func TestHandleRetryTimer_ReactionInTerminalStateReleasesClaim(t *testing.T) {
 
 	const id = "TERMINAL-REACTION"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:      id,
@@ -2848,7 +2850,7 @@ func TestHandleRetryTimer_ReactionHandoffNoSlotsPreservesContext(t *testing.T) {
 	}
 
 	// MaxConcurrentAgents = 1, one other issue already running → slots exhausted.
-	state := NewState(5000, 1, nil, AgentTotals{})
+	state := NewState(5000, 1, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.Running["OTHER-1"] = &RunningEntry{
 		Identifier: "OTHER-1",
@@ -2923,7 +2925,7 @@ func TestHandleRetryTimer_ReactionHandoffPerStateCapExhaustedPreservesContext(t 
 	// Per-state cap for "ready for review" = 1. One other issue running in that state.
 	// Global capacity = 5 (plenty available).
 	perStateMap := map[string]int{"ready for review": 1}
-	state := NewState(5000, 5, perStateMap, AgentTotals{})
+	state := NewState(5000, 5, 0, perStateMap, AgentTotals{})
 	state.Running["OTHER-RFR"] = &RunningEntry{
 		Identifier: "OTHER-RFR",
 		Issue:      candidateIssue("OTHER-RFR", "OTHER-RFR", "Ready For Review"),
@@ -2980,7 +2982,7 @@ func TestHandleRetryTimer_ReactionActiveStateBlockerReschedules(t *testing.T) {
 		"review_comments": map[string]any{"count": 1},
 	}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -3041,7 +3043,7 @@ func TestHandleRetryTimer_NonReactionActiveStateBlockerReleasesClaim(t *testing.
 
 	const id = "ACTIVE-BLOCKER-NONREACTION"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -3083,7 +3085,7 @@ func TestHandleRetryTimer_UnknownReactionKindInHandoffStateReleasesClaim(t *test
 
 	const id = "HANDOFF-UNKNOWN"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:      id,
@@ -3132,7 +3134,7 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 	// issue. Guards against nil-map panics or early-return guards that
 	// incorrectly require a prior claim before dispatching a handoff-state
 	// reaction retry.
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:      id,
 		Identifier:   id,
@@ -3172,7 +3174,7 @@ func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
 	const wantRuleName = "bug-rule"
 	const wantTemplateID = "/abs/prompts/bug.md"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
 		Identifier: id,
@@ -3239,7 +3241,7 @@ func TestHandleRetryTimer_ReschedulePreservesFrozenFields(t *testing.T) {
 	const wantTemplateID = "/abs/prompts/feature.md"
 
 	// Fill all slots so dispatch is blocked and the retry is rescheduled.
-	state := NewState(1, 1, nil, AgentTotals{})
+	state := NewState(1, 1, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
 		Identifier: id,
@@ -3290,7 +3292,7 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	const wantTemplateID = "/abs/prompts/docs.md"
 
 	// Fill all slots to force reschedule.
-	state := NewState(1, 1, nil, AgentTotals{})
+	state := NewState(1, 1, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
 		Identifier: id,
@@ -3338,7 +3340,7 @@ func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
 	const id = "ISS-BADKIND"
 	const frozenKind = "unknown-agent"
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
 		Identifier: id,
@@ -3383,7 +3385,7 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		t.Parallel()
 
 		const id = "DWELL-UNRELATED-1"
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Claimed[id] = struct{}{}
 		state.RetryAttempts[id] = &RetryEntry{
 			IssueID:      id,
@@ -3423,7 +3425,7 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		t.Parallel()
 
 		const id = "DWELL-UNRELATED-2"
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Claimed[id] = struct{}{}
 		staleSince := time.Now().Add(-(pausedRetryMaxDwell + time.Minute)).UnixMilli()
 		state.RetryAttempts[id] = &RetryEntry{
@@ -3481,7 +3483,7 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		t.Parallel()
 
 		const id = "DWELL-BLOCKED-1"
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Claimed[id] = struct{}{}
 		state.RetryAttempts[id] = &RetryEntry{
 			IssueID:      id,
@@ -3521,7 +3523,7 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		t.Parallel()
 
 		const id = "DWELL-BLOCKED-2"
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Claimed[id] = struct{}{}
 		staleSince := time.Now().Add(-(pausedRetryMaxDwell + time.Minute)).UnixMilli()
 		state.RetryAttempts[id] = &RetryEntry{
@@ -3571,7 +3573,7 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		t.Parallel()
 
 		const id = "DWELL-RESET"
-		state := NewState(5000, 1, nil, AgentTotals{})
+		state := NewState(5000, 1, 0, nil, AgentTotals{})
 		state.Claimed[id] = struct{}{}
 		state.RetryAttempts[id] = &RetryEntry{
 			IssueID:      id,

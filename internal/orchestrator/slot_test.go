@@ -143,7 +143,7 @@ func TestHasAvailableSlots(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := NewState(1000, tt.globalMax, tt.maxConcurrentByState, AgentTotals{})
+			s := NewState(1000, tt.globalMax, 0, tt.maxConcurrentByState, AgentTotals{})
 			s.Running = makeRunningFromStates(tt.runningStates)
 
 			got := HasAvailableSlots(s, tt.queryState)

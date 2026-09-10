@@ -175,6 +175,13 @@ func buildBudgetHoldComment(entry *BudgetExhaustedEntry) string {
 	if entry.BudgetSessions > 0 {
 		lines = append(lines, fmt.Sprintf("Sessions: %d of %d", entry.UsedSessions, entry.BudgetSessions))
 	}
+	if entry.StoppedInFlight != nil && *entry.StoppedInFlight > 0 {
+		word := "session"
+		if *entry.StoppedInFlight != 1 {
+			word = "sessions"
+		}
+		lines = append(lines, fmt.Sprintf("Stopped in flight: %d %s", *entry.StoppedInFlight, word))
+	}
 
 	if hasSetting {
 		lines = append(lines, fmt.Sprintf("Raising %s raises this ceiling.", setting))

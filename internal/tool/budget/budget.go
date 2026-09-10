@@ -1,7 +1,7 @@
 // Package budget implements [domain.AgentTool] for the cost_budget tool.
 // It reports cumulative per-issue token spend and the remaining token
-// budget so agents can self-regulate before the orchestrator's hard
-// token ceiling blocks a re-dispatch.
+// budget so agents can self-regulate before the ceiling stops the run
+// in flight or blocks a re-dispatch.
 package budget
 
 import (
@@ -96,9 +96,9 @@ func (t *BudgetTool) Name() string { return "cost_budget" }
 func (t *BudgetTool) Description() string {
 	return "Returns cumulative token spend for the current issue and the remaining token " +
 		"budget. Use this to decide whether to skip an expensive step, return partial work, " +
-		"or hand off before the orchestrator blocks further sessions on the token ceiling. " +
-		"A false used_tokens_complete means some sessions could not be measured, so used_tokens " +
-		"is a lower bound."
+		"or hand off before the token ceiling stops this run in flight or blocks a further " +
+		"session. A false used_tokens_complete means some sessions could not be measured, so " +
+		"used_tokens is a lower bound."
 }
 
 // InputSchema returns the JSON Schema for cost_budget input.

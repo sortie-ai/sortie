@@ -41,6 +41,7 @@ type spyMetrics struct {
 	trackerComments       []trackerCommentCall
 	candidateHolds        []string
 	budgetExhaustions     []string
+	runsStoppedByBudget   []string
 	budgetExhaustedIssues []budgetExhaustedIssuesCall
 }
 
@@ -241,6 +242,12 @@ func (s *spyMetrics) IncBudgetExhaustions(reason string) {
 	s.budgetExhaustions = append(s.budgetExhaustions, reason)
 }
 
+func (s *spyMetrics) IncRunsStoppedByBudget(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runsStoppedByBudget = append(s.runsStoppedByBudget, reason)
+}
+
 func (s *spyMetrics) SetBudgetExhaustedIssues(reason string, count int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -300,7 +307,7 @@ func TestActiveElapsedSeconds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			state := NewState(5000, 4, nil, AgentTotals{})
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
 			state.Running = tt.entries
 
 			got := ActiveElapsedSeconds(state, now)
@@ -317,7 +324,7 @@ func TestUpdateGauges(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	spy := &spyMetrics{}
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["A-1"] = &RunningEntry{StartedAt: now.Add(-30 * time.Second)}
 	state.Running["A-2"] = &RunningEntry{StartedAt: now.Add(-60 * time.Second)}
 	state.RetryAttempts["B-1"] = &RetryEntry{IssueID: "B-1"}
@@ -360,7 +367,7 @@ func TestUpdateGauges_SSH(t *testing.T) {
 	hp.AcquireHost("ISS-2", "host-a")
 	hp.AcquireHost("ISS-3", "host-b")
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	o := &Orchestrator{
 		state:    state,
@@ -397,7 +404,7 @@ func TestUpdateGauges_BudgetLevels(t *testing.T) {
 
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 		spy := &spyMetrics{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.BudgetExhausted["iss-1"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 		state.BudgetExhausted["iss-2"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 		state.BudgetExhausted["iss-3"] = &BudgetExhaustedEntry{Reason: budgetReasonToken}
@@ -426,7 +433,7 @@ func TestUpdateGauges_BudgetLevels(t *testing.T) {
 
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 		spy := &spyMetrics{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		o := &Orchestrator{
 			state:    state,
@@ -484,7 +491,7 @@ func TestHandleTick_BudgetGaugeRecompute(t *testing.T) {
 		issue := domain.Issue{ID: "iss-gauge-clear", Identifier: "PROJ-GAUGE-CLEAR", Title: "title", State: "To Do"}
 		wm := budgetTickConfig(3)
 		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
-		state := NewState(60000, 10, nil, AgentTotals{})
+		state := NewState(60000, 10, 0, nil, AgentTotals{})
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -511,7 +518,7 @@ func TestHandleTick_BudgetGaugeRecompute(t *testing.T) {
 		issue := domain.Issue{ID: "iss-gauge-leave", Identifier: "PROJ-GAUGE-LEAVE", Title: "title", State: "To Do"}
 		wm := budgetTickConfig(3)
 		store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 5}}
-		state := NewState(60000, 10, nil, AgentTotals{})
+		state := NewState(60000, 10, 0, nil, AgentTotals{})
 		present := true
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
@@ -843,7 +850,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 
 		spy := &spyMetrics{}
 		store := &mockRetryStore{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		issueID := "RT-1"
 		state.Claimed[issueID] = struct{}{}
@@ -891,7 +898,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 
 		spy := &spyMetrics{}
 		store := &mockRetryStore{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		issueID := "RT-2"
 		state.Claimed[issueID] = struct{}{}
@@ -921,7 +928,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 
 		spy := &spyMetrics{}
 		store := &mockRetryStore{}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		issueID := "RT-3"
 		state.Claimed[issueID] = struct{}{}
@@ -954,7 +961,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 		spy := &spyMetrics{}
 		store := &mockRetryStore{}
 		// Max 1 concurrent, with 1 already running.
-		state := NewState(5000, 1, nil, AgentTotals{})
+		state := NewState(5000, 1, 0, nil, AgentTotals{})
 		state.Running["OTHER"] = &RunningEntry{Issue: domain.Issue{State: "To Do"}}
 
 		issueID := "RT-4"
@@ -995,7 +1002,7 @@ func TestReconcileMetrics(t *testing.T) {
 		store := &mockRetryStore{}
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		// Entry started 10 minutes ago with no agent activity.
 		state.Running["ST-1"] = &RunningEntry{
 			Identifier: "ST-1-ident",
@@ -1029,7 +1036,7 @@ func TestReconcileMetrics(t *testing.T) {
 		store := &mockRetryStore{}
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		cancelled := false
 		state.Running["TM-1"] = &RunningEntry{
 			Identifier: "TM-1-ident",
@@ -1067,7 +1074,7 @@ func TestReconcileMetrics(t *testing.T) {
 		store := &mockRetryStore{}
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["AC-1"] = &RunningEntry{
 			Identifier: "AC-1-ident",
 			StartedAt:  now.Add(-10 * time.Second),
@@ -1101,7 +1108,7 @@ func TestReconcileMetrics(t *testing.T) {
 		store := &mockRetryStore{}
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["NA-1"] = &RunningEntry{
 			Identifier: "NA-1-ident",
 			StartedAt:  now.Add(-10 * time.Second),
@@ -1133,7 +1140,7 @@ func TestReconcileMetrics(t *testing.T) {
 		store := &mockRetryStore{}
 		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 		state.Running["NP-1"] = &RunningEntry{
 			Identifier: "NP-1-ident",
 			StartedAt:  now.Add(-10 * time.Second),
