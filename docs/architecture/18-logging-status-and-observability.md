@@ -61,12 +61,15 @@ record, message `"token ceiling cannot bound this run"`, carrying `agent_kind`, 
 and `budget_tokens`, once per dispatch. A dispatch whose baseline read fails emits one `Warn`
 record, message `"prior token spend unknown, token ceiling bounds this session only"`, carrying
 `error` and `budget_tokens`, once per dispatch. A confirming read that fails while a running
-session is over the pre-filter emits one `Warn` record, message `"in-flight token ceiling check
-failed, run continues"`, carrying `error` and `budget_tokens`, at most once per run regardless
-of how many failing reads follow. A running session the ceiling stops emits one `Warn` record,
-message `"run stopped by token ceiling"`, carrying `reason`, `used_tokens`, `budget_tokens`,
-`issue_tokens_completed`, `session_tokens`, `unmeasured_sessions`, and `ceiling_setting`, once
-per run.
+session is over the pre-filter, and whose session has not reached the ceiling on its own spend,
+emits one `Warn` record, message `"in-flight token ceiling check failed, run continues"`,
+carrying `error` and `budget_tokens`, at most once per run regardless of how many failing reads
+follow. A running session the ceiling stops emits one `Warn` record, message `"run stopped by
+token ceiling"`, carrying `reason`, `used_tokens`, `budget_tokens`, `issue_tokens_completed`,
+`session_tokens`, `sum_source`, and `ceiling_setting`, once per run. `sum_source` is
+`confirmed_read` when a read established the completed sum and `session_spend_alone` when the
+session's own spend reached the ceiling and no read was needed; `unmeasured_sessions` joins the
+record only in the first case, because only a read supplies that count.
 
 The tracker comment this same hold posts is recorded separately, at the write site rather than
 alongside the log record above. A successful write emits one `Info` record, message

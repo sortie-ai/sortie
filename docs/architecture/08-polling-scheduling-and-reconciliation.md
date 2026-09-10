@@ -193,12 +193,15 @@ Per-issue token budget (cost ceiling):
 - The in-flight lane runs on the event loop rather than at dispatch: an integer comparison
   against the running session's own token total pre-filters every usage event so no store read
   runs until the pre-filter fires, and only then does a confirming read against the same sum
-  the dispatch lanes read decide the stop. A failed confirming read fails open, logging a
-  warning and leaving the run running; the pre-filter re-evaluates on every later usage figure,
-  so the run remains bounded by the next dispatch decision even while the confirming read keeps
-  failing. Once the confirming read shows the sum at or over the ceiling, the lane cancels the
-  running session's context, which records the stop in `run_history` and the tracker's next
-  hold notice.
+  the dispatch lanes read decide the stop. A failed confirming read still stops the run when
+  the running session's own spend has reached the ceiling on its own, because a completed-session
+  sum is never negative and the read is then not needed to know the ceiling is breached. Where
+  the completed sum is what carries the issue over, a failed read fails open: the run keeps going
+  and can pass `max_tokens` until a later read succeeds or the run ends, and the next dispatch
+  decision prevents only the session after it. The pre-filter re-evaluates on every later usage
+  figure. Once the sum is established, by a confirming read or by the session's own spend alone,
+  the lane cancels the running session's context, which records the stop in `run_history` and the
+  tracker's next hold notice.
 
 Note:
 

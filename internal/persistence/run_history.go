@@ -467,8 +467,9 @@ type IssueTokenUsage struct {
 // count of unmeasured rows, and the count of rows the token ceiling
 // stopped in flight, across all run_history rows for the issue.
 // Returns the zero [IssueTokenUsage] and a nil error when the issue has
-// no rows. The summed total is exact even though an unmeasured row's
-// token columns are always zero.
+// no rows. An unmeasured row's token columns are zero, so a non-zero
+// UnmeasuredSessions makes the summed total a lower bound on what the
+// issue really spent rather than the whole of it.
 func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTokenUsage, error) {
 	var usage IssueTokenUsage
 	row := s.db.QueryRowContext(ctx,

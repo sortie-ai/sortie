@@ -3568,7 +3568,7 @@ re-applies configuration and prompt template without restart.
 | `agent.max_retry_backoff_ms`           | **Immediate** — affects future retry scheduling.                                               |
 | `agent.max_concurrent_agents_by_state` | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
-| `agent.max_tokens`                     | **Immediate** — stops a run already in flight from the next poll tick and affects future retry timer evaluations. |
+| `agent.max_tokens`                     | **Immediate** — the poll tick carries the new ceiling to the event loop, and the first usage figure after it stops a run already over the ceiling; also affects future retry timer evaluations. |
 | `agent.max_consecutive_absences`       | **Immediate** — affects future worker exits, retry timer evaluations, and poll-tick park sweeps. |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
 | `ci_feedback.kind`                     | **No effect** — requires restart. CI provider is created once at process start.                |
