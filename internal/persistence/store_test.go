@@ -2203,10 +2203,11 @@ func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 		t.Errorf("APIRequestCount = %d, want 42", got.APIRequestCount)
 	}
 	// The fixture never sets APIRequestsMeasured, so it round-trips
-	// false beside the non-zero count - the same false-qualifier shape
-	// migration 016 leaves a pre-migration row in, and by design here
-	// too, since the store applies no invariant between the two
-	// columns of its own. A regression that let the qualifier drift
+	// false beside the non-zero count. That pairing is not one the
+	// orchestrator writes, and this row is not the legacy shape
+	// migration 016 leaves behind either; it is here because the store
+	// applies no invariant between the two columns and must return
+	// what it was handed. A regression that let the qualifier drift
 	// from what was written would still pass on the count alone.
 	if got.APIRequestsMeasured {
 		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
