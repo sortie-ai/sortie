@@ -115,7 +115,41 @@ type workEvidenceObserverFacts struct {
 	newObserverCalls  int
 	newObserverPos    token.Position
 	declaredTrue      map[string]bool
+	observerNames     map[string]bool
 	observedFields    map[string]bool
+}
+
+// workEvidenceReceiverName returns the trailing identifier of a receiver
+// expression, which is the variable or field an observer is stored in:
+// "work" for both `work` and `state.work`. It returns "" for a receiver
+// shape this syntax-only check does not model.
+func workEvidenceReceiverName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return e.Sel.Name
+	}
+	return ""
+}
+
+// isWorkEvidenceNewObserverCall reports whether expr is a call to
+// agentcore.NewWorkObserver, with agentcoreIdent the name the enclosing
+// file imports that package under.
+func isWorkEvidenceNewObserverCall(expr ast.Expr, agentcoreIdent string) bool {
+	if agentcoreIdent == "" {
+		return false
+	}
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	recv, ok := sel.X.(*ast.Ident)
+	return ok && recv.Name == agentcoreIdent && sel.Sel.Name == workEvidenceNewObserverFunc
 }
 
 // workEvidenceObserverRegistrationFacts scans files for the ExitObserved
@@ -126,6 +160,7 @@ type workEvidenceObserverFacts struct {
 func workEvidenceObserverRegistrationFacts(fset *token.FileSet, files []*ast.File) workEvidenceObserverFacts {
 	facts := workEvidenceObserverFacts{
 		declaredTrue:   map[string]bool{},
+		observerNames:  map[string]bool{},
 		observedFields: map[string]bool{},
 	}
 
@@ -137,6 +172,46 @@ func workEvidenceObserverRegistrationFacts(fset *token.FileSet, files []*ast.Fil
 				facts.namesExitObserved = true
 			}
 
+			switch node := n.(type) {
+			case *ast.AssignStmt:
+				for i, rhs := range node.Rhs {
+					if i < len(node.Lhs) && isWorkEvidenceNewObserverCall(rhs, agentcoreIdent) {
+						if name := workEvidenceReceiverName(node.Lhs[i]); name != "" {
+							facts.observerNames[name] = true
+						}
+					}
+				}
+			case *ast.KeyValueExpr:
+				if key, ok := node.Key.(*ast.Ident); ok && isWorkEvidenceNewObserverCall(node.Value, agentcoreIdent) {
+					facts.observerNames[key.Name] = true
+				}
+			}
+
+			call, ok := n.(*ast.CallExpr)
+			if !ok || !isWorkEvidenceNewObserverCall(call, agentcoreIdent) {
+				return true
+			}
+			facts.newObserverCalls++
+			facts.newObserverPos = fset.Position(call.Pos())
+			if len(call.Args) > 0 {
+				for field := range workEvidenceObserveFuncs {
+					if val := mcpCompositeLitKeyValue(call.Args[0], field); val != nil {
+						if b, isBool := boolLiteralValue(val); isBool && b {
+							facts.declaredTrue[field] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	// Observations are collected in a second pass because the constructor
+	// can appear after the Observe calls in traversal order: three adapters
+	// build the observer in RunTurn and feed it from a closure declared
+	// higher in the same file.
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -146,23 +221,13 @@ func workEvidenceObserverRegistrationFacts(fset *token.FileSet, files []*ast.Fil
 				return true
 			}
 
-			if agentcoreIdent != "" {
-				if recv, ok := sel.X.(*ast.Ident); ok && recv.Name == agentcoreIdent && sel.Sel.Name == workEvidenceNewObserverFunc {
-					facts.newObserverCalls++
-					facts.newObserverPos = fset.Position(call.Pos())
-					if len(call.Args) > 0 {
-						for field := range workEvidenceObserveFuncs {
-							if val := mcpCompositeLitKeyValue(call.Args[0], field); val != nil {
-								if b, isBool := boolLiteralValue(val); isBool && b {
-									facts.declaredTrue[field] = true
-								}
-							}
-						}
-					}
-					return true
-				}
+			// An Observe call counts only on the receiver the constructor
+			// result was stored in. Matching the method name alone lets an
+			// unrelated value with a same-named method satisfy a declared
+			// signal while the observer itself never sees one.
+			if !facts.observerNames[workEvidenceReceiverName(sel.X)] {
+				return true
 			}
-
 			for _, method := range workEvidenceObserveFuncs {
 				if sel.Sel.Name == method {
 					facts.observedFields[method] = true
@@ -439,6 +504,29 @@ type sessionState struct {
 }
 `,
 			wantCount: 0,
+		},
+		{
+			name: "an Observe call on an unrelated receiver does not satisfy a declared field",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/agent/agentcore"
+
+func run(state *sessionState, audit *auditLog) {
+	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
+	state.work.ObserveAssistantOutput()
+	audit.ObserveToolActivity()
+}
+
+type auditLog struct{}
+
+func (a *auditLog) ObserveToolActivity() {}
+
+type sessionState struct {
+	ExitObserved bool
+	work         *agentcore.WorkObserver
+}
+`,
+			wantCount: 1,
 		},
 		{
 			name: "naming ExitObserved with zero NewWorkObserver calls is rejected",
