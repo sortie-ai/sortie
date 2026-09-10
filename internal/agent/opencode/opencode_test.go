@@ -1772,7 +1772,7 @@ printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id"
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
-	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	const wantMessage = "agent exited without producing output: no message from the agent and no tool call"
 	if agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
@@ -1786,7 +1786,7 @@ printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id"
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no assistant output on the run stream",
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
 }
 
@@ -1814,7 +1814,7 @@ exit 0`)
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
-	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	const wantMessage = "agent exited without producing output: no message from the agent and no tool call"
 	if agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
@@ -1828,7 +1828,7 @@ exit 0`)
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no assistant output on the run stream",
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
 }
 
@@ -1939,6 +1939,74 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("RunTurn() error = %v, want nil (not a typed-nil *domain.AgentError)", err)
+	}
+}
+
+// TestRunTurn_ToolOnlyNoTerminalCompletes drives the committed
+// tool_success.jsonl fixture, which carries a completed tool_use part and
+// no text or reasoning part at all. opencode's normal path sets no
+// terminal report, so DecideTurn genuinely consults Work here: reporting
+// turn_completed is proof the observer's ToolActivity field fired from
+// this shape of the committed fixture corpus, and it doubles as the
+// tool-activity-only case of property 1.
+func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScript(t, tmpDir, "tool_success.jsonl")
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
+}
+
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// session's second turn, whose stream carries neither declared signal,
+// reports turn_failed even though the first turn on the same session
+// carried both a text part and a completed tool_use part.
+func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+if [ -f '%s' ]; then
+  printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_both_then_none","part":{"id":"p1","messageID":"m1","sessionID":"ses_both_then_none","snapshot":"","type":"step-start"}}\n'
+else
+  touch '%s'
+  printf '{"type":"text","timestamp":1000,"sessionID":"ses_both_then_none","part":{"id":"p1","messageID":"m1","sessionID":"ses_both_then_none","type":"text","text":"ok","time":{"start":1000,"end":1000}}}\n'
+  printf '{"type":"tool_use","timestamp":1001,"sessionID":"ses_both_then_none","part":{"id":"p2","messageID":"m1","sessionID":"ses_both_then_none","type":"tool","tool":"read","callID":"call_both","state":{"status":"completed","input":{},"output":"ok","time":{"start":1001,"end":1001}}}}\n'
+fi`, counterFile, counterFile))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	_, result1, err := collectEvents(t, a, session, "first")
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	_, result2, err := collectEvents(t, a, session, "second")
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn with both signals must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 }
 

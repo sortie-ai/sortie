@@ -29,9 +29,8 @@ reviews:
       enabled: false
 
   path_filters:
-    - '!internal/agent/clientprotocol/testdata/schema-v*/**'
-    - '!internal/agent/clientprotocol/wire_gen.go'
-    - '!**/testdata/summary/*.golden'
+    - "!**/testdata/**"
+    - "!internal/agent/clientprotocol/wire_gen.go"
 
 chat:
   art: false

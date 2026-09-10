@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `brew` command that loads the sortie tap no longer prints Homebrew's deprecation warning for the `verified` parameter in the cask's `url` stanza. Homebrew does not honor that parameter and verifies cask download URLs through its own default behavior instead.
   ([#1036](https://github.com/sortie-ai/sortie/issues/1036))
 
+- `copilot-cli` and `claude-code` no longer report `turn_failed` for a turn that produced assistant output or completed tool activity but carried no per-message output-token count or terminal result event; work evidence now comes from a shared observer reading model-authored content and tool-call activity on each adapter's own turn stream, rather than a runtime-specific token count. On `kiro`, a non-blank stdout line is now, alongside the credits trailer, a positive success signal, so a zero exit with an authentication marker on stderr and a non-blank stdout line now reports `turn_completed` instead of `turn_failed`.
+  ([#1060](https://github.com/sortie-ai/sortie/issues/1060))
+
 ### Changed
 
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.

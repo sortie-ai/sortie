@@ -98,10 +98,9 @@ type turnRuntime struct {
 	waitMu          sync.Mutex
 	waitRes         waitResult
 
-	// assistantOutputSeen is true once at least one text, reasoning, or
-	// tool_use part has been parsed during this turn. It is the per-turn
-	// work signal for the shared turn-disposition decision.
-	assistantOutputSeen bool
+	// work is the per-turn work-evidence observer for the shared
+	// turn-disposition decision.
+	work *agentcore.WorkObserver
 }
 
 type waitResult struct {
@@ -267,6 +266,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		readerDone:      make(chan struct{}),
 		stopCh:          make(chan struct{}),
 		terminalOutcome: domain.EventTurnCompleted,
+		work:            agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true}),
 	}
 	state.active = runtime
 	state.mu.Unlock()
@@ -402,7 +402,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid text payload"})
 					continue
 				}
-				runtime.assistantOutputSeen = true
+				runtime.work.ObserveAssistantOutput()
 				agentcore.EmitNotification(emit, typeutil.TruncateRunes(part.Text, 500))
 
 			case "reasoning":
@@ -410,7 +410,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid reasoning payload"})
 					continue
 				}
-				runtime.assistantOutputSeen = true
+				runtime.work.ObserveAssistantOutput()
 				emit(domain.AgentEvent{
 					Type:      domain.EventOtherMessage,
 					Timestamp: now,
@@ -423,7 +423,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid tool_use payload"})
 					continue
 				}
-				runtime.assistantOutputSeen = true
+				runtime.work.ObserveToolActivity()
 				emit(domain.AgentEvent{
 					Type:           domain.EventToolResult,
 					Timestamp:      now,
@@ -568,18 +568,12 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	}
 	sessionID := state.currentSessionID()
 
-	// Work reflects this turn's own parsed parts, not the run-cumulative
-	// export figure, which is non-zero on any turn after the first.
 	ev := agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     exit.exitCode,
 		Cause:        exit.err,
-		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no assistant output on the run stream",
 	}
-	if runtime.assistantOutputSeen {
-		ev.Work = agentcore.WorkPresent
-	}
+	ev.Work, ev.WorkDetail = runtime.work.Report()
 
 	switch {
 	case runtime.terminalOutcome == domain.EventTurnFailed:

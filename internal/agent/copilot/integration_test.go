@@ -278,6 +278,17 @@ func TestIntegration_RunTurn(t *testing.T) {
 		}
 		t.Errorf("expected EventToolResult with non-empty ToolName; got tool results: %v", toolNames)
 	}
+
+	// A normal turn decides at the terminal-success row and never
+	// consults Work, so the disposition above is not itself proof the
+	// observer fired against the installed runtime; read it directly.
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+	if !state.work.Observed() {
+		t.Error("state.work.Observed() = false after a real turn, want true")
+	}
 }
 
 // TestIntegration_RunTurn_InputTokenRecovery drives one real turn with

@@ -1,0 +1,24 @@
+kiro-cli headless stdout capture - provenance record
+
+This directory holds one byte-exact capture of a single kiro-cli turn's
+standard output. It is read only by test code; a testdata/ directory is
+excluded from every Go build, so the file never reaches the compiled binary.
+
+Runtime:      kiro-cli 2.21.2
+Captured:     2026-09-10
+Command:      kiro-cli chat --no-interactive --wrap never -- "List exactly three primary colors, one per line, no other text."
+Exit code:    0
+Stderr:       carried the credits trailer; not captured here
+
+The capture does not end in a newline. That is the shape kiro-cli produces:
+the last stdout line of a zero-exit turn is unterminated, and a copy written
+with a trailing byte would not reproduce the runtime. A test asserts both the
+digest below and the absent final newline, so an editor that normalizes the
+file fails rather than passes.
+
+Format: each asset line below has the form
+  <relative-file-path> <byte-count> sha256:<hex-digest>
+fields are separated by a single space; the hex digest is lowercase and
+follows the literal prefix "sha256:".
+
+turn_stdout.txt 48 sha256:af6cd348093979a59e45c26a0c0de4095871d534781f55eebfe0b010cf10a227

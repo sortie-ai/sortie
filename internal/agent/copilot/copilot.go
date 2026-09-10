@@ -140,6 +140,7 @@ type sessionState struct {
 	// to forkSession.
 	turnOutputTokens int64
 	inFlight         *agentcore.ToolTracker
+	work             *agentcore.WorkObserver
 
 	// turnCompletionSeen is true once a session.task_complete event has
 	// arrived this turn.
@@ -365,6 +366,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 			switch event.Type {
 			case "assistant.message_delta":
+				// The event type itself names an assistant message, so it
+				// is a work signal even though its payload is unparsed.
+				state.work.ObserveAssistantOutput()
 				// Stall timer reset; ephemeral streaming content.
 				agentcore.EmitNotification(emit, "")
 
@@ -374,6 +378,12 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 					if dataErr == nil {
 						if msgData.Model != "" {
 							state.lastModel = msgData.Model
+						}
+						if msgData.Content != "" {
+							state.work.ObserveAssistantOutput()
+						}
+						if len(msgData.ToolRequests) > 0 {
+							state.work.ObserveToolActivity()
 						}
 						state.admitOutputTokens(msgData.APICallID, msgData.OutputTokens, emit, now)
 						agentcore.EmitNotification(emit, summarizeAssistantMessage(msgData))
@@ -412,6 +422,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					toolData, dataErr := parseToolExecutionData(event.Data)
 					if dataErr == nil {
+						state.work.ObserveToolActivity()
 						state.inFlight.Begin(toolData.ToolCallID, toolData.ToolName)
 						agentcore.EmitNotification(emit, fmt.Sprintf("tool started: %s", toolData.ToolName))
 					}
@@ -421,6 +432,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					toolData, dataErr := parseToolExecutionData(event.Data)
 					if dataErr == nil {
+						state.work.ObserveToolActivity()
 						toolName, durationMS, ok := state.inFlight.End(toolData.ToolCallID)
 						if !ok {
 							toolName = toolData.ToolName
@@ -530,16 +542,11 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			usage, journalMeasured := state.recoverUsage(state.logger())
 			measured := journalMeasured || state.assistantFieldSeen
 
-			// Work tests this turn's own output, not the run cumulative,
-			// which is non-zero on any second turn.
 			ev := agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,
-				Work:         agentcore.WorkAbsent,
 			}
-			if state.turnOutputTokens > 0 {
-				ev.Work = agentcore.WorkPresent
-			}
+			ev.Work, ev.WorkDetail = state.work.Report()
 
 			var apiDurationMS int64
 			if lastResult != nil {
@@ -640,6 +647,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	// snapshot across turns, so it is not reset here.
 	state.turnOutputTokens = 0
 	state.inFlight = agentcore.NewToolTracker()
+	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
 	state.turnCompletionSeen = false
 	state.turnCompletionSuccess = false
 	state.turnCompletionSummary = ""

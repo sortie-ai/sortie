@@ -3,13 +3,27 @@
 package kiro
 
 import (
-	"strings"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// loadKiroCapture reads a testdata/ fixture file and returns its raw
+// bytes, unmodified.
+func loadKiroCapture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("loadKiroCapture(%q): %v", name, err)
+	}
+	return data
+}
 
 func TestStripANSI(t *testing.T) {
 	t.Parallel()
@@ -165,8 +179,8 @@ func TestParseLine_EmitsNotification(t *testing.T) {
 		t.Error("notification.AgentPID is empty, want the subprocess PID")
 	}
 
-	if got := state.turnStdout.String(); !strings.Contains(got, "> PONG") {
-		t.Errorf("state.turnStdout = %q, want it to contain the stripped line %q", got, "> PONG")
+	if !state.work.Observed() {
+		t.Error("state.work.Observed() = false after a non-blank stdout line, want true")
 	}
 }
 
@@ -239,12 +253,13 @@ func TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow(t *testing.T) {
 	// Mirrors the TurnEvidence StartSession's OnFinalize closure builds in
 	// kiro.go: neither the success nor the auth-failure switch arm matches
 	// when creditsSeen and authFailed are both false, so Terminal stays
-	// TerminalAbsent and the shared table decides from ExitCode and Work.
+	// TerminalAbsent and the shared table decides from ExitCode and the
+	// observer's report for a turn with no non-blank stdout line.
 	ev := agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     0,
-		Work:         agentcore.WorkUnobservable,
-		WorkDetail:   "no credits trailer on stderr",
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent",
 	}
 
 	got := agentcore.DecideTurn(ev)
@@ -254,5 +269,38 @@ func TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow(t *testing.T) {
 	}
 	if got.ExitReason != domain.EventTurnFailed {
 		t.Errorf("DecideTurn(%+v).ExitReason = %q, want %q", ev, got.ExitReason, domain.EventTurnFailed)
+	}
+}
+
+// TestParseLine_CommittedStdoutCaptureIsObservedAsAssistantOutput pins
+// property 6 for kiro: the committed byte-exact turn_stdout.txt capture,
+// driven through ParseLine via a real turn, is observed as assistant
+// output. It also pins the capture's own digest and its absent final
+// newline byte, so an editor pass that normalizes the file reddens this
+// test rather than silently passing it.
+func TestParseLine_CommittedStdoutCaptureIsObservedAsAssistantOutput(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	capture := loadKiroCapture(t, "turn_stdout.txt")
+
+	const wantDigest = "af6cd348093979a59e45c26a0c0de4095871d534781f55eebfe0b010cf10a227"
+	sum := sha256.Sum256(capture)
+	if got := hex.EncodeToString(sum[:]); got != wantDigest {
+		t.Fatalf("sha256(turn_stdout.txt) = %s, want %s (fixture was modified)", got, wantDigest)
+	}
+	if len(capture) == 0 || capture[len(capture)-1] == '\n' {
+		t.Fatalf("turn_stdout.txt ends in a newline, want the runtime's own unterminated final line")
+	}
+
+	bin := fakeChatScript(t, t.TempDir(), string(capture), "a warning with no markers\n", 0)
+	adapter, session, _ := mustStartSession(t, bin)
+
+	_, result, err := runChatTurn(t, adapter, session, "ping")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
 }

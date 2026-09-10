@@ -1686,6 +1686,7 @@ exit 0
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
 }
 
@@ -1739,6 +1740,159 @@ exit 0
 		ExitCode:     0,
 		Work:         agentcore.WorkPresent,
 	}, result, err)
+}
+
+// TestRunTurn_ToolActivityOnlyNoResultExitZero drives a stream carrying
+// completed tool activity and no assistant text at all, exiting zero
+// with no terminal result event, and pins that tool activity alone is
+// sufficient to report turn_completed.
+func TestRunTurn_ToolActivityOnlyNoResultExitZero(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	fixture := loadFixture(t, "tool_only_no_text.jsonl")
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
+}
+
+// TestRunTurn_AssistantAndToolNoUsageNoResultCompletes is the property-2
+// regression coverage for claude: a stream carrying assistant text and
+// completed tool activity, no per-message usage object anywhere, and no
+// terminal result event, still reports turn_completed. The composed
+// stream is asserted to carry no usage object, so a future revert to a
+// token-count derivation fails this test rather than passing it.
+func TestRunTurn_AssistantAndToolNoUsageNoResultCompletes(t *testing.T) {
+	t.Parallel()
+
+	const jsonl = `{"type":"system","subtype":"init","session_id":"prop2-session","cwd":"/tmp"}
+{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"Reading the file."},{"type":"tool_use","id":"toolu_prop2","name":"Read","input":{"file_path":"main.go"}}]}}
+{"type":"user","message":{"id":"msg_2","type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_prop2","content":"package main","is_error":false}]}}
+{"type":"assistant","message":{"id":"msg_3","type":"message","role":"assistant","content":[{"type":"text","text":"The file contains a basic main package."}]}}
+`
+	if strings.Contains(jsonl, "usage") {
+		t.Fatal("composed stream contains a usage object, want none")
+	}
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, jsonl))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	sawToolResult := false
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			sawToolResult = true
+			break
+		}
+	}
+	if !sawToolResult {
+		t.Error("EventToolResult not delivered for the completed tool call")
+	}
+}
+
+// TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus drives committed
+// testdata/ fixtures and pins that each field the claude WorkSignals
+// declaration sets true is observed by at least one of them:
+// tool_only_no_text.jsonl carries a tool call and no text block at all,
+// so its own shape attributes the observation to ToolActivity alone, and
+// full_session.jsonl's final assistant message carries a plain text
+// block, attributing an observation to AssistantOutput.
+func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		fixture string
+	}{
+		{name: "assistant text observed", fixture: "full_session.jsonl"},
+		{name: "tool call alone observed", fixture: "tool_only_no_text.jsonl"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			fixture := loadFixture(t, tt.fixture)
+			script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+			adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+			session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+				WorkspacePath: tmpDir,
+				AgentConfig:   domain.AgentConfig{Command: script},
+			})
+			if err != nil {
+				t.Fatalf("StartSession() error = %v", err)
+			}
+
+			if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+				Prompt:  "test",
+				OnEvent: func(domain.AgentEvent) {},
+			}); err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+
+			state := session.Internal.(*sessionState)
+			if !state.work.Observed() {
+				t.Errorf("state.work.Observed() = false after %s, want true", tt.fixture)
+			}
+		})
+	}
 }
 
 func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
@@ -1902,6 +2056,8 @@ exit 0
 	if got.Message != "tool_result: Read" {
 		t.Errorf("Message = %q, want %q", got.Message, "tool_result: Read")
 	}
+
+	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
 }
 
 // TestRunTurn_ToolResultInAssistantEvent validates that the original
@@ -2292,9 +2448,10 @@ func TestProcessToolBlocks_XMLStripping(t *testing.T) {
 	}
 	tracker := agentcore.NewToolTracker()
 	tracker.Begin("toolu_test01", "Edit")
+	work := agentcore.NewWorkObserver(agentcore.WorkSignals{ToolActivity: true})
 
 	var events []domain.AgentEvent
-	processToolBlocks(blocks, tracker, time.Now(), func(e domain.AgentEvent) {
+	processToolBlocks(blocks, tracker, work, time.Now(), func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 
@@ -2351,9 +2508,10 @@ func TestProcessToolBlocks_TailTruncation(t *testing.T) {
 	}
 	tracker := agentcore.NewToolTracker()
 	tracker.Begin("toolu_tail01", "Bash")
+	work := agentcore.NewWorkObserver(agentcore.WorkSignals{ToolActivity: true})
 
 	var events []domain.AgentEvent
-	processToolBlocks(blocks, tracker, time.Now(), func(e domain.AgentEvent) {
+	processToolBlocks(blocks, tracker, work, time.Now(), func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 
@@ -2872,6 +3030,62 @@ exit 0
 	})
 	if result2.ExitReason != domain.EventTurnFailed {
 		t.Errorf("RunTurn(second).ExitReason = %q, want %q (per-turn work predicate must not carry the first turn's output forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
+}
+
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// session's second turn, whose stream carries neither declared signal,
+// reports turn_failed even though the first turn on the same session
+// carried both assistant output and completed tool activity.
+func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	script := writeScript(t, tmpDir, fmt.Sprintf(`
+if [ -f '%s' ]; then
+  echo '{"type":"system","subtype":"init","session_id":"both-then-none","cwd":"/tmp"}'
+else
+  touch '%s'
+  cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"both-then-none","cwd":"/tmp"}
+{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"Reading."},{"type":"tool_use","id":"toolu_both","name":"Read","input":{"file_path":"main.go"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_both","content":"package main","is_error":false}]}}
+JSONL
+fi
+exit 0
+`, counterFile, counterFile))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "first",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "second",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn with both signals must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
 	}
 	var agentErr *domain.AgentError
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {

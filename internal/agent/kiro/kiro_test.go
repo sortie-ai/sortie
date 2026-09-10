@@ -260,13 +260,50 @@ func TestOnFinalize_AuthFailed(t *testing.T) {
 	}, result, err)
 }
 
+// TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout pins property 10's
+// first case in its all-whitespace form: an authentication marker on
+// stderr and a stdout carrying only whitespace still reports
+// turn_failed, because the observer's trim-then-check threshold treats
+// a whitespace-only line as no signal, so the authentication branch's
+// guard still fires.
+func TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	bin := fakeChatScript(t, t.TempDir(), "   \n", authFailLine, 0)
+	adapter, session, state := mustStartSession(t, bin)
+
+	events, result, err := runChatTurn(t, adapter, session, "ping")
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrResponseError)
+	if !hasEventType(events, domain.EventTurnFailed) {
+		t.Error("EventTurnFailed not delivered for auth failure with whitespace-only stdout")
+	}
+	if state.resumeRequested {
+		t.Error("state.resumeRequested = true, want false after an auth-failed turn")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrResponseError,
+		TerminalMessage:   "kiro authentication failed",
+		ExitObserved:      true,
+		ExitCode:          0,
+	}, result, err)
+}
+
 func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
 
-	// Exit 0 with neither the credits trailer nor the auth-failure line: a
-	// bare exit 0 is never a success.
-	bin := fakeChatScript(t, t.TempDir(), "some transcript text", "a warning with no markers\n", 0)
+	// Exit 0 with neither the credits trailer nor the auth-failure line,
+	// and stdout carrying only whitespace: the observer's stricter
+	// trim-then-check threshold means a whitespace-only line is never
+	// work, so a bare exit 0 with nothing behind it is never a success.
+	bin := fakeChatScript(t, t.TempDir(), "   \n", "a warning with no markers\n", 0)
 	adapter, session, state := mustStartSession(t, bin)
 
 	events, result, err := runChatTurn(t, adapter, session, "ping")
@@ -283,9 +320,9 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	}
 
 	// The zero-work message carries the family-wide stem plus the
-	// credits-trailer detail, so an operator can grep one string across
+	// declared-signal detail, so an operator can grep one string across
 	// every adapter and still see kiro's own signal.
-	const wantMessage = "agent exited without producing output: no credits trailer on stderr"
+	const wantMessage = "agent exited without producing output: no message from the agent"
 	turnFailed, ok := findEventByType(events, domain.EventTurnFailed)
 	if !ok {
 		t.Fatal("turn_failed event not found")
@@ -301,8 +338,8 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     0,
-		Work:         agentcore.WorkUnobservable,
-		WorkDetail:   "no credits trailer on stderr",
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent",
 	}, result, err)
 }
 
@@ -345,9 +382,12 @@ func TestOnFinalize_NonZeroExit(t *testing.T) {
 	}, result, err)
 }
 
-// TestOnFinalize_AuthLineWithStdoutIsNotAuthError verifies the auth-failure arm
-// requires empty stdout: an auth line accompanied by transcript text falls
-// through to the bare-exit-0 arm (ErrTurnFailed), not the auth arm.
+// TestOnFinalize_AuthLineWithStdoutIsNotAuthError verifies the
+// auth-failure arm requires no non-blank stdout line: an auth line
+// accompanied by a non-blank transcript line stops the auth-failure
+// guard from firing, and the observer's own report of the non-blank
+// line reports turn_completed. This is the one combination where the
+// stdout-substitution guard change flips the disposition (property 10).
 func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -357,16 +397,48 @@ func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 
 	_, result, err := runChatTurn(t, adapter, session, "ping")
 
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	if err != nil {
+		t.Errorf("RunTurn() error = %v, want nil", err)
+	}
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     0,
-		Work:         agentcore.WorkUnobservable,
-		WorkDetail:   "no credits trailer on stderr",
+		Work:         agentcore.WorkPresent,
+	}, result, err)
+}
+
+// TestOnFinalize_TranscriptNoCreditsNoAuthCompletes pins property 10's
+// second case: a zero exit with a transcript on stdout and no credits
+// trailer reports turn_completed, because the observer's own report of
+// the non-blank stdout line is now the positive signal, not a bare exit
+// code.
+func TestOnFinalize_TranscriptNoCreditsNoAuthCompletes(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	bin := fakeChatScript(t, t.TempDir(), "the answer is 42", "a warning with no markers\n", 0)
+	adapter, session, state := mustStartSession(t, bin)
+
+	_, result, err := runChatTurn(t, adapter, session, "ping")
+
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	if err != nil {
+		t.Errorf("RunTurn() error = %v, want nil", err)
+	}
+	if state.resumeRequested {
+		t.Error("state.resumeRequested = true, want false (no credits trailer on this turn)")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
 	}, result, err)
 }
 
@@ -467,6 +539,46 @@ func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
 	if !strings.Contains(lines[1], "--resume") {
 		t.Errorf("second turn args = %q, want the --resume flag", lines[1])
 	}
+}
+
+// TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout pins
+// property 9: a session's second turn, whose stdout carries only
+// whitespace, reports turn_failed even though the first turn on the
+// same session had a non-blank transcript line.
+func TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	dir := t.TempDir()
+	counterFile := filepath.Join(dir, "turn-count")
+	bin := agenttest.WriteScript(t, dir, "kiro-cli", fmt.Sprintf(`if [ "$1" = "whoami" ]; then
+  printf '%%s\n' 'Authenticated with API key'
+  exit 0
+fi
+if [ -f '%s' ]; then
+  printf '   \n'
+else
+  touch '%s'
+  printf 'the answer is 42\n'
+fi
+exit 0
+`, counterFile, counterFile))
+
+	adapter, session, _ := mustStartSession(t, bin)
+
+	_, result1, err := runChatTurn(t, adapter, session, "first")
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	_, result2, err := runChatTurn(t, adapter, session, "second")
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn's non-blank line must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
 }
 
 func TestRunTurn_NilOnEventPanics(t *testing.T) {

@@ -467,7 +467,6 @@ func TestRunTurn_SuccessfulTurn(t *testing.T) {
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 		Terminal: agentcore.TerminalSuccess,
-		Work:     agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -897,7 +896,6 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrTurnFailed,
 		TerminalMessage:   "Context window exceeded",
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -947,7 +945,6 @@ func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
 		TerminalMessage:   "subprocess stdout closed unexpectedly",
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -998,7 +995,6 @@ func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrTurnFailed,
 		TerminalMessage:   wantMessage,
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 

@@ -36,9 +36,6 @@ func TestApplySessionUpdate(t *testing.T) {
 		if !got.hasEvent || got.event.Type != domain.EventNotification {
 			t.Fatalf("applySessionUpdate() = %+v, want a notification event", got)
 		}
-		if !got.workPresent {
-			t.Error("applySessionUpdate() workPresent = false, want true for an agent message chunk")
-		}
 		if got.event.Message != "Reading the file to understand its structure." {
 			t.Errorf("applySessionUpdate() Message = %q, want the chunk's text", got.event.Message)
 		}
@@ -79,8 +76,8 @@ func TestApplySessionUpdate(t *testing.T) {
 		if !ok {
 			t.Fatal("parseSessionUpdate(tool_call) found = false, want true")
 		}
-		if got := applySessionUpdate(tracker, begin); !got.workPresent || got.hasEvent {
-			t.Fatalf("applySessionUpdate(tool_call) = %+v, want workPresent=true, hasEvent=false", got)
+		if got := applySessionUpdate(tracker, begin); got.hasEvent {
+			t.Fatalf("applySessionUpdate(tool_call) = %+v, want hasEvent=false", got)
 		}
 
 		end, ok := parseSessionUpdate(loadSessionUpdateFixture(t, "tool_call_update_completed.json"))
@@ -235,7 +232,7 @@ func TestStopReasonEvidence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stopReasonEvidence(tt.reason, agentcore.WorkPresent)
+			got := stopReasonEvidence(tt.reason)
 
 			if got.Terminal != tt.wantTerminal {
 				t.Errorf("stopReasonEvidence(%q).Terminal = %v, want %v", tt.reason, got.Terminal, tt.wantTerminal)
@@ -246,29 +243,26 @@ func TestStopReasonEvidence(t *testing.T) {
 			if tt.wantMessageSet && got.TerminalMessage == "" {
 				t.Errorf("stopReasonEvidence(%q).TerminalMessage is empty, want the received value carried in it", tt.reason)
 			}
-			if got.Work != agentcore.WorkPresent {
-				t.Errorf("stopReasonEvidence(%q).Work = %v, want %v", tt.reason, got.Work, agentcore.WorkPresent)
-			}
 		})
 	}
 
 	t.Run("the unrecognized value itself is carried in the message", func(t *testing.T) {
 		t.Parallel()
-		got := stopReasonEvidence(stopReason("some_future_reason"), agentcore.WorkAbsent)
+		got := stopReasonEvidence(stopReason("some_future_reason"))
 		if !strings.Contains(got.TerminalMessage, "some_future_reason") {
 			t.Errorf("stopReasonEvidence(...).TerminalMessage = %q, want it to name the value received", got.TerminalMessage)
 		}
 	})
 
-	t.Run("a token limit terminal carries its kind regardless of work presence", func(t *testing.T) {
+	t.Run("a token limit terminal carries its kind", func(t *testing.T) {
 		t.Parallel()
 
-		got := stopReasonEvidence(stopReasonMaxTokens, agentcore.WorkAbsent)
+		got := stopReasonEvidence(stopReasonMaxTokens)
 		if got.TerminalErrorKind != domain.ErrTurnTokenLimit {
-			t.Errorf("stopReasonEvidence(max_tokens, WorkAbsent).TerminalErrorKind = %q, want %q", got.TerminalErrorKind, domain.ErrTurnTokenLimit)
+			t.Errorf("stopReasonEvidence(max_tokens).TerminalErrorKind = %q, want %q", got.TerminalErrorKind, domain.ErrTurnTokenLimit)
 		}
 		if got.Terminal != agentcore.TerminalFailure {
-			t.Errorf("stopReasonEvidence(max_tokens, WorkAbsent).Terminal = %v, want %v", got.Terminal, agentcore.TerminalFailure)
+			t.Errorf("stopReasonEvidence(max_tokens).Terminal = %v, want %v", got.Terminal, agentcore.TerminalFailure)
 		}
 	})
 
@@ -277,7 +271,7 @@ func TestStopReasonEvidence(t *testing.T) {
 
 		reason := stopReason(strings.Repeat("界", messageTruncateLimit))
 
-		got := stopReasonEvidence(reason, agentcore.WorkAbsent)
+		got := stopReasonEvidence(reason)
 
 		if gotRunes := len([]rune(got.TerminalMessage)); gotRunes != messageTruncateLimit+1 {
 			t.Errorf("len([]rune(stopReasonEvidence(%q).TerminalMessage)) = %d, want %d", reason, gotRunes, messageTruncateLimit+1)

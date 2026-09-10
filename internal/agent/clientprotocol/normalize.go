@@ -30,12 +30,10 @@ const (
 const messageTruncateLimit = 500
 
 // normalizedUpdate is what applySessionUpdate returns for one recognized
-// session/update variant: the event to publish, if any, and whether the
-// variant is evidence of the model producing something during the turn.
+// session/update variant: the event to publish, if any.
 type normalizedUpdate struct {
-	event       domain.AgentEvent
-	hasEvent    bool
-	workPresent bool
+	event    domain.AgentEvent
+	hasEvent bool
 }
 
 // applySessionUpdate normalizes one decoded session/update variant,
@@ -50,9 +48,8 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 		text := chunkText(ev.chunk)
 		if text == "" {
 			return normalizedUpdate{
-				event:       domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: nonTextChunkMessage},
-				hasEvent:    true,
-				workPresent: true,
+				event:    domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: nonTextChunkMessage},
+				hasEvent: true,
 			}
 		}
 		return normalizedUpdate{
@@ -61,15 +58,13 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 				Timestamp: now,
 				Message:   typeutil.TruncateRunes(text, messageTruncateLimit),
 			},
-			hasEvent:    true,
-			workPresent: true,
+			hasEvent: true,
 		}
 
 	case updateAgentThoughtChunk:
 		return normalizedUpdate{
-			event:       domain.AgentEvent{Type: domain.EventOtherMessage, Timestamp: now, Message: reasoningBlockMessage},
-			hasEvent:    true,
-			workPresent: true,
+			event:    domain.AgentEvent{Type: domain.EventOtherMessage, Timestamp: now, Message: reasoningBlockMessage},
+			hasEvent: true,
 		}
 
 	case updateUserMessageChunk:
@@ -80,7 +75,7 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 
 	case updateToolCall:
 		tracker.Begin(string(ev.toolCallBegin.ToolCallID), normalizeToolKind(ev.toolCallBegin.Kind))
-		return normalizedUpdate{workPresent: true}
+		return normalizedUpdate{}
 
 	case updateToolCallUpdate:
 		if ev.toolCallUpdate.Status == nil {
@@ -171,34 +166,30 @@ func normalizeToolKind(kind *toolKind) string {
 // by the caller through activeTurn.pendingEnd, which overrides whatever
 // this function returns; the case handled here is the third row: nobody
 // cancelled, which is a nonconformant answer reported as failed.
-func stopReasonEvidence(reason stopReason, work agentcore.WorkReport) agentcore.TurnEvidence {
+func stopReasonEvidence(reason stopReason) agentcore.TurnEvidence {
 	switch reason {
 	case stopReasonEndTurn:
-		return agentcore.TurnEvidence{Terminal: agentcore.TerminalSuccess, Work: work}
+		return agentcore.TurnEvidence{Terminal: agentcore.TerminalSuccess}
 	case stopReasonRefusal:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnRefused,
-			Work:              work,
 		}
 	case stopReasonMaxTokens:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnTokenLimit,
-			Work:              work,
 		}
 	case stopReasonMaxTurnRequests:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnRequestLimit,
-			Work:              work,
 		}
 	case stopReasonCancelled:
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnFailed,
 			TerminalMessage:   cancelledWithNoCancellationMessage,
-			Work:              work,
 		}
 	default:
 		return agentcore.TurnEvidence{
@@ -208,18 +199,8 @@ func stopReasonEvidence(reason stopReason, work agentcore.WorkReport) agentcore.
 				fmt.Sprintf("agent reported an unrecognized stop reason: %q", string(reason)),
 				messageTruncateLimit,
 			),
-			Work: work,
 		}
 	}
-}
-
-// workReportFrom converts the turn-scoped observation flag into the
-// shared package's closed WorkReport set.
-func workReportFrom(observed bool) agentcore.WorkReport {
-	if observed {
-		return agentcore.WorkPresent
-	}
-	return agentcore.WorkAbsent
 }
 
 // cancelledWithNoCancellationMessage is the compile-time constant

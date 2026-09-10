@@ -15,6 +15,7 @@ comment:
   require_changes: true
 
 ignore:
+  - "**/testdata/**"
   - "internal/adaptertest/**"
   - "internal/qualification/probe/toolserver_unix.go"
-  - "**/*_gen.go"
+  - "internal/agent/clientprotocol/wire_gen.go"

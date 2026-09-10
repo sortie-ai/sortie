@@ -48,7 +48,7 @@ The adapter reports no cost figure at all, even though the stream carries one. I
 
 The adapter never decides a disposition. It fills in evidence and hands it to the shared `agentcore.FinalizeTurn`, which owns the mapping from evidence to outcome and error kind. Cancellation, a stdout scan failure, a missing binary, and death by signal are all decided by the skeleton before the adapter's finalize hook runs at all.
 
-One trap sits in that evidence. Work evidence is this turn's own assistant output, never the run-cumulative figure, which is non-zero on every turn after the first. Feed it the cumulative snapshot and the zero-work safety row, the one that turns a process which exited cleanly having produced nothing into a failure rather than a silent success, stops firing for the rest of the run.
+One trap sits in that evidence. Work evidence comes from the shared per-turn observer, never the run-cumulative usage figure, which is non-zero on every turn after the first: a `text` content block with non-empty text is assistant output, and a `tool_use` or `tool_result` block is tool activity. Feed it the cumulative snapshot and the zero-work safety row, the one that turns a process which exited cleanly having produced nothing into a failure rather than a silent success, stops firing for the rest of the run.
 
 The adapter enforces no deadline of its own. The per-turn deadline, the stall threshold, and the teardown budget are all orchestrator-side; the subprocess sees them only through the context the skeleton passes to the command. So a timeout is something the orchestrator reports on the adapter's return, not something the adapter produces.
 
