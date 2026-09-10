@@ -69,6 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On `/api/v1/state` and `/api/v1/{identifier}`, a running row's `api_request_count` and the four members of its `tokens` object are now `null` when no measurement produced them, where each was previously an integer reading `0`; `requests_by_model` is absent on the same condition. The `sortie_status` tool nulls its own four token figures on that condition too and gains a `tokens_measured` field beside them, so an agent prompt that parses that response may need revising. A session with a turn still in flight keeps reporting the figures it has.
   ([#1061](https://github.com/sortie-ai/sortie/issues/1061))
 
+### Migrations
+
+- Add `api_requests_measured INTEGER NOT NULL DEFAULT 0` to `session_metadata`; a pre-migration row reads back as unmeasured, because its request count was recorded before anything qualified it, and the row self-heals the next time that issue runs. The default is the opposite of `run_history.tokens_measured`'s, which reads back as measured, because `run_history` is an append-only record no later run can correct.
+  ([#1061](https://github.com/sortie-ai/sortie/issues/1061))
+
 ## [1.23.0] - 2026-08-31
 
 ### Added
