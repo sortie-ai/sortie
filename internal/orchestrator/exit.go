@@ -541,9 +541,17 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
+	// The worker's own turn tally is taken alongside the entry's,
+	// because the entry's is fed by the agent event channel while this
+	// exit arrives on its own: a session_started still queued there
+	// would otherwise leave the count at zero and let a session that
+	// really ran be stored as a measured zero. Taking the larger can
+	// only move away from that reading.
+	turnsSeen := max(entry.TurnCount, workerResult.TurnsCompleted)
+
 	// An unmeasured count is stored as zero so a reader of the database
 	// cannot find a figure contradicting the qualifier beside it.
-	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
+	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, turnsSeen, entry.APIRequestCount)
 	requestCount := 0
 	if requestsMeasured {
 		requestCount = entry.APIRequestCount

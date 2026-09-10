@@ -9324,6 +9324,39 @@ func TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile(t
 	}
 }
 
+// TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally covers the
+// entry whose session_started is still queued on the agent event
+// channel when the exit arrives on its own. The entry's turn count
+// reads zero, which alone would store a session that really ran as a
+// measured zero; the worker's own tally is what prevents it.
+func TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-REQV3", nil)
+	entry := state.Running["ISSUE-REQV3"]
+	entry.UsageArrival = registry.UsageArrivalIncremental
+	// Nothing from the event channel reached this entry.
+	entry.TurnCount = 0
+	entry.APIRequestCount = 0
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "ISSUE-REQV3",
+		Identifier:     "ISSUE-REQV3-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		WorkspacePath:  "/tmp/ws",
+		TurnsCompleted: 1,
+	}, defaultExitParams(t, store))
+
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+	if store.sessionMetadata[0].APIRequestsMeasured {
+		t.Error("SessionMetadata.APIRequestsMeasured = true, want false (the worker ran a turn and no request was counted)")
+	}
+}
+
 // TestHandleWorkerExit_SessionMetadataRequestVerdict proves P6: the
 // persisted session_metadata row's api_request_count is always zero
 // when its api_requests_measured flag is zero, even when the running
