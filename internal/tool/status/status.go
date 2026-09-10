@@ -7,8 +7,10 @@
 // The four token figures are reported only when a measurement produced
 // them; otherwise they are null beside a false measurement flag, so an
 // agent asking what it has spent is never handed a fabricated number.
-// A session that has not yet begun a turn is the one case reporting
-// zeros as measured, because nothing has run and the zero is proven.
+// Zeros beside a true flag are themselves a measurement, and arise two
+// ways: a session that has not yet begun a turn, whose zero is proven
+// because nothing has run, and a runtime that measured the work and
+// found it cost nothing.
 package status
 
 import (
