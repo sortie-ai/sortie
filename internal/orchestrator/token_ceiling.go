@@ -62,7 +62,9 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 // An integer pre-filter against the baseline frozen by
 // [freezeIssueTokenBaseline] keeps every event free of I/O; only an
 // event that crosses the pre-filter triggers a confirming read, which
-// makes the kill decision exact.
+// makes the kill decision exact. A confirming read that fails leaves
+// the run going, except where this session's own spend has reached the
+// ceiling on its own, which needs no read to be certain.
 //
 // Must be called from the orchestrator's single-writer event loop,
 // after [HandleAgentEvent] has applied the event's usage delta. Takes
@@ -87,6 +89,15 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 
 	usage, err := store.TokenUsageByIssue(ctx, issueID)
 	if err != nil {
+		// A completed-session sum is never negative, so a session whose
+		// own spend already reaches the ceiling proves the breach
+		// without the read that just failed. Stopping here is what
+		// keeps a persistence outage from suspending the ceiling for
+		// as long as it lasts.
+		if entry.AgentTotalTokens >= int64(ceiling) {
+			stopRunAtTokenCeiling(entry, metrics, log, ceiling, nil, tokenSumSessionSpendAlone)
+			return
+		}
 		if !entry.TokenCeilingQueryWarned {
 			entry.TokenCeilingQueryWarned = true
 			log.Warn("in-flight token ceiling check failed, run continues",
@@ -97,22 +108,44 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 		return
 	}
 	entry.IssueTokensCompleted = usage.TotalTokens
-	used := usage.TotalTokens + entry.AgentTotalTokens
-	if used < int64(ceiling) {
+	if entry.IssueTokensCompleted+entry.AgentTotalTokens < int64(ceiling) {
 		return
 	}
 
+	stopRunAtTokenCeiling(entry, metrics, log, ceiling, &usage.UnmeasuredSessions, tokenSumConfirmedRead)
+}
+
+// How the sum behind a stop was established, reported as sum_source on
+// the stop record. A confirmed read carries an exact completed sum; a
+// session-spend-alone stop carries whatever baseline the entry held,
+// which makes used_tokens a lower bound and leaves the unmeasured count
+// unknown.
+const (
+	tokenSumConfirmedRead     = "confirmed_read"
+	tokenSumSessionSpendAlone = "session_spend_alone"
+)
+
+// stopRunAtTokenCeiling latches the stop, counts it, records it, and
+// cancels the run. unmeasuredSessions is nil when no read supplied it,
+// and the attribute is then absent rather than reported as zero.
+func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slog.Logger, ceiling int, unmeasuredSessions *int, sumSource string) {
 	entry.TokenCeilingStopped = true
 	metrics.IncRunsStoppedByBudget(budgetReasonToken)
-	log.Warn("run stopped by token ceiling",
+
+	attrs := []any{
 		slog.String("reason", budgetReasonToken),
-		slog.Int64("used_tokens", used),
+		slog.Int64("used_tokens", entry.IssueTokensCompleted+entry.AgentTotalTokens),
 		slog.Int("budget_tokens", ceiling),
-		slog.Int64("issue_tokens_completed", usage.TotalTokens),
+		slog.Int64("issue_tokens_completed", entry.IssueTokensCompleted),
 		slog.Int64("session_tokens", entry.AgentTotalTokens),
-		slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
+		slog.String("sum_source", sumSource),
 		slog.String("ceiling_setting", ceilingSettingByBudgetReason[budgetReasonToken]),
-	)
+	}
+	if unmeasuredSessions != nil {
+		attrs = append(attrs, slog.Int("unmeasured_sessions", *unmeasuredSessions))
+	}
+	log.Warn("run stopped by token ceiling", attrs...)
+
 	if entry.CancelFunc != nil {
 		entry.CancelFunc()
 	}

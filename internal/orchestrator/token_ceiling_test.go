@@ -205,6 +205,13 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		if len(spy.runsStoppedByBudget) != 1 || spy.runsStoppedByBudget[0] != budgetReasonToken {
 			t.Errorf("IncRunsStoppedByBudget calls = %v, want exactly one %q", spy.runsStoppedByBudget, budgetReasonToken)
 		}
+
+		line := lineWith(t, lb.String(), "run stopped by token ceiling")
+		for _, want := range []string{"sum_source=" + tokenSumConfirmedRead, "unmeasured_sessions="} {
+			if !strings.Contains(line, want) {
+				t.Errorf("stop record taken on a confirming read is missing %s:\n%s", want, line)
+			}
+		}
 	})
 
 	t.Run("events after the stop produce no additional record or counter increment", func(t *testing.T) {
@@ -279,16 +286,20 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		state.Running["ISS-FAILREAD"] = &RunningEntry{
 			Identifier: "ISS-FAILREAD-ident",
 			CancelFunc: func() { cancelCalls++ },
+			// The frozen baseline is what carries this issue over the
+			// ceiling; the session's own spend stays under it, so the
+			// failed read is genuinely the only evidence available.
+			IssueTokensCompleted: 80,
 		}
 		queryErr := errors.New("db unavailable")
 		store := &fakeTokenStore{responses: []tokenStoreResponse{
 			{err: queryErr},
 			{err: queryErr},
-			{usage: persistence.IssueTokenUsage{TotalTokens: 0}},
+			{usage: persistence.IssueTokenUsage{TotalTokens: 80}},
 		}}
 
-		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 150}, store, spy, logger)
-		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 160}, store, spy, logger)
+		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 25}, store, spy, logger)
+		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 26}, store, spy, logger)
 
 		entry := state.Running["ISS-FAILREAD"]
 		if entry.TokenCeilingStopped {
@@ -301,13 +312,51 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 			t.Errorf("entry.CancelFunc called %d times, want 0 while reads keep failing", cancelCalls)
 		}
 
-		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 170}, store, spy, logger)
+		driveEvent(state, "ISS-FAILREAD", domain.TokenUsage{TotalTokens: 27}, store, spy, logger)
 
 		if !entry.TokenCeilingStopped {
 			t.Fatal("entry.TokenCeilingStopped = false, want true once the confirming read succeeds and the sum is at the ceiling")
 		}
 		if cancelCalls != 1 {
 			t.Errorf("entry.CancelFunc called %d times after recovery, want 1", cancelCalls)
+		}
+	})
+
+	t.Run("a failing read still stops a session whose own spend reached the ceiling", func(t *testing.T) {
+		t.Parallel()
+
+		lb, logger := textLogger()
+		spy := &spyMetrics{}
+		var cancelCalls int
+		state := NewState(5000, 4, 100, nil, AgentTotals{})
+		state.Running["ISS-OUTAGE"] = &RunningEntry{
+			Identifier: "ISS-OUTAGE-ident",
+			CancelFunc: func() { cancelCalls++ },
+		}
+		store := &fakeTokenStore{responses: []tokenStoreResponse{{err: errors.New("db unavailable")}}}
+
+		driveEvent(state, "ISS-OUTAGE", domain.TokenUsage{TotalTokens: 150}, store, spy, logger)
+
+		entry := state.Running["ISS-OUTAGE"]
+		if !entry.TokenCeilingStopped {
+			t.Fatal("entry.TokenCeilingStopped = false; a session whose own spend reached the ceiling needs no read to prove the breach")
+		}
+		if cancelCalls != 1 {
+			t.Errorf("entry.CancelFunc called %d times, want 1", cancelCalls)
+		}
+		if len(spy.runsStoppedByBudget) != 1 || spy.runsStoppedByBudget[0] != budgetReasonToken {
+			t.Errorf("IncRunsStoppedByBudget calls = %v, want exactly one %q", spy.runsStoppedByBudget, budgetReasonToken)
+		}
+		if strings.Contains(lb.String(), "in-flight token ceiling check failed, run continues") {
+			t.Error(`logged "run continues" for a run it stopped`)
+		}
+
+		line := lineWith(t, lb.String(), "run stopped by token ceiling")
+		if !strings.Contains(line, "sum_source="+tokenSumSessionSpendAlone) {
+			t.Errorf("stop record does not name how the sum was established:\n%s", line)
+		}
+		if strings.Contains(line, "unmeasured_sessions=") {
+			t.Errorf("stop record reports an unmeasured count no read supplied:\n%s", line)
 		}
 	})
 
@@ -397,15 +446,16 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 		sessionID  = "sess-42"
 	)
 
-	newState := func(arrival registry.UsageArrival, sessionTokens int64) *State {
+	newState := func(arrival registry.UsageArrival, completedTokens, sessionTokens int64) *State {
 		state := NewState(5000, 4, 100, nil, AgentTotals{})
 		state.Running[issueID] = &RunningEntry{
-			Identifier:       identifier,
-			SessionID:        sessionID,
-			AgentKind:        "mock",
-			UsageArrival:     arrival,
-			AgentTotalTokens: sessionTokens,
-			CancelFunc:       func() {},
+			Identifier:           identifier,
+			SessionID:            sessionID,
+			AgentKind:            "mock",
+			UsageArrival:         arrival,
+			IssueTokensCompleted: completedTokens,
+			AgentTotalTokens:     sessionTokens,
+			CancelFunc:           func() {},
 		}
 		return state
 	}
@@ -421,7 +471,7 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 			message: "token ceiling cannot bound this run",
 			emit: func(log *slog.Logger) {
 				store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{}}}}
-				freezeIssueTokenBaseline(context.Background(), newState(registry.UsageArrivalNone, 0), issueID, store, log)
+				freezeIssueTokenBaseline(context.Background(), newState(registry.UsageArrivalNone, 0, 0), issueID, store, log)
 			},
 		},
 		{
@@ -429,7 +479,7 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 			message: "prior token spend unknown, token ceiling bounds this session only",
 			emit: func(log *slog.Logger) {
 				store := &fakeTokenStore{responses: []tokenStoreResponse{{err: errors.New("boom")}}}
-				freezeIssueTokenBaseline(context.Background(), newState(registry.UsageArrivalIncremental, 0), issueID, store, log)
+				freezeIssueTokenBaseline(context.Background(), newState(registry.UsageArrivalIncremental, 0, 0), issueID, store, log)
 			},
 		},
 		{
@@ -437,7 +487,7 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 			message: "in-flight token ceiling check failed, run continues",
 			emit: func(log *slog.Logger) {
 				store := &fakeTokenStore{responses: []tokenStoreResponse{{err: errors.New("boom")}}}
-				state := newState(registry.UsageArrivalIncremental, 150)
+				state := newState(registry.UsageArrivalIncremental, 80, 25)
 				enforceInFlightTokenCeiling(context.Background(), state, issueID, usageEvent, store, &spyMetrics{}, log)
 			},
 		},
@@ -446,7 +496,7 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 			message: "run stopped by token ceiling",
 			emit: func(log *slog.Logger) {
 				store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 0}}}}
-				state := newState(registry.UsageArrivalIncremental, 150)
+				state := newState(registry.UsageArrivalIncremental, 0, 150)
 				enforceInFlightTokenCeiling(context.Background(), state, issueID, usageEvent, store, &spyMetrics{}, log)
 			},
 		},
