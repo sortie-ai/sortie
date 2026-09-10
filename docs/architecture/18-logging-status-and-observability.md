@@ -138,6 +138,8 @@ should return:
 - each running row should include `tokens_pending`, true only when the frozen arrival settles at
   most one figure per turn, the session is measured, and the turn that figure would settle for is
   still in flight
+- each running row should include `api_requests_measured`, true when the row's
+  `api_request_count` is a count of model API requests the session measured
 - `retrying` (list of retry queue rows)
 - `agent_totals`
   - `input_tokens`
@@ -215,9 +217,12 @@ Token accounting rules:
   usage payload, not only `token_usage` events, so an adapter can attach the authoritative
   run-cumulative snapshot to a turn-finalization event without losing it.
 - `api_request_count` is incremented monotonically, and only, per `token_usage` event; a
-  usage-bearing terminal event does not count as an additional request. It counts actual API
-  requests only when the session's kind resolves a `usage_arrival` of `incremental`; for a kind
-  resolving `turn_end`, the count settles at most once per turn and is not a request count.
+  usage-bearing terminal event does not count as an additional request. The count is a
+  measurement of API requests only when the session's resolved `usage_arrival` is `incremental`
+  and either a figure has arrived or no turn has begun. A kind resolving `turn_end` settles the
+  count at most once per turn and never measures requests, and a session whose runtime stopped
+  delivering per-request figures reports the count as unmeasured rather than as zero, so a
+  consumer never reads a fabricated zero where the declaration alone promised a request count.
 - `tokens_pending` distinguishes a settled figure from one still in flight: it is true only when
   the resolved `usage_arrival` is `turn_end`, the session is measured, and the turn that figure
   would settle for has not yet reached a terminal event. A consumer presenting the current token
@@ -406,8 +411,11 @@ Minimum endpoints:
         "tokens": {
           "input_tokens": 1200,
           "output_tokens": 800,
-          "total_tokens": 2000
+          "total_tokens": 2000,
+          "cache_read_tokens": 400
         },
+        "api_request_count": 3,
+        "tokens_measured": true,
         "usage_arrival": "incremental",
         "usage_attribution": "per_model",
         "tokens_pending": false,
@@ -463,6 +471,13 @@ API design notes:
 
 - The JSON shapes above are the recommended baseline for interoperability and debugging ergonomics.
 - Implementations may add fields, but should avoid breaking existing fields within a version.
+- On a running row, `api_request_count` is `null` exactly when `api_requests_measured` is false,
+  the four members of `tokens` are `null` exactly when `tokens_measured` is false, and
+  `requests_by_model` is absent on the first condition and when the attribution names no model.
+- Sortie deviates from the field-stability note above for those five figures, narrowing each from
+  an integer to a nullable one, because a consumer reading a number cannot tell a measured zero
+  from an unmeasured one. A typed consumer is forced to handle the null; an untyped one, in a
+  language where `null` coerces to `0` in arithmetic, is no worse off than it was.
 - Endpoints should be read-only except for operational triggers like `/refresh`.
 - Unsupported methods on defined routes should return `405 Method Not Allowed`.
 - API errors should use a JSON envelope such as `{"error":{"code":"...","message":"..."}}`.

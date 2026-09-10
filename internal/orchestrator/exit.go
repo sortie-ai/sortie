@@ -541,16 +541,24 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
+	// An unmeasured count is stored as zero so a reader of the database
+	// cannot find a figure contradicting the qualifier beside it.
+	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
+	requestCount := 0
+	if requestsMeasured {
+		requestCount = entry.APIRequestCount
+	}
 	sessionMeta := persistence.SessionMetadata{
-		IssueID:         workerResult.IssueID,
-		SessionID:       sessionID,
-		InputTokens:     entry.AgentInputTokens,
-		OutputTokens:    entry.AgentOutputTokens,
-		TotalTokens:     entry.AgentTotalTokens,
-		CacheReadTokens: entry.CacheReadTokens,
-		ModelName:       entry.ModelName,
-		APIRequestCount: entry.APIRequestCount,
-		UpdatedAt:       now.Format(time.RFC3339),
+		IssueID:             workerResult.IssueID,
+		SessionID:           sessionID,
+		InputTokens:         entry.AgentInputTokens,
+		OutputTokens:        entry.AgentOutputTokens,
+		TotalTokens:         entry.AgentTotalTokens,
+		CacheReadTokens:     entry.CacheReadTokens,
+		ModelName:           entry.ModelName,
+		APIRequestCount:     requestCount,
+		APIRequestsMeasured: requestsMeasured,
+		UpdatedAt:           now.Format(time.RFC3339),
 	}
 	if entry.AgentPID != "" {
 		sessionMeta.AgentPID = &entry.AgentPID

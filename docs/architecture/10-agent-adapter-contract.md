@@ -331,7 +331,8 @@ Response fields:
 | `turns_remaining` | integer | `max_turns - turn_number`, clamped at 0 |
 | `attempt` | integer or null | Retry or continuation attempt number; null on the first run |
 | `session_duration_seconds` | number | Wall-clock seconds since the session started |
-| `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens` |
+| `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens`. Each member is an integer or null; the four are null together, exactly when the sibling `tokens_measured` is false, and each carries its figure otherwise |
+| `tokens_measured` | boolean | True when the four figures in `tokens` are a measurement the session's runtime reported; false when nothing measured them |
 
 On success the tool returns the response object above under `data`, in the envelope
 `{"success": true, "data": {...}}` of Section 10.4.2. On failure it returns the failure envelope

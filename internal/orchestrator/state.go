@@ -157,8 +157,9 @@ type RunningEntry struct {
 	ModelName string
 
 	// APIRequestCount is the number of token_usage events received for
-	// this session. Each token_usage event corresponds to one API request
-	// round-trip from the agent.
+	// this session. Whether that is a count of model API requests is a
+	// separate verdict, resolved by apiRequestsMeasured from the
+	// session's frozen arrival, its turn count, and this counter.
 	APIRequestCount int
 
 	// RequestsByModel maps model name to the count of token_usage events
@@ -1139,6 +1140,7 @@ type SnapshotRunningEntry struct {
 	ModelName           string                    `json:"model_name,omitempty"`
 	APIRequestCount     int                       `json:"api_request_count"`
 	RequestsByModel     map[string]int            `json:"requests_by_model,omitempty"`
+	APIRequestsMeasured bool                      `json:"api_requests_measured"`
 	WorkspacePath       string                    `json:"workspace_path"`
 	SSHHost             string                    `json:"ssh_host,omitempty"`
 	ToolTimeMs          int64                     `json:"tool_time_ms"`
@@ -1226,6 +1228,26 @@ func ActiveElapsedSeconds(state *State, now time.Time) float64 {
 	return total
 }
 
+// apiRequestsMeasured reports whether a session's API request count is
+// a measurement of model API requests.
+//
+// Only an arrival that reports during the turn can produce one, and
+// then only once a figure has arrived or while no turn has begun: a
+// session past its first turn with nothing counted measured nothing,
+// whatever its declaration promised. turnCount is compared against
+// zero and nothing else, because a kind emitting the session-started
+// event once per session rather than once per turn undercounts it;
+// every kind emits it at least once, at its first turn.
+func apiRequestsMeasured(arrival registry.UsageArrival, turnCount, apiRequestCount int) bool {
+	if !arrival.ReportsDuringTurn() {
+		return false
+	}
+	if apiRequestCount > 0 {
+		return true
+	}
+	return turnCount == 0
+}
+
 // RuntimeSnapshot captures a point-in-time view of the orchestrator's
 // runtime state. The now parameter controls the snapshot timestamp and
 // the active-session elapsed time computation; it is normalized to UTC
@@ -1252,8 +1274,13 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 
 	var activeElapsedTotal float64
 	for _, entry := range state.Running {
+		requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
+
+		// A map has no null on the wire, so absence is the only way to
+		// say the breakdown means nothing. Gating it here rather than
+		// in each presenter states the rule once.
 		var modelRequests map[string]int
-		if entry.RequestsByModel != nil {
+		if requestsMeasured && entry.UsageAttribution.NamesModel() && entry.RequestsByModel != nil {
 			modelRequests = make(map[string]int, len(entry.RequestsByModel))
 			maps.Copy(modelRequests, entry.RequestsByModel)
 		}
@@ -1275,6 +1302,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			ModelName:           entry.ModelName,
 			APIRequestCount:     entry.APIRequestCount,
 			RequestsByModel:     modelRequests,
+			APIRequestsMeasured: requestsMeasured,
 			WorkspacePath:       entry.WorkspacePath,
 			SSHHost:             entry.SSHHost,
 			ToolTimeMs:          entry.ToolTimeMs,

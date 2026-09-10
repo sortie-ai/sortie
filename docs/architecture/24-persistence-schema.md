@@ -98,6 +98,15 @@ a row whose `session_id` matches the live session is itself the measurement sign
 `tokens_measured = 0`. The unconditional write at session exit is outside that window: by then
 the run's own measurement state has already been recorded on its `run_history` row.
 
+The request count needs a column of its own for the reason the token measurement does not. The
+argument above rests on the in-flight write being gated on a usage-bearing event, so the row's
+existence is itself the token measurement signal. That gate fires for a kind that reports usage
+only when a turn ends too, and such a kind counts turns rather than requests, so the row's
+existence says nothing about whether the request-counting path ran. `api_requests_measured` is
+what says it. A row written before migration 016 reads `0`, because its count was written by the
+unconditional rule that column exists to qualify; the row self-heals on that issue's next
+session.
+
 **`session_metadata`**: last known session metadata per issue (for observability and debug)
 
 | Column              | Type    | Notes                             |
@@ -110,7 +119,8 @@ the run's own measurement state has already been recorded on its `run_history` r
 | `total_tokens`      | INTEGER | Accumulated total tokens          |
 | `cache_read_tokens` | INTEGER | Accumulated cache-read tokens (migration 002) |
 | `model_name`        | TEXT    | Last reported LLM model identifier (migration 002) |
-| `api_request_count` | INTEGER | Number of API round-trips observed (migration 002) |
+| `api_request_count` | INTEGER | Measured model API requests, written as zero when `api_requests_measured` is `0` (migration 002) |
+| `api_requests_measured` | INTEGER | `1` when `api_request_count` is a measurement; `0` when the count is unknown and written as zero (migration 016) |
 | `updated_at`        | TEXT    | ISO-8601 timestamp of last update |
 
 **`aggregate_metrics`**: global token and runtime totals

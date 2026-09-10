@@ -40,15 +40,38 @@ const (
 	WorkerExitCancelled WorkerExitKind = "cancelled"
 )
 
+// workerState is the .sortie/state.json shape the running agent reads
+// back through its status tool. The four token members are nil
+// together, exactly when TokensMeasured is false, and a nil member
+// serializes as JSON null rather than being omitted, so the agent
+// cannot mistake an unmeasured session for one that spent nothing.
+// The session-start write states a measured zero: no turn has begun,
+// so the session has provably spent nothing.
 type workerState struct {
 	TurnNumber      int    `json:"turn_number"`
 	MaxTurns        int    `json:"max_turns"`
 	Attempt         *int   `json:"attempt"`
 	StartedAt       string `json:"started_at"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
-	CacheReadTokens int64  `json:"cache_read_tokens"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	TotalTokens     *int64 `json:"total_tokens"`
+	CacheReadTokens *int64 `json:"cache_read_tokens"`
+	TokensMeasured  bool   `json:"tokens_measured"`
+}
+
+// withTokens returns s carrying the worker's own measurement mirror
+// and, when that mirror is true, the four figures it has folded so
+// far. It is the one gate every state-file write passes through.
+func (s workerState) withTokens(usage domain.TokenUsage, measured bool) workerState {
+	s.TokensMeasured = measured
+	if !measured {
+		return s
+	}
+	s.InputTokens = &usage.InputTokens
+	s.OutputTokens = &usage.OutputTokens
+	s.TotalTokens = &usage.TotalTokens
+	s.CacheReadTokens = &usage.CacheReadTokens
+	return s
 }
 
 // writeWorkerState atomically writes session runtime state to
@@ -953,7 +976,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			MaxTurns:   maxTurns,
 			Attempt:    attempt,
 			StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-		}); err != nil {
+		}.withTokens(localUsage, localMeasured)); err != nil {
 			logger.Warn("failed to write status state file at session start", slog.Any("error", err))
 		}
 	}
@@ -961,15 +984,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	for {
 		if mcpConfigPath != "" {
 			if err := writeWorkerState(wsResult.Path, workerState{
-				TurnNumber:      turnNumber,
-				MaxTurns:        maxTurns,
-				Attempt:         attempt,
-				StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-				InputTokens:     localUsage.InputTokens,
-				OutputTokens:    localUsage.OutputTokens,
-				TotalTokens:     localUsage.TotalTokens,
-				CacheReadTokens: localUsage.CacheReadTokens,
-			}); err != nil {
+				TurnNumber: turnNumber,
+				MaxTurns:   maxTurns,
+				Attempt:    attempt,
+				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+			}.withTokens(localUsage, localMeasured)); err != nil {
 				logger.Warn("failed to write status state file at turn start",
 					slog.Int("turn_number", turnNumber),
 					slog.Any("error", err),
@@ -1061,15 +1080,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 					if mcpConfigPath != "" {
 						if err := writeWorkerState(wsResult.Path, workerState{
-							TurnNumber:      turnNumber,
-							MaxTurns:        maxTurns,
-							Attempt:         attempt,
-							StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-							InputTokens:     localUsage.InputTokens,
-							OutputTokens:    localUsage.OutputTokens,
-							TotalTokens:     localUsage.TotalTokens,
-							CacheReadTokens: localUsage.CacheReadTokens,
-						}); err != nil {
+							TurnNumber: turnNumber,
+							MaxTurns:   maxTurns,
+							Attempt:    attempt,
+							StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+						}.withTokens(localUsage, localMeasured)); err != nil {
 							logger.Warn("failed to write status state file on token event", slog.Any("error", err))
 						}
 					}
