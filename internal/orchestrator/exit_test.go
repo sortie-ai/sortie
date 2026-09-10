@@ -9341,12 +9341,14 @@ func TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally(t *testing.T) {
 	entry.APIRequestCount = 0
 
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:        "ISSUE-REQV3",
-		Identifier:     "ISSUE-REQV3-ident",
-		ExitKind:       WorkerExitNormal,
-		AgentAdapter:   "mock",
-		WorkspacePath:  "/tmp/ws",
-		TurnsCompleted: 1,
+		IssueID:       "ISSUE-REQV3",
+		Identifier:    "ISSUE-REQV3-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+		// The turn began and then failed, so nothing completed.
+		TurnsCompleted: 0,
+		TurnsStarted:   1,
 	}, defaultExitParams(t, store))
 
 	if len(store.sessionMetadata) != 1 {

@@ -545,9 +545,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// because the entry's is fed by the agent event channel while this
 	// exit arrives on its own: a session_started still queued there
 	// would otherwise leave the count at zero and let a session that
-	// really ran be stored as a measured zero. Taking the larger can
-	// only move away from that reading.
-	turnsSeen := max(entry.TurnCount, workerResult.TurnsCompleted)
+	// really ran be stored as a measured zero. The started tally is
+	// the one to take, because a turn that errored or was cancelled
+	// still means the session ran.
+	turnsSeen := max(entry.TurnCount, workerResult.TurnsStarted)
 
 	// An unmeasured count is stored as zero so a reader of the database
 	// cannot find a figure contradicting the qualifier beside it.

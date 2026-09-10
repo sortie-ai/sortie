@@ -130,6 +130,12 @@ type WorkerResult struct {
 	// (received a TurnResult) before the worker exited.
 	TurnsCompleted int
 
+	// TurnsStarted is the number of turns the worker began, counted as
+	// each one starts rather than when it returns, so a turn that
+	// errored or was cancelled still counts. A reader deciding whether
+	// the session ever ran needs this rather than TurnsCompleted.
+	TurnsStarted int
+
 	// SessionID is the adapter-assigned session identifier. Empty if
 	// the worker exited before starting a session. The exit handler
 	// uses this to populate RunningEntry.SessionID and to enable
@@ -691,6 +697,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var workspacePath string
 	var sessionID string
 	var turnsCompleted int
+	var turnsStarted int
 	var observedIssueState string
 	var session domain.Session
 	var sessionStarted bool
@@ -735,6 +742,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ExitKind:           WorkerExitError,
 					Error:              fmt.Errorf("worker panic: %v", r),
 					TurnsCompleted:     turnsCompleted,
+					TurnsStarted:       turnsStarted,
 					SessionID:          sessionID,
 					WorkspacePath:      workspacePath,
 					AgentAdapter:       agentKind,
@@ -1005,6 +1013,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKindForErr(ctx),
 				Error:              fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1042,6 +1051,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
+		turnsStarted++
 
 		if turnNumber == 1 {
 			localMeasured = false
@@ -1136,6 +1146,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKindForErr(ctx),
 				Error:              fmt.Errorf("agent turn %d: %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1167,6 +1178,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKind,
 				Error:              fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1206,6 +1218,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ExitKind:           exitKindForErr(ctx),
 					Error:              fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
 					TurnsCompleted:     turnsCompleted,
+					TurnsStarted:       turnsStarted,
 					SessionID:          session.ID,
 					WorkspacePath:      wsResult.Path,
 					AgentAdapter:       agentKind,
@@ -1336,6 +1349,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Error:              phaseErr,
 			ReviewMetadata:     reviewMeta,
 			TurnsCompleted:     turnsCompleted,
+			TurnsStarted:       turnsStarted,
 			SessionID:          session.ID,
 			WorkspacePath:      wsResult.Path,
 			AgentAdapter:       agentKind,
