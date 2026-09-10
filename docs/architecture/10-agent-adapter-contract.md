@@ -350,7 +350,8 @@ Availability: registered when the database path and issue ID are present in the 
 On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
 Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
 recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
-`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, `ci_failed`, or `needs_person`), and
+`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, `ci_failed`, `needs_person`, or
+`budget_stopped`), and
 `error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
 from the envelope's `error` object.
 
@@ -359,11 +360,13 @@ On failure the tool returns the failure envelope
 `query_failed`. This happens when the history query fails.
 
 **`cost_budget` (Tier 1)** returns cumulative per-issue token spend and the remaining token
-budget so an agent can self-regulate before the orchestrator's token ceiling blocks a
+budget so an agent can self-regulate before the ceiling stops the run in flight or blocks a
 re-dispatch. It sums `total_tokens` across the issue's `run_history` rows and adds the running
 session's recorded `total_tokens` from `session_metadata`, then makes no external calls. It is
-the advisory counterpart to the `agent.max_tokens` enforcement on the dispatch path; both read
-the same summed `total_tokens`, so the advisory reading and the refusal agree.
+the advisory counterpart to the `agent.max_tokens` enforcement: the tool adds the running
+session's recorded `session_metadata` total, written at most once per throttled write interval,
+while the in-flight lane adds the session's live in-memory total, which every usage event
+raises. The advisory reading therefore trails the enforced figure by up to that interval.
 
 Availability: registered when the database path and issue ID are present in the environment
 (`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`), the same condition as `workspace_history`. The running

@@ -37,7 +37,7 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `workspace`     | TEXT    | Workspace path                            |
 | `started_at`    | TEXT    | ISO-8601 timestamp                        |
 | `completed_at`  | TEXT    | ISO-8601 timestamp                        |
-| `status`          | TEXT    | Run disposition (`succeeded`, `failed`, `cancelled`, `ci_failed`, or `needs_person`) |
+| `status`          | TEXT    | Run disposition (`succeeded`, `failed`, `cancelled`, `ci_failed`, `needs_person`, or `budget_stopped`) |
 | `error`           | TEXT    | Error message if failed, may be null      |
 | `workflow_file`   | TEXT    | Workflow file name the run was driven by, may be null (migration 003) |
 | `turns_completed`   | INTEGER | Agent turns the attempt completed (migration 005) |
@@ -74,6 +74,11 @@ run carries it in the existing `error` field. In particular, this change adds no
 work was observed, it cannot serve as the reset for a consecutive-absence sequence; that reset is
 recorded per issue in `handoff_absence_resets` below.
 
+`budget_stopped` records a run the per-issue token ceiling stopped while it was in flight,
+distinct from `cancelled`, which still covers a run stopped by stall detection, a terminal
+tracker state, or shutdown. The distinction lets a consumer attribute a stop to the budget
+ceiling from the durable record alone, without parsing `error` text.
+
 A row with `tokens_measured = 0` always carries zero in all four token columns; the invariant
 runs in one direction only, because a measured run can legitimately report a zero spend. Every
 writer sets `tokens_measured` explicitly rather than relying on the column's default: the SQL
@@ -84,7 +89,9 @@ is not recoverable and are treated as measured.
 
 The token columns mirror those on `session_metadata`. The per-issue token budget
 (`agent.max_tokens`) sums `total_tokens` here; the other three are recorded for parity and
-future use. The `session_metadata` write cadence changed to throttled-incremental during a
+future use. The in-flight lane that stops a run mid-turn adds the running session's own live
+in-memory total to that sum, rather than waiting for the session's own row to land. The
+`session_metadata` write cadence changed to throttled-incremental during a
 running session (at most one write per issue per two seconds, on the orchestrator event loop)
 so the `cost_budget` tool can read in-flight spend before the session's `run_history` row
 exists.

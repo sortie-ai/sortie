@@ -146,11 +146,12 @@ Per-issue effort budget (defense-in-depth):
 
 Per-issue token budget (cost ceiling):
 
-- When `agent.max_tokens > 0`, two lanes evaluate it: the retry handler sums `total_tokens`
+- When `agent.max_tokens > 0`, three lanes evaluate it: the retry handler sums `total_tokens`
   across the issue's `run_history` entries on the same pre-dispatch path, after the session
   check, once per retry; the poll tick's rebuild runs the same sum as one batch query over the
   whole candidate set, once per tick, after the session-count query (see the rebuild bullet
-  below).
+  below); and the event loop evaluates a run already in flight against the same ceiling as
+  each usage figure arrives.
 - If the sum reaches `max_tokens`, a warning is logged on both lanes. The retry handler
   releases the claim it holds and does not re-dispatch; the rebuild writes the candidate into
   the exhausted-issue set instead, for the reason the effort-budget bullet above states.
@@ -189,6 +190,15 @@ Per-issue token budget (cost ceiling):
   visibility of the query-failure fail-open case above. The retry path warns on every occurrence
   rather than once per issue, because it runs once per retry rather than once per poll tick.
 - `max_tokens = 0` (default) disables the budget entirely.
+- The in-flight lane runs on the event loop rather than at dispatch: an integer comparison
+  against the running session's own token total pre-filters every usage event so no store read
+  runs until the pre-filter fires, and only then does a confirming read against the same sum
+  the dispatch lanes read decide the stop. A failed confirming read fails open, logging a
+  warning and leaving the run running; the pre-filter re-evaluates on every later usage figure,
+  so the run remains bounded by the next dispatch decision even while the confirming read keeps
+  failing. Once the confirming read shows the sum at or over the ceiling, the lane cancels the
+  running session's context, which records the stop in `run_history` and the tracker's next
+  hold notice.
 
 Note:
 

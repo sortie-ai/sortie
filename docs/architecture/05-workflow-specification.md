@@ -247,20 +247,25 @@ Fields:
 - `max_tokens` (integer)
   - Default: `0` (unlimited; no token budget enforced).
   - Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the
-    issue's `run_history` entries and stops re-dispatching once the sum reaches `max_tokens`.
-  - When the sum reaches `max_tokens`, a warning is logged, on the same two lanes and for the
-    same reason `max_sessions` states above. A failed token query fails open, but not the same
-    way on both lanes: the retry handler's check is skipped and dispatch proceeds for that
-    issue, while the rebuild folds the prior set's entries for the failing axis forward
+    issue's completed `run_history` entries, adds the running session's own reported spend,
+    and stops re-dispatching once the sum reaches `max_tokens`.
+  - Reaching the ceiling also stops a run already in flight, on the event loop, as soon as a
+    usage figure carries the sum to the ceiling, not only at the next dispatch decision.
+  - When the sum reaches `max_tokens`, a warning is logged, on the same two dispatch lanes and
+    for the same reason `max_sessions` states above. A failed token query fails open, but not
+    the same way on both lanes: the retry handler's check is skipped and dispatch proceeds for
+    that issue, while the rebuild folds the prior set's entries for the failing axis forward
     unchanged and keeps the other axis fresh.
   - A run whose coding agent reported no token usage is recorded unmeasured and contributes
     nothing to the sum. A sum below `max_tokens` that includes at least one unmeasured run
     allows the dispatch and logs a warning naming the issue, the sum, the ceiling, and the
     unmeasured count.
   - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
-  - Changes are re-applied at runtime and affect future retry timer evaluations.
+  - Changes are re-applied at runtime: a lowered ceiling reaches a run already in flight from
+    the next poll tick onward, and it affects future retry timer evaluations.
   - Reaching the ceiling also posts one comment on the issue naming the token budget and
-    `agent.max_tokens` as the setting that raises it.
+    `agent.max_tokens` as the setting that raises it, stating whether a session was stopped
+    in flight.
 - `max_consecutive_absences` (integer)
   - Default: `3`.
   - Bounds how many runs in a row may be observed to have produced no evidence of work before

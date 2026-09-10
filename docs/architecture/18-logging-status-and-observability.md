@@ -54,6 +54,20 @@ or invented one. The record fires once per hold: a tick that re-observes an
 already-announced hold under the same reason emits nothing further, and whichever lane discovers a
 hold is the only one that announces it.
 
+The in-flight token ceiling adds four records of its own, beyond the hold record above, so
+budget observability covers a run already in flight and not only a re-dispatch that never
+starts. A dispatch whose resolved usage arrival reports no figure at all emits one `Warn`
+record, message `"token ceiling cannot bound this run"`, carrying `agent_kind`, `usage_arrival`,
+and `budget_tokens`, once per dispatch. A dispatch whose baseline read fails emits one `Warn`
+record, message `"prior token spend unknown, token ceiling bounds this session only"`, carrying
+`error` and `budget_tokens`, once per dispatch. A confirming read that fails while a running
+session is over the pre-filter emits one `Warn` record, message `"in-flight token ceiling check
+failed, run continues"`, carrying `error` and `budget_tokens`, at most once per run regardless
+of how many failing reads follow. A running session the ceiling stops emits one `Warn` record,
+message `"run stopped by token ceiling"`, carrying `reason`, `used_tokens`, `budget_tokens`,
+`issue_tokens_completed`, `session_tokens`, `unmeasured_sessions`, and `ceiling_setting`, once
+per run.
+
 The tracker comment this same hold posts is recorded separately, at the write site rather than
 alongside the log record above. A successful write emits one `Info` record, message
 `"budget hold notice posted"`, carrying the standard issue context fields. A failed write emits
@@ -232,8 +246,11 @@ Token accounting rules:
 - At session exit, the session's token totals are written to the `run_history` row alongside
   the aggregate update. The run's final usage is reconciled from the worker result before that
   row is written, so a dropped or late event cannot lower the recorded total. The per-issue
-  token budget (`agent.max_tokens`) sums `run_history` `total_tokens` per issue; the
-  `cost_budget` tool reads the same sum plus the running session's recorded total.
+  token budget (`agent.max_tokens`) sums `run_history` `total_tokens` per issue; the in-flight
+  lane adds the running session's live in-memory total, which is not the same figure the
+  `cost_budget` tool reads. The tool adds the running session's recorded `session_metadata`
+  total instead, written at most once per throttled write interval, so its advisory reading
+  trails the in-flight lane's enforced figure by up to that interval.
 
 Timing accounting rules:
 
@@ -528,6 +545,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_candidate_holds_total{reason}` | Counter | `IncCandidateHolds`. Candidates the dispatch loop held, partitioned by reason (`blocked_by`, `blockers_unresolved`, `blockers_not_read`, `blockers_incomplete`). Incremented once per held candidate; never incremented for a candidate rejected by an eligibility or capacity gate, and never incremented a second time for the pass-level `blocker reads halted for this tick` ERROR that accompanies a run of `blockers_unresolved` holds. |
 | `sortie_budget_exhaustions_total{reason}` | Counter | `IncBudgetExhaustions`. Issue entries into the per-issue budget-exhausted set, partitioned by reason (`token_budget`, `session_budget`, open to a later value). Incremented once per hold, from whichever lane discovered it; never incremented on a tick that merely re-observes an already-announced hold. |
 | `sortie_budget_exhausted_issues{reason}` | Gauge | `SetBudgetExhaustedIssues`. Issues currently held out of dispatch, partitioned by reason. Recomputed from the full budget-exhausted set on every gauge update, including every declared reason at zero when nothing is held, so a reason that clears reports zero rather than freezing at its last value. |
+| `sortie_runs_stopped_by_budget_total{reason}` | Counter | `IncRunsStoppedByBudget`. Runs the orchestrator stopped in flight because a budget ceiling was reached, partitioned by reason. Only `token_budget` is reachable: a session is a discrete unit, so the session ceiling cannot be crossed part-way through one. Incremented once per stopped run. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |
