@@ -119,8 +119,8 @@ session.
 | `total_tokens`      | INTEGER | Accumulated total tokens          |
 | `cache_read_tokens` | INTEGER | Accumulated cache-read tokens (migration 002) |
 | `model_name`        | TEXT    | Last reported LLM model identifier (migration 002) |
-| `api_request_count` | INTEGER | Measured model API requests, written as zero when `api_requests_measured` is `0` (migration 002) |
-| `api_requests_measured` | INTEGER | `1` when `api_request_count` is a measurement; `0` when the count is unknown and written as zero (migration 016) |
+| `api_request_count` | INTEGER | Measured model API requests; a current writer stores zero when `api_requests_measured` is `0` (migration 002) |
+| `api_requests_measured` | INTEGER | `1` when `api_request_count` is a measurement; `0` when it is not. A row predating migration 016 reads `0` here while keeping the count it already had, until that issue's next session write (migration 016) |
 | `updated_at`        | TEXT    | ISO-8601 timestamp of last update |
 
 **`aggregate_metrics`**: global token and runtime totals

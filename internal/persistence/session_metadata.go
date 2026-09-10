@@ -25,8 +25,10 @@ type SessionMetadata struct {
 
 	// APIRequestsMeasured is true when APIRequestCount is a
 	// measurement of model API requests. False when nothing counted
-	// them, in which case APIRequestCount is written as zero so the
-	// stored row cannot contradict its own qualifier.
+	// them, in which case a current writer stores APIRequestCount as
+	// zero so the row cannot contradict its own qualifier. A row last
+	// written before this field existed is the exception: it keeps the
+	// count it had beside a false qualifier until its issue runs again.
 	APIRequestsMeasured bool
 }
 
