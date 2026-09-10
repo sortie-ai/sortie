@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -925,9 +926,11 @@ func TestHandleDashboard_NoSSHHostColumn(t *testing.T) {
 	}
 }
 
-// TestBuildDashboardData_ExtendedFields verifies that the new
-// CacheReadTokens, ModelName, and APIRequestCount fields are passed
-// through buildDashboardData to the template data structures.
+// TestBuildDashboardData_ExtendedFields verifies that the
+// CacheReadTokens, ModelName, and API request-count fields are passed
+// through buildDashboardData to the template data structures. The
+// request count reaches the template only through its pre-formatted
+// row, which is the panel's one guarded reader of the raw figure.
 func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 	t.Parallel()
 
@@ -945,6 +948,9 @@ func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 				CacheReadTokens:  8000,
 				ModelName:        "claude-sonnet-4-20250514",
 				APIRequestCount:  12,
+
+				UsageArrival:        registry.UsageArrivalIncremental,
+				APIRequestsMeasured: true,
 			},
 		},
 		AgentTotals: orchestrator.SnapshotAgentTotals{
@@ -968,8 +974,8 @@ func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 	if entry.ModelName != "claude-sonnet-4-20250514" {
 		t.Errorf("Running[0].ModelName = %q, want %q", entry.ModelName, "claude-sonnet-4-20250514")
 	}
-	if entry.APIRequestCount != 12 {
-		t.Errorf("Running[0].APIRequestCount = %d, want 12", entry.APIRequestCount)
+	if entry.APIRequestsRow != "12" {
+		t.Errorf("Running[0].APIRequestsRow = %q, want %q", entry.APIRequestsRow, "12")
 	}
 	if data.CacheReadTokens != 15000 {
 		t.Errorf("CacheReadTokens = %d, want 15000", data.CacheReadTokens)
@@ -2196,8 +2202,11 @@ func TestUsageRowFunctions_Totality(t *testing.T) {
 					if got := usageModelRow(attribution, "some-model"); got == "" {
 						t.Errorf("usageModelRow(%q, \"some-model\") = empty, want non-empty (%s)", attribution, name)
 					}
-					if got := usageAPIRequestsRow(arrival, 3); got == "" {
-						t.Errorf("usageAPIRequestsRow(%q, 3) = empty, want non-empty (%s)", arrival, name)
+					if got := usageAPIRequestsRow(arrival, measured, 3, nil); got == "" {
+						t.Errorf("usageAPIRequestsRow(%q, %v, 3, nil) = empty, want non-empty (%s)", arrival, measured, name)
+					}
+					if got := usageAPIRequestsRow(arrival, measured, 3, map[string]int{"a": 1, "b": 2}); got == "" {
+						t.Errorf("usageAPIRequestsRow(%q, %v, 3, breakdown) = empty, want non-empty (%s)", arrival, measured, name)
 					}
 					if got := usageTokensRow(arrival, measured, pending, "1,234"); got == "" {
 						t.Errorf("usageTokensRow(%q, %v, %v, \"1,234\") = empty, want non-empty (%s)", arrival, measured, pending, name)
@@ -2279,22 +2288,24 @@ func TestUsageAPIRequestsRow_Golden(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		arrival registry.UsageArrival
-		want    string
+		name     string
+		arrival  registry.UsageArrival
+		measured bool
+		want     string
 	}{
-		{"none arrival", registry.UsageArrivalNone, dashPlaceholder},
-		{"incremental arrival", registry.UsageArrivalIncremental, "7"},
-		{"turn_end arrival", registry.UsageArrivalTurnEnd, "not measured"},
-		{"undeclared arrival", registry.UsageArrivalUndeclared, "not measured"},
+		{"none arrival", registry.UsageArrivalNone, false, dashPlaceholder},
+		{"incremental arrival, measured", registry.UsageArrivalIncremental, true, "7"},
+		{"turn_end arrival", registry.UsageArrivalTurnEnd, false, "not measured"},
+		{"undeclared arrival", registry.UsageArrivalUndeclared, false, "not measured"},
+		{"arrival outside the declared set", registry.UsageArrival("bogus"), false, "not measured"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := usageAPIRequestsRow(tt.arrival, 7); got != tt.want {
-				t.Errorf("usageAPIRequestsRow(%q, 7) = %q, want %q", tt.arrival, got, tt.want)
+			if got := usageAPIRequestsRow(tt.arrival, tt.measured, 7, nil); got != tt.want {
+				t.Errorf("usageAPIRequestsRow(%q, %v, 7, nil) = %q, want %q", tt.arrival, tt.measured, got, tt.want)
 			}
 		})
 	}
@@ -2470,5 +2481,150 @@ func TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst(t *testing.T) {
 		if usageIdx >= idx {
 			t.Errorf("Usage reporting row at byte %d does not precede %s at byte %d", usageIdx, label, idx)
 		}
+	}
+}
+
+// extractDashboardRow returns the rendered text between the <dt>label</dt>
+// and its following <dd>...</dd>, or fails the test when the label is
+// absent. Used to read a specific detail row's own value out of the
+// rendered body rather than searching the whole page for a substring.
+func extractDashboardRow(t *testing.T, body, label string) string {
+	t.Helper()
+	re := regexp.MustCompile(`(?s)<dt>` + regexp.QuoteMeta(label) + `</dt>\s*<dd>(.*?)</dd>`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("body missing a <dt>%s</dt> row", label)
+	}
+	return strings.TrimSpace(m[1])
+}
+
+// TestRequestCountStateMatrix_RenderedRowAndWire proves P7: it walks
+// section 3.3's rule table as a state matrix over a SnapshotRunningEntry,
+// the struct both presenters consume, and for each row marshals a
+// runningEntryResponse and renders the panel. The wire half checks that
+// api_request_count is null exactly when the verdict is false; the
+// rendered half extracts the API Requests row's own value from the body
+// and matches it against exactly one of the three admissible strings,
+// rather than searching the page for the absence of a numeral, which
+// can never fail because the page always carries other numbers.
+func TestRequestCountStateMatrix_RenderedRowAndWire(t *testing.T) {
+	t.Parallel()
+
+	admissibleUnmeasured := map[string]bool{
+		"not reported yet": true,
+		"not measured":     true,
+		dashPlaceholder:    true,
+	}
+
+	tests := []struct {
+		name            string
+		arrival         registry.UsageArrival
+		measured        bool
+		apiRequestCount int
+	}{
+		{"incremental, no turn, zero count: measured, presents zero", registry.UsageArrivalIncremental, true, 0},
+		{"incremental, no turn, positive count: measured, presents the count", registry.UsageArrivalIncremental, true, 5},
+		{"incremental, turns began, zero count: unmeasured", registry.UsageArrivalIncremental, false, 0},
+		{"incremental, turns began, positive count: measured, presents the count", registry.UsageArrivalIncremental, true, 7},
+		{"turn_end, unmeasured, contradicted raw count ignored on the wire", registry.UsageArrivalTurnEnd, false, 9},
+		{"none, unmeasured, contradicted raw count ignored on the wire", registry.UsageArrivalNone, false, 9},
+		{"undeclared arrival, unmeasured", registry.UsageArrivalUndeclared, false, 9},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := orchestrator.SnapshotRunningEntry{
+				IssueID:             "issue-matrix",
+				Identifier:          "MT-MATRIX",
+				State:               "In Progress",
+				StartedAt:           time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+				UsageArrival:        tt.arrival,
+				APIRequestCount:     tt.apiRequestCount,
+				APIRequestsMeasured: tt.measured,
+			}
+
+			resp := toRunningEntryResponse(entry)
+			if (resp.APIRequestCount != nil) != tt.measured {
+				t.Fatalf("APIRequestCount != nil = %v, want %v (api_requests_measured)", resp.APIRequestCount != nil, tt.measured)
+			}
+			if tt.measured && *resp.APIRequestCount != tt.apiRequestCount {
+				t.Errorf("APIRequestCount = %d, want %d", *resp.APIRequestCount, tt.apiRequestCount)
+			}
+
+			snap := orchestrator.RuntimeSnapshotResult{
+				GeneratedAt: entry.StartedAt.Add(time.Minute),
+				Running:     []orchestrator.SnapshotRunningEntry{entry},
+			}
+			ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+			dr := getDashboard(t, ts, "/")
+			if dr.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+			}
+
+			row := extractDashboardRow(t, dr.Body, "API Requests")
+			if tt.measured {
+				want := FormatInt(int64(tt.apiRequestCount))
+				if row != want {
+					t.Errorf("rendered API Requests row = %q, want %q", row, want)
+				}
+				return
+			}
+			if !admissibleUnmeasured[row] {
+				t.Errorf("rendered API Requests row = %q, want one of %v", row, admissibleUnmeasured)
+			}
+			if strings.Contains(row, FormatInt(int64(tt.apiRequestCount))) && tt.apiRequestCount != 0 {
+				t.Errorf("rendered API Requests row = %q leaks the raw unmeasured count %d", row, tt.apiRequestCount)
+			}
+		})
+	}
+}
+
+// TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests is P10's
+// own reproduction, run end to end rather than at either row function
+// alone: a session whose runtime delivers usage on a turn-final event
+// but never a token_usage event renders "not measured" in the API
+// Requests row and its real, non-zero token total in the Tokens row,
+// on the same card, with no zero standing in for either fact.
+func TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:             "id-turnend-p10",
+				Identifier:          "MT-P10",
+				State:               "In Progress",
+				StartedAt:           now.Add(-3 * time.Minute),
+				LastAgentEvent:      domain.EventTurnCompleted,
+				UsageArrival:        registry.UsageArrivalTurnEnd,
+				UsageAttribution:    registry.UsageAttributionSessionTotal,
+				UsageMeasured:       true,
+				APIRequestsMeasured: false,
+				APIRequestCount:     0,
+				AgentTotalTokens:    1500,
+			},
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+	dr := getDashboard(t, ts, "/")
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+
+	requestsRow := extractDashboardRow(t, dr.Body, "API Requests")
+	if requestsRow != "not measured" {
+		t.Errorf("API Requests row = %q, want %q", requestsRow, "not measured")
+	}
+	tokensRow := extractDashboardRow(t, dr.Body, "Tokens")
+	if tokensRow != "1,500" {
+		t.Errorf("Tokens row = %q, want %q", tokensRow, "1,500")
+	}
+	if requestsRow == "0" || tokensRow == "0" {
+		t.Errorf("a row states a fabricated zero: API Requests=%q, Tokens=%q", requestsRow, tokensRow)
 	}
 }

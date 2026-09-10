@@ -124,6 +124,7 @@ func TestMCPServer_StatusTool_Dispatch(t *testing.T) {
 		"output_tokens":     int64(1200),
 		"total_tokens":      int64(6200),
 		"cache_read_tokens": int64(800),
+		"tokens_measured":   true,
 	})
 
 	reg := domain.NewToolRegistry()

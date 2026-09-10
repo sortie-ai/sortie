@@ -6,10 +6,12 @@ import (
 	_ "embed" // required for //go:embed directives
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
@@ -71,7 +73,6 @@ type dashboardRunningEntry struct {
 	TotalTokens      int64
 	CacheReadTokens  int64
 	ModelName        string
-	APIRequestCount  int
 	DetailURL        string
 	Host             string
 	ToolTimePct      string
@@ -145,17 +146,46 @@ func usageModelRow(attribution registry.UsageAttribution, modelName string) stri
 }
 
 // usageAPIRequestsRow renders the API Requests row. A count is shown
-// only for an arrival whose figures arrive per API request during the
-// turn; every other declared arrival's count is not a request count.
-func usageAPIRequestsRow(arrival registry.UsageArrival, apiRequestCount int) string {
+// only when the session's measurement verdict is true; the arrival
+// decides only which unmeasured wording the row carries. A none
+// arrival reaches the panel's existing dash rather than restating the
+// Usage reporting row's reason, so its arm is evaluated first.
+//
+// An incremental session reads not reported yet rather than not
+// measured, because a figure that has not arrived yet and one that
+// never will are not separable from the event stream; the wording
+// matches what the Tokens row already uses for that same ambiguity.
+func usageAPIRequestsRow(
+	arrival registry.UsageArrival,
+	measured bool,
+	apiRequestCount int,
+	requestsByModel map[string]int,
+) string {
 	switch {
 	case arrival == registry.UsageArrivalNone:
 		return dashPlaceholder
-	case arrival.ReportsDuringTurn():
+	case measured && len(requestsByModel) >= 2:
+		return FormatInt(int64(apiRequestCount)) + " (" + formatRequestsByModel(requestsByModel) + ")"
+	case measured:
 		return FormatInt(int64(apiRequestCount))
+	case arrival == registry.UsageArrivalIncremental:
+		return "not reported yet"
 	default:
 		return "not measured"
 	}
+}
+
+// formatRequestsByModel renders the per-model split as model: count
+// pairs joined by a comma, in ascending model-name order so the
+// rendered string is deterministic. It is called only where the
+// breakdown names more than one model, the one case in which the
+// split says something the Model row above does not.
+func formatRequestsByModel(requestsByModel map[string]int) string {
+	pairs := make([]string, 0, len(requestsByModel))
+	for _, model := range slices.Sorted(maps.Keys(requestsByModel)) {
+		pairs = append(pairs, model+": "+FormatInt(int64(requestsByModel[model])))
+	}
+	return strings.Join(pairs, ", ")
 }
 
 // usageTokensRow renders the Tokens row. tokensStr is the
@@ -420,7 +450,6 @@ func buildDashboardData(
 			TotalTokens:       e.AgentTotalTokens,
 			CacheReadTokens:   e.CacheReadTokens,
 			ModelName:         e.ModelName,
-			APIRequestCount:   e.APIRequestCount,
 			DetailURL:         "/api/v1/" + url.PathEscape(e.Identifier),
 			Host:              e.SSHHost,
 			ToolTimePct:       toolPct,
@@ -430,9 +459,10 @@ func buildDashboardData(
 			UsageMeasured:     e.UsageMeasured,
 			UsageReportingRow: usageReportingRow(e.UsageArrival, e.UsageAttribution),
 			ModelRow:          usageModelRow(e.UsageAttribution, e.ModelName),
-			APIRequestsRow:    usageAPIRequestsRow(e.UsageArrival, e.APIRequestCount),
-			TokensRow:         usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensPending, tokensStr),
-			EstCostRow:        usageEstCostRow(e.UsageArrival, hasRates, e.TokensPending, entryCostStr),
+			APIRequestsRow: usageAPIRequestsRow(
+				e.UsageArrival, e.APIRequestsMeasured, e.APIRequestCount, e.RequestsByModel),
+			TokensRow:  usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensPending, tokensStr),
+			EstCostRow: usageEstCostRow(e.UsageArrival, hasRates, e.TokensPending, entryCostStr),
 		}
 	}
 	data.Running = running

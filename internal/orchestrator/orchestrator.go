@@ -1039,16 +1039,24 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 		return
 	}
 
+	// An unmeasured count is stored as zero so a reader of the database
+	// cannot find a figure contradicting the qualifier beside it.
+	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
+	requestCount := 0
+	if requestsMeasured {
+		requestCount = entry.APIRequestCount
+	}
 	meta := persistence.SessionMetadata{
-		IssueID:         issueID,
-		SessionID:       entry.SessionID,
-		InputTokens:     entry.AgentInputTokens,
-		OutputTokens:    entry.AgentOutputTokens,
-		TotalTokens:     entry.AgentTotalTokens,
-		CacheReadTokens: entry.CacheReadTokens,
-		ModelName:       entry.ModelName,
-		APIRequestCount: entry.APIRequestCount,
-		UpdatedAt:       now.Format(time.RFC3339),
+		IssueID:             issueID,
+		SessionID:           entry.SessionID,
+		InputTokens:         entry.AgentInputTokens,
+		OutputTokens:        entry.AgentOutputTokens,
+		TotalTokens:         entry.AgentTotalTokens,
+		CacheReadTokens:     entry.CacheReadTokens,
+		ModelName:           entry.ModelName,
+		APIRequestCount:     requestCount,
+		APIRequestsMeasured: requestsMeasured,
+		UpdatedAt:           now.Format(time.RFC3339),
 	}
 	if entry.AgentPID != "" {
 		meta.AgentPID = &entry.AgentPID

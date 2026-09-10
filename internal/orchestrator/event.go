@@ -163,9 +163,11 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	}
 
 	if event.Type == domain.EventTokenUsage {
-		// Increment API request count unconditionally — each
-		// token_usage event represents one API round-trip, including
-		// one whose reported usage is entirely zero.
+		// The counter counts token_usage events, including one whose
+		// reported usage is entirely zero. That is a round-trip count
+		// only for a session the measurement verdict admits, and the
+		// increment stays unconditional so the verdict, not the
+		// counter, carries the distinction.
 		entry.APIRequestCount++
 
 		// A turn_end kind settles at most one figure per turn; more

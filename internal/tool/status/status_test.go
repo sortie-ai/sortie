@@ -152,8 +152,10 @@ func TestStatusTool_CorrectTurnAndBudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("data.tokens is not an object: %v", d["tokens"])
 	}
-	if got, _ := tokens["input_tokens"].(float64); got != 0 {
-		t.Errorf("data.tokens.input_tokens = %v, want 0", tokens["input_tokens"])
+	if value, exists := tokens["input_tokens"]; !exists {
+		t.Error("data.tokens.input_tokens key missing from response")
+	} else if value != nil {
+		t.Errorf("data.tokens.input_tokens = %v, want null on an unmeasured session", value)
 	}
 }
 
@@ -209,10 +211,11 @@ func TestStatusTool_TokenCounts(t *testing.T) {
 		TurnNumber:      5,
 		MaxTurns:        20,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
-		InputTokens:     15000,
-		OutputTokens:    3000,
-		TotalTokens:     18000,
-		CacheReadTokens: 2000,
+		InputTokens:     new(int64(15000)),
+		OutputTokens:    new(int64(3000)),
+		TotalTokens:     new(int64(18000)),
+		CacheReadTokens: new(int64(2000)),
+		TokensMeasured:  true,
 	})
 
 	tool := New(dir)
@@ -239,6 +242,53 @@ func TestStatusTool_TokenCounts(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("data.tokens.%s = %v, want %v", field, got, want)
+		}
+	}
+}
+
+// TestStatusTool_TokenCounts_GenuineZero proves the third state the
+// tokens_measured qualifier exists to distinguish: a session that has
+// measured usage but accumulated no tokens yet reports zero numbers,
+// not a null, beside tokens_measured: true. A gate that treats a
+// zero-valued figure as absent would collapse this into the
+// unmeasured shape TestStatusTool_ExplicitlyUnmeasuredStateFile locks
+// down, erasing the distinction between "measured zero" and "never
+// measured".
+func TestStatusTool_TokenCounts_GenuineZero(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeStateFile(t, dir, stateFile{
+		TurnNumber:      1,
+		MaxTurns:        20,
+		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		InputTokens:     new(int64(0)),
+		OutputTokens:    new(int64(0)),
+		TotalTokens:     new(int64(0)),
+		CacheReadTokens: new(int64(0)),
+		TokensMeasured:  true,
+	})
+
+	tool := New(dir)
+	m := executeOK(t, tool)
+	assertSuccessEnvelope(t, m)
+	d := dataFields(t, m)
+
+	if got, ok := d["tokens_measured"].(bool); !ok || !got {
+		t.Errorf("data.tokens_measured = %v, want true", d["tokens_measured"])
+	}
+	tokens, ok := d["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tokens is not an object: %v", d["tokens"])
+	}
+	for _, field := range []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"} {
+		got, present := tokens[field]
+		if !present {
+			t.Errorf("data.tokens.%s key missing from response", field)
+			continue
+		}
+		if got != float64(0) {
+			t.Errorf("data.tokens.%s = %v, want 0 (not null)", field, got)
 		}
 	}
 }
@@ -546,6 +596,95 @@ func TestStatusTool_EmptyJSONInput(t *testing.T) {
 
 	if _, ok := d["turn_number"]; !ok {
 		t.Error("data.turn_number missing from success response")
+	}
+}
+
+// TestStatusTool_ExplicitlyUnmeasuredStateFile proves P19's first
+// half: a state file whose tokens_measured flag decodes false returns
+// tokens_measured false and all four tokens members null, inside a
+// success envelope, never a failure envelope.
+func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeStateFile(t, dir, stateFile{
+		TurnNumber:      2,
+		MaxTurns:        10,
+		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		InputTokens:     new(int64(1000)),
+		OutputTokens:    new(int64(500)),
+		TotalTokens:     new(int64(1500)),
+		CacheReadTokens: new(int64(200)),
+		TokensMeasured:  false,
+	})
+
+	tool := New(dir)
+	m := executeOK(t, tool)
+	assertSuccessEnvelope(t, m)
+	d := dataFields(t, m)
+
+	if got, ok := d["tokens_measured"].(bool); !ok || got {
+		t.Errorf("data.tokens_measured = %v, want false", d["tokens_measured"])
+	}
+	tokens, ok := d["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tokens is not an object: %v", d["tokens"])
+	}
+	for _, field := range []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"} {
+		if value, exists := tokens[field]; !exists {
+			t.Errorf("data.tokens.%s key missing from response", field)
+		} else if value != nil {
+			t.Errorf("data.tokens.%s = %v, want null even though the state file carries a figure", field, value)
+		}
+	}
+}
+
+// TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember proves
+// P19's second half: a state file written by a binary from before the
+// token figures gained their qualifier carries four numbers and no
+// tokens_measured member at all. Decoding it leaves TokensMeasured at
+// its Go zero value, false, so the tool nulls the four figures rather
+// than publishing them under an absent qualifier, and produces no
+// failure envelope for a file that decodes cleanly.
+func TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dotSortie := filepath.Join(dir, ".sortie")
+	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	preChangeState := []byte(`{
+		"turn_number": 4,
+		"max_turns": 10,
+		"started_at": "` + time.Now().UTC().Format(time.RFC3339Nano) + `",
+		"input_tokens": 1000,
+		"output_tokens": 500,
+		"total_tokens": 1500,
+		"cache_read_tokens": 200
+	}`)
+	if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), preChangeState, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	tool := New(dir)
+	m := executeOK(t, tool)
+	assertSuccessEnvelope(t, m)
+	d := dataFields(t, m)
+
+	if got, ok := d["tokens_measured"].(bool); !ok || got {
+		t.Errorf("data.tokens_measured = %v, want false for a state file with no tokens_measured member", d["tokens_measured"])
+	}
+	tokens, ok := d["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tokens is not an object: %v", d["tokens"])
+	}
+	for _, field := range []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"} {
+		if value, exists := tokens[field]; !exists {
+			t.Errorf("data.tokens.%s key missing from response", field)
+		} else if value != nil {
+			t.Errorf("data.tokens.%s = %v, want null (the absent flag decodes false)", field, value)
+		}
 	}
 }
 

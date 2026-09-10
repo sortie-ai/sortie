@@ -541,16 +541,33 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
+	// The worker's own turn tally is taken alongside the entry's,
+	// because the entry's is fed by the agent event channel while this
+	// exit arrives on its own: a session_started still queued there
+	// would otherwise leave the count at zero and let a session that
+	// really ran be stored as a measured zero. The started tally is
+	// the one to take, because a turn that errored or was cancelled
+	// still means the session ran.
+	turnsSeen := max(entry.TurnCount, workerResult.TurnsStarted)
+
+	// An unmeasured count is stored as zero so a reader of the database
+	// cannot find a figure contradicting the qualifier beside it.
+	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, turnsSeen, entry.APIRequestCount)
+	requestCount := 0
+	if requestsMeasured {
+		requestCount = entry.APIRequestCount
+	}
 	sessionMeta := persistence.SessionMetadata{
-		IssueID:         workerResult.IssueID,
-		SessionID:       sessionID,
-		InputTokens:     entry.AgentInputTokens,
-		OutputTokens:    entry.AgentOutputTokens,
-		TotalTokens:     entry.AgentTotalTokens,
-		CacheReadTokens: entry.CacheReadTokens,
-		ModelName:       entry.ModelName,
-		APIRequestCount: entry.APIRequestCount,
-		UpdatedAt:       now.Format(time.RFC3339),
+		IssueID:             workerResult.IssueID,
+		SessionID:           sessionID,
+		InputTokens:         entry.AgentInputTokens,
+		OutputTokens:        entry.AgentOutputTokens,
+		TotalTokens:         entry.AgentTotalTokens,
+		CacheReadTokens:     entry.CacheReadTokens,
+		ModelName:           entry.ModelName,
+		APIRequestCount:     requestCount,
+		APIRequestsMeasured: requestsMeasured,
+		UpdatedAt:           now.Format(time.RFC3339),
 	}
 	if entry.AgentPID != "" {
 		sessionMeta.AgentPID = &entry.AgentPID

@@ -29,6 +29,7 @@ var usageBranchDeclarationSet = map[string][]string{
 		"usageAttributionClause",
 		"usageModelRow",
 		"usageAPIRequestsRow",
+		"formatRequestsByModel",
 		"usageTokensRow",
 		"usageEstCostRow",
 	},

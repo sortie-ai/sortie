@@ -16,6 +16,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -9320,5 +9321,145 @@ func TestHandleWorkerExit_DeclaredRunSeedsReactionsReleasedOnTerminalReconcile(t
 
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions present after the terminal-issue release, want removed")
+	}
+}
+
+// TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally covers the
+// entry whose session_started is still queued on the agent event
+// channel when the exit arrives on its own. The entry's turn count
+// reads zero, which alone would store a session that really ran as a
+// measured zero; the worker's own tally is what prevents it.
+func TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-REQV3", nil)
+	entry := state.Running["ISSUE-REQV3"]
+	entry.UsageArrival = registry.UsageArrivalIncremental
+	// Nothing from the event channel reached this entry.
+	entry.TurnCount = 0
+	entry.APIRequestCount = 0
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-REQV3",
+		Identifier:    "ISSUE-REQV3-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+		// The turn began and then failed, so nothing completed.
+		TurnsCompleted: 0,
+		TurnsStarted:   1,
+	}, defaultExitParams(t, store))
+
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+	if store.sessionMetadata[0].APIRequestsMeasured {
+		t.Error("SessionMetadata.APIRequestsMeasured = true, want false (the worker ran a turn and no request was counted)")
+	}
+}
+
+// TestHandleWorkerExit_SessionMetadataRequestVerdict proves P6: the
+// persisted session_metadata row's api_request_count is always zero
+// when its api_requests_measured flag is zero, even when the running
+// entry it was built from carries a non-zero raw count, and the raw
+// count survives untouched when the verdict is true.
+func TestHandleWorkerExit_SessionMetadataRequestVerdict(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmeasured entry: persisted count is zero despite a non-zero raw count", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-REQV1", nil)
+		entry := state.Running["ISSUE-REQV1"]
+		// turn_end never reports during the turn, so the verdict is
+		// false regardless of the raw count; a non-zero raw count here
+		// models a runtime that contradicted its own declaration.
+		entry.UsageArrival = registry.UsageArrivalTurnEnd
+		entry.TurnCount = 3
+		entry.APIRequestCount = 11
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-REQV1",
+			Identifier:    "ISSUE-REQV1-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: "/tmp/ws",
+		}, defaultExitParams(t, store))
+
+		if len(store.sessionMetadata) != 1 {
+			t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+		}
+		meta := store.sessionMetadata[0]
+		if meta.APIRequestsMeasured {
+			t.Fatal("SessionMetadata.APIRequestsMeasured = true, want false (turns began, no request arrived)")
+		}
+		if meta.APIRequestCount != 0 {
+			t.Errorf("SessionMetadata.APIRequestCount = %d, want 0 for an unmeasured row", meta.APIRequestCount)
+		}
+	})
+
+	t.Run("measured entry: persisted count is the raw count", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-REQV2", nil)
+		entry := state.Running["ISSUE-REQV2"]
+		entry.UsageArrival = registry.UsageArrivalIncremental
+		entry.TurnCount = 1
+		entry.APIRequestCount = 6
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-REQV2",
+			Identifier:    "ISSUE-REQV2-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: "/tmp/ws",
+		}, defaultExitParams(t, store))
+
+		if len(store.sessionMetadata) != 1 {
+			t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+		}
+		meta := store.sessionMetadata[0]
+		if !meta.APIRequestsMeasured {
+			t.Fatal("SessionMetadata.APIRequestsMeasured = false, want true (a request arrived)")
+		}
+		if meta.APIRequestCount != 6 {
+			t.Errorf("SessionMetadata.APIRequestCount = %d, want 6 for a measured row", meta.APIRequestCount)
+		}
+	})
+}
+
+// TestHandleWorkerExit_UnreachableFromRuntimeSnapshot proves P17: once
+// HandleWorkerExit returns, RuntimeSnapshot carries no running row for
+// the exited issue, so the unconditional usage reconciliation that
+// touches the entry on the way out can never leave a figure beside a
+// false flag on a snapshot the wire can serialize.
+func TestHandleWorkerExit_UnreachableFromRuntimeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-P17", nil)
+	entry := state.Running["ISSUE-P17"]
+	entry.UsageMeasured = false
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-P17",
+		Identifier:    "ISSUE-P17-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+		Usage:         domain.TokenUsage{InputTokens: 500, OutputTokens: 300, TotalTokens: 800},
+	}, defaultExitParams(t, store))
+
+	snap := RuntimeSnapshot(state, baseTime.Add(120*time.Second))
+	for _, row := range snap.Running {
+		if row.IssueID == "ISSUE-P17" {
+			t.Fatalf("RuntimeSnapshot still carries a running row for the exited issue: %+v", row)
+		}
+	}
+	if len(snap.Running) != 0 {
+		t.Errorf("len(snap.Running) = %d, want 0 after HandleWorkerExit", len(snap.Running))
 	}
 }

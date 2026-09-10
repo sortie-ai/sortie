@@ -3,6 +3,14 @@
 // remaining turns, session duration, and cumulative token usage. It reads
 // from the .sortie/state.json file written by the worker goroutine inside
 // the session workspace.
+//
+// The four token figures are reported only when a measurement produced
+// them; otherwise they are null beside a false measurement flag, so an
+// agent asking what it has spent is never handed a fabricated number.
+// Zeros beside a true flag are themselves a measurement, and arise two
+// ways: a session that has not yet begun a turn, whose zero is proven
+// because nothing has run, and a runtime that measured the work and
+// found it cost nothing.
 package status
 
 import (
@@ -27,15 +35,21 @@ var inputSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
+// stateFile mirrors the worker's .sortie/state.json shape. A file
+// written by a binary from before the token figures gained their
+// qualifier carries figures and no flag, so TokensMeasured decodes
+// false and those figures are ignored rather than published under a
+// qualifier that contradicts them.
 type stateFile struct {
 	TurnNumber      int    `json:"turn_number"`
 	MaxTurns        int    `json:"max_turns"`
 	Attempt         *int   `json:"attempt"`
 	StartedAt       string `json:"started_at"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
-	CacheReadTokens int64  `json:"cache_read_tokens"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	TotalTokens     *int64 `json:"total_tokens"`
+	CacheReadTokens *int64 `json:"cache_read_tokens"`
+	TokensMeasured  bool   `json:"tokens_measured"`
 }
 
 type statusResponse struct {
@@ -45,13 +59,17 @@ type statusResponse struct {
 	Attempt                *int    `json:"attempt"`
 	SessionDurationSeconds float64 `json:"session_duration_seconds"`
 	Tokens                 tokens  `json:"tokens"`
+	TokensMeasured         bool    `json:"tokens_measured"`
 }
 
+// tokens carries the session's four token figures. The members are
+// nil together, exactly when the response's TokensMeasured is false,
+// and each serializes as JSON null rather than being omitted.
 type tokens struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	TotalTokens     int64 `json:"total_tokens"`
-	CacheReadTokens int64 `json:"cache_read_tokens"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	TotalTokens     *int64 `json:"total_tokens"`
+	CacheReadTokens *int64 `json:"cache_read_tokens"`
 }
 
 // StatusTool implements [domain.AgentTool] for the sortie_status tool.
@@ -135,12 +153,15 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMess
 		TurnsRemaining:         turnsRemaining,
 		Attempt:                sf.Attempt,
 		SessionDurationSeconds: durationSeconds,
-		Tokens: tokens{
+		TokensMeasured:         sf.TokensMeasured,
+	}
+	if sf.TokensMeasured {
+		resp.Tokens = tokens{
 			InputTokens:     sf.InputTokens,
 			OutputTokens:    sf.OutputTokens,
 			TotalTokens:     sf.TotalTokens,
 			CacheReadTokens: sf.CacheReadTokens,
-		},
+		}
 	}
 
 	return toolresult.Success(resp)

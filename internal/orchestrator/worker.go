@@ -40,15 +40,38 @@ const (
 	WorkerExitCancelled WorkerExitKind = "cancelled"
 )
 
+// workerState is the .sortie/state.json shape the running agent reads
+// back through its status tool. The four token members are nil
+// together, exactly when TokensMeasured is false, and a nil member
+// serializes as JSON null rather than being omitted, so the agent
+// cannot mistake an unmeasured session for one that spent nothing.
+// The session-start write states a measured zero: no turn has begun,
+// so the session has provably spent nothing.
 type workerState struct {
 	TurnNumber      int    `json:"turn_number"`
 	MaxTurns        int    `json:"max_turns"`
 	Attempt         *int   `json:"attempt"`
 	StartedAt       string `json:"started_at"`
-	InputTokens     int64  `json:"input_tokens"`
-	OutputTokens    int64  `json:"output_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
-	CacheReadTokens int64  `json:"cache_read_tokens"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	TotalTokens     *int64 `json:"total_tokens"`
+	CacheReadTokens *int64 `json:"cache_read_tokens"`
+	TokensMeasured  bool   `json:"tokens_measured"`
+}
+
+// withTokens returns s carrying the worker's own measurement mirror
+// and, when that mirror is true, the four figures it has folded so
+// far. It is the one gate every state-file write passes through.
+func (s workerState) withTokens(usage domain.TokenUsage, measured bool) workerState {
+	s.TokensMeasured = measured
+	if !measured {
+		return s
+	}
+	s.InputTokens = &usage.InputTokens
+	s.OutputTokens = &usage.OutputTokens
+	s.TotalTokens = &usage.TotalTokens
+	s.CacheReadTokens = &usage.CacheReadTokens
+	return s
 }
 
 // writeWorkerState atomically writes session runtime state to
@@ -106,6 +129,12 @@ type WorkerResult struct {
 	// TurnsCompleted is the number of turns that ran to completion
 	// (received a TurnResult) before the worker exited.
 	TurnsCompleted int
+
+	// TurnsStarted is the number of turns the worker began, counted as
+	// each one starts rather than when it returns, so a turn that
+	// errored or was cancelled still counts. A reader deciding whether
+	// the session ever ran needs this rather than TurnsCompleted.
+	TurnsStarted int
 
 	// SessionID is the adapter-assigned session identifier. Empty if
 	// the worker exited before starting a session. The exit handler
@@ -668,6 +697,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var workspacePath string
 	var sessionID string
 	var turnsCompleted int
+	var turnsStarted int
 	var observedIssueState string
 	var session domain.Session
 	var sessionStarted bool
@@ -712,6 +742,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ExitKind:           WorkerExitError,
 					Error:              fmt.Errorf("worker panic: %v", r),
 					TurnsCompleted:     turnsCompleted,
+					TurnsStarted:       turnsStarted,
 					SessionID:          sessionID,
 					WorkspacePath:      workspacePath,
 					AgentAdapter:       agentKind,
@@ -953,30 +984,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			MaxTurns:   maxTurns,
 			Attempt:    attempt,
 			StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-		}); err != nil {
+		}.withTokens(localUsage, localMeasured)); err != nil {
 			logger.Warn("failed to write status state file at session start", slog.Any("error", err))
 		}
 	}
 
 	for {
-		if mcpConfigPath != "" {
-			if err := writeWorkerState(wsResult.Path, workerState{
-				TurnNumber:      turnNumber,
-				MaxTurns:        maxTurns,
-				Attempt:         attempt,
-				StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-				InputTokens:     localUsage.InputTokens,
-				OutputTokens:    localUsage.OutputTokens,
-				TotalTokens:     localUsage.TotalTokens,
-				CacheReadTokens: localUsage.CacheReadTokens,
-			}); err != nil {
-				logger.Warn("failed to write status state file at turn start",
-					slog.Int("turn_number", turnNumber),
-					slog.Any("error", err),
-				)
-			}
-		}
-
 		// Render the prompt template for this turn.
 		issueMap := issue.ToTemplateMap()
 		var renderOpts []prompt.RenderOption
@@ -1000,6 +1013,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKindForErr(ctx),
 				Error:              fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1037,9 +1051,28 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
+		turnsStarted++
 
 		if turnNumber == 1 {
 			localMeasured = false
+		}
+
+		// The turn-start write follows the flip above: publishing it
+		// earlier would put a measured verdict on disk for the whole of
+		// turn one, which an agent reading its own spend would take as a
+		// measurement of zero.
+		if mcpConfigPath != "" {
+			if err := writeWorkerState(wsResult.Path, workerState{
+				TurnNumber: turnNumber,
+				MaxTurns:   maxTurns,
+				Attempt:    attempt,
+				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+			}.withTokens(localUsage, localMeasured)); err != nil {
+				logger.Warn("failed to write status state file at turn start",
+					slog.Int("turn_number", turnNumber),
+					slog.Any("error", err),
+				)
+			}
 		}
 
 		turnResult, err := runBoundedTurn(ctx, deps.AgentAdapter, session, domain.RunTurnParams{
@@ -1053,25 +1086,21 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
-				if event.Type == domain.EventTokenUsage || hasUsage(event.Usage) {
+				measurementArrived := event.Type == domain.EventTokenUsage || hasUsage(event.Usage)
+				if measurementArrived {
 					localMeasured = true
 				}
 				if hasUsage(event.Usage) {
 					localUsage, localLastUsage = foldLocalUsage(event.Usage, localUsage, localLastUsage)
-
-					if mcpConfigPath != "" {
-						if err := writeWorkerState(wsResult.Path, workerState{
-							TurnNumber:      turnNumber,
-							MaxTurns:        maxTurns,
-							Attempt:         attempt,
-							StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-							InputTokens:     localUsage.InputTokens,
-							OutputTokens:    localUsage.OutputTokens,
-							TotalTokens:     localUsage.TotalTokens,
-							CacheReadTokens: localUsage.CacheReadTokens,
-						}); err != nil {
-							logger.Warn("failed to write status state file on token event", slog.Any("error", err))
-						}
+				}
+				if measurementArrived && mcpConfigPath != "" {
+					if err := writeWorkerState(wsResult.Path, workerState{
+						TurnNumber: turnNumber,
+						MaxTurns:   maxTurns,
+						Attempt:    attempt,
+						StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+					}.withTokens(localUsage, localMeasured)); err != nil {
+						logger.Warn("failed to write status state file on token event", slog.Any("error", err))
 					}
 				}
 				deps.OnEvent(issue.ID, event)
@@ -1081,11 +1110,30 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// Fold TurnResult.Usage into the local mirror on both the success
 		// and the error path, so a run-cumulative figure the adapter
 		// reported only on TurnResult (not through an event) is not lost.
+		// A figure the adapter reports here is a measurement whether or
+		// not it also sets the flag, which is how the event path above
+		// already reads a non-zero payload.
+		resultCarriesMeasurement := hasUsage(turnResult.Usage) || turnResult.UsageMeasured
 		if hasUsage(turnResult.Usage) {
 			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
 		}
-		if turnResult.UsageMeasured {
+		if resultCarriesMeasurement {
 			localMeasured = true
+		}
+
+		// An adapter may report a session's only measurement here rather
+		// than through an event, and on the last turn no later write
+		// would carry it, so the file would keep denying a measurement
+		// that exists.
+		if resultCarriesMeasurement && mcpConfigPath != "" {
+			if err := writeWorkerState(wsResult.Path, workerState{
+				TurnNumber: turnNumber,
+				MaxTurns:   maxTurns,
+				Attempt:    attempt,
+				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+			}.withTokens(localUsage, localMeasured)); err != nil {
+				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))
+			}
 		}
 
 		if err != nil {
@@ -1098,6 +1146,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKindForErr(ctx),
 				Error:              fmt.Errorf("agent turn %d: %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1129,6 +1178,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           exitKind,
 				Error:              fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
 				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
 				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
@@ -1168,6 +1218,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ExitKind:           exitKindForErr(ctx),
 					Error:              fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
 					TurnsCompleted:     turnsCompleted,
+					TurnsStarted:       turnsStarted,
 					SessionID:          session.ID,
 					WorkspacePath:      wsResult.Path,
 					AgentAdapter:       agentKind,
@@ -1298,6 +1349,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Error:              phaseErr,
 			ReviewMetadata:     reviewMeta,
 			TurnsCompleted:     turnsCompleted,
+			TurnsStarted:       turnsStarted,
 			SessionID:          session.ID,
 			WorkspacePath:      wsResult.Path,
 			AgentAdapter:       agentKind,

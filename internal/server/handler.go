@@ -44,7 +44,7 @@ type runningEntryResponse struct {
 	WorkspacePath     string         `json:"workspace_path"`
 	Tokens            tokenInfo      `json:"tokens"`
 	ModelName         string         `json:"model_name,omitempty"`
-	APIRequestCount   int            `json:"api_request_count"`
+	APIRequestCount   *int           `json:"api_request_count"`
 	RequestsByModel   map[string]int `json:"requests_by_model,omitempty"`
 	ToolTimePercent   *float64       `json:"tool_time_percent"`
 	APITimePercent    *float64       `json:"api_time_percent"`
@@ -52,19 +52,25 @@ type runningEntryResponse struct {
 
 	// UsageArrival and UsageAttribution mirror
 	// [orchestrator.SnapshotRunningEntry]'s frozen pair verbatim, as
-	// their string values. TokensPending and APIRequestsMeasured are
-	// derived from the same pair.
+	// their string values. TokensPending derives from that frozen
+	// pair; APIRequestsMeasured is the session-resolved verdict the
+	// snapshot carries, and it is true exactly when APIRequestCount
+	// is non-nil.
 	UsageArrival        string `json:"usage_arrival"`
 	UsageAttribution    string `json:"usage_attribution"`
 	TokensPending       bool   `json:"tokens_pending"`
 	APIRequestsMeasured bool   `json:"api_requests_measured"`
 }
 
+// tokenInfo carries a running row's four token figures. The members
+// are nil together, exactly when the row's TokensMeasured is false,
+// and a nil member serializes as JSON null rather than being omitted,
+// so a consumer can tell a measured zero from an unmeasured figure.
 type tokenInfo struct {
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	TotalTokens     int64 `json:"total_tokens"`
-	CacheReadTokens int64 `json:"cache_read_tokens"`
+	InputTokens     *int64 `json:"input_tokens"`
+	OutputTokens    *int64 `json:"output_tokens"`
+	TotalTokens     *int64 `json:"total_tokens"`
+	CacheReadTokens *int64 `json:"cache_read_tokens"`
 }
 
 type retryEntryResponse struct {
@@ -133,31 +139,38 @@ type errorDetail struct {
 
 func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time.Time) runningEntryResponse {
 	resp := runningEntryResponse{
-		IssueID:           e.IssueID,
-		IssueIdentifier:   e.Identifier,
-		DisplayIdentifier: e.DisplayID,
-		State:             e.State,
-		SessionID:         e.SessionID,
-		TurnCount:         e.TurnCount,
-		LastEvent:         string(e.LastAgentEvent),
-		LastMessage:       e.LastAgentMessage,
-		StartedAt:         e.StartedAt.UTC(),
-		LastEventAt:       e.LastAgentTimestamp.UTC(),
-		WorkspacePath:     e.WorkspacePath,
-		Tokens: tokenInfo{
-			InputTokens:     e.AgentInputTokens,
-			OutputTokens:    e.AgentOutputTokens,
-			TotalTokens:     e.AgentTotalTokens,
-			CacheReadTokens: e.CacheReadTokens,
-		},
+		IssueID:             e.IssueID,
+		IssueIdentifier:     e.Identifier,
+		DisplayIdentifier:   e.DisplayID,
+		State:               e.State,
+		SessionID:           e.SessionID,
+		TurnCount:           e.TurnCount,
+		LastEvent:           string(e.LastAgentEvent),
+		LastMessage:         e.LastAgentMessage,
+		StartedAt:           e.StartedAt.UTC(),
+		LastEventAt:         e.LastAgentTimestamp.UTC(),
+		WorkspacePath:       e.WorkspacePath,
 		ModelName:           e.ModelName,
-		APIRequestCount:     e.APIRequestCount,
 		RequestsByModel:     e.RequestsByModel,
 		TokensMeasured:      e.UsageMeasured,
 		UsageArrival:        string(e.UsageArrival),
 		UsageAttribution:    string(e.UsageAttribution),
 		TokensPending:       e.TokensPending,
-		APIRequestsMeasured: e.UsageArrival.ReportsDuringTurn(),
+		APIRequestsMeasured: e.APIRequestsMeasured,
+	}
+
+	// A figure no measurement produced is null in the place it already
+	// occupies, beside the flag that explains it.
+	if e.UsageMeasured {
+		resp.Tokens = tokenInfo{
+			InputTokens:     &e.AgentInputTokens,
+			OutputTokens:    &e.AgentOutputTokens,
+			TotalTokens:     &e.AgentTotalTokens,
+			CacheReadTokens: &e.CacheReadTokens,
+		}
+	}
+	if e.APIRequestsMeasured {
+		resp.APIRequestCount = &e.APIRequestCount
 	}
 
 	if len(nowArgs) > 0 && !e.StartedAt.IsZero() {

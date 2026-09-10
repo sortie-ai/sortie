@@ -85,6 +85,7 @@ func TestToRunningEntryResponse(t *testing.T) {
 		AgentOutputTokens:  500,
 		AgentTotalTokens:   1500,
 		WorkspacePath:      "/tmp/ws/MT-100",
+		UsageMeasured:      true,
 	}
 
 	got := toRunningEntryResponse(entry)
@@ -125,21 +126,26 @@ func TestToRunningEntryResponse(t *testing.T) {
 		t.Errorf("LastEventAt location = %v, want UTC", got.LastEventAt.Location())
 	}
 
-	// Token info
-	if got.Tokens.InputTokens != 1000 {
-		t.Errorf("Tokens.InputTokens = %d, want %d", got.Tokens.InputTokens, 1000)
+	// Token info: a measured entry carries its figures rather than nulls.
+	if got.Tokens.InputTokens == nil || got.Tokens.OutputTokens == nil || got.Tokens.TotalTokens == nil {
+		t.Fatalf("Tokens = %+v, want three non-nil members on a measured entry", got.Tokens)
 	}
-	if got.Tokens.OutputTokens != 500 {
-		t.Errorf("Tokens.OutputTokens = %d, want %d", got.Tokens.OutputTokens, 500)
+	if *got.Tokens.InputTokens != 1000 {
+		t.Errorf("Tokens.InputTokens = %d, want %d", *got.Tokens.InputTokens, 1000)
 	}
-	if got.Tokens.TotalTokens != 1500 {
-		t.Errorf("Tokens.TotalTokens = %d, want %d", got.Tokens.TotalTokens, 1500)
+	if *got.Tokens.OutputTokens != 500 {
+		t.Errorf("Tokens.OutputTokens = %d, want %d", *got.Tokens.OutputTokens, 500)
+	}
+	if *got.Tokens.TotalTokens != 1500 {
+		t.Errorf("Tokens.TotalTokens = %d, want %d", *got.Tokens.TotalTokens, 1500)
 	}
 }
 
-// TestToRunningEntryResponse_ExtendedFields verifies that the new
+// TestToRunningEntryResponse_ExtendedFields verifies that the
 // CacheReadTokens, ModelName, APIRequestCount, and RequestsByModel
-// fields are mapped correctly through the wire-type constructor.
+// fields are mapped correctly through the wire-type constructor for a
+// measured entry, whose figures the constructor carries rather than
+// nulls.
 func TestToRunningEntryResponse_ExtendedFields(t *testing.T) {
 	t.Parallel()
 
@@ -152,18 +158,27 @@ func TestToRunningEntryResponse_ExtendedFields(t *testing.T) {
 		ModelName:       "claude-sonnet-4-20250514",
 		APIRequestCount: 15,
 		RequestsByModel: map[string]int{"claude-sonnet-4-20250514": 12, "claude-opus-4-20250514": 3},
+
+		UsageMeasured:       true,
+		APIRequestsMeasured: true,
 	}
 
 	got := toRunningEntryResponse(entry)
 
-	if got.Tokens.CacheReadTokens != 8000 {
-		t.Errorf("Tokens.CacheReadTokens = %d, want 8000", got.Tokens.CacheReadTokens)
+	if got.Tokens.CacheReadTokens == nil {
+		t.Fatal("Tokens.CacheReadTokens = nil, want 8000 on a measured entry")
+	}
+	if *got.Tokens.CacheReadTokens != 8000 {
+		t.Errorf("Tokens.CacheReadTokens = %d, want 8000", *got.Tokens.CacheReadTokens)
 	}
 	if got.ModelName != "claude-sonnet-4-20250514" {
 		t.Errorf("ModelName = %q, want %q", got.ModelName, "claude-sonnet-4-20250514")
 	}
-	if got.APIRequestCount != 15 {
-		t.Errorf("APIRequestCount = %d, want 15", got.APIRequestCount)
+	if got.APIRequestCount == nil {
+		t.Fatal("APIRequestCount = nil, want 15 on a measured entry")
+	}
+	if *got.APIRequestCount != 15 {
+		t.Errorf("APIRequestCount = %d, want 15", *got.APIRequestCount)
 	}
 	if len(got.RequestsByModel) != 2 {
 		t.Fatalf("len(RequestsByModel) = %d, want 2", len(got.RequestsByModel))
@@ -190,6 +205,9 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 		ModelName:         "test-model",
 		APIRequestCount:   7,
 		RequestsByModel:   map[string]int{"test-model": 7},
+
+		UsageMeasured:       true,
+		APIRequestsMeasured: true,
 	}
 
 	got := toRunningEntryResponse(entry)
@@ -226,7 +244,9 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 // covers one incremental entry, whose APIRequestsMeasured is true and
 // TokensPending is always false, and one turn_end entry, whose
 // APIRequestsMeasured is false and TokensPending reflects the frozen
-// snapshot's own TokensPending field.
+// snapshot's own TokensPending field. Both verdicts are resolved
+// upstream and carried on the snapshot; the constructor re-derives
+// neither.
 func TestToRunningEntryResponse_UsageDispositionFields(t *testing.T) {
 	t.Parallel()
 
@@ -258,12 +278,13 @@ func TestToRunningEntryResponse_UsageDispositionFields(t *testing.T) {
 			t.Parallel()
 
 			entry := orchestrator.SnapshotRunningEntry{
-				IssueID:          "issue-usage",
-				Identifier:       "MT-USAGE",
-				State:            "In Progress",
-				UsageArrival:     tt.arrival,
-				UsageAttribution: tt.attribution,
-				TokensPending:    tt.tokensPending,
+				IssueID:             "issue-usage",
+				Identifier:          "MT-USAGE",
+				State:               "In Progress",
+				UsageArrival:        tt.arrival,
+				UsageAttribution:    tt.attribution,
+				TokensPending:       tt.tokensPending,
+				APIRequestsMeasured: tt.wantAPIRequestsMeasured,
 			}
 
 			got := toRunningEntryResponse(entry)
@@ -311,6 +332,236 @@ func TestToRunningEntryResponse_UsageDispositionFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot
+// proves P5 the way the property requires: exercised from
+// [orchestrator.RuntimeSnapshot] outward over a real
+// [orchestrator.State], because the breakdown's gate lives in
+// RuntimeSnapshot itself and a hand-built SnapshotRunningEntry would
+// bypass it. It also proves P4 along the way: api_requests_measured
+// equals api_request_count != null on the same serialized row.
+func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		arrival          registry.UsageArrival
+		attribution      registry.UsageAttribution
+		turnCount        int
+		apiRequestCount  int
+		requestsByModel  map[string]int
+		wantMeasured     bool
+		wantBreakdownKey bool
+	}{
+		{
+			name:             "verdict false: breakdown absent despite per-model attribution",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionPerModel,
+			turnCount:        2,
+			apiRequestCount:  0,
+			requestsByModel:  map[string]int{"claude-sonnet-4-20250514": 3},
+			wantMeasured:     false,
+			wantBreakdownKey: false,
+		},
+		{
+			name:             "verdict true, attribution does not name a model: breakdown absent",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionSessionTotal,
+			turnCount:        1,
+			apiRequestCount:  5,
+			requestsByModel:  map[string]int{"claude-sonnet-4-20250514": 5},
+			wantMeasured:     true,
+			wantBreakdownKey: false,
+		},
+		{
+			name:             "verdict true, per-model attribution: breakdown present",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionPerModel,
+			turnCount:        1,
+			apiRequestCount:  5,
+			requestsByModel:  map[string]int{"claude-sonnet-4-20250514": 5},
+			wantMeasured:     true,
+			wantBreakdownKey: true,
+		},
+		{
+			name:             "verdict true, zero turns and zero requests: genuine zero, not unmeasured",
+			arrival:          registry.UsageArrivalIncremental,
+			attribution:      registry.UsageAttributionSessionTotal,
+			turnCount:        0,
+			apiRequestCount:  0,
+			requestsByModel:  nil,
+			wantMeasured:     true,
+			wantBreakdownKey: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := orchestrator.NewState(5000, 10, nil, orchestrator.AgentTotals{})
+			state.Running["issue-1"] = &orchestrator.RunningEntry{
+				Identifier:       "MT-RBM",
+				Issue:            domain.Issue{ID: "issue-1", State: "In Progress"},
+				StartedAt:        time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+				TurnCount:        tt.turnCount,
+				APIRequestCount:  tt.apiRequestCount,
+				RequestsByModel:  tt.requestsByModel,
+				UsageArrival:     tt.arrival,
+				UsageAttribution: tt.attribution,
+			}
+
+			snap := orchestrator.RuntimeSnapshot(state, time.Date(2026, 3, 24, 12, 1, 0, 0, time.UTC))
+			if len(snap.Running) != 1 {
+				t.Fatalf("len(snap.Running) = %d, want 1", len(snap.Running))
+			}
+
+			got := toRunningEntryResponse(snap.Running[0])
+			if got.APIRequestsMeasured != tt.wantMeasured {
+				t.Fatalf("APIRequestsMeasured = %v, want %v", got.APIRequestsMeasured, tt.wantMeasured)
+			}
+			// P4: the boolean and the count's nullity must agree.
+			if (got.APIRequestCount != nil) != got.APIRequestsMeasured {
+				t.Errorf("APIRequestCount != nil is %v, want it to equal APIRequestsMeasured (%v)",
+					got.APIRequestCount != nil, got.APIRequestsMeasured)
+			}
+
+			data, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			_, hasKey := decoded["requests_by_model"]
+			if hasKey != tt.wantBreakdownKey {
+				t.Errorf("JSON has requests_by_model key = %v, want %v", hasKey, tt.wantBreakdownKey)
+			}
+
+			// The wire must carry the count itself, not merely agree on
+			// its nullity: a measured genuine zero must reach the wire
+			// as 0, never as null.
+			wantAPIRequestCount := decoded["api_request_count"]
+			if tt.wantMeasured {
+				if wantAPIRequestCount != float64(tt.apiRequestCount) {
+					t.Errorf("JSON api_request_count = %#v, want %v", wantAPIRequestCount, tt.apiRequestCount)
+				}
+			} else if wantAPIRequestCount != nil {
+				t.Errorf("JSON api_request_count = %#v, want null", wantAPIRequestCount)
+			}
+		})
+	}
+}
+
+// TestToRunningEntryResponse_TokenFiguresNullGate proves P12, P13, and
+// P14: the four tokens members are nil together exactly when the
+// entry's UsageMeasured is false, four numbers otherwise, including a
+// genuine zero the entry's own runtime reported, and a tokens_pending
+// entry carries four numbers rather than a null.
+func TestToRunningEntryResponse_TokenFiguresNullGate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmeasured entry: all four members nil, present in JSON as null", func(t *testing.T) {
+		t.Parallel()
+
+		entry := orchestrator.SnapshotRunningEntry{
+			IssueID:           "issue-unmeasured",
+			Identifier:        "MT-UNMEASURED",
+			AgentInputTokens:  999, // raw figures the presenter must not read
+			AgentOutputTokens: 999,
+			AgentTotalTokens:  999,
+			CacheReadTokens:   999,
+			UsageMeasured:     false,
+		}
+
+		got := toRunningEntryResponse(entry)
+		if got.Tokens != (tokenInfo{}) {
+			t.Errorf("Tokens = %+v, want all four members nil", got.Tokens)
+		}
+
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		tokens, ok := decoded["tokens"].(map[string]any)
+		if !ok {
+			t.Fatalf("JSON tokens is not an object: %v", decoded["tokens"])
+		}
+		for _, field := range []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"} {
+			if value, exists := tokens[field]; !exists {
+				t.Errorf("JSON tokens.%s key missing, want present as null", field)
+			} else if value != nil {
+				t.Errorf("JSON tokens.%s = %v, want null", field, value)
+			}
+		}
+	})
+
+	t.Run("measured entry with a genuine zero cache figure: four numbers, zero not null", func(t *testing.T) {
+		t.Parallel()
+
+		entry := orchestrator.SnapshotRunningEntry{
+			IssueID:           "issue-measured-zero-cache",
+			Identifier:        "MT-ZEROCACHE",
+			AgentInputTokens:  1000,
+			AgentOutputTokens: 500,
+			AgentTotalTokens:  1500,
+			CacheReadTokens:   0, // the runtime reports usage but no cache data
+			UsageMeasured:     true,
+		}
+
+		got := toRunningEntryResponse(entry)
+		if got.Tokens.CacheReadTokens == nil {
+			t.Fatal("Tokens.CacheReadTokens = nil, want a non-nil pointer to 0")
+		}
+		if *got.Tokens.CacheReadTokens != 0 {
+			t.Errorf("Tokens.CacheReadTokens = %d, want 0", *got.Tokens.CacheReadTokens)
+		}
+
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		tokens := decoded["tokens"].(map[string]any)
+		if value, exists := tokens["cache_read_tokens"]; !exists {
+			t.Error("JSON tokens.cache_read_tokens key missing")
+		} else if value != float64(0) {
+			t.Errorf("JSON tokens.cache_read_tokens = %v, want 0 (not null)", value)
+		}
+	})
+
+	t.Run("tokens_pending entry carries four numbers, never a null", func(t *testing.T) {
+		t.Parallel()
+
+		entry := orchestrator.SnapshotRunningEntry{
+			IssueID:           "issue-pending",
+			Identifier:        "MT-PENDING",
+			AgentInputTokens:  200,
+			AgentOutputTokens: 100,
+			AgentTotalTokens:  300,
+			CacheReadTokens:   50,
+			UsageMeasured:     true,
+			TokensPending:     true,
+		}
+
+		got := toRunningEntryResponse(entry)
+		if !got.TokensPending {
+			t.Fatal("TokensPending = false, want true")
+		}
+		if got.Tokens.InputTokens == nil || got.Tokens.OutputTokens == nil ||
+			got.Tokens.TotalTokens == nil || got.Tokens.CacheReadTokens == nil {
+			t.Fatalf("Tokens = %+v, want four non-nil members on a tokens_pending entry", got.Tokens)
+		}
+	})
 }
 
 // --- Per-session timing percentage tests ---
@@ -1784,7 +2035,11 @@ func TestStateResponseJSON(t *testing.T) {
 				State:           "In Progress",
 				StartedAt:       fixedTime,
 				LastEventAt:     fixedTime,
-				Tokens:          tokenInfo{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+				Tokens: tokenInfo{
+					InputTokens:  new(int64(10)),
+					OutputTokens: new(int64(5)),
+					TotalTokens:  new(int64(15)),
+				},
 			},
 		},
 		Retrying:    []retryEntryResponse{},
@@ -2200,5 +2455,151 @@ func TestLivez200_Readyz503_DBDown(t *testing.T) {
 	body := decodeJSON[readyResponse](t, readyResp)
 	if body.Checks["database"] != "fail" {
 		t.Errorf("readyz Checks[database] = %q, want %q", body.Checks["database"], "fail")
+	}
+}
+
+// TestStateRouteNullsUnmeasuredFigures locks the wire contract at the
+// route rather than at the constructor: a figure no measurement
+// produced serializes as JSON null, and a measured one serializes as a
+// number - a genuine zero included, beside its true qualifier, never
+// suppressed into a null alongside the unmeasured figures. It decodes
+// into map[string]any rather than into runningEntryResponse so a wrong
+// or missing struct tag cannot round-trip through the same types and
+// hide the defect, which is the whole failure this change exists to
+// prevent.
+func TestStateRouteNullsUnmeasuredFigures(t *testing.T) {
+	t.Parallel()
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: time.Now().UTC(),
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:             "measured",
+				Identifier:          "MT-1",
+				AgentInputTokens:    1200,
+				AgentOutputTokens:   800,
+				AgentTotalTokens:    2000,
+				CacheReadTokens:     300,
+				APIRequestCount:     12,
+				RequestsByModel:     map[string]int{"model-a": 7, "model-b": 5},
+				APIRequestsMeasured: true,
+				UsageMeasured:       true,
+				UsageArrival:        registry.UsageArrivalIncremental,
+				UsageAttribution:    registry.UsageAttributionPerModel,
+			},
+			{
+				IssueID:          "unmeasured",
+				Identifier:       "MT-2",
+				UsageArrival:     registry.UsageArrivalNone,
+				UsageAttribution: registry.UsageAttributionNone,
+			},
+			{
+				IssueID:             "measured-zero",
+				Identifier:          "MT-3",
+				AgentInputTokens:    0,
+				AgentOutputTokens:   0,
+				AgentTotalTokens:    0,
+				CacheReadTokens:     0,
+				APIRequestCount:     0,
+				APIRequestsMeasured: true,
+				UsageMeasured:       true,
+				UsageArrival:        registry.UsageArrivalIncremental,
+				UsageAttribution:    registry.UsageAttributionSessionTotal,
+			},
+		},
+	}
+
+	ts := testServer(t, fixedSnapshot(snap), acceptingRefresh())
+
+	resp, err := http.Get(ts.URL + "/api/v1/state")
+	if err != nil {
+		t.Fatalf("GET /api/v1/state: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body := decodeJSON[map[string]any](t, resp)
+	running, ok := body["running"].([]any)
+	if !ok || len(running) != 3 {
+		t.Fatalf("running = %#v, want three entries", body["running"])
+	}
+
+	byID := map[string]map[string]any{}
+	for _, raw := range running {
+		entry, entryOK := raw.(map[string]any)
+		if !entryOK {
+			t.Fatalf("running entry = %#v, want an object", raw)
+		}
+		id, idOK := entry["issue_id"].(string)
+		if !idOK {
+			t.Fatalf("running entry has no issue_id: %#v", entry)
+		}
+		byID[id] = entry
+	}
+
+	tokenKeys := []string{"input_tokens", "output_tokens", "total_tokens", "cache_read_tokens"}
+
+	unmeasured := byID["unmeasured"]
+	if got, present := unmeasured["api_request_count"]; !present || got != nil {
+		t.Errorf("unmeasured api_request_count = %#v (present=%v), want present and null", got, present)
+	}
+	if got := unmeasured["api_requests_measured"]; got != false {
+		t.Errorf("unmeasured api_requests_measured = %#v, want false", got)
+	}
+	unmeasuredTokens, ok := unmeasured["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("unmeasured tokens = %#v, want an object rather than a null", unmeasured["tokens"])
+	}
+	for _, key := range tokenKeys {
+		if got, present := unmeasuredTokens[key]; !present || got != nil {
+			t.Errorf("unmeasured tokens.%s = %#v (present=%v), want present and null", key, got, present)
+		}
+	}
+	if got, present := unmeasured["requests_by_model"]; present {
+		t.Errorf("unmeasured requests_by_model = %#v, want the key absent", got)
+	}
+
+	measured := byID["measured"]
+	if got := measured["api_request_count"]; got != float64(12) {
+		t.Errorf("measured api_request_count = %#v, want 12", got)
+	}
+	if got := measured["api_requests_measured"]; got != true {
+		t.Errorf("measured api_requests_measured = %#v, want true", got)
+	}
+	if got := measured["tokens_measured"]; got != true {
+		t.Errorf("measured tokens_measured = %#v, want true", got)
+	}
+	measuredTokens, ok := measured["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("measured tokens = %#v, want an object", measured["tokens"])
+	}
+	for key, want := range map[string]float64{
+		"input_tokens": 1200, "output_tokens": 800, "total_tokens": 2000, "cache_read_tokens": 300,
+	} {
+		if got := measuredTokens[key]; got != want {
+			t.Errorf("measured tokens.%s = %#v, want %v", key, got, want)
+		}
+	}
+	if _, present := measured["requests_by_model"]; !present {
+		t.Error("measured requests_by_model absent, want the breakdown present")
+	}
+
+	measuredZero := byID["measured-zero"]
+	if got, present := measuredZero["api_request_count"]; !present || got != float64(0) {
+		t.Errorf("measured-zero api_request_count = %#v (present=%v), want present and 0, not null", got, present)
+	}
+	if got := measuredZero["api_requests_measured"]; got != true {
+		t.Errorf("measured-zero api_requests_measured = %#v, want true", got)
+	}
+	if got := measuredZero["tokens_measured"]; got != true {
+		t.Errorf("measured-zero tokens_measured = %#v, want true", got)
+	}
+	measuredZeroTokens, ok := measuredZero["tokens"].(map[string]any)
+	if !ok {
+		t.Fatalf("measured-zero tokens = %#v, want an object", measuredZero["tokens"])
+	}
+	for _, key := range tokenKeys {
+		if got, present := measuredZeroTokens[key]; !present || got != float64(0) {
+			t.Errorf("measured-zero tokens.%s = %#v (present=%v), want present and 0, not null", key, got, present)
+		}
 	}
 }

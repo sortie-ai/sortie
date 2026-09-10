@@ -3908,6 +3908,258 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 	})
 }
 
+// readWorkerStateFile reads and decodes .sortie/state.json inside
+// wsPath, using the same workerState shape writeWorkerState produces.
+func readWorkerStateFile(t *testing.T, wsPath string) workerState {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(wsPath, ".sortie", "state.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(.sortie/state.json): %v", err)
+	}
+	var s workerState
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatalf("Unmarshal state.json %q: %v", data, err)
+	}
+	return s
+}
+
+// assertMeasuredZero fails the test unless s carries TokensMeasured
+// true beside four non-nil pointers to zero, the state-file shape a
+// gate write must produce for a session that has spent nothing.
+func assertMeasuredZero(t *testing.T, s workerState) {
+	t.Helper()
+	if !s.TokensMeasured {
+		t.Fatal("TokensMeasured = false, want true")
+	}
+	for name, p := range map[string]*int64{
+		"InputTokens": s.InputTokens, "OutputTokens": s.OutputTokens,
+		"TotalTokens": s.TotalTokens, "CacheReadTokens": s.CacheReadTokens,
+	} {
+		if p == nil {
+			t.Errorf("%s = nil, want a non-nil pointer to 0", name)
+			continue
+		}
+		if *p != 0 {
+			t.Errorf("%s = %d, want 0", name, *p)
+		}
+	}
+}
+
+// assertUnmeasuredNull fails the test unless s carries TokensMeasured
+// false beside four nil pointers, the state-file shape the gate must
+// produce for a session with no measurement yet.
+func assertUnmeasuredNull(t *testing.T, s workerState) {
+	t.Helper()
+	if s.TokensMeasured {
+		t.Fatal("TokensMeasured = true, want false")
+	}
+	if s.InputTokens != nil || s.OutputTokens != nil || s.TotalTokens != nil || s.CacheReadTokens != nil {
+		t.Errorf("token pointers = (%v, %v, %v, %v), want all nil",
+			s.InputTokens, s.OutputTokens, s.TotalTokens, s.CacheReadTokens)
+	}
+}
+
+// TestRunWorkerAttempt_StateFileTokenGate proves P18 at all three
+// writeWorkerState call sites: the session-start write, the turn-start
+// write, and the on-event write. Each assertion reads .sortie/state.json
+// from inside a runTurnFn closure, the one point in the worker's single
+// goroutine where a test can observe the file between two writes.
+func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("turn-start write on turn one publishes the unmeasured verdict", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		startFn, wsPath := captureWorkspacePath()
+		var captured workerState
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					captured = readWorkerStateFile(t, wsPath())
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if captured.TurnNumber != 1 {
+			t.Errorf("TurnNumber = %d, want 1 (the turn-start write for turn 1 follows the session-start write)", captured.TurnNumber)
+		}
+		// The measured zero belongs to the session-start write, before
+		// any turn began. Once turn one is under way that verdict no
+		// longer holds, and an agent reading its own spend here must not
+		// be handed a zero it can read as a measurement.
+		assertUnmeasuredNull(t, captured)
+	})
+
+	t.Run("turn-start write on turn two reflects a run that reported nothing on turn one", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 2
+
+		startFn, wsPath := captureWorkspacePath()
+		var captured workerState
+		var turnNumber atomic.Int64
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					if turnNumber.Add(1) == 2 {
+						captured = readWorkerStateFile(t, wsPath())
+					}
+					// Neither turn reports any usage: no event carries
+					// it, and the TurnResult declares no measurement.
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, UsageMeasured: false}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if captured.TurnNumber != 2 {
+			t.Errorf("TurnNumber = %d, want 2", captured.TurnNumber)
+		}
+		assertUnmeasuredNull(t, captured)
+	})
+
+	t.Run("an all-zero token_usage event reaches the state file as a measured zero", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		startFn, wsPath := captureWorkspacePath()
+		var captured workerState
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					// A runtime that measured the turn and found it cost
+					// nothing. The verdict changes; no figure does.
+					params.OnEvent(domain.AgentEvent{
+						Type:      domain.EventTokenUsage,
+						Timestamp: time.Now().UTC(),
+					})
+					captured = readWorkerStateFile(t, wsPath())
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		assertMeasuredZero(t, captured)
+	})
+
+	t.Run("on-event write carries the folded usage the moment it arrives", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		startFn, wsPath := captureWorkspacePath()
+		var captured workerState
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{
+						Type:      domain.EventTokenUsage,
+						Timestamp: time.Now().UTC(),
+						Usage:     domain.TokenUsage{InputTokens: 120, OutputTokens: 30, TotalTokens: 150, CacheReadTokens: 10},
+					})
+					captured = readWorkerStateFile(t, wsPath())
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if !captured.TokensMeasured {
+			t.Fatal("TokensMeasured = false, want true after an event carrying usage")
+		}
+		checks := map[string]struct {
+			got  *int64
+			want int64
+		}{
+			"InputTokens": {captured.InputTokens, 120}, "OutputTokens": {captured.OutputTokens, 30},
+			"TotalTokens": {captured.TotalTokens, 150}, "CacheReadTokens": {captured.CacheReadTokens, 10},
+		}
+		for name, c := range checks {
+			if c.got == nil {
+				t.Errorf("%s = nil, want %d", name, c.want)
+				continue
+			}
+			if *c.got != c.want {
+				t.Errorf("%s = %d, want %d", name, *c.got, c.want)
+			}
+		}
+	})
+}
+
 func TestBuildDispatchComment(t *testing.T) {
 	t.Parallel()
 
@@ -7719,5 +7971,118 @@ func TestStopGraceDefaultMatchesBuiltIn(t *testing.T) {
 	got := time.Duration(cfg.Agent.StopGraceMS) * time.Millisecond
 	if got != procutil.DefaultStopGrace {
 		t.Errorf("agent.stop_grace_ms default = %v, want %v (procutil.DefaultStopGrace)", got, procutil.DefaultStopGrace)
+	}
+}
+
+// TestRunWorkerAttempt_StateFileMeasuresResultUsageWithoutFlag covers an
+// adapter that reports a figure on TurnResult without also setting the
+// flag. The figure is the measurement, so nulling it would write over a
+// real number with an absence.
+func TestRunWorkerAttempt_StateFileMeasuresResultUsageWithoutFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				return domain.TurnResult{
+					SessionID:  session.ID,
+					ExitReason: domain.EventTurnCompleted,
+					Usage:      domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600},
+					// UsageMeasured deliberately left false.
+				}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		WorkflowPath:           "/fake/WORKFLOW.md",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if !result.UsageMeasured {
+		t.Error("WorkerResult.UsageMeasured = false, want true when the result carried a figure")
+	}
+
+	got := readWorkerStateFile(t, wsPath())
+	if !got.TokensMeasured {
+		t.Error("TokensMeasured = false, want true")
+	}
+	if got.TotalTokens == nil {
+		t.Fatal("TotalTokens = nil, want the figure the result carried")
+	}
+	if *got.TotalTokens != 600 {
+		t.Errorf("TotalTokens = %d, want 600", *got.TotalTokens)
+	}
+}
+
+// TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement covers the
+// adapter that reports its measurement on TurnResult rather than through
+// an event. On a one-turn run no later write exists to carry it, so
+// without a write here the file outlives the run still denying a
+// measurement that happened.
+func TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				// No event at all: the whole measurement arrives here.
+				return domain.TurnResult{
+					SessionID:     session.ID,
+					ExitReason:    domain.EventTurnCompleted,
+					Usage:         domain.TokenUsage{InputTokens: 90, OutputTokens: 10, TotalTokens: 100},
+					UsageMeasured: true,
+				}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		WorkflowPath:           "/fake/WORKFLOW.md",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+
+	got := readWorkerStateFile(t, wsPath())
+	if !got.TokensMeasured {
+		t.Error("TokensMeasured = false, want true after a result-only measurement")
+	}
+	if got.TotalTokens == nil {
+		t.Fatal("TotalTokens = nil, want the figure the result carried")
+	}
+	if *got.TotalTokens != 100 {
+		t.Errorf("TotalTokens = %d, want 100", *got.TotalTokens)
 	}
 }

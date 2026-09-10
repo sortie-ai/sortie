@@ -2199,6 +2199,7 @@ aggregate token/runtime totals, and rate limits.
       "requests_by_model": {"claude-sonnet-4-20250514": 3},
       "tool_time_percent": 12.3,
       "api_time_percent": 45.6,
+      "tokens_measured": true,
       "usage_arrival": "incremental",
       "usage_attribution": "per_model",
       "tokens_pending": false,
@@ -2242,17 +2243,18 @@ aggregate token/runtime totals, and rate limits.
 
 | Field               | Type              | Description                                                                                                                                |
 | ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tokens`                  | object            | Token counts for this session: `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`.                                      |
-| `tokens.cache_read_tokens` | integer          | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. Zero when the agent adapter does not report cache data. |
+| `tokens`                  | object            | Token counts for this session. Each of the four members, `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens`, is an integer or `null`. The four are `null` together, exactly when `tokens_measured` is `false`, and each carries its figure otherwise. |
+| `tokens.cache_read_tokens` | integer or `null` | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. `null` when `tokens_measured` is `false`; `0` when the session is measured and the agent adapter reports no cache data. |
 | `model_name`              | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model.         |
-| `api_request_count` | integer           | Number of `token_usage` events received during this session. It is a count of actual API requests only when `usage_arrival` is `incremental`; for `turn_end` it settles at most once per turn and is not a request count. |
-| `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when no model data is available. Enables tracking model usage when the agent switches models mid-session. |
+| `api_request_count` | integer or `null` | Number of `token_usage` events received during this session, and a count of actual API requests only when `api_requests_measured` is `true`. `null` exactly when that field is `false`. |
+| `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when `api_requests_measured` is `false`, and when `usage_attribution` does not name a model. Enables tracking model usage when the agent switches models mid-session. |
 | `tool_time_percent` | number or `null`  | Cumulative tool call execution time as a percentage of session wall-clock time. Computed at response time. `null` when no tool timing data has been received. |
 | `api_time_percent`  | number or `null`  | Cumulative LLM API response wait time as a percentage of session wall-clock time. Computed at response time. `null` when no API timing data has been received. |
+| `tokens_measured`    | boolean           | True once at least one usage measurement has been reported in this session. The four members of `tokens` are `null` when it is `false`.   |
 | `usage_arrival`      | string            | The session's kind's declared usage-reporting arrival, frozen at dispatch: `incremental`, `turn_end`, `none`, or `""` when undeclared.    |
 | `usage_attribution`  | string            | The session's kind's declared usage-reporting attribution, frozen at dispatch: `per_model`, `session_total`, `none`, or `""` when undeclared. |
 | `tokens_pending`     | boolean           | True only when `usage_arrival` is `turn_end`, the session is measured, and the turn that figure would settle for is still in flight.      |
-| `api_requests_measured` | boolean        | True only when `usage_arrival` is `incremental`, the one disposition under which `api_request_count` counts actual API requests.          |
+| `api_requests_measured` | boolean        | True when `api_request_count` is a measurement of model API requests: `usage_arrival` is `incremental` and either a figure has arrived or no turn has begun. False for every other arrival, and for an `incremental` session past its first turn that has reported nothing. |
 
 **Aggregate totals:**
 
@@ -2302,6 +2304,7 @@ not in current orchestrator state.
     "requests_by_model": {"claude-sonnet-4-20250514": 3},
     "tool_time_percent": 12.3,
     "api_time_percent": 45.6,
+    "tokens_measured": true,
     "usage_arrival": "incremental",
     "usage_attribution": "per_model",
     "tokens_pending": false,

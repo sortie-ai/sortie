@@ -1287,6 +1287,61 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 	}
 }
 
+// TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip proves P6 at
+// the storage boundary: a row written with the verdict true round-trips
+// its raw count, including a genuine zero the measurement itself
+// produced, and a row written with the verdict false round-trips the
+// zero count the two orchestrator writers store for it, so the
+// persisted row can never contradict its own qualifier.
+func TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		measured        bool
+		apiRequestCount int
+	}{
+		{"measured row round-trips its raw count", true, 9},
+		{"measured row round-trips a genuine zero count", true, 0},
+		{"unmeasured row round-trips a zero count", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openTestStore(t)
+			migrateOrFatal(t, s)
+			ctx := context.Background()
+
+			meta := SessionMetadata{
+				IssueID:             "ISS-REQV",
+				SessionID:           "sess-reqv",
+				APIRequestCount:     tt.apiRequestCount,
+				APIRequestsMeasured: tt.measured,
+				UpdatedAt:           "2026-03-19T10:00:00Z",
+			}
+			if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+				t.Fatalf("UpsertSessionMetadata: %v", err)
+			}
+
+			got, found, err := s.LoadSessionMetadata(ctx, "ISS-REQV")
+			if err != nil {
+				t.Fatalf("LoadSessionMetadata: %v", err)
+			}
+			if !found {
+				t.Fatal("expected found=true, got false")
+			}
+			if got.APIRequestsMeasured != tt.measured {
+				t.Errorf("APIRequestsMeasured = %v, want %v", got.APIRequestsMeasured, tt.measured)
+			}
+			if got.APIRequestCount != tt.apiRequestCount {
+				t.Errorf("APIRequestCount = %d, want %d", got.APIRequestCount, tt.apiRequestCount)
+			}
+		})
+	}
+}
+
 func TestLoadSessionMetadata_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -2147,6 +2202,16 @@ func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 	if got.APIRequestCount != 42 {
 		t.Errorf("APIRequestCount = %d, want 42", got.APIRequestCount)
 	}
+	// The fixture never sets APIRequestsMeasured, so it round-trips
+	// false beside the non-zero count. That pairing is not one the
+	// orchestrator writes, and this row is not the legacy shape
+	// migration 016 leaves behind either; it is here because the store
+	// applies no invariant between the two columns and must return
+	// what it was handed. A regression that let the qualifier drift
+	// from what was written would still pass on the count alone.
+	if got.APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
+	}
 }
 
 // TestUpsertSessionMetadata_ExtendedFieldsUpdate verifies that updating
@@ -2195,6 +2260,9 @@ func TestUpsertSessionMetadata_ExtendedFieldsUpdate(t *testing.T) {
 	if got.APIRequestCount != 18 {
 		t.Errorf("APIRequestCount = %d, want 18", got.APIRequestCount)
 	}
+	if got.APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
+	}
 }
 
 // TestLoadAllSessionMetadata_ExtendedFields verifies that extended fields
@@ -2232,6 +2300,9 @@ func TestLoadAllSessionMetadata_ExtendedFields(t *testing.T) {
 	}
 	if all[0].APIRequestCount != 3 {
 		t.Errorf("APIRequestCount = %d, want 3", all[0].APIRequestCount)
+	}
+	if all[0].APIRequestsMeasured {
+		t.Error("APIRequestsMeasured = true, want false (fixture never sets it)")
 	}
 }
 
