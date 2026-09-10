@@ -63,6 +63,10 @@ func AssertDispositionContract(
 		t.Errorf("err = %v, want *domain.AgentError", err)
 		return
 	}
+	if agentErr == nil {
+		t.Errorf("err = %v, want a non-nil *domain.AgentError", err)
+		return
+	}
 	if agentErr.Kind != want.ErrorKind {
 		t.Errorf("err.Kind = %q, want %q", agentErr.Kind, want.ErrorKind)
 	}
@@ -102,7 +106,7 @@ func AssertWorkEvidenceConsistent(
 	}
 
 	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) {
+	if !errors.As(err, &agentErr) || agentErr == nil {
 		return
 	}
 

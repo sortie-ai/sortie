@@ -124,20 +124,11 @@ func TestAssertDispositionContract_Violating(t *testing.T) {
 // TestAssertDispositionContract_TypedNilAgentErrorPanics pins the
 // documented hazard AssertDispositionContract's own doc comment
 // describes: a caller handing back a typed-nil *domain.AgentError as a
-// non-nil error interface. err != nil then reports true, so the
-// assertion proceeds to read a field through the nil pointer
-// errors.As extracts, which panics rather than silently passing the
-// case. A stand-in cannot make this assertion "fail" the ordinary way,
-// since nothing here reaches its own t.Errorf call; recover() confirms
-// the panic in place of a Failed() check.
-func TestAssertDispositionContract_TypedNilAgentErrorPanics(t *testing.T) {
+// non-nil error interface. err != nil then reports true and errors.As
+// succeeds while leaving the extracted pointer nil, so the assertion
+// has to report the case rather than dereference it.
+func TestAssertDispositionContract_TypedNilAgentErrorFails(t *testing.T) {
 	t.Parallel()
-
-	defer func() {
-		if recover() == nil {
-			t.Error("AssertDispositionContract(typed-nil *domain.AgentError) did not panic, want panic")
-		}
-	}()
 
 	var typedNil *domain.AgentError
 	var err error = typedNil
@@ -145,6 +136,10 @@ func TestAssertDispositionContract_TypedNilAgentErrorPanics(t *testing.T) {
 	stand := new(testing.T)
 	AssertDispositionContract(stand, agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "context cancelled"},
 		domain.TurnResult{ExitReason: domain.EventTurnCancelled}, err)
+
+	if !stand.Failed() {
+		t.Error("AssertDispositionContract(typed-nil *domain.AgentError) did not fail, want a failure")
+	}
 }
 
 // TestAssertWorkEvidenceConsistent_Passing exercises the exported
