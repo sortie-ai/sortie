@@ -56,6 +56,21 @@ func TestApplySessionUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("agent_message_chunk with a non-text content block emits malformed", func(t *testing.T) {
+		t.Parallel()
+		ev, ok := parseSessionUpdate(loadSessionUpdateFixture(t, "agent_message_chunk_image.json"))
+		if !ok {
+			t.Fatal("parseSessionUpdate() found = false, want true")
+		}
+		got := applySessionUpdate(agentcore.NewToolTracker(), ev)
+		if !got.hasEvent || got.event.Type != domain.EventMalformed {
+			t.Fatalf("applySessionUpdate() = %+v, want a malformed event", got)
+		}
+		if got.event.Message != nonTextChunkMessage {
+			t.Errorf("applySessionUpdate() Message = %q, want %q", got.event.Message, nonTextChunkMessage)
+		}
+	})
+
 	t.Run("plan emits the plan-update constant", func(t *testing.T) {
 		t.Parallel()
 		ev, ok := parseSessionUpdate(loadSessionUpdateFixture(t, "plan.json"))
