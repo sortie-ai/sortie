@@ -232,9 +232,11 @@ const (
 	// model API request the turn makes, while the turn's work is
 	// still in flight. A turn making N requests delivers N events.
 	// api_request_count is a request count for a session of this
-	// arrival only once a figure has arrived: a runtime that stops
-	// delivering the per-request event leaves the count at zero
-	// while the declaration still promises one.
+	// arrival once a figure has arrived, and for one that has not
+	// yet begun a turn, which has genuinely issued no request. In
+	// between, a runtime that stops delivering the per-request
+	// event leaves the count at zero while the declaration still
+	// promises one, and that zero measures nothing.
 	UsageArrivalIncremental UsageArrival = "incremental"
 
 	// UsageArrivalTurnEnd declares that the adapter emits at most
