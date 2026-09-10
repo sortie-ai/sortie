@@ -3967,7 +3967,7 @@ func assertUnmeasuredNull(t *testing.T, s workerState) {
 func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 	t.Parallel()
 
-	t.Run("session-start and first turn-start write a measured zero", func(t *testing.T) {
+	t.Run("turn-start write on turn one publishes the unmeasured verdict", func(t *testing.T) {
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -4004,7 +4004,11 @@ func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 		if captured.TurnNumber != 1 {
 			t.Errorf("TurnNumber = %d, want 1 (the turn-start write for turn 1 follows the session-start write)", captured.TurnNumber)
 		}
-		assertMeasuredZero(t, captured)
+		// The measured zero belongs to the session-start write, before
+		// any turn began. Once turn one is under way that verdict no
+		// longer holds, and an agent reading its own spend here must not
+		// be handed a zero it can read as a measurement.
+		assertUnmeasuredNull(t, captured)
 	})
 
 	t.Run("turn-start write on turn two reflects a run that reported nothing on turn one", func(t *testing.T) {
@@ -4050,6 +4054,49 @@ func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 			t.Errorf("TurnNumber = %d, want 2", captured.TurnNumber)
 		}
 		assertUnmeasuredNull(t, captured)
+	})
+
+	t.Run("an all-zero token_usage event reaches the state file as a measured zero", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		startFn, wsPath := captureWorkspacePath()
+		var captured workerState
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					// A runtime that measured the turn and found it cost
+					// nothing. The verdict changes; no figure does.
+					params.OnEvent(domain.AgentEvent{
+						Type:      domain.EventTokenUsage,
+						Timestamp: time.Now().UTC(),
+					})
+					captured = readWorkerStateFile(t, wsPath())
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		assertMeasuredZero(t, captured)
 	})
 
 	t.Run("on-event write carries the folded usage the moment it arrives", func(t *testing.T) {

@@ -982,20 +982,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	for {
-		if mcpConfigPath != "" {
-			if err := writeWorkerState(wsResult.Path, workerState{
-				TurnNumber: turnNumber,
-				MaxTurns:   maxTurns,
-				Attempt:    attempt,
-				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-			}.withTokens(localUsage, localMeasured)); err != nil {
-				logger.Warn("failed to write status state file at turn start",
-					slog.Int("turn_number", turnNumber),
-					slog.Any("error", err),
-				)
-			}
-		}
-
 		// Render the prompt template for this turn.
 		issueMap := issue.ToTemplateMap()
 		var renderOpts []prompt.RenderOption
@@ -1061,6 +1047,24 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			localMeasured = false
 		}
 
+		// The turn-start write follows the flip above: publishing it
+		// earlier would put a measured verdict on disk for the whole of
+		// turn one, which an agent reading its own spend would take as a
+		// measurement of zero.
+		if mcpConfigPath != "" {
+			if err := writeWorkerState(wsResult.Path, workerState{
+				TurnNumber: turnNumber,
+				MaxTurns:   maxTurns,
+				Attempt:    attempt,
+				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+			}.withTokens(localUsage, localMeasured)); err != nil {
+				logger.Warn("failed to write status state file at turn start",
+					slog.Int("turn_number", turnNumber),
+					slog.Any("error", err),
+				)
+			}
+		}
+
 		turnResult, err := runBoundedTurn(ctx, deps.AgentAdapter, session, domain.RunTurnParams{
 			Prompt: rendered,
 			Issue:  issue,
@@ -1072,21 +1076,21 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
-				if event.Type == domain.EventTokenUsage || hasUsage(event.Usage) {
+				measurementArrived := event.Type == domain.EventTokenUsage || hasUsage(event.Usage)
+				if measurementArrived {
 					localMeasured = true
 				}
 				if hasUsage(event.Usage) {
 					localUsage, localLastUsage = foldLocalUsage(event.Usage, localUsage, localLastUsage)
-
-					if mcpConfigPath != "" {
-						if err := writeWorkerState(wsResult.Path, workerState{
-							TurnNumber: turnNumber,
-							MaxTurns:   maxTurns,
-							Attempt:    attempt,
-							StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-						}.withTokens(localUsage, localMeasured)); err != nil {
-							logger.Warn("failed to write status state file on token event", slog.Any("error", err))
-						}
+				}
+				if measurementArrived && mcpConfigPath != "" {
+					if err := writeWorkerState(wsResult.Path, workerState{
+						TurnNumber: turnNumber,
+						MaxTurns:   maxTurns,
+						Attempt:    attempt,
+						StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+					}.withTokens(localUsage, localMeasured)); err != nil {
+						logger.Warn("failed to write status state file on token event", slog.Any("error", err))
 					}
 				}
 				deps.OnEvent(issue.ID, event)
