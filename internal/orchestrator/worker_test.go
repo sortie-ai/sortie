@@ -7973,3 +7973,59 @@ func TestStopGraceDefaultMatchesBuiltIn(t *testing.T) {
 		t.Errorf("agent.stop_grace_ms default = %v, want %v (procutil.DefaultStopGrace)", got, procutil.DefaultStopGrace)
 	}
 }
+
+// TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement covers the
+// adapter that reports its measurement on TurnResult rather than through
+// an event. On a one-turn run no later write exists to carry it, so
+// without a write here the file outlives the run still denying a
+// measurement that happened.
+func TestRunWorkerAttempt_StateFileCarriesResultOnlyMeasurement(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				// No event at all: the whole measurement arrives here.
+				return domain.TurnResult{
+					SessionID:     session.ID,
+					ExitReason:    domain.EventTurnCompleted,
+					Usage:         domain.TokenUsage{InputTokens: 90, OutputTokens: 10, TotalTokens: 100},
+					UsageMeasured: true,
+				}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		WorkflowPath:           "/fake/WORKFLOW.md",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+
+	got := readWorkerStateFile(t, wsPath())
+	if !got.TokensMeasured {
+		t.Error("TokensMeasured = false, want true after a result-only measurement")
+	}
+	if got.TotalTokens == nil {
+		t.Fatal("TotalTokens = nil, want the figure the result carried")
+	}
+	if *got.TotalTokens != 100 {
+		t.Errorf("TotalTokens = %d, want 100", *got.TotalTokens)
+	}
+}

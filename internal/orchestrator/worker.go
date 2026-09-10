@@ -1100,11 +1100,27 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// Fold TurnResult.Usage into the local mirror on both the success
 		// and the error path, so a run-cumulative figure the adapter
 		// reported only on TurnResult (not through an event) is not lost.
+		resultCarriesMeasurement := hasUsage(turnResult.Usage) || turnResult.UsageMeasured
 		if hasUsage(turnResult.Usage) {
 			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
 		}
 		if turnResult.UsageMeasured {
 			localMeasured = true
+		}
+
+		// An adapter may report a session's only measurement here rather
+		// than through an event, and on the last turn no later write
+		// would carry it, so the file would keep denying a measurement
+		// that exists.
+		if resultCarriesMeasurement && mcpConfigPath != "" {
+			if err := writeWorkerState(wsResult.Path, workerState{
+				TurnNumber: turnNumber,
+				MaxTurns:   maxTurns,
+				Attempt:    attempt,
+				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+			}.withTokens(localUsage, localMeasured)); err != nil {
+				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))
+			}
 		}
 
 		if err != nil {
