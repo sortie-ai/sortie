@@ -725,8 +725,8 @@ adapter-local: every adapter obtains its turn disposition from the one shared ru
 adapter whose runtime reports something the rule cannot express extends the rule itself, under
 review, rather than deciding the case in a private branch.
 
-One adapter diverges, not two, and the divergence is currency rather than structure: an adapter
-with no per-turn process exit never reaches the work rows at all.
+Two adapters sit outside the common shape, for different reasons. Kiro declares work evidence the
+others do not. Codex reaches no work row at all, because it observes no per-turn process exit.
 
 - Headless Kiro reports no token counts, so the work evidence it declares is its stdout
   transcript, and the credits trailer on stderr stays the runtime's own success report, ranking
