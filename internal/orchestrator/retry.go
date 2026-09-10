@@ -305,7 +305,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// knows this issue under the same reason, so a hold that survives a
 	// gap in candidacy keeps reporting when it began.
 	blocked := false
-	blockBudget := func(reason string, usedSessions int, usedTokens *int64, unmeasuredSessions *int) {
+	blockBudget := func(reason string, usedSessions int, usedTokens *int64, unmeasuredSessions *int, stoppedInFlight *int) {
 		at := time.Now().UTC()
 		if told, wasTold := state.BudgetAnnounced[issueID]; wasTold && told.Reason == reason {
 			at = told.At
@@ -319,6 +319,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			UsedTokens:         usedTokens,
 			BudgetTokens:       int64(params.MaxTokens),
 			UnmeasuredSessions: unmeasuredSessions,
+			StoppedInFlight:    stoppedInFlight,
 			ExhaustedAt:        at,
 		}
 		delete(state.Claimed, issueID)
@@ -347,7 +348,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int("count", count),
 				slog.Int("max_sessions", params.MaxSessions),
 			)
-			blockBudget(budgetReasonSession, count, nil, nil)
+			blockBudget(budgetReasonSession, count, nil, nil, nil)
 		}
 	}
 
@@ -371,7 +372,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int("used_sessions", usage.Sessions),
 				slog.Int("budget_sessions", params.MaxSessions),
 			)
-			blockBudget(budgetReasonToken, usage.Sessions, &usage.TotalTokens, &usage.UnmeasuredSessions)
+			blockBudget(budgetReasonToken, usage.Sessions, &usage.TotalTokens, &usage.UnmeasuredSessions, &usage.StoppedInFlight)
 		} else {
 			if blocked {
 				// The session gate already blocked; the token axis was
@@ -380,6 +381,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				// own enrichment.
 				state.BudgetExhausted[issueID].UsedTokens = &usage.TotalTokens
 				state.BudgetExhausted[issueID].UnmeasuredSessions = &usage.UnmeasuredSessions
+				state.BudgetExhausted[issueID].StoppedInFlight = &usage.StoppedInFlight
 			}
 			if usage.UnmeasuredSessions > 0 {
 				log.Warn("token budget cannot be fully evaluated, allowing dispatch",
@@ -674,6 +676,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
 		entry.UsageArrival, entry.UsageAttribution = params.ResolveUsageDisposition(agentKind, host)
+		freezeIssueTokenBaseline(ctx, state, issueID, params.Store, params.Logger)
 	}
 	metrics.IncDispatches(outcomeSuccess)
 

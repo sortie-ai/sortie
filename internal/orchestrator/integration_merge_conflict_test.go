@@ -312,7 +312,7 @@ func TestReconcileMergeConflict_LiveAPI_E2E(t *testing.T) {
 	store := openInMemoryStore(t)
 	metrics := newMergeConflictMetricsSpy()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
 	state.PendingReactions[rkey] = &PendingReaction{
 		IssueID:    issueID,

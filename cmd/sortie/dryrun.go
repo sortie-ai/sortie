@@ -33,6 +33,7 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 	state := orchestrator.NewState(
 		cfg.Polling.IntervalMS,
 		cfg.Agent.MaxConcurrentAgents,
+		cfg.Agent.MaxTokens,
 		cfg.Agent.MaxConcurrentByState,
 		orchestrator.AgentTotals{},
 	)

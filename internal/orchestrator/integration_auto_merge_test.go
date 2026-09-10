@@ -493,7 +493,7 @@ func TestReconcileAutoMerge_LiveAPI_E2E(t *testing.T) {
 	metrics := newAutoMergeMetricsCounter()
 
 	// Build the reconcile state with one PendingReaction for the new PR.
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindAutoMerge)
 	state.PendingReactions[rkey] = &PendingReaction{
 		IssueID:    issueID,

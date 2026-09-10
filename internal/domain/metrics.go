@@ -199,6 +199,12 @@ type Metrics interface {
 	// it (sortie_budget_exhaustions_total{reason} counter).
 	IncBudgetExhaustions(reason string)
 
+	// IncRunsStoppedByBudget increments the counter of runs the
+	// orchestrator stopped in flight because a budget ceiling was
+	// reached. reason is "token_budget"
+	// (sortie_runs_stopped_by_budget_total{reason} counter).
+	IncRunsStoppedByBudget(reason string)
+
 	// SetBudgetExhaustedIssues records how many issues are currently
 	// held out of dispatch under the given reason, one of the
 	// dispatch-gate reason values whose vocabulary may gain a third
@@ -253,6 +259,7 @@ func (*NoopMetrics) IncMergeConflictEscalations(string)                    {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 func (*NoopMetrics) IncCandidateHolds(string)                              {}
 func (*NoopMetrics) IncBudgetExhaustions(string)                           {}
+func (*NoopMetrics) IncRunsStoppedByBudget(string)                         {}
 func (*NoopMetrics) SetBudgetExhaustedIssues(string, int)                  {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]

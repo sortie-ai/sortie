@@ -96,7 +96,7 @@ func newLabelFixPending(issueID string, prNumber int, branch string) *PendingRea
 // PendingReaction entry.
 func stateWithLabelFixPending(t *testing.T, issueID string, prNumber int, branch string) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindLabelFix)
 	s.PendingReactions[rkey] = newLabelFixPending(issueID, prNumber, branch)
 	return s

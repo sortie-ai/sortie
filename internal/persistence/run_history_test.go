@@ -425,6 +425,76 @@ func TestQueryTokenBudgetUsage(t *testing.T) {
 	})
 }
 
+// TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity seeds
+// one issue with a mix of statuses, including one status the
+// StoppedInFlight count must ignore (a plain "cancelled" row, distinct
+// from a ceiling-stopped one), and asserts that TokenUsageByIssue and
+// QueryTokenBudgetUsage report the identical IssueTokenUsage for it.
+func TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity(t *testing.T) {
+	t.Parallel()
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	const issueID = "ISS-STOPPED-PARITY"
+
+	stopped1 := tokenRun(1, issueID, 500)
+	stopped1.Status = "budget_stopped"
+	stopped1.TokensMeasured = true
+	appendOrFatal(t, s, stopped1)
+
+	stopped2 := tokenRun(2, issueID, 300)
+	stopped2.Status = "budget_stopped"
+	stopped2.TokensMeasured = true
+	appendOrFatal(t, s, stopped2)
+
+	// A plain cancellation, not a ceiling stop: the StoppedInFlight count
+	// must not mistake this for one.
+	cancelled := tokenRun(3, issueID, 200)
+	cancelled.Status = "cancelled"
+	cancelled.TokensMeasured = true
+	appendOrFatal(t, s, cancelled)
+
+	succeeded := tokenRun(4, issueID, 400)
+	succeeded.Status = "succeeded"
+	succeeded.TokensMeasured = true
+	appendOrFatal(t, s, succeeded)
+
+	unmeasured := tokenRun(5, issueID, 0)
+	unmeasured.Status = "succeeded"
+	unmeasured.TokensMeasured = false
+	appendOrFatal(t, s, unmeasured)
+
+	byIssue, err := s.TokenUsageByIssue(ctx, issueID)
+	if err != nil {
+		t.Fatalf("TokenUsageByIssue(%s) unexpected error: %v", issueID, err)
+	}
+	byBudget, err := s.QueryTokenBudgetUsage(ctx, []string{issueID})
+	if err != nil {
+		t.Fatalf("QueryTokenBudgetUsage unexpected error: %v", err)
+	}
+	budgetUsage, ok := byBudget[issueID]
+	if !ok {
+		t.Fatalf("QueryTokenBudgetUsage result = %v, want an entry for %s", byBudget, issueID)
+	}
+
+	want := IssueTokenUsage{
+		TotalTokens:        1400,
+		Sessions:           5,
+		UnmeasuredSessions: 1,
+		StoppedInFlight:    2,
+	}
+	if byIssue != want {
+		t.Errorf("TokenUsageByIssue(%s) = %+v, want %+v", issueID, byIssue, want)
+	}
+	if budgetUsage != want {
+		t.Errorf("QueryTokenBudgetUsage()[%s] = %+v, want %+v", issueID, budgetUsage, want)
+	}
+	if byIssue != budgetUsage {
+		t.Errorf("TokenUsageByIssue = %+v, QueryTokenBudgetUsage = %+v, want identical", byIssue, budgetUsage)
+	}
+}
+
 // completionRun returns a run_history row for identifier carrying
 // completedAt, with the remaining fields from newTestRun.
 func completionRun(i int, identifier, completedAt string) RunHistory {

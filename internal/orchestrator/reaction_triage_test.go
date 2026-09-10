@@ -300,7 +300,7 @@ func (s *triageGateStore) AppendRunHistory(_ context.Context, run persistence.Ru
 // cap, and a triageGateStore.
 func gateParams(t *testing.T, store *triageGateStore, workspaceRoot string) (*State, ReconcileParams) {
 	t.Helper()
-	state := NewState(1000, 5, nil, AgentTotals{})
+	state := NewState(1000, 5, 0, nil, AgentTotals{})
 	params := ReconcileParams{
 		Store:         store,
 		WorkspaceRoot: workspaceRoot,
@@ -975,7 +975,7 @@ func TestReactionTriageGate(t *testing.T) {
 		identifier := "ISS-CAP"
 		root := mustTriageWorkspace(t, identifier)
 		store := &triageGateStore{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		state.TriageInFlight.Add(1) // saturate the cap of max(MaxConcurrentAgents, 1) == 1
 		params := ReconcileParams{Store: store, WorkspaceRoot: root}
 		pending := &PendingReaction{IssueID: identifier}
@@ -1065,7 +1065,7 @@ func TestStartReactionTriage_UnconsumedRun_StillLogsCompletion(t *testing.T) {
 
 	identifier := "ISS-UNCONSUMED"
 	root := mustTriageWorkspace(t, identifier)
-	state := NewState(1000, 5, nil, AgentTotals{})
+	state := NewState(1000, 5, 0, nil, AgentTotals{})
 	req := ReactionTriageRequest{
 		Kind:        "ci",
 		Identifier:  identifier,

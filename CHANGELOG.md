@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1059](https://github.com/sortie-ai/sortie/issues/1059),
   [#1061](https://github.com/sortie-ai/sortie/issues/1061))
 
+- A running session's token spend is now checked against `agent.max_tokens` as usage arrives, not only at the next dispatch decision, so a run that crosses the ceiling mid-turn is stopped in flight instead of running to completion before the ceiling ever gets a chance to hold it. A run stopped this way records `budget_stopped` in the run history and increments a new `sortie_runs_stopped_by_budget_total{reason}` counter; the existing budget-hold tracker comment now also states when a hold followed a session stopped this way.
+  ([#1062](https://github.com/sortie-ai/sortie/issues/1062))
+
 ### Fixed
 
 - A string-typed adapter configuration key whose value carries another YAML type, such as `tracker.endpoint: 123`, `agent.kind: 123`, or a mistyped `claude-code.model`, is now rejected with a diagnostic naming the key and the type found, instead of being silently coerced to the empty string and then treated as absent or defaulted to the adapter's own default. A workflow that previously started with such a value now fails at config load, at adapter construction, or offline through `sortie validate`, whichever reads the key first; the fix is to quote the value or remove the key.

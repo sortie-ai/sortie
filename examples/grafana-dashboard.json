@@ -2742,6 +2742,56 @@
             "title": "Candidate Holds",
             "description": "Candidates the dispatch loop held per second by reason (blocked_by, blockers_unresolved, blockers_not_read, blockers_incomplete).",
             "type": "timeseries"
+        },
+        {
+            "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+            "fieldConfig": {
+                "defaults": {
+                    "color": { "mode": "thresholds" },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            { "color": "green", "value": null },
+                            { "color": "red", "value": 1 }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 117 },
+            "id": 43,
+            "options": {
+                "colorMode": "value",
+                "graphMode": "none",
+                "justifyMode": "auto",
+                "orientation": "auto",
+                "reduceOptions": {
+                    "calcs": ["lastNotNull"],
+                    "fields": "",
+                    "values": false
+                },
+                "showPercentChange": false,
+                "textMode": "auto",
+                "wideLayout": true
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "${DS_PROMETHEUS}"
+                    },
+                    "editorMode": "code",
+                    "expr": "sortie_runs_stopped_by_budget_total",
+                    "instant": false,
+                    "legendFormat": "{{reason}}",
+                    "range": true,
+                    "refId": "A"
+                }
+            ],
+            "title": "Runs Stopped In Flight",
+            "description": "Runs the orchestrator stopped in flight by a budget ceiling, by reason.",
+            "type": "stat"
         }
     ],
     "refresh": "30s",

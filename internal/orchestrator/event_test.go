@@ -14,7 +14,7 @@ import (
 // newStateWithEntry returns a *State containing a single RunningEntry under
 // issueID. Helpers call this to avoid repetitive setup in every test.
 func newStateWithEntry(issueID string) (*State, *RunningEntry) {
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	entry := &RunningEntry{}
 	state.Running[issueID] = entry
 	return state, entry
@@ -26,7 +26,7 @@ func newStateWithEntry(issueID string) (*State, *RunningEntry) {
 func TestHandleAgentEvent_UnknownIssue(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	HandleAgentEvent(state, "GHOST-999", domain.AgentEvent{
 		Type:      domain.EventNotification,
 		Timestamp: time.Now().UTC(),
@@ -335,7 +335,7 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 func TestHandleAgentEvent_TwoSessions_AgentTotals(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	entryA := &RunningEntry{}
 	entryB := &RunningEntry{}
 	state.Running["A-1"] = entryA
@@ -672,7 +672,7 @@ func TestHandleAgentEvent_DebugLogging(t *testing.T) {
 		var buf bytes.Buffer
 		logger := debugLogger(t, &buf)
 
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		HandleAgentEvent(state, "GHOST-1", domain.AgentEvent{
 			Type:      domain.EventNotification,
@@ -1161,7 +1161,7 @@ func TestHandleAgentEvent_CacheReadTokens_DebugLog(t *testing.T) {
 func TestHandleAgentEvent_TwoSessions_CacheReadTotals(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["A-1"] = &RunningEntry{}
 	state.Running["B-1"] = &RunningEntry{}
 	ts := time.Now().UTC()

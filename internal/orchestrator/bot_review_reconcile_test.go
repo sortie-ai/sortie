@@ -61,7 +61,7 @@ func makeBotReviewPendingEntry(t *testing.T, issueID string, prNumber int) *Pend
 // stateWithBotReviewReaction creates a State with one bot-review PendingReaction.
 func stateWithBotReviewReaction(t *testing.T, issueID string, prNumber int) *State {
 	t.Helper()
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindBotReview)
 	s.PendingReactions[rkey] = makeBotReviewPendingEntry(t, issueID, prNumber)
 	s.Claimed[issueID] = struct{}{}
@@ -674,7 +674,7 @@ func TestReconcileBotReviewComments_UnchangedDispatchedFingerprint(t *testing.T)
 func TestReconcileBotReviewComments_KindDataTypeMismatch(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey("BOT-MISMATCH", ReactionKindBotReview)
 	state.PendingReactions[rkey] = &PendingReaction{
 		IssueID:    "BOT-MISMATCH",
@@ -706,7 +706,7 @@ func TestReconcileBotReviewComments_KindDataTypeMismatch(t *testing.T) {
 func TestReconcileBotReviewComments_SkipsNonBotReviewEntries(t *testing.T) {
 	t.Parallel()
 
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	// Add a review-kind entry that must remain untouched.
 	reviewKey := ReactionKey("BOT-CROSS", ReactionKindReview)
 	state.PendingReactions[reviewKey] = &PendingReaction{
@@ -745,7 +745,7 @@ func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ISO-1"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	// Seed: review slot.
 	reviewKey := ReactionKey(issueID, ReactionKindReview)
@@ -833,7 +833,7 @@ func TestEscalateBotReviewFailure_LabelAction(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-LABEL-1"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -875,7 +875,7 @@ func TestEscalateBotReviewFailure_CommentAction(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-COMMENT-1"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -917,7 +917,7 @@ func TestEscalateBotReviewFailure_EmptyEscalation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-EMPTY-1"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -952,7 +952,7 @@ func TestEscalateBotReviewFailure_NilTrackerAdapter(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-NOTRACKER"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -995,7 +995,7 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	t.Parallel()
 
 	issueID := "BOT-CAP"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 	// Sibling review slot that must survive.
 	reviewKey := ReactionKey(issueID, ReactionKindReview)
@@ -1357,7 +1357,7 @@ func TestEscalateBotReviewFailure_LabelDefaultsWhenEmpty(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-LABEL-DEFAULT"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -1399,7 +1399,7 @@ func TestEscalateBotReviewFailure_LabelActionError(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-LABEL-ERR"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -1444,7 +1444,7 @@ func TestEscalateBotReviewFailure_CommentActionError(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-COMMENT-ERR"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -1486,7 +1486,7 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ESC-DELFP-ERR"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:   issueID,
@@ -1538,7 +1538,7 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	t.Parallel()
 
 	issueID := "BOT-COEXIST"
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	reviewKey := ReactionKey(issueID, ReactionKindReview)
 	state.PendingReactions[reviewKey] = newReviewPendingEntry(issueID, 55)
 	botKey := ReactionKey(issueID, ReactionKindBotReview)

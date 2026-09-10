@@ -298,9 +298,9 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	state := NewState(
 		cfg.Polling.IntervalMS,
 		cfg.Agent.MaxConcurrentAgents,
+		0,
 		nil,
-		AgentTotals{},
-	)
+		AgentTotals{})
 
 	orch := NewOrchestrator(OrchestratorParams{
 		State:           state,

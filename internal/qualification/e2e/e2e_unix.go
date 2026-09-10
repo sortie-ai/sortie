@@ -501,7 +501,7 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	if err != nil {
 		t.Fatalf("resolve the tool server binary: %v", err)
 	}
-	state := orchestrator.NewState(20, 1, nil, orchestrator.AgentTotals{})
+	state := orchestrator.NewState(20, 1, 0, nil, orchestrator.AgentTotals{})
 	orch := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		MCPServerBinary: toolServer,
 		State:           state,

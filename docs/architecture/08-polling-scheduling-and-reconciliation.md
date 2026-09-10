@@ -146,11 +146,12 @@ Per-issue effort budget (defense-in-depth):
 
 Per-issue token budget (cost ceiling):
 
-- When `agent.max_tokens > 0`, two lanes evaluate it: the retry handler sums `total_tokens`
+- When `agent.max_tokens > 0`, three lanes evaluate it: the retry handler sums `total_tokens`
   across the issue's `run_history` entries on the same pre-dispatch path, after the session
   check, once per retry; the poll tick's rebuild runs the same sum as one batch query over the
   whole candidate set, once per tick, after the session-count query (see the rebuild bullet
-  below).
+  below); and the event loop evaluates a run already in flight against the same ceiling as
+  each usage figure arrives.
 - If the sum reaches `max_tokens`, a warning is logged on both lanes. The retry handler
   releases the claim it holds and does not re-dispatch; the rebuild writes the candidate into
   the exhausted-issue set instead, for the reason the effort-budget bullet above states.
@@ -189,6 +190,18 @@ Per-issue token budget (cost ceiling):
   visibility of the query-failure fail-open case above. The retry path warns on every occurrence
   rather than once per issue, because it runs once per retry rather than once per poll tick.
 - `max_tokens = 0` (default) disables the budget entirely.
+- The in-flight lane runs on the event loop rather than at dispatch: an integer comparison
+  against the running session's own token total pre-filters every usage event so no store read
+  runs until the pre-filter fires, and only then does a confirming read against the same sum
+  the dispatch lanes read decide the stop. A failed confirming read still stops the run when
+  the running session's own spend has reached the ceiling on its own, because a completed-session
+  sum is never negative and the read is then not needed to know the ceiling is breached. Where
+  the completed sum is what carries the issue over, a failed read fails open: the run keeps going
+  and can pass `max_tokens` until a later read succeeds or the run ends, and the next dispatch
+  decision prevents only the session after it. The pre-filter re-evaluates on every later usage
+  figure. Once the sum is established, by a confirming read or by the session's own spend alone,
+  the lane cancels the running session's context, which records the stop in `run_history` and the
+  tracker's next hold notice.
 
 Note:
 

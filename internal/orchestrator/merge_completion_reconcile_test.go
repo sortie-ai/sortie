@@ -333,7 +333,7 @@ func newMGCPending(issueID string, prNumber int) *PendingReaction {
 // mgcStateWithPending creates a State with one merge-completion
 // PendingReaction entry, not claimed.
 func mgcStateWithPending(issueID string, prNumber int) *State {
-	s := NewState(5000, 4, nil, AgentTotals{})
+	s := NewState(5000, 4, 0, nil, AgentTotals{})
 	rkey := ReactionKey(issueID, ReactionKindMergeCompletion)
 	s.PendingReactions[rkey] = newMGCPending(issueID, prNumber)
 	return s
@@ -510,7 +510,7 @@ func TestReconcileMergeCompletion_RecoveryOverDispatchedFingerprintNoTransition(
 	store.fingerprints[issueID+":"+ReactionKindMergeCompletion] = mgcFingerprintRecord{fingerprint: "sha-4", dispatched: true}
 
 	tracker := &mgcTrackerFake{states: map[string]string{issueID: "In Review"}}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun(issueID, identifier, "owner/repo#13", 1)
 
 	recoverParams := PendingReactionRecoveryParams{
@@ -1564,7 +1564,7 @@ func TestReconcileMergeCompletion_SweepCollectsOnlyTheWrittenTerminalList(t *tes
 		tmpDir := t.TempDir()
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-MGC-SWEEP-1"))
 		tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-MGC-SWEEP-1": "done"}}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, SweepWorkspacesParams{
 			WorkspaceRoot:  tmpDir,
@@ -1584,7 +1584,7 @@ func TestReconcileMergeCompletion_SweepCollectsOnlyTheWrittenTerminalList(t *tes
 		tmpDir := t.TempDir()
 		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-MGC-SWEEP-2"))
 		tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-MGC-SWEEP-2": "done"}}
-		state := NewState(5000, 4, nil, AgentTotals{})
+		state := NewState(5000, 4, 0, nil, AgentTotals{})
 
 		SweepWorkspaces(state, SweepWorkspacesParams{
 			WorkspaceRoot:  tmpDir,

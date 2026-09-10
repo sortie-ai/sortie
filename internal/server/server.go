@@ -48,7 +48,7 @@ type RunHistoryEntry struct {
 	// Attempt is the one-based retry attempt number.
 	Attempt int
 	// Status is the terminal run outcome: "succeeded", "failed",
-	// "cancelled", "ci_failed", or "needs_person".
+	// "cancelled", "ci_failed", "needs_person", or "budget_stopped".
 	Status string
 	// WorkflowFile is the path to the workflow definition used.
 	WorkflowFile string

@@ -254,9 +254,9 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 }
 
 // hasUsage reports whether usage carries a non-zero component. Shared
-// by HandleAgentEvent, the worker's OnEvent relay, and
-// maybeWriteIncrementalMetadata so all three sites apply the same
-// usage-bearing-event condition.
+// by HandleAgentEvent, the worker's OnEvent relay,
+// maybeWriteIncrementalMetadata, and enforceInFlightTokenCeiling so all
+// four sites apply the same usage-bearing-event condition.
 func hasUsage(usage domain.TokenUsage) bool {
 	return usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.CacheReadTokens != 0
 }

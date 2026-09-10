@@ -219,7 +219,7 @@ func TestParkExhaustedAbsencesZeroValueConfigResolvesDefaultCeiling(t *testing.T
 	cfg := config.ServiceConfig{}
 	store := &stubStore{absenceCounts: map[string]int{issueID: 0}}
 	tracker := newRecordingHandoffTracker()
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	orchestrator := NewOrchestrator(OrchestratorParams{
 		State:           state,
 		Logger:          discardLogger(),
@@ -323,7 +323,7 @@ func TestAbsenceCeilingParkPointStableAcrossMaxSessions(t *testing.T) {
 				}
 				store := &stubStore{absenceCounts: map[string]int{issueID: 2}}
 				tracker := newRecordingHandoffTracker()
-				state := NewState(1000, 1, nil, AgentTotals{})
+				state := NewState(1000, 1, 0, nil, AgentTotals{})
 				orchestrator := NewOrchestrator(OrchestratorParams{
 					State:           state,
 					Logger:          discardLogger(),
@@ -653,7 +653,7 @@ func TestRebuildBudgetExhaustedRetainsAbsenceParkingOnQueryError(t *testing.T) {
 	issue := candidateIssue(issueID, "PROJ-REBUILD", "To Do")
 	cfg := config.ServiceConfig{}
 	store := &stubStore{absenceCountErr: errors.New("database is locked")}
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	state.Parked[issueID] = &ParkedEntry{Identifier: "PROJ-REBUILD", Reason: parkReasonHandoffAbsence}
 	orchestrator := NewOrchestrator(OrchestratorParams{
 		State:           state,
@@ -726,7 +726,7 @@ func TestRebuildBudgetExhaustedSkipsAbsenceGateUnderOffPolicy(t *testing.T) {
 	}
 	store := &stubStore{absenceCounts: map[string]int{issueID: 5}}
 	tracker := newRecordingHandoffTracker()
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	orchestrator := NewOrchestrator(OrchestratorParams{
 		State:           state,
 		Logger:          discardLogger(),
@@ -769,7 +769,7 @@ func TestRebuildBudgetExhaustedRestoresAbsenceParkingAfterRestart(t *testing.T) 
 	manager := &stubWorkflowManager{config: startupCfg}
 	store := &stubStore{absenceCounts: map[string]int{issueID: 3}}
 	tracker := newRecordingHandoffTracker()
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	orchestrator := NewOrchestrator(OrchestratorParams{
 		State:           state,
 		Logger:          discardLogger(),
@@ -817,7 +817,7 @@ func TestParkExhaustedAbsencesLeavesBudgetExhaustedEmpty(t *testing.T) {
 	cfg := config.ServiceConfig{}
 	store := &stubStore{absenceCounts: map[string]int{issueID: 3}}
 	tracker := newRecordingHandoffTracker()
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	orchestrator := NewOrchestrator(OrchestratorParams{
 		State:           state,
 		Logger:          discardLogger(),
@@ -848,7 +848,7 @@ func TestUnparkIssueAgentBlockedResetsAbsenceSequence(t *testing.T) {
 
 	const issueID = "BLK-UNPARK"
 	store := &mockExitStore{}
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	state.Parked[issueID] = &ParkedEntry{Identifier: "PROJ-BLK", Reason: parkReasonAgentBlocked}
 
 	unparkIssue(context.Background(), state, issueID, unparkTriggerStateChanged, store, discardLogger())
@@ -916,7 +916,7 @@ func TestHandleTickAbsenceReleaseOrdering(t *testing.T) {
 		t.Fatalf("UpsertParkedIssue: %v", err)
 	}
 
-	state := NewState(1000, 4, nil, AgentTotals{})
+	state := NewState(1000, 4, 0, nil, AgentTotals{})
 	state.Parked[issueID] = &ParkedEntry{
 		Identifier:  "PROJ-ORD",
 		Reason:      parkReasonHandoffAbsence,
@@ -971,7 +971,7 @@ func TestParkExhaustedAbsencesOffPolicyHoldsExistingParkAndSkipsNewPark(t *testi
 	cfg := config.ServiceConfig{Tracker: config.TrackerConfig{HandoffEvidence: config.HandoffEvidenceOff}}
 	store := &stubStore{absenceCounts: map[string]int{freshIssueID: 5}}
 	tracker := newRecordingHandoffTracker()
-	state := NewState(1000, 1, nil, AgentTotals{})
+	state := NewState(1000, 1, 0, nil, AgentTotals{})
 	state.Parked[heldIssueID] = &ParkedEntry{
 		Identifier:  "PROJ-HELD",
 		Reason:      parkReasonHandoffAbsence,
@@ -1141,7 +1141,7 @@ func TestParkSingleLogRecordPerTrigger(t *testing.T) {
 		store := &stubStore{absenceCounts: map[string]int{issueID: 3}}
 		tracker := newRecordingHandoffTracker()
 		spy := &spyMetrics{}
-		state := NewState(1000, 1, nil, AgentTotals{})
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		var logs bytes.Buffer
 		orchestrator := NewOrchestrator(OrchestratorParams{
 			State:           state,

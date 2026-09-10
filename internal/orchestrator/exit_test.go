@@ -151,7 +151,7 @@ func noopRetryFire(_ string) {}
 // issueID. The running entry's StartedAt is set to baseTime.
 func exitState(t *testing.T, issueID string, retryAttempt *int) *State {
 	t.Helper()
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running[issueID] = &RunningEntry{
 		Identifier:   issueID + "-ident",
 		StartedAt:    baseTime,
@@ -1067,6 +1067,113 @@ func TestHandleWorkerExit_CancelledExit(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus verifies
+// that a WorkerExitCancelled exit whose entry the in-flight token ceiling
+// latched records status "budget_stopped", an error naming the used and
+// budgeted token figures, and schedules no retry of its own.
+func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-CEIL", nil)
+	// A reload moved the configured ceiling between the stop and this
+	// exit. The record must name the ceiling the run actually hit, not
+	// whichever one is current.
+	state.MaxTokens = 900
+	entry := state.Running["ISSUE-CEIL"]
+	entry.TokenCeilingStopped = true
+	entry.TokenCeilingAtStop = 500
+	entry.IssueTokensCompleted = 300
+	entry.AgentTotalTokens = 250
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-CEIL",
+		Identifier:    "ISSUE-CEIL-ident",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	run := store.runHistories[0]
+	if run.Status != "budget_stopped" {
+		t.Errorf("RunHistory.Status = %q, want %q", run.Status, "budget_stopped")
+	}
+	if run.Error == nil || !strings.Contains(*run.Error, "550") || !strings.Contains(*run.Error, "500") {
+		t.Errorf("RunHistory.Error = %v, want it to name used tokens 550 and budgeted tokens 500", run.Error)
+	}
+	if run.Error != nil && strings.Contains(*run.Error, "900") {
+		t.Errorf("RunHistory.Error = %q names the reloaded ceiling instead of the one the run hit", *run.Error)
+	}
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0 (a ceiling stop schedules no retry of its own)", len(store.retryEntries))
+	}
+	if _, ok := state.RetryAttempts["ISSUE-CEIL"]; ok {
+		t.Error("RetryAttempts[ISSUE-CEIL] present after a ceiling-stopped exit, want none")
+	}
+}
+
+// TestHandleWorkerExit_CancelledWithoutTokenCeilingStopStaysCancelled verifies
+// that a WorkerExitCancelled exit whose entry the token ceiling never
+// latched (stall detection, a terminal tracker state, or shutdown) still
+// records the ordinary "cancelled" status, even under a configured ceiling.
+func TestHandleWorkerExit_CancelledWithoutTokenCeilingStopStaysCancelled(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-STALL", nil)
+	state.MaxTokens = 500
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-STALL",
+		Identifier:    "ISSUE-STALL-ident",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "cancelled" {
+		t.Errorf("RunHistory.Status = %q, want %q", got, "cancelled")
+	}
+}
+
+// TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit verifies
+// that a latched TokenCeilingStopped entry does not produce "budget_stopped"
+// when the worker's exit kind is something other than WorkerExitCancelled —
+// the two conditions can diverge if the run finished on its own in the
+// window between the cancel and the worker noticing it.
+func TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-RACE", nil)
+	state.MaxTokens = 500
+	entry := state.Running["ISSUE-RACE"]
+	entry.TokenCeilingStopped = true
+	entry.IssueTokensCompleted = 300
+	entry.AgentTotalTokens = 250
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-RACE",
+		Identifier:    "ISSUE-RACE-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want %q (a latched ceiling stop must not override a non-cancelled exit)", got, "succeeded")
+	}
+}
+
 func TestHandleWorkerExit_RuntimeSecondsAccounting(t *testing.T) {
 	t.Parallel()
 
@@ -1153,7 +1260,7 @@ func TestHandleWorkerExit_UnknownIssueNoOp(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	state := NewState(5000, 4, nil, AgentTotals{})
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	params := defaultExitParams(t, store)
 
 	// Call with an issueID not in state.Running.
@@ -9087,7 +9194,7 @@ func TestDrainRunningWorkers_NoChangeState(t *testing.T) {
 	t.Parallel()
 
 	const issueID = "DRAIN-NC"
-	state := NewState(60000, 1, nil, AgentTotals{})
+	state := NewState(60000, 1, 0, nil, AgentTotals{})
 	state.Running[issueID] = &RunningEntry{
 		Identifier: "PROJ-DRAIN-NC",
 		Issue:      domain.Issue{ID: issueID, Identifier: "PROJ-DRAIN-NC", State: "In Progress"},

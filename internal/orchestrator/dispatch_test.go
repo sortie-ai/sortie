@@ -341,7 +341,7 @@ func TestShouldDispatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := NewState(1000, 10, nil, AgentTotals{})
+			s := NewState(1000, 10, 0, nil, AgentTotals{})
 			if tt.setupState != nil {
 				tt.setupState(s)
 			}
@@ -367,7 +367,7 @@ func TestShouldDispatchParkedIssue(t *testing.T) {
 	terminal := []string{"Done"}
 
 	newParkedState := func() *State {
-		s := NewState(1000, 10, nil, AgentTotals{})
+		s := NewState(1000, 10, 0, nil, AgentTotals{})
 		s.Parked[issue.ID] = &ParkedEntry{Identifier: issue.Identifier, Reason: parkReasonAgentBlocked}
 		return s
 	}
@@ -410,7 +410,7 @@ func TestShouldDispatch_ReopenAfterTerminalRelease(t *testing.T) {
 	terminal := []string{"Done"}
 	issue := domain.Issue{ID: "REOPEN-1", Identifier: "REOPEN-1", Title: "T", State: "To Do"}
 
-	state := NewState(1000, 10, nil, AgentTotals{})
+	state := NewState(1000, 10, 0, nil, AgentTotals{})
 	state.Claimed[issue.ID] = struct{}{}
 
 	if ShouldDispatch(issue, state, active, terminal) {
@@ -604,7 +604,7 @@ func testIssue(id string) domain.Issue {
 }
 
 func newTestState() *State {
-	return NewState(1000, 10, nil, AgentTotals{})
+	return NewState(1000, 10, 0, nil, AgentTotals{})
 }
 
 // --- Tests for NextAttempt ---
@@ -1374,7 +1374,7 @@ func TestEvaluateCandidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := NewState(1000, 10, nil, AgentTotals{})
+			s := NewState(1000, 10, 0, nil, AgentTotals{})
 			pass := &TickResolution{}
 
 			var resolver BlockerResolver
@@ -1435,7 +1435,7 @@ func TestEvaluateCandidate_ParityWithShouldDispatchWithSets(t *testing.T) {
 		t.Run(issue.Identifier, func(t *testing.T) {
 			t.Parallel()
 
-			s := NewState(1000, 10, nil, AgentTotals{})
+			s := NewState(1000, 10, 0, nil, AgentTotals{})
 			pass := &TickResolution{}
 
 			decision := EvaluateCandidate(context.Background(), issue, s, activeSet, terminalSet, nil, pass)
@@ -1545,7 +1545,7 @@ func TestEvaluateCandidate_HaltLatch(t *testing.T) {
 
 	deploymentErr := &domain.TrackerError{Kind: domain.ErrTrackerAuth}
 
-	s := NewState(1000, 10, nil, AgentTotals{})
+	s := NewState(1000, 10, 0, nil, AgentTotals{})
 	pass := &TickResolution{}
 
 	resolver := &fakeBlockerResolver{
@@ -1598,7 +1598,7 @@ func TestEvaluateCandidate_TransientFailureDoesNotHalt(t *testing.T) {
 
 	transientErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport}
 
-	s := NewState(1000, 10, nil, AgentTotals{})
+	s := NewState(1000, 10, 0, nil, AgentTotals{})
 	pass := &TickResolution{}
 
 	resolver := &fakeBlockerResolver{
@@ -1674,7 +1674,7 @@ func TestEvaluateCandidate_ReadBudgetWindow(t *testing.T) {
 		},
 	}
 
-	s := NewState(1000, 10, nil, AgentTotals{})
+	s := NewState(1000, 10, 0, nil, AgentTotals{})
 	offset := 0
 
 	wantPasses := (needyCount + maxBlockerReadsPerPass - 1) / maxBlockerReadsPerPass
@@ -1753,7 +1753,7 @@ func TestEvaluateCandidate_OffsetResetsOnCapacityBreak(t *testing.T) {
 		},
 	}
 
-	s := NewState(1000, 10, nil, AgentTotals{})
+	s := NewState(1000, 10, 0, nil, AgentTotals{})
 	pass := &TickResolution{offset: 0}
 
 	// A capacity break stops the walk after two candidates, well under
@@ -1795,7 +1795,7 @@ func TestEvaluateCandidate_DispatchedOrderPreservingSubsequence(t *testing.T) {
 		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
 		resolveFn:   resolveOK,
 	}
-	boundedState := NewState(1000, 10, nil, AgentTotals{})
+	boundedState := NewState(1000, 10, 0, nil, AgentTotals{})
 	boundedPass := &TickResolution{offset: 0}
 	var boundedDispatched []string
 	for _, issue := range issues {
@@ -1811,7 +1811,7 @@ func TestEvaluateCandidate_DispatchedOrderPreservingSubsequence(t *testing.T) {
 		needsReadFn: func(issue domain.Issue) bool { return issue.BlockersUnresolved },
 		resolveFn:   resolveOK,
 	}
-	liftedState := NewState(1000, 10, nil, AgentTotals{})
+	liftedState := NewState(1000, 10, 0, nil, AgentTotals{})
 	var liftedDispatched []string
 	offset := 0
 	wantPasses := (len(issues) + maxBlockerReadsPerPass - 1) / maxBlockerReadsPerPass
@@ -1878,7 +1878,7 @@ func TestEvaluateCandidate_BudgetSpentWithoutBinding(t *testing.T) {
 		},
 	}
 
-	s := NewState(1000, 10, nil, AgentTotals{})
+	s := NewState(1000, 10, 0, nil, AgentTotals{})
 	offset := 0
 
 	for passNum := range 2 {

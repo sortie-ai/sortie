@@ -355,6 +355,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	state := orchestrator.NewState(
 		br.cfg.Polling.IntervalMS,
 		br.cfg.Agent.MaxConcurrentAgents,
+		br.cfg.Agent.MaxTokens,
 		br.cfg.Agent.MaxConcurrentByState,
 		totals,
 	)

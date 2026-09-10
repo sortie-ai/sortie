@@ -225,8 +225,9 @@ type AgentConfig struct {
 	// reading it as a sentinel that removes the grace.
 	StopGraceMS int
 
-	// MaxTokens is the cumulative per-issue token ceiling enforced at
-	// dispatch preflight. 0 means unlimited.
+	// MaxTokens is the cumulative per-issue token ceiling. Enforced on
+	// the dispatch path and, as each usage figure arrives, on the
+	// event loop for the run already in flight. 0 means unlimited.
 	MaxTokens int
 
 	// MaxConsecutiveAbsences bounds how many runs in a row may be
