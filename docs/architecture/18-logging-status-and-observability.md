@@ -56,11 +56,15 @@ hold is the only one that announces it.
 
 The in-flight token ceiling adds four records of its own, beyond the hold record above, so
 budget observability covers a run already in flight and not only a re-dispatch that never
-starts. A dispatch whose resolved usage arrival reports no figure at all emits one `Warn`
-record, message `"token ceiling cannot bound this run"`, carrying `agent_kind`, `usage_arrival`,
-and `budget_tokens`, once per dispatch. A dispatch whose baseline read fails emits one `Warn`
-record, message `"prior token spend unknown, token ceiling bounds this session only"`, carrying
-`error` and `budget_tokens`, once per dispatch. A confirming read that fails while a running
+starts. A dispatch emits at most one of the two
+freeze records, never both. A dispatch whose resolved usage arrival reports no figure at all
+emits one `Warn` record, message `"token ceiling cannot bound this run"`, carrying `agent_kind`,
+`usage_arrival`, and `budget_tokens`, and also `error` when the baseline read failed on the same
+dispatch. A dispatch whose arrival does report figures but whose baseline read fails emits one
+`Warn` record instead, message `"prior token spend unknown, token ceiling bounds this session
+only"`, carrying `error` and `budget_tokens`. A run the arrival cannot bound never gets the
+second record, because the ceiling does not bound that session either and saying so would
+contradict the first. A confirming read that fails while a running
 session is over the pre-filter, and whose session has not reached the ceiling on its own spend,
 emits one `Warn` record, message `"in-flight token ceiling check failed, run continues"`,
 carrying `error` and `budget_tokens`, at most once per run regardless of how many failing reads
