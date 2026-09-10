@@ -539,7 +539,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			continue
 
 		case <-cancelDeadline:
-			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, Work: agentcore.WorkUnobservable}
+			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
 			meta := agentcore.TurnMeta{
 				SessionID:     state.threadID,
 				Usage:         state.acc.Snapshot(),
@@ -652,10 +652,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 				snapshot := state.acc.Snapshot()
 
-				// Work is unreachable here: codex's persistent subprocess
-				// has no per-turn process exit to observe, so the shared
-				// decision's zero-work row never applies to this adapter.
-				ev := agentcore.TurnEvidence{Work: agentcore.WorkUnobservable}
+				var ev agentcore.TurnEvidence
 
 				switch {
 				case ctx.Err() != nil:
@@ -759,7 +756,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				// classification of a request this turn recognizes, matching
 				// the adapter's existing treatment of an interrupted turn.
 				if ctx.Err() != nil {
-					ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, Work: agentcore.WorkUnobservable}
+					ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
 					meta := agentcore.TurnMeta{
 						SessionID:     state.threadID,
 						Usage:         state.acc.Snapshot(),

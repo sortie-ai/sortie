@@ -16,6 +16,7 @@ package dispositiontest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -62,10 +63,57 @@ func AssertDispositionContract(
 		t.Errorf("err = %v, want *domain.AgentError", err)
 		return
 	}
+	if agentErr == nil {
+		t.Errorf("err = %v, want a non-nil *domain.AgentError", err)
+		return
+	}
 	if agentErr.Kind != want.ErrorKind {
 		t.Errorf("err.Kind = %q, want %q", agentErr.Kind, want.ErrorKind)
 	}
 	if agentErr.Message != want.ErrorMessage {
 		t.Errorf("err.Message = %q, want %q", agentErr.Message, want.ErrorMessage)
+	}
+}
+
+// AssertWorkEvidenceConsistent fails t when an adapter emitted at least one
+// domain.EventToolResult for a turn and still reported that turn as one of
+// the two no-work failures.
+//
+// It derives both failure messages from [agentcore.DecideTurn] rather than
+// restating them, so a change to either message cannot silently disarm it.
+// It is a no-op when events carries no domain.EventToolResult, because
+// only a turn with observed tool activity is in scope for the check.
+func AssertWorkEvidenceConsistent(
+	t *testing.T,
+	events []domain.AgentEvent,
+	result domain.TurnResult,
+	err error,
+) {
+	t.Helper()
+
+	sawToolResult := false
+	for _, ev := range events {
+		if ev.Type == domain.EventToolResult {
+			sawToolResult = true
+			break
+		}
+	}
+	if !sawToolResult {
+		return
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		return
+	}
+
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr == nil {
+		return
+	}
+
+	zeroWork := agentcore.DecideTurn(agentcore.TurnEvidence{ExitObserved: true, Work: agentcore.WorkAbsent})
+	unobservable := agentcore.DecideTurn(agentcore.TurnEvidence{ExitObserved: true, Work: agentcore.WorkUnobservable})
+
+	if strings.HasPrefix(agentErr.Message, zeroWork.ErrorMessage) || agentErr.Message == unobservable.ErrorMessage {
+		t.Errorf("turn emitted a tool result but reported %q, want a work-present disposition", agentErr.Message)
 	}
 }

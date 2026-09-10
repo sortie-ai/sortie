@@ -564,8 +564,9 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 // the event wall-clock timestamp in tests.
 func collectToolEvents(t *testing.T, ev rawEvent, tracker *agentcore.ToolTracker, now time.Time) []domain.AgentEvent {
 	t.Helper()
+	work := agentcore.NewWorkObserver(agentcore.WorkSignals{ToolActivity: true})
 	var events []domain.AgentEvent
-	processToolBlocks(ev.contentBlocks(), tracker, now, func(e domain.AgentEvent) {
+	processToolBlocks(ev.contentBlocks(), tracker, work, now, func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 	return events

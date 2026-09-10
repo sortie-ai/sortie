@@ -264,6 +264,17 @@ func TestIntegration_RunTurn(t *testing.T) {
 	if result.Usage.TotalTokens <= 0 {
 		t.Errorf("TurnResult.Usage.TotalTokens = %d, want > 0", result.Usage.TotalTokens)
 	}
+
+	// A normal turn decides at the terminal-success row and never
+	// consults Work, so the disposition above is not itself proof the
+	// observer fired against the installed runtime; read it directly.
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+	if !state.work.Observed() {
+		t.Error("state.work.Observed() = false after a real turn, want true")
+	}
 }
 
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {

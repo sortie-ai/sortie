@@ -621,7 +621,168 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
+}
+
+// TestRunTurn_SingleSignalNoTerminalCompletes drives a stream carrying
+// only one of the two declared signals, exiting zero with no terminal
+// result event, and pins that each signal alone is sufficient to report
+// turn_completed.
+func TestRunTurn_SingleSignalNoTerminalCompletes(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	tests := []struct {
+		name  string
+		jsonl string
+	}{
+		{
+			name:  "assistant output only",
+			jsonl: `{"type":"assistant.message","data":{"content":"hello there","toolRequests":[]}}` + "\n",
+		},
+		{
+			name:  "tool activity only",
+			jsonl: loadTestFixture(t, "tool_only_no_assistant_content.jsonl"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter, session := newTestSession(t, t.TempDir())
+			state := session.Internal.(*sessionState)
+			state.target.Command = fakeCopilotBinaryWithOutput(t, tt.jsonl, 0)
+
+			result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+				OnEvent: func(domain.AgentEvent) {},
+			})
+
+			if err != nil {
+				t.Fatalf("RunTurn() error = %v", err)
+			}
+			if result.ExitReason != domain.EventTurnCompleted {
+				t.Errorf("RunTurn().ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+			}
+		})
+	}
+}
+
+// TestRunTurn_NoOutputTokensNoResultCompletes is the property-2 regression
+// fixture: a stream carrying assistant output and completed tool activity,
+// no per-message output-token field anywhere, and no terminal result
+// event, still reports turn_completed. The fixture itself is asserted to
+// carry no output-token field, so a future revert to token-count
+// derivation fails this test rather than passing it.
+func TestRunTurn_NoOutputTokensNoResultCompletes(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	fixture := loadTestFixture(t, "tool_use_no_output_tokens_no_result.jsonl")
+	if strings.Contains(fixture, "outputTokens") {
+		t.Fatalf("fixture tool_use_no_output_tokens_no_result.jsonl contains an output-token field, want none")
+	}
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, fixture, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("RunTurn().ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	if !hasEventType(events, domain.EventToolResult) {
+		t.Error("EventToolResult not delivered for the retained tool.execution_complete record")
+	}
+}
+
+// TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus drives the committed
+// testdata/ corpus and pins that each field the copilot WorkSignals
+// declaration sets true is observed by at least one committed fixture:
+// simple_session.jsonl carries assistant content and no tool call record
+// at all, and tool_only_no_assistant_content.jsonl carries a tool call and
+// no assistant.message record at all, so each fixture's own shape
+// attributes the observation to a single field.
+func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	t.Run("assistant content alone is observed", func(t *testing.T) {
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+		if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			OnEvent: func(domain.AgentEvent) {},
+		}); err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+		if !state.work.Observed() {
+			t.Error("state.work.Observed() = false after simple_session.jsonl, want true")
+		}
+	})
+
+	t.Run("tool call alone is observed", func(t *testing.T) {
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_only_no_assistant_content.jsonl"), 0)
+
+		if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			OnEvent: func(domain.AgentEvent) {},
+		}); err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+		if !state.work.Observed() {
+			t.Error("state.work.Observed() = false after tool_only_no_assistant_content.jsonl, want true")
+		}
+	})
+}
+
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// session's second turn, whose stream carries neither declared signal,
+// reports turn_failed even though the first turn on the same session
+// carried both assistant output and completed tool activity.
+func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	outFile := filepath.Join(tmpDir, "out.jsonl")
+	if err := os.WriteFile(outFile, []byte(loadTestFixture(t, "tool_use_no_output_tokens_no_result.jsonl")), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	state.target.Command = agenttest.WriteScript(t, tmpDir, "copilot", fmt.Sprintf(`
+if [ -f '%s' ]; then
+  exit 0
+fi
+touch '%s'
+cat '%s'
+exit 0
+`, counterFile, counterFile, outFile))
+
+	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn with both signals must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
 }
 
 func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
@@ -766,6 +927,8 @@ func TestRunTurn_ToolUseEvents(t *testing.T) {
 	if toolEvent.ToolName == "" {
 		t.Error("EventToolResult.ToolName is empty")
 	}
+
+	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
 }
 
 // TestRunTurn_ToolDeniedContinuesTurn drives a tool.execution_complete

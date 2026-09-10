@@ -46,7 +46,7 @@ func TestRunTurnFinalize(t *testing.T) {
 				respondLine(t, inPw, promptID, promptResponse{StopReason: tt.reason})
 
 				outcome := awaitOutcome(t, outcomeCh)
-				want := stopReasonEvidence(tt.reason, agentcore.WorkAbsent)
+				want := stopReasonEvidence(tt.reason)
 				dispositiontest.AssertDispositionContract(t, want, outcome.result, outcome.err)
 			})
 		}

@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"tool-only-session-001","cwd":"/workspace"}
+{"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_only01","name":"Bash","input":{"command":"ls"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"user","message":{"id":"msg_02","type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_only01","content":"main.go","is_error":false}]}}

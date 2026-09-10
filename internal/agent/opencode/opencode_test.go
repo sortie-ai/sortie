@@ -1514,6 +1514,55 @@ printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","
 	}, result, err)
 }
 
+// TestRunTurn_ReasoningPartCountsAsWork drives a run stream carrying a
+// "reasoning" part and nothing else: no text, no tool_use. Reasoning is
+// one of this adapter's two declared assistant-output feed points, so it
+// alone must satisfy WorkObserver and the turn must complete as
+// turn_completed rather than falling to the zero-work row.
+func TestRunTurn_ReasoningPartCountsAsWork(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf '{"type":"reasoning","timestamp":1000,"sessionID":"ses_reasoning123","part":{"id":"p1","messageID":"m1","sessionID":"ses_reasoning123","type":"reasoning","text":"thinking it through"}}\n'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	var sawReasoningBlock bool
+	var sawTurnCompleted bool
+	for _, event := range events {
+		switch {
+		case event.Type == domain.EventOtherMessage && event.Message == "reasoning block":
+			sawReasoningBlock = true
+		case event.Type == domain.EventTurnCompleted:
+			sawTurnCompleted = true
+		}
+	}
+	if !sawReasoningBlock {
+		t.Error("reasoning block event was not emitted")
+	}
+	if !sawTurnCompleted {
+		t.Error("turn_completed event was not emitted")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
+}
+
 // TestRunTurn_PermissionWarningRecognizedOnStderr drives the
 // permission_warning_then_error.txt fixture split across the two real
 // streams the opencode runtime uses: the denial warning on stderr, the
@@ -1772,7 +1821,7 @@ printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id"
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
-	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	const wantMessage = "agent exited without producing output: no message from the agent and no tool call"
 	if agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
@@ -1786,7 +1835,7 @@ printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id"
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no assistant output on the run stream",
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
 }
 
@@ -1814,7 +1863,7 @@ exit 0`)
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
-	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	const wantMessage = "agent exited without producing output: no message from the agent and no tool call"
 	if agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
@@ -1828,7 +1877,7 @@ exit 0`)
 		ExitObserved: true,
 		ExitCode:     0,
 		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no assistant output on the run stream",
+		WorkDetail:   "no message from the agent and no tool call",
 	}, result, err)
 }
 
@@ -1939,6 +1988,74 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("RunTurn() error = %v, want nil (not a typed-nil *domain.AgentError)", err)
+	}
+}
+
+// TestRunTurn_ToolOnlyNoTerminalCompletes drives the committed
+// tool_success.jsonl fixture, which carries a completed tool_use part and
+// no text or reasoning part at all. opencode's normal path sets no
+// terminal report, so DecideTurn genuinely consults Work here: reporting
+// turn_completed is proof the observer's ToolActivity field fired from
+// this shape of the committed fixture corpus, and it doubles as the
+// tool-activity-only case of property 1.
+func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScript(t, tmpDir, "tool_success.jsonl")
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
+}
+
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// session's second turn, whose stream carries neither declared signal,
+// reports turn_failed even though the first turn on the same session
+// carried both a text part and a completed tool_use part.
+func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+if [ -f '%s' ]; then
+  printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_both_then_none","part":{"id":"p1","messageID":"m1","sessionID":"ses_both_then_none","snapshot":"","type":"step-start"}}\n'
+else
+  touch '%s'
+  printf '{"type":"text","timestamp":1000,"sessionID":"ses_both_then_none","part":{"id":"p1","messageID":"m1","sessionID":"ses_both_then_none","type":"text","text":"ok","time":{"start":1000,"end":1000}}}\n'
+  printf '{"type":"tool_use","timestamp":1001,"sessionID":"ses_both_then_none","part":{"id":"p2","messageID":"m1","sessionID":"ses_both_then_none","type":"tool","tool":"read","callID":"call_both","state":{"status":"completed","input":{},"output":"ok","time":{"start":1001,"end":1001}}}}\n'
+fi`, counterFile, counterFile))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	_, result1, err := collectEvents(t, a, session, "first")
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	_, result2, err := collectEvents(t, a, session, "second")
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn with both signals must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 }
 

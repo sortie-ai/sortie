@@ -4,11 +4,13 @@
 # Shows function names in hunk headers
 *.go diff=golang
 
+# A test pins this capture's sha256 - EOL conversion would break it
+internal/agent/kiro/testdata/turn_stdout.txt -text
+
 # Collapsed in GitHub PR diffs, excluded from language stats
 go.sum linguist-generated
+**/testdata/** linguist-generated
 internal/agent/clientprotocol/wire_gen.go linguist-generated
-internal/agent/clientprotocol/testdata/schema-v*/** linguist-generated
-internal/qualification/probe/testdata/summary/*.golden linguist-generated
 
 # Excluded from GitHub language stats
 docs/** linguist-documentation

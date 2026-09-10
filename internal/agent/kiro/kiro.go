@@ -85,9 +85,10 @@ type sessionState struct {
 	// so turn 2+ adds --resume for cwd-scoped continuation.
 	resumeRequested bool
 
-	// turnStdout accumulates ANSI-stripped stdout for the active turn.
-	// Reset at the top of each RunTurn before delegating to forkSession.
-	turnStdout *strings.Builder
+	// work is the per-turn work-evidence observer for the shared
+	// turn-disposition decision. Reset at the top of each RunTurn before
+	// delegating to forkSession.
+	work *agentcore.WorkObserver
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -143,7 +144,6 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		passthrough: a.passthrough,
 		baseLogger:  slog.Default().With(slog.String("component", "kiro-adapter")),
 		sessionID:   params.ResumeSessionID,
-		turnStdout:  &strings.Builder{},
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -152,7 +152,9 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		},
 		ParseLine: func(line []byte, emit func(domain.AgentEvent), pid string) (any, error) {
 			text := stripANSI(string(line))
-			state.turnStdout.WriteString(text)
+			if strings.TrimSpace(text) != "" {
+				state.work.ObserveAssistantOutput()
+			}
 			if text != "" {
 				emit(domain.AgentEvent{
 					Type:      domain.EventNotification,
@@ -168,22 +170,14 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
 			creditsSeen, authFailed := classifyStderr(stderrLines)
 
-			// Headless Kiro reports no per-turn token count, so the work
-			// signal this adapter can offer is the currency the runtime
-			// actually exposes: the credits trailer, consumed below as the
-			// success signal rather than as Work.
-			ev := agentcore.TurnEvidence{
-				ExitObserved: true,
-				ExitCode:     exitCode,
-				Work:         agentcore.WorkUnobservable,
-				WorkDetail:   "no credits trailer on stderr",
-			}
+			ev := agentcore.TurnEvidence{ExitObserved: true, ExitCode: exitCode}
+			ev.Work, ev.WorkDetail = state.work.Report()
 
 			switch {
 			case exitCode == 0 && creditsSeen:
 				ev.Terminal = agentcore.TerminalSuccess
 				state.resumeRequested = true
-			case exitCode == 0 && authFailed && state.turnStdout.Len() == 0:
+			case exitCode == 0 && authFailed && !state.work.Observed():
 				ev.Terminal = agentcore.TerminalFailure
 				ev.TerminalErrorKind = domain.ErrResponseError
 				ev.TerminalMessage = "kiro authentication failed"
@@ -262,7 +256,7 @@ func (a *KiroAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		}
 	}
 
-	state.turnStdout = &strings.Builder{}
+	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true})
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }

@@ -324,7 +324,6 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 				Terminal:          agentcore.TerminalFailure,
 				TerminalErrorKind: domain.ErrTurnFailed,
 				TerminalMessage:   "turn interrupted",
-				Work:              agentcore.WorkUnobservable,
 			},
 		},
 		{
@@ -333,7 +332,6 @@ func TestRunTurn_InterruptedStatus(t *testing.T) {
 			wantEvidence: agentcore.TurnEvidence{
 				Terminal:        agentcore.TerminalCancelled,
 				TerminalMessage: "turn cancelled after the runtime reported status interrupted",
-				Work:            agentcore.WorkUnobservable,
 			},
 		},
 	}
@@ -458,7 +456,6 @@ func TestRunTurn_CompletedNotificationUnderCancelledContext(t *testing.T) {
 			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 				Terminal:        agentcore.TerminalCancelled,
 				TerminalMessage: tt.wantMessage,
-				Work:            agentcore.WorkUnobservable,
 			}, result, err)
 		})
 	}
@@ -520,7 +517,6 @@ func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
 				Terminal:          agentcore.TerminalFailure,
 				TerminalErrorKind: domain.ErrTurnFailed,
 				TerminalMessage:   tt.wantMessage,
-				Work:              agentcore.WorkUnobservable,
 			}, result, err)
 		})
 	}
@@ -573,7 +569,6 @@ func TestRunTurn_EmptyTurnStatus(t *testing.T) {
 			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 				Terminal:          agentcore.TerminalFailure,
 				TerminalErrorKind: domain.ErrTurnFailed,
-				Work:              agentcore.WorkUnobservable,
 			}, result, err)
 		})
 	}

@@ -467,7 +467,6 @@ func TestRunTurn_SuccessfulTurn(t *testing.T) {
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
 		Terminal: agentcore.TerminalSuccess,
-		Work:     agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -897,7 +896,6 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrTurnFailed,
 		TerminalMessage:   "Context window exceeded",
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -947,7 +945,6 @@ func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
 		TerminalMessage:   "subprocess stdout closed unexpectedly",
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -998,7 +995,6 @@ func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrTurnFailed,
 		TerminalMessage:   wantMessage,
-		Work:              agentcore.WorkUnobservable,
 	}, result, err)
 }
 
@@ -1958,5 +1954,87 @@ func TestRunTurn_NullIDApprovalRequestIsNotAnswered(t *testing.T) {
 	}
 	if !reported {
 		t.Error("null-id approval request was not reported as another message")
+	}
+}
+
+// TestRunTurn_CancelledApprovalRequestReportsCancelled covers the
+// ctx.Err() check inside the request-recognition path: an
+// orchestrator-initiated cancellation observed while a non-null-id
+// approval request is pending must report the turn cancelled and
+// return without answering the request, matching the adapter's
+// existing treatment of an interrupted turn.
+func TestRunTurn_CancelledApprovalRequestReportsCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stdin := &interruptTrackingWriteCloser{interrupts: make(chan struct{}, 1)}
+	recorder := &capturingWriteCloser{}
+	state := newInterruptedStatusState(t, io.MultiWriter(stdin, recorder))
+
+	type outcome struct {
+		result domain.TurnResult
+		err    error
+	}
+	outcomeCh := make(chan outcome, 1)
+	finished := make(chan struct{})
+
+	var events []domain.AgentEvent
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	go func() {
+		defer close(finished)
+		result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+			Prompt:  "go",
+			OnEvent: collectEvents(&events),
+		})
+		outcomeCh <- outcome{result: result, err: err}
+	}()
+
+	t.Cleanup(func() {
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+		}
+	})
+
+	// The unbuffered send returns only once RunTurn has received it,
+	// which proves its main event loop is running before cancellation.
+	state.msgCh <- jsonrpc.Message{Kind: jsonrpc.KindNotification, Method: "turn/started", Params: json.RawMessage(`{"turnId":"turn-001"}`)}
+
+	cancel()
+	select {
+	case <-stdin.interrupts:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not send turn/interrupt after cancellation")
+	}
+
+	approvalMsg := jsonrpc.Message{
+		Kind:   jsonrpc.KindRequest,
+		ID:     jsonrpc.NumberID(99),
+		Method: "item/commandExecution/requestApproval",
+		Params: json.RawMessage(`{}`),
+	}
+	select {
+	case state.msgCh <- approvalMsg:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not accept the pending approval request after cancellation")
+	}
+
+	select {
+	case got := <-outcomeCh:
+		if got.result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+		}
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not return after the approval request arrived")
+	}
+
+	if _, ok := recorder.find(`{"id":99`); ok {
+		t.Error("a reply was written for the pending approval request, want the cancellation path to skip answering it")
+	}
+	if got := filterEventsOfType(events, domain.EventTurnCancelled); len(got) != 1 {
+		t.Errorf("turn_cancelled event count = %d, want 1", len(got))
 	}
 }

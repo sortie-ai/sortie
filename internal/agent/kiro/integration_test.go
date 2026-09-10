@@ -51,10 +51,12 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 }
 
 // TestKiroAdapter_Integration drives one real turn against the live
-// kiro-cli binary and asserts turn_completed, satisfying the shared
-// disposition decision's live-runtime obligation for this adapter: the
-// only check that can catch an evidence mapping that is internally
-// consistent but wrong against the actual wire format.
+// kiro-cli binary and asserts turn_completed. This package's own
+// TestKiroAdapter_WorkObserverIntegration, in work_integration_test.go,
+// carries the shared disposition decision's live-runtime work-evidence
+// obligation for this adapter, because it alone can reach sessionState
+// to assert on the observer directly; this test cannot, since it
+// declares package kiro_test.
 func TestKiroAdapter_Integration(t *testing.T) {
 	skipIfNotEnabled(t)
 

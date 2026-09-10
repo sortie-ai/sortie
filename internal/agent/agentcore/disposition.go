@@ -12,6 +12,12 @@ import (
 // agent family.
 const zeroWorkMessageStem = "agent exited without producing output"
 
+// workUnobservableMessage is the fixed message for the row selected when
+// an adapter reported no work evidence at all. Unlike zeroWorkMessageStem
+// it carries no WorkDetail suffix, because there is no signal name to
+// report: the adapter constructed no observer.
+const workUnobservableMessage = "agent exited with no result and this kind offers no output signal"
+
 // turnInputRequiredMessageStem is the shared diagnostic stem every
 // adapter's human-input-required row uses, so an operator can grep one
 // string across the whole agent family.
@@ -161,7 +167,7 @@ const (
 	RowNonZeroExit
 
 	// RowZeroWork is the row selected when Terminal is TerminalAbsent, the
-	// process exited 0, and Work is not WorkPresent.
+	// process exited 0, and Work is WorkAbsent.
 	RowZeroWork
 
 	// RowWorkPresent is the row selected when Terminal is TerminalAbsent,
@@ -175,6 +181,11 @@ const (
 	// RowTerminalIncomplete is the row selected when Terminal is
 	// TerminalIncomplete.
 	RowTerminalIncomplete
+
+	// RowWorkUnobservable is the row selected when Terminal is
+	// TerminalAbsent, the process exited 0, and the adapter reported no
+	// work evidence at all.
+	RowWorkUnobservable
 )
 
 // TurnDisposition is the normalized outcome of one turn.
@@ -218,7 +229,7 @@ type TurnMeta struct {
 
 // DecideTurn returns the normalized disposition for one agent turn. It is
 // pure: no I/O, no logging, no emission, no state. Every TurnEvidence value
-// maps to exactly one of nine rows, evaluated in order and returned on the
+// maps to exactly one of ten rows, evaluated in order and returned on the
 // first match.
 //
 // A positive terminal report is authoritative: when Terminal is
@@ -307,7 +318,8 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 		}
 	}
 
-	if ev.Work != WorkPresent {
+	switch ev.Work {
+	case WorkAbsent:
 		message := zeroWorkMessageStem
 		if ev.WorkDetail != "" {
 			message += ": " + ev.WorkDetail
@@ -319,6 +331,14 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 			EventMessage: message,
 			ErrorMessage: message,
 		}
+	case WorkUnobservable:
+		return TurnDisposition{
+			Row:          RowWorkUnobservable,
+			ExitReason:   domain.EventTurnFailed,
+			ErrorKind:    domain.ErrTurnFailed,
+			EventMessage: workUnobservableMessage,
+			ErrorMessage: workUnobservableMessage,
+		}
 	}
 
 	return TurnDisposition{
@@ -329,9 +349,9 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 
 // FinalizeTurn applies DecideTurn to ev, emits the matching terminal event
 // through emit, logs a warn message when the decision selects RowZeroWork,
-// RowHumanInputRequired, or RowTerminalIncomplete, and returns the paired
-// TurnResult and error. The returned *domain.AgentError is nil if and only
-// if the disposition is domain.EventTurnCompleted.
+// RowWorkUnobservable, RowHumanInputRequired, or RowTerminalIncomplete, and
+// returns the paired TurnResult and error. The returned *domain.AgentError
+// is nil if and only if the disposition is domain.EventTurnCompleted.
 //
 // FinalizeTurn panics when emit is nil. It substitutes slog.Default() when
 // logger is nil. It is not idempotent, because it emits; callers MUST call
@@ -364,6 +384,9 @@ func FinalizeTurn(
 
 	if disposition.Row == RowZeroWork {
 		logger.Warn("agent exited without producing output, treating as failure")
+	}
+	if disposition.Row == RowWorkUnobservable {
+		logger.Warn("agent exited with no result and this kind offers no output signal, treating as failure")
 	}
 	if disposition.Row == RowHumanInputRequired {
 		logger.Warn("agent asked for a decision only a person can make, ending the attempt")

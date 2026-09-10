@@ -57,8 +57,7 @@ type activeTurn struct {
 	done     chan struct{}
 	cancelCh chan struct{}
 
-	awaitedID    jsonrpc.ID
-	workObserved bool
+	awaitedID jsonrpc.ID
 
 	// capsSnapshot is the capability record as it stood when this turn
 	// began. Every decision this turn makes from the record reads this
@@ -507,7 +506,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		return
 	}
 
-	p.finalizeTurn(stopReasonEvidence(resp.StopReason, workReportFrom(turn.workObserved)))
+	p.finalizeTurn(stopReasonEvidence(resp.StopReason))
 }
 
 // handleSessionUpdateMessage decodes and normalizes one session/update
@@ -544,9 +543,6 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	}
 
 	result := applySessionUpdate(p.tracker, sue)
-	if p.activeTurn != nil && result.workPresent {
-		p.activeTurn.workObserved = true
-	}
 	if result.hasEvent {
 		p.emitOrQueue(result.event)
 	}
@@ -681,7 +677,7 @@ func (p *pumpState) finalizeTurn(ev agentcore.TurnEvidence) {
 
 	switch turn.pendingEnd {
 	case turnEndCancelled:
-		ev = agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, Work: workReportFrom(turn.workObserved)}
+		ev = agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
 	case turnEndHumanInput:
 		ev = agentcore.HumanInputEvidence(turn.pendingDetail)
 	}

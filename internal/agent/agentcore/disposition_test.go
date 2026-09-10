@@ -90,6 +90,15 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "",
 		},
 		{
+			name:             "R8 work unobservable reports the fixed no-signal message",
+			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkUnobservable},
+			wantRow:          RowWorkUnobservable,
+			wantExitReason:   domain.EventTurnFailed,
+			wantErrorKind:    domain.ErrTurnFailed,
+			wantEventMessage: "agent exited with no result and this kind offers no output signal",
+			wantErrorMessage: "agent exited with no result and this kind offers no output signal",
+		},
+		{
 			name:             "terminal incomplete with message",
 			ev:               TurnEvidence{Terminal: TerminalIncomplete, TerminalMessage: "some detail"},
 			wantRow:          RowTerminalIncomplete,
@@ -175,26 +184,40 @@ func TestDecideTurn_R1R2DefaultOnlyOnEmptyMessage(t *testing.T) {
 	}
 }
 
-// TestDecideTurn_ZeroWorkRowBothWorkValuesFail pins that WorkAbsent and
-// WorkUnobservable both reach RowZeroWork, so an adapter with no positive
-// signal to offer never completes a turn by omission.
+// TestDecideTurn_ZeroWorkRowBothWorkValuesFail pins that WorkAbsent
+// reaches RowZeroWork and WorkUnobservable reaches RowWorkUnobservable,
+// so neither an adapter that looked and found nothing nor one with
+// nothing to look at ever completes a turn by omission.
 func TestDecideTurn_ZeroWorkRowBothWorkValuesFail(t *testing.T) {
 	t.Parallel()
 
-	for _, work := range []WorkReport{WorkAbsent, WorkUnobservable} {
-		ev := TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: work}
+	tests := []struct {
+		name    string
+		work    WorkReport
+		wantRow DispositionRow
+	}{
+		{name: "WorkAbsent", work: WorkAbsent, wantRow: RowZeroWork},
+		{name: "WorkUnobservable", work: WorkUnobservable, wantRow: RowWorkUnobservable},
+	}
 
-		got := DecideTurn(ev)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		if got.Row != RowZeroWork {
-			t.Errorf("DecideTurn(Work=%v).Row = %v, want %v", work, got.Row, RowZeroWork)
-		}
-		if got.ExitReason != domain.EventTurnFailed {
-			t.Errorf("DecideTurn(Work=%v).ExitReason = %q, want %q", work, got.ExitReason, domain.EventTurnFailed)
-		}
-		if got.ErrorKind != domain.ErrTurnFailed {
-			t.Errorf("DecideTurn(Work=%v).ErrorKind = %q, want %q", work, got.ErrorKind, domain.ErrTurnFailed)
-		}
+			ev := TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: tt.work}
+
+			got := DecideTurn(ev)
+
+			if got.Row != tt.wantRow {
+				t.Errorf("DecideTurn(Work=%v).Row = %v, want %v", tt.work, got.Row, tt.wantRow)
+			}
+			if got.ExitReason != domain.EventTurnFailed {
+				t.Errorf("DecideTurn(Work=%v).ExitReason = %q, want %q", tt.work, got.ExitReason, domain.EventTurnFailed)
+			}
+			if got.ErrorKind != domain.ErrTurnFailed {
+				t.Errorf("DecideTurn(Work=%v).ErrorKind = %q, want %q", tt.work, got.ErrorKind, domain.ErrTurnFailed)
+			}
+		})
 	}
 }
 
@@ -225,11 +248,31 @@ func TestDecideTurn_ZeroWorkRowWorkDetailSuffix(t *testing.T) {
 			Terminal:     TerminalAbsent,
 			ExitObserved: true,
 			ExitCode:     0,
+			Work:         WorkAbsent,
+			WorkDetail:   "no message from the agent and no tool call",
+		})
+
+		const want = "agent exited without producing output: no message from the agent and no tool call"
+		if got.EventMessage != want {
+			t.Errorf("EventMessage = %q, want %q", got.EventMessage, want)
+		}
+		if got.ErrorMessage != want {
+			t.Errorf("ErrorMessage = %q, want %q", got.ErrorMessage, want)
+		}
+	})
+
+	t.Run("work unobservable ignores WorkDetail and reports the fixed message", func(t *testing.T) {
+		t.Parallel()
+
+		got := DecideTurn(TurnEvidence{
+			Terminal:     TerminalAbsent,
+			ExitObserved: true,
+			ExitCode:     0,
 			Work:         WorkUnobservable,
 			WorkDetail:   "no credits trailer on stderr",
 		})
 
-		const want = "agent exited without producing output: no credits trailer on stderr"
+		const want = "agent exited with no result and this kind offers no output signal"
 		if got.EventMessage != want {
 			t.Errorf("EventMessage = %q, want %q", got.EventMessage, want)
 		}
@@ -403,6 +446,36 @@ func TestFinalizeTurn_TerminalIncompleteLogsWarn(t *testing.T) {
 	_, _ = FinalizeTurn(func(domain.AgentEvent) {}, nil, TurnEvidence{Terminal: TerminalIncomplete}, TurnMeta{})
 
 	const want = "agent stopped without reporting the task complete, treating as failure"
+
+	var warnEntries []agenttest.LogSpyEntry
+	for _, e := range spy.Entries() {
+		if e.Level == slog.LevelWarn {
+			warnEntries = append(warnEntries, e)
+		}
+	}
+	if len(warnEntries) != 1 {
+		t.Fatalf("FinalizeTurn() logged %d WARN lines, want 1: %+v", len(warnEntries), warnEntries)
+	}
+	if warnEntries[0].Msg != want {
+		t.Errorf("FinalizeTurn() warn message = %q, want %q", warnEntries[0].Msg, want)
+	}
+	if warnEntries[0].Line != "" {
+		t.Errorf("FinalizeTurn() warn carries a %q attribute, want no attributes", warnEntries[0].Line)
+	}
+}
+
+// TestFinalizeTurn_WorkUnobservableLogsWarn pins the exact warn line
+// FinalizeTurn emits for RowWorkUnobservable, and that it carries no
+// attributes.
+func TestFinalizeTurn_WorkUnobservableLogsWarn(t *testing.T) {
+	// No t.Parallel(): installs a global slog default, matching every
+	// other test in this package that installs the log spy.
+	spy := agenttest.InstallLogSpy(t)
+
+	ev := TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkUnobservable}
+	_, _ = FinalizeTurn(func(domain.AgentEvent) {}, nil, ev, TurnMeta{})
+
+	const want = "agent exited with no result and this kind offers no output signal, treating as failure"
 
 	var warnEntries []agenttest.LogSpyEntry
 	for _, e := range spy.Entries() {

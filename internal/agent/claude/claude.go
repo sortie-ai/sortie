@@ -83,6 +83,7 @@ type sessionState struct {
 	apiCallStart     time.Time
 	emittedAPITiming bool
 	inFlight         *agentcore.ToolTracker
+	work             *agentcore.WorkObserver
 
 	// humanInputEnds and humanInputDetail record a recognized request that
 	// only a person could answer, observed in ParseLine on a
@@ -250,14 +251,20 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 						}
 					}
 				}
+				for _, block := range event.contentBlocks() {
+					if block.Type == "text" && block.Text != "" {
+						state.work.ObserveAssistantOutput()
+						break
+					}
+				}
 				// ToolTracker.Begin stores time.Now() internally, so no separate
 				// monotonic timestamp is needed before calling processToolBlocks.
-				processToolBlocks(event.contentBlocks(), state.inFlight, now, emit)
+				processToolBlocks(event.contentBlocks(), state.inFlight, state.work, now, emit)
 				agentcore.EmitNotification(emit, summarizeAssistant(event))
 
 			case "user":
 				// Claude Code emits tool results as user-role messages.
-				processToolBlocks(event.contentBlocks(), state.inFlight, now, emit)
+				processToolBlocks(event.contentBlocks(), state.inFlight, state.work, now, emit)
 				state.apiCallStart = time.Now() // next API call is imminent
 
 			case "result":
@@ -308,16 +315,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 
 			lastResult, _ := lastParsed.(*rawEvent)
 
-			// Work tests this turn's own output, not the run cumulative,
-			// which is non-zero on any second turn.
 			ev := agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,
-				Work:         agentcore.WorkAbsent,
 			}
-			if sumTurnMessages(state.turnMessages).OutputTokens > 0 {
-				ev.Work = agentcore.WorkPresent
-			}
+			ev.Work, ev.WorkDetail = state.work.Report()
 
 			var turnAPIDuration int64
 			if lastResult != nil {
@@ -381,6 +383,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	state.apiCallStart = time.Time{}
 	state.emittedAPITiming = false
 	state.inFlight = agentcore.NewToolTracker()
+	state.work = agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true})
 	state.humanInputEnds = false
 	state.humanInputDetail = ""
 
@@ -506,18 +509,23 @@ func truncateToolError(s string, maxLen int) string {
 // entries. tool_use blocks are registered in inFlight; tool_result
 // blocks are correlated against inFlight and emitted as
 // [domain.EventToolResult] via onEvent. The wallTime parameter is the
-// wall-clock timestamp written into emitted events.
+// wall-clock timestamp written into emitted events. work observes tool
+// activity at either block, because a requested call counts at any
+// point in its life, not only at completion.
 func processToolBlocks(
 	blocks []rawContentBlock,
 	inFlight *agentcore.ToolTracker,
+	work *agentcore.WorkObserver,
 	wallTime time.Time,
 	onEvent func(domain.AgentEvent),
 ) {
 	for _, block := range blocks {
 		if block.Type == "tool_use" && block.ID != "" {
+			work.ObserveToolActivity()
 			inFlight.Begin(block.ID, block.Name)
 		}
 		if block.Type == "tool_result" {
+			work.ObserveToolActivity()
 			toolName, durationMS, ok := inFlight.End(block.ToolUseID)
 			if !ok {
 				toolName = "unknown"
