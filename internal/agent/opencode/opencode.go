@@ -65,7 +65,7 @@ type sessionState struct {
 	baseLogger     *slog.Logger
 	createdSession bool
 	runStartedAtMS int64
-	acc            *agentcore.RunUsage
+	usage          *agentcore.TurnEndUsage
 	mu             sync.Mutex
 	active         *turnRuntime
 
@@ -76,11 +76,6 @@ type sessionState struct {
 	// declares no server, or when the launch target is remote. Set
 	// once in StartSession and never mutated after.
 	mcpConfigContent string
-
-	// usageMeasured reports whether a session export has yielded a
-	// usage figure for this run. Monotone: set true once and never
-	// cleared.
-	usageMeasured bool
 }
 
 type turnRuntime struct {
@@ -146,7 +141,7 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 		baseLogger:       slog.Default().With(slog.String("component", "opencode-adapter")),
 		createdSession:   params.ResumeSessionID == "",
 		runStartedAtMS:   time.Now().UnixMilli(),
-		acc:              agentcore.NewRunUsage(),
+		usage:            agentcore.NewTurnEndUsage(),
 		mcpConfigContent: mcpConfigContent,
 	}
 
@@ -324,8 +319,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 						Cause:             parsed.Err,
 					}
 				}
-				meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
-				result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+				result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
 				if agentErr != nil {
 					return result, agentErr
 				}
@@ -371,8 +365,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					TerminalErrorKind: domain.ErrResponseError,
 					TerminalMessage:   message,
 				}
-				meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
-				result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+				result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
 				if agentErr != nil {
 					return result, agentErr
 				}
@@ -476,8 +469,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			_ = waitForProcess(runtime)
 			clearActive(state, runtime)
 			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
-			meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
-			result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
 			if agentErr != nil {
 				return result, agentErr
 			}
@@ -495,8 +487,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				TerminalErrorKind: domain.ErrResponseTimeout,
 				TerminalMessage:   "timed out waiting for first opencode json event",
 			}
-			meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
-			result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
 			if agentErr != nil {
 				return result, agentErr
 			}
@@ -538,23 +529,16 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	}
 	usage := queryExportUsage(ctx, state, window)
 
-	// A failed or empty export must not lower the run's previously
-	// reported snapshot; skip the update entirely rather than replacing
-	// settled with the zero value.
-	snapshot := state.acc.Snapshot()
+	var recovered *agentcore.RecoveredUsage
 	if hasUsage(usage) {
-		state.usageMeasured = true
-		snapshot = state.acc.SetRunCumulative(domain.TokenUsage{
-			InputTokens:     usage.InputTokens,
-			OutputTokens:    usage.OutputTokens,
-			CacheReadTokens: usage.CacheReadTokens,
-		})
-		emit(domain.AgentEvent{
-			Type:      domain.EventTokenUsage,
-			Timestamp: time.Now().UTC(),
-			Usage:     snapshot,
-			Model:     usage.Model,
-		})
+		recovered = &agentcore.RecoveredUsage{
+			Run: domain.TokenUsage{
+				InputTokens:     usage.InputTokens,
+				OutputTokens:    usage.OutputTokens,
+				CacheReadTokens: usage.CacheReadTokens,
+			},
+			Model: usage.Model,
+		}
 	}
 
 	clearActive(state, runtime)
@@ -601,13 +585,7 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		procutil.EmitWarnLines(stderrLines, state.logger())
 	}
 
-	meta := agentcore.TurnMeta{
-		SessionID:     sessionID,
-		Usage:         snapshot,
-		UsageMeasured: state.usageMeasured,
-	}
-
-	result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+	result, agentErr := state.usage.Finalize(emit, state.logger(), ev, sessionID, 0, recovered)
 	if agentErr != nil {
 		return result, agentErr
 	}
