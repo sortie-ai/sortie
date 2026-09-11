@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-09-11
+
 ### Added
 
 - The new `agent-client-protocol` agent kind runs Agent Client Protocol-compatible runtimes over stdio and resumes previous sessions when supported by the runtime. Locally launched runtimes can use workflow-configured MCP servers, while requests requiring human input are refused or end the attempt rather than waiting indefinitely. Token-based budgets do not apply because the protocol does not report token usage; when the runtime itself ends a turn at its own token limit the claim is released rather than retried into the same limit, while a turn that exhausts the runtime's request or turn budget is retried on a fresh session. Stopping a session closes it through the protocol when the runtime advertised that capability at handshake. A runtime running over SSH gets no other clean close, because the termination signal reaches the local relay rather than the runtime itself. Gemini CLI is the first runtime published on this route, with a ready-to-copy sample workflow at `examples/WORKFLOW.agent-client-protocol.md`; the sample sets the runtime's own workspace-trust and tool-approval switches, which an unattended run needs and which the sample states the cost of.
@@ -881,7 +883,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.23.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/sortie-ai/sortie/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/sortie-ai/sortie/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/sortie-ai/sortie/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/sortie-ai/sortie/compare/v1.20.0...v1.21.0
