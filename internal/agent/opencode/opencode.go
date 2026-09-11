@@ -16,10 +16,9 @@
 package opencode
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -69,6 +68,12 @@ type sessionState struct {
 	mu             sync.Mutex
 	active         *turnRuntime
 
+	// drainGrace bounds every post-exit wait a turn performs on its
+	// stdout reader once the subprocess has been reaped. Written once by
+	// StartSession, or by a test before a session's first turn; RunTurn
+	// reads it when it builds each turn's own turnRuntime.
+	drainGrace time.Duration
+
 	// mcpConfigContent is the translated MCP configuration document
 	// delivered through the runtime's inline configuration environment
 	// variable on every turn's subprocess. Empty when the session
@@ -82,16 +87,18 @@ type turnRuntime struct {
 	pid             string
 	proc            *os.Process
 	waitCh          chan waitResult
-	lineCh          chan parsedLine
-	readerDone      chan struct{}
-	stopCh          chan struct{}
-	stopOnce        sync.Once
+	reader          *procutil.StdoutReader
 	stderrCollector *procutil.StderrCollector
 	firstJSONSeen   bool
 	terminalError   *rawRunError
 	terminalOutcome domain.AgentEventType
 	waitMu          sync.Mutex
 	waitRes         waitResult
+
+	// drainGrace is the bound startWait and every post-exit reader wait
+	// applies once the subprocess has been reaped. Recorded from
+	// sessionState.drainGrace when the turn is launched.
+	drainGrace time.Duration
 
 	// work is the per-turn work-evidence observer for the shared
 	// turn-disposition decision.
@@ -142,6 +149,7 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 		createdSession:   params.ResumeSessionID == "",
 		runStartedAtMS:   time.Now().UnixMilli(),
 		usage:            agentcore.NewTurnEndUsage(),
+		drainGrace:       procutil.DefaultDrainGrace,
 		mcpConfigContent: mcpConfigContent,
 	}
 
@@ -225,41 +233,48 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
 
-	stdoutPipe, err := cmd.StdoutPipe()
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
 	if err != nil {
 		state.mu.Unlock()
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "create stdout pipe",
-			Err:     err,
-		}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		state.mu.Unlock()
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "create stderr pipe",
-			Err:     err,
-		}
-	}
 
-	if err := cmd.Start(); err != nil {
-		state.mu.Unlock()
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "start opencode subprocess",
-			Err:     err,
+		var startErr *procutil.StartError
+		if !errors.As(err, &startErr) {
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: "start opencode subprocess",
+				Err:     err,
+			}
+		}
+		switch startErr.Stage {
+		case procutil.StageStdoutPipe:
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: "create stdout pipe",
+				Err:     startErr.Err,
+			}
+		case procutil.StageStderrPipe:
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: "create stderr pipe",
+				Err:     startErr.Err,
+			}
+		default: // procutil.StageProcessStart
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrResponseError,
+				Message: "start opencode subprocess",
+				Err:     startErr.Err,
+			}
 		}
 	}
+	// The package's only close of either pipe end: covers all five
+	// return paths this turn can take, none of which precedes it.
+	defer pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
 
 	runtime := &turnRuntime{
 		pid:             strconv.Itoa(cmd.Process.Pid),
 		proc:            cmd.Process,
 		waitCh:          make(chan waitResult, 1),
-		lineCh:          make(chan parsedLine, 16),
-		readerDone:      make(chan struct{}),
-		stopCh:          make(chan struct{}),
+		drainGrace:      state.drainGrace,
 		terminalOutcome: domain.EventTurnCompleted,
 		work:            agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true}),
 	}
@@ -270,9 +285,9 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		logger.Warn("process group assignment failed", slog.Any("error", assignErr))
 	}
 
-	runtime.stderrCollector = procutil.NewStderrCollector(stderrPipe, logger)
-	startOpenCodeReader(stdoutPipe, runtime)
-	startWait(runtime, cmd, procutil.DefaultDrainGrace)
+	runtime.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, logger)
+	runtime.reader = procutil.NewStdoutReader(pipes.Stdout, logger)
+	startWait(runtime, cmd)
 
 	emit := func(event domain.AgentEvent) {
 		if state.target.RemoteCommand == "" {
@@ -286,187 +301,222 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	defer stopTimer(readTimer)
 
 	readTimeoutC := readTimer.C
-	lineCh := runtime.lineCh
+	lineCh := runtime.reader.Stream()
 	waitCh := runtime.waitCh
+	var postExitC <-chan time.Time
 	var exit waitResult
 	processExited := false
 
+	// handleLine applies one raw stdout line's per-event path: parsing,
+	// the first-JSON latch, and the event switch. It is shared between
+	// the turn's primary select loop and the post-exit drain below, so a
+	// line arriving in either place is processed identically. done
+	// reports that the turn's own result is ready to return.
+	handleLine := func(line []byte) (domain.TurnResult, error, bool) {
+		event, parseErr := parseRunEvent(line)
+		var parsed parsedLine
+		if parseErr != nil {
+			parsed.PlainText = string(line)
+		} else {
+			parsed.Event = &event
+		}
+
+		if parsed.PlainText != "" {
+			if readTimeoutC != nil {
+				resetTimer(readTimer, readTimeout)
+			}
+
+			plainText := typeutil.TruncateRunes(parsed.PlainText, 500)
+			emit(domain.AgentEvent{
+				Type:      domain.EventMalformed,
+				Timestamp: time.Now().UTC(),
+				Message:   plainText,
+			})
+			return domain.TurnResult{}, nil, false
+		}
+
+		rawEvent := parsed.Event
+		if rawEvent == nil {
+			return domain.TurnResult{}, nil, false
+		}
+
+		runtime.firstJSONSeen = true
+		if readTimeoutC != nil {
+			stopTimer(readTimer)
+			readTimeoutC = nil
+		}
+
+		started, mismatch := state.applySessionEvent(rawEvent.SessionID)
+		if mismatch {
+			message := fmt.Sprintf("session id mismatch: expected %q, got %q", state.currentSessionID(), rawEvent.SessionID)
+			killTurnProcess(runtime)
+			_ = waitForProcess(runtime)
+			drainReaderBounded(runtime.reader, runtime.drainGrace)
+			procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
+			clearActive(state, runtime)
+			ev := agentcore.TurnEvidence{
+				Terminal:          agentcore.TerminalFailure,
+				TerminalErrorKind: domain.ErrResponseError,
+				TerminalMessage:   message,
+			}
+			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
+			return result, agentErr, true
+		}
+		if started {
+			emit(domain.AgentEvent{
+				Type:      domain.EventSessionStarted,
+				Timestamp: time.Now().UTC(),
+				SessionID: state.currentSessionID(),
+				Message:   "session started",
+			})
+		}
+
+		now := time.Now().UTC()
+		switch rawEvent.Type {
+		case "step_start":
+			if _, err := parseStepStartPart(rawEvent.Part); err != nil {
+				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid step_start payload"})
+				return domain.TurnResult{}, nil, false
+			}
+			agentcore.EmitNotification(emit, "step started")
+
+		case "text":
+			part, err := parseTextPart(rawEvent.Part)
+			if err != nil {
+				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid text payload"})
+				return domain.TurnResult{}, nil, false
+			}
+			runtime.work.ObserveAssistantOutput()
+			agentcore.EmitNotification(emit, typeutil.TruncateRunes(part.Text, 500))
+
+		case "reasoning":
+			if _, err := parseReasoningPart(rawEvent.Part); err != nil {
+				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid reasoning payload"})
+				return domain.TurnResult{}, nil, false
+			}
+			runtime.work.ObserveAssistantOutput()
+			emit(domain.AgentEvent{
+				Type:      domain.EventOtherMessage,
+				Timestamp: now,
+				Message:   "reasoning block",
+			})
+
+		case "tool_use":
+			part, err := parseToolPart(rawEvent.Part)
+			if err != nil {
+				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid tool_use payload"})
+				return domain.TurnResult{}, nil, false
+			}
+			runtime.work.ObserveToolActivity()
+			emit(domain.AgentEvent{
+				Type:           domain.EventToolResult,
+				Timestamp:      now,
+				ToolName:       part.Tool,
+				ToolDurationMS: toolDuration(part.State.Time),
+				ToolError:      strings.EqualFold(part.State.Status, "error"),
+				Message:        typeutil.TruncateRunes(part.State.Error, 500),
+			})
+
+		case "step_finish":
+			part, err := parseStepFinishPart(rawEvent.Part)
+			if err != nil {
+				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid step_finish payload"})
+				return domain.TurnResult{}, nil, false
+			}
+			agentcore.EmitNotification(emit, fmt.Sprintf("step finished: %s", part.Reason))
+
+		case "error":
+			runtime.terminalOutcome = domain.EventTurnFailed
+			// One failure can surface as two error events: the
+			// actionable diagnostic the session publishes, and the
+			// generic placeholder the run command reports when the
+			// failure is not in its API error schema. Their order on
+			// the stream is not guaranteed, so keep whichever event
+			// carries detail rather than whichever arrives last.
+			if runtime.terminalError == nil || !isMaskedServerError(rawRunErrorMessage(rawEvent.Error)) {
+				runtime.terminalError = rawEvent.Error
+			}
+
+		default:
+			emit(domain.AgentEvent{
+				Type:      domain.EventMalformed,
+				Timestamp: now,
+				Message:   fmt.Sprintf("unknown event type: %s", rawEvent.Type),
+			})
+		}
+
+		return domain.TurnResult{}, nil, false
+	}
+
 	for {
 		select {
-		case parsed, ok := <-lineCh:
+		case line, ok := <-lineCh:
 			if !ok {
 				lineCh = nil
+				if readErr := runtime.reader.Err(); readErr != nil && !errors.Is(readErr, procutil.ErrStdoutAbandoned) {
+					killTurnProcess(runtime)
+					_ = waitForProcess(runtime)
+					clearActive(state, runtime)
+
+					ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
+					if ctx.Err() == nil && !state.isClosed() {
+						procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
+						ev = agentcore.TurnEvidence{
+							Terminal:          agentcore.TerminalFailure,
+							TerminalErrorKind: domain.ErrResponseError,
+							TerminalMessage:   "stdout read error",
+							Cause:             readErr,
+						}
+					}
+					result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
+					if agentErr != nil {
+						return result, agentErr
+					}
+					return result, nil
+				}
 				if processExited {
 					return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 				}
 				continue
 			}
 
-			if parsed.Err != nil {
-				closeStop(runtime)
-				killTurnProcess(runtime)
-				<-runtime.readerDone
-				_ = waitForProcess(runtime)
-				clearActive(state, runtime)
-
-				ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
-				if ctx.Err() == nil && !state.isClosed() {
-					procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
-					ev = agentcore.TurnEvidence{
-						Terminal:          agentcore.TerminalFailure,
-						TerminalErrorKind: domain.ErrResponseError,
-						TerminalMessage:   "stdout read error",
-						Cause:             parsed.Err,
-					}
-				}
-				result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
-				if agentErr != nil {
-					return result, agentErr
-				}
-				return result, nil
-			}
-
-			if parsed.PlainText != "" {
-				if readTimeoutC != nil {
-					resetTimer(readTimer, readTimeout)
-				}
-
-				plainText := typeutil.TruncateRunes(parsed.PlainText, 500)
-				emit(domain.AgentEvent{
-					Type:      domain.EventMalformed,
-					Timestamp: time.Now().UTC(),
-					Message:   plainText,
-				})
-				continue
-			}
-
-			event := parsed.Event
-			if event == nil {
-				continue
-			}
-
-			if readTimeoutC != nil {
-				runtime.firstJSONSeen = true
-				stopTimer(readTimer)
-				readTimeoutC = nil
-			}
-
-			started, mismatch := state.applySessionEvent(event.SessionID)
-			if mismatch {
-				message := fmt.Sprintf("session id mismatch: expected %q, got %q", state.currentSessionID(), event.SessionID)
-				closeStop(runtime)
-				killTurnProcess(runtime)
-				<-runtime.readerDone
-				_ = waitForProcess(runtime)
-				procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
-				clearActive(state, runtime)
-				ev := agentcore.TurnEvidence{
-					Terminal:          agentcore.TerminalFailure,
-					TerminalErrorKind: domain.ErrResponseError,
-					TerminalMessage:   message,
-				}
-				result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
-				if agentErr != nil {
-					return result, agentErr
-				}
-				return result, nil
-			}
-			if started {
-				emit(domain.AgentEvent{
-					Type:      domain.EventSessionStarted,
-					Timestamp: time.Now().UTC(),
-					SessionID: state.currentSessionID(),
-					Message:   "session started",
-				})
-			}
-
-			now := time.Now().UTC()
-			switch event.Type {
-			case "step_start":
-				if _, err := parseStepStartPart(event.Part); err != nil {
-					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid step_start payload"})
-					continue
-				}
-				agentcore.EmitNotification(emit, "step started")
-
-			case "text":
-				part, err := parseTextPart(event.Part)
-				if err != nil {
-					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid text payload"})
-					continue
-				}
-				runtime.work.ObserveAssistantOutput()
-				agentcore.EmitNotification(emit, typeutil.TruncateRunes(part.Text, 500))
-
-			case "reasoning":
-				if _, err := parseReasoningPart(event.Part); err != nil {
-					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid reasoning payload"})
-					continue
-				}
-				runtime.work.ObserveAssistantOutput()
-				emit(domain.AgentEvent{
-					Type:      domain.EventOtherMessage,
-					Timestamp: now,
-					Message:   "reasoning block",
-				})
-
-			case "tool_use":
-				part, err := parseToolPart(event.Part)
-				if err != nil {
-					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid tool_use payload"})
-					continue
-				}
-				runtime.work.ObserveToolActivity()
-				emit(domain.AgentEvent{
-					Type:           domain.EventToolResult,
-					Timestamp:      now,
-					ToolName:       part.Tool,
-					ToolDurationMS: toolDuration(part.State.Time),
-					ToolError:      strings.EqualFold(part.State.Status, "error"),
-					Message:        typeutil.TruncateRunes(part.State.Error, 500),
-				})
-
-			case "step_finish":
-				part, err := parseStepFinishPart(event.Part)
-				if err != nil {
-					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid step_finish payload"})
-					continue
-				}
-				agentcore.EmitNotification(emit, fmt.Sprintf("step finished: %s", part.Reason))
-
-			case "error":
-				runtime.terminalOutcome = domain.EventTurnFailed
-				// One failure can surface as two error events: the
-				// actionable diagnostic the session publishes, and the
-				// generic placeholder the run command reports when the
-				// failure is not in its API error schema. Their order on
-				// the stream is not guaranteed, so keep whichever event
-				// carries detail rather than whichever arrives last.
-				if runtime.terminalError == nil || !isMaskedServerError(rawRunErrorMessage(event.Error)) {
-					runtime.terminalError = event.Error
-				}
-
-			default:
-				emit(domain.AgentEvent{
-					Type:      domain.EventMalformed,
-					Timestamp: now,
-					Message:   fmt.Sprintf("unknown event type: %s", event.Type),
-				})
+			if result, agentErr, done := handleLine(line); done {
+				return result, agentErr
 			}
 
 		case <-waitCh:
 			exit = waitForProcess(runtime)
 			processExited = true
 			waitCh = nil
+			stopTimer(readTimer)
+			readTimeoutC = nil
+			postExitC = time.After(runtime.drainGrace)
 			if lineCh == nil {
 				return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 			}
 
+		case <-postExitC:
+			for draining := true; draining; {
+				select {
+				case line, ok := <-lineCh:
+					if !ok {
+						draining = false
+						continue
+					}
+					if result, agentErr, done := handleLine(line); done {
+						return result, agentErr
+					}
+				default:
+					draining = false
+				}
+			}
+			runtime.reader.Abandon(runtime.drainGrace)
+			return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
+
 		case <-ctx.Done():
-			closeStop(runtime)
 			killTurnProcess(runtime)
-			<-runtime.readerDone
 			_ = waitForProcess(runtime)
+			drainReaderBounded(runtime.reader, runtime.drainGrace)
 			clearActive(state, runtime)
 			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
 			result, agentErr := state.usage.Finalize(emit, state.logger(), ev, state.currentSessionID(), 0, nil)
@@ -476,10 +526,9 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			return result, nil
 
 		case <-readTimeoutC:
-			closeStop(runtime)
 			killTurnProcess(runtime)
-			<-runtime.readerDone
 			_ = waitForProcess(runtime)
+			drainReaderBounded(runtime.reader, runtime.drainGrace)
 			procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 			clearActive(state, runtime)
 			ev := agentcore.TurnEvidence{
@@ -642,75 +691,49 @@ func (s *sessionState) applySessionEvent(eventSessionID string) (bool, bool) {
 	return true, false
 }
 
-func startOpenCodeReader(stdout io.Reader, runtime *turnRuntime) {
+// startWait reaps the turn's subprocess independently of its stdout
+// reader and, once the reap and group kill have run, bounds the wait
+// for the turn's stderr drain before reading it.
+func startWait(runtime *turnRuntime, cmd *exec.Cmd) {
 	go func() {
-		defer close(runtime.lineCh)
-		defer close(runtime.readerDone)
+		reaper := procutil.StartReaper(cmd)
+		<-reaper.Done()
 
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
-
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			event, err := parseRunEvent(line)
-			parsed := parsedLine{}
-			if err != nil {
-				parsed.PlainText = string(line)
-			} else {
-				parsed.Event = &event
-			}
-
-			select {
-			case runtime.lineCh <- parsed:
-			case <-runtime.stopCh:
-				return
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			select {
-			case runtime.lineCh <- parsedLine{Err: err}:
-			case <-runtime.stopCh:
-			}
-		}
-	}()
-}
-
-// startWait reaps the turn's subprocess. grace bounds the wait for the
-// turn's stderr drain, once before cmd.Wait is called and once after
-// the process group is killed.
-func startWait(runtime *turnRuntime, cmd *exec.Cmd, grace time.Duration) {
-	go func() {
-		// Wait for the stdout reader to finish before calling cmd.Wait().
-		// cmd.Wait() closes the stdout and stderr pipe read ends after
-		// reaping the process, which races with a scanner still reading
-		// buffered output on either stream if called first; for stderr
-		// this can silently drop a permission-refusal warning that
-		// finalizeExitedTurn depends on. The stderr wait is bounded so a
-		// descendant that inherits the stderr handle and outlives the
-		// direct child cannot withhold the reap.
-		<-runtime.readerDone
-		drained := runtime.stderrCollector.WaitDone(grace)
-
-		waitErr := cmd.Wait()
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-
-		if !drained {
-			if !runtime.stderrCollector.WaitDone(grace) {
-				runtime.stderrCollector.Abandon(grace)
-			}
+		if !runtime.stderrCollector.WaitDone(runtime.drainGrace) {
+			runtime.stderrCollector.Abandon(runtime.drainGrace)
 		}
 
 		runtime.waitMu.Lock()
 		runtime.waitRes = waitResult{
-			exitCode: procutil.ExtractExitCode(waitErr),
-			err:      waitErr,
+			exitCode: procutil.ExtractExitCode(reaper.Err()),
+			err:      reaper.Err(),
 		}
 		runtime.waitMu.Unlock()
 
 		close(runtime.waitCh)
 	}()
+}
+
+// drainReaderBounded discards every line still receivable from reader
+// until its scan ends or grace elapses. Stream is unbuffered, so a
+// reader parked on a send finishes only once something receives; this
+// keeps the group kill's release of that reader from being confused
+// with an abandonment, because Abandon is called only when the timer
+// wins.
+func drainReaderBounded(reader *procutil.StdoutReader, grace time.Duration) {
+	timer := time.NewTimer(grace)
+	defer stopTimer(timer)
+	for {
+		select {
+		case _, ok := <-reader.Stream():
+			if !ok {
+				return
+			}
+		case <-timer.C:
+			reader.Abandon(grace)
+			return
+		}
+	}
 }
 
 func waitForProcess(runtime *turnRuntime) waitResult {
@@ -728,12 +751,6 @@ func clearActive(state *sessionState, runtime *turnRuntime) {
 	}
 }
 
-func closeStop(runtime *turnRuntime) {
-	runtime.stopOnce.Do(func() {
-		close(runtime.stopCh)
-	})
-}
-
 // stopActiveTurn signals runtime's subprocess to exit gracefully and
 // waits up to grace for it to do so on its own before force-terminating
 // its process group. logger receives the graceful phase's outcome.
@@ -742,7 +759,6 @@ func stopActiveTurn(ctx context.Context, runtime *turnRuntime, grace time.Durati
 		return nil
 	}
 
-	closeStop(runtime)
 	if runtime.proc == nil {
 		return nil
 	}

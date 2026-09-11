@@ -13,12 +13,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 )
 
-const maxLineBytes = 10 * 1024 * 1024
-
 type parsedLine struct {
 	Event     *rawRunEvent
 	PlainText string
-	Err       error
 }
 
 type rawRunEvent struct {
