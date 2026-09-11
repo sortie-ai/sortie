@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `copilot-cli` and `claude-code` no longer report `turn_failed` for a turn that produced assistant output or completed tool activity but carried no per-message output-token count or terminal result event; work evidence now comes from a shared observer reading model-authored content and tool-call activity on each adapter's own turn stream, rather than a runtime-specific token count. On `kiro`, a non-blank stdout line is now, alongside the credits trailer, a positive success signal, so a zero exit with an authentication marker on stderr and a non-blank stdout line now reports `turn_completed` instead of `turn_failed`.
   ([#1060](https://github.com/sortie-ai/sortie/issues/1060))
 
+- A locally launched `copilot-cli` session now reports the model behind its token figures, because each turn's recovered usage figure arrives as one usage report naming it. `model_name` now appears in the JSON API and the persisted session record for such a run, `usage_attribution` now reads `per_model`, and the dashboard Model row now names the model instead of saying the figures are not attributed to one. A run over SSH reads no session journal, so it reports no token figure and no model, as before.
+  ([#1073](https://github.com/sortie-ai/sortie/issues/1073))
+
 ### Changed
 
 - A second interrupt (Ctrl-C) during shutdown now ends every remaining shutdown wait at once, instead of being silently discarded until shutdown finishes on its own. Each abandoned wait logs a warning naming what was given up.

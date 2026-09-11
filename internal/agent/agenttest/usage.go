@@ -223,6 +223,13 @@ func assertResolvedUsageReporting(t usageContractReporter, tc UsageReportingCase
 		}
 		if arrival == registry.UsageArrivalTurnEnd {
 			for i, event := range tc.Events {
+				// The ordering rule binds every token_usage event,
+				// including one carrying an all-zero figure, which a
+				// genuine zero spend produces.
+				if event.Type == domain.EventTokenUsage && !followedByTerminalEvent(tc.Events, i) {
+					t.Errorf("case %q: event %d: declared turn_end, the usage event has no later turn-terminal event",
+						tc.Name, i)
+				}
 				if event.Usage == (domain.TokenUsage{}) {
 					continue
 				}
@@ -273,4 +280,25 @@ func dominates(result, figure domain.TokenUsage) bool {
 		result.OutputTokens >= figure.OutputTokens &&
 		result.TotalTokens >= figure.TotalTokens &&
 		result.CacheReadTokens >= figure.CacheReadTokens
+}
+
+// turnTerminalEventTypes lists the event types that end a turn, the set
+// a turn_end kind's usage event MUST precede.
+var turnTerminalEventTypes = map[domain.AgentEventType]bool{
+	domain.EventTurnCompleted:      true,
+	domain.EventTurnFailed:         true,
+	domain.EventTurnCancelled:      true,
+	domain.EventTurnEndedWithError: true,
+	domain.EventTurnInputRequired:  true,
+}
+
+// followedByTerminalEvent reports whether events holds a turn-terminal
+// event at some index after usageIdx.
+func followedByTerminalEvent(events []domain.AgentEvent, usageIdx int) bool {
+	for _, event := range events[usageIdx+1:] {
+		if turnTerminalEventTypes[event.Type] {
+			return true
+		}
+	}
+	return false
 }

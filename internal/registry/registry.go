@@ -241,8 +241,9 @@ const (
 
 	// UsageArrivalTurnEnd declares that the adapter emits at most
 	// one domain.EventTokenUsage per turn, and only after the
-	// turn's work is over. api_request_count is not a count of API
-	// requests for a kind declaring this value.
+	// turn's work is over and before the turn's terminal event.
+	// api_request_count is not a count of API requests for a kind
+	// declaring this value.
 	UsageArrivalTurnEnd UsageArrival = "turn_end"
 
 	// UsageArrivalNone declares that no usage figure is ever

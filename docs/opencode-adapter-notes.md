@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/opencode`: why this one does not use the shared subprocess skeleton, where OpenCode's session and permission model collide with ours, and the failures that look like something else.
 
-Last updated: 2026-08-23
+Last updated: 2026-09-11
 
 ## Where to get the volatile facts
 
@@ -48,7 +48,7 @@ A refusal surfaces on stderr as a human-readable warning line while stdout stays
 
 Step-scoped token counts on the stream are not a running total. Between the tool step and the final text step of one turn the numbers move in both directions, so summing them across steps is wrong and taking the last one is wrong too.
 
-The registered kind declares `turn_end` arrival and `per_model` attribution: `finalizeExitedTurn` emits only after the subprocess exits, from `queryExportUsage`, carrying `Model: usage.Model`. The export runs over SSH in remote mode too, so the disposition does not change with the launch mode, unlike `copilot-cli`.
+The registered kind declares `turn_end` arrival and `per_model` attribution: the figure `queryExportUsage` recovers after the subprocess exits is reported through the shared turn-end report in `agentcore`, carrying the model of the last kept export message. The export runs over SSH in remote mode too, so the disposition does not change with the launch mode, unlike `copilot-cli`.
 
 The adapter recovers authoritative usage by running a sanitized session export after the subprocess exits, and it computes its own totals from per-message figures rather than reading the export's session aggregate. Two reasons, both durable. The aggregate spans the entire session including turns from an earlier run, while the figure Sortie reports is run-scoped; and the aggregate's own total field is not the sum of its input and output components, because it also folds in cache and reasoning tokens. So the adapter selects assistant messages by session ID and, on a resumed session, by creation time at or after the run's start, then sums them. The export is sanitized deliberately, so tool output bodies never reach a log.
 

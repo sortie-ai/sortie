@@ -461,6 +461,55 @@ func lineWith(t *testing.T, rendered, msg string) string {
 	return found[0]
 }
 
+// TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop drives a
+// turn_end-shaped pair on one issue: the token_usage event carrying S1
+// and the terminal event that follows it, both carrying the same
+// snapshot. With agent.max_tokens set below S1.TotalTokens, it asserts
+// enforceInFlightTokenCeiling stops the run on the token_usage event,
+// and the terminal event that follows produces no second stop record.
+func TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+	spy := &spyMetrics{}
+	var cancelCalls int
+	s1 := domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CacheReadTokens: 5}
+
+	// agent.max_tokens (state.MaxTokens) is set below S1.TotalTokens.
+	state := NewState(5000, 4, 100, nil, AgentTotals{})
+	state.Running["ISS-TE"] = &RunningEntry{
+		Identifier: "ISS-TE-ident",
+		CancelFunc: func() { cancelCalls++ },
+	}
+	store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 0}}}}
+
+	usageEvent := domain.AgentEvent{Type: domain.EventTokenUsage, Usage: s1}
+	HandleAgentEvent(state, "ISS-TE", usageEvent, logger, spy)
+	enforceInFlightTokenCeiling(context.Background(), state, "ISS-TE", usageEvent, store, spy, logger)
+
+	entry := state.Running["ISS-TE"]
+	if !entry.TokenCeilingStopped {
+		t.Fatal("entry.TokenCeilingStopped = false, want true after the token_usage event alone (S1.TotalTokens exceeds the ceiling)")
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("entry.CancelFunc called %d times after the token_usage event, want 1", cancelCalls)
+	}
+
+	terminalEvent := domain.AgentEvent{Type: domain.EventTurnCompleted, Usage: s1}
+	HandleAgentEvent(state, "ISS-TE", terminalEvent, logger, spy)
+	enforceInFlightTokenCeiling(context.Background(), state, "ISS-TE", terminalEvent, store, spy, logger)
+
+	if cancelCalls != 1 {
+		t.Errorf("entry.CancelFunc called %d times total, want 1 (the terminal event produces no second stop)", cancelCalls)
+	}
+	if got := strings.Count(lb.String(), "run stopped by token ceiling"); got != 1 {
+		t.Errorf(`log contains %d "run stopped by token ceiling" records, want 1`, got)
+	}
+	if len(spy.runsStoppedByBudget) != 1 {
+		t.Errorf("IncRunsStoppedByBudget called %d times, want 1", len(spy.runsStoppedByBudget))
+	}
+}
+
 // TestTokenCeilingRecordsCarryIssueContext pins the identifying
 // attributes on every record this file emits. Both entry points take an
 // unscoped logger and derive the issue-scoped one themselves, so a

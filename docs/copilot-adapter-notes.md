@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's GitHub Copilot CLI adapter in `internal/agent/copilot`: the decisions behind it, where its session and cost model collide with ours, and the failures that are hard to diagnose from a log.
 
-Last updated: 2026-08-30
+Last updated: 2026-09-11
 
 ## Where to get the volatile facts
 
@@ -28,17 +28,17 @@ This is the thing that ruins an afternoon when writing tests. A stand-in binary 
 
 ## Token accounting lives off the event stream
 
-The only token-shaped field the adapter reads off the stdout stream is a per-message output count, which it sums as an in-turn estimate and nothing more. It reads that count from either of two events the stream may carry it on, deduplicating by the API call identifier both carry. The stream may also carry an input and cache breakdown, both per model call and as a session-level checkpoint, which the adapter deliberately does not read: those figures are per model call rather than per run, and the input side is the journal's job. The runtime's real accounting lives in an on-disk session journal, which the adapter reads after the subprocess exits.
+The adapter reads no token figure from the event stream. The session-state journal is its only source, an on-disk record the adapter reads after the subprocess exits.
 
-That journal is session-cumulative across every process that resumes the session, not per-invocation. A second turn's record includes the first turn's spend. Recovering one run's own contribution means subtracting a baseline: the record that predates the run. The adapter resolves that baseline once, at its first read attempt, and the consequence is unforgiving. Miss the first attempt on a session someone else started and the boundary record is gone for good; the run then marks recovery unavailable and lets the output-only estimate stand for the rest of its life rather than reporting a figure inflated by a previous run's spend. Journal reads are also skipped in SSH mode, on an ID that fails the path-segment check, and on a file that breaches the size or line caps.
+That journal is session-cumulative across every process that resumes the session, not per-invocation. A second turn's record includes the first turn's spend. Recovering one run's own contribution means subtracting a baseline: the record that predates the run. The adapter resolves that baseline once, at its first read attempt, and the consequence is unforgiving. Miss the first attempt on a session someone else started and the boundary record is gone for good; the run then marks recovery unavailable and reports no further figure for the rest of the run rather than reporting a figure inflated by a previous run's spend. Journal reads are also skipped in SSH mode, on an ID that fails the path-segment check, and on a file that breaches the size or line caps.
 
 The practical rule: a usage figure from this adapter is run-cumulative and never decreases, a failed journal read never lowers a figure already reported, and the "measured" flag distinguishes an unknown spend from a genuine zero. Assertions that ignore that distinction pass for the wrong reason.
 
-The registered kind declares `turn_end` arrival and `session_total` attribution, from the post-exit journal read, the authoritative figure that names no model. A `UsageSessionRules` entry narrows a remote launch to `none`/`none`, mirroring the journal read's own SSH-mode skip above. This follows the declaration invariant that a disposition reflects the code path that always runs: the per-message output-count estimate this section opens with is a starved fallback current runtime releases rarely feed, so the declaration is built on the journal read rather than on that estimate. Reconcile the declared pair against this section at the next live capture.
+The registered kind declares `turn_end` arrival and `per_model` attribution: the figure and the model both come from the shutdown record, reported through the shared turn-end report in `agentcore`. A `UsageSessionRules` entry narrows a remote launch to `none`/`none`, mirroring the journal read's own SSH-mode skip above.
 
 There is a third source worth knowing about even though the adapter does not read it. This CLI can export OpenTelemetry, and its spans carry the per-request input and output token counts that the JSON stream does not. An operator who exports the relevant variables into Sortie's environment gets them in the subprocess too, since it inherits that environment, and ends up with a token breakdown the adapter itself cannot see. That is the answer to give when someone needs per-request accounting today rather than a change here.
 
-The model name rides along with the same two events the token count does: `model.message`'s `data.modelCall.model` on an assistant-authored record, and `assistant.message`'s `data.model`. Whichever of the two names a model last, for the current turn, is the value stamped onto every `token_usage` event the adapter emits for the rest of that turn. A stream shape that names no model on either carrier leaves the field blank rather than falling back to the operator-configured `copilot-cli.model` passthrough value, which is the model requested rather than the model the runtime reported using.
+The model name is the shutdown record's `modelMetrics` key whose token count grew the most since the previous record, breaking a tie by whichever trimmed name sorts first. A record naming no model, or one where no key grew, leaves the field blank rather than falling back to the operator-configured `copilot-cli.model` passthrough value, which is the model requested rather than the model the runtime reported using.
 
 ## Approvals
 

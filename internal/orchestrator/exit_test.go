@@ -9433,6 +9433,94 @@ func TestHandleWorkerExit_SessionMetadataRequestVerdict(t *testing.T) {
 	})
 }
 
+// TestHandleWorkerExit_TurnEndPairPersistedRow replays the same
+// turn_end/per_model event sequence [token_usage{S1, M},
+// turn_completed{S1}, token_usage{S2, M}, turn_completed{S2}] onto an
+// entry through HandleAgentEvent, and asserts the frozen entry's
+// ModelName and RequestsByModel, RuntimeSnapshot's reporting of the
+// same session (ModelName, UsageAttribution per_model, and no
+// RequestsByModel, since turn_end never reports during the turn), and
+// the row HandleWorkerExit appends and persists: run_history's
+// TotalTokens equal to S2.TotalTokens, and session_metadata's
+// model_name equal to M.
+func TestHandleWorkerExit_TurnEndPairPersistedRow(t *testing.T) {
+	t.Parallel()
+
+	const (
+		issueID = "ISSUE-TE1"
+		model   = "claude-sonnet-5"
+	)
+	s1 := domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CacheReadTokens: 5}
+	s2 := domain.TokenUsage{InputTokens: 250, OutputTokens: 55, TotalTokens: 305, CacheReadTokens: 12}
+	ts := time.Now().UTC()
+
+	state := exitState(t, issueID, nil)
+	entry := state.Running[issueID]
+	entry.UsageArrival = registry.UsageArrivalTurnEnd
+	entry.UsageAttribution = registry.UsageAttributionPerModel
+
+	for _, ev := range []domain.AgentEvent{
+		{Type: domain.EventTokenUsage, Timestamp: ts, Model: model, Usage: s1},
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s1},
+		{Type: domain.EventTokenUsage, Timestamp: ts, Model: model, Usage: s2},
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s2},
+	} {
+		HandleAgentEvent(state, issueID, ev, discardLogger(), nil)
+	}
+
+	if entry.ModelName != model {
+		t.Errorf("entry.ModelName = %q, want %q", entry.ModelName, model)
+	}
+	if got := entry.RequestsByModel[model]; got != 2 {
+		t.Errorf("entry.RequestsByModel[%q] = %d, want 2", model, got)
+	}
+	if entry.AgentTotalTokens != s2.TotalTokens {
+		t.Fatalf("entry.AgentTotalTokens = %d, want %d", entry.AgentTotalTokens, s2.TotalTokens)
+	}
+
+	snap := RuntimeSnapshot(state, ts)
+	if len(snap.Running) != 1 {
+		t.Fatalf("RuntimeSnapshot.Running = %d entries, want 1", len(snap.Running))
+	}
+	runningSnap := snap.Running[0]
+	if runningSnap.ModelName != model {
+		t.Errorf("RuntimeSnapshot ModelName = %q, want %q", runningSnap.ModelName, model)
+	}
+	if runningSnap.UsageAttribution != registry.UsageAttributionPerModel {
+		t.Errorf("RuntimeSnapshot UsageAttribution = %q, want %q", runningSnap.UsageAttribution, registry.UsageAttributionPerModel)
+	}
+	if runningSnap.RequestsByModel != nil {
+		t.Errorf("RuntimeSnapshot RequestsByModel = %v, want nil (turn_end never reports during the turn)", runningSnap.RequestsByModel)
+	}
+
+	store := &mockExitStore{}
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        issueID,
+		Identifier:     issueID + "-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "copilot-cli",
+		WorkspacePath:  "/tmp/ws",
+		Usage:          s2,
+		UsageMeasured:  true,
+		TurnsCompleted: 2,
+		TurnsStarted:   2,
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].TotalTokens; got != s2.TotalTokens {
+		t.Errorf("run_history TotalTokens = %d, want %d", got, s2.TotalTokens)
+	}
+
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+	if got := store.sessionMetadata[0].ModelName; got != model {
+		t.Errorf("session_metadata.model_name = %q, want %q", got, model)
+	}
+}
+
 // TestHandleWorkerExit_UnreachableFromRuntimeSnapshot proves that once
 // HandleWorkerExit returns, RuntimeSnapshot carries no running row for
 // the exited issue, so the unconditional usage reconciliation that

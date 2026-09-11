@@ -830,6 +830,105 @@ cat '`+runPath+`'`)
 	agenttest.AssertModelReported(t, allEvents, "anthropic/claude-sonnet-4-5")
 }
 
+// TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn drives two turns
+// on one session: the first turn's export yields a usage figure and
+// measures the run, and the second turn is cancelled via context before
+// it completes. It asserts the second turn's UsageMeasured stays true,
+// since the measured latch lives in the session's TurnEndUsage rather
+// than being derived per turn.
+func TestRunTurn_UsageMeasuredPersistsAcrossCancelledTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	runFixture := loadFixture(t, "simple_turn.jsonl")
+	runPath := filepath.Join(tmpDir, "run.jsonl")
+	if err := os.WriteFile(runPath, runFixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exportPath := filepath.Join(tmpDir, "export.json")
+	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first invocation completes normally and leaves counterPath
+	// behind; the second invocation, detecting it, emits one event and
+	// blocks until the test cancels its turn's context.
+	counterPath := filepath.Join(tmpDir, "turn-count")
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) cat '`+exportPath+`'; exit 0;;
+esac
+if [ -f '`+counterPath+`' ]; then
+  printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
+  sleep 1000
+fi
+touch '`+counterPath+`'
+cat '`+runPath+`'`)
+
+	outerCtx, outerCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer outerCancel()
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(outerCtx, domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result1, err := a.RunTurn(outerCtx, session, domain.RunTurnParams{
+		Prompt:  "first prompt",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn (turn 1) error = %v", err)
+	}
+	if !result1.UsageMeasured {
+		t.Fatal("turn 1: UsageMeasured = false, want true")
+	}
+
+	turnCtx, turnCancel := context.WithCancel(outerCtx)
+	gotEvent := make(chan struct{}, 1)
+	resultCh := make(chan domain.TurnResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, runErr := a.RunTurn(turnCtx, session, domain.RunTurnParams{
+			Prompt: "second prompt",
+			OnEvent: func(domain.AgentEvent) {
+				select {
+				case gotEvent <- struct{}{}:
+				default:
+				}
+			},
+		})
+		resultCh <- result
+		errCh <- runErr
+	}()
+
+	select {
+	case <-gotEvent:
+	case <-outerCtx.Done():
+		t.Fatal("timed out waiting for turn 2's first event")
+	}
+	turnCancel()
+
+	select {
+	case result2 := <-resultCh:
+		if result2.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("turn 2: ExitReason = %q, want %q", result2.ExitReason, domain.EventTurnCancelled)
+		}
+		if !result2.UsageMeasured {
+			t.Error("turn 2 (cancelled after a measured turn): UsageMeasured = false, want true")
+		}
+		<-errCh
+	case <-outerCtx.Done():
+		t.Fatal("RunTurn (turn 2) did not return after context cancel")
+	}
+}
+
 func TestRunTurn_SessionStartedOnce(t *testing.T) {
 	t.Parallel()
 

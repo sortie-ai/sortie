@@ -144,12 +144,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantKey:               "session_persistence",
 			},
 			{
-				name:                 "copilot-cli requires command, declares MCP injection supported, declares turn_end/session_total usage, and declares no resume blocker",
+				name:                 "copilot-cli requires command, declares MCP injection supported, declares turn_end/per_model usage, and declares no resume blocker",
 				kind:                 "copilot-cli",
 				wantCommand:          true,
 				wantMCPInjection:     registry.MCPInjectionSupported,
 				wantUsageArrival:     registry.UsageArrivalTurnEnd,
-				wantUsageAttribution: registry.UsageAttributionSessionTotal,
+				wantUsageAttribution: registry.UsageAttributionPerModel,
 			},
 			{
 				name:                 "codex requires command, declares MCP injection translated, declares incremental/per_model usage, and declares no resume blocker",

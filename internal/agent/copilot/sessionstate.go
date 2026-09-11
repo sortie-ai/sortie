@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -51,25 +52,27 @@ func sessionStateRoot(env func(string) string, home func() (string, error)) (str
 // returns the totals of the last line whose decoded type is
 // "session.shutdown" as current, and the totals of the line before that
 // as previous (the zero value when at most one such record exists).
-// found is false when the file holds no session.shutdown record.
+// model names the model [shutdownModelName] selects between those two
+// records, empty whenever found is false or err is non-nil. found is
+// false when the file holds no session.shutdown record.
 //
 // The read is abandoned and err is non-nil when the file exceeds 64 MB
 // or a single line exceeds 10 MB. A line that fails to decode is
 // skipped without failing the read. readSessionUsage never logs the
 // file's contents.
-func readSessionUsage(path string) (current, previous domain.TokenUsage, found bool, err error) {
+func readSessionUsage(path string) (current, previous domain.TokenUsage, model string, found bool, err error) {
 	info, statErr := os.Stat(path)
 	if statErr != nil {
-		return domain.TokenUsage{}, domain.TokenUsage{}, false, statErr
+		return domain.TokenUsage{}, domain.TokenUsage{}, "", false, statErr
 	}
 	if info.Size() > maxSessionStateFileBytes {
-		return domain.TokenUsage{}, domain.TokenUsage{}, false,
+		return domain.TokenUsage{}, domain.TokenUsage{}, "", false,
 			fmt.Errorf("session-state events file exceeds %d bytes: %w", maxSessionStateFileBytes, errSessionStateCapExceeded)
 	}
 
 	f, openErr := os.Open(path) //nolint:gosec // path is derived from a validated session id, not user input
 	if openErr != nil {
-		return domain.TokenUsage{}, domain.TokenUsage{}, false, openErr
+		return domain.TokenUsage{}, domain.TokenUsage{}, "", false, openErr
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
 
@@ -92,20 +95,49 @@ func readSessionUsage(path string) (current, previous domain.TokenUsage, found b
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
 		if errors.Is(scanErr, bufio.ErrTooLong) {
-			return domain.TokenUsage{}, domain.TokenUsage{}, false,
+			return domain.TokenUsage{}, domain.TokenUsage{}, "", false,
 				fmt.Errorf("session-state events file line exceeds %d bytes: %w", maxSessionStateLineBytes, errSessionStateCapExceeded)
 		}
-		return domain.TokenUsage{}, domain.TokenUsage{}, false, fmt.Errorf("scan session-state events file: %w", scanErr)
+		return domain.TokenUsage{}, domain.TokenUsage{}, "", false, fmt.Errorf("scan session-state events file: %w", scanErr)
 	}
 
 	if len(records) == 0 {
-		return domain.TokenUsage{}, domain.TokenUsage{}, false, nil
+		return domain.TokenUsage{}, domain.TokenUsage{}, "", false, nil
 	}
-	current = shutdownTotals(records[len(records)-1])
+	last := records[len(records)-1]
+	var prevRecord shutdownEvent
 	if len(records) == 2 {
-		previous = shutdownTotals(records[0])
+		prevRecord = records[0]
+		previous = shutdownTotals(prevRecord)
 	}
-	return current, previous, true, nil
+	current = shutdownTotals(last)
+	model = shutdownModelName(last, prevRecord)
+	return current, previous, model, true, nil
+}
+
+// shutdownModelName returns the trimmed modelMetrics key of current
+// whose token growth against the same key in previous is the largest
+// positive value, breaking a tie by the trimmed name that sorts first
+// lexicographically. A key blank after trimming is skipped. Returns ""
+// when current.Data.ModelMetrics is empty or no key grew.
+func shutdownModelName(current, previous shutdownEvent) string {
+	best, bestGrowth := "", int64(0)
+	for key, entry := range current.Data.ModelMetrics {
+		name := strings.TrimSpace(key)
+		if name == "" {
+			continue
+		}
+		prior := previous.Data.ModelMetrics[key]
+		growth := (entry.Usage.InputTokens + entry.Usage.OutputTokens) -
+			(prior.Usage.InputTokens + prior.Usage.OutputTokens)
+		if growth <= 0 {
+			continue
+		}
+		if growth > bestGrowth || (growth == bestGrowth && name < best) {
+			best, bestGrowth = name, growth
+		}
+	}
+	return best
 }
 
 // shutdownTotals extracts token totals from one session.shutdown
