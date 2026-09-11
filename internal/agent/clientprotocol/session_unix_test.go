@@ -147,7 +147,7 @@ func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
 	})
 
 	cancel()
-	waitForFile(t, evidencePath, awaitTimeout)
+	waitForFile(t, evidencePath)
 }
 
 // stderrThenExitScript is a fake agent that writes marker to stderr
@@ -339,7 +339,7 @@ func TestStopSessionReachesGroupChild(t *testing.T) {
 // and kill_process_group can only ever reach the group they targeted.
 func TestStopSessionDoesNotReachEscapedProcessGroupMember(t *testing.T) {
 	t.Parallel()
-	requireSetsid(t)
+	agenttest.RequireSetsid(t)
 
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "escaped.pid")

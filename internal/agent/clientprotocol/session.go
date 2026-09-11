@@ -66,9 +66,9 @@ type sessionState struct {
 
 	pid             int
 	stdinCloser     io.Closer
-	stdoutCloser    io.Closer
+	pipes           *procutil.OwnedPipes
 	stderrCollector *procutil.StderrCollector
-	waitCh          chan struct{} // closed once the subprocess has been reaped
+	waitCh          <-chan struct{} // closed once the subprocess has been reaped
 
 	itemCh   chan pumpItem
 	stopCh   chan struct{}
@@ -235,17 +235,21 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 	if err != nil {
 		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdin pipe", Err: err}
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdout pipe", Err: err}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: err}
-	}
 
-	if err := cmd.Start(); err != nil {
-		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: err}
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
+	if err != nil {
+		var startErr *procutil.StartError
+		if !errors.As(err, &startErr) {
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: err}
+		}
+		switch startErr.Stage {
+		case procutil.StageStdoutPipe:
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdout pipe", Err: startErr.Err}
+		case procutil.StageStderrPipe:
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stderr pipe", Err: startErr.Err}
+		default: // procutil.StageProcessStart
+			return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to start subprocess", Err: startErr.Err}
+		}
 	}
 
 	if assignErr := procutil.AssignProcess(cmd.Process.Pid, cmd.Process); assignErr != nil {
@@ -254,26 +258,19 @@ func startSession(ctx context.Context, origins *sessionOrigins, params domain.St
 
 	state.pid = cmd.Process.Pid
 	state.stdinCloser = stdinPipe
-	state.stdoutCloser = stdoutPipe
-	state.waitCh = make(chan struct{})
-	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
+	state.pipes = pipes
+	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 
-	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, pumpHandler(state.itemCh, state.stopCh),
+	state.conn = jsonrpc.NewConn(stdinPipe, pipes.Stdout, pumpHandler(state.itemCh, state.stopCh),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
 
-	// The reaper waits for the connection's reader to finish before it
-	// reaps. cmd.Wait closes the pipe StdoutPipe returned, so reaping
-	// while the reader is still consuming would truncate the stream: an
-	// agent that writes its final response and exits would have that
-	// response discarded and the turn reported as a lost subprocess.
-	// Teardown closes the read handle itself, so this wait always ends.
-	go func() {
-		<-state.conn.Done()
-		cmd.Wait()                                 //nolint:errcheck,gosec // exit code is not read; teardown only waits for the process to be gone
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-		close(state.waitCh)
-	}()
+	// The reap runs independently of the connection's reader: the pipes
+	// are caller-owned, so exec.Cmd.Wait closes neither read end and
+	// reaping cannot cut a reader still consuming buffered output short.
+	// Teardown's close_stdout and close_pipes steps are what end that
+	// reader.
+	reaper := procutil.StartReaper(cmd)
+	state.waitCh = reaper.Done()
 
 	// The capability record is built here, on this goroutine, with its
 	// stage-one states, before the pump starts. The pump's start orders
@@ -679,7 +676,10 @@ type teardownStep struct {
 // left blocked on us during the graceful phase. The remaining steps are
 // unchanged: close_stdout releases the connection's parked read only
 // after the wait, close_connection and stop_pump follow, and
-// drain_stderr_and_reap collects diagnostics and reaps last.
+// drain_stderr_and_reap collects diagnostics and reaps. close_pipes runs
+// last: the pipes are caller-owned now, so close_stdout alone no longer
+// fully releases them, and closing the standard-error end has to wait
+// until drain_stderr_and_reap has drained or abandoned that collector.
 //
 // A residual: an agent parked on a permission request the pump has not
 // yet answered may not reach its exit path, because close_stdin runs
@@ -698,6 +698,7 @@ func defaultTeardownOrder(callerCtx, graceCtx context.Context, grace time.Durati
 		{name: "close_connection", run: closeConnection},
 		{name: "stop_pump", run: stopPump},
 		{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
+		{name: "close_pipes", run: closePipes},
 	}
 }
 
@@ -793,10 +794,23 @@ func closeStdin(state *sessionState) {
 
 // closeStdout closes the handle the connection reads the agent's
 // standard output through. This ends a scan a descendant holding that
-// pipe's write end would otherwise keep parked.
+// pipe's write end would otherwise keep parked. It does not release the
+// standard-error end; close_pipes does that once the collector's own
+// bound has run.
 func closeStdout(state *sessionState) {
-	if state.stdoutCloser != nil {
-		state.stdoutCloser.Close() //nolint:errcheck,gosec // best-effort; unparks the connection's read
+	if state.pipes != nil {
+		state.pipes.CloseStdout() //nolint:errcheck,gosec // best-effort; unparks the connection's read
+	}
+}
+
+// closePipes closes both read ends the session owns. It is the final
+// teardown step: drain_stderr_and_reap is what leaves the standard-error
+// collector drained or abandoned, and the two startSession failure paths
+// read stderrCollector.Lines after teardown returns, so a close ahead of
+// that step would return fewer lines with no marker and no record.
+func closePipes(state *sessionState) {
+	if state.pipes != nil {
+		state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
 	}
 }
 

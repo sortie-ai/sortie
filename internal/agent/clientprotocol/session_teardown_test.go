@@ -5,7 +5,6 @@ package clientprotocol
 import (
 	"bytes"
 	"context"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -76,42 +75,8 @@ type parkedTeardownFixture struct {
 	release func()
 }
 
-// pipeWiring selects how newParkedTeardownSession connects the
-// subprocess's standard input and standard output.
-type pipeWiring int
-
-const (
-	// pipeWiringAutoClosing uses cmd.StdinPipe and cmd.StdoutPipe,
-	// exactly as startSession does. Their documented side effect,
-	// that Cmd.Wait closes both once the process has been reaped, is
-	// production behavior rather than a test artifact: this
-	// fixture's own always-running reaper goroutine, mirroring
-	// StartSession's, races that automatic close against teardown's
-	// own closeStdin and closeStdout, and wins once
-	// kill_process_group has actually reaped the process. That is the
-	// right wiring for the bound case and for
-	// TestStopSessionTeardownReturnsWithConnectionClosedFirst, where
-	// every step able to release the parked write runs after
-	// close_connection: whichever close wins the race between
-	// Cmd.Wait's automatic pipe close and teardown's own closes, that
-	// test's assertion is unchanged, and a Close that still waits on
-	// the parked write still fails it.
-	pipeWiringAutoClosing pipeWiring = iota
-
-	// pipeWiringManual connects a plain os.Pipe pair directly to
-	// cmd.Stdin and cmd.Stdout, which Cmd.Wait does not know to
-	// close. The second control names omitting the standard-output
-	// close as its own defect; with pipeWiringAutoClosing, killing
-	// the process group first reaps the process, and Cmd.Wait's own
-	// unrelated auto-close of the StdoutPipe races in and papers
-	// over the very omission that control means to expose. Manual
-	// wiring removes that confound so the control tests only the
-	// property it names.
-	pipeWiringManual
-)
-
 // newParkedTeardownSession launches the scenario's fake agent as a
-// real subprocess, wires a session to it exactly as StartSession
+// real subprocess, wires a session to it exactly as startSession
 // would (skipping the handshake calls, which this scenario has no use
 // for), and waits for genuine evidence that the reply write is
 // parked: the reader helper's own completion marker, written only
@@ -120,9 +85,9 @@ const (
 // what makes the park a property of the setup rather than a timing
 // assumption; the wait loop itself is bounded polling for that
 // marker, not a sleep standing in for the park.
-func newParkedTeardownSession(t *testing.T, wiring pipeWiring) *parkedTeardownFixture {
+func newParkedTeardownSession(t *testing.T) *parkedTeardownFixture {
 	t.Helper()
-	requireSetsid(t)
+	agenttest.RequireSetsid(t)
 
 	dir := t.TempDir()
 	script := strings.NewReplacer(
@@ -134,67 +99,39 @@ func newParkedTeardownSession(t *testing.T, wiring pipeWiring) *parkedTeardownFi
 	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
 	procutil.SetProcessGroup(cmd)
 
-	var stdinCloser io.WriteCloser
-	var stdoutCloser io.ReadCloser
-	var childSideCloser func()
-	switch wiring {
-	case pipeWiringManual:
-		stdinCloser, stdoutCloser, childSideCloser = wireManualPipes(t, cmd)
-	default:
-		var err error
-		stdinCloser, err = cmd.StdinPipe()
-		if err != nil {
-			t.Fatalf("StdinPipe: %v", err)
-		}
-		stdoutCloser, err = cmd.StdoutPipe()
-		if err != nil {
-			t.Fatalf("StdoutPipe: %v", err)
-		}
+	stdinCloser, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
 	}
 
-	stderrPipe, err := cmd.StderrPipe()
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
 	if err != nil {
-		t.Fatalf("StderrPipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if childSideCloser != nil {
-		// The child's copies were dup2'd onto its own descriptors
-		// during Start; the parent's references to them are now
-		// redundant, matching how cmd.StdinPipe and cmd.StdoutPipe
-		// close their own child-side ends once Start returns.
-		childSideCloser()
+		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
 
 	state := &sessionState{
-		pid:          cmd.Process.Pid,
-		stdinCloser:  stdinCloser,
-		stdoutCloser: stdoutCloser,
-		waitCh:       make(chan struct{}),
-		itemCh:       make(chan pumpItem, pumpChannelCapacity),
-		stopCh:       make(chan struct{}),
-		pumpDone:     make(chan struct{}),
-		logger:       discardLogger(),
-		agentConfig:  domain.AgentConfig{ReadTimeoutMS: 60000},
-		caps:         newCapabilityRecord(false),
+		pid:         cmd.Process.Pid,
+		stdinCloser: stdinCloser,
+		pipes:       pipes,
+		itemCh:      make(chan pumpItem, pumpChannelCapacity),
+		stopCh:      make(chan struct{}),
+		pumpDone:    make(chan struct{}),
+		logger:      discardLogger(),
+		agentConfig: domain.AgentConfig{ReadTimeoutMS: 60000},
+		caps:        newCapabilityRecord(false),
 	}
-	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
+	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 
-	go func() {
-		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap, mirroring startSession's own reaper
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-		close(state.waitCh)
-	}()
+	reaper := procutil.StartReaper(cmd)
+	state.waitCh = reaper.Done()
 
-	state.conn = jsonrpc.NewConn(stdinCloser, stdoutCloser, pumpHandler(state.itemCh, state.stopCh),
+	state.conn = jsonrpc.NewConn(stdinCloser, pipes.Stdout, pumpHandler(state.itemCh, state.stopCh),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
 
 	go runPump(state)
 	markSessionKnown(state)
 
-	waitForFile(t, filepath.Join(dir, "reader.done"), awaitTimeout)
+	waitForFile(t, filepath.Join(dir, "reader.done"))
 
 	release := sync.OnceFunc(func() {
 		// Each helper is its own session and process group leader, so
@@ -209,60 +146,102 @@ func newParkedTeardownSession(t *testing.T, wiring pipeWiring) *parkedTeardownFi
 	return &parkedTeardownFixture{state: state, release: release}
 }
 
-// wireManualPipes builds a plain os.Pipe pair for each direction and
-// assigns the child's end directly to cmd.Stdin and cmd.Stdout,
-// returning the parent-side ends the caller keeps and a closer for
-// the child-side ends the caller invokes once Start has dup2'd them
-// onto the child's own descriptors. Unlike cmd.StdinPipe and
-// cmd.StdoutPipe, this registers nothing for Cmd.Wait to close on the
-// caller's behalf.
-func wireManualPipes(t *testing.T, cmd *exec.Cmd) (stdin io.WriteCloser, stdout io.ReadCloser, closeChildSide func()) {
+// teardownParkedStderrScriptTemplate extends teardownParkedScriptTemplate
+// with a third detached helper that holds the standard-error write end
+// open, for property P13's own run: with that helper alongside the
+// reader and writer, drain_stderr_and_reap can only abandon the
+// standard-error collector, and close_pipes is the only step left able
+// to release it. This template is used only by that property's own
+// fixture and MUST NOT replace the shared one: parking the collector on
+// every run built from it would break the four runs whose step slices
+// never reach close_pipes.
+const teardownParkedStderrScriptTemplate = `dir='__DIR__'
+exec 3<&0
+exec 4>&1
+setsid sh -c 'echo $$ >"'"$dir"'/reader.pid"; dd bs=65536 count=1 of=/dev/null 2>/dev/null; touch "'"$dir"'/reader.done"; sleep 600' <&3 3<&- 4>&- >/dev/null 2>/dev/null &
+setsid sh -c 'echo $$ >"'"$dir"'/writer.pid"; sleep 600' >&4 4>&- 3<&- <&- 2>/dev/null &
+setsid sh -c 'echo $$ >"'"$dir"'/stderr_holder.pid"; sleep 600' <&3 3<&- 4>&- >/dev/null &
+exec 3<&-
+exec 4>&-
+exec <&-
+huge=$(head -c __SIZE__ /dev/zero | tr '\0' 'x')
+printf '{"jsonrpc":"2.0","id":1,"method":"session/request_permission","params":{"sessionId":"sess-test","options":[{"kind":"reject_once","name":"reject","optionId":"%s"}],"toolCall":{"toolCallId":"tc-1","title":"work"}}}\n' "$huge"
+printf '{"jsonrpc":"2.0","id":2,"method":"fs/read_text_file","params":{}}\n'
+exec >&-
+sleep 600
+`
+
+// newParkedTeardownSessionWithStderrHolder behaves like
+// newParkedTeardownSession, except its fake agent also detaches a third
+// helper that holds the standard-error write end open, so
+// drain_stderr_and_reap can only abandon the collector and close_pipes
+// is the only remaining step able to release it. Used only by property
+// P13's own tests.
+func newParkedTeardownSessionWithStderrHolder(t *testing.T) *parkedTeardownFixture {
 	t.Helper()
+	agenttest.RequireSetsid(t)
 
-	inRead, inWrite, err := os.Pipe()
+	dir := t.TempDir()
+	script := strings.NewReplacer(
+		"__DIR__", dir,
+		"__SIZE__", strconv.Itoa(teardownParkedOptionSize),
+	).Replace(teardownParkedStderrScriptTemplate)
+	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", script)
+
+	cmd := exec.Command(scriptPath) //nolint:gosec // fixed path under t.TempDir()
+	procutil.SetProcessGroup(cmd)
+
+	stdinCloser, err := cmd.StdinPipe()
 	if err != nil {
-		t.Fatalf("os.Pipe (stdin): %v", err)
+		t.Fatalf("StdinPipe: %v", err)
 	}
-	outRead, outWrite, err := os.Pipe()
+
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
 	if err != nil {
-		t.Fatalf("os.Pipe (stdout): %v", err)
+		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
 
-	cmd.Stdin = inRead
-	cmd.Stdout = outWrite
+	state := &sessionState{
+		pid:         cmd.Process.Pid,
+		stdinCloser: stdinCloser,
+		pipes:       pipes,
+		itemCh:      make(chan pumpItem, pumpChannelCapacity),
+		stopCh:      make(chan struct{}),
+		pumpDone:    make(chan struct{}),
+		logger:      discardLogger(),
+		agentConfig: domain.AgentConfig{ReadTimeoutMS: 60000},
+		caps:        newCapabilityRecord(false),
+	}
+	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 
-	t.Cleanup(func() {
-		_ = inWrite.Close()
-		_ = outRead.Close()
+	reaper := procutil.StartReaper(cmd)
+	state.waitCh = reaper.Done()
+
+	state.conn = jsonrpc.NewConn(stdinCloser, pipes.Stdout, pumpHandler(state.itemCh, state.stopCh),
+		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
+
+	go runPump(state)
+	markSessionKnown(state)
+
+	waitForFile(t, filepath.Join(dir, "reader.done"))
+
+	release := sync.OnceFunc(func() {
+		killHelperGroup(filepath.Join(dir, "reader.pid"))
+		killHelperGroup(filepath.Join(dir, "writer.pid"))
+		killHelperGroup(filepath.Join(dir, "stderr_holder.pid"))
 	})
+	t.Cleanup(release)
 
-	return inWrite, outRead, func() {
-		_ = inRead.Close()
-		_ = outWrite.Close()
-	}
+	return &parkedTeardownFixture{state: state, release: release}
 }
 
-// requireSetsid skips t cleanly when the setsid binary is not on
-// PATH: the scenario needs it to detach the reader and writer helper
-// processes into their own session, escaping the process group teardown
-// terminates, which is what lets a descendant go on holding a pipe end
-// open past that termination. setsid ships with util-linux and is not
-// present on macOS, so this keeps the suite from failing there for a
-// reason unrelated to what it tests.
-func requireSetsid(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("setsid"); err != nil {
-		t.Skipf("skipping: setsid not found on PATH: %v", err)
-	}
-}
-
-// waitForFile polls for path to exist, failing t if timeout elapses
+// waitForFile polls for path to exist, failing t if awaitTimeout elapses
 // first. This is a bounded wait for a concrete condition the fake
 // agent script itself establishes, not a sleep standing in for the
 // park it evidences.
-func waitForFile(t *testing.T, path string, timeout time.Duration) {
+func waitForFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(awaitTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -287,9 +266,21 @@ func killHelperGroup(pidFile string) {
 }
 
 // assertSessionGoroutinesExited fails t unless the session's pump,
-// its connection's reader, and its subprocess reaper have all
-// exited: the leak check that fails when a session's goroutines
-// outlive StopSession.
+// its connection's reader, its subprocess reaper, and its standard-
+// error collector have all exited: the leak check that fails when a
+// session's goroutines outlive StopSession.
+//
+// The collector's check is a bounded wait, procutil.DefaultDrainGrace,
+// rather than the non-blocking receive the other three use. Each of
+// those three reads a channel teardown itself joins (stop_pump joins
+// the pump, drain_stderr_and_reap waits on the reaper's channel, and
+// the connection's reader is behind both), but the collector is the one
+// session goroutine teardown never joins: drain_stderr_and_reap
+// abandons it and close_pipes only unparks its read without waiting, so
+// it is scheduled after stopSession has already returned. A non-
+// blocking check there would report a leak that is not one on every
+// fixture that leaves a descendant holding the standard-error write
+// end, which is exactly property P13's own fixture.
 func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 	t.Helper()
 
@@ -308,6 +299,9 @@ func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 	default:
 		t.Error("session leak: the subprocess reaper goroutine is still running after teardown returned")
 	}
+	if state.stderrCollector != nil && !state.stderrCollector.WaitDone(procutil.DefaultDrainGrace) {
+		t.Error("session leak: the standard-error collector goroutine is still running after teardown returned")
+	}
 }
 
 // TestStopSessionTeardownOrder pins teardown's step order by its
@@ -320,7 +314,7 @@ func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 func TestStopSessionTeardownOrder(t *testing.T) {
 	t.Parallel()
 
-	fx := newParkedTeardownSession(t, pipeWiringAutoClosing)
+	fx := newParkedTeardownSession(t)
 
 	start := time.Now()
 	err := stopSession(context.Background(), fakeSession(fx.state))
@@ -334,6 +328,164 @@ func TestStopSessionTeardownOrder(t *testing.T) {
 	}
 
 	assertSessionGoroutinesExited(t, fx.state)
+}
+
+// TestStopSessionTeardownOrder_ClosePipesReleasesStderrCollector covers
+// property P13: with the escaped stderr holder alongside the reader and
+// writer, drain_stderr_and_reap can only abandon the standard-error
+// collector, so assertSessionGoroutinesExited's bounded fourth check
+// passes only because close_pipes, the order's last step, unparks that
+// collector's read. teardown's ceiling is the same one
+// TestStopSessionTeardownOrder pins; this run exercises the same order
+// against a fixture that also parks the standard-error drain.
+func TestStopSessionTeardownOrder_ClosePipesReleasesStderrCollector(t *testing.T) {
+	t.Parallel()
+
+	fx := newParkedTeardownSessionWithStderrHolder(t)
+
+	start := time.Now()
+	err := stopSession(context.Background(), fakeSession(fx.state))
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("stopSession() error = %v", err)
+	}
+	if bound := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace + teardownReturnOverhead; elapsed >= bound {
+		t.Errorf("stopSession() took %v, want under %v", elapsed, bound)
+	}
+
+	assertSessionGoroutinesExited(t, fx.state)
+}
+
+// TestStopSessionTeardownOrder_ClosePipesPresenceControl is property
+// P14's presence control for close_pipes: with the escaped stderr
+// holder fixture, defaultTeardownOrder's steps minus close_pipes still
+// return (drain_stderr_and_reap abandons the collector rather than
+// waiting on it forever), but the collector itself is left parked,
+// proven by a non-blocking WaitDone(0) reporting false. Calling
+// closePipes directly afterward is what releases it. The non-blocking
+// probe is correct on the first half, where the collector's read cannot
+// return at all, and would be wrong on the second, where the collector
+// is only waiting to be scheduled; the second half therefore uses the
+// same bounded WaitDone(procutil.DefaultDrainGrace) every other drain
+// bound in this file is already expressed in.
+func TestStopSessionTeardownOrder_ClosePipesPresenceControl(t *testing.T) {
+	t.Parallel()
+
+	fx := newParkedTeardownSessionWithStderrHolder(t)
+
+	order := defaultTeardownOrder(context.Background(), context.Background(), procutil.DefaultStopGrace)
+	steps := order[:len(order)-1]
+	if steps[len(steps)-1].name == "close_pipes" {
+		t.Fatal("defaultTeardownOrder's last step is not close_pipes; this control no longer drops the right step")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		runTeardown(fx.state, steps)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(procutil.DefaultStopGrace + 2*procutil.DefaultDrainGrace + teardownReturnOverhead):
+		t.Fatal("runTeardown() (minus close_pipes) did not return")
+	}
+
+	if fx.state.stderrCollector.WaitDone(0) {
+		t.Fatal("stderrCollector.WaitDone(0) = true before close_pipes ran, want false: the escaped stderr holder must still be parking the read")
+	}
+
+	closePipes(fx.state)
+
+	if !fx.state.stderrCollector.WaitDone(procutil.DefaultDrainGrace) {
+		t.Error("stderrCollector.WaitDone() = false after close_pipes ran, want true")
+	}
+
+	fx.release()
+}
+
+// TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr is the
+// clientprotocol half of property P9: moving close_pipes ahead of
+// drain_stderr_and_reap, reproduced locally by calling the two step
+// functions directly in the wrong order rather than through
+// defaultTeardownOrder, loses a line written to standard error just
+// before the write end closes. This wiring needs no real subprocess:
+// closePipes and drainStderrAndReap operate on state.pipes and
+// state.stderrCollector alone, so the ordering claim is verified
+// against a plain os.Pipe, matching procutil's own P9 negative control
+// for the shared skeleton and opencode.
+func TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr(t *testing.T) {
+	t.Parallel()
+
+	t.Run("close_pipes before the drain loses the late write", func(t *testing.T) {
+		t.Parallel()
+
+		stdoutR, stdoutW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe() = %v", err)
+		}
+		t.Cleanup(func() { stdoutW.Close() }) //nolint:errcheck // best-effort
+		stderrR, stderrW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe() = %v", err)
+		}
+
+		state := &sessionState{
+			pipes:  &procutil.OwnedPipes{Stdout: stdoutR, Stderr: stderrR},
+			logger: discardLogger(),
+		}
+
+		if _, err := stderrW.WriteString("late diagnostic\n"); err != nil {
+			t.Fatalf("WriteString() = %v", err)
+		}
+		stderrW.Close() //nolint:errcheck // best-effort
+
+		// Reproduces the defect this property guards against: closing
+		// both read ends before the collector ever gets a chance to
+		// drain the buffered line, rather than after
+		// drain_stderr_and_reap has run.
+		closePipes(state)
+		state.stderrCollector = procutil.NewStderrCollector(state.pipes.Stderr, state.logger)
+
+		lines := state.stderrCollector.Lines()
+		if len(lines) == 1 && lines[0] == "late diagnostic" {
+			t.Fatalf("Lines() = %v, want the write lost to the premature close (the negative control did not reproduce the loss)", lines)
+		}
+	})
+
+	t.Run("drain_stderr_and_reap before close_pipes recovers the late write", func(t *testing.T) {
+		t.Parallel()
+
+		stdoutR, stdoutW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe() = %v", err)
+		}
+		t.Cleanup(func() { stdoutW.Close() }) //nolint:errcheck // best-effort
+		stderrR, stderrW, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe() = %v", err)
+		}
+
+		state := &sessionState{
+			pipes:  &procutil.OwnedPipes{Stdout: stdoutR, Stderr: stderrR},
+			logger: discardLogger(),
+		}
+		state.stderrCollector = procutil.NewStderrCollector(stderrR, state.logger)
+
+		if _, err := stderrW.WriteString("late diagnostic\n"); err != nil {
+			t.Fatalf("WriteString() = %v", err)
+		}
+		stderrW.Close() //nolint:errcheck // best-effort
+
+		drainStderrAndReap(context.Background())(state)
+		closePipes(state)
+
+		want := []string{"late diagnostic"}
+		if got := state.stderrCollector.Lines(); len(got) != 1 || got[0] != want[0] {
+			t.Errorf("Lines() = %v, want %v", got, want)
+		}
+	})
 }
 
 // runTeardownControl runs steps (a deliberately wrong variant of
@@ -377,7 +529,7 @@ func runTeardownControl(t *testing.T, fx *parkedTeardownFixture, steps []teardow
 func TestStopSessionTeardownReturnsWithConnectionClosedFirst(t *testing.T) {
 	t.Parallel()
 
-	fx := newParkedTeardownSession(t, pipeWiringAutoClosing)
+	fx := newParkedTeardownSession(t)
 	steps := []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
 		{name: "close_connection", run: closeConnection},
@@ -411,7 +563,7 @@ func TestStopSessionTeardownReturnsWithConnectionClosedFirst(t *testing.T) {
 func TestStopSessionTeardownControlNoStdoutClose(t *testing.T) {
 	t.Parallel()
 
-	fx := newParkedTeardownSession(t, pipeWiringManual)
+	fx := newParkedTeardownSession(t)
 	runTeardownControl(t, fx, []teardownStep{
 		{name: "answer_open", run: signalAnswerOpen},
 		{name: "kill_process_group", run: killProcessGroup},
@@ -468,16 +620,11 @@ func teardownExitsOnItsOwnScript() string {
 
 // newGracefulTeardownSession launches script as a real subprocess and
 // wires a session to it exactly as newParkedTeardownSession does,
-// skipping the handshake calls this scenario has no use for, except
-// that its reaper goroutine gates on state.conn.Done() before
-// cmd.Wait(), exactly as startSession's own reaper does.
-// newParkedTeardownSession's own reaper does not: it calls cmd.Wait()
-// first, so state.waitCh would close on process exit alone and satisfy
-// await_exit for a reason production cannot produce. logger is used
-// as the session's logger; a nil logger falls back to discardLogger.
-// A non-empty readyPath is awaited before this returns, so a caller
-// that signals the process right away does not race the script's own
-// startup.
+// skipping the handshake calls this scenario has no use for. logger is
+// used as the session's logger; a nil logger falls back to
+// discardLogger. A non-empty readyPath is awaited before this returns,
+// so a caller that signals the process right away does not race the
+// script's own startup.
 func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *slog.Logger) *sessionState {
 	t.Helper()
 
@@ -491,43 +638,31 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	if err != nil {
 		t.Fatalf("StdinPipe: %v", err)
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
+
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
 	if err != nil {
-		t.Fatalf("StdoutPipe: %v", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatalf("StderrPipe: %v", err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("StartWithOwnedPipes: %v", err)
 	}
 
 	if logger == nil {
 		logger = discardLogger()
 	}
 	state := &sessionState{
-		pid:          cmd.Process.Pid,
-		stdinCloser:  stdinPipe,
-		stdoutCloser: stdoutPipe,
-		waitCh:       make(chan struct{}),
-		itemCh:       make(chan pumpItem, pumpChannelCapacity),
-		stopCh:       make(chan struct{}),
-		pumpDone:     make(chan struct{}),
-		logger:       logger,
-		caps:         newCapabilityRecord(false),
+		pid:         cmd.Process.Pid,
+		stdinCloser: stdinPipe,
+		pipes:       pipes,
+		itemCh:      make(chan pumpItem, pumpChannelCapacity),
+		stopCh:      make(chan struct{}),
+		pumpDone:    make(chan struct{}),
+		logger:      logger,
+		caps:        newCapabilityRecord(false),
 	}
-	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, state.logger)
-	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, pumpHandler(state.itemCh, state.stopCh),
+	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
+	state.conn = jsonrpc.NewConn(stdinPipe, pipes.Stdout, pumpHandler(state.itemCh, state.stopCh),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
 
-	go func() {
-		<-state.conn.Done()
-		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap, mirroring startSession's own reaper
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-		close(state.waitCh)
-	}()
+	reaper := procutil.StartReaper(cmd)
+	state.waitCh = reaper.Done()
 
 	go runPump(state)
 
@@ -536,7 +671,7 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	})
 
 	if readyPath != "" {
-		waitForFile(t, readyPath, awaitTimeout)
+		waitForFile(t, readyPath)
 	}
 
 	return state
@@ -566,8 +701,8 @@ func waitForPIDFile(t *testing.T, path string, timeout time.Duration) int {
 // TestStopSessionTeardownGracefulHandler: against a fake agent that
 // installs a handler for the graceful signal and exits from it,
 // teardown produces the handler's durable evidence, and the property
-// fails if steps 2 (signal_graceful) and 5 (kill_process_group) are
-// exchanged, or if step 4 (await_exit) is removed.
+// fails if signal_graceful and kill_process_group are exchanged, or if
+// await_exit is removed.
 func TestStopSessionTeardownGracefulHandler(t *testing.T) {
 	t.Parallel()
 
@@ -798,7 +933,7 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 func TestStopSessionTeardownParkedWriteBoundsCloseSession(t *testing.T) {
 	t.Parallel()
 
-	fx := newParkedTeardownSession(t, pipeWiringAutoClosing)
+	fx := newParkedTeardownSession(t)
 	fx.state.closeSessionID = "sess-parked-close"
 	fx.state.agentConfig.StopGraceMS = 400
 	grace := procutil.StopGrace(fx.state.agentConfig.StopGraceMS)
