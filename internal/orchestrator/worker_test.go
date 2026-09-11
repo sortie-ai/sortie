@@ -2103,6 +2103,60 @@ func TestRunWorkerAttempt(t *testing.T) {
 	})
 }
 
+// TestRunWorkerAttempt_TurnEndPairZeroAddedDelta drives RunWorkerAttempt
+// against a fake turn_end-shaped agent adapter whose two turns each
+// emit a token_usage event immediately followed by a turn_completed
+// event carrying the same snapshot (S1 on turn one, S2 on turn two,
+// componentwise at least S1), and whose TurnResult also carries that
+// snapshot. It asserts the WorkerResult handed to OnExit carries Usage
+// equal to S2: foldLocalUsage's clamped-delta rule applies a zero
+// delta to every value after the first that repeats or falls below the
+// watermark, so folding both events and the TurnResult of each turn
+// never double-counts.
+func TestRunWorkerAttempt_TurnEndPairZeroAddedDelta(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2
+
+	const model = "claude-sonnet-5"
+	s1 := domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CacheReadTokens: 5}
+	s2 := domain.TokenUsage{InputTokens: 250, OutputTokens: 55, TotalTokens: 305, CacheReadTokens: 12}
+
+	var turnNumber atomic.Int64
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				usage := s1
+				if turnNumber.Add(1) == 2 {
+					usage = s2
+				}
+				if params.OnEvent != nil {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Model: model, Usage: usage})
+					params.OnEvent(domain.AgentEvent{Type: domain.EventTurnCompleted, Timestamp: time.Now().UTC(), Usage: usage})
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, Usage: usage, UsageMeasured: true}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.Usage != s2 {
+		t.Errorf("WorkerResult.Usage = %+v, want %+v (equal to S2)", result.Usage, s2)
+	}
+}
+
 // TestRunWorkerAttempt_ObservedIssueStatePropagated verifies that
 // WorkerResult.ObservedIssueState carries the state returned by the
 // per-turn refresh that ended the turn loop.

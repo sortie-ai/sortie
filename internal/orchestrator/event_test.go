@@ -1079,6 +1079,88 @@ func TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount(t *test
 	}
 }
 
+// TestHandleAgentEvent_TurnEndPairZeroAddedDelta drives HandleAgentEvent
+// over the shaped turn_end sequence
+// [token_usage{S1, M}, turn_completed{S1}] then
+// [token_usage{S2, M}, turn_completed{S2}], with S2 componentwise at
+// least S1, and asserts the final AgentInputTokens, AgentOutputTokens,
+// AgentTotalTokens, CacheReadTokens, State.AgentTotals, and the
+// per-component sum passed to metrics.AddTokens equal what a reduced
+// sequence carrying only [turn_completed{S1}, turn_completed{S2}]
+// produces, and equal S2 itself: the token_usage report's duplicate
+// snapshot adds a zero delta once the terminal event has already
+// settled it.
+func TestHandleAgentEvent_TurnEndPairZeroAddedDelta(t *testing.T) {
+	t.Parallel()
+
+	const model = "claude-sonnet-5"
+	s1 := domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CacheReadTokens: 5}
+	s2 := domain.TokenUsage{InputTokens: 250, OutputTokens: 55, TotalTokens: 305, CacheReadTokens: 12}
+	ts := time.Now().UTC()
+
+	fullState, fullEntry := newStateWithEntry("TE-FULL")
+	fullMetrics := &spyMetrics{}
+	for _, ev := range []domain.AgentEvent{
+		{Type: domain.EventTokenUsage, Timestamp: ts, Model: model, Usage: s1},
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s1},
+		{Type: domain.EventTokenUsage, Timestamp: ts, Model: model, Usage: s2},
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s2},
+	} {
+		HandleAgentEvent(fullState, "TE-FULL", ev, slog.Default(), fullMetrics)
+	}
+
+	reducedState, reducedEntry := newStateWithEntry("TE-REDUCED")
+	reducedMetrics := &spyMetrics{}
+	for _, ev := range []domain.AgentEvent{
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s1},
+		{Type: domain.EventTurnCompleted, Timestamp: ts, Usage: s2},
+	} {
+		HandleAgentEvent(reducedState, "TE-REDUCED", ev, slog.Default(), reducedMetrics)
+	}
+
+	if fullEntry.AgentInputTokens != s2.InputTokens || fullEntry.AgentInputTokens != reducedEntry.AgentInputTokens {
+		t.Errorf("AgentInputTokens: full = %d, reduced = %d, want both = %d", fullEntry.AgentInputTokens, reducedEntry.AgentInputTokens, s2.InputTokens)
+	}
+	if fullEntry.AgentOutputTokens != s2.OutputTokens || fullEntry.AgentOutputTokens != reducedEntry.AgentOutputTokens {
+		t.Errorf("AgentOutputTokens: full = %d, reduced = %d, want both = %d", fullEntry.AgentOutputTokens, reducedEntry.AgentOutputTokens, s2.OutputTokens)
+	}
+	if fullEntry.AgentTotalTokens != s2.TotalTokens || fullEntry.AgentTotalTokens != reducedEntry.AgentTotalTokens {
+		t.Errorf("AgentTotalTokens: full = %d, reduced = %d, want both = %d", fullEntry.AgentTotalTokens, reducedEntry.AgentTotalTokens, s2.TotalTokens)
+	}
+	if fullEntry.CacheReadTokens != s2.CacheReadTokens || fullEntry.CacheReadTokens != reducedEntry.CacheReadTokens {
+		t.Errorf("CacheReadTokens: full = %d, reduced = %d, want both = %d", fullEntry.CacheReadTokens, reducedEntry.CacheReadTokens, s2.CacheReadTokens)
+	}
+
+	wantTotals := AgentTotals{InputTokens: s2.InputTokens, OutputTokens: s2.OutputTokens, TotalTokens: s2.TotalTokens, CacheReadTokens: s2.CacheReadTokens}
+	if fullState.AgentTotals != wantTotals || reducedState.AgentTotals != wantTotals {
+		t.Errorf("AgentTotals: full = %+v, reduced = %+v, want both = %+v", fullState.AgentTotals, reducedState.AgentTotals, wantTotals)
+	}
+
+	sumTokens := func(spy *spyMetrics, tokenType string) int64 {
+		var sum int64
+		for _, call := range spy.tokens {
+			if call.tokenType == tokenType {
+				sum += call.count
+			}
+		}
+		return sum
+	}
+	for _, tt := range []struct {
+		tokenType string
+		want      int64
+	}{
+		{"input", s2.InputTokens},
+		{"output", s2.OutputTokens},
+		{"cache_read", s2.CacheReadTokens},
+	} {
+		fullSum := sumTokens(fullMetrics, tt.tokenType)
+		reducedSum := sumTokens(reducedMetrics, tt.tokenType)
+		if fullSum != tt.want || fullSum != reducedSum {
+			t.Errorf("metrics.AddTokens(%q) sum: full = %d, reduced = %d, want both = %d", tt.tokenType, fullSum, reducedSum, tt.want)
+		}
+	}
+}
+
 // TestApplyUsageDelta_RepeatedCumulative_AppliesZeroDelta verifies that
 // calling applyUsageDelta twice with the same cumulative value applies
 // a non-zero delta only on the first call.
