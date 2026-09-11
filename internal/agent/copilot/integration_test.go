@@ -236,22 +236,53 @@ func TestIntegration_RunTurn(t *testing.T) {
 	assertNoEventType(t, events, domain.EventTurnFailed)
 	assertNoEventType(t, events, domain.EventStartupFailed)
 
-	// Cumulative output tokens must be positive regardless of which usage
-	// path recovered them. TotalTokens must equal InputTokens plus
-	// OutputTokens on both paths: the output-only fallback (SSH mode, or a
-	// failed journal read) reports InputTokens 0, so the two forms agree
-	// there, and a successful session-state journal read reports the full
-	// breakdown, where TotalTokens must not silently drop the input half.
-	if result.Usage.OutputTokens <= 0 {
-		t.Errorf("TurnResult.Usage.OutputTokens = %d, want > 0", result.Usage.OutputTokens)
+	// Exactly one token_usage event, positioned after the last tool_result
+	// and before turn_completed, carrying the recovered figure: no stream
+	// event carries an input count, so InputTokens > 0 fails exactly when
+	// journal recovery stops working.
+	var usageIdx, completedIdx, lastToolResultIdx = -1, -1, -1
+	usageCount := 0
+	for i, e := range events {
+		switch e.Type {
+		case domain.EventTokenUsage:
+			usageIdx = i
+			usageCount++
+		case domain.EventTurnCompleted:
+			completedIdx = i
+		case domain.EventToolResult:
+			lastToolResultIdx = i
+		}
+	}
+	if usageCount != 1 {
+		t.Fatalf("token_usage event count = %d, want 1", usageCount)
+	}
+	if completedIdx < 0 {
+		t.Fatal("no turn_completed event delivered")
+	}
+	if usageIdx <= lastToolResultIdx {
+		t.Errorf("token_usage event at index %d, want after the last tool_result at index %d", usageIdx, lastToolResultIdx)
+	}
+	if usageIdx >= completedIdx {
+		t.Errorf("token_usage event at index %d, want before turn_completed at index %d", usageIdx, completedIdx)
+	}
+
+	usageEvent := events[usageIdx]
+	if usageEvent.Usage != result.Usage {
+		t.Errorf("token_usage event Usage = %+v, want %+v (TurnResult.Usage)", usageEvent.Usage, result.Usage)
+	}
+	if usageEvent.Usage.InputTokens <= 0 {
+		t.Errorf("token_usage event Usage.InputTokens = %d, want > 0", usageEvent.Usage.InputTokens)
+	}
+	if usageEvent.Model == "" {
+		t.Error("token_usage event Model is empty, want non-empty")
+	}
+	if !result.UsageMeasured {
+		t.Error("TurnResult.UsageMeasured = false, want true")
 	}
 	if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
 		t.Errorf("TurnResult.Usage.TotalTokens = %d, want InputTokens+OutputTokens (%d)",
 			result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
 	}
-
-	// At least one EventTokenUsage must have been delivered.
-	assertContainsEventType(t, events, domain.EventTokenUsage)
 
 	// Verify at least one EventToolResult with a non-empty ToolName.
 	// The prompt causes Copilot CLI to use the view or read tool, producing

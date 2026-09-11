@@ -102,17 +102,14 @@ func TestParseEvent(t *testing.T) {
 			},
 		},
 		{
-			name:     "assistant.message with outputTokens and content",
-			line:     `{"type":"assistant.message","id":"e1","timestamp":"2026-01-01T00:00:00Z","data":{"messageId":"m1","content":"hello","toolRequests":[],"outputTokens":42}}`,
+			name:     "assistant.message with content",
+			line:     `{"type":"assistant.message","id":"e1","timestamp":"2026-01-01T00:00:00Z","data":{"messageId":"m1","content":"hello","toolRequests":[]}}`,
 			wantType: "assistant.message",
 			check: func(t *testing.T, ev rawEvent) {
 				t.Helper()
 				data, err := parseAssistantMessageData(ev.Data)
 				if err != nil {
 					t.Fatalf("parseAssistantMessageData: %v", err)
-				}
-				if data.OutputTokens == nil || *data.OutputTokens != 42 {
-					t.Errorf("OutputTokens = %v, want 42", data.OutputTokens)
 				}
 				if data.Content != "hello" {
 					t.Errorf("Content = %q, want %q", data.Content, "hello")
@@ -389,13 +386,14 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 		}
 	}
 
-	// Verify the assistant.message event carries accumulated output tokens.
+	// Verify the assistant.message event carries its content.
 	msgData, err := parseAssistantMessageData(events[5].Data)
 	if err != nil {
 		t.Fatalf("parseAssistantMessageData(events[5]): %v", err)
 	}
-	if msgData.OutputTokens == nil || *msgData.OutputTokens != 6 {
-		t.Errorf("assistant.message.outputTokens = %v, want 6", msgData.OutputTokens)
+	const wantContent = "\n\nhello world"
+	if msgData.Content != wantContent {
+		t.Errorf("assistant.message.content = %q, want %q", msgData.Content, wantContent)
 	}
 
 	// Verify the result event carries the session ID and exit code.
@@ -420,78 +418,6 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 		t.Errorf("result.Usage.TotalAPIDurMS = %d, want 6866", result.Usage.TotalAPIDurMS)
 	}
 }
-
-func TestParseFixture_ModelMessageSession(t *testing.T) {
-	t.Parallel()
-
-	lines := scanFixtureLines(t, "model_message_session.jsonl")
-	if len(lines) != 14 {
-		t.Fatalf("model_message_session.jsonl: got %d lines, want 14", len(lines))
-	}
-
-	wantTypes := []string{
-		"model.message",
-		"assistant.message",
-		"model.message",
-		"model.message",
-		"assistant.message",
-		"model.message",
-		"assistant.message",
-		"model.message",
-		"assistant.message",
-		"model.message",
-		"assistant.message",
-		"session.task_complete",
-		"model.messages_snapshot",
-		"result",
-	}
-
-	events := make([]rawEvent, len(lines))
-	for i, line := range lines {
-		ev, err := parseEvent(line)
-		if err != nil {
-			t.Fatalf("parseEvent(line %d): %v", i+1, err)
-		}
-		events[i] = ev
-	}
-
-	for i, want := range wantTypes {
-		if events[i].Type != want {
-			t.Errorf("event[%d].Type = %q, want %q", i, events[i].Type, want)
-		}
-	}
-
-	// The assistant-role model.message records carry the five
-	// output-token values in observed order; the tool-role record
-	// carries none.
-	wantOutputTokens := []int64{119, 107, 84, 68, 70}
-	var gotOutputTokens []int64
-	for i, ev := range events {
-		if ev.Type != "model.message" {
-			continue
-		}
-		payload, err := parseModelMessageData(ev.Data)
-		if err != nil {
-			t.Fatalf("parseModelMessageData(event[%d]): %v", i, err)
-		}
-		if payload.Message.Role != "assistant" {
-			continue
-		}
-		if payload.Message.OutputTokens == nil {
-			t.Fatalf("event[%d] model.message.outputTokens is nil, want a value", i)
-		}
-		gotOutputTokens = append(gotOutputTokens, *payload.Message.OutputTokens)
-	}
-	if len(gotOutputTokens) != len(wantOutputTokens) {
-		t.Fatalf("assistant-role model.message count = %d, want %d", len(gotOutputTokens), len(wantOutputTokens))
-	}
-	for i, want := range wantOutputTokens {
-		if gotOutputTokens[i] != want {
-			t.Errorf("outputTokens[%d] = %d, want %d", i, gotOutputTokens[i], want)
-		}
-	}
-}
-
 func TestParseFixture_ToolUseSession(t *testing.T) {
 	t.Parallel()
 
