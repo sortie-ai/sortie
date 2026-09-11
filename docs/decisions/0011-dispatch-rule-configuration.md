@@ -540,25 +540,25 @@ is a sequence.
 
 The decision is validated when all of the following are true after implementation:
 
-1. **Backward compatibility.** Every existing example workflow under `examples/` and
-   every fixture under `internal/workflow/testdata/` continues to pass without
-   modification, with empty `ServiceConfig.Dispatch` and identical observable
-   behavior.
-2. **Rule resolution.** Table-driven tests in `internal/orchestrator/route_test.go`
-   exercise: AND across keys, OR within a key, glob matches and non-matches, numeric
-   predicates, nil-priority handling, case-insensitivity for `issue_type` and
-   `assignee`, catch-all rule, fallback to `dispatch.default`, fallback to
-   top-level `agent.kind` and body template, and frozen selection across retry and
+1. **Backward compatibility.** A workflow whose front matter carries no `dispatch`
+   section parses to an empty `ServiceConfig.Dispatch`, and every issue dispatches
+   through the top-level `agent.kind` and the Markdown body template, with observable
+   behavior identical to that of a workflow written before rules existed.
+2. **Rule resolution.** Matching is AND across keys and OR within a key. Globs match
+   and fail to match as written, numeric priority predicates and a nil priority
+   resolve as specified, and `issue_type` and `assignee` compare case-insensitively.
+   A catch-all rule wins where no earlier rule matched; with no rule matching, the
+   selection falls back to `dispatch.default`, then to the top-level `agent.kind` and
+   body template. A selection resolved at dispatch is frozen across retry and
    reaction continuation.
-3. **Schema validation.** Unit tests in `internal/config/schema_test.go` cover the
-  warning cases (unknown sub-keys under `dispatch`, `dispatch.rules[*]`, and
-  `dispatch.default`) and the error cases (malformed list, missing fields, duplicate
-  rule names, unreachable rules, unknown match keys, unknown agent kinds, missing or
-  unreadable template files, malformed globs, malformed priority predicates).
-4. **Two-rules acceptance test.** A new integration test in
-   `internal/orchestrator/dispatch_test.go` exercises the canonical two-rule case:
-   an issue with label `bug` dispatches to a different agent and/or template than
-   one with label `docs`, and an issue with no matching label uses the default.
+3. **Schema validation.** The schema check warns on unknown sub-keys under
+   `dispatch`, `dispatch.rules[*]`, and `dispatch.default`. It errors on a malformed
+   list, missing fields, duplicate rule names, unreachable rules, unknown match keys,
+   unknown agent kinds, missing or unreadable template files, malformed globs, and
+   malformed priority predicates.
+4. **Two-rule acceptance.** In the canonical two-rule workflow, an issue labeled
+   `bug` dispatches to a different agent and/or template than one labeled `docs`, and
+   an issue carrying neither label uses the default.
 5. **Diagnostics.** Operator-facing error messages for each failure mode are reviewed
    for clarity. The CLI `sortie validate` subcommand (proposed under ADR-0004's
    negative-consequence mitigation) exercises the same code path as preflight.
