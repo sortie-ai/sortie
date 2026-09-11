@@ -299,7 +299,7 @@ jobs:
         run: go test -race -count=1 -v -timeout 120s -run 'TestGitHubIntegration' ./internal/orchestrator/...
 
   test-integration-claude:
-    name: "Integration: Claude Code"
+    name: "Integration: Claude"
     needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
@@ -332,14 +332,14 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install Claude Code CLI
+      - name: Install Claude
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/claude/...
 
   test-integration-copilot:
-    name: "Integration: GitHub Copilot CLI"
+    name: "Integration: Copilot"
     needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
@@ -372,14 +372,14 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install GitHub Copilot CLI
+      - name: Install Copilot
         run: npm install -g @github/copilot
 
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/copilot/...
 
   test-integration-codex:
-    name: "Integration: OpenAI Codex"
+    name: "Integration: Codex"
     needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
@@ -412,7 +412,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install OpenAI Codex CLI
+      - name: Install Codex
         run: npm install -g @openai/codex
 
       - name: Run integration tests
