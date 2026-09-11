@@ -46,74 +46,28 @@ server:
 
 {{/* Sortie sample workflow, GitHub Issues + Kiro CLI (Agent Client Protocol).
 
-     Sortie reaches this runtime two ways. The native kiro kind is the
-     other one; this route is the one that delivers Sortie's own tools
-     and session continuation, and the native route delivers neither.
-     Pick per deployment, not by retiring either kind. See
-     docs/agent-client-protocol-adapter-notes.md for the transport and
-     docs/kiro-adapter-notes.md for what this runtime does and does not
-     deliver on each route.
-
-     The acp subcommand does not appear in kiro-cli --help. It is
-     listed under --help-all.
-
-     Prerequisites, run before pointing Sortie at a copy of this file:
-       1. Install kiro-cli and confirm it resolves on PATH.
-       2. Sign in once, on the machine that will run Sortie, so a
-          device login is stored. Read the credential warning below
-          before deciding to use an API key instead.
-       3. Confirm the credential the run will actually use:
-            kiro-cli whoami
-          It reports the account. A machine with no credential at all
-          does not fail here, it blocks on an interactive device
-          login, so check this before an unattended run rather than
-          after one hangs.
-
-     Credential warning, and it decides whether this route is worth
-     taking at all. Authenticating with KIRO_API_KEY starts sessions,
-     runs turns and continues sessions correctly, and silently carries
-     none of Sortie's tools: the runtime asks its backend for a
-     governance profile before enabling tool servers, that request
-     fails for an API key, and the runtime then disables them for the
-     session with no error anywhere Sortie can see. A stored device
-     login does not hit that check. Since Sortie's tools reaching the
-     agent is the reason to prefer this route over the native kiro
-     kind, use a stored login here. See docs/kiro-adapter-notes.md for
-     the runtime log line that confirms which of the two you got.
-
      Required env vars:
        GITHUB_TOKEN          Fine-grained PAT with Issues read/write
                              permission for the tracker adapter.
        SORTIE_GITHUB_PROJECT Repository in owner/repo format.
        SORTIE_REPO_URL       Git clone URL for the repository.
-     Optional env vars:
+
+     Optional:
        SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
                              (defaults to system temp).
 
-     max_turns: 15 is this project's sample default (see WORKFLOW.md,
-     WORKFLOW.codex.md, WORKFLOW.opencode.md), not a property of this
-     route.
+     Kiro-specific constraints on this route:
+       1. Install kiro-cli and confirm it resolves on PATH.
+       2. acp is listed under kiro-cli --help-all, not --help.
+       3. Use a stored device login; KIRO_API_KEY delivers no Sortie tools.
+       4. Confirm which credential a run uses: kiro-cli whoami.
+       5. -a is required for a working unattended run, not optional hardening.
+       6. Run this agent inside a hardened sandbox.
+       7. max_turns: 15 above is a sample default, not a route property.
 
-     -a is required for a working unattended run, not optional
-     hardening. This runtime carries one switch where other runtimes
-     carry two: -a both trusts the declared tool servers and puts the
-     runtime in a mode that does not ask, so dropping it makes every
-     tool call, Sortie's and the runtime's own, wait for an approval an
-     unattended run cannot give. It auto-approves the runtime's own
-     shell tool as well. Run this agent inside a hardened sandbox.
-
-     To narrow that posture, --trust-tools=<names> replaces -a with an
-     explicit set, and a tool a declared server offers is named
-     @<server>/<tool> there. Sortie does not manage that list; a set
-     that omits a tool the prompt will attempt puts the run back into
-     an approval wait it cannot answer.
-
-     No --model is pinned above: this kind has no model configuration
-     key. Qualification was measured against one pinned model; an
-     unpinned run resolves whatever the credential defaults to. To pin
-     one, add --model <id> to agent.command above, and see
-     docs/kiro-adapter-notes.md for how to list the models your
-     credential reaches. */}}
+     Full reference for this route, including the credential constraint,
+     the narrower --trust-tools alternative, and model pinning:
+     https://docs.sortie-ai.com/reference/agent-client-protocol-kiro/ */}}
 
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
