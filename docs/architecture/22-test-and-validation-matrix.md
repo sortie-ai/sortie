@@ -476,6 +476,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   carries a test calling the shared usage-reporting conformance assertion against its own real
   event stream, proving the declared disposition matches what the adapter's own emission code
   produces
+- Each kind declaring `turn_end` reports through the shared turn-end report, and a syntactic
+  contract test fails a `turn_end` package that emits `token_usage` itself, finalizes a turn
+  outside the shared report, or does not construct it exactly once, directly in its session-start
+  method
 - The token-accounting regression test's captured-output requirement admits two fixture
   exceptions, kept apart rather than merged into one permission: a protocol-shape fixture for a
   surface no probe can reach, derived from the schema the runtime's own binary generates, naming
