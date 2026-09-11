@@ -273,10 +273,11 @@ func TestAssertUsageReporting_Passing(t *testing.T) {
 		t.Parallel()
 		cases := []UsageReportingCase{
 			{
-				Name: "one figure settled after the last tool result",
+				Name: "one figure settled after the last tool result, followed by the terminal event",
 				Events: []domain.AgentEvent{
 					{Type: domain.EventToolResult},
 					{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}},
+					{Type: domain.EventTurnCompleted},
 				},
 				Result: domain.TurnResult{UsageMeasured: true, Usage: domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}},
 			},
@@ -498,6 +499,46 @@ func TestAssertResolvedUsageReporting_AttributionArms(t *testing.T) {
 
 		if len(reporter.errors) == 0 {
 			t.Error("assertResolvedUsageReporting(none attribution, turn_end arrival) recorded no failures, want at least one")
+		}
+	})
+}
+
+// TestAssertResolvedUsageReporting_TurnEndTerminalOrdering proves P14:
+// a turn_end case whose usage event has no later turn-terminal event
+// fails, and the same case with turn_completed appended passes.
+func TestAssertResolvedUsageReporting_TurnEndTerminalOrdering(t *testing.T) {
+	t.Parallel()
+
+	usageStream := func() []domain.AgentEvent {
+		return []domain.AgentEvent{
+			{Type: domain.EventToolResult},
+			{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{InputTokens: 5, OutputTokens: 1, TotalTokens: 6}},
+		}
+	}
+	result := domain.TurnResult{UsageMeasured: true, Usage: domain.TokenUsage{InputTokens: 5, OutputTokens: 1, TotalTokens: 6}}
+
+	t.Run("no trailing terminal event fails", func(t *testing.T) {
+		t.Parallel()
+
+		reporter := &fakeReporter{}
+		tc := UsageReportingCase{Name: "no terminal event", Events: usageStream(), Result: result}
+		assertResolvedUsageReporting(reporter, tc, registry.UsageArrivalTurnEnd, registry.UsageAttributionSessionTotal)
+
+		if len(reporter.errors) == 0 {
+			t.Error("assertResolvedUsageReporting(turn_end) recorded no failures for a usage event with no trailing terminal event, want at least one")
+		}
+	})
+
+	t.Run("turn_completed appended passes", func(t *testing.T) {
+		t.Parallel()
+
+		reporter := &fakeReporter{}
+		events := append(usageStream(), domain.AgentEvent{Type: domain.EventTurnCompleted})
+		tc := UsageReportingCase{Name: "terminal event appended", Events: events, Result: result}
+		assertResolvedUsageReporting(reporter, tc, registry.UsageArrivalTurnEnd, registry.UsageAttributionSessionTotal)
+
+		if len(reporter.errors) != 0 {
+			t.Errorf("assertResolvedUsageReporting(turn_end) recorded failures %v for a usage event followed by turn_completed, want none", reporter.errors)
 		}
 	})
 }
