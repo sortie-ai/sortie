@@ -262,11 +262,7 @@ func TestWebhook_Send_TransportFailureReturnsClassifiedError(t *testing.T) {
 func TestWebhook_Send_ContextCancellationReturnsError(t *testing.T) {
 	t.Parallel()
 
-	// A server that closes the connection immediately after accepting, so
-	// the client's Do() returns a transport error fast without waiting for
-	// the handler to complete.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Hijack and close so the client sees a connection reset quickly.
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
@@ -276,7 +272,6 @@ func TestWebhook_Send_ContextCancellationReturnsError(t *testing.T) {
 		t.Fatalf("newNotifier: %v", err)
 	}
 
-	// Cancel the context before sending.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

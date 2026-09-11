@@ -15,7 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Closeable adapter spy infrastructure ---
+// Closeable adapter spy infrastructure.
 //
 // "closeable-file" and "closeable-mock" are test-only adapter kinds that
 // wrap the real file tracker and mock agent adapters and additionally
@@ -181,7 +181,7 @@ func TestRunAdapterCloseOnShutdown(t *testing.T) {
 }
 
 // TestRunAdapterCloseNotCalledForNonClosers confirms that adapters which
-// do not implement io.Closer are unaffected — run() must not panic or
+// do not implement io.Closer are unaffected; run() must not panic or
 // fail when the type assertion is false. This exercises the regular
 // "file" + "mock" kinds used throughout the rest of the test suite.
 func TestRunAdapterCloseNotCalledForNonClosers(t *testing.T) {

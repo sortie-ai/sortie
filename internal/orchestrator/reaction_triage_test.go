@@ -20,8 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test helpers ---
-
 // mustTriageWorkspace creates a workspace root containing a directory for
 // identifier and returns the root. RunReactionTriage never creates the
 // workspace itself, so every test that expects a run to start must call
@@ -325,8 +323,6 @@ func gateRequest(root, identifier, fingerprint string) ReactionTriageRequest {
 		Subject:       map[string]any{"head_sha": fingerprint},
 	}
 }
-
-// --- RunReactionTriage: disposition table ---
 
 func TestRunReactionTriage(t *testing.T) {
 	t.Parallel()
@@ -692,8 +688,6 @@ func TestRunReactionTriage_SubjectTextNeverInEnvironment(t *testing.T) {
 		t.Error("captured input file does not contain the subject text; the fixture is not exercising the marker")
 	}
 }
-
-// --- reactionTriageGate: decision table ---
 
 func TestReactionTriageGate(t *testing.T) {
 	t.Parallel()
@@ -1104,8 +1098,6 @@ func (lw lockedWriter) Write(p []byte) (int, error) {
 	defer lw.mu.Unlock()
 	return lw.w.Write(p)
 }
-
-// --- The supported-kind set and the gated kinds agree ---
 
 // probeCITriageGate drives one reconcileCIStatus pass on a failing CI
 // entry with triage configured and reports whether the gate started a

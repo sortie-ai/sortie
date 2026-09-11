@@ -49,8 +49,6 @@ func giteaReviewDecisionHandler(t *testing.T, reviewsFixture, prFixture []byte) 
 	}
 }
 
-// --- FetchPendingReviews ---
-
 func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 	t.Parallel()
 
@@ -292,8 +290,6 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 	})
 }
 
-// --- FetchBotReviewComments ---
-
 func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 	t.Parallel()
 
@@ -414,8 +410,6 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 		}
 	})
 }
-
-// --- GetReviewDecision ---
 
 func TestGiteaSCMGetReviewDecision(t *testing.T) {
 	t.Parallel()

@@ -55,7 +55,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnDotContext,
 			wantNode:  ".issue.title",
 		},
-		// if does NOT redefine dot — no warning expected.
+		// if does NOT redefine dot; no warning expected.
 		{
 			name:      "DotContextIfNoWarn",
 			body:      `{{ if .issue.parent }}{{ .issue.title }}{{ end }}`,
@@ -73,7 +73,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			body:      `{{ range .issue.labels }}{{ . }}{{ end }}`,
 			wantCount: 0,
 		},
-		// $.issue.title uses root-qualified $, not dot — no warning.
+		// $.issue.title uses root-qualified $, not dot; no warning.
 		{
 			name:      "DollarEscapeNoWarn",
 			body:      `{{ range .issue.labels }}{{ $.issue.title }}{{ end }}`,
@@ -113,7 +113,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownVar,
 			wantNode:  "$.not_a_reaction",
 		},
-		// All three top-level keys are valid — no warning.
+		// All three top-level keys are valid; no warning.
 		{
 			name:      "KnownTopLevelNoWarn",
 			body:      `{{ .issue.title }}{{ .attempt }}{{ .run.turn_number }}`,
@@ -135,7 +135,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownField,
 			wantNode:  ".run.foo",
 		},
-		// attempt is a scalar — any sub-field is invalid.
+		// attempt is a scalar; any sub-field is invalid.
 		{
 			name:      "AttemptSubField",
 			body:      `{{ .attempt.something }}`,
@@ -157,7 +157,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownField,
 			wantNode:  ".issue.parent.nonexistent",
 		},
-		// .issue.title is a scalar — chaining further is invalid.
+		// .issue.title is a scalar; chaining further is invalid.
 		{
 			name:      "ScalarNestedAccess",
 			body:      `{{ .issue.title.something }}`,
@@ -165,7 +165,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownField,
 			wantNode:  ".issue.title.something",
 		},
-		// Slice fields are opaque scalars in the schema — sub-access is flagged.
+		// Slice fields are opaque scalars in the schema; sub-access is flagged.
 		{
 			name:      "SliceSubFieldBlocked",
 			body:      `{{ .issue.comments.author }}`,
@@ -186,7 +186,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			body:      `{{ range .issue.comments }}{{ $.issue.comments }}{{ end }}`,
 			wantCount: 0,
 		},
-		// $.run.nonexistent — dollar-prefixed unknown sub-field.
+		// $.run.nonexistent; dollar-prefixed unknown sub-field.
 		{
 			name:      "DollarUnknownSubField",
 			body:      `{{ $.run.nonexistent }}`,
@@ -223,14 +223,14 @@ func TestAnalyzeTemplate(t *testing.T) {
 			body:      `{{ .issue.labels | join "," }}{{ .issue.title | lower }}{{ .issue | toJSON }}`,
 			wantCount: 0,
 		},
-		// Clean template with if/else and known fields — no warnings.
+		// Clean template with if/else and known fields; no warnings.
 		{
 			name:      "CleanTemplate",
 			body:      `{{ if .attempt }}retry{{ else }}{{ .issue.title }}{{ end }}`,
 			wantCount: 0,
 		},
 		// Range body triggers both dot-context warnings (two
-		// separate FieldNode references — both are top-level keys inside range).
+		// separate FieldNode references; both are top-level keys inside range).
 		{
 			name:      "MultipleWarnings",
 			body:      `{{ range .issue.labels }}{{ .issue.nonexistent }}{{ .run.turn_number }}{{ end }}`,
@@ -243,7 +243,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			body:      "", // will be overridden in loop
 			wantCount: 0,
 		},
-		// Boundary: empty body — produces a valid template with empty tree.
+		// Boundary: empty body; produces a valid template with empty tree.
 		{
 			name:      "EmptyTemplate",
 			body:      "",

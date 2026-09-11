@@ -516,7 +516,7 @@ func TestRunHook_ProcessTreeKill(t *testing.T) {
 		t.Errorf("HookError.Op = %q, want %q", he.Op, "timeout")
 	}
 
-	// RunHook must return promptly after the timeout — allow generous
+	// RunHook must return promptly after the timeout; allow generous
 	// slack for WaitDelay (3 s) plus scheduling jitter.
 	elapsed := time.Since(start)
 	if elapsed > 5*time.Second {

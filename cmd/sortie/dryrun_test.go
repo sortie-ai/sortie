@@ -16,8 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- --dry-run flag tests ---
-
 // assertNoDatabaseFile verifies no .sortie.db exists in workflowDir after a
 // dry-run. Every dry-run test calls this to enforce the read-only invariant:
 // --dry-run must never open or create the SQLite database.
@@ -295,8 +293,6 @@ func TestRunDryRunSSHHostCapacity(t *testing.T) {
 	assertNoDatabaseFile(t, dir)
 }
 
-// --- GitHub validate tests ---
-
 // githubInvalidProjectWorkflow is a minimal GitHub workflow where
 // tracker.project is not in owner/repo format (no slash), used to
 // trigger the tracker.project.format preflight diagnostic.
@@ -319,10 +315,6 @@ func TestRunDryRunNoServer(t *testing.T) {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "dry-run")
 	}
 }
-
-// --- resolveLogFormat tests ---
-
-// --- runDryRun blocker-gate tests ---
 
 // dryRunFakeTracker is a configurable domain.TrackerAdapter double that
 // returns a fixed candidate list, so runDryRun tests can drive specific
@@ -518,7 +510,7 @@ func TestRunDryRun_CapacityFullMakesNoBlockerRead(t *testing.T) {
 
 // TestRunDryRun_ReadBudgetPerCycle pins that a single dry-run cycle
 // issues at most the per-pass blocker-read budget, holding the
-// remainder as blockers_not_read.
+// rest as blockers_not_read.
 func TestRunDryRun_ReadBudgetPerCycle(t *testing.T) {
 	t.Parallel()
 

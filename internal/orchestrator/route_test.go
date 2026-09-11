@@ -7,8 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- helpers ---
-
 func issueWithLabels(labels ...string) domain.Issue {
 	return domain.Issue{
 		ID:         "ISS-1",
@@ -18,8 +16,6 @@ func issueWithLabels(labels ...string) domain.Issue {
 		Labels:     labels,
 	}
 }
-
-// --- TestResolveRule ---
 
 func TestResolveRule(t *testing.T) {
 	t.Parallel()
@@ -38,7 +34,6 @@ func TestResolveRule(t *testing.T) {
 		wantRuleName string
 		wantLayer    ResolutionLayer
 	}{
-		// --- Fallback chain ---
 		{
 			name:         "no dispatch section falls back to workflow defaults",
 			issue:        issueWithLabels("bug"),
@@ -85,7 +80,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromDefault,
 		},
 
-		// --- Rule matching ---
 		{
 			name:  "rule match returns ResolvedFromRule",
 			issue: issueWithLabels("bug"),
@@ -147,7 +141,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- Catch-all ---
 		{
 			name:  "catch-all rule short-circuits remaining rules",
 			issue: issueWithLabels("anything"),
@@ -169,7 +162,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- AND/OR semantics ---
 		{
 			name: "AND across keys: label matches but issue_type does not",
 			issue: domain.Issue{
@@ -218,7 +210,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- Glob match ---
 		{
 			name:  "glob label match with wildcard",
 			issue: issueWithLabels("p0-critical"),
@@ -258,7 +249,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromFallback,
 		},
 
-		// --- Case-insensitive issue_type ---
 		{
 			name: "issue_type is case-insensitive",
 			issue: domain.Issue{
@@ -282,7 +272,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- Case-insensitive assignee ---
 		{
 			name: "assignee is case-insensitive",
 			issue: domain.Issue{
@@ -328,7 +317,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromFallback,
 		},
 
-		// --- Identifier glob ---
 		{
 			name: "identifier glob match",
 			issue: domain.Issue{
@@ -351,7 +339,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- Priority predicates ---
 		{
 			name: "priority eq match",
 			issue: domain.Issue{
@@ -507,7 +494,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromFallback,
 		},
 
-		// --- First-match-wins order ---
 		{
 			name:  "first matching rule wins",
 			issue: issueWithLabels("bug"),
@@ -534,7 +520,6 @@ func TestResolveRule(t *testing.T) {
 			wantLayer:    ResolvedFromRule,
 		},
 
-		// --- Partial override falls through to dispatch default ---
 		{
 			name:  "rule agent-only falls through to dispatch default template",
 			issue: issueWithLabels("bug"),
@@ -586,8 +571,6 @@ func TestResolveRule(t *testing.T) {
 	}
 }
 
-// --- TestNormalizeDispatchRuleName ---
-
 func TestNormalizeDispatchRuleName(t *testing.T) {
 	t.Parallel()
 
@@ -612,8 +595,6 @@ func TestNormalizeDispatchRuleName(t *testing.T) {
 		})
 	}
 }
-
-// --- TestResolutionLayer_String ---
 
 func TestResolutionLayer_String(t *testing.T) {
 	t.Parallel()

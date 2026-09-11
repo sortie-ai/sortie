@@ -7,7 +7,7 @@ import (
 )
 
 // etagCacheLen returns the current number of entries without going through
-// the public API. White-box helper — lives only in the test file.
+// the public API. White-box helper; lives only in the test file.
 func etagCacheLen(t *testing.T, c *etagCache) int {
 	t.Helper()
 	c.mu.RLock()
@@ -143,7 +143,7 @@ func TestETagCache_Touch_UpdatesAccessTime(t *testing.T) {
 	c.entries["/path/b"] = eb
 	c.mu.Unlock()
 
-	// Touch /path/a — its accessedAt is updated to time.Now() (much larger than 2).
+	// Touch /path/a; its accessedAt is updated to time.Now() (much larger than 2).
 	c.touch("/path/a")
 
 	// Adding /path/c triggers eviction; /path/b has the smallest accessedAt (2).

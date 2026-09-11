@@ -74,8 +74,6 @@ func failingLookupHandler(t *testing.T) http.HandlerFunc {
 	}
 }
 
-// --- FetchPendingReviews ---
-
 func TestFetchPendingReviews_ExcludesBotReviewer(t *testing.T) {
 	t.Parallel()
 
@@ -231,8 +229,6 @@ func TestFetchPendingReviews_ErrorStatuses(t *testing.T) {
 	})
 }
 
-// --- FetchBotReviewComments ---
-
 func TestFetchBotReviewComments_AllowlistArmSkipsLookup(t *testing.T) {
 	t.Parallel()
 
@@ -303,8 +299,6 @@ func TestFetchBotReviewComments_ErrorStatuses(t *testing.T) {
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
 }
-
-// --- resolveBotFlag cache ---
 
 func TestResolveBotFlag_CacheSharedAcrossCallSites(t *testing.T) {
 	t.Parallel()
@@ -424,8 +418,6 @@ func TestResolveBotFlag_CacheSharedAcrossCallSites(t *testing.T) {
 		}
 	})
 }
-
-// --- normalizeNotes ---
 
 // normalizeNotesHeadSHA matches the sha field of testdata/mr_basic.json,
 // the fixture these subtests serve for the conditional merge-request read.
@@ -577,8 +569,6 @@ func TestNormalizeNotes_MalformedTimestampTolerated(t *testing.T) {
 	got, err := adapter.normalizeNotes(context.Background(), testPRNumber, scmOwner, scmRepo, notes)
 	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
 }
-
-// --- GetReviewDecision ---
 
 func TestGetReviewDecision_ArmOrder(t *testing.T) {
 	t.Parallel()

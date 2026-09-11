@@ -21,8 +21,6 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 )
 
-// --- GitHub E2E test helpers ---
-
 // skipUnlessGitHubE2E skips the test unless SORTIE_GITHUB_E2E=1 and the
 // required credentials are present. Required environment variables:
 //
@@ -173,7 +171,7 @@ func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 	// Remove any state labels the orchestrator may have added.
 	for _, label := range []string{"done", "wontfix", "in-progress", "review"} {
 		labelPath := fmt.Sprintf("/repos/%s/%s/issues/%s/labels/%s", c.owner, c.repo, number, label)
-		// Ignore errors — label may not be present.
+		// Ignore errors, label may not be present.
 		req, err := http.NewRequestWithContext(context.Background(), "DELETE", c.baseURL+labelPath, nil)
 		if err != nil {
 			continue
@@ -195,8 +193,6 @@ func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 	t.Logf("cleanup: restored and closed issue #%s", number)
 }
 
-// --- Integration test ---
-
 // TestGitHubIntegration_FullDispatchCycle verifies the full orchestrator
 // dispatch cycle with the real GitHub adapter: poll → dispatch mock agent →
 // handoff transition (label swap, issue left open).
@@ -205,7 +201,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 
 	ctx := context.Background()
 
-	// --- Setup: GitHub API client for test issue management ---
 	ghClient := newGitHubAPIClient(t)
 
 	// Create a test issue with the "backlog" label.
@@ -229,7 +224,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		"query_filter": issueTitle + " in:title",
 	}
 
-	// --- Setup: real GitHub tracker adapter via registry ---
 	trackerFactory, err := registry.Trackers.Get("github")
 	if err != nil {
 		t.Fatalf("registry.Trackers.Get(%q): %v", "github", err)
@@ -239,7 +233,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		t.Fatalf("NewGitHubAdapter: %v", err)
 	}
 
-	// --- Setup: mock agent adapter via registry ---
 	agentFactory, err := registry.Agents.Get("mock")
 	if err != nil {
 		t.Fatalf("registry.Agents.Get(%q): %v", "mock", err)
@@ -251,7 +244,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		t.Fatalf("NewMockAdapter: %v", err)
 	}
 
-	// --- Setup: real SQLite store ---
 	dbPath := t.TempDir() + "/test.db"
 	store, err := persistence.Open(ctx, dbPath)
 	if err != nil {
@@ -266,7 +258,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		t.Fatalf("store.Migrate: %v", err)
 	}
 
-	// --- Setup: config and workflow manager ---
 	// Built through the loader rather than as a struct literal, so this test
 	// can only ever run a configuration an operator could also write.
 	workspaceRoot := t.TempDir()
@@ -294,7 +285,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	wm := &stubWorkflowManager{config: cfg, template: tmpl}
 	regs := passingPreflightRegistries()
 
-	// --- Setup: orchestrator state and construction ---
 	state := NewState(
 		cfg.Polling.IntervalMS,
 		cfg.Agent.MaxConcurrentAgents,
@@ -317,7 +307,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		},
 	})
 
-	// --- Execution: run orchestrator with a timeout ---
 	testCtx, testCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer testCancel()
 
@@ -330,7 +319,7 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 
 	// Poll the GitHub issue for the handoff transition to complete.
 	// HandleWorkerExit persists run history before calling TransitionIssue,
-	// so we cannot rely on run history alone — we must wait for the actual
+	// so we cannot rely on run history alone; we must wait for the actual
 	// label swap and state change on GitHub.
 	t.Logf("waiting for orchestrator to dispatch and complete issue #%s...", issueNumber)
 	var issue githubIssueResponse
@@ -392,7 +381,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		t.Error("issue still has 'backlog' label after handoff to 'review'")
 	}
 
-	// --- Verification: run history in SQLite ---
 	entries, err := store.QueryRunHistoryByIssue(ctx, issueNumber)
 	if err != nil {
 		t.Fatalf("QueryRunHistoryByIssue: %v", err)
@@ -402,7 +390,6 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	}
 	t.Logf("run history: %d entries, latest status=%q", len(entries), entries[0].Status)
 
-	// --- Verification: workspace directory was created ---
 	// The workspace manager creates a directory under workspaceRoot keyed
 	// by the issue identifier. The GitHub adapter uses the issue number
 	// as both ID and Identifier.

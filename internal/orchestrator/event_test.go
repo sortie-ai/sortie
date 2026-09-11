@@ -235,7 +235,7 @@ func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 		t.Errorf("after 2nd event: AgentTotals.OutputTokens = %d, want 100", state.AgentTotals.OutputTokens)
 	}
 
-	// Third report: same values as second — zero delta, no double-counting.
+	// Third report: same values as second, zero delta, no double-counting.
 	HandleAgentEvent(state, "MT-6", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -279,14 +279,14 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
 	}, slog.Default(), nil)
 
-	// Second token usage: {200, 100, 300} — delta {+100, +50, +150}.
+	// Second token usage: {200, 100, 300}, delta {+100, +50, +150}.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
 	}, slog.Default(), nil)
 
-	// Duplicate token usage — zero delta.
+	// Duplicate token usage, zero delta.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -397,7 +397,7 @@ func TestHandleAgentEvent_RateLimits(t *testing.T) {
 		t.Errorf("AgentRateLimits.Data[\"limit\"] = %v, want 100", got)
 	}
 
-	// Mutate the original map — the stored copy must be unaffected.
+	// Mutate the original map; the stored copy must be unaffected.
 	originalMap["limit"] = 999
 	if got := state.AgentRateLimits.Data["limit"]; got != 100 {
 		t.Errorf("after mutation: AgentRateLimits.Data[\"limit\"] = %v, want 100 (shallow copy isolation breach)", got)
@@ -426,7 +426,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 	tPlus1 := base.Add(1 * time.Second)
 	tPlus3 := base.Add(3 * time.Second)
 
-	// Event A at T+2s — advances timestamp from zero value.
+	// Event A at T+2s, advances timestamp from zero value.
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventNotification,
 		Timestamp: tPlus2,
@@ -435,7 +435,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 		t.Errorf("after event A: LastAgentTimestamp = %v, want %v", entry.LastAgentTimestamp, tPlus2)
 	}
 
-	// Event B at T+1s (out-of-order) — must NOT regress the timestamp.
+	// Event B at T+1s (out-of-order), must NOT regress the timestamp.
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventTurnCompleted,
 		Timestamp: tPlus1,
@@ -448,7 +448,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 		t.Errorf("after event B: LastAgentEvent = %q, want %q", entry.LastAgentEvent, "turn_completed")
 	}
 
-	// Event C at T+3s — must advance the timestamp.
+	// Event C at T+3s, must advance the timestamp.
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventNotification,
 		Timestamp: tPlus3,
@@ -479,7 +479,7 @@ func TestHandleAgentEvent_TokenUsage_CounterRegression(t *testing.T) {
 		t.Errorf("after 1st: AgentInputTokens = %d, want 200", entry.AgentInputTokens)
 	}
 
-	// Second report: regression {150, 80, 230} — delta clamped to zero,
+	// Second report: regression {150, 80, 230}, delta clamped to zero,
 	// baselines must NOT regress.
 	HandleAgentEvent(state, "MT-11", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
@@ -500,7 +500,7 @@ func TestHandleAgentEvent_TokenUsage_CounterRegression(t *testing.T) {
 		t.Errorf("after regression: LastReportedTotalTokens = %d, want 300 (must not regress)", entry.LastReportedTotalTokens)
 	}
 
-	// Third report: legitimate increase {250, 120, 370} — delta is
+	// Third report: legitimate increase {250, 120, 370}, delta is
 	// computed against the preserved baseline {200, 100, 300}, yielding
 	// {+50, +20, +70}. Without monotonic baselines this would compute
 	// against the regressed {150, 80, 230} and produce {+100, +40, +140},
@@ -560,7 +560,7 @@ func TestHandleAgentEvent_RateLimits_OutOfOrder(t *testing.T) {
 		t.Errorf("after newer event: Data[\"a\"] = %v, want 1", got)
 	}
 
-	// Older event arrives second at T+1s — must NOT overwrite.
+	// Older event arrives second at T+1s, must NOT overwrite.
 	HandleAgentEvent(state, "MT-12", domain.AgentEvent{
 		Type:       domain.EventNotification,
 		Timestamp:  tPlus1,
@@ -687,8 +687,6 @@ func TestHandleAgentEvent_DebugLogging(t *testing.T) {
 		}
 	})
 }
-
-// --- Extended Token Metrics Tests ---
 
 // TestHandleAgentEvent_CacheReadTokens_Delta verifies the delta algorithm
 // for CacheReadTokens: cumulative deltas, zero on duplicate, clamped on
@@ -1180,8 +1178,6 @@ func TestHandleAgentEvent_TwoSessions_CacheReadTotals(t *testing.T) {
 	}
 }
 
-// --- Per-session timing breakdown tests ---
-
 // TestHandleAgentEvent_APIDurationMS_Accumulates verifies that
 // APIDurationMS on any event type accumulates into entry.APITimeMs.
 func TestHandleAgentEvent_APIDurationMS_Accumulates(t *testing.T) {
@@ -1309,7 +1305,7 @@ func TestHandleAgentEvent_CombinedTimingAccumulation(t *testing.T) {
 	state, entry := newStateWithEntry("COMBO-1")
 	ts := time.Now().UTC()
 
-	// Session started — increments TurnCount to 1.
+	// Session started, increments TurnCount to 1.
 	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{
 		Type:      domain.EventSessionStarted,
 		Timestamp: ts,
@@ -1564,10 +1560,10 @@ func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
 // declaration-drift log: a none-arrival entry logs on any token_usage
 // event; a turn_end-arrival entry logs only when a turn reports more
 // than one figure, scoped to the current turn via the per-turn
-// baseline rather than via TurnCount, which the r3 review found
-// produces a false positive for a kind emitting session_started once
-// per session (opencode-shaped) rather than once per turn; an
-// incremental-arrival entry never logs regardless of figure count.
+// baseline rather than via TurnCount, which produces a false positive
+// for a kind emitting session_started once per session (opencode-shaped)
+// rather than once per turn; an incremental-arrival entry never logs
+// regardless of figure count.
 func TestHandleAgentEvent_UsageDeclarationDriftLog(t *testing.T) {
 	t.Parallel()
 

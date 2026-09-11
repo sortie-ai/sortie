@@ -118,7 +118,7 @@ func openEndedHandshakeState(t *testing.T, repliesByID map[int64]string) *sessio
 // own, but without a watchTermination goroutine racing the test's own
 // direct control of state.msgCh: jsonrpc.Conn.Call does not read
 // state.msgCh at all, so closing it, or pushing a message onto it,
-// directly from the test cannot race Call's own resolution — the two
+// directly from the test cannot race Call's own resolution; the two
 // channels are entirely independent. This is the deterministic way to
 // end a msgCh-reading wait loop from a test: any attempt to close, or
 // force an error on, the underlying connection instead would race
@@ -162,8 +162,6 @@ func authWaitState(t *testing.T, repliesByID map[int64]string) *sessionState {
 	return state
 }
 
-// --- initializeHandshake ---
-
 func TestInitializeHandshake_Success(t *testing.T) {
 	t.Parallel()
 
@@ -199,8 +197,6 @@ func TestInitializeHandshake_EOF(t *testing.T) {
 	}
 }
 
-// --- authenticateIfNeeded ---
-
 func TestAuthenticateIfNeeded_AlreadyLoggedIn(t *testing.T) {
 	t.Parallel()
 
@@ -215,7 +211,7 @@ func TestAuthenticateIfNeeded_AlreadyLoggedIn(t *testing.T) {
 func TestAuthenticateIfNeeded_NullAccountNoAPIKey(t *testing.T) {
 	t.Parallel()
 
-	// account/read response with null account — CODEX_API_KEY not set → return nil.
+	// account/read response with null account, CODEX_API_KEY not set → return nil.
 	state := handshakeState(t, `{"id":1,"result":{"account":null}}`)
 
 	if err := authenticateIfNeeded(context.Background(), state); err != nil {
@@ -235,7 +231,7 @@ func TestAuthenticateIfNeeded_AccountReadError(t *testing.T) {
 }
 
 func TestAuthenticateIfNeeded_LoginSuccess(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "test-api-key-12345")
 
 	// id=1: account/read → null account
@@ -253,7 +249,7 @@ func TestAuthenticateIfNeeded_LoginSuccess(t *testing.T) {
 }
 
 func TestAuthenticateIfNeeded_LoginResponseError(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "invalid-key")
 
 	// id=1: account/read → null
@@ -270,7 +266,7 @@ func TestAuthenticateIfNeeded_LoginResponseError(t *testing.T) {
 }
 
 func TestAuthenticateIfNeeded_LoginCompletedFailed(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "bad-key")
 
 	state := handshakeState(t,
@@ -291,8 +287,6 @@ func TestAuthenticateIfNeeded_LoginCompletedFailed(t *testing.T) {
 		t.Errorf("AgentError.Kind = %q, want %q", ae.Kind, domain.ErrResponseError)
 	}
 }
-
-// --- startThread ---
 
 func TestStartThread_Success(t *testing.T) {
 	t.Parallel()
@@ -439,8 +433,6 @@ func TestStartThread_NoModelMember(t *testing.T) {
 	}
 }
 
-// --- resumeThread ---
-
 func TestResumeThread_Success(t *testing.T) {
 	t.Parallel()
 
@@ -486,10 +478,10 @@ func TestResumeThread_UnmarshalFailureReturnsEmptyModel(t *testing.T) {
 }
 
 func TestAuthenticateIfNeeded_ContextCancelledDuringLoginWait(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "test-key")
 
-	// pw stays open — the peer answers both calls but the app-server
+	// pw stays open: the peer answers both calls but the app-server
 	// never sends account/login/completed, so authenticateIfNeeded
 	// blocks in its notification wait until ctx is cancelled.
 	state := openEndedHandshakeState(t, map[int64]string{
@@ -520,7 +512,7 @@ func TestAuthenticateIfNeeded_ContextCancelledDuringLoginWait(t *testing.T) {
 func TestStartThread_ContextCancelledDuringNotificationWait(t *testing.T) {
 	t.Parallel()
 
-	// pw stays open — the peer answers thread/start but the app-server
+	// pw stays open: the peer answers thread/start but the app-server
 	// never sends thread/started.
 	state := openEndedHandshakeState(t, map[int64]string{
 		1: `{"id":1,"result":{"thread":{"id":"thread-abc"}}}`,

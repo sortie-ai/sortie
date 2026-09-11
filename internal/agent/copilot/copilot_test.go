@@ -198,8 +198,8 @@ func TestStartSession_NoAuthSource(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 
 	// Unset all GitHub token env vars and ensure gh is not on PATH.
-	// If gh is on PATH, this test skips — we cannot override PATH
-	// without affecting other tests and the gh check is a best-effort.
+	// If gh is on PATH, this test skips: PATH cannot be overridden
+	// without affecting other tests, and the gh check is best-effort.
 	if _, err := exec.LookPath("gh"); err == nil {
 		t.Skip("gh is on PATH; checkAuth() will pass via gh fallback, skipping auth-failure test")
 	}
@@ -294,14 +294,14 @@ func TestStartSession_DefaultCommand(t *testing.T) {
 
 	adapter, _ := NewCopilotAdapter(map[string]any{})
 	// Empty command falls back to "copilot". In CI, copilot is likely
-	// absent, so we expect ErrAgentNotFound. If copilot is installed,
-	// the session may succeed — either outcome is acceptable.
+	// absent, so ErrAgentNotFound is expected. If copilot is installed,
+	// the session may succeed; either outcome is acceptable.
 	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{},
 	})
 	if err == nil {
-		return // copilot is on PATH — that's fine
+		return // copilot is on PATH, which is fine
 	}
 	requireAgentError(t, err, domain.ErrAgentNotFound)
 }
@@ -666,9 +666,9 @@ func TestRunTurn_SingleSignalNoTerminalCompletes(t *testing.T) {
 	}
 }
 
-// TestRunTurn_NoOutputTokensNoResultCompletes is the property-2 regression
-// fixture: a stream carrying assistant output and completed tool activity,
-// no per-message output-token field anywhere, and no terminal result
+// TestRunTurn_NoOutputTokensNoResultCompletes pins a regression fixture:
+// a stream carrying assistant output and completed tool activity, no
+// per-message output-token field anywhere, and no terminal result
 // event, still reports turn_completed. The fixture itself is asserted to
 // carry no output-token field, so a future revert to token-count
 // derivation fails this test rather than passing it.
@@ -741,7 +741,7 @@ func TestRunTurn_WorkSignalsObservedAcrossFixtureCorpus(t *testing.T) {
 	})
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
 // session's second turn, whose stream carries neither declared signal,
 // reports turn_failed even though the first turn on the same session
 // carried both assistant output and completed tool activity.
@@ -1648,8 +1648,9 @@ func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
 // TestRunTurn_SessionStateRecovery_FirstReadAttempt drives
 // sessionState.recoverUsage directly across two simulated finalizes,
 // the first of which misses its read (the events file does not exist
-// yet), and asserts the two ways R24 resolves the resulting baseline
-// ambiguity: a run that created the session takes a zero baseline on
+// yet), and asserts the two ways session-state recovery resolves the
+// resulting baseline ambiguity: a run that created the session takes a
+// zero baseline on
 // its later successful read, while a run that resumed a session marks
 // recovery unavailable for the rest of the run.
 func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {

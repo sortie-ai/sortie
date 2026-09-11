@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- helpers ---
-
 func alwaysRegistered(_ string) bool { return true }
 
 func neverRegistered(_ string) bool { return false }
@@ -51,8 +49,6 @@ func requireConfigError(t *testing.T, err error) *ConfigError {
 	}
 	return ce
 }
-
-// --- TestBuildDispatchConfig ---
 
 func TestBuildDispatchConfig_NilOrAbsent(t *testing.T) {
 	t.Parallel()

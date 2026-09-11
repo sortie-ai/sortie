@@ -18,8 +18,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 )
 
-// --- Test helpers ---
-
 // webhookBackend returns a NotificationBackend pointing at a live httptest
 // server. The server is closed via t.Cleanup.
 func webhookBackend(t *testing.T) config.NotificationBackend {
@@ -156,8 +154,6 @@ func (s *stubTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 func (s *stubTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
 func (s *stubTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
 func (s *stubTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
-
-// --- Tests ---
 
 // TestBuildSessionToolRegistry_AllToolsPresent verifies served-side parity:
 // all five expected tools appear in the built registry and in the names served
@@ -354,7 +350,7 @@ func TestBuildSessionToolRegistry_MisconfiguredNotifier(t *testing.T) {
 }
 
 // TestBuildSessionToolRegistry_DBOpenDegradation verifies that a read-only
-// open failure produces a degraded success — workspace_history and
+// open failure produces a degraded success; workspace_history and
 // cost_budget absent, result.Store nil, and the degradation warning logged.
 func TestBuildSessionToolRegistry_DBOpenDegradation(t *testing.T) {
 	t.Parallel()

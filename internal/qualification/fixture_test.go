@@ -159,11 +159,11 @@ func TestFixtureSetToolServerDelivery(t *testing.T) {
 // TestFixtureSetPermissionHandling confirms SetPermissionHandling
 // rewrites addPermission's own seeded record to the given grade and
 // detail for each of the three grades a permission-handling
-// observation can produce, and confirms the drift from the plan's
-// prose: addPolicyPrecondition's record classifies as
-// RowPolicyPrecondition, which ConclusionsFromRecords never turns
-// into a graded row, so SetPermissionHandling leaves it untouched
-// rather than rewriting it too.
+// observation can produce. It also confirms that
+// addPolicyPrecondition's record classifies as RowPolicyPrecondition,
+// which ConclusionsFromRecords never turns into a graded row, so
+// SetPermissionHandling leaves it untouched rather than rewriting it
+// too.
 func TestFixtureSetPermissionHandling(t *testing.T) {
 	t.Parallel()
 
@@ -230,11 +230,10 @@ func TestFixtureSetPermissionHandling(t *testing.T) {
 // TestFixtureSetSessionContinuation confirms SetSessionContinuation
 // rewrites both the baseline and the recall record addContinuation
 // seeded for surface, for each of the three grades a continuation
-// replay observation can produce, and confirms the drift from the
-// plan's prose: the caller's free-text detail lands on the baseline
-// record, while the recall record's Detail is always one of the
-// closed-set constants checkRecallRecord validates against, never the
-// caller's text.
+// replay observation can produce. The caller's free-text detail lands
+// on the baseline record, while the recall record's Detail is always
+// one of the closed-set constants checkRecallRecord validates
+// against, never the caller's text.
 func TestFixtureSetSessionContinuation(t *testing.T) {
 	t.Parallel()
 

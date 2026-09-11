@@ -90,7 +90,6 @@ func TestTruncateRunes(t *testing.T) {
 	}
 }
 
-// repeatString returns s repeated n times.
 func repeatString(s string, n int) string {
 	result := make([]byte, len(s)*n)
 	for i := range n {

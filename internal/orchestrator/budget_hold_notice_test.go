@@ -299,9 +299,9 @@ func TestReleaseAllBudgetHoldNotices_RetainsMemoryWhenDeleteFails(t *testing.T) 
 }
 
 // TestBuildBudgetHoldComment_CrossLaneParity drives the same IssueTokenUsage
-// through both notice-posting lanes' real entry construction — the retry
+// through both notice-posting lanes' real entry construction: the retry
 // lane's blockBudget (via HandleRetryTimer) and the rebuild's token arm
-// (via Orchestrator.handleTick) — and asserts the two resulting entries
+// (via Orchestrator.handleTick). It asserts the two resulting entries
 // render an identical comment body. The two lanes never see the same
 // wall clock, so BudgetAnnounced is pre-seeded identically on both sides
 // to freeze ExhaustedAt; buildBudgetHoldComment does not render

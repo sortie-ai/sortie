@@ -16,8 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- helpers ---
-
 // mustCIProvider constructs a *GiteaCIProvider against endpoint with a
 // throwaway token and maxLogLines, or fails the test.
 func mustCIProvider(t *testing.T, endpoint string, maxLogLines int) *GiteaCIProvider {
@@ -73,8 +71,6 @@ func buildStatusPage(t *testing.T, status string, start, n int) []byte {
 	}
 	return body
 }
-
-// --- status and conclusion mapping ---
 
 func TestGiteaMapRunStatus(t *testing.T) {
 	t.Parallel()
@@ -137,8 +133,6 @@ func TestGiteaMapConclusion(t *testing.T) {
 		})
 	}
 }
-
-// --- FetchCIStatus normalization ---
 
 func TestGiteaFetchCIStatus(t *testing.T) {
 	t.Parallel()
@@ -284,8 +278,6 @@ func TestGiteaFetchCIStatus_MixedRunsMatchesCore(t *testing.T) {
 	adaptertest.AssertCIAggregateMatchesCore(t, got)
 }
 
-// --- FetchCIStatus pagination ---
-
 func TestGiteaFetchCIStatusPagination(t *testing.T) {
 	t.Parallel()
 
@@ -354,8 +346,6 @@ func TestGiteaFetchCIStatusPagination(t *testing.T) {
 		}
 	})
 }
-
-// --- log excerpt ---
 
 func TestGiteaStripANSI(t *testing.T) {
 	t.Parallel()
@@ -583,8 +573,6 @@ func TestGiteaCILogExcerpt(t *testing.T) {
 	})
 }
 
-// --- error mapping ---
-
 func TestGiteaToCIError(t *testing.T) {
 	t.Parallel()
 
@@ -672,8 +660,6 @@ func TestGiteaToCIError(t *testing.T) {
 		}
 	})
 }
-
-// --- registration, request shape, and construction ---
 
 func TestGiteaCIRegistration(t *testing.T) {
 	t.Parallel()

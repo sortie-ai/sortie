@@ -411,7 +411,7 @@ func TestFinish(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 
-		// Should not panic or return error — failure is logged and ignored.
+		// Should not panic or return error; failure is logged and ignored.
 		Finish(context.Background(), FinishParams{
 			Path:          dir,
 			Identifier:    "F-2",
@@ -758,7 +758,7 @@ func TestCleanup(t *testing.T) {
 
 // TestCleanup_HookOutputLogging covers the hook_output failure attribute
 // and the hook completed success record at the before_remove site reached
-// through Cleanup (R1-R4).
+// through Cleanup.
 func TestCleanup_HookOutputLogging(t *testing.T) {
 	t.Parallel()
 
@@ -1006,7 +1006,7 @@ func TestCleanupByPath(t *testing.T) {
 
 // TestCleanupByPath_HookOutputLogging covers the hook_output failure
 // attribute and the hook completed success record at the before_remove
-// site reached through CleanupByPath (R1-R4).
+// site reached through CleanupByPath.
 func TestCleanupByPath_HookOutputLogging(t *testing.T) {
 	t.Parallel()
 
@@ -1479,7 +1479,7 @@ func TestPrepare_PreRunFunc(t *testing.T) {
 }
 
 // TestPrepare_HookOutputLogging covers the hook_output attribute added to
-// the after_create failure WARN record (R1, R2, R5, R6, R9).
+// the after_create failure WARN record.
 func TestPrepare_HookOutputLogging(t *testing.T) {
 	t.Parallel()
 
@@ -1626,7 +1626,7 @@ func TestPrepare_HookOutputLogging(t *testing.T) {
 }
 
 // TestPrepare_HookCompletedLogging covers the "hook completed" DEBUG
-// record emitted on hook success (R3, R4).
+// record emitted on hook success.
 func TestPrepare_HookCompletedLogging(t *testing.T) {
 	t.Parallel()
 

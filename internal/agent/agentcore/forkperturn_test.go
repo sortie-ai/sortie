@@ -20,8 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- helpers ---
-
 // writeTrapScript writes an agent script that installs a TERM trap,
 // touches a readiness marker, then blocks. It returns the script path
 // and the marker path. trap is the trap body quoted as the shell
@@ -128,8 +126,6 @@ func requireAgentError(t *testing.T, err error, want domain.AgentErrorKind) {
 		t.Errorf("AgentError.Kind = %q, want %q", ae.Kind, want)
 	}
 }
-
-// --- tests ---
 
 func TestForkPerTurnSession(t *testing.T) {
 	t.Parallel()

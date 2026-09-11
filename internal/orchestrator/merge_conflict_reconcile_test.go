@@ -12,8 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // mergeConflictMetricsSpy records merge-conflict-specific metric calls while
 // delegating every other method to NoopMetrics.
 type mergeConflictMetricsSpy struct {
@@ -176,8 +174,6 @@ func (s *statefulFingerprintStore) has(issueID, kind string) bool {
 	return ok
 }
 
-// --- Test helpers ---
-
 // mcBaseTime is a fixed reference time for merge-conflict reconcile tests.
 var mcBaseTime = time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
 
@@ -250,8 +246,6 @@ func dirtyStatus(headSHA, base string) domain.PRMergeStatus {
 	}
 }
 
-// --- reconcileMergeConflicts guard tests ---
-
 func TestReconcileMergeConflicts_NilAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -291,8 +285,6 @@ func TestReconcileMergeConflicts_NotConfigured(t *testing.T) {
 		t.Errorf("GetMergeability calls = %d, want 0 (not configured)", scm.calls)
 	}
 }
-
-// --- 5.1.1 Dispatch (AC1) ---
 
 func TestReconcileMergeConflicts_Dispatch(t *testing.T) {
 	t.Parallel()
@@ -341,8 +333,6 @@ func TestReconcileMergeConflicts_Dispatch(t *testing.T) {
 	}
 }
 
-// --- 5.1.2 Unknown defers (AC12) ---
-
 func TestReconcileMergeConflicts_UnknownDefers(t *testing.T) {
 	t.Parallel()
 
@@ -378,8 +368,6 @@ func TestReconcileMergeConflicts_UnknownDefers(t *testing.T) {
 		t.Errorf(`IncMergeConflictChecks("unknown") = %d, want 1`, metrics.checks["unknown"])
 	}
 }
-
-// --- 5.1.3 Not-dirty resets (AC8 branch N1) ---
 
 func TestReconcileMergeConflicts_NotDirtyResets(t *testing.T) {
 	t.Parallel()
@@ -437,8 +425,6 @@ func TestReconcileMergeConflicts_NotDirtyResets(t *testing.T) {
 	}
 }
 
-// --- 5.1.4 Dedup same head (AC7) ---
-
 func TestReconcileMergeConflicts_DedupSameHead(t *testing.T) {
 	t.Parallel()
 
@@ -486,8 +472,6 @@ func TestReconcileMergeConflicts_DedupSameHead(t *testing.T) {
 		t.Errorf("stored fingerprint = %q, want digest of head-same", rec.fingerprint)
 	}
 }
-
-// --- 5.1.5 Episodic re-arm with intervening clean tick (AC8) ---
 
 func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 	t.Parallel()
@@ -555,8 +539,6 @@ func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 	}
 }
 
-// --- 5.1.6 Escalate on strict over-limit (AC10) ---
-
 func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 	t.Parallel()
 
@@ -622,8 +604,6 @@ func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 	}
 }
 
-// --- 5.1.7 Escalation resets counter, re-arm with NO clean tick (AC15) ---
-
 func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 	t.Parallel()
 
@@ -662,7 +642,7 @@ func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 	}
 
 	// A normal worker exit re-seeds the merge-conflict slot. There is NO clean
-	// (N1) observation between the escalation and the next conflict.
+	// observation between the escalation and the next conflict.
 	state.PendingReactions[rkey] = newMergeConflictPending(issueID, 88)
 
 	// Tick 3: a NEW dirty head H3 → because the escalation reset the counter,
@@ -687,8 +667,6 @@ func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 		t.Error("after tick 3: slot still present, want consumed by fresh dispatch")
 	}
 }
-
-// --- 5.1.8 Cross-kind isolation (AC2) ---
 
 func TestReconcileMergeConflicts_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
@@ -780,8 +758,6 @@ func TestReconcileMergeConflicts_CrossKindIsolation(t *testing.T) {
 	}
 }
 
-// --- 5.1.9 Fetch error backs off (E1) ---
-
 func TestReconcileMergeConflicts_FetchErrorBacksOff(t *testing.T) {
 	t.Parallel()
 
@@ -821,8 +797,6 @@ func TestReconcileMergeConflicts_FetchErrorBacksOff(t *testing.T) {
 	}
 }
 
-// --- 5.1.10 Empty head SHA does not dispatch (D1a) ---
-
 func TestReconcileMergeConflicts_EmptyHeadDoesNotDispatch(t *testing.T) {
 	t.Parallel()
 
@@ -858,8 +832,6 @@ func TestReconcileMergeConflicts_EmptyHeadDoesNotDispatch(t *testing.T) {
 		t.Errorf("IncMergeConflictChecks called = %v, want none on empty-head defer", metrics.checks)
 	}
 }
-
-// --- 5.1.11 Empty base branch defers (AC16, D1b) ---
 
 func TestReconcileMergeConflicts_EmptyBaseDefers(t *testing.T) {
 	t.Parallel()
@@ -1055,8 +1027,6 @@ func TestReconcileMergeConflicts_WatchWindowElapsedLogsRenamedAttribute(t *testi
 	}
 }
 
-// --- 5.1.12 Template map (AC6) ---
-
 func TestBuildMergeConflictTemplateMap(t *testing.T) {
 	t.Parallel()
 
@@ -1106,8 +1076,6 @@ func TestBuildMergeConflictTemplateMap(t *testing.T) {
 	}
 }
 
-// --- buildMergeConflictEscalationComment reports dispatched turns (attempts-1) ---
-
 func TestBuildMergeConflictEscalationComment(t *testing.T) {
 	t.Parallel()
 
@@ -1149,8 +1117,6 @@ func TestBuildMergeConflictEscalationComment(t *testing.T) {
 	}
 }
 
-// --- 5.1.13 Dispatch carries real base (AC6b orchestrator side) ---
-
 func TestReconcileMergeConflicts_DispatchCarriesRealBase(t *testing.T) {
 	t.Parallel()
 
@@ -1181,8 +1147,6 @@ func TestReconcileMergeConflicts_DispatchCarriesRealBase(t *testing.T) {
 			mergeContext["base"], "release/2.0")
 	}
 }
-
-// --- 5.1.14 Coexists with auto-merge on the same tick (AC3) ---
 
 func TestReconcileMergeConflicts_Coexists(t *testing.T) {
 	t.Parallel()
@@ -1230,7 +1194,6 @@ func TestReconcileMergeConflicts_Coexists(t *testing.T) {
 	if _, ok := state.RetryAttempts[issueID]; !ok {
 		t.Error("merge-conflict continuation not scheduled on coexist tick; want scheduled")
 	}
-	// auto-merge deferred (its slot survives, no merge happened).
 	if _, ok := state.PendingReactions[mergeKey]; !ok {
 		t.Error("auto-merge slot consumed; want re-enqueued (deferred on dirty)")
 	}
@@ -1238,8 +1201,6 @@ func TestReconcileMergeConflicts_Coexists(t *testing.T) {
 		t.Errorf(`IncAutoMergeReactions("merged") = %d, want 0 (no double action on dirty PR)`, amMetrics.autoMerge["merged"])
 	}
 }
-
-// --- ReconcileRunningIssues wiring (AC5) ---
 
 // TestReconcileRunningIssues_MergeConflictOrdering verifies that
 // reconcileMergeConflicts is wired into ReconcileRunningIssues: a due
@@ -1378,8 +1339,6 @@ func TestReconcileMergeConflicts_FreeSlotControlDispatches(t *testing.T) {
 	}
 }
 
-// --- Attribution-gated per-episode reset ---
-
 // mcAttributionStore wraps a *statefulFingerprintStore and overrides
 // CountWorkerRunsCompletedSince with a configurable result, so a test can
 // force a specific classifyHeadChange verdict while still exercising the
@@ -1515,8 +1474,6 @@ func TestHandleMergeConflictDirty_SameHeadDedupPrecedesAttributionQuery(t *testi
 		t.Errorf("CountWorkerRunsCompletedSince calls = %d, want 0 (dedup precedes the attribution query)", store.countCalls)
 	}
 }
-
-// --- Triage gate integration ---
 
 // mergeConflictTriageParams returns mergeConflictParams wired with a
 // real workspace and the given triage script, so reactionTriageGate

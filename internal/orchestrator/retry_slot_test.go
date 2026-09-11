@@ -11,8 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles shared by the cross-pass contention tests ---
-
 // retrySlotCI is a controllable CIStatusProvider for the cross-pass
 // contention tests in this file.
 type retrySlotCI struct {
@@ -167,8 +165,6 @@ func (s *retrySlotStore) hasRunHistoryStatus(status string) bool {
 	return false
 }
 
-// --- Test helpers ---
-
 // retrySlotBaseTime is a fixed reference time for the cross-pass
 // contention tests in this file.
 func retrySlotBaseTime() time.Time {
@@ -272,8 +268,6 @@ func retrySlotLabelFixPending(issueID string, createdAt time.Time) *PendingReact
 	}
 }
 
-// --- Label-review defers to a ci incumbent it did not create ---
-
 func TestRetrySlot_LabelReviewDefersToCI(t *testing.T) {
 	t.Parallel()
 
@@ -319,8 +313,6 @@ func TestRetrySlot_LabelReviewDefersToCI(t *testing.T) {
 	}
 }
 
-// --- Review defers to a queued label-review retry ---
-
 func TestRetrySlot_ReviewDefersToLabelReview(t *testing.T) {
 	t.Parallel()
 
@@ -354,8 +346,6 @@ func TestRetrySlot_ReviewDefersToLabelReview(t *testing.T) {
 		t.Errorf("ReactionAttempts[%s] present, want absent (a defer must not increment it)", rKey)
 	}
 }
-
-// --- CI and label-fix deferrals in both directions ---
 
 func TestRetrySlot_CIAndLabelFixDeferrals(t *testing.T) {
 	t.Parallel()
@@ -438,8 +428,6 @@ func TestRetrySlot_CIAndLabelFixDeferrals(t *testing.T) {
 	})
 }
 
-// --- Merge-conflict defers to a ci incumbent (cross-pass half) ---
-
 func TestRetrySlot_MergeConflictDefersToCI(t *testing.T) {
 	t.Parallel()
 
@@ -470,8 +458,6 @@ func TestRetrySlot_MergeConflictDefersToCI(t *testing.T) {
 		t.Errorf("ReactionAttempts[%s] present, want absent", mcKey)
 	}
 }
-
-// --- Liveness with a handoff state configured ---
 
 func TestRetrySlot_LivenessWithHandoffConfigured(t *testing.T) {
 	t.Parallel()
@@ -556,8 +542,6 @@ func TestRetrySlot_LivenessWithHandoffConfigured(t *testing.T) {
 	}
 }
 
-// --- Liveness with no handoff state configured ---
-
 func TestRetrySlot_LivenessNoHandoffConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -640,9 +624,9 @@ func TestRetrySlot_LivenessNoHandoffConfigured(t *testing.T) {
 	}
 }
 
-// --- The deferral record names an empty-kind continuation incumbent
-// with the literal "continuation" ---
-
+// TestRetrySlot_DeferralRecordReportsContinuationForEmptyKindIncumbent
+// verifies that the deferral record names an empty-kind continuation
+// incumbent with the literal "continuation".
 func TestRetrySlot_DeferralRecordReportsContinuationForEmptyKindIncumbent(t *testing.T) {
 	t.Parallel()
 
@@ -671,9 +655,9 @@ func TestRetrySlot_DeferralRecordReportsContinuationForEmptyKindIncumbent(t *tes
 	}
 }
 
-// --- CreatedAt advances on every arbitration deferral, for both a
-// TTL-bearing kind and a kind with no TTL ---
-
+// TestRetrySlot_TTLRefreshOnArbitrationDeferral verifies that CreatedAt
+// advances on every arbitration deferral, for both a TTL-bearing kind and
+// a kind with no TTL.
 func TestRetrySlot_TTLRefreshOnArbitrationDeferral(t *testing.T) {
 	t.Parallel()
 

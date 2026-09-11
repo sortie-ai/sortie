@@ -214,7 +214,7 @@ func TestNotificationsConfig_VarResolution_Set(t *testing.T) {
 
 func TestNotificationsConfig_VarResolution_Unset(t *testing.T) {
 	// Ensure the variable is not set; t.Setenv with empty string
-	// sets it to empty but here we use an unset variable name.
+	// sets it to empty, but this uses an unset variable name instead.
 	raw := map[string]any{
 		"notifications": []any{
 			map[string]any{

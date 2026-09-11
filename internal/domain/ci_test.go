@@ -16,8 +16,6 @@ func (m *mockCIStatusProvider) FetchCIStatus(_ context.Context, _ string) (CIRes
 	return CIResult{}, nil
 }
 
-// --- TestCIResult_ToTemplateMap ---
-
 func TestCIResult_ToTemplateMap_FullyPopulated(t *testing.T) {
 	t.Parallel()
 
@@ -156,8 +154,6 @@ func TestCIResult_ToTemplateMap_EmptyLogExcerpt(t *testing.T) {
 		t.Errorf("ToTemplateMap()[log_excerpt] = %q, want %q", val, "")
 	}
 }
-
-// --- TestCIError ---
 
 func TestCIError_Error_WithWrapped(t *testing.T) {
 	t.Parallel()

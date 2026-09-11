@@ -14,8 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
-// --- Test doubles ---
-
 // mockCIProvider is a controllable CIStatusProvider for CI reconcile tests.
 type mockCIProvider struct {
 	result domain.CIResult
@@ -265,8 +263,6 @@ func (s *ciMetricsSpy) IncCIStatusChecks(result string) { s.ciStatusChecks[resul
 func (s *ciMetricsSpy) IncCIEscalations(action string)  { s.ciEscalations[action]++ }
 func (s *ciMetricsSpy) IncRetries(trigger string)       { s.retriesByTrigger[trigger]++ }
 
-// --- Test helpers ---
-
 // ciBaseTime is a fixed reference for CI reconcile tests.
 var ciBaseTime = time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
@@ -346,8 +342,6 @@ func ciParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusProvider,
 	}
 }
 
-// --- Guard tests ---
-
 func TestReconcileCIStatus_NilCIProvider(t *testing.T) {
 	t.Parallel()
 
@@ -391,8 +385,6 @@ func TestReconcileCIStatus_NilSCMAdapter(t *testing.T) {
 	}
 }
 
-// --- The live head, never the frozen ref ---
-
 // TestReconcileCIStatus_RefIsLiveHead_NeverFrozenBranchOrSHA verifies that
 // the ref passed to FetchCIStatus always equals the freshly-read
 // PRMergeStatus.HeadSHA, never CIReactionData.SHA or CIReactionData.Branch,
@@ -425,8 +417,6 @@ func TestReconcileCIStatus_RefIsLiveHead_NeverFrozenBranchOrSHA(t *testing.T) {
 			scm.lastPRNumber, scm.lastOwner, scm.lastRepo)
 	}
 }
-
-// --- Fingerprint read-before-write ordering ---
 
 // TestReconcileCIStatus_FingerprintReadPrecedesWrite_CallOrder verifies
 // that GetReactionFingerprint is called before UpsertReactionFingerprint
@@ -482,8 +472,6 @@ func TestReconcileCIStatus_FingerprintReadPrecedesWrite_CallOrder(t *testing.T) 
 		t.Errorf("UpsertReactionFingerprint calls = %d, want 0 when the stored head already matches the live head", store2.upsertFingerprintCalls)
 	}
 }
-
-// --- The core defect and the keeps-passing watch ---
 
 // TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation
 // covers the core defect this change fixes: a pull request whose earlier
@@ -574,8 +562,6 @@ func TestReconcileCIStatus_KeepsPassing_NoDispatchNoAttemptNoRunHistory(t *testi
 		t.Errorf("tracker called (comment=%d, label=%d) across a keeps-passing watch; want 0/0", tracker.commentIssueCalls, tracker.addLabelCalled)
 	}
 }
-
-// --- Steady-state status handling ---
 
 func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 	t.Parallel()
@@ -725,7 +711,6 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	// Entry consumed (not re-enqueued as pending-check).
 	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-5", ReactionKindCI)]; ok {
 		t.Error("PendingReactions entry re-enqueued on CI failure; want consumed")
 	}
@@ -758,7 +743,6 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 		t.Error("RetryEntry.ContinuationContext is nil; want continuation map")
 	}
 
-	// ReactionAttempts incremented.
 	if state.ReactionAttempts[ReactionKey("ISS-CI-5", ReactionKindCI)] != 1 {
 		t.Errorf("ReactionAttempts[ISS-CI-5] = %d, want 1", state.ReactionAttempts[ReactionKey("ISS-CI-5", ReactionKindCI)])
 	}
@@ -771,13 +755,12 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 		t.Errorf(`IncRetries("ci_fix") = %d, want 1`, metrics.retriesByTrigger["ci_fix"])
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["ISS-CI-5"]; !ok {
 		t.Error("claim released after CI failure under max retries; want preserved")
 	}
 }
 
-// TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC covers R9: the
+// TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC verifies that the
 // CI-failure writer formats a UTC time with time.RFC3339, so the
 // persisted value ends in "Z" and parses back as RFC3339.
 func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
@@ -809,8 +792,6 @@ func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
 	}
 }
 
-// --- Escalation as a per-epoch soft stop ---
-
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 	t.Parallel()
 
@@ -833,7 +814,6 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 		t.Errorf("DeleteRetryEntry calls = %v, want [ISS-CI-6]", store.deletedIssueIDs)
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["ISS-CI-6"]; ok {
 		t.Error("claim not released after CI escalation; want released")
 	}
@@ -895,7 +875,6 @@ func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 	if _, ok := state.Claimed["ISS-CI-7"]; ok {
 		t.Error("claim not released after comment escalation")
 	}
-	// The entry survives the soft stop.
 	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-7", ReactionKindCI)]; !ok {
 		t.Error("PendingReactions entry removed after comment escalation; want re-enqueued (soft stop)")
 	}
@@ -1169,8 +1148,6 @@ func TestReconcileCIStatus_NoPersonAttributingLanguage(t *testing.T) {
 	}
 }
 
-// --- TrackerOpsWg lifecycle tests ---
-
 // blockingCITracker is a TrackerAdapter whose AddLabel and CommentIssue
 // methods block on channel gates. Used to pace fire-and-forget goroutines
 // spawned by escalateCIFailure so TrackerOpsWg tracking can be verified.
@@ -1307,8 +1284,6 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 		t.Fatal("TrackerOpsWg.Wait() did not return after CommentIssue goroutine completed")
 	}
 }
-
-// --- Backoff tests ---
 
 func TestComputeCIPendingDelay(t *testing.T) {
 	t.Parallel()
@@ -1575,8 +1550,6 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 	}
 }
 
-// --- Watch window ---
-
 // TestReconcileCIStatus_WatchWindow_MeasuredFromHeadRecordedAt covers
 // an entry whose age past the last recorded head exceeds
 // watch_window_ms is dropped with its counter, and one whose head moved
@@ -1723,8 +1696,6 @@ func TestReconcileCIStatus_DropOnAgeReleasesCounter(t *testing.T) {
 		t.Errorf("GetMergeability calls = %d, want 0 (watch window exceeded before read)", scm.calls)
 	}
 }
-
-// --- Watch-end conditions ---
 
 func TestReconcileCIStatus_Merged_EndsWatch(t *testing.T) {
 	t.Parallel()
@@ -1895,8 +1866,6 @@ func TestReconcileCIStatus_ClosedAndMerged_EndsWatchThroughMergedBranch(t *testi
 	}
 }
 
-// --- Fingerprint dedup tests ---
-
 // TestReconcileCIStatus_DedupSkip verifies that when GetReactionFingerprint
 // returns the current head with dispatched=true, no FetchCIStatus call is
 // made and the entry is re-enqueued.
@@ -2011,8 +1980,6 @@ func TestReconcileCIStatus_UpgradePath_PreExistingFingerprintNotLiveHead(t *test
 	}
 }
 
-// --- One head read, one epoch transition, one status fetch per tick ---
-
 // TestReconcileCIStatus_OneHeadReadOneEpochTransitionOneStatusFetchPerTick
 // verifies that across one poll interval (one call to reconcileCIStatus),
 // exactly one head read, one epoch transition, and one FetchCIStatus call
@@ -2048,8 +2015,6 @@ func TestReconcileCIStatus_OneHeadReadOneEpochTransitionOneStatusFetchPerTick(t 
 	}
 }
 
-// --- Dispatch marking ---
-
 // TestReconcileCIStatus_Failing_DoesNotMarkDispatched verifies that
 // handleCIFailure never calls MarkReactionDispatched: CI dispatch tracking
 // is entirely fingerprint-based on the live head, with no separate
@@ -2073,8 +2038,6 @@ func TestReconcileCIStatus_Failing_DoesNotMarkDispatched(t *testing.T) {
 		t.Error("retry not scheduled after CI failure; want scheduled")
 	}
 }
-
-// --- Escalation error metrics ---
 
 func TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric(t *testing.T) {
 	t.Parallel()
@@ -2190,7 +2153,6 @@ func TestEscalateCIFailure_FingerprintSurvivesEscalation(t *testing.T) {
 	if store.deleteFingerprintCalls != 0 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 0 during CI escalation (fingerprint is the epoch record)", store.deleteFingerprintCalls)
 	}
-	// Claim must be released.
 	if _, ok := state.Claimed["ISS-FP-6"]; ok {
 		t.Error("claim not released after escalation")
 	}
@@ -2237,8 +2199,6 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testi
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 0 (escalation no longer deletes the epoch record)", store.deleteFingerprintCalls)
 	}
 }
-
-// --- Retry-slot arbitration tests ---
 
 // TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow seeds a
 // persisted retry row and a matching in-memory continuation entry, then
@@ -2352,8 +2312,6 @@ func TestReconcileCIStatus_Pending_LeavesCreatedAtUnchanged(t *testing.T) {
 		t.Errorf("PendingAttempts = %d, want 1 (the tick ran)", entry.PendingAttempts)
 	}
 }
-
-// --- End-to-end attribution tests against a real persistence store ---
 
 // TestReconcileCIStatus_CIFailedRunHistoryExcludedFromAttribution verifies
 // that a run_history row with status ci_failed and completed_at inside
@@ -2526,8 +2484,6 @@ func TestReconcileCIStatus_UpsertFailure_DefersEpochTransition(t *testing.T) {
 		t.Errorf("FetchCIStatus called %d times after a failed upsert; want 0 (the pass ends before the status read)", ci.calls)
 	}
 }
-
-// --- Triage gate integration ---
 
 // escalateTriageScript and dispatchAgentTriageScript answer "escalate"
 // and "dispatch-agent" respectively; handledScript (defined in

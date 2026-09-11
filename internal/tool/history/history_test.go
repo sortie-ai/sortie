@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- Helpers ---
-
 var noopQuery QueryFunc = func(_ context.Context, _ string, _ int) ([]Entry, error) {
 	return []Entry{}, nil
 }
@@ -64,8 +62,6 @@ func assertFailureEnvelope(t *testing.T, m map[string]any, wantKind string) map[
 	}
 	return errObj
 }
-
-// --- Tests ---
 
 func TestHistoryTool_Name(t *testing.T) {
 	t.Parallel()

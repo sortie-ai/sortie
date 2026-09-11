@@ -199,7 +199,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 	t.Run("ContinuationTurnRenderError", func(t *testing.T) {
 		t.Parallel()
 
-		// References a missing field unconditionally — errors on all turns.
+		// References a missing field unconditionally; errors on all turns.
 		body := "{{ .issue.missing_field }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
 		if err != nil {
@@ -227,7 +227,7 @@ func TestBuildTurnPrompt(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for turnNumber=0, got nil")
 		}
-		// Must NOT be a *TemplateError — this is a caller bug, not a template issue.
+		// Must NOT be a *TemplateError; this is a caller bug, not a template issue.
 		if _, ok := errors.AsType[*TemplateError](err); ok {
 			t.Errorf("BuildTurnPrompt(turnNumber=0) error type = %T, want plain error", err)
 		}

@@ -282,8 +282,6 @@ func swapDefaultLogger(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// --- parseIID ---
-
 func TestParseIID(t *testing.T) {
 	t.Parallel()
 
@@ -319,8 +317,6 @@ func TestParseIID(t *testing.T) {
 		})
 	}
 }
-
-// --- Constructor ---
 
 func TestNewGitLabAdapter(t *testing.T) {
 	t.Parallel()
@@ -679,8 +675,6 @@ func TestNewGitLabAdapter(t *testing.T) {
 	})
 }
 
-// --- parseQueryFilter ---
-
 func TestParseQueryFilter(t *testing.T) {
 	t.Parallel()
 
@@ -730,8 +724,6 @@ func TestParseQueryFilter(t *testing.T) {
 		})
 	}
 }
-
-// --- Percent-encoded project path ---
 
 func TestProjectPathPercentEncoding(t *testing.T) {
 	t.Parallel()
@@ -810,8 +802,6 @@ func TestProjectPathPercentEncoding(t *testing.T) {
 	})
 }
 
-// --- Registration ---
-
 func TestGitLabAdapterRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -822,8 +812,6 @@ func TestGitLabAdapterRegistration(t *testing.T) {
 		t.Errorf(`Trackers.Get("gitlab") = %v, want registered constructor`, err)
 	}
 }
-
-// --- paginateIssues ---
 
 func TestPaginateIssues(t *testing.T) {
 	t.Parallel()
@@ -923,8 +911,6 @@ func TestPaginateIssues(t *testing.T) {
 	})
 }
 
-// --- paginateNotes ---
-
 func TestPaginateNotes(t *testing.T) {
 	t.Parallel()
 
@@ -977,8 +963,6 @@ func TestPaginateNotes(t *testing.T) {
 		}
 	})
 }
-
-// --- FetchCandidateIssues ---
 
 func TestFetchCandidateIssues(t *testing.T) {
 	t.Parallel()
@@ -1247,8 +1231,6 @@ func identifiersOf(issues []domain.Issue) []string {
 	return out
 }
 
-// --- FetchIssuesByStates ---
-
 func TestFetchIssuesByStates(t *testing.T) {
 	t.Parallel()
 
@@ -1418,8 +1400,6 @@ func TestFetchIssuesByStates(t *testing.T) {
 	})
 }
 
-// --- FetchIssueByID ---
-
 func TestFetchIssueByID(t *testing.T) {
 	t.Parallel()
 
@@ -1531,8 +1511,6 @@ func TestFetchIssueByID(t *testing.T) {
 	})
 }
 
-// --- FetchIssueComments ---
-
 func TestFetchIssueComments(t *testing.T) {
 	t.Parallel()
 
@@ -1643,8 +1621,6 @@ func TestFetchIssueComments(t *testing.T) {
 		}
 	})
 }
-
-// --- FetchIssueStatesByIDs / FetchIssueStatesByIdentifiers ---
 
 func TestFetchIssueStatesByIDs(t *testing.T) {
 	t.Parallel()
@@ -1922,8 +1898,6 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 	})
 }
 
-// --- TransitionIssue ---
-
 func TestTransitionIssue(t *testing.T) {
 	t.Parallel()
 
@@ -2163,8 +2137,6 @@ func TestTransitionIssue(t *testing.T) {
 	})
 }
 
-// --- CommentIssue ---
-
 func TestCommentIssue(t *testing.T) {
 	t.Parallel()
 
@@ -2235,8 +2207,6 @@ func TestCommentIssue(t *testing.T) {
 		}
 	})
 }
-
-// --- AddLabel ---
 
 func TestAddLabel(t *testing.T) {
 	t.Parallel()
@@ -2309,8 +2279,6 @@ func TestAddLabel(t *testing.T) {
 		}
 	})
 }
-
-// --- Label catalog pagination (multi-page regression) ---
 
 func TestLabelCatalogPagination(t *testing.T) {
 	t.Parallel()
@@ -2420,7 +2388,7 @@ func TestLabelCatalogPagination(t *testing.T) {
 	})
 }
 
-// --- query_filter labels diagnostic (W1, W2, wildcard exemptions) ---
+// query_filter labels diagnostic (W1, W2, wildcard exemptions).
 //
 // NewGitLabAdapter takes its logger from slog.Default(), so every subtest
 // here calls swapDefaultLogger and none of them, nor this function itself,
@@ -2625,8 +2593,6 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 	})
 }
 
-// --- Error-category mapping for a rejected write ---
-
 func TestWriteErrorMapping(t *testing.T) {
 	t.Parallel()
 
@@ -2666,8 +2632,6 @@ func TestWriteErrorMapping(t *testing.T) {
 		})
 	}
 }
-
-// --- Identifier guard across all three writes ---
 
 func TestWriteIdentifierGuard(t *testing.T) {
 	t.Parallel()

@@ -15,8 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // labelFixDispatchedFlagStore returns a fixed mark and a hardcoded
 // dispatched flag from GetReactionFingerprint, proving
 // reconcileLabelFixCommands never reads the flag: a fresh event past the
@@ -61,8 +59,6 @@ func (s *labelFixDispatchedFlagStore) DeleteReactionFingerprint(_ context.Contex
 	return nil
 }
 
-// --- Test helpers ---
-//
 // These reuse the generic label-event and SCM/fingerprint-store test
 // doubles already declared in label_review_reconcile_test.go
 // (labelEvent, labelReviewBaseTime, labelReviewSCMFake,
@@ -127,9 +123,7 @@ func labelFixParams(store ReconcileStore, scm domain.SCMAdapter) ReconcileParams
 	}
 }
 
-// --- reconcileLabelFixCommands guard tests ---
-
-// TestReconcileLabelFixCommands_Disabled covers V6: a nil SCM adapter or an
+// TestReconcileLabelFixCommands_Disabled verifies that a nil SCM adapter or an
 // unconfigured feature returns immediately with zero ListLabelEvents calls,
 // before any journal read.
 func TestReconcileLabelFixCommands_Disabled(t *testing.T) {
@@ -171,9 +165,7 @@ func TestReconcileLabelFixCommands_Disabled(t *testing.T) {
 	}
 }
 
-// --- reconcileLabelFixCommands dispatch tests ---
-
-// TestReconcileLabelFixCommands_Dispatch covers V1, V2, and A13: one
+// TestReconcileLabelFixCommands_Dispatch verifies that one
 // matching labeled event confirmed with the label still present produces
 // exactly one ScheduleRetry call carrying the label_fix continuation
 // context (including branch), the acting user, the frozen dispatch fields,
@@ -252,11 +244,11 @@ func TestReconcileLabelFixCommands_Dispatch(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelFixCommands_ContinuesAfterAgeRemoval covers R31: after
+// TestReconcileLabelFixCommands_ContinuesAfterAgeRemoval verifies that after
 // the periodic sweep removes a workspace by age, the label-fix reconcile
 // pass still observes a matching label event and still schedules a retry
 // carrying ReactionKindLabelFix, re-enqueuing the pending entry. The
-// reconcile pass reads nothing from the workspace directory (R27), so its
+// reconcile pass reads nothing from the workspace directory, so its
 // removal has no bearing on detection.
 //
 // The recreate-through-dispatch property (workspace.Ensure/Prepare
@@ -344,7 +336,7 @@ func TestReconcileLabelFixCommands_LabelAbsentAtDetection(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelFixCommands_BurstCollapse covers V3: multiple matching
+// TestReconcileLabelFixCommands_BurstCollapse verifies that multiple matching
 // labeled events in one batch collapse to exactly one scheduled retry,
 // carrying the latest match.
 func TestReconcileLabelFixCommands_BurstCollapse(t *testing.T) {
@@ -567,7 +559,7 @@ func TestReconcileLabelFixCommands_DispatchedFlagIgnored(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelFixCommands_AcknowledgmentBestEffort covers V4: after a
+// TestReconcileLabelFixCommands_AcknowledgmentBestEffort verifies that after a
 // confirmed dispatch, RemoveLabel is called with the configured fix label;
 // a failure logs a Warn and leaves dedup and the dispatch unaffected.
 func TestReconcileLabelFixCommands_AcknowledgmentBestEffort(t *testing.T) {
@@ -711,7 +703,7 @@ func TestReconcileLabelFixCommands_NoTTLDrop(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelFixCommands_CrossKindIsolation covers A9: with ci,
+// TestReconcileLabelFixCommands_CrossKindIsolation verifies that with ci,
 // review, bot-review, merge, merge-conflict, and label-review entries all
 // present for one issue, a label-fix dispatch mutates none of them.
 func TestReconcileLabelFixCommands_CrossKindIsolation(t *testing.T) {
@@ -778,7 +770,7 @@ func TestReconcileLabelFixCommands_CrossKindIsolation(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelFixCommands_DispatchLogsActorAndPRNumber covers A11: a
+// TestReconcileLabelFixCommands_DispatchLogsActorAndPRNumber verifies that a
 // confirmed dispatch emits an Info log carrying the PR number and the
 // acting user, unconditionally.
 func TestReconcileLabelFixCommands_DispatchLogsActorAndPRNumber(t *testing.T) {
@@ -837,11 +829,9 @@ func TestReconcileLabelFixCommands_JournalSubstrateNotSnapshot(t *testing.T) {
 	}
 }
 
-// --- buildLabelFixMap tests ---
-
-// TestBuildLabelFixMap_FieldMapping covers A13's sibling shape and the
-// added branch coordinate: every documented field is present and mapped
-// from LabelFixReactionData.
+// TestBuildLabelFixMap_FieldMapping verifies that every documented field is
+// present and mapped from LabelFixReactionData, covering the label-fix-only
+// branch coordinate.
 func TestBuildLabelFixMap_FieldMapping(t *testing.T) {
 	t.Parallel()
 

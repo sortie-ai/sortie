@@ -19,8 +19,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// --- Shared test helpers ---
-
 // writeVerdictFile writes a ReviewVerdict as JSON to <wsPath>/.sortie/review_verdict.json.
 func writeVerdictFile(t *testing.T, wsPath string, verdict domain.ReviewVerdict) {
 	t.Helper()
@@ -100,8 +98,6 @@ func (m *reviewMetricsCount) IncSelfReviewCapReached() { m.capReached++ }
 func (m *reviewMetricsCount) ObserveSelfReviewVerificationDuration(cmd string, _ float64) {
 	m.verCmds = append(m.verCmds, cmd)
 }
-
-// --- verdictWriter is a test AgentAdapter that writes verdict files ---
 
 // verdictWriter implements domain.AgentAdapter. Each call to RunTurn writes
 // the next verdict in the slice to the workspace, then returns success.
@@ -242,8 +238,6 @@ func (r *repeatingNeedsReviewAdapter) RunTurn(_ context.Context, sess domain.Ses
 	}
 	return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
 }
-
-// --- readReviewVerdict tests ---
 
 func TestReadReviewVerdict_Pass(t *testing.T) {
 	t.Parallel()
@@ -447,8 +441,6 @@ func TestReadReviewVerdict_CaseNormalization(t *testing.T) {
 	}
 }
 
-// --- assembleReviewPrompt tests ---
-
 func TestAssembleReviewPrompt_ContainsKeyFields(t *testing.T) {
 	t.Parallel()
 
@@ -539,8 +531,6 @@ func TestAssembleReviewPrompt_StatusFileInstruction(t *testing.T) {
 	}
 }
 
-// --- buildFixPrompt tests ---
-
 func TestBuildFixPrompt_WithIssues(t *testing.T) {
 	t.Parallel()
 
@@ -584,8 +574,6 @@ func TestBuildFixPrompt_ParseError(t *testing.T) {
 		t.Errorf("prompt with nil verdict missing fallback text; prompt = %q", prompt)
 	}
 }
-
-// --- writeReviewSummary tests ---
 
 func TestWriteReviewSummary_Pass(t *testing.T) {
 	t.Parallel()
@@ -678,8 +666,6 @@ func TestWriteReviewSummary_SymlinkRejected(t *testing.T) {
 		t.Error("review_summary.md written through symlink, expected rejection")
 	}
 }
-
-// --- runSingleVerification tests ---
 
 func TestRunVerification_Success(t *testing.T) {
 	t.Parallel()
@@ -798,8 +784,6 @@ func TestRunVerification_ContextCancelled(t *testing.T) {
 	_ = result
 }
 
-// --- generateWorkspaceDiff tests ---
-
 func TestGenerateDiff_EmptyDiff(t *testing.T) {
 	t.Parallel()
 
@@ -892,8 +876,6 @@ func TestGenerateDiff_NoGit(t *testing.T) {
 		t.Error("generateWorkspaceDiff with non-git dir: expected error, got nil")
 	}
 }
-
-// --- runSelfReviewLoop tests ---
 
 func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 	t.Parallel()
@@ -1252,8 +1234,6 @@ func TestSelfReviewLoop_ReviewSummaryWritten(t *testing.T) {
 	}
 }
 
-// --- runSelfReviewLoop terminal status signal ---
-
 // TestSelfReviewLoop_TerminalStatusSignal covers every terminal path of
 // runSelfReviewLoop and asserts its second return value: StatusBlocked for
 // the two in-phase abort arms, StatusNone everywhere else.
@@ -1493,8 +1473,6 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 		t.Error("CapReached = false, want true")
 	}
 }
-
-// --- Fix-turn deadline expiry ---
 
 // selfReviewTurnBoundMS is the turn bound the fix-turn annotation test
 // configures. Nothing in that test waits for it to expire.

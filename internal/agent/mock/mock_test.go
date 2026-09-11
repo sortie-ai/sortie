@@ -301,10 +301,10 @@ func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	adapter, _ := NewMockAdapter(map[string]any{})
 	sess := domain.Session{ID: "s"}
 
-	// Turn 1 — consume.
+	// First turn: consume.
 	adapter.RunTurn(context.Background(), sess, defaultParams()) //nolint:errcheck // test setup
 
-	// Turn 2 — collect events.
+	// Second turn: collect events.
 	params := defaultParams()
 	events := collectEvents(&params)
 
@@ -921,8 +921,6 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 		t.Errorf("turn 2 CacheReadTokens = %d, want 400", tokenEv2.Usage.CacheReadTokens)
 	}
 }
-
-// --- Per-session timing tests (Spec 8.19) ---
 
 // TestNewMockAdapter_TimingConfig verifies parsing of api_duration_ms
 // and tool_calls configuration keys.

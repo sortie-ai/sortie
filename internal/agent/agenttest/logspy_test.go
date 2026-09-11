@@ -193,7 +193,7 @@ func TestLogSpy_Entries_IsSnapshot(t *testing.T) {
 }
 
 func TestInstallLogSpy_SetsDefault(t *testing.T) {
-	// Not parallel — manipulates global slog.Default.
+	// Not parallel: manipulates global slog.Default.
 	spy := agenttest.InstallLogSpy(t)
 
 	slog.Default().Warn("agent stderr", slog.String("line", "global log"))
@@ -208,7 +208,7 @@ func TestInstallLogSpy_SetsDefault(t *testing.T) {
 }
 
 func TestRequireWarnLines_ReturnsLines(t *testing.T) {
-	// Not parallel — InstallLogSpy mutates the global slog.Default.
+	// Not parallel: InstallLogSpy mutates the global slog.Default.
 	spy := agenttest.InstallLogSpy(t)
 	slog.Default().Warn("agent stderr", slog.String("line", "startup rejected: no license"))
 

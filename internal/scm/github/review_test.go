@@ -14,8 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- helpers ---
-
 func newTestSCMAdapter(t *testing.T, baseURL string) *GitHubSCMAdapter {
 	t.Helper()
 	a, err := NewGitHubSCMAdapter(map[string]any{
@@ -61,8 +59,6 @@ func reviewsAndCommentsHandler(t *testing.T, reviewsFixture, commentsFixture []b
 		}
 	})
 }
-
-// --- Constructor tests ---
 
 func TestNewGitHubSCMAdapter_MissingAPIKey(t *testing.T) {
 	t.Parallel()
@@ -148,8 +144,6 @@ func TestNewGitHubSCMAdapter_CustomUserAgent(t *testing.T) {
 		t.Errorf("User-Agent = %q, want %q", gotUserAgent, "my-app/1.0")
 	}
 }
-
-// --- FetchPendingReviews tests ---
 
 func TestFetchPendingReviews_NoReviews(t *testing.T) {
 	t.Parallel()
@@ -416,7 +410,7 @@ func TestFetchPendingReviews_Pagination_Comments(t *testing.T) {
 		t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
 	}
 
-	// Comments page1 has comment 300, page2 has comment 301 — both non-outdated.
+	// Comments page1 has comment 300, page2 has comment 301; both non-outdated.
 	if len(got) != 2 {
 		t.Errorf("FetchPendingReviews with paginated comments len = %d, want 2", len(got))
 	}
@@ -456,7 +450,7 @@ func TestFetchPendingReviews_HTTP404(t *testing.T) {
 func TestFetchPendingReviews_TransportError(t *testing.T) {
 	t.Parallel()
 
-	// Server closes immediately after listen — all connections refused.
+	// Server closes immediately after listen; all connections refused.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
 
@@ -479,10 +473,8 @@ func TestFetchPendingReviews_JSONPayloadError(t *testing.T) {
 	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 }
 
-// --- FetchBotReviewComments tests ---
-
-// TestFetchBotReviewComments_BotTypeReturned verifies R1: a review authored by
-// a user with user.type == "Bot" is returned by FetchBotReviewComments.
+// TestFetchBotReviewComments_BotTypeReturned verifies that a review authored
+// by a user with user.type == "Bot" is returned by FetchBotReviewComments.
 func TestFetchBotReviewComments_BotTypeReturned(t *testing.T) {
 	t.Parallel()
 
@@ -542,8 +534,8 @@ func TestFetchBotReviewComments_BotTypeCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestFetchBotReviewComments_BotExcludedByFetchPendingReviews verifies R1: the
-// same bot fixture that FetchBotReviewComments returns is excluded by
+// TestFetchBotReviewComments_BotExcludedByFetchPendingReviews verifies that
+// the same bot fixture that FetchBotReviewComments returns is excluded by
 // FetchPendingReviews.
 func TestFetchBotReviewComments_BotExcludedByFetchPendingReviews(t *testing.T) {
 	t.Parallel()
@@ -573,7 +565,7 @@ func TestFetchBotReviewComments_BotExcludedByFetchPendingReviews(t *testing.T) {
 	}
 }
 
-// TestFetchBotReviewComments_AllowlistMatchCaseInsensitive verifies R2: a
+// TestFetchBotReviewComments_AllowlistMatchCaseInsensitive verifies that a
 // review authored by a user with user.type == "User" whose login matches a
 // botUsernames entry case-insensitively is returned by FetchBotReviewComments.
 // The test uses a fixture where both the review and its inline comment carry
@@ -641,7 +633,7 @@ func TestFetchBotReviewComments_CommentedReviewIncluded(t *testing.T) {
 	}
 }
 
-// TestFetchBotReviewComments_SelectionIgnoresBody verifies R3: classification
+// TestFetchBotReviewComments_SelectionIgnoresBody verifies that classification
 // reads only user.login and user.type; the body content does not affect
 // selection. A bot with empty body is still classified as bot (no PR-level
 // comment), and its inline comments are returned.
@@ -649,10 +641,10 @@ func TestFetchBotReviewComments_SelectionIgnoresBody(t *testing.T) {
 	t.Parallel()
 
 	// reviews_changes_requested_no_body.json has user.type == "User" (not a bot).
-	// We need a bot review with empty body to confirm body doesn't affect selection.
+	// A bot review with empty body confirms body content doesn't affect selection.
 	// Use a bot review + inline comment; the bot is selected by user.type, not body.
 	reviewsFixture := loadFixture(t, "reviews_bot.json")
-	// Provide a bot inline comment — body content is irrelevant to selection.
+	// Provide a bot inline comment; body content is irrelevant to selection.
 	commentsFixture := loadFixture(t, "comments_bot_inline.json")
 	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
 	defer srv.Close()
@@ -726,9 +718,9 @@ func TestFetchBotReviewComments_OutdatedCommentFlag(t *testing.T) {
 }
 
 // TestFetchBotReviewComments_LiveResponseLocations uses responses captured
-// from sortie-ai/sortie PR #649. GitHub's review-scoped endpoint omitted all
-// line fields for the same comments, while the PR-scoped endpoint returned
-// the current and original ranges used below.
+// from a live GitHub pull request. GitHub's review-scoped endpoint omitted
+// all line fields for the same comments, while the PR-scoped endpoint
+// returned the current and original ranges used below.
 func TestFetchBotReviewComments_LiveResponseLocations(t *testing.T) {
 	t.Parallel()
 

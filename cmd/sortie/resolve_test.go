@@ -141,16 +141,12 @@ Do {{ .issue.title }}.
 		t.Fatalf("exit code = %d, want 1 (preflight should fail); stderr: %s", code, stderr.String())
 	}
 
-	// .sortie.db must NOT exist — DB open should not have run.
+	// .sortie.db must NOT exist; DB open should not have run.
 	dbPath := filepath.Join(workflowDir, ".sortie.db")
 	if _, err := os.Stat(dbPath); err == nil {
 		t.Errorf("database file should not exist at %s when preflight fails", dbPath)
 	}
 }
-
-// --- resolveDBPath tests ---
-
-// --- resolveDBPath tests ---
 
 func TestResolveDBPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -196,12 +192,8 @@ func TestResolveDBPath(t *testing.T) {
 	}
 }
 
-// --- Database path integration tests ---
-
 // writeWorkflowFileWithDBPath creates a WORKFLOW.md in dir with a
 // custom db_path field and returns its absolute path.
-
-// --- Database path integration tests ---
 
 // writeWorkflowFileWithDBPath creates a WORKFLOW.md in dir with a
 // custom db_path field and returns its absolute path.
@@ -295,7 +287,7 @@ func TestRunDatabaseRelativePath(t *testing.T) {
 		t.Errorf("expected database at %s, got error: %v", relDB, err)
 	}
 
-	// data/ must NOT exist in CWD — confirms resolution against workflow dir.
+	// data/ must NOT exist in CWD; confirms resolution against workflow dir.
 	cwdData := filepath.Join(cwdDir, "data")
 	if _, err := os.Stat(cwdData); err == nil {
 		t.Errorf("data/ should not exist in CWD at %s", cwdData)
@@ -308,13 +300,9 @@ func TestRunDatabaseRelativePath(t *testing.T) {
 	}
 }
 
-// --- Config map completeness tests ---
-
 // toSnakeCase converts a PascalCase field name to snake_case, handling
 // acronyms like "MS", "API", "ID" correctly: APIKey → api_key,
 // TurnTimeoutMS → turn_timeout_ms, MaxConcurrentByState → max_concurrent_by_state.
-
-// --- Config map completeness tests ---
 
 // toSnakeCase converts a PascalCase field name to snake_case, handling
 // acronyms like "MS", "API", "ID" correctly: APIKey → api_key,
@@ -356,10 +344,6 @@ func TestTrackerConfigMapCompleteness(t *testing.T) {
 		}
 	}
 }
-
-// --- mergeTrackerCredentials tests ---
-
-// --- mergeTrackerCredentials tests ---
 
 func TestMergeTrackerCredentials(t *testing.T) {
 	t.Parallel()
@@ -461,10 +445,6 @@ func TestMergeTrackerCredentialsExtensionsWin(t *testing.T) {
 	}
 }
 
-// --- Kind-match guard wiring tests ---
-
-// --- Kind-match guard wiring tests ---
-
 func TestKindMatchGuardWiring(t *testing.T) {
 	t.Parallel()
 
@@ -539,8 +519,6 @@ func TestKindMatchGuardWiring(t *testing.T) {
 		})
 	}
 }
-
-// --- Quick-start documentation integration test ---
 
 // quickStartWorkflow returns WORKFLOW.md content matching the
 // https://docs.sortie-ai.com/getting-started/quick-start/ tutorial,
@@ -632,8 +610,6 @@ func TestResolveServerPort(t *testing.T) {
 			wantPort:    7678,
 			wantEnabled: true,
 		},
-
-		// --- Boundary and invalid port regression tests ---
 
 		{
 			name:        "flag negative port rejected",
@@ -959,8 +935,6 @@ func TestResolveServerHost(t *testing.T) {
 	}
 }
 
-// --- resolveLogLevel tests ---
-
 func TestResolveLogLevel(t *testing.T) {
 	t.Parallel()
 
@@ -1076,12 +1050,8 @@ func TestResolveLogLevel(t *testing.T) {
 	}
 }
 
-// --- --log-level CLI flag integration tests ---
-
 // minimalWorkflowWithLogLevel returns a WORKFLOW.md with the given level
 // set in the logging.level extension key.
-
-// --- resolveLogFormat tests ---
 
 func TestResolveLogFormat(t *testing.T) {
 	t.Parallel()
@@ -1190,8 +1160,6 @@ func TestResolveLogFormat(t *testing.T) {
 		})
 	}
 }
-
-// --- --log-format CLI flag integration tests ---
 
 // minimalWorkflowWithLogFormat returns a WORKFLOW.md with the given format
 // set in the logging.format extension key.

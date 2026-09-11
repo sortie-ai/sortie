@@ -151,8 +151,6 @@ func buildBulkComments(t *testing.T, n int) []byte {
 	return data
 }
 
-// --- Constructor ---
-
 func TestNewGiteaAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -593,8 +591,6 @@ func TestNewGiteaAdapter_EmptyEndpointMessageIsPinned(t *testing.T) {
 	}
 }
 
-// --- Registration ---
-
 func TestGiteaAdapterRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -605,8 +601,6 @@ func TestGiteaAdapterRegistration(t *testing.T) {
 		t.Errorf(`Trackers.Get("gitea") = %v, want registered constructor`, err)
 	}
 }
-
-// --- paginateIssues ---
 
 func TestPaginateIssues(t *testing.T) {
 	t.Parallel()
@@ -725,8 +719,6 @@ func TestPaginateIssues(t *testing.T) {
 		}
 	})
 }
-
-// --- FetchCandidateIssues ---
 
 func TestFetchCandidateIssues(t *testing.T) {
 	t.Parallel()
@@ -1044,8 +1036,6 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 }
 
-// --- FetchIssuesByStates ---
-
 func TestFetchIssuesByStates(t *testing.T) {
 	t.Parallel()
 
@@ -1249,8 +1239,6 @@ func TestFetchIssuesByStates(t *testing.T) {
 	})
 }
 
-// --- reportUnresolvedLabels ---
-
 func TestReportUnresolvedLabels(t *testing.T) {
 	t.Parallel()
 
@@ -1304,8 +1292,6 @@ func TestReportUnresolvedLabels(t *testing.T) {
 		}
 	})
 }
-
-// --- warnUnrecognizedFilterKeys ---
 
 func TestWarnUnrecognizedFilterKeys(t *testing.T) {
 	t.Parallel()
@@ -1361,8 +1347,6 @@ func TestWarnUnrecognizedFilterKeys(t *testing.T) {
 	})
 }
 
-// --- fetchLabelNames ---
-
 func TestFetchLabelNames(t *testing.T) {
 	t.Parallel()
 
@@ -1389,8 +1373,6 @@ func TestFetchLabelNames(t *testing.T) {
 		}
 	})
 }
-
-// --- FetchIssueByID ---
 
 func TestFetchIssueByID(t *testing.T) {
 	t.Parallel()
@@ -1489,8 +1471,6 @@ func TestFetchIssueByID(t *testing.T) {
 	})
 }
 
-// --- FetchIssueComments ---
-
 func TestFetchIssueComments(t *testing.T) {
 	t.Parallel()
 
@@ -1581,8 +1561,6 @@ func TestFetchIssueComments(t *testing.T) {
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 }
-
-// --- FetchIssueStatesByIDs / FetchIssueStatesByIdentifiers ---
 
 func TestFetchIssueStatesByIDs(t *testing.T) {
 	t.Parallel()
@@ -1699,8 +1677,6 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 	}
 }
 
-// --- fetchBlockers ---
-
 func TestFetchBlockers(t *testing.T) {
 	t.Parallel()
 
@@ -1754,8 +1730,6 @@ func TestFetchBlockers(t *testing.T) {
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 }
-
-// --- TransitionIssue ---
 
 func TestTransitionIssue(t *testing.T) {
 	t.Parallel()
@@ -1979,8 +1953,6 @@ func TestTransitionIssue(t *testing.T) {
 	})
 }
 
-// --- CommentIssue ---
-
 func TestCommentIssue(t *testing.T) {
 	t.Parallel()
 
@@ -2014,8 +1986,6 @@ func TestCommentIssue(t *testing.T) {
 	})
 }
 
-// --- Write error mapping ---
-
 func TestWriteErrorMapping(t *testing.T) {
 	t.Parallel()
 
@@ -2045,8 +2015,6 @@ func TestWriteErrorMapping(t *testing.T) {
 		})
 	}
 }
-
-// --- AddLabel ---
 
 func TestAddLabel(t *testing.T) {
 	t.Parallel()
@@ -2154,8 +2122,6 @@ func TestAddLabel(t *testing.T) {
 		}
 	})
 }
-
-// --- ensureLabelID ---
 
 func TestEnsureLabelID(t *testing.T) {
 	t.Parallel()

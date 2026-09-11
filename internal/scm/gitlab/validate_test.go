@@ -11,8 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 // diagsWithSeverity returns the subset of diags with the given severity.
 func diagsWithSeverity(diags []registry.ValidationDiag, severity string) []registry.ValidationDiag {
 	var out []registry.ValidationDiag
@@ -33,8 +31,6 @@ func assertNoMessageContains(t *testing.T, diags []registry.ValidationDiag, subs
 		}
 	}
 }
-
-// --- Tests ---
 
 func TestValidateEndpoint(t *testing.T) {
 	t.Parallel()

@@ -21,8 +21,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- helpers ---
-
 func validConfig(endpoint string) map[string]any {
 	return map[string]any{
 		"endpoint": endpoint,
@@ -83,8 +81,6 @@ type spyMetrics struct {
 func (s *spyMetrics) IncTrackerRequests(operation, result string) {
 	s.calls = append(s.calls, operation+":"+result)
 }
-
-// --- Constructor tests ---
 
 func TestNewGitHubAdapter(t *testing.T) {
 	t.Parallel()
@@ -494,8 +490,6 @@ func TestNewGitHubAdapter_HandoffStateExtraction(t *testing.T) {
 	})
 }
 
-// --- FetchCandidateIssues ---
-
 func TestFetchCandidateIssues_FiltersPullRequests(t *testing.T) {
 	t.Parallel()
 
@@ -760,8 +754,6 @@ func TestFetchCandidateIssues_AuthError(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 }
 
-// --- FetchIssueByID ---
-
 func TestFetchIssueByID_FullPopulation(t *testing.T) {
 	t.Parallel()
 
@@ -991,8 +983,6 @@ func TestFetchIssueByID_CommentsNotFound(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
 
-// --- FetchIssuesByStates ---
-
 func TestFetchIssuesByStates_EmptyInput(t *testing.T) {
 	t.Parallel()
 
@@ -1031,7 +1021,7 @@ func TestFetchIssuesByStates_ActiveStatesUsesIssuesEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	// "backlog" is an active state — should use issues endpoint.
+	// "backlog" is an active state; should use issues endpoint.
 	issues, err := a.FetchIssuesByStates(context.Background(), []string{"backlog"})
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates: %v", err)
@@ -1068,7 +1058,7 @@ func TestFetchIssuesByStates_TerminalStatesUsesSearchEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	// "done" is a terminal state — must use search endpoint.
+	// "done" is a terminal state; must use search endpoint.
 	_, err := a.FetchIssuesByStates(context.Background(), []string{"done"})
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates: %v", err)
@@ -1136,7 +1126,7 @@ func TestFetchIssuesByStates_Dedup(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	// Request both active ("backlog") and terminal ("done") — issue #1 matches both.
+	// Request both active ("backlog") and terminal ("done"); issue #1 matches both.
 	issues, err := a.FetchIssuesByStates(context.Background(), []string{"backlog", "done"})
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates: %v", err)
@@ -1146,8 +1136,6 @@ func TestFetchIssuesByStates_Dedup(t *testing.T) {
 		t.Fatalf("len = %d, want 1 (deduplication)", len(issues))
 	}
 }
-
-// --- FetchIssueStatesByIDs ---
 
 func TestFetchIssueStatesByIDs_Success(t *testing.T) {
 	t.Parallel()
@@ -1249,8 +1237,6 @@ func TestFetchIssueStatesByIDs_ContextCancellation(t *testing.T) {
 	}
 }
 
-// --- FetchIssueStatesByIdentifiers ---
-
 func TestFetchIssueStatesByIdentifiers_Success(t *testing.T) {
 	t.Parallel()
 
@@ -1271,8 +1257,6 @@ func TestFetchIssueStatesByIdentifiers_Success(t *testing.T) {
 		t.Errorf("result[\"7\"] = %q, want review", result["7"])
 	}
 }
-
-// --- FetchIssueComments ---
 
 func TestFetchIssueComments_SinglePage(t *testing.T) {
 	t.Parallel()
@@ -1367,8 +1351,6 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 	_, err := a.FetchIssueComments(context.Background(), "999")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
-
-// --- TransitionIssue ---
 
 // transitionServer sets up an httptest server that simulates GitHub label and
 // state operations for TransitionIssue. It tracks which API calls were made.
@@ -1712,8 +1694,6 @@ func TestTransitionIssue_LabelURLEncoding(t *testing.T) {
 	}
 }
 
-// --- CommentIssue ---
-
 func TestCommentIssue_Success(t *testing.T) {
 	t.Parallel()
 
@@ -1751,8 +1731,6 @@ func TestCommentIssue_Error(t *testing.T) {
 	err := a.CommentIssue(context.Background(), "999", "comment")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
-
-// --- SetMetrics ---
 
 func TestSetMetrics_RecordsOperations(t *testing.T) {
 	t.Parallel()
@@ -1832,7 +1810,7 @@ func TestSetMetrics_NilMetricsDoesNotPanic(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Adapter with no SetMetrics call — metrics field is nil.
+	// Adapter with no SetMetrics call; metrics field is nil.
 	a := mustAdapter(t, validConfig(srv.URL))
 	// Must not panic.
 	_, err := a.FetchCandidateIssues(context.Background())
@@ -1840,8 +1818,6 @@ func TestSetMetrics_NilMetricsDoesNotPanic(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
 }
-
-// --- FetchCandidateIssues (search path) ---
 
 func TestFetchCandidateIssues_SearchPagination(t *testing.T) {
 	t.Parallel()
@@ -1915,8 +1891,6 @@ func TestFetchCandidateIssues_SearchAPIError(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 }
 
-// --- FetchIssueByID additional error paths ---
-
 func TestFetchIssueByID_NonNotFoundError(t *testing.T) {
 	t.Parallel()
 
@@ -1980,8 +1954,6 @@ func TestFetchIssueByID_ParentAPIError(t *testing.T) {
 	_, err := a.FetchIssueByID(context.Background(), "42")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 }
-
-// --- FetchIssuesByStates additional paths ---
 
 func TestFetchIssuesByStates_OpenPagination(t *testing.T) {
 	t.Parallel()
@@ -2141,8 +2113,6 @@ func TestFetchIssuesByStates_ContextCancelledDuringTerminal(t *testing.T) {
 	}
 }
 
-// --- FetchIssueStatesByIDs additional paths ---
-
 func TestFetchIssueStatesByIDs_SkipsPullRequest(t *testing.T) {
 	t.Parallel()
 
@@ -2177,8 +2147,6 @@ func TestFetchIssueStatesByIdentifiers_Error(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 }
 
-// --- FetchIssueComments additional paths ---
-
 func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
 	t.Parallel()
 
@@ -2192,8 +2160,6 @@ func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
 	_, err := a.FetchIssueComments(context.Background(), "42")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 }
-
-// --- TransitionIssue additional paths ---
 
 func TestTransitionIssue_GetIssueError(t *testing.T) {
 	t.Parallel()
@@ -2245,8 +2211,6 @@ func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 		t.Errorf("POST count = %d, want 1 (add-label must still execute)", got)
 	}
 }
-
-// --- ETag cache constructor tests ---
 
 func TestNewGitHubAdapter_ETagCacheSizeDefault(t *testing.T) {
 	t.Parallel()
@@ -2312,8 +2276,6 @@ func TestNewGitHubAdapter_ETagCacheSizeNegative(t *testing.T) {
 		t.Errorf("etagCache.maxSize = %d, want 1000 (negative falls back to default)", a.etagCache.maxSize)
 	}
 }
-
-// --- FetchIssueStatesByIDs — ETag conditional request tests ---
 
 func TestFetchIssueStatesByIDs_ConditionalRequest_304(t *testing.T) {
 	t.Parallel()
@@ -2453,7 +2415,7 @@ func TestFetchIssueStatesByIDs_304_CachedStateUsedAfterEviction(t *testing.T) {
 	// Issue 1's server handler blocks until issue 2 has been processed and has
 	// evicted issue 1 from the size-1 cache. The 304 for issue 1 must still
 	// return the correct state via the local variable captured before the HTTP
-	// call — not via a re-lookup of the (now-evicted) cache entry.
+	// call; not via a re-lookup of the (now-evicted) cache entry.
 	issue1Arrived := make(chan struct{}, 1)
 	releaseGA := make(chan struct{})
 
@@ -2573,12 +2535,12 @@ func TestFetchIssueStatesByIDs_NetworkError_CachePreserved(t *testing.T) {
 	cfg["etag_cache_size"] = 100
 	a := mustAdapter(t, cfg)
 
-	// Call 1: success — populates cache.
+	// Call 1: success, populates cache.
 	if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"30"}); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 
-	// Call 2: server error — must not evict the cache entry.
+	// Call 2: server error, must not evict the cache entry.
 	_, err := a.FetchIssueStatesByIDs(context.Background(), []string{"30"})
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 
@@ -2668,7 +2630,7 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
-	// Only issue #1 (backlog) appears — PR (#2) filtered, done (#3) non-active.
+	// Only issue #1 (backlog) appears; PR (#2) filtered, done (#3) non-active.
 	if len(candidates) != 1 {
 		t.Fatalf("FetchCandidateIssues: got %d issues, want 1 (only backlog)", len(candidates))
 	}
@@ -2681,7 +2643,7 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 		activeSet[s] = true // GitHub adapter already lowercases
 	}
 
-	// Active issue — FetchIssueByID succeeds and local check accepts.
+	// Active issue: FetchIssueByID succeeds and local check accepts.
 	issue1, err := a.FetchIssueByID(ctx, "1")
 	if err != nil {
 		t.Fatalf("FetchIssueByID(1): %v", err)
@@ -2696,11 +2658,11 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 		t.Errorf("issue 1 (state=%q): local active check rejects it but it was a candidate", issue1.State)
 	}
 
-	// PR — FetchIssueByID returns ErrTrackerNotFound.
+	// PR: FetchIssueByID returns ErrTrackerNotFound.
 	_, err = a.FetchIssueByID(ctx, "2")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
-	// Non-active issue — FetchIssueByID succeeds but local check rejects.
+	// Non-active issue: FetchIssueByID succeeds but local check rejects.
 	issue3, err := a.FetchIssueByID(ctx, "3")
 	if err != nil {
 		t.Fatalf("FetchIssueByID(3): %v", err)

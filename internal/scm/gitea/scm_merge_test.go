@@ -13,8 +13,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- GetMergeability ---
-
 // pr_merged.json is schema-inferred from the upstream MergedCommitID
 // *string field in modules/structs/pull.go at the Gitea v1.27.0 tag this
 // project pins (JSON key merge_commit_sha), the same provenance marker
@@ -138,8 +136,6 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 		})
 	}
 }
-
-// --- GetCIStatus ---
 
 func TestGiteaSCMGetCIStatus(t *testing.T) {
 	t.Parallel()
@@ -362,8 +358,6 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 		}
 	})
 }
-
-// --- MergePR ---
 
 func TestGiteaSCMMergePR(t *testing.T) {
 	t.Parallel()
@@ -591,8 +585,6 @@ func assertSCMConflict(t *testing.T, err error) *domain.SCMError {
 	}
 	return se
 }
-
-// --- DeleteBranch ---
 
 func TestGiteaSCMDeleteBranch(t *testing.T) {
 	t.Parallel()

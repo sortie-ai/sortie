@@ -712,7 +712,7 @@ func TestResolveNotificationCap_MixedZeroAndNonZero_ReturnsNonZeroMax(t *testing
 }
 
 // mcpServerWorkflow returns a minimal WORKFLOW.md body suitable for
-// runMCPServer tests. No tracker section is included — only what is
+// runMCPServer tests. No tracker section is included; only what is
 // required to pass workflow.Load and config.NewServiceConfig without
 // error. The notifications list is injected as an optional YAML block
 // so tests can control whether buildNotifyTool succeeds.

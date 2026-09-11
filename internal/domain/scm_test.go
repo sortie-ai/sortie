@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// --- TestSCMError_Error ---
-
 func TestSCMError_Error(t *testing.T) {
 	t.Parallel()
 
@@ -70,8 +68,6 @@ func TestSCMError_Error(t *testing.T) {
 	}
 }
 
-// --- TestSCMError_Unwrap ---
-
 func TestSCMError_Unwrap(t *testing.T) {
 	t.Parallel()
 
@@ -118,8 +114,6 @@ func TestSCMError_Unwrap(t *testing.T) {
 		}
 	})
 }
-
-// --- TestSCMAdapter_InterfaceCompliance ---
 
 // Compile-time check: mockSCMAdapter satisfies the SCMAdapter interface.
 var _ SCMAdapter = (*mockSCMAdapter)(nil)

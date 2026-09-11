@@ -586,7 +586,6 @@ func TestContentBlock_ToolUseID(t *testing.T) {
 		t.Fatalf("contentBlocks() = %d blocks, want 2", len(blocks))
 	}
 
-	// blocks[0]: tool_use
 	if blocks[0].Type != "tool_use" {
 		t.Errorf("blocks[0].Type = %q, want %q", blocks[0].Type, "tool_use")
 	}
@@ -597,7 +596,6 @@ func TestContentBlock_ToolUseID(t *testing.T) {
 		t.Errorf("blocks[0].Name = %q, want %q", blocks[0].Name, "Bash")
 	}
 
-	// blocks[1]: tool_result with ToolUseID correlation
 	if blocks[1].Type != "tool_result" {
 		t.Errorf("blocks[1].Type = %q, want %q", blocks[1].Type, "tool_result")
 	}
@@ -680,7 +678,6 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		t.Fatalf("total EventToolResult events = %d, want 2", len(toolEvents))
 	}
 
-	// First event: Read tool result.
 	if toolEvents[0].ToolName != "Read" {
 		t.Errorf("toolEvents[0].ToolName = %q, want %q", toolEvents[0].ToolName, "Read")
 	}
@@ -691,7 +688,6 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		t.Errorf("toolEvents[0].ToolDurationMS = %d, want >= 0", toolEvents[0].ToolDurationMS)
 	}
 
-	// Second event: Bash tool result.
 	if toolEvents[1].ToolName != "Bash" {
 		t.Errorf("toolEvents[1].ToolName = %q, want %q", toolEvents[1].ToolName, "Bash")
 	}

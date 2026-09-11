@@ -12,8 +12,6 @@ import (
 func typePtr(name string) *githubIssueType { return &githubIssueType{Name: name} }
 func prMarker() *githubPR                  { return &githubPR{} }
 
-// --- normalizeIssue ---
-
 func TestNormalizeIssue_AllFields(t *testing.T) {
 	t.Parallel()
 
@@ -277,8 +275,6 @@ func TestQualifyDisplayID(t *testing.T) {
 	}
 }
 
-// --- normalizeBlockers ---
-
 func TestNormalizeBlockers_NonEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -328,8 +324,6 @@ func TestNormalizeBlockers_EmptyReturnsNonNilSlice(t *testing.T) {
 	}
 }
 
-// --- normalizeComments ---
-
 func TestNormalizeComments_NonEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -374,8 +368,6 @@ func TestNormalizeComments_EmptyReturnsNonNilSlice(t *testing.T) {
 	}
 }
 
-// --- isPullRequest ---
-
 func TestIsPullRequest(t *testing.T) {
 	t.Parallel()
 
@@ -407,8 +399,6 @@ func TestIsPullRequest(t *testing.T) {
 		})
 	}
 }
-
-// --- dependency-summary cheap-answer pre-filter ---
 
 func TestNormalizeIssue_DependenciesSummaryPreFilter(t *testing.T) {
 	t.Parallel()
@@ -519,7 +509,5 @@ func TestNormalizeIssue_PreFilterDecisionEquality(t *testing.T) {
 		t.Errorf("pre-filtered BlockedBy len = %d, per-issue-read BlockedBy len = %d, want equal", len(preFiltered.BlockedBy), len(readBlockedBy))
 	}
 }
-
-// --- domain type sanity check (compile-time) ---
 
 var _ domain.Issue = domain.Issue{}

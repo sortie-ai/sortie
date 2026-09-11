@@ -35,8 +35,8 @@ func configFromFields(fields registry.TrackerConfigFields) map[string]any {
 	return config
 }
 
-// TestValidateConfig_ErrorRows covers the five error-severity rows of the
-// R31a table, one case per row (plus a port variant of the Cloud-format
+// TestValidateConfig_ErrorRows covers the five error-severity diagnostic
+// checks, one case per check (plus a port variant of the Cloud-format
 // row proving the check compares against url.URL.Hostname rather than
 // Host). Each case also asserts NewJiraAdapter rejects the equivalent
 // config, so the offline verdict cannot diverge from the construction
@@ -136,7 +136,7 @@ func TestValidateConfig_ErrorRows(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_StateListWarnings covers the sixth R31a row: an
+// TestValidateConfig_StateListWarnings asserts that an
 // empty or untrimmed tracker.active_states or tracker.terminal_states
 // element is a warning, because the fault only costs matches at query
 // time rather than blocking Jira construction.
@@ -277,8 +277,8 @@ func TestValidateConfig_QueryFilterAnyShapeProducesNoDiagnostic(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_NeverPlacesAPIKeyValueInMessage pins R7: neither
-// api_key-shape check may echo the api_key value in its diagnostic
+// TestValidateConfig_NeverPlacesAPIKeyValueInMessage asserts that neither
+// api_key-shape check echoes the api_key value in its diagnostic
 // message.
 func TestValidateConfig_NeverPlacesAPIKeyValueInMessage(t *testing.T) {
 	t.Parallel()
@@ -326,12 +326,11 @@ func checkNames(diags []registry.ValidationDiag) []string {
 	return names
 }
 
-// TestValidateConfig_ExactDiagnosticSets covers the suppression rule
-// (R11.2), the api_key precedence rule (R11.3), and the three
-// verdict-preservation input classes R7 enumerates (R11.7). Each case
-// asserts the full ordered diagnostic set rather than the presence of
-// one check, since a check that silently stops firing would otherwise
-// pass a presence-only assertion.
+// TestValidateConfig_ExactDiagnosticSets covers the suppression rule, the
+// api_key precedence rule, and the three verdict-preservation input
+// classes. Each case asserts the full ordered diagnostic set rather than
+// the presence of one check, since a check that silently stops firing
+// would otherwise pass a presence-only assertion.
 func TestValidateConfig_ExactDiagnosticSets(t *testing.T) {
 	t.Parallel()
 
@@ -413,9 +412,9 @@ func TestValidateConfig_ExactDiagnosticSets(t *testing.T) {
 	}
 }
 
-// TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics covers
-// R11.4: three configurations that construct successfully today and
-// must acquire no diagnostic from the widened hook.
+// TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics asserts
+// that three configurations that construct successfully today acquire
+// no diagnostic from the widened hook.
 func TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics(t *testing.T) {
 	t.Parallel()
 
@@ -467,9 +466,9 @@ func TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics(t *testing.T)
 	}
 }
 
-// TestValidateConfig_APIVersionMessageParity covers R11.5: the
+// TestValidateConfig_APIVersionMessageParity asserts that the
 // tracker.api_version.invalid and tracker.api_version.cloud_conflict
-// messages must be the exact Message NewJiraAdapter's own error owner
+// messages are the exact Message NewJiraAdapter's own error owner
 // produces for the same input, never a hook-authored restatement.
 func TestValidateConfig_APIVersionMessageParity(t *testing.T) {
 	t.Parallel()

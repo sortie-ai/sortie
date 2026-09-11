@@ -78,7 +78,7 @@ func TestServerLifecycle(t *testing.T) {
 	})
 
 	// Bind a listener first so we know the server is ready
-	// immediately after Serve starts — no sleep needed.
+	// immediately after Serve starts; no sleep needed.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -179,8 +179,6 @@ func TestServeMethod(t *testing.T) {
 	}
 }
 
-// --- Helpers for /metrics tests ---
-
 func testServerWithRegistry(t *testing.T, reg *prometheus.Registry) *httptest.Server {
 	t.Helper()
 	srv := New(Params{
@@ -193,8 +191,6 @@ func testServerWithRegistry(t *testing.T, reg *prometheus.Registry) *httptest.Se
 	t.Cleanup(ts.Close)
 	return ts
 }
-
-// --- /metrics endpoint tests ---
 
 func TestMetricsEndpoint(t *testing.T) {
 	t.Parallel()
@@ -272,8 +268,6 @@ func TestMetricsEndpointMethodNotAllowed(t *testing.T) {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
-
-// --- Draining + Shutdown tests ---
 
 func TestSetDrainingThenShutdown(t *testing.T) {
 	t.Parallel()

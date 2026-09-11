@@ -7,8 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 // diagsWithSeverity returns the subset of diags with the given severity.
 func diagsWithSeverity(diags []registry.ValidationDiag, severity string) []registry.ValidationDiag {
 	var out []registry.ValidationDiag
@@ -19,8 +17,6 @@ func diagsWithSeverity(diags []registry.ValidationDiag, severity string) []regis
 	}
 	return out
 }
-
-// --- Tests ---
 
 func TestValidateAPIKeyHint(t *testing.T) {
 	// No t.Parallel(): subtests use t.Setenv to control GITHUB_TOKEN.

@@ -356,7 +356,7 @@ func TestShouldDispatch(t *testing.T) {
 
 // TestShouldDispatchParkedIssue verifies that both ShouldDispatch and
 // ShouldDispatchWithSets return false for a parked issue that satisfies
-// every other gate, with state.BudgetExhausted empty — matching a
+// every other gate, with state.BudgetExhausted empty, matching a
 // deployment where both agent.max_sessions and agent.max_tokens are zero,
 // so the park gate alone, not a budget gate, accounts for the refusal.
 func TestShouldDispatchParkedIssue(t *testing.T) {
@@ -592,8 +592,6 @@ func TestStateSet(t *testing.T) {
 	}
 }
 
-// --- Test helpers for 6.3 functions ---
-
 func testIssue(id string) domain.Issue {
 	return domain.Issue{
 		ID:         id,
@@ -606,8 +604,6 @@ func testIssue(id string) domain.Issue {
 func newTestState() *State {
 	return NewState(1000, 10, 0, nil, AgentTotals{})
 }
-
-// --- Tests for NextAttempt ---
 
 func TestNextAttempt(t *testing.T) {
 	t.Parallel()
@@ -634,8 +630,6 @@ func TestNextAttempt(t *testing.T) {
 		})
 	}
 }
-
-// --- Tests for CancelRetry ---
 
 func TestCancelRetry(t *testing.T) {
 	t.Parallel()
@@ -712,8 +706,6 @@ func TestCancelRetry(t *testing.T) {
 		}
 	})
 }
-
-// --- Tests for ScheduleRetry ---
 
 func TestScheduleRetry(t *testing.T) {
 	t.Parallel()
@@ -792,7 +784,6 @@ func TestScheduleRetry(t *testing.T) {
 		if entry.Attempt != 2 {
 			t.Errorf("RetryEntry.Attempt = %d, want %d", entry.Attempt, 2)
 		}
-		// Old timer should have been stopped.
 		if oldTimer.Stop() {
 			t.Error("old timer was not stopped by ScheduleRetry")
 		}
@@ -874,8 +865,6 @@ func TestScheduleRetry(t *testing.T) {
 	})
 }
 
-// --- Tests for retrySlotIncumbent ---
-
 func TestRetrySlotIncumbent(t *testing.T) {
 	t.Parallel()
 
@@ -905,8 +894,6 @@ func TestRetrySlotIncumbent(t *testing.T) {
 		}
 	})
 }
-
-// --- Tests for logRetrySlotDeferral ---
 
 func TestLogRetrySlotDeferral(t *testing.T) {
 	t.Parallel()
@@ -965,8 +952,6 @@ func TestLogRetrySlotDeferral(t *testing.T) {
 	})
 }
 
-// --- Tests for DispatchIssue ---
-
 func TestDispatchIssue(t *testing.T) {
 	t.Parallel()
 
@@ -988,7 +973,6 @@ func TestDispatchIssue(t *testing.T) {
 			t.Fatal("worker goroutine did not execute within 1 second")
 		}
 
-		// Issue must be claimed.
 		if _, claimed := s.Claimed[issue.ID]; !claimed {
 			t.Error("DispatchIssue() did not add issue to Claimed set")
 		}
@@ -999,7 +983,6 @@ func TestDispatchIssue(t *testing.T) {
 			t.Fatal("DispatchIssue() did not create Running entry")
 		}
 
-		// Running count.
 		if got := len(s.Running); got != 1 {
 			t.Errorf("len(Running) = %d, want 1", got)
 		}
@@ -1228,8 +1211,6 @@ func TestDispatchIssue(t *testing.T) {
 		DispatchIssue(context.Background(), s, testIssue("ISS-P"), nil, "", nil)
 	})
 }
-
-// --- EvaluateCandidate ---
 
 // fakeBlockerResolver is a test double for BlockerResolver. Both
 // functions default to a no-op when nil: NeedsRead reports false and
@@ -1622,8 +1603,6 @@ func TestEvaluateCandidate_TransientFailureDoesNotHalt(t *testing.T) {
 		t.Errorf("resolver calls = %d, want 2 (transient failure does not halt the pass)", len(resolver.callOrder))
 	}
 }
-
-// --- Read budget window ---
 
 // budgetWindowIssueCount is the fixed number of needy candidates
 // budgetWindowIssues returns: more than maxBlockerReadsPerPass, so the

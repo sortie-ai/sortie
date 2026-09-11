@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// --- Helpers ---
-
 var noopQuery BudgetQueryFunc = func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
 	return BudgetUsage{}, nil
 }
@@ -36,8 +34,6 @@ func executeOK(t *testing.T, tool *BudgetTool) costBudgetResponse {
 	}
 	return envelope.Data
 }
-
-// --- Tests ---
 
 func TestBudgetTool_Name(t *testing.T) {
 	t.Parallel()

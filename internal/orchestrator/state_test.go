@@ -465,7 +465,7 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("RateLimits[reset_at] = %v, want %q", got, "2026-03-24T13:00:00Z")
 		}
 
-		// Mutate original after snapshot — snapshot must be unaffected.
+		// Mutate original after snapshot; snapshot must be unaffected.
 		origData["injected_key"] = "should not appear"
 		if _, leaked := result.RateLimits["injected_key"]; leaked {
 			t.Error("RateLimits contains injected_key after original mutation — shallow copy isolation failed")
@@ -559,8 +559,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("WorkspacePath = %q, want empty string", result.Running[0].WorkspacePath)
 		}
 	})
-
-	// --- Extended token metric snapshot tests ---
 
 	t.Run("extended fields copied to snapshot", func(t *testing.T) {
 		t.Parallel()
@@ -659,7 +657,7 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 
-	// P5: the breakdown is gated in RuntimeSnapshot itself, the one
+	// The breakdown is gated in RuntimeSnapshot itself, the one
 	// site that resolves the request verdict, so these two cases must
 	// run through RuntimeSnapshot rather than assert on a hand-built
 	// SnapshotRunningEntry, which would bypass the gate entirely.
@@ -713,8 +711,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("RequestsByModel = %v, want nil when attribution does not name a model", snap.RequestsByModel)
 		}
 	})
-
-	// --- Timing fields snapshot tests ---
 
 	t.Run("ToolTimeMs and APITimeMs copied to snapshot", func(t *testing.T) {
 		t.Parallel()
@@ -1038,8 +1034,6 @@ func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {
 	}
 }
 
-// --- isKnownReactionKind tests ---
-
 func TestIsKnownReactionKind_AcceptsAutoMerge(t *testing.T) {
 	t.Parallel()
 
@@ -1064,8 +1058,6 @@ func TestIsKnownReactionKind_AcceptsAutoMerge(t *testing.T) {
 		})
 	}
 }
-
-// --- watchWindowMS tests ---
 
 // TestWatchWindowMS covers the shared watch_window_ms parsing helper used by
 // the review, bot-review, auto-merge, and merge-conflict reaction builders:
@@ -1160,8 +1152,6 @@ func TestWatchWindowMS(t *testing.T) {
 		})
 	}
 }
-
-// --- BuildAutoMergeReactionConfig tests ---
 
 func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 	t.Parallel()
@@ -1360,8 +1350,6 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-// --- NewState auto-merge flag defaults ---
-
 func TestNewState_AutoMergePreflightFlagDefaultsFalse(t *testing.T) {
 	t.Parallel()
 
@@ -1461,8 +1449,6 @@ func TestRuntimeSnapshot_SelfReviewFields(t *testing.T) {
 	}
 }
 
-// --- isKnownReactionKind merge-conflict case ---
-
 func TestIsKnownReactionKind_AcceptsMergeConflict(t *testing.T) {
 	t.Parallel()
 
@@ -1489,8 +1475,6 @@ func TestIsKnownReactionKind_AcceptsMergeConflict(t *testing.T) {
 		})
 	}
 }
-
-// --- BuildMergeConflictReactionConfig tests ---
 
 func TestBuildMergeConflictReactionConfig(t *testing.T) {
 	t.Parallel()
@@ -1666,8 +1650,6 @@ func TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel(t *test
 	}
 }
 
-// --- isKnownReactionKind label-review case ---
-
 func TestIsKnownReactionKind_AcceptsLabelReview(t *testing.T) {
 	t.Parallel()
 
@@ -1695,9 +1677,7 @@ func TestIsKnownReactionKind_AcceptsLabelReview(t *testing.T) {
 	}
 }
 
-// --- reactionKindPins / isKnownReactionKind / reactionKindPinsWorkspace ---
-
-// TestReactionKindPins covers R11: isKnownReactionKind and
+// TestReactionKindPins verifies that isKnownReactionKind and
 // reactionKindPinsWorkspace both derive from the single reactionKindPins
 // map, so the set of known kinds is asserted by iterating the map itself
 // rather than by a second hand-written list that could diverge from it.
@@ -1743,8 +1723,6 @@ func TestReactionKindPins(t *testing.T) {
 	})
 }
 
-// --- BuildLabelReviewReactionConfig tests ---
-
 func TestBuildLabelReviewReactionConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1766,8 +1744,6 @@ func TestBuildLabelReviewReactionConfig(t *testing.T) {
 		t.Errorf("BuildLabelReviewReactionConfig(%+v) = %+v, want %+v", cfg, got, want)
 	}
 }
-
-// --- isKnownReactionKind label-fix case ---
 
 func TestIsKnownReactionKind_AcceptsLabelFix(t *testing.T) {
 	t.Parallel()
@@ -1794,8 +1770,6 @@ func TestIsKnownReactionKind_AcceptsLabelFix(t *testing.T) {
 		})
 	}
 }
-
-// --- isKnownReactionKind merge-completion case ---
 
 // TestIsKnownReactionKind_AcceptsMergeCompletion verifies that the kind is
 // registered in reactionKindPins, and that reactionKindPinsWorkspace reports
@@ -1829,8 +1803,6 @@ func TestIsKnownReactionKind_AcceptsMergeCompletion(t *testing.T) {
 		t.Errorf("reactionKindPinsWorkspace(%q) = %v, want false", ReactionKindMergeCompletion, got)
 	}
 }
-
-// --- BuildMergeCompletionReactionConfig tests ---
 
 // TestBuildMergeCompletionReactionConfig covers the nine validation
 // failures of the stated evaluation order, the ADR-default success case,
@@ -2024,8 +1996,6 @@ func TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry(t *testin
 		}
 	})
 }
-
-// --- BuildLabelFixReactionConfig tests ---
 
 func TestBuildLabelFixReactionConfig(t *testing.T) {
 	t.Parallel()
@@ -2332,12 +2302,11 @@ func TestRuntimeSnapshot_UsageDispositionFields(t *testing.T) {
 	}
 }
 
-// TestApiRequestsMeasured walks section 3.3's rule table (P1, P2): an
+// TestApiRequestsMeasured walks the arrival/attribution rule table: an
 // arrival that does not report during the turn is always unmeasured,
 // and for incremental a positive raw count is always measured while a
 // zero count depends only on whether a turn began. The last two cases
-// prove totality (P8's counterpart for this function) over a value
-// outside the declared UsageArrival set.
+// prove totality over a value outside the declared UsageArrival set.
 func TestApiRequestsMeasured(t *testing.T) {
 	t.Parallel()
 
@@ -2374,7 +2343,7 @@ func TestApiRequestsMeasured(t *testing.T) {
 	}
 }
 
-// TestApiRequestsMeasuredSingleDerivationSite proves P3:
+// TestApiRequestsMeasuredSingleDerivationSite proves that
 // apiRequestsMeasured is the only site that derives the request
 // verdict. It walks every non-test source file under cmd and internal
 // for a call to UsageArrival's ReportsDuringTurn, the frozen

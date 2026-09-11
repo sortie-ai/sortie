@@ -78,8 +78,6 @@ func serveJSON(t *testing.T, body []byte) *httptest.Server {
 	}))
 }
 
-// --- GetMergeability: detailed_merge_status table ---
-
 func TestGetMergeability_StatusTable(t *testing.T) {
 	t.Parallel()
 
@@ -143,8 +141,6 @@ func quoteIfEmpty(s string) string {
 	return s
 }
 
-// --- GetMergeability: expected blocking values ---
-
 func TestGetMergeability_ExpectedBlockingValues(t *testing.T) {
 	t.Parallel()
 
@@ -202,8 +198,6 @@ func TestGetMergeability_ExpectedBlockingValues(t *testing.T) {
 	}
 }
 
-// --- GetMergeability: unexpected values ---
-
 func TestGetMergeability_UnexpectedValues(t *testing.T) {
 	t.Parallel()
 
@@ -247,8 +241,6 @@ func TestGetMergeability_UnexpectedValues(t *testing.T) {
 		})
 	}
 }
-
-// --- GetMergeability: the non-mergeable Debug record ---
 
 func TestGetMergeability_NonMergeableDebugRecord(t *testing.T) {
 	t.Parallel()
@@ -339,8 +331,6 @@ func TestGetMergeability_NonMergeableDebugRecord(t *testing.T) {
 	})
 }
 
-// --- GetMergeability: merged and open dispositions ---
-
 func TestGetMergeability_MergedDisposition(t *testing.T) {
 	t.Parallel()
 
@@ -422,8 +412,6 @@ func TestGetMergeability_Closed(t *testing.T) {
 	}
 }
 
-// --- GetMergeability: field population ---
-
 func TestGetMergeability_FieldPopulation(t *testing.T) {
 	t.Parallel()
 
@@ -473,8 +461,6 @@ func TestGetMergeability_FieldPopulation(t *testing.T) {
 		}
 	})
 }
-
-// --- GetCIStatus: head_pipeline mapping ---
 
 func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 	t.Parallel()
@@ -531,9 +517,6 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 		})
 	}
 }
-
-// --- GetCIStatus: agreement with the CI provider's own normalization over
-// the full 13-value pipeline-status enum ---
 
 func TestGetCIStatus_PipelineStatusEnumAgreement(t *testing.T) {
 	t.Parallel()
@@ -592,8 +575,6 @@ func TestGetCIStatus_PipelineStatusEnumAgreement(t *testing.T) {
 	}
 }
 
-// --- GetCIStatus: request budget ---
-
 func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 	t.Parallel()
 
@@ -645,8 +626,6 @@ func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 		run(t, map[string]any{"head_pipeline": nil})
 	})
 }
-
-// --- GetCIStatus: head-comparison deferral ---
 
 // divergentPipelineSHA names a commit that is never the merge request's
 // own sha in any fixture in this file, so a head_pipeline carrying it
@@ -735,8 +714,6 @@ func TestGetCIStatus_HeadComparisonDeferral(t *testing.T) {
 	})
 }
 
-// --- GetCIStatus: absent head_pipeline ---
-
 func TestGetCIStatus_NilHeadPipelineIssuesNoWarning(t *testing.T) {
 	t.Parallel()
 
@@ -769,8 +746,6 @@ func TestGetCIStatus_NilHeadPipelineIssuesNoWarning(t *testing.T) {
 	}
 }
 
-// --- GetCIStatus: missing merge-request sha ---
-
 func TestGetCIStatus_MissingMergeRequestSHA(t *testing.T) {
 	t.Parallel()
 
@@ -802,8 +777,6 @@ func TestGetCIStatus_MissingMergeRequestSHA(t *testing.T) {
 		t.Errorf("requests = %d, want 1", n)
 	}
 }
-
-// --- GetCIStatus: case-insensitive head comparison ---
 
 func TestGetCIStatus_HeadComparisonCaseInsensitive(t *testing.T) {
 	t.Parallel()
@@ -863,8 +836,6 @@ func TestGetCIStatus_HeadComparisonCaseInsensitive(t *testing.T) {
 		}
 	})
 }
-
-// --- GetCIStatus: generated merge-ref exemption ---
 
 // exemptPipelineSHA names a commit that is never the merge request's own
 // sha in any fixture in this file, matching the shape of a merged
@@ -983,8 +954,6 @@ func TestGetCIStatus_GeneratedMergeRefExemption(t *testing.T) {
 	})
 }
 
-// --- GetCIStatus: detached merge-request pipeline ---
-
 func TestGetCIStatus_DetachedMergeRequestPipelineInsideComparison(t *testing.T) {
 	t.Parallel()
 
@@ -1039,8 +1008,6 @@ func TestGetCIStatus_DetachedMergeRequestPipelineInsideComparison(t *testing.T) 
 	})
 }
 
-// --- GetCIStatus: shapes that imitate the exemption ---
-
 func TestGetCIStatus_ExemptionRejectsImitatingShapes(t *testing.T) {
 	t.Parallel()
 
@@ -1084,8 +1051,6 @@ func TestGetCIStatus_ExemptionRejectsImitatingShapes(t *testing.T) {
 		})
 	}
 }
-
-// --- GetCIStatus: manual head pipeline job-set fold ---
 
 // manualPipelineSHA and manualPipelineID are the full 40-character sha
 // and pipeline id every manual-path test below addresses the statuses
@@ -1580,8 +1545,6 @@ func TestGetCIStatus_ManualWarnings(t *testing.T) {
 	})
 }
 
-// --- Error status coverage ---
-
 func TestGetMergeability_ErrorStatuses(t *testing.T) {
 	t.Parallel()
 
@@ -1649,8 +1612,6 @@ func TestGetCIStatus_ErrorStatuses(t *testing.T) {
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
 }
-
-// --- MergePR: success, strategy encoding, and request shape (AC3, AC13, R35) ---
 
 func TestMergePR_StrategyEncodingAndRequestShape(t *testing.T) {
 	t.Parallel()
@@ -1826,8 +1787,6 @@ func TestMergePR_PayloadValidation(t *testing.T) {
 	})
 }
 
-// --- MergePR: conflict promotion, already-merged marker, and auth enrichment (AC4, AC5, AC10, R10-R14) ---
-
 func TestMergePR_ConflictPromotion(t *testing.T) {
 	t.Parallel()
 
@@ -1992,8 +1951,6 @@ func assertMergeConflict(t *testing.T, err error) *domain.SCMError {
 	return se
 }
 
-// --- DeleteBranch (AC6) ---
-
 func TestDeleteBranch_AbsentBranchDisposition(t *testing.T) {
 	t.Parallel()
 
@@ -2049,8 +2006,6 @@ func TestDeleteBranch_SlashBearingNameEncoded(t *testing.T) {
 	}
 }
 
-// --- Cross-kind conflict isolation (AC9, R17, R36) ---
-
 func TestGitLabSCM_ConflictKindBelongsToMergeOnly(t *testing.T) {
 	t.Parallel()
 
@@ -2104,8 +2059,6 @@ func TestGitLabSCM_ConflictKindBelongsToMergeOnly(t *testing.T) {
 		})
 	}
 }
-
-// --- MergePR: message composition and non-conflict failure classes ---
 
 func TestComposeMessage(t *testing.T) {
 	t.Parallel()

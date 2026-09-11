@@ -28,8 +28,6 @@ func v2Config(endpoint string) map[string]any {
 	}
 }
 
-// --- api_version normalization at the constructor (AC6, AC7) ---
-
 func TestNewJiraAdapter_APIVersion(t *testing.T) {
 	t.Parallel()
 
@@ -136,8 +134,6 @@ func asTrackerError(t *testing.T, err error, target **domain.TrackerError) {
 	}
 }
 
-// --- resolveAuth matrix (AC4, AC6) ---
-
 func TestResolveAuth(t *testing.T) {
 	t.Parallel()
 
@@ -215,8 +211,6 @@ func TestResolveAuth_GuardRelaxesOnlyForV2ColonFree(t *testing.T) {
 		}
 	}
 }
-
-// --- Host / version consistency guard, reject arm (AC11) ---
 
 func TestNewJiraAdapter_HostVersionGuard_RejectCloudV2(t *testing.T) {
 	t.Parallel()
@@ -470,8 +464,6 @@ func TestNewJiraAdapter_HostVersionGuard_NoWarnForConsistent(t *testing.T) {
 	}
 }
 
-// --- v2 offset search pagination (AC1, AC3) ---
-
 func TestPaginatedSearchV2_SinglePage(t *testing.T) {
 	t.Parallel()
 
@@ -596,8 +588,6 @@ func TestPaginatedSearchV2_DecodeError(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 }
 
-// --- v2 comment write (AC5) ---
-
 func TestCommentIssue_V2RawStringBody(t *testing.T) {
 	t.Parallel()
 
@@ -667,8 +657,6 @@ func TestCommentPayload_ByVersion(t *testing.T) {
 		t.Errorf("commentPayload(3) = %s, want an ADF document with type doc", raw)
 	}
 }
-
-// --- Transport auth header and no-secret-logging (AC4, AC10) ---
 
 func TestV2Transport_AuthHeader(t *testing.T) {
 	t.Parallel()
@@ -750,8 +738,6 @@ func TestV2Transport_NoSecretInLogs(t *testing.T) {
 	}
 }
 
-// --- v2 HTTP error category mapping (AC8) ---
-
 func TestV2_HTTPErrorMapping(t *testing.T) {
 	t.Parallel()
 
@@ -784,8 +770,6 @@ func TestV2_HTTPErrorMapping(t *testing.T) {
 		})
 	}
 }
-
-// --- v3 regression: a config without api_version keeps v3 behavior (AC6) ---
 
 func TestV3Regression_NoAPIVersion(t *testing.T) {
 	t.Parallel()
@@ -869,7 +853,7 @@ func TestV3Regression_ADFFlattening(t *testing.T) {
 }
 
 // TestV3Regression_ColonGuardPreserved confirms the v3 colon guard still
-// rejects email: and :token at construction (AC6).
+// rejects email: and :token at construction.
 func TestV3Regression_ColonGuardPreserved(t *testing.T) {
 	t.Parallel()
 

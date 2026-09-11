@@ -169,22 +169,22 @@ func TestNormalizeSearchIssue_BlockerExtraction(t *testing.T) {
 		Key: "X-1",
 		Fields: jiraFields{
 			IssueLinks: []jiraIssueLink{
-				// Inward "Blocks" — should produce BlockerRef
+				// Inward "Blocks"; should produce BlockerRef
 				{
 					Type:        jiraLinkType{Name: "Blocks"},
 					InwardIssue: &jiraLinkedIssue{ID: "2", Key: "X-2", Fields: &jiraLinkedIssueFields{Status: &jiraStatus{Name: "Open"}}},
 				},
-				// Outward "Blocks" — should be ignored
+				// Outward "Blocks"; should be ignored
 				{
 					Type:         jiraLinkType{Name: "Blocks"},
 					OutwardIssue: &jiraLinkedIssue{ID: "3", Key: "X-3"},
 				},
-				// "Relates" link — should be ignored
+				// "Relates" link; should be ignored
 				{
 					Type:        jiraLinkType{Name: "Relates"},
 					InwardIssue: &jiraLinkedIssue{ID: "4", Key: "X-4"},
 				},
-				// "Blocks" with nil inward issue — should be ignored
+				// "Blocks" with nil inward issue; should be ignored
 				{
 					Type: jiraLinkType{Name: "Blocks"},
 				},

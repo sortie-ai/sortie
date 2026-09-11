@@ -20,8 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// --- Test doubles ---
-
 // mockExitStore records calls to the WorkerExitStore interface methods and
 // returns configurable errors. It satisfies [WorkerExitStore].
 type mockExitStore struct {
@@ -139,8 +137,6 @@ func (m *mockExitStore) CountWorkerRunsCompletedSince(_ context.Context, _ strin
 	return 0, errors.New("worker run count is unsupported by this test double")
 }
 
-// --- Test helpers ---
-
 // baseTime is a fixed reference time for deterministic tests.
 var baseTime = time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
 
@@ -174,8 +170,6 @@ func defaultExitParams(t *testing.T, store *mockExitStore) HandleWorkerExitParam
 	}
 }
 
-// --- Pure helper tests ---
-
 func TestComputeBackoffDelay(t *testing.T) {
 	t.Parallel()
 
@@ -185,7 +179,7 @@ func TestComputeBackoffDelay(t *testing.T) {
 		maxRetryBackoffMS int
 		want              int64
 	}{
-		// Default cap (300000) — attempts 1..7.
+		// Default cap (300000), attempts 1..7.
 		{name: "attempt 1 default cap", attempt: 1, maxRetryBackoffMS: 300_000, want: 10_000},
 		{name: "attempt 2 default cap", attempt: 2, maxRetryBackoffMS: 300_000, want: 20_000},
 		{name: "attempt 3 default cap", attempt: 3, maxRetryBackoffMS: 300_000, want: 40_000},
@@ -306,8 +300,6 @@ func TestClassifyWorkerError(t *testing.T) {
 	}
 }
 
-// --- HandleWorkerExit tests ---
-
 func TestHandleWorkerExit_NormalExit(t *testing.T) {
 	t.Parallel()
 
@@ -323,7 +315,6 @@ func TestHandleWorkerExit_NormalExit(t *testing.T) {
 		WorkspacePath: "/tmp/ws",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["ISSUE-1"]; ok {
 		t.Error("Running entry not removed after normal exit")
 	}
@@ -333,12 +324,10 @@ func TestHandleWorkerExit_NormalExit(t *testing.T) {
 		t.Errorf("AgentTotals.SecondsRunning = %f, want 60", state.AgentTotals.SecondsRunning)
 	}
 
-	// Added to Completed set.
 	if _, ok := state.Completed["ISSUE-1"]; !ok {
 		t.Error("issue not added to Completed set after normal exit")
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["ISSUE-1"]; !ok {
 		t.Error("claim released after normal exit, should be preserved")
 	}
@@ -706,17 +695,14 @@ func TestHandleWorkerExit_RetryableError(t *testing.T) {
 		WorkspacePath: "/tmp/ws",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["ISSUE-2"]; ok {
 		t.Error("Running entry not removed after error exit")
 	}
 
-	// NOT added to Completed set.
 	if _, ok := state.Completed["ISSUE-2"]; ok {
 		t.Error("issue added to Completed set after error exit, should not be")
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["ISSUE-2"]; !ok {
 		t.Error("claim released after retryable error exit, should be preserved")
 	}
@@ -823,22 +809,18 @@ func TestHandleWorkerExit_NonRetryableError(t *testing.T) {
 		WorkspacePath: "/tmp/ws",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["ISSUE-3"]; ok {
 		t.Error("Running entry not removed after non-retryable error exit")
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["ISSUE-3"]; ok {
 		t.Error("claim preserved after non-retryable error exit, should be released")
 	}
 
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["ISSUE-3"]; ok {
 		t.Error("retry scheduled after non-retryable error exit, should not be")
 	}
 
-	// NOT added to Completed set.
 	if _, ok := state.Completed["ISSUE-3"]; ok {
 		t.Error("issue added to Completed set after non-retryable error exit")
 	}
@@ -1033,22 +1015,18 @@ func TestHandleWorkerExit_CancelledExit(t *testing.T) {
 		WorkspacePath: "/tmp/ws",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["ISSUE-4"]; ok {
 		t.Error("Running entry not removed after cancelled exit")
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["ISSUE-4"]; ok {
 		t.Error("claim preserved after cancelled exit, should be released")
 	}
 
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["ISSUE-4"]; ok {
 		t.Error("retry scheduled after cancelled exit, should not be")
 	}
 
-	// NOT added to Completed set.
 	if _, ok := state.Completed["ISSUE-4"]; ok {
 		t.Error("issue added to Completed set after cancelled exit")
 	}
@@ -1144,7 +1122,7 @@ func TestHandleWorkerExit_CancelledWithoutTokenCeilingStopStaysCancelled(t *test
 
 // TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit verifies
 // that a latched TokenCeilingStopped entry does not produce "budget_stopped"
-// when the worker's exit kind is something other than WorkerExitCancelled —
+// when the worker's exit kind is something other than WorkerExitCancelled;
 // the two conditions can diverge if the run finished on its own in the
 // window between the cancel and the worker noticing it.
 func TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit(t *testing.T) {
@@ -1491,7 +1469,7 @@ func TestHandleWorkerExit_RunHistoryFields(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerExit_RunHistoryCompletedAtIsUTC covers R9: the
+// TestHandleWorkerExit_RunHistoryCompletedAtIsUTC verifies that the
 // production writer formats a UTC time with time.RFC3339, so the
 // persisted value ends in "Z" and parses back as RFC3339. Unlike
 // TestHandleWorkerExit_RunHistoryFields, NowFunc is left nil so the
@@ -1651,8 +1629,6 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 	})
 }
 
-// --- Cancelled exit: retry claim preservation ---
-
 func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T) {
 	t.Parallel()
 
@@ -1674,7 +1650,6 @@ func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T)
 		AgentAdapter: "mock",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["CAN-1"]; ok {
 		t.Error("Running entry not removed after cancelled exit")
 	}
@@ -1684,7 +1659,6 @@ func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T)
 		t.Error("claim released despite pre-scheduled retry")
 	}
 
-	// Retry entry preserved.
 	if _, ok := state.RetryAttempts["CAN-1"]; !ok {
 		t.Error("pre-scheduled retry entry removed")
 	}
@@ -1705,18 +1679,14 @@ func TestHandleWorkerExit_CancelledWithoutRetryReleasesClaim(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["CAN-2"]; ok {
 		t.Error("Running entry not removed after cancelled exit")
 	}
 
-	// Claim released — no pre-scheduled retry.
 	if _, ok := state.Claimed["CAN-2"]; ok {
 		t.Error("claim preserved without pre-scheduled retry")
 	}
 }
-
-// --- PendingCleanup: workspace removal on exit ---
 
 func TestHandleWorkerExit_PendingCleanupRemovesWorkspace(t *testing.T) {
 	t.Parallel()
@@ -1743,7 +1713,6 @@ func TestHandleWorkerExit_PendingCleanupRemovesWorkspace(t *testing.T) {
 		WorkspacePath: wsDir,
 	}, params)
 
-	// Workspace directory removed.
 	if _, err := os.Stat(wsDir); !os.IsNotExist(err) {
 		t.Errorf("workspace directory still exists after PendingCleanup exit")
 	}
@@ -1772,7 +1741,7 @@ func TestHandleWorkerExit_NoPendingCleanupSkipsWorkspace(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// Workspace directory still exists — no cleanup.
+	// Workspace directory still exists, no cleanup.
 	if _, err := os.Stat(wsDir); err != nil {
 		t.Errorf("workspace directory removed despite PendingCleanup=false: %v", err)
 	}
@@ -1848,19 +1817,16 @@ func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 		WorkspacePath: actualWS, // actual path at old root
 	}, params)
 
-	// Actual workspace at old root is cleaned.
 	if _, err := os.Stat(actualWS); !os.IsNotExist(err) {
 		t.Error("workspace at old root still exists, cleanup used wrong path")
 	}
 
-	// New root was never touched — no directory created there.
+	// New root was never touched, no directory created there.
 	newRootWS := filepath.Join(newRoot, "PROJ-99")
 	if _, err := os.Stat(newRootWS); !os.IsNotExist(err) {
 		t.Error("directory exists at new root, cleanup should not touch it")
 	}
 }
-
-// --- Handoff transition tests ---
 
 // exitStateWithIssue creates a *State with a running entry whose
 // Issue.State is set to issueState. Used by handoff transition tests.
@@ -1972,8 +1938,6 @@ func TestHandleWorkerExit_HandoffEvidenceObservedAbsenceWithholds(t *testing.T) 
 		}
 	}
 }
-
-// --- Withheld-handoff verification-read suppression tests ---
 
 // suppressedExitWant carries the read-site log values a suppressed
 // exit's records are asserted against.
@@ -3314,17 +3278,14 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds(t *testing.T) {
 		t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "Human Review")
 	}
 
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["HO-1"]; ok {
 		t.Error("retry scheduled after successful handoff transition, should not be")
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["HO-1"]; ok {
 		t.Error("claim preserved after successful handoff transition, should be released")
 	}
 
-	// Added to Completed set.
 	if _, ok := state.Completed["HO-1"]; !ok {
 		t.Error("issue not added to Completed set after handoff transition")
 	}
@@ -3357,7 +3318,6 @@ func TestHandleWorkerExit_HandoffTransitionFails(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// TransitionIssue called once.
 	if len(tracker.transitionCalls) != 1 {
 		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
 	}
@@ -3371,12 +3331,10 @@ func TestHandleWorkerExit_HandoffTransitionFails(t *testing.T) {
 		t.Errorf("retry Attempt = %d, want 1", retryEntry.Attempt)
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["HO-2"]; !ok {
 		t.Error("claim released after failed handoff transition, should be preserved")
 	}
 
-	// Added to Completed set.
 	if _, ok := state.Completed["HO-2"]; !ok {
 		t.Error("issue not added to Completed set after failed handoff")
 	}
@@ -3405,7 +3363,6 @@ func TestHandleWorkerExit_HandoffNotConfigured(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// TransitionIssue NOT called.
 	if len(tracker.transitionCalls) != 0 {
 		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
 	}
@@ -3419,7 +3376,6 @@ func TestHandleWorkerExit_HandoffNotConfigured(t *testing.T) {
 		t.Errorf("retry Attempt = %d, want 1", retryEntry.Attempt)
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["HO-3"]; !ok {
 		t.Error("claim released when handoff not configured, should be preserved")
 	}
@@ -3443,17 +3399,15 @@ func TestHandleWorkerExit_HandoffConfiguredButIssueNotActive(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// TransitionIssue NOT called — issue is not active.
+	// TransitionIssue NOT called, issue is not active.
 	if len(tracker.transitionCalls) != 0 {
 		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
 	}
 
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["HO-4"]; ok {
 		t.Error("retry scheduled for non-active issue, should not be")
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["HO-4"]; ok {
 		t.Error("claim preserved for non-active issue, should be released")
 	}
@@ -3475,12 +3429,10 @@ func TestHandleWorkerExit_NormalExitIssueNotActive_NoHandoff(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["HO-5"]; ok {
 		t.Error("retry scheduled for non-active issue without handoff, should not be")
 	}
 
-	// Claim released.
 	if _, ok := state.Claimed["HO-5"]; ok {
 		t.Error("claim preserved for non-active issue, should be released")
 	}
@@ -3507,23 +3459,19 @@ func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testin
 		AgentAdapter: "mock",
 	}, params)
 
-	// Continuation retry scheduled (backward compat: empty ActiveStates
 	// treated as "issue is active").
 	if _, ok := state.RetryAttempts["HO-6"]; !ok {
 		t.Error("retry not scheduled with empty ActiveStates, backward compat guard failed")
 	}
 
-	// Claim preserved.
 	if _, ok := state.Claimed["HO-6"]; !ok {
 		t.Error("claim released with empty ActiveStates, should be preserved")
 	}
 }
 
-// --- Terminal-observation suppression tests ---
-
-// TestHandleWorkerExit_WorkerObservationTerminalSuppressesHandoff is the
-// guard for the R4 arm of R7: handoffPath is true from the dispatch-time
-// snapshot, and only terminalSuppressed drives the enqueue gate false.
+// TestHandleWorkerExit_WorkerObservationTerminalSuppressesHandoff verifies
+// that handoffPath being true from the dispatch-time snapshot is not
+// enough on its own; only terminalSuppressed drives the enqueue gate false.
 func TestHandleWorkerExit_WorkerObservationTerminalSuppressesHandoff(t *testing.T) {
 	t.Parallel()
 
@@ -3600,10 +3548,10 @@ func TestHandleWorkerExit_ReconcileObservationSkipsVerificationRead(t *testing.T
 	}
 }
 
-// TestHandleWorkerExit_VerificationReadReportsTerminalSuppressesHandoff is
-// the guard for the R6 arm of R7: the dispatch-time snapshot and the
-// worker observation are both active, and only the verification read
-// immediately before the write reports the terminal state.
+// TestHandleWorkerExit_VerificationReadReportsTerminalSuppressesHandoff
+// verifies that even when the dispatch-time snapshot and the worker
+// observation are both active, only the verification read immediately
+// before the write reports the terminal state.
 func TestHandleWorkerExit_VerificationReadReportsTerminalSuppressesHandoff(t *testing.T) {
 	t.Parallel()
 
@@ -3683,7 +3631,7 @@ func TestHandleWorkerExit_VerificationReadFailsProceedsWithHandoff(t *testing.T)
 }
 
 // TestHandleWorkerExit_VerificationReadOmitsIssueProceedsWithHandoff pins
-// R6's rule that an issue absent from the verification read's response is
+// the rule that an issue absent from the verification read's response is
 // not a terminal observation.
 func TestHandleWorkerExit_VerificationReadOmitsIssueProceedsWithHandoff(t *testing.T) {
 	t.Parallel()
@@ -3715,8 +3663,8 @@ func TestHandleWorkerExit_VerificationReadOmitsIssueProceedsWithHandoff(t *testi
 }
 
 // TestHandleWorkerExit_TerminalObservationNoHandoffStateCancelsRetry pins
-// R10's gating of the skipped-handoff metric on a configured handoff
-// state, and R4's replacement of today's continuation retry.
+// the skipped-handoff metric's gating on a configured handoff state, and
+// the replacement of today's continuation retry.
 func TestHandleWorkerExit_TerminalObservationNoHandoffStateCancelsRetry(t *testing.T) {
 	t.Parallel()
 
@@ -3749,7 +3697,7 @@ func TestHandleWorkerExit_TerminalObservationNoHandoffStateCancelsRetry(t *testi
 }
 
 // TestHandleWorkerExit_TerminalOverridesEmptyActiveStatesFallback pins
-// R5's rule that the terminal test overrides the empty-active_states
+// the rule that the terminal test overrides the empty-active_states
 // backward-compatibility fallback.
 func TestHandleWorkerExit_TerminalOverridesEmptyActiveStatesFallback(t *testing.T) {
 	t.Parallel()
@@ -3780,7 +3728,7 @@ func TestHandleWorkerExit_TerminalOverridesEmptyActiveStatesFallback(t *testing.
 }
 
 // TestHandleWorkerExit_TerminalTestIsCaseInsensitive pins the
-// case-insensitive comparison R5 requires.
+// case-insensitive comparison the terminal test requires.
 func TestHandleWorkerExit_TerminalTestIsCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
@@ -3999,8 +3947,6 @@ func TestHandleWorkerExit_TerminalSuppressionIsObservable(t *testing.T) {
 	}
 }
 
-// --- Handoff pending-reaction regression tests ---
-
 func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReaction(t *testing.T) {
 	t.Parallel()
 
@@ -4024,17 +3970,14 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReacti
 		WorkspacePath: wsPath,
 	}, params)
 
-	// TransitionIssue called exactly once.
 	if len(tracker.transitionCalls) != 1 {
 		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
 	}
 
-	// Claim released after successful handoff.
 	if _, ok := state.Claimed["HO-R1"]; ok {
 		t.Error("state.Claimed[HO-R1] present after successful handoff, want released")
 	}
 
-	// No ordinary retry scheduled.
 	if _, ok := state.RetryAttempts["HO-R1"]; ok {
 		t.Error("retry scheduled after successful handoff, want none")
 	}
@@ -4093,7 +4036,6 @@ func TestHandleWorkerExit_HandoffTransitionFails_PopulatesReviewPendingReaction(
 		WorkspacePath: wsPath,
 	}, params)
 
-	// Continuation retry scheduled after handoff failure.
 	if _, ok := state.RetryAttempts["HO-R2"]; !ok {
 		t.Fatal("retry not scheduled after failed handoff transition, want continuation retry")
 	}
@@ -4148,12 +4090,10 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesCIPendingReaction(t
 		WorkspacePath: wsPath,
 	}, params)
 
-	// Claim released after successful handoff.
 	if _, ok := state.Claimed["HO-C1"]; ok {
 		t.Error("state.Claimed[HO-C1] present after successful handoff, want released")
 	}
 
-	// No ordinary retry scheduled.
 	if _, ok := state.RetryAttempts["HO-C1"]; ok {
 		t.Error("retry scheduled after successful handoff, want none")
 	}
@@ -4213,7 +4153,6 @@ func TestHandleWorkerExit_HandoffTransitionFails_PopulatesCIPendingReaction(t *t
 		WorkspacePath: wsPath,
 	}, params)
 
-	// Continuation retry scheduled after handoff failure.
 	if _, ok := state.RetryAttempts["HO-C2"]; !ok {
 		t.Fatal("retry not scheduled after failed handoff transition, want continuation retry")
 	}
@@ -4316,7 +4255,7 @@ func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 
 	params := defaultExitParams(t, store)
 
-	// Worker exited before workspace preparation — WorkspacePath is empty.
+	// Worker exited before workspace preparation, WorkspacePath is empty.
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "NOWSP-1",
 		Identifier:    "NOWSP-1-ident",
@@ -4325,12 +4264,11 @@ func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 		WorkspacePath: "",
 	}, params)
 
-	// Running entry removed.
 	if _, ok := state.Running["NOWSP-1"]; ok {
 		t.Error("Running entry not removed")
 	}
 
-	// Directory at wsRoot is NOT removed — no workspace path means no cleanup.
+	// Directory at wsRoot is NOT removed, no workspace path means no cleanup.
 	if _, err := os.Stat(oldPathDir); err != nil {
 		t.Errorf("workspace dir removed despite empty WorkspacePath: %v", err)
 	}
@@ -4375,7 +4313,6 @@ func TestHandleWorkerExit_RetryableErrorLogsWarn(t *testing.T) {
 		}
 	}
 
-	// No "worker run failed" at ERROR level.
 	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "level=ERROR") && strings.Contains(line, "worker run failed") {
 			t.Errorf("unexpected ERROR log with 'worker run failed':\n%s", line)
@@ -4414,7 +4351,6 @@ func TestHandleWorkerExit_NonRetryableErrorLogsError(t *testing.T) {
 		}
 	}
 
-	// No "worker run failed" at WARN level.
 	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "level=WARN") && strings.Contains(line, "worker run failed") {
 			t.Errorf("unexpected WARN log with 'worker run failed':\n%s", line)
@@ -4444,8 +4380,6 @@ func TestHandleWorkerExit_NormalExitNoWorkerFailedLog(t *testing.T) {
 		t.Errorf("normal exit should not emit 'worker run failed' log\ngot: %s", out)
 	}
 }
-
-// --- SSH Host Pool integration tests ---
 
 func TestHandleWorkerExit_ReleasesSSHHost(t *testing.T) {
 	t.Parallel()
@@ -4484,7 +4418,7 @@ func TestHandleWorkerExit_NilHostPoolSafe(t *testing.T) {
 	store := &mockExitStore{}
 	state := exitState(t, "ISSUE-NIL", nil)
 	params := defaultExitParams(t, store)
-	// HostPool is nil (default) — should not panic.
+	// HostPool is nil (default), should not panic.
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "ISSUE-NIL",
@@ -4551,8 +4485,6 @@ func TestHandleWorkerExit_WorkflowFilePersisted(t *testing.T) {
 		t.Errorf("RunHistory.WorkflowFile = %q, want %q", got, "backend.WORKFLOW.md")
 	}
 }
-
-// --- Comment builder unit tests ---
 
 // commentAwareMetrics wraps spyMetrics and signals done when IncTrackerComments
 // is called. It lets tests synchronize with the detached comment goroutine
@@ -4723,8 +4655,6 @@ func TestBuildFailureComment(t *testing.T) {
 	}
 }
 
-// --- HandleWorkerExit tracker comment integration tests ---
-
 // exitParamsWithComments returns defaultExitParams extended with a tracker
 // adapter and the given comments config. ActiveStates is set so the issue
 // is not active, keeping retryScheduled=false on normal exit for clean assertions.
@@ -4810,7 +4740,7 @@ func TestHandleWorkerExit_NoCommentWhenOnCompletionFalse(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// No goroutine spawned — assert immediately.
+	// No goroutine spawned, assert immediately.
 	if len(tracker.commentCalls) != 0 {
 		t.Errorf("CommentIssue call count = %d, want 0 (OnCompletion=false)", len(tracker.commentCalls))
 	}
@@ -4888,7 +4818,7 @@ func TestHandleWorkerExit_NoCommentWhenOnFailureFalse(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// No goroutine spawned — assert immediately.
+	// No goroutine spawned, assert immediately.
 	if len(tracker.commentCalls) != 0 {
 		t.Errorf("CommentIssue call count = %d, want 0 (OnFailure=false)", len(tracker.commentCalls))
 	}
@@ -4902,7 +4832,7 @@ func TestHandleWorkerExit_NoCommentOnCancelled(t *testing.T) {
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{}
 	state := exitState(t, "CMT-5", nil)
-	// Both flags enabled — still no comment for cancellation.
+	// Both flags enabled, still no comment for cancellation.
 	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{
 		OnCompletion: true,
 		OnFailure:    true,
@@ -4915,7 +4845,7 @@ func TestHandleWorkerExit_NoCommentOnCancelled(t *testing.T) {
 		AgentAdapter: "mock",
 	}, params)
 
-	// No goroutine spawned — assert immediately.
+	// No goroutine spawned, assert immediately.
 	if len(tracker.commentCalls) != 0 {
 		t.Errorf("CommentIssue call count = %d, want 0 (cancelled exit)", len(tracker.commentCalls))
 	}
@@ -5040,8 +4970,6 @@ func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
 	}
 }
 
-// --- Attempt numbering and TurnsCompleted persistence ---
-
 func TestHandleWorkerExit_FirstDispatchAttemptIsOne(t *testing.T) {
 	t.Parallel()
 
@@ -5101,7 +5029,7 @@ func TestHandleWorkerExit_TurnsCompletedZeroWhenNoTurnsRan(t *testing.T) {
 		ExitKind:     WorkerExitError,
 		AgentAdapter: "mock",
 		Error:        errors.New("workspace prep failed"),
-		// TurnsCompleted is zero-value — worker never reached the turn loop.
+		// TurnsCompleted is zero-value, worker never reached the turn loop.
 	}, params)
 
 	if len(store.runHistories) != 1 {
@@ -5111,8 +5039,6 @@ func TestHandleWorkerExit_TurnsCompletedZeroWhenNoTurnsRan(t *testing.T) {
 		t.Errorf("RunHistory.TurnsCompleted = %d, want 0 when no turns ran", store.runHistories[0].TurnsCompleted)
 	}
 }
-
-// --- Soft-stop tests ---
 
 // TestHandleWorkerExit_SoftStop verifies the A2O soft-stop exit path:
 // claim released, no retry scheduled, added to Completed, metrics use
@@ -5140,17 +5066,14 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 			SoftStopReason: "blocked",
 		}, params)
 
-		// Claim released on soft-stop.
 		if _, ok := state.Claimed["SS-1"]; ok {
 			t.Error("claim preserved after soft-stop, want released")
 		}
 
-		// No continuation retry scheduled.
 		if _, ok := state.RetryAttempts["SS-1"]; ok {
 			t.Error("retry scheduled after soft-stop, want suppressed")
 		}
 
-		// Added to Completed.
 		if _, ok := state.Completed["SS-1"]; !ok {
 			t.Error("issue not added to Completed set after soft-stop")
 		}
@@ -5318,14 +5241,13 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 			SoftStopReason: "blocked",
 		}, params)
 
-		// CancelRetry must have removed the pre-existing entry.
 		if _, ok := state.RetryAttempts["SS-6"]; ok {
 			t.Error("pre-existing RetryAttempts entry not removed by CancelRetry on soft-stop")
 		}
 
 		// CancelRetry must have stopped the timer, not only deleted the map entry.
 		// Stop() returns false when the timer was already stopped; true means it
-		// was still live — a bug where CancelRetry skipped the Stop() call.
+		// was still live, a bug where CancelRetry skipped the Stop() call.
 		if preexisting.TimerHandle.Stop() {
 			t.Error("timer was not stopped by CancelRetry: Stop() returned true (timer was still live)")
 		}
@@ -5369,12 +5291,10 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 				len(tracker.transitionCalls))
 		}
 
-		// Claim released.
 		if _, ok := state.Claimed["SS-7"]; ok {
 			t.Error("claim preserved after soft-stop, want released")
 		}
 
-		// No retry scheduled.
 		if _, ok := state.RetryAttempts["SS-7"]; ok {
 			t.Error("retry scheduled after soft-stop with handoff configured, want suppressed")
 		}
@@ -5792,10 +5712,9 @@ func TestHandleWorkerExitBlockedLabelCommandPostureTakesUnchangedDisposition(t *
 	}
 }
 
-// TestHandleWorkerExitNeedsHumanReviewPerformsHandoffWithoutParking is
-// issue #811's own regression requirement: a needs-human-review exit still
-// performs the handoff transition where configured, records no park, and
-// applies no parking label.
+// TestHandleWorkerExitNeedsHumanReviewPerformsHandoffWithoutParking verifies
+// that a needs-human-review exit still performs the handoff transition where
+// configured, records no park, and applies no parking label.
 func TestHandleWorkerExitNeedsHumanReviewPerformsHandoffWithoutParking(t *testing.T) {
 	t.Parallel()
 
@@ -5922,8 +5841,6 @@ func TestBuildSoftStopComment(t *testing.T) {
 		})
 	}
 }
-
-// --- CI provider tests for HandleWorkerExit ---
 
 // writeSCMMetadata writes a minimal .sortie/scm.json to the given workspace
 // directory so that workspace.ReadSCMMetadata can read it.
@@ -6134,7 +6051,7 @@ func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingReaction(t *testing
 	params.CIProvider = &ciProviderStubExit{}
 	params.SCMAdapter = &scmAdapterStubExit{}
 
-	// WorkspacePath is empty — worker exited before workspace preparation.
+	// WorkspacePath is empty, worker exited before workspace preparation.
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CI-ISS-3",
 		Identifier:    "CI-ISS-3-ident",
@@ -6207,8 +6124,6 @@ func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingReaction(t *testing.T) {
 		t.Error("PendingReactions populated after SoftStop; want absent (claim released before CI check)")
 	}
 }
-
-// --- TrackerOpsWg lifecycle tests ---
 
 // TestHandleWorkerExit_TrackerOpsWgDrains verifies that TrackerOpsWg.Add(1)
 // is called before the comment goroutine starts and TrackerOpsWg.Done() is
@@ -6418,11 +6333,9 @@ func TestHandleWorkerExit_ErrorRetry_NoSessionID(t *testing.T) {
 	}
 }
 
-// --- Auto-merge enqueue tests ---
-
 // TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction verifies that
 // a complete PR metadata file causes HandleWorkerExit to populate the
-// auto-merge PendingReaction on a normal exit (spec Test 7 positive case).
+// auto-merge PendingReaction on a normal exit.
 func TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
@@ -6471,7 +6384,7 @@ func TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction(t *testing.T
 
 // TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata verifies that the
 // auto-merge pending reaction is NOT created when the workspace SCM metadata
-// lacks required fields (spec Test 7).
+// lacks required fields.
 func TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -6538,7 +6451,7 @@ func TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata(t *testing.T) {
 
 // TestHandleWorkerExit_AutoMergeEnqueueRequiresConfigured verifies that the
 // auto-merge pending reaction is NOT created when AutoMergeReactionConfigured
-// is false, even with a valid SCM metadata file (spec Test 6).
+// is false, even with a valid SCM metadata file.
 func TestHandleWorkerExit_AutoMergeEnqueueRequiresConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -6683,8 +6596,6 @@ func TestHandleWorkerExit_AutoMergeEnqueueDoesNotOverwrite(t *testing.T) {
 		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 77 (seeded value)", mergeData.PRNumber)
 	}
 }
-
-// --- Bot-review enqueue tests ---
 
 // TestHandleWorkerExit_BotReviewEnqueue_PopulatesPendingReaction verifies that
 // a complete PR metadata file causes HandleWorkerExit to populate the
@@ -6986,8 +6897,6 @@ func TestHandleWorkerExit_BotReviewEnqueueSkippedWhenClaimReleased(t *testing.T)
 	}
 }
 
-// --- merge-conflict enqueue tests ---
-
 func TestHandleWorkerExit_MergeConflictEnqueue_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
@@ -7212,8 +7121,6 @@ func TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-// --- label-review enqueue tests ---
-
 // TestHandleWorkerExit_LabelReviewEnqueue verifies that a normal exit with
 // PR metadata and LabelReviewReactionConfigured==true seeds one
 // label-review pending entry; the slot is not overwritten if already
@@ -7410,8 +7317,6 @@ func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
 	})
 }
 
-// --- label-review read-only exit tests ---
-
 // TestHandleWorkerExit_LabelReviewReadOnlyExit_NoHandoff verifies that a
 // normal exit whose running entry carries ReactionKind==label-review takes
 // neither the handoff path nor the active-issue continuation-retry path,
@@ -7478,8 +7383,6 @@ func TestHandleWorkerExit_LabelReviewReadOnlyExit_ErrorStillRetries(t *testing.T
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelReview)
 	}
 }
-
-// --- label-fix seeding tests ---
 
 // TestHandleWorkerExit_LabelFixEnqueue verifies the label-fix seeding
 // block: a normal exit with the SCM adapter configured, the label-fix
@@ -7717,8 +7620,6 @@ func TestHandleWorkerExit_LabelFixEnqueue(t *testing.T) {
 	})
 }
 
-// --- label-fix exit tests ---
-
 // TestHandleWorkerExit_LabelFixExit_NoHandoff verifies that a normal exit
 // whose running entry carries ReactionKind==label-fix takes neither the
 // handoff path nor the active-issue continuation-retry path, even when
@@ -7797,8 +7698,6 @@ func TestHandleWorkerExit_LabelFixExit_ErrorStillRetries(t *testing.T) {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelFix)
 	}
 }
-
-// --- merge-completion enqueue tests ---
 
 // TestHandleWorkerExit_MergeCompletionEnqueue verifies that a normal exit
 // with the SCM adapter present, the reaction configured, and workspace SCM
@@ -7993,8 +7892,6 @@ func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
 		}
 	})
 }
-
-// --- Retry-slot arbitration: worker-exit incumbent protection ---
 
 // TestHandleWorkerExit_HandoffFailureDeferral covers the two handoff
 // branches that schedule a continuation on failure: the nil-adapter
@@ -8553,8 +8450,8 @@ func TestHandleWorkerExit_SuccessfulHandoffPreservesIncumbent(t *testing.T) {
 	})
 }
 
-// TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding covers
-// R28: retaining the claim to protect an incumbent on the non-active
+// TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding verifies
+// that retaining the claim to protect an incumbent on the non-active
 // default branch must not widen which reaction kinds a read-only
 // label-review exit seeds. Every reaction kind is configured and the
 // workspace carries full PR metadata, so the only variable between the
@@ -8709,8 +8606,6 @@ func TestHandleWorkerExit_CompletionSignalAfterSelfReview(t *testing.T) {
 		t.Error("RunHistory.ReviewMetadata = nil, want the marshaled review metadata")
 	}
 }
-
-// --- no-change-needed declaration: exit disposition ---
 
 // TestResolveExitTarget covers the target-resolution helper directly: an
 // undeclared run and a declared run whose no_change_state is unset both
@@ -9289,8 +9184,8 @@ func TestHandleWorkerExit_NoChangeStateLiveReload(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs covers spec
-// A-25: the handoff arm's log record carries target_state and
+// TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs verifies
+// that the handoff arm's log record carries target_state and
 // no_change_declared on both a declared and an ordinary handoff.
 func TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs(t *testing.T) {
 	t.Parallel()
@@ -9343,8 +9238,8 @@ func TestHandleWorkerExit_HandoffLogRecordCarriesTargetStateAttrs(t *testing.T) 
 	}
 }
 
-// TestHandleWorkerExit_DeclaredRunLabelReviewPostureNoWarning covers spec
-// A-26: a declared run on a label-review posture releases the claim
+// TestHandleWorkerExit_DeclaredRunLabelReviewPostureNoWarning verifies
+// that a declared run on a label-review posture releases the claim
 // without a transition, without a retry, and without an "unrecognized
 // soft-stop reason" record, because the catch-all guard is silenced
 // for the declared value.
@@ -9466,7 +9361,7 @@ func TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerExit_SessionMetadataRequestVerdict proves P6: the
+// TestHandleWorkerExit_SessionMetadataRequestVerdict proves that the
 // persisted session_metadata row's api_request_count is always zero
 // when its api_requests_measured flag is zero, even when the running
 // entry it was built from carries a non-zero raw count, and the raw
@@ -9538,7 +9433,7 @@ func TestHandleWorkerExit_SessionMetadataRequestVerdict(t *testing.T) {
 	})
 }
 
-// TestHandleWorkerExit_UnreachableFromRuntimeSnapshot proves P17: once
+// TestHandleWorkerExit_UnreachableFromRuntimeSnapshot proves that once
 // HandleWorkerExit returns, RuntimeSnapshot carries no running row for
 // the exited issue, so the unconditional usage reconciliation that
 // touches the entry on the way out can never leave a figure beside a

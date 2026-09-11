@@ -17,7 +17,7 @@ import (
 //
 // review_comments and bot_review_comments are excluded: their builder
 // returns a list, so element fields are addressed inside {{ range }},
-// where the analyzer does not validate field names — a generated check on
+// where the analyzer does not validate field names; a generated check on
 // them would assert nothing. ci_failure is excluded because its builder
 // lives in internal/domain, covered instead by
 // TestTemplateFieldSchemaMatchesDomain in internal/prompt.

@@ -17,8 +17,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- GetReviewDecision tests ---
-
 // TestGetReviewDecision_GraphQL_EnumMapping covers the four authoritative
 // review decision values plus the null case via a table-driven test.
 func TestGetReviewDecision_GraphQL_EnumMapping(t *testing.T) {
@@ -452,8 +450,6 @@ func TestGraphqlBasePath_RewriteTable(t *testing.T) {
 	}
 }
 
-// --- GetCIStatus tests ---
-
 func TestGetCIStatus_Success(t *testing.T) {
 	t.Parallel()
 
@@ -694,8 +690,6 @@ func TestGetCIStatus_CombinedStatusStateValues(t *testing.T) {
 	}
 }
 
-// --- GetMergeability tests ---
-
 func TestGetMergeability_Clean(t *testing.T) {
 	t.Parallel()
 
@@ -823,9 +817,9 @@ func TestGetMergeability_BaseBranch(t *testing.T) {
 }
 
 // pinnedMergeCommitOID is the live-verified oid testdata/graphql_merge_commit.json
-// carries for sortie-ai/sortie pull request 772. A future recapture that
-// moves the fixtures to a different pull request must update this value in
-// the same change.
+// carries for the live pull request it was captured against. A future
+// recapture that moves the fixtures to a different pull request must
+// update this value in the same change.
 const pinnedMergeCommitOID = "52512b6736c84bd66169f80f3fa851cfb951a8c2"
 
 // mergeabilityFixtureHandler builds an httptest handler that serves prBody
@@ -1122,8 +1116,6 @@ func TestGitHubMergeFixtures_Provenance(t *testing.T) {
 	})
 }
 
-// --- mapMergeableState tests ---
-
 func TestMapMergeableState(t *testing.T) {
 	t.Parallel()
 
@@ -1153,8 +1145,6 @@ func TestMapMergeableState(t *testing.T) {
 		})
 	}
 }
-
-// --- MergePR tests ---
 
 func TestMergePR_Success(t *testing.T) {
 	t.Parallel()
@@ -1259,8 +1249,6 @@ func TestMergePR_409ThenConfirmedMerged_CarriesAlreadyMergedMarker(t *testing.T)
 	adaptertest.AssertAlreadyMergedMarker(t, err)
 }
 
-// --- DeleteBranch tests ---
-
 func TestDeleteBranch_Success(t *testing.T) {
 	t.Parallel()
 
@@ -1314,8 +1302,6 @@ func TestDeleteBranch_409IsNotPromotedToConflict(t *testing.T) {
 	// DeleteBranch is not on that path.
 	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 }
-
-// --- VerifyAutoMergeScopes tests ---
 
 func TestVerifyAutoMergeScopes_LegacyRepoScope(t *testing.T) {
 	t.Parallel()
@@ -1477,8 +1463,6 @@ func TestVerifyAutoMergeScopes_WhitespaceOnlyHeaderReturnsUnableToVerify(t *test
 		t.Errorf("missing = %v, want nil (unable to verify)", missing)
 	}
 }
-
-// --- splitScopes tests ---
 
 func TestSplitScopes(t *testing.T) {
 	t.Parallel()

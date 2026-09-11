@@ -230,13 +230,6 @@ func recordedShapeViolations(clientLines, agentLines [][]byte, events []domain.A
 	return violations, observed
 }
 
-// --- Ungated negative controls ---
-//
-// TestRecordedShapeViolations proves recordedShapeViolations can both
-// pass a clean capture and fail on the mutations the spec names. It
-// runs with no gate variable set: every control is an in-test edit to
-// one decoded, hand-written base capture, never a live recording.
-
 // shapeFixtureLine is one decoded JSON-RPC line from a live_shape
 // fixture, kept as a generic map so a control can remove or rewrite
 // exactly the member it targets before re-encoding the line.

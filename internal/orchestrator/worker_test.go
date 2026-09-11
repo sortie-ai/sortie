@@ -25,8 +25,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// --- Test helpers ---
-
 // mustParseTemplate compiles a prompt template or fails the test.
 func mustParseTemplate(t *testing.T, body string) *prompt.Template {
 	t.Helper()
@@ -321,8 +319,6 @@ func isSelfReviewFixPrompt(prompt string) bool {
 	return strings.Contains(prompt, "## Self-Review Fix: Iteration")
 }
 
-// --- Helper unit tests ---
-
 func TestNormalizeAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -456,8 +452,6 @@ func TestToDomainAgentConfig(t *testing.T) {
 		}
 	})
 }
-
-// --- RunWorkerAttempt integration tests ---
 
 func TestRunWorkerAttempt(t *testing.T) {
 	t.Parallel()
@@ -1460,7 +1454,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
 		}
 
-		// Verify after_run hook was executed during panic recovery.
 		if _, err := os.Stat(markerPath); err != nil {
 			t.Errorf("after_run marker file not found: %v (workspace.Finish not called during panic recovery)", err)
 		}
@@ -1575,7 +1568,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 		if !strings.Contains(result.Error.Error(), "worker panic") {
 			t.Errorf("Error = %q, want to contain %q", result.Error, "worker panic")
 		}
-		// Turn 1 completed successfully before the panic on turn 2.
 		if result.TurnsCompleted != 1 {
 			t.Errorf("TurnsCompleted = %d, want 1 (turn 1 completed, panic on turn 2)", result.TurnsCompleted)
 		}
@@ -2259,8 +2251,6 @@ func TestRunWorkerAttempt_AfterRunHookCannotReachWorkerResult(t *testing.T) {
 	}
 }
 
-// --- stopSessionBestEffort unit tests ---
-
 // TestStopSessionDeadline asserts the pure formula directly: the
 // resolved grace plus three drain periods, tracking a configured
 // agent.stop_grace_ms rather than a fixed value.
@@ -2593,8 +2583,6 @@ func TestStopSessionBestEffort_FloorStopsAFalseFailedStop(t *testing.T) {
 	})
 }
 
-// --- stopSessionBestEffort log message tests ---
-
 func TestStopSessionBestEffort_LogMessage(t *testing.T) {
 	t.Parallel()
 
@@ -2624,8 +2612,6 @@ func TestStopSessionBestEffort_LogMessage(t *testing.T) {
 		t.Errorf("log output missing error attribute, got: %s", output)
 	}
 }
-
-// --- exitKindForErr unit tests ---
 
 func TestExitKindForErr(t *testing.T) {
 	t.Parallel()
@@ -2887,7 +2873,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		tracker := &mockTrackerAdapter{}
 		ec := newExitCapture()
 
-		// Issue state exactly equals InProgressState — transition must be skipped.
+		// Issue state exactly equals InProgressState, transition must be skipped.
 		issue := workerTestIssue()
 		issue.State = "In Progress"
 
@@ -2929,7 +2915,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		tracker := &mockTrackerAdapter{}
 		ec := newExitCapture()
 
-		// issue.State differs only in casing — skip must still apply.
+		// issue.State differs only in casing, skip must still apply.
 		issue := workerTestIssue()
 		issue.State = "in progress"
 
@@ -2971,7 +2957,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		tracker := &mockTrackerAdapter{}
 		ec := newExitCapture()
 
-		// issue.State = "To Do" (default from workerTestIssue) — states differ,
+		// issue.State = "To Do" (default from workerTestIssue), states differ,
 		// so TransitionIssue must be called.
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
@@ -3682,7 +3668,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		// Relative path — worker must resolve it via filepath.Dir(WorkflowPath).
+		// Relative path, worker must resolve it via filepath.Dir(WorkflowPath).
 		cfg.SetExtensionSection("mock", map[string]any{"mcp_config": relName})
 
 		var capturedMCPConfigPath atomic.Value
@@ -3959,9 +3945,10 @@ func assertUnmeasuredNull(t *testing.T, s workerState) {
 	}
 }
 
-// TestRunWorkerAttempt_StateFileTokenGate proves P18 at all three
-// writeWorkerState call sites: the session-start write, the turn-start
-// write, and the on-event write. Each assertion reads .sortie/state.json
+// TestRunWorkerAttempt_StateFileTokenGate proves the token gate holds at
+// all three writeWorkerState call sites: the session-start write, the
+// turn-start write, and the on-event write. Each assertion reads
+// .sortie/state.json
 // from inside a runTurnFn closure, the one point in the worker's single
 // goroutine where a test can observe the file between two writes.
 func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
@@ -4340,7 +4327,6 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
 		result := ec.waitResult(t)
 
-		// Comment failure must be non-fatal: worker reaches normal exit.
 		if result.ExitKind != WorkerExitNormal {
 			t.Errorf("ExitKind = %q, want %q (comment error must be non-fatal)", result.ExitKind, WorkerExitNormal)
 		}
@@ -4841,8 +4827,6 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 	})
 }
 
-// --- PromptTemplateByIDFunc dispatch ID tests ---
-
 // TestRunWorkerAttempt_PromptTemplateByIDFunc_ForwardsTemplateID verifies that
 // RunWorkerAttempt calls PromptTemplateByIDFunc with the TemplateID from
 // WorkerDeps, allowing the frozen dispatch selection to resolve the correct
@@ -5180,7 +5164,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 
 		result := ec.waitResult(t)
 
-		// Attempt must not fail.
 		if result.ExitKind != WorkerExitNormal {
 			t.Errorf("ExitKind = %q, want %q (degrade not fail)", result.ExitKind, WorkerExitNormal)
 		}
@@ -5255,12 +5238,10 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 }
 
-// --- Read-only (label-review) dispatch tests ---
-
 // TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace verifies that a read-only
 // attempt creates its workspace via workspace.Ensure: the directory exists,
 // but neither after_create nor before_run runs even when both are
-// configured (A4, A9).
+// configured.
 func TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hooks use touch, unavailable on windows")
@@ -5355,7 +5336,7 @@ func TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned(t *testing.T) {
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition verifies that
 // a read-only attempt never calls TransitionIssue even when
-// cfg.Tracker.InProgressState is set (A4).
+// cfg.Tracker.InProgressState is set.
 func TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition(t *testing.T) {
 	t.Parallel()
 
@@ -5386,7 +5367,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition(t *testing.T) 
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment verifies that a
 // read-only attempt never posts the dispatch comment even when
-// cfg.Tracker.Comments.OnDispatch is true (A4).
+// cfg.Tracker.Comments.OnDispatch is true.
 func TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment(t *testing.T) {
 	t.Parallel()
 
@@ -5417,7 +5398,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment(t *testing.T) {
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh verifies that a
 // read-only attempt never calls FetchIssueStatesByIDs during the turn loop;
-// the loop terminates via max_turns instead (A4).
+// the loop terminates via max_turns instead.
 func TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -5462,9 +5443,9 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh(t *testing.T) {
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview verifies that a
 // read-only attempt never runs the self-review loop even when self-review
-// is enabled (A4), including when the agent writes the completion signal:
+// is enabled, including when the agent writes the completion signal:
 // DrivesIssueState is false for PostureReview, so the phase gate fails on
-// that condition regardless of the signal (W-14).
+// that condition regardless of the signal.
 func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("self-review verification command uses touch")
@@ -5514,7 +5495,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesAfterRunHook verifies that a
 // read-only attempt never runs the after_run hook even when cfg.Hooks.AfterRun
-// is set (A4).
+// is set.
 func TestRunWorkerAttempt_ReadOnly_SuppressesAfterRunHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("after_run hook uses touch, unavailable on windows")
@@ -5627,7 +5608,7 @@ func TestRunWorkerAttempt_NormalDispatchUnaffected(t *testing.T) {
 // PostureFix attempt runs the operator after_create/before_run setup
 // hooks, proving it takes the workspace.Prepare clone path rather than
 // the read-only path's scratch workspace.Ensure path, which accepts no
-// hook configuration at all (A4).
+// hook configuration at all.
 func TestRunWorkerAttempt_Fix_RunsSetupHooksAndClones(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hooks use touch, unavailable on windows")
@@ -5672,7 +5653,7 @@ func TestRunWorkerAttempt_Fix_RunsSetupHooksAndClones(t *testing.T) {
 // PostureFix attempt starts a fresh session (StartSessionParams.ResumeSessionID
 // empty) and clears a stale .sortie/status left in the reused per-issue
 // workspace via the Prepare PreRunFunc, so a prior recognized signal does
-// not end the fix session on turn one (A4).
+// not end the fix session on turn one.
 func TestRunWorkerAttempt_Fix_FreshSessionClearsStaleStatus(t *testing.T) {
 	t.Parallel()
 
@@ -5733,7 +5714,7 @@ func TestRunWorkerAttempt_Fix_FreshSessionClearsStaleStatus(t *testing.T) {
 
 // TestRunWorkerAttempt_Fix_SuppressesInProgressTransition verifies that a
 // fix attempt never calls TransitionIssue even when
-// cfg.Tracker.InProgressState is set (A4).
+// cfg.Tracker.InProgressState is set.
 func TestRunWorkerAttempt_Fix_SuppressesInProgressTransition(t *testing.T) {
 	t.Parallel()
 
@@ -5764,7 +5745,7 @@ func TestRunWorkerAttempt_Fix_SuppressesInProgressTransition(t *testing.T) {
 
 // TestRunWorkerAttempt_Fix_SuppressesDispatchComment verifies that a fix
 // attempt never posts the dispatch comment even when
-// cfg.Tracker.Comments.OnDispatch is true (A4).
+// cfg.Tracker.Comments.OnDispatch is true.
 func TestRunWorkerAttempt_Fix_SuppressesDispatchComment(t *testing.T) {
 	t.Parallel()
 
@@ -5796,7 +5777,7 @@ func TestRunWorkerAttempt_Fix_SuppressesDispatchComment(t *testing.T) {
 // TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh verifies that a fix
 // attempt never calls FetchIssueStatesByIDs during the turn loop; the loop
 // terminates via max_turns instead, since a PR under review usually has its
-// linked issue in a non-active state (A4).
+// linked issue in a non-active state.
 func TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -5840,10 +5821,10 @@ func TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh(t *testing.T) {
 }
 
 // TestRunWorkerAttempt_Fix_SuppressesSelfReview verifies that a fix attempt
-// never runs the self-review loop even when self-review is enabled (A4),
+// never runs the self-review loop even when self-review is enabled,
 // including when the agent writes the completion signal: DrivesIssueState
 // is false for PostureFix, so the phase gate fails on that condition
-// regardless of the signal (W-14).
+// regardless of the signal.
 func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("self-review verification command uses touch")
@@ -5893,7 +5874,7 @@ func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
 
 // TestRunWorkerAttempt_Fix_AfterRunHookOnCleanExit verifies that a fix
 // attempt runs the after_run teardown hook on a clean exit, unlike the
-// read-only path, because RunsSetupHooks is true for PostureFix (A4).
+// read-only path, because RunsSetupHooks is true for PostureFix.
 func TestRunWorkerAttempt_Fix_AfterRunHookOnCleanExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("after_run hook uses touch, unavailable on windows")
@@ -5932,7 +5913,7 @@ func TestRunWorkerAttempt_Fix_AfterRunHookOnCleanExit(t *testing.T) {
 // TestRunWorkerAttempt_Fix_AfterRunHookOnPanic verifies that a fix attempt
 // runs the after_run teardown hook during panic recovery, because
 // RunsSetupHooks is true for PostureFix and its teardown must run on every
-// exit path for symmetry with the setup hooks that ran (A4).
+// exit path for symmetry with the setup hooks that ran.
 func TestRunWorkerAttempt_Fix_AfterRunHookOnPanic(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("after_run hook uses touch, unavailable on windows")
@@ -5979,8 +5960,6 @@ func TestRunWorkerAttempt_Fix_AfterRunHookOnPanic(t *testing.T) {
 		t.Error("StopSession was not called during panic recovery, want teardown")
 	}
 }
-
-// --- Self-review admission on the completion signal ---
 
 // TestRunWorkerAttempt_CompletionSignalEntersSelfReview verifies that a
 // needs-human-review signal read inside the turn loop, on a deployment
@@ -6170,8 +6149,9 @@ func TestRunWorkerAttempt_SelfReviewDisabledSignalUnchanged(t *testing.T) {
 // status file is removed at the moment the run is admitted to the phase,
 // before the first review turn ever reads it: the file must already be
 // gone by the time the review turn's RunTurn call begins, which is the
-// one moment a P-3-only implementation (in-phase consumption after the
-// read, with no entry consumption) has not yet cleaned it up.
+// one moment an implementation that consumes the signal only in-phase,
+// after the read and with no entry-time consumption, has not yet cleaned
+// it up.
 func TestRunWorkerAttempt_CompletionSignalConsumedOnEntry(t *testing.T) {
 	t.Parallel()
 
@@ -6775,7 +6755,7 @@ func TestRunWorkerAttempt_AfterRunHookObservesConsumedBlockedStatus(t *testing.T
 }
 
 // TestRunWorkerAttempt_StatusSignalLogLines verifies the two admission
-// log lines are emitted on exactly the runs W-3 specifies: the preserved
+// log lines are emitted on exactly these runs: the preserved
 // exit line when a recognized signal ends the run without the phase, and
 // the new admission line when the signal is admitted to the phase.
 func TestRunWorkerAttempt_StatusSignalLogLines(t *testing.T) {
@@ -6868,8 +6848,6 @@ func TestRunWorkerAttempt_StatusSignalLogLines(t *testing.T) {
 		}
 	})
 }
-
-// --- Turn-timeout enforcement (issue #834) ---
 
 // boundedTurnStub is a domain.AgentAdapter.RunTurn stub that emits an
 // event on every tick of interval until ctx is done or natural elapses,
@@ -7442,8 +7420,6 @@ func TestRunBoundedTurn_ExpiryWithNilAdapterError(t *testing.T) {
 		t.Errorf("err = %v, want the deadline substituted as the wrapped cause", err)
 	}
 }
-
-// --- no-change-needed admission, retraction, and consumption ---
 
 // TestRunWorkerAttempt_AdmissionParity verifies that a no-change-needed
 // signal is admitted to the self-review phase, and skipped, on the same

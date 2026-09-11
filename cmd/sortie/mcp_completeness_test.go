@@ -312,8 +312,6 @@ func TestEveryAgentKindHasMCPInjectionCoverage(t *testing.T) {
 	}
 }
 
-// --- kindsMissingMCPInjectionCoverage unit coverage ---
-
 // writeFixtureFile writes content to dir/name, creating dir if needed.
 func writeFixtureFile(t *testing.T, dir, name, content string) {
 	t.Helper()

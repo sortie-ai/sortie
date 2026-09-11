@@ -15,8 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // labelReviewSCMFake is a controllable domain.SCMAdapter for label-review
 // reconcile tests. ListLabelEvents and RemoveLabel are the only methods
 // this reconcile pass exercises; every other method is a plain stub.
@@ -177,8 +175,6 @@ func (s *labelReviewFingerprintStore) DeleteReactionFingerprint(_ context.Contex
 	return nil
 }
 
-// --- Test helpers ---
-
 // labelReviewBaseTime is a fixed reference time for label-review reconcile
 // tests.
 var labelReviewBaseTime = time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
@@ -243,9 +239,7 @@ func labelReviewParams(store ReconcileStore, scm domain.SCMAdapter) ReconcilePar
 	}
 }
 
-// --- reconcileLabelReviewCommands guard tests ---
-
-// TestReconcileLabelReviewCommands_Disabled covers V3: a nil SCM adapter or
+// TestReconcileLabelReviewCommands_Disabled verifies that a nil SCM adapter or
 // an unconfigured feature returns immediately with zero ListLabelEvents
 // calls, before any journal read.
 func TestReconcileLabelReviewCommands_Disabled(t *testing.T) {
@@ -287,9 +281,7 @@ func TestReconcileLabelReviewCommands_Disabled(t *testing.T) {
 	}
 }
 
-// --- reconcileLabelReviewCommands dispatch tests ---
-
-// TestReconcileLabelReviewCommands_Dispatch covers V1: one matching labeled
+// TestReconcileLabelReviewCommands_Dispatch verifies that one matching labeled
 // event confirmed with the label still present produces exactly one
 // ScheduleRetry call carrying the label_review continuation context, the
 // acting user, and the frozen dispatch fields.
@@ -366,11 +358,11 @@ func TestReconcileLabelReviewCommands_Dispatch(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_ContinuesAfterAgeRemoval covers R31: after
+// TestReconcileLabelReviewCommands_ContinuesAfterAgeRemoval verifies that after
 // the periodic sweep removes a workspace by age, the label-review reconcile
 // pass still observes a matching label event and still schedules a retry
 // carrying ReactionKindLabelReview, re-enqueuing the pending entry. The
-// reconcile pass reads nothing from the workspace directory (R27), so its
+// reconcile pass reads nothing from the workspace directory, so its
 // removal has no bearing on detection.
 //
 // The recreate-through-dispatch property (workspace.Ensure/Prepare
@@ -424,7 +416,7 @@ func TestReconcileLabelReviewCommands_ContinuesAfterAgeRemoval(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_LabelAbsentAtDetection covers V4 and the
+// TestReconcileLabelReviewCommands_LabelAbsentAtDetection verifies the
 // retraction rule: a matching labeled event exists past the stored mark,
 // but a later unlabeled event in the same batch means the label is not
 // present at detection time. No dispatch fires, but the mark still advances
@@ -500,7 +492,7 @@ func TestReconcileLabelReviewCommands_BurstCollapse(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_DepthOneWhileRunning covers V2 and the
+// TestReconcileLabelReviewCommands_DepthOneWhileRunning verifies the
 // depth-one invariant: a matching event arrives while a label-review
 // session is already running for the issue. No second dispatch or pending
 // entry is created.
@@ -565,7 +557,7 @@ func TestReconcileLabelReviewCommands_DepthOneWhileQueued(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_RepeatAfterCompletion covers A10: after a
+// TestReconcileLabelReviewCommands_RepeatAfterCompletion verifies that after a
 // first dispatch completes (the session exits, clearing state.RetryAttempts
 // for the issue) and the label is re-applied, a second dispatch fires on a
 // later tick driven entirely by the reconcile's own re-enqueue.
@@ -830,7 +822,7 @@ func TestReconcileLabelReviewCommands_NoTTLDrop(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_CrossKindIsolation covers A6: with ci,
+// TestReconcileLabelReviewCommands_CrossKindIsolation verifies that with ci,
 // review, bot-review, merge, and merge-conflict entries all present for one
 // issue, a label-review dispatch mutates none of them.
 func TestReconcileLabelReviewCommands_CrossKindIsolation(t *testing.T) {
@@ -892,8 +884,8 @@ func TestReconcileLabelReviewCommands_CrossKindIsolation(t *testing.T) {
 	}
 }
 
-// TestReconcileLabelReviewCommands_DispatchLogsActorAndPRNumber covers A11
-// and the first half of A12: a confirmed dispatch emits an Info log
+// TestReconcileLabelReviewCommands_DispatchLogsActorAndPRNumber verifies
+// that a confirmed dispatch emits an Info log
 // carrying the PR number and the acting user, unconditionally.
 func TestReconcileLabelReviewCommands_DispatchLogsActorAndPRNumber(t *testing.T) {
 	t.Parallel()
@@ -925,7 +917,7 @@ func TestReconcileLabelReviewCommands_DispatchLogsActorAndPRNumber(t *testing.T)
 	}
 }
 
-// TestReconcileLabelReviewCommands_JournalSubstrateNotSnapshot covers V5:
+// TestReconcileLabelReviewCommands_JournalSubstrateNotSnapshot verifies that
 // detection uses only ListLabelEvents (the journal substrate); no other
 // SCMAdapter method is ever called for label-review detection or dispatch.
 func TestReconcileLabelReviewCommands_JournalSubstrateNotSnapshot(t *testing.T) {
@@ -998,8 +990,6 @@ func TestReconcileLabelCommands_StopPollingAfterTerminal(t *testing.T) {
 	}
 }
 
-// --- labelReviewMark tests ---
-
 func TestLabelReviewMark_FixedWidthAndOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -1030,8 +1020,6 @@ func TestLabelReviewMark_NonUTCNormalizedBeforeCompare(t *testing.T) {
 		t.Errorf("labelReviewMark(non-UTC input) = %q, want %q (normalized to UTC)", got, want)
 	}
 }
-
-// --- buildLabelReviewMap tests ---
 
 func TestBuildLabelReviewMap_FieldMapping(t *testing.T) {
 	t.Parallel()

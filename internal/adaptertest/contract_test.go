@@ -1479,9 +1479,9 @@ const cmd = "gemini --acp"
 // rather than silently skipped, and dropping either the anchoring
 // clause or the profile-source clause of rule IDENTITY's wide scope
 // must redden against a real collision already present in the tree,
-// per verification property 2's kiro and cursor examples. The last two
-// subtests confirm today's real snapshot keeps both collisions green,
-// for the two different reasons the clauses exist.
+// using the kiro and cursor examples below. The last two subtests
+// confirm today's real snapshot keeps both collisions green, for the
+// two different reasons the clauses exist.
 func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	snapshot := contractAgentIdentitySnapshotData()
 

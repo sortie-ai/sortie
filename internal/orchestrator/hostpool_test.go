@@ -130,19 +130,16 @@ func TestReleaseHost(t *testing.T) {
 	hp := NewHostPool([]string{"a"}, 1)
 	hp.AcquireHost("ISS-1", "")
 
-	// At capacity.
 	if hp.HasCapacity() {
 		t.Error("HasCapacity() = true before release, want false")
 	}
 
 	hp.ReleaseHost("ISS-1")
 
-	// Capacity restored.
 	if !hp.HasCapacity() {
 		t.Error("HasCapacity() = false after release, want true")
 	}
 
-	// Assignment cleared.
 	if got := hp.HostFor("ISS-1"); got != "" {
 		t.Errorf("HostFor(ISS-1) = %q after release, want empty", got)
 	}

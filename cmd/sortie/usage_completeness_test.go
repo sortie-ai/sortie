@@ -133,8 +133,6 @@ func TestEveryAgentKindHasUsageReportingCoverage(t *testing.T) {
 	}
 }
 
-// --- kindsMissingUsageReportingCoverage unit coverage ---
-
 // fixtureUsageCoveredKindRegister registers "covered-kind" from a
 // directory named "covered-dir", deliberately not matching the kind
 // string, mirroring claude-code/claude and copilot-cli/copilot.

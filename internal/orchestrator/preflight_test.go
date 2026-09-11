@@ -12,8 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 // stubTrackerRegistry implements the TrackerRegistry interface in
 // PreflightParams with configurable Get and Meta behavior.
 type stubTrackerRegistry struct {
@@ -148,8 +146,6 @@ func requireNoWarnCheck(t *testing.T, result PreflightResult, check string) {
 		t.Errorf("ValidateDispatchConfig() has unexpected warning check %q; got warnings: %v", check, result.Warnings)
 	}
 }
-
-// --- Tests ---
 
 func TestValidateDispatchConfig(t *testing.T) {
 	t.Parallel()

@@ -191,8 +191,6 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 	})
 }
 
-// --- RemoveLabel ---
-
 func TestGiteaSCMRemoveLabel(t *testing.T) {
 	t.Parallel()
 

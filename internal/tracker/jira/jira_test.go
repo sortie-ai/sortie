@@ -54,8 +54,6 @@ func loadFixture(t *testing.T, name string) []byte {
 	return data
 }
 
-// --- Constructor tests ---
-
 func TestNewJiraAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -280,8 +278,6 @@ func TestRegistration(t *testing.T) {
 		t.Fatal("constructor is nil")
 	}
 }
-
-// --- FetchCandidateIssues tests ---
 
 func TestFetchCandidateIssues_SinglePage(t *testing.T) {
 	t.Parallel()
@@ -530,8 +526,6 @@ func TestFetchCandidateIssues_NoQueryFilter(t *testing.T) {
 	}
 }
 
-// --- FetchIssueByID tests ---
-
 func TestFetchIssueByID_WithComments(t *testing.T) {
 	t.Parallel()
 
@@ -667,8 +661,6 @@ func TestFetchIssueByID_MultiPageComments(t *testing.T) {
 	}
 }
 
-// --- FetchIssuesByStates tests ---
-
 func TestFetchIssuesByStates_EmptyStates(t *testing.T) {
 	t.Parallel()
 
@@ -741,8 +733,6 @@ func TestFetchIssuesByStates_QueryFilter(t *testing.T) {
 	}
 }
 
-// --- FetchIssueStatesByIDs tests ---
-
 func TestFetchIssueStatesByIDs_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -792,7 +782,7 @@ func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
 
-	// ID "3" is missing from response — omitted from map
+	// ID "3" is missing from response; omitted from map
 	if len(result) != 2 {
 		t.Fatalf("len = %d, want 2", len(result))
 	}
@@ -934,8 +924,6 @@ func TestFetchIssueStatesByIDs_ResultKeyedByID(t *testing.T) {
 	}
 }
 
-// --- FetchIssueStatesByIdentifiers tests ---
-
 func TestFetchIssueStatesByIdentifiers_Empty(t *testing.T) {
 	t.Parallel()
 
@@ -986,7 +974,7 @@ func TestFetchIssueStatesByIdentifiers_SingleBatch(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
 	}
 
-	// PROJ-3 is missing from response — omitted from map.
+	// PROJ-3 is missing from response; omitted from map.
 	if len(result) != 2 {
 		t.Fatalf("len = %d, want 2", len(result))
 	}
@@ -1073,8 +1061,6 @@ func TestFetchIssueStatesByIdentifiers_NoQueryFilter(t *testing.T) {
 	}
 }
 
-// --- FetchIssueComments tests ---
-
 func TestFetchIssueComments_MultiPage(t *testing.T) {
 	t.Parallel()
 
@@ -1138,8 +1124,6 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
 
-// --- Full lifecycle integration test ---
-
 func TestAdapterLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -1154,7 +1138,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		case path == "/rest/api/3/search/jql":
 			jql := r.URL.Query().Get("jql")
 			if strings.Contains(jql, "id IN") {
-				// FetchIssueStatesByIDs — return minimal status keyed by numeric ID
+				// FetchIssueStatesByIDs: return minimal status keyed by numeric ID
 				resp := searchResponse{
 					Issues: []jiraIssue{
 						{ID: "10001", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "To Do"}}},
@@ -1167,7 +1151,7 @@ func TestAdapterLifecycle(t *testing.T) {
 				w.Write(searchFixture) //nolint:errcheck // test helper
 			}
 		case strings.HasSuffix(path, "/comment"):
-			// Determine if we need comments or empty based on issue key
+			// Select comments or empty based on issue key.
 			if strings.Contains(path, "PROJ-5") {
 				w.Write(commentsFixture) //nolint:errcheck // test helper
 			} else {
@@ -1240,7 +1224,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("terminal len = %d, want 2", len(terminal))
 	}
 
-	// FetchIssueStatesByIDs — uses numeric IDs, results keyed by ID
+	// FetchIssueStatesByIDs: uses numeric IDs, results keyed by ID
 	stateMap, err := a.FetchIssueStatesByIDs(ctx, []string{"10001", "10002"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
@@ -1264,8 +1248,6 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("comments[0].Body = %q", comments[0].Body)
 	}
 }
-
-// --- TransitionIssue tests ---
 
 func TestTransitionIssue_Success(t *testing.T) {
 	t.Parallel()
@@ -1532,8 +1514,6 @@ func TestTransitionIssue_ContextCancellation(t *testing.T) {
 		t.Errorf("TransitionIssue() error = %v, want context.Canceled", err)
 	}
 }
-
-// --- Metrics instrumentation tests ---
 
 type trackerRequestCall struct {
 	operation string
@@ -1885,7 +1865,7 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		// Adapter without SetMetrics — all methods must not panic.
+		// Adapter without SetMetrics; all methods must not panic.
 		a := mustAdapter(t, validConfig(srv.URL))
 		a.FetchCandidateIssues(ctx)                              //nolint:errcheck // verifying no panic
 		a.FetchIssueByID(ctx, "PROJ-5")                          //nolint:errcheck // verifying no panic
@@ -1898,8 +1878,6 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		a.AddLabel(ctx, "PROJ-123", "urgent")                    //nolint:errcheck // verifying no panic
 	})
 }
-
-// --- CommentIssue tests ---
 
 func TestCommentIssue_Success(t *testing.T) {
 	t.Parallel()

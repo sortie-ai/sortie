@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// --- Helpers ---
-
 // captureLogger returns an slog.Logger that writes to the provided buffer.
 func captureLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -38,8 +36,6 @@ func makeDotSortieDir(t *testing.T, wsPath string) {
 		t.Fatalf("MkdirAll(.sortie): %v", err)
 	}
 }
-
-// --- TestReadStatusFile ---
 
 func TestReadStatusFile(t *testing.T) {
 	t.Parallel()
@@ -372,8 +368,6 @@ func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
 	}
 }
 
-// --- TestIsRecognized ---
-
 func TestStatusSignal_IsRecognized(t *testing.T) {
 	t.Parallel()
 
@@ -398,8 +392,6 @@ func TestStatusSignal_IsRecognized(t *testing.T) {
 		})
 	}
 }
-
-// --- TestCleanupStatusFile ---
 
 func TestCleanupStatusFile(t *testing.T) {
 	t.Parallel()
@@ -504,7 +496,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		t.Parallel()
 
 		// Regression: a symlink at status that resolves inside the workspace
-		// must not be followed during cleanup — the symlink target must be preserved.
+		// must not be followed during cleanup; the symlink target must be preserved.
 		wsPath := t.TempDir()
 		makeDotSortieDir(t, wsPath)
 
@@ -536,7 +528,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		t.Parallel()
 
 		// Regression: a .sortie symlink pointing inside the workspace must also
-		// be rejected — nothing in the target directory may be removed.
+		// be rejected; nothing in the target directory may be removed.
 		wsPath := t.TempDir()
 
 		// Real directory with a status file, both inside the workspace.

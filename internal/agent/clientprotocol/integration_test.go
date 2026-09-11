@@ -51,8 +51,6 @@ type liveProtocolCapture struct {
 	events     func() []domain.AgentEvent // nil for expectHandshakeOnly
 }
 
-// --- Integration test helpers ---
-
 // skipUnlessClientProtocolIntegration skips the current test unless
 // SORTIE_CLIENTPROTOCOL_TEST=1 is set and SORTIE_CLIENTPROTOCOL_COMMAND
 // names a launch command. The command variable is a fixture coordinate
@@ -274,8 +272,6 @@ func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType
 	}
 	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
 }
-
-// --- Integration test functions ---
 
 // TestIntegration_StartSession verifies that StartSession returns a
 // populated Session with a non-empty session id and process PID.

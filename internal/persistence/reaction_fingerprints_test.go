@@ -52,7 +52,7 @@ func TestUpsertReactionFingerprint_SameFingerprintPreservesDispatched(t *testing
 		t.Fatalf("MarkReactionDispatched: %v", err)
 	}
 
-	// Upsert same fingerprint again — dispatched must remain 1.
+	// Upsert same fingerprint again; dispatched must remain 1.
 	if err := s.UpsertReactionFingerprint(ctx, "ISS-2", "ci", "sha-abc"); err != nil {
 		t.Fatalf("UpsertReactionFingerprint (repeat): %v", err)
 	}
@@ -79,7 +79,7 @@ func TestUpsertReactionFingerprint_ChangedFingerprintResetsDispatched(t *testing
 		t.Fatalf("MarkReactionDispatched: %v", err)
 	}
 
-	// Upsert a different fingerprint — dispatched must be reset to 0.
+	// Upsert a different fingerprint; dispatched must be reset to 0.
 	if err := s.UpsertReactionFingerprint(ctx, "ISS-3", "ci", "sha-new"); err != nil {
 		t.Fatalf("UpsertReactionFingerprint (new): %v", err)
 	}

@@ -12,9 +12,10 @@ import (
 	"testing"
 )
 
-// workEvidenceForbiddenConstants are the three WorkReport values property
-// 4 forbids a non-test file outside the allowlisted packages from naming
-// through its own agentcore import qualifier.
+// workEvidenceForbiddenConstants are the three WorkReport values the
+// no-forbidden-constants rule forbids a non-test file outside the
+// allowlisted packages from naming through its own agentcore import
+// qualifier.
 var workEvidenceForbiddenConstants = map[string]bool{
 	"WorkPresent":      true,
 	"WorkAbsent":       true,
@@ -22,7 +23,7 @@ var workEvidenceForbiddenConstants = map[string]bool{
 }
 
 // workEvidenceConstantAllowlist names the packages under internal/agent/
-// property 4 exempts, and why. agentcore and mock mirror
+// the no-forbidden-constants rule exempts, and why. agentcore and mock mirror
 // dispositionContractAllowlist's reasoning for the same two packages.
 // dispositiontest is exempt because AssertWorkEvidenceConsistent derives
 // its two failure messages from agentcore.DecideTurn rather than
@@ -34,19 +35,19 @@ var workEvidenceConstantAllowlist = map[string]string{
 	"dispositiontest": "derives its two failure messages from agentcore.DecideTurn rather than restating them",
 }
 
-// workEvidenceExitObservedIdentifier is the bare field identifier
-// property 5 partitions packages on, whether read from a TurnEvidence
-// value or written into a composite literal.
+// workEvidenceExitObservedIdentifier is the bare field identifier the
+// observer-wiring rule partitions packages on, whether read from a
+// TurnEvidence value or written into a composite literal.
 const workEvidenceExitObservedIdentifier = "ExitObserved"
 
 // workEvidenceNewObserverFunc and workEvidenceObserveFuncs are the
-// agentcore.WorkObserver constructor and observation methods property 5
-// counts.
+// agentcore.WorkObserver constructor and observation methods the
+// observer-wiring rule counts.
 const workEvidenceNewObserverFunc = "NewWorkObserver"
 
 // workEvidenceObserveFuncs maps each WorkSignals field name to the
-// WorkObserver method that observes it, so property 5 can pair a
-// declaration with its matching observation call.
+// WorkObserver method that observes it, so the observer-wiring rule can
+// pair a declaration with its matching observation call.
 var workEvidenceObserveFuncs = map[string]string{
 	"AssistantOutput": "ObserveAssistantOutput",
 	"ToolActivity":    "ObserveToolActivity",
@@ -239,7 +240,7 @@ func workEvidenceObserverRegistrationFacts(fset *token.FileSet, files []*ast.Fil
 	return facts
 }
 
-// checkWorkEvidenceObserverWiring evaluates property 5 for one package's
+// checkWorkEvidenceObserverWiring evaluates the observer-wiring rule for one package's
 // facts. A package that names ExitObserved MUST contain exactly one
 // NewWorkObserver call declaring at least one field true, with an
 // Observe call for each declared field and none for an undeclared one.
@@ -293,7 +294,7 @@ func checkWorkEvidenceObserverWiring(dirName string, facts workEvidenceObserverF
 // files of every package under internal/agent/ other than
 // workEvidenceConstantAllowlist's entries and fails when any names
 // WorkPresent, WorkAbsent, or WorkUnobservable through its own
-// agentcore import qualifier, per spec property 4.
+// agentcore import qualifier.
 func TestWorkEvidenceContract_NoForbiddenConstants(t *testing.T) {
 	root := ".."
 
@@ -334,7 +335,7 @@ func TestWorkEvidenceContract_NoForbiddenConstants(t *testing.T) {
 
 // TestWorkEvidenceContract_ObserverWiring walks the non-test Go files
 // under internal/agent/, grouped by package directory, and fails when a
-// package that registers an agent kind breaks property 5's ExitObserved
+// package that registers an agent kind breaks the observer-wiring rule's ExitObserved
 // partition: naming ExitObserved without exactly one correctly wired
 // agentcore.NewWorkObserver call, or calling agentcore.NewWorkObserver
 // without naming ExitObserved. The subject set is derived from
@@ -401,9 +402,9 @@ func TestWorkEvidenceContract_ObserverWiring(t *testing.T) {
 	}
 }
 
-// TestCheckWorkEvidenceConstantsFile_DetectsViolations pins the property
-// 4 checker's own logic against inline source fixtures, independent of
-// the current state of any production package.
+// TestCheckWorkEvidenceConstantsFile_DetectsViolations pins the
+// no-forbidden-constants rule's own checker logic against inline source
+// fixtures, independent of the current state of any production package.
 func TestCheckWorkEvidenceConstantsFile_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
@@ -476,8 +477,8 @@ var w = 0
 }
 
 // TestCheckWorkEvidenceObserverWiring_DetectsViolations pins the
-// property 5 checker's own logic against inline source fixtures,
-// independent of the current state of any production package.
+// observer-wiring rule's own checker logic against inline source
+// fixtures, independent of the current state of any production package.
 func TestCheckWorkEvidenceObserverWiring_DetectsViolations(t *testing.T) {
 	t.Parallel()
 

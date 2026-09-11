@@ -127,7 +127,7 @@ func TestValidateDefaultPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// No explicit path — resolveWorkflowPath defaults to ./WORKFLOW.md.
+	// No explicit path; resolveWorkflowPath defaults to ./WORKFLOW.md.
 	code := run(ctx, []string{"validate"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
@@ -284,7 +284,7 @@ func TestValidateHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// --help must exit 0 — it is not a failure.
+	// --help must exit 0; it is not a failure.
 	code := run(ctx, []string{"validate", "--help"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("run(validate --help) = %d, want 0", code)
@@ -366,7 +366,7 @@ func TestValidateUnresolvedEnvVar(t *testing.T) {
 	// t.Parallel omitted: t.Setenv requires a sequential test.
 
 	// Ensure the test env var expands to empty string. Using t.Setenv
-	// with "" has the same expansion result as the var being unset — both
+	// with "" has the same expansion result as the var being unset; both
 	// cause os.ExpandEnv to produce "". t.Setenv restores the original
 	// value after the test.
 	t.Setenv("SORTIE_TEST_NONEXISTENT_VAR_198", "")
@@ -413,7 +413,7 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	// The validate subcommand must return promptly — no filesystem
+	// The validate subcommand must return promptly; no filesystem
 	// watcher goroutine is started (mgr.Start is never called).
 	start := time.Now()
 	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
@@ -429,8 +429,6 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 		t.Errorf("run(validate) took %v, want < %v (possible watcher goroutine started)", elapsed, maxDuration)
 	}
 }
-
-// --- Front matter warning integration tests ---
 
 // typoTopLevelKeyWorkflow returns a workflow with the "trackers" typo at the
 // top level (unknown_key warning) and a valid tracker.kind so preflight passes.
@@ -760,12 +758,8 @@ func TestValidateErrorAndWarningsTogether(t *testing.T) {
 	}
 }
 
-// --- Template static analysis warning tests ---
-
 // dotContextWorkflow returns a workflow whose prompt triggers WarnDotContext:
 // .issue.title referenced inside {{ range }} where dot is the element.
-
-// --- Template static analysis warning tests ---
 
 // dotContextWorkflow returns a workflow whose prompt triggers WarnDotContext:
 // .issue.title referenced inside {{ range }} where dot is the element.
@@ -1188,10 +1182,6 @@ func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
 	}
 }
 
-// --- writeJSON / emitDiags error-path tests ---
-
-// --- writeJSON / emitDiags error-path tests ---
-
 func TestWriteJSON(t *testing.T) {
 	t.Parallel()
 
@@ -1283,15 +1273,11 @@ Do {{ .issue.title }}.
 	}
 }
 
-// --- OS signal and server shutdown edge-case tests ---
-
 // TestRunSIGINTCleanShutdown verifies that run() returns 0 when the process
 // receives SIGINT via signal.NotifyContext. Uses the helper-subprocess
 // pattern to avoid delivering OS signals to the test runner's own process.
 //
 // Subprocess mode is activated by SORTIE_TEST_SIGINT_HELPER=1.
-
-// --- GitHub validate tests ---
 
 // githubInvalidProjectWorkflow is a minimal GitHub workflow where
 // tracker.project is not in owner/repo format (no slash), used to
@@ -2167,8 +2153,6 @@ func TestValidateAgentConfigOfflineVerdict_MockKindSessionResume(t *testing.T) {
 	}
 }
 
-// --- HTTP Server Always-On integration tests ---
-
 func TestValidateShortHelp(t *testing.T) {
 	t.Parallel()
 
@@ -2186,8 +2170,6 @@ func TestValidateShortHelp(t *testing.T) {
 		t.Errorf("run([validate -h]) stderr = %q, want empty", stderr.String())
 	}
 }
-
-// --- dispatch-specific validate tests ---
 
 // makeDispatchWorkflow writes a WORKFLOW.md to dir with the given dispatch
 // section content and returns the absolute path to the workflow file.
@@ -2482,8 +2464,9 @@ func TestValidateDispatch_ValidRulesPassThrough(t *testing.T) {
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysOutOfRange covers R3: an out-of-range
-// workspace.retention_days value is reported as an error diagnostic with
+// TestValidateWorkspaceRetentionDaysOutOfRange asserts that an
+// out-of-range workspace.retention_days value is reported as an error
+// diagnostic with
 // check name config.workspace.retention_days, offline (the file tracker
 // makes no network call).
 func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
@@ -2591,7 +2574,7 @@ func TestValidateNonPositiveTurnTimeoutMSJSON(t *testing.T) {
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysValid covers R1 and R5: an in-range
+// TestValidateWorkspaceRetentionDaysValid asserts that an in-range
 // workspace.retention_days value in the front matter is recognized by
 // the schema and produces no warnings, offline (the file tracker makes
 // no network call).
@@ -2630,8 +2613,8 @@ func TestValidateWorkspaceRetentionDaysValid(t *testing.T) {
 	}
 }
 
-// TestValidateWorkspaceRetentionDaysFromEnvOverride covers R1, R5, and
-// R9: a workspace.retention_days value supplied only through
+// TestValidateWorkspaceRetentionDaysFromEnvOverride asserts that a
+// workspace.retention_days value supplied only through
 // SORTIE_WORKSPACE_RETENTION_DAYS, with no retention_days line in the
 // front matter, is recognized by the schema and produces no warnings.
 //
@@ -2709,8 +2692,6 @@ func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check prefixed 'config.dispatch'", out.Errors)
 	}
 }
-
-// --- unresolved_extension_var end-to-end validate tests ---
 
 // unresolvedExtVarWorkflow returns a workflow YAML containing an extension block
 // whose api_key references varName, which must be unset when the test runs.
@@ -2853,8 +2834,6 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		}
 	})
 }
-
-// --- reactions.label_commands end-to-end validate tests ---
 
 // labelCommandsBothLabelsEmptyWorkflow returns a workflow with an active
 // label_commands provider and both command labels explicitly disabled,
@@ -3007,7 +2986,7 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestRunValidate_LabelCommandsFixOnlyValid covers A1/A2's fix-only
+// TestRunValidate_LabelCommandsFixOnlyValid covers the fix-only
 // activation shape offline: a provider with review_label explicitly
 // disabled and fix_label set is a valid block, not the
 // both-labels-empty error (companion to
@@ -3035,8 +3014,6 @@ func TestRunValidate_LabelCommandsFixOnlyValid(t *testing.T) {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
 	}
 }
-
-// --- Gitea forge validate checks ---
 
 // diagWithCheck returns a pointer to the first diag in diags whose Check
 // matches want, or nil if none match.
@@ -4409,8 +4386,6 @@ func TestAgentRegistryKindsDisjointFromOtherFamilies(t *testing.T) {
 		}
 	}
 }
-
-// --- reactions.<kind>.triage validate tests ---
 
 // triageUnsupportedKeyWorkflow embeds a triage block under auto_merge, a
 // reaction kind config.TriageSupportedReactionKeys does not include.

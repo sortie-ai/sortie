@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- Test helpers ---
-
 // assertFailureShape asserts the fail-safe zero-value contract of a rejected
 // [Endpoint]: every field except Redacted is empty, so a caller that ignores
 // the ok result cannot find a usable-looking Base.
@@ -26,8 +24,6 @@ func assertFailureShape(t *testing.T, raw string, got Endpoint) {
 		t.Errorf("ParseEndpoint(%q) Path = %q, want empty on failure", raw, got.Path)
 	}
 }
-
-// --- Tests ---
 
 func TestParseEndpoint_Rejected(t *testing.T) {
 	t.Parallel()

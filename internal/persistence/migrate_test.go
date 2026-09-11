@@ -360,7 +360,7 @@ func TestMigrate_NullConstraints(t *testing.T) {
 		t.Errorf("session_metadata.agent_pid should accept NULL: %v", err)
 	}
 
-	// retry_entries.identifier is NOT NULL — insertion without it must fail.
+	// retry_entries.identifier is NOT NULL; insertion without it must fail.
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
 		 VALUES ('re-2', NULL, 1, 1000)`)

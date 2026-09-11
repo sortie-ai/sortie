@@ -46,7 +46,7 @@ func newCapturingLogger() (*slog.Logger, *bytes.Buffer) {
 	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
 }
 
-// scmErrorStatusCase pins one row of the §3.7 HTTP-status-to-SCMErrorKind
+// scmErrorStatusCase pins one row of the HTTP-status-to-SCMErrorKind
 // mapping every read method's error coverage exercises.
 type scmErrorStatusCase struct {
 	name   string
@@ -55,8 +55,8 @@ type scmErrorStatusCase struct {
 	want   domain.SCMErrorKind
 }
 
-// scmErrorStatusCases returns the four statuses R26 requires every read
-// method to cover: 401, 404, 429, and a 5xx.
+// scmErrorStatusCases returns the four statuses every read method must
+// cover: 401, 404, 429, and a 5xx.
 func scmErrorStatusCases(t *testing.T) []scmErrorStatusCase {
 	t.Helper()
 	return []scmErrorStatusCase{
@@ -67,8 +67,8 @@ func scmErrorStatusCases(t *testing.T) []scmErrorStatusCase {
 	}
 }
 
-// runSCMErrorStatusTable exercises the shared statuses (R26's four plus
-// 405 and 409, which R27 pins to ErrSCMAPI rather than ErrSCMConflict)
+// runSCMErrorStatusTable exercises the shared statuses (the four above
+// plus 405 and 409, which map to ErrSCMAPI rather than ErrSCMConflict)
 // against call, which issues exactly one adapter read against a server
 // that answers every request with the given status and body.
 func runSCMErrorStatusTable(t *testing.T, call func(t *testing.T, srv *httptest.Server) error) {
@@ -95,8 +95,6 @@ func runSCMErrorStatusTable(t *testing.T, call func(t *testing.T, srv *httptest.
 		})
 	}
 }
-
-// --- NewGitLabSCMAdapter validation ---
 
 func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 	t.Parallel()
@@ -172,8 +170,6 @@ func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 		assertMessageRedacted(t, scmErr.Message, "https:/gitlab.example.com/group", "operator", "secret")
 	})
 }
-
-// --- NewGitLabSCMAdapter defaults ---
 
 func TestNewGitLabSCMAdapter_Defaults(t *testing.T) {
 	t.Parallel()
@@ -319,8 +315,6 @@ func TestNewGitLabSCMAdapter_Defaults(t *testing.T) {
 	})
 }
 
-// --- NewGitLabSCMAdapter issues no network request ---
-
 func TestNewGitLabSCMAdapter_NoNetworkRequest(t *testing.T) {
 	t.Parallel()
 
@@ -341,8 +335,6 @@ func TestNewGitLabSCMAdapter_NoNetworkRequest(t *testing.T) {
 		t.Errorf("requests during construction = %d, want 0", n)
 	}
 }
-
-// --- Project addressing ---
 
 func TestProjectPath(t *testing.T) {
 	t.Parallel()
@@ -390,8 +382,6 @@ func TestProjectPath(t *testing.T) {
 		}
 	})
 }
-
-// --- paginateSCM ---
 
 func TestPaginateSCM_FollowsLinkHeader(t *testing.T) {
 	t.Parallel()
@@ -479,8 +469,6 @@ func TestPaginateSCM_FollowsLinkHeader(t *testing.T) {
 	})
 }
 
-// --- asSCMError passthrough (rule 4 of §3.3.3) ---
-
 func TestAsSCMError_PassthroughDecodeFailure(t *testing.T) {
 	t.Parallel()
 
@@ -512,8 +500,6 @@ func TestAsSCMError_PassthroughDecodeFailure(t *testing.T) {
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
 }
-
-// --- Error status mapping (§3.7) ---
 
 func TestErrorStatusMapping(t *testing.T) {
 	t.Parallel()
@@ -553,8 +539,6 @@ func TestErrorStatusMapping(t *testing.T) {
 		})
 	}
 }
-
-// --- Registration (R34, AC1) ---
 
 func TestGitLabSCMRegistration(t *testing.T) {
 	t.Parallel()

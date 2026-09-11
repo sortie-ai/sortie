@@ -126,8 +126,6 @@ func TestMCPInjectionConformance(t *testing.T) {
 	})
 }
 
-// --- renderMCPServerOverrides ---
-
 // TestRenderMCPServerOverrides_OnePerServer asserts that a session
 // whose generated file names the sortie-tools server plus one
 // operator server renders one override per server.
@@ -332,8 +330,6 @@ func TestRenderMCPServerOverrides_CredentialPassthrough(t *testing.T) {
 		t.Errorf("renderMCPServerOverrides() rendered = %q, want the session-only variable rendered literally", rendered)
 	}
 }
-
-// --- encoding contract ---
 
 // TestRenderMCPServerTable_EncodingContract asserts the exact
 // rendered argument for each encoding case the renderer must handle.

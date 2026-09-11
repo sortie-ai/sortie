@@ -14,8 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
-// --- ListLabelEvents ---
-
 func TestListLabelEvents_SkipsNullLabel(t *testing.T) {
 	t.Parallel()
 
@@ -171,8 +169,6 @@ func TestListLabelEvents_ErrorStatuses(t *testing.T) {
 		}
 	})
 }
-
-// --- RemoveLabel (AC7) ---
 
 func TestRemoveLabel_AbsentLabelNoOp(t *testing.T) {
 	t.Parallel()

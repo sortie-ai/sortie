@@ -594,19 +594,18 @@ func TestUnconfirmedLoadSuccessNoReplayClearsProvisionalSessionIDForFallbackUpda
 	t.Errorf("events = %+v, want the session/update observed once the fallback session/new was answered to have reached the turn", events)
 }
 
-// TestResolveLoadDefersUntilCreationMinuteElapses confirms property 1
-// of the same-minute guard: a session/load for an identifier this
-// process created in the current UTC minute does not reach the
-// connection before the guard's clock leaves that minute. It also
-// exercises property 9: a fake clock placed a few milliseconds before
-// the minute boundary keeps the whole test's wall-clock cost in the
-// milliseconds, never the full minute. This test must fail if the
-// prologue is removed from resolveLoad, since the guarded session/load
-// would then reach the connection immediately, inside the check window
-// below.
+// TestResolveLoadDefersUntilCreationMinuteElapses confirms the
+// same-minute guard: a session/load for an identifier this process
+// created in the current UTC minute does not reach the connection
+// before the guard's clock leaves that minute. A fake clock placed a
+// few milliseconds before the minute boundary keeps the whole test's
+// wall-clock cost in the milliseconds, never the full minute. This test
+// must fail if the prologue is removed from resolveLoad, since the
+// guarded session/load would then reach the connection immediately,
+// inside the check window below.
 //
-// It also covers property 5 by way of assertSessionContinuationEntry:
-// once the deferred load is confirmed by observed replay, the
+// It also covers, by way of assertSessionContinuationEntry, that once
+// the deferred load is confirmed by observed replay, the
 // sessionContinuation capability is not lowered, so the deferral
 // itself is not treated as a failed observation.
 func TestResolveLoadDefersUntilCreationMinuteElapses(t *testing.T) {
@@ -648,9 +647,9 @@ func TestResolveLoadDefersUntilCreationMinuteElapses(t *testing.T) {
 }
 
 // TestResolveLoadDeferralLogsDebugRecord confirms the deferral's
-// exact log shape: a Debug record on state.logger with the message
-// the spec pins and exactly the two typed attributes session_id and
-// wait_ms.
+// exact log shape: a Debug record on state.logger with the pinned
+// deferral message and exactly the two typed attributes session_id
+// and wait_ms.
 func TestResolveLoadDeferralLogsDebugRecord(t *testing.T) {
 	t.Parallel()
 
@@ -693,10 +692,10 @@ func TestResolveLoadDeferralLogsDebugRecord(t *testing.T) {
 	}
 }
 
-// TestResolveLoadNoDeferralWhenNotInCreationMinute confirms property 2:
-// a session/load for an identifier with no ledger entry, and one
-// recorded in an earlier UTC minute, both reach the connection with no
-// delay the guard added.
+// TestResolveLoadNoDeferralWhenNotInCreationMinute confirms that a
+// session/load for an identifier with no ledger entry, and one recorded
+// in an earlier UTC minute, both reach the connection with no delay the
+// guard added.
 func TestResolveLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
 	t.Parallel()
 
@@ -761,10 +760,10 @@ func TestResolveLoadNoDeferralWhenNotInCreationMinute(t *testing.T) {
 	}
 }
 
-// TestResolveResumeIgnoresCreationLedger confirms property 3: a
-// session/resume reaches the connection with no delay the guard
-// added, even when the ledger holds a current-minute entry for the
-// same identifier. The guard is scoped to session/load alone.
+// TestResolveResumeIgnoresCreationLedger confirms that a session/resume
+// reaches the connection with no delay the guard added, even when the
+// ledger holds a current-minute entry for the same identifier. The
+// guard is scoped to session/load alone.
 func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
 	t.Parallel()
 
@@ -798,9 +797,9 @@ func TestResolveResumeIgnoresCreationLedger(t *testing.T) {
 }
 
 // TestResolveLoadContextCancelDuringDeferralReturnsPortExit confirms
-// property 4: when the caller's context ends while the deferral is
-// being spent, no session/load and no session/new reaches the
-// connection, and resolveSession returns a domain.AgentError of kind
+// that when the caller's context ends while the deferral is being
+// spent, no session/load and no session/new reaches the connection,
+// and resolveSession returns a domain.AgentError of kind
 // domain.ErrPortExit.
 func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
 	t.Parallel()
@@ -843,8 +842,8 @@ func TestResolveLoadContextCancelDuringDeferralReturnsPortExit(t *testing.T) {
 	}
 }
 
-// TestFallbackSessionRecordedIsGuardedOnLaterLoad confirms property 6:
-// the identifier a fallback session/new creates is recorded in the
+// TestFallbackSessionRecordedIsGuardedOnLaterLoad confirms that the
+// identifier a fallback session/new creates is recorded in the
 // shared ledger, so a later attempt loading it, on another session
 // sharing the same *sessionOrigins the way ClientProtocolAdapter's own
 // value is shared across sessions, is guarded exactly as a

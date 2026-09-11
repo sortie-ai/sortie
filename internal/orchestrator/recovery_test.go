@@ -14,8 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- PopulateRetries tests ---
-
 func TestPopulateRetries(t *testing.T) {
 	t.Parallel()
 
@@ -123,8 +121,6 @@ func TestPopulateRetries(t *testing.T) {
 	})
 }
 
-// --- Buffer sizing tests ---
-
 func TestRetryTimerChBuffer_AccountsForPrePopulatedRetries(t *testing.T) {
 	t.Parallel()
 
@@ -171,8 +167,6 @@ func TestRetryTimerChBuffer_DefaultWithoutRetries(t *testing.T) {
 		t.Errorf("retryTimerCh cap = %d, want 64", cap(o.retryTimerCh))
 	}
 }
-
-// --- activateReconstructedRetries tests ---
 
 func TestActivateReconstructedRetries(t *testing.T) {
 	t.Parallel()
@@ -283,7 +277,6 @@ func TestActivateReconstructedRetries(t *testing.T) {
 			t.Fatal("retryTimerCh is empty, expected id-now")
 		}
 
-		// id-later should have a timer.
 		if state.RetryAttempts["id-later"].TimerHandle == nil {
 			t.Error("id-later should have non-nil TimerHandle")
 		} else {
@@ -316,7 +309,6 @@ func TestActivateReconstructedRetries(t *testing.T) {
 
 		o.activateReconstructedRetries()
 
-		// Timer should be unchanged.
 		if state.RetryAttempts["id-active"].TimerHandle != existingTimer {
 			t.Error("TimerHandle should not be replaced for already-active entry")
 		}
@@ -474,8 +466,6 @@ func TestPopulateRetries_SessionID_Nil(t *testing.T) {
 		t.Errorf("PopulateRetries_SessionID_Nil: SessionID = %q, want empty", got.SessionID)
 	}
 }
-
-// --- RecoverPendingReactions tests ---
 
 // recoveryNow is a fixed instant used as the NowFunc reference for recovery tests.
 var recoveryNow = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
@@ -924,7 +914,7 @@ func TestRecoverPendingReactions_SkipsNonHandoffState(t *testing.T) {
 		Repo:     "r",
 	})
 
-	// Tracker returns "In Progress" — not the handoff state "In Review".
+	// Tracker returns "In Progress", not the handoff state "In Review".
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-5": "In Progress"}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-5", "PROJ-5", "", 1)
@@ -954,7 +944,7 @@ func TestRecoverPendingReactions_SkipsTerminalState(t *testing.T) {
 		Repo:     "r",
 	})
 
-	// Tracker returns "Done" — a configured terminal state.
+	// Tracker returns "Done", a configured terminal state.
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-6": "Done"}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-6", "PROJ-6", "", 1)
@@ -1008,7 +998,6 @@ func TestRecoverPendingReactions_SkipsClaimedOrRetryingIssue(t *testing.T) {
 	if result.ReviewRecovered != 0 {
 		t.Errorf("ReviewRecovered = %d, want 0 for claimed/retry/running issues", result.ReviewRecovered)
 	}
-	// Retry state unchanged.
 	if _, ok := state.RetryAttempts["ISS-RETRY"]; !ok {
 		t.Error("state.RetryAttempts[ISS-RETRY] was removed by recovery, want unchanged")
 	}
@@ -1126,7 +1115,7 @@ func TestRecoverPendingReactions_DoesNotOverwriteExistingReview(t *testing.T) {
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-EXISTING": "In Review"}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	// Pre-populate a pending reaction — recovery must not overwrite it.
+	// Pre-populate a pending reaction; recovery must not overwrite it.
 	existing := &PendingReaction{
 		IssueID: "ISS-EXISTING", Kind: ReactionKindReview,
 		KindData: &ReviewReactionData{PRNumber: 9999, Owner: "old", Repo: "old", Branch: "old"},
@@ -1186,7 +1175,7 @@ func TestRecoverPendingReactions_InvalidSCMMetadataSkips(t *testing.T) {
 	t.Parallel()
 
 	wsRoot := t.TempDir()
-	// No .sortie/scm.json written — ReadSCMMetadata returns zero value.
+	// No .sortie/scm.json written, ReadSCMMetadata returns zero value.
 
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-NOMETA": "In Review"}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -1320,7 +1309,6 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 		t.Fatalf("ReviewRecovered = %d, want 1", result.ReviewRecovered)
 	}
 
-	// Issue was NOT claimed before reconcile.
 	if _, claimed := state.Claimed["ISS-DISPATCH"]; claimed {
 		t.Error("ISS-DISPATCH claimed before reconcile; want not claimed at recovery time")
 	}
@@ -1357,8 +1345,6 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
 	}
 }
-
-// --- Auto-merge recovery tests ---
 
 // TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured verifies that
 // a run history entry with full PR metadata is recovered as a merge-kind
@@ -1417,7 +1403,7 @@ func TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured(t *testing.
 
 // TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured verifies that no
 // merge-kind PendingReaction is created when AutoMergeReactionConfigured is
-// false, even with full PR metadata present (spec Test 6).
+// false, even with full PR metadata present.
 func TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -1487,9 +1473,7 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata(t *testing.
 	}
 }
 
-// --- bot-review startup recovery tests (6.6 → R11) ---
-
-// TestRecoverPendingReactions_RecreatesBotReviewAfterRestart verifies R11:
+// TestRecoverPendingReactions_RecreatesBotReviewAfterRestart verifies that
 // a run_history row plus SCMMetadata with full PR identity and
 // BotReviewReactionConfigured=true reconstructs a bot-review PendingReaction
 // and increments BotReviewRecovered.
@@ -1559,7 +1543,7 @@ func TestRecoverPendingReactions_RecreatesBotReviewAfterRestart(t *testing.T) {
 	}
 }
 
-// TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse verifies R11:
+// TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse verifies that
 // BotReviewReactionConfigured=false → no bot-review entry is reconstructed, even
 // with full PR metadata present.
 func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T) {
@@ -1595,7 +1579,7 @@ func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T
 	}
 }
 
-// TestRecoverPendingReactions_BotReviewMissingPRNumber verifies R11: a row missing
+// TestRecoverPendingReactions_BotReviewMissingPRNumber verifies that a row missing
 // PRNumber (zero) recovers no bot-review entry even when BotReviewReactionConfigured=true.
 func TestRecoverPendingReactions_BotReviewMissingPRNumber(t *testing.T) {
 	t.Parallel()
@@ -1630,7 +1614,7 @@ func TestRecoverPendingReactions_BotReviewMissingPRNumber(t *testing.T) {
 	}
 }
 
-// TestRecoverPendingReactions_BotReviewMissingOwner verifies R11: a row missing
+// TestRecoverPendingReactions_BotReviewMissingOwner verifies that a row missing
 // Owner recovers no bot-review entry.
 func TestRecoverPendingReactions_BotReviewMissingOwner(t *testing.T) {
 	t.Parallel()
@@ -1665,7 +1649,7 @@ func TestRecoverPendingReactions_BotReviewMissingOwner(t *testing.T) {
 	}
 }
 
-// TestRecoverPendingReactions_BotReviewMissingRepo verifies R11: a row missing
+// TestRecoverPendingReactions_BotReviewMissingRepo verifies that a row missing
 // Repo recovers no bot-review entry.
 func TestRecoverPendingReactions_BotReviewMissingRepo(t *testing.T) {
 	t.Parallel()
@@ -1700,7 +1684,7 @@ func TestRecoverPendingReactions_BotReviewMissingRepo(t *testing.T) {
 	}
 }
 
-// TestRecoverPendingReactions_BotReviewMissingBranch verifies R11: a row missing
+// TestRecoverPendingReactions_BotReviewMissingBranch verifies that a row missing
 // Branch recovers no bot-review entry.
 func TestRecoverPendingReactions_BotReviewMissingBranch(t *testing.T) {
 	t.Parallel()
@@ -1734,8 +1718,6 @@ func TestRecoverPendingReactions_BotReviewMissingBranch(t *testing.T) {
 		t.Error("bot-review PendingReactions entry created with empty Branch; want absent")
 	}
 }
-
-// --- merge-conflict recovery tests ---
 
 func TestRecoverPendingReactions_MergeConflict(t *testing.T) {
 	t.Parallel()

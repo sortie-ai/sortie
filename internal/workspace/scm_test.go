@@ -23,8 +23,6 @@ func writeSCMFile(t *testing.T, wsPath string, content []byte) {
 	}
 }
 
-// --- TestReadSCMMetadata ---
-
 func TestReadSCMMetadata_FileAbsent(t *testing.T) {
 	t.Parallel()
 

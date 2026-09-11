@@ -51,8 +51,6 @@ func requireTrackerErrorKind(t *testing.T, err error, kind domain.TrackerErrorKi
 	adaptertest.AssertTrackerErrorKind(t, err, kind)
 }
 
-// --- Constructor tests ---
-
 func TestNewFileAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -158,8 +156,6 @@ func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
 		t.Error("active_states missing 'in progress'")
 	}
 }
-
-// --- FetchCandidateIssues tests ---
 
 func TestFetchCandidateIssues(t *testing.T) {
 	t.Parallel()
@@ -274,8 +270,6 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 }
 
-// --- FetchIssueByID tests ---
-
 func TestFetchIssueByID(t *testing.T) {
 	t.Parallel()
 
@@ -381,8 +375,6 @@ func TestFetchIssueByID(t *testing.T) {
 	})
 }
 
-// --- FetchIssuesByStates tests ---
-
 func TestFetchIssuesByStates(t *testing.T) {
 	t.Parallel()
 
@@ -444,8 +436,6 @@ func TestFetchIssuesByStates(t *testing.T) {
 	})
 }
 
-// --- FetchIssueStatesByIDs tests ---
-
 func TestFetchIssueStatesByIDs(t *testing.T) {
 	t.Parallel()
 
@@ -502,8 +492,6 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 	})
 }
 
-// --- FetchIssueStatesByIdentifiers tests ---
-
 func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 	t.Parallel()
 
@@ -558,8 +546,6 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 		}
 	})
 }
-
-// --- FetchIssueComments tests ---
 
 func TestFetchIssueComments(t *testing.T) {
 	t.Parallel()
@@ -625,8 +611,6 @@ func TestFetchIssueComments(t *testing.T) {
 		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 }
-
-// --- Normalization tests ---
 
 func TestNormalization(t *testing.T) {
 	t.Parallel()
@@ -759,8 +743,6 @@ func TestNormalization(t *testing.T) {
 	})
 }
 
-// --- Registry integration test ---
-
 func TestRegistryIntegration(t *testing.T) {
 	t.Parallel()
 
@@ -782,8 +764,6 @@ func TestRegistryIntegration(t *testing.T) {
 		t.Fatal("expected issues from registry-constructed adapter")
 	}
 }
-
-// --- TransitionIssue tests ---
 
 func TestTransitionIssue(t *testing.T) {
 	t.Parallel()
@@ -942,8 +922,6 @@ func TestTransitionIssue(t *testing.T) {
 		}
 	})
 }
-
-// --- Metrics instrumentation tests ---
 
 type trackerRequestCall struct {
 	operation string
@@ -1183,9 +1161,9 @@ func TestAddLabel_IsANoOp(t *testing.T) {
 }
 
 // TestAddLabel_VisibleOnSubsequentReads verifies that a label recorded
-// through AddLabel is visible on a later FetchCandidateIssues call — the
+// through AddLabel is visible on a later FetchCandidateIssues call (the
 // load-bearing read, since it is the one the orchestrator's park release
-// rule evaluates — and on a later FetchIssueByID call.
+// rule evaluates) and on a later FetchIssueByID call.
 func TestAddLabel_VisibleOnSubsequentReads(t *testing.T) {
 	t.Parallel()
 

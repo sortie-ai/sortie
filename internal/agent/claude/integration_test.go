@@ -75,8 +75,6 @@ func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domai
 	}
 }
 
-// --- Integration test functions ---
-
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessIntegration(t)
 

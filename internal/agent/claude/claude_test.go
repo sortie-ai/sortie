@@ -1047,7 +1047,7 @@ exit 0
 	})
 }
 
-// TestRunTurn_SubAgentUsage exercises R15's sub-agent accounting rule
+// TestRunTurn_SubAgentUsage exercises the sub-agent accounting rule
 // using a fixture whose result event carries a two-model modelUsage map
 // and a top-level usage object whose output_tokens is zero, the shape a
 // fully-delegating session produces because usage excludes sub-agent
@@ -1334,7 +1334,7 @@ exec sleep 60
 			Prompt: "test",
 			OnEvent: func(e domain.AgentEvent) {
 				events = append(events, e)
-				// Cancel as soon as we get the init event.
+				// Cancel as soon as the init event arrives.
 				if e.Type == domain.EventSessionStarted {
 					cancel()
 				}
@@ -1784,11 +1784,11 @@ exit 0
 	}, result, err)
 }
 
-// TestRunTurn_AssistantAndToolNoUsageNoResultCompletes is the property-2
-// regression coverage for claude: a stream carrying assistant text and
-// completed tool activity, no per-message usage object anywhere, and no
-// terminal result event, still reports turn_completed. The composed
-// stream is asserted to carry no usage object, so a future revert to a
+// TestRunTurn_AssistantAndToolNoUsageNoResultCompletes pins regression
+// coverage for claude: a stream carrying assistant text and completed
+// tool activity, no per-message usage object anywhere, and no terminal
+// result event, still reports turn_completed. The composed stream is
+// asserted to carry no usage object, so a future revert to a
 // token-count derivation fails this test rather than passing it.
 func TestRunTurn_AssistantAndToolNoUsageNoResultCompletes(t *testing.T) {
 	t.Parallel()
@@ -2723,7 +2723,7 @@ func TestRunTurn_PerRequestAPIDurationMS_NoInitGuard(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	// No system/init event — apiCallStart stays zero, so the guard
+	// No system/init event: apiCallStart stays zero, so the guard
 	// !apiCallStart.IsZero() prevents any timing from being recorded.
 	// emittedAPITiming stays false, so the fallback path fires on result.
 	script := writeScript(t, tmpDir, `
@@ -3037,7 +3037,7 @@ exit 0
 	}
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
 // session's second turn, whose stream carries neither declared signal,
 // reports turn_failed even though the first turn on the same session
 // carried both assistant output and completed tool activity.

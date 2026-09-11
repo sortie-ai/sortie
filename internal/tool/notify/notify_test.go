@@ -74,8 +74,6 @@ func assertFailureKind(t *testing.T, m map[string]any, wantKind string) {
 	}
 }
 
-// --- Tool identity tests ---
-
 func TestNotifyTool_Name(t *testing.T) {
 	t.Parallel()
 
@@ -144,8 +142,6 @@ func TestNotifyTool_InputSchema_DefensiveCopy(t *testing.T) {
 	}
 }
 
-// --- New panic tests ---
-
 func TestNew_PanicsOnEmptyBackends(t *testing.T) {
 	t.Parallel()
 
@@ -175,8 +171,6 @@ func TestNew_PanicsOnNilBackends(t *testing.T) {
 
 	New(nil, testEnv(), 10)
 }
-
-// --- Execute dispatch and delivery tests ---
 
 func TestExecute_ValidCallDispatchesToBackend(t *testing.T) {
 	t.Parallel()
@@ -287,8 +281,6 @@ func TestExecute_SuccessResultShape(t *testing.T) {
 	}
 }
 
-// --- Validation error tests ---
-
 func TestExecute_InvalidInput_UnknownField(t *testing.T) {
 	t.Parallel()
 
@@ -365,8 +357,6 @@ func TestExecute_InvalidInput_GoErrorIsNil(t *testing.T) {
 	}
 }
 
-// --- Rate limiting tests ---
-
 func TestExecute_RateLimited_PastCap(t *testing.T) {
 	t.Parallel()
 
@@ -428,14 +418,12 @@ func TestExecute_RejectedCallDoesNotIncrementCounter(t *testing.T) {
 	mock := &mockNotifier{}
 	tool := New([]domain.Notifier{mock}, testEnv(), 10)
 
-	// Validation failure — counter must not increment.
+	// Validation failure; counter must not increment.
 	executeJSON(t, tool, `{"severity":"bad","title":"T","body":"B"}`)
 	if tool.count != 0 {
 		t.Errorf("counter = %d after rejected call, want 0", tool.count)
 	}
 }
-
-// --- Send failure tests ---
 
 func TestExecute_SendFailed_ReturnsCorrectKind(t *testing.T) {
 	t.Parallel()
@@ -494,8 +482,6 @@ func TestExecute_SendFailed_MessageRedacted(t *testing.T) {
 	}
 }
 
-// --- Valid severity and category acceptance ---
-
 func TestExecute_AllValidSeverities(t *testing.T) {
 	t.Parallel()
 
@@ -544,8 +530,6 @@ func TestExecute_OptionalCategoryAbsent(t *testing.T) {
 	}
 }
 
-// --- Multi-backend tests ---
-
 func TestExecute_MultipleBackends_AllReceiveNotification(t *testing.T) {
 	t.Parallel()
 
@@ -585,8 +569,6 @@ func TestExecute_MultipleBackends_FirstErrorShortCircuits(t *testing.T) {
 		t.Errorf("backend 2 was called %d times after first backend failed, want 0", len(mock2.received))
 	}
 }
-
-// --- Envelope source field ---
 
 func TestExecute_SourceFromEnvContext(t *testing.T) {
 	t.Parallel()

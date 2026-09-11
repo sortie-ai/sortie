@@ -13,8 +13,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // mgcTransitionCall records one TransitionIssue invocation.
 type mgcTransitionCall struct {
 	issueID string
@@ -299,8 +297,6 @@ func (s *mgcStoreFake) missingSHAObservation(issueID string) (mgcFingerprintReco
 	rec, ok := s.fingerprints[issueID+":"+mergeCompletionMissingSHAObservationKind]
 	return rec, ok
 }
-
-// --- Test helpers ---
 
 // mgcBaseTime is a fixed reference time for merge-completion reconcile
 // tests.

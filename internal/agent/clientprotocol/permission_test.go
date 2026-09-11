@@ -270,8 +270,8 @@ func TestToolDeliveryReportedOnceThenLatched(t *testing.T) {
 
 // TestToolDeliveryReportLogsWarnRecord confirms the uncallable-tool
 // report's Warn record carries exactly the message and the one
-// reason=permission_refused attribute the plan specifies, with no
-// other attribute attached.
+// reason=permission_refused attribute, with no other attribute
+// attached.
 func TestToolDeliveryReportLogsWarnRecord(t *testing.T) {
 	t.Parallel()
 

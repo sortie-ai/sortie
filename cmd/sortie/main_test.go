@@ -25,7 +25,7 @@ import (
 // runTestTimeout is the context timeout used by tests that exercise the
 // full run() startup sequence. These tests verify startup behavior
 // (logging, DB creation, flag parsing) and do not need to wait for a
-// poll cycle — the orchestrator shuts down as soon as the context
+// poll cycle; the orchestrator shuts down as soon as the context
 // expires.
 //
 // The pure-Go SQLite driver (modernc.org/sqlite) is significantly slower
@@ -467,7 +467,6 @@ func TestRunSIGINTCleanShutdown(t *testing.T) {
 		t.Skip("SIGINT is not supported on Windows")
 	}
 	if os.Getenv("SORTIE_TEST_SIGINT_HELPER") == "1" {
-		// --- subprocess ---
 		// This code runs as a subprocess when the parent test injects the
 		// env var. signal.NotifyContext handles SIGINT by cancelling ctx,
 		// which causes run() to shut down cleanly.
@@ -476,10 +475,9 @@ func TestRunSIGINTCleanShutdown(t *testing.T) {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		os.Exit(run(ctx, []string{wfPath}, os.Stdout, os.Stderr))
-		return // unreachable — silences staticcheck
+		return // unreachable, silences staticcheck
 	}
 
-	// --- parent test ---
 	dir := t.TempDir()
 	writeIssuesFixture(t, dir)
 	writeWorkflowFile(t, dir)
@@ -497,7 +495,7 @@ func TestRunSIGINTCleanShutdown(t *testing.T) {
 		t.Fatalf("cmd.Start: %v", err)
 	}
 
-	// Poll subprocess stderr until "sortie started" appears — confirming
+	// Poll subprocess stderr until "sortie started" appears; confirming
 	// the orchestrator event loop is running before we send SIGINT.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -511,7 +509,7 @@ func TestRunSIGINTCleanShutdown(t *testing.T) {
 		t.Fatalf("subprocess did not reach 'sortie started' within 5 s; stderr:\n%s", subStderr.String())
 	}
 
-	// Send SIGINT — should trigger context cancellation and clean shutdown.
+	// Send SIGINT; should trigger context cancellation and clean shutdown.
 	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatalf("Signal(SIGINT): %v", err)
 	}
@@ -786,7 +784,7 @@ func TestRunLogLevelFlagOverridesExtension(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeIssuesFixture(t, dir)
-	// Extension requests error level; flag requests debug — flag must win.
+	// Extension requests error level; flag requests debug; flag must win.
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("error"))
 
 	var stdout, stderr bytes.Buffer
@@ -828,7 +826,7 @@ func TestRunLogLevelDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
-	// No --log-level flag and no extension — default is info.
+	// No --log-level flag and no extension; default is info.
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -1081,7 +1079,7 @@ func TestRunLogFormatDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
-	// No --log-format flag — default is text.
+	// No --log-format flag; default is text.
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
@@ -1177,7 +1175,7 @@ func TestRunLogFormatFlagOverridesExtension(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	writeIssuesFixture(t, dir)
-	// Extension requests json; flag requests text — flag must win.
+	// Extension requests json; flag requests text; flag must win.
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("json"))
 
 	var stdout, stderr bytes.Buffer
@@ -1225,7 +1223,7 @@ func TestRunLogFormatExtensionNonStringType(t *testing.T) {
 	t.Chdir(dir)
 	writeIssuesFixture(t, dir)
 
-	// YAML integer 42 decodes as int — resolveLogFormat must reject it.
+	// YAML integer 42 decodes as int; resolveLogFormat must reject it.
 	content := []byte(`---
 polling:
   interval_ms: 30000
@@ -1320,8 +1318,6 @@ func TestRunLongHelp(t *testing.T) {
 		t.Errorf("run([--help]) stderr = %q, want empty", stderr.String())
 	}
 }
-
-// --- Auto-merge wiring tests ---
 
 // autoMergeWorkflowNoProvider returns a minimal WORKFLOW.md with
 // reactions.auto_merge but an empty provider, so the auto-merge feature is
@@ -1706,8 +1702,6 @@ func TestRunAutoMerge_MismatchedProviders(t *testing.T) {
 	}
 }
 
-// --- Label-fix wiring tests ---
-
 // labelFixOnlyWorkflowUnknownProvider returns a WORKFLOW.md with a
 // fix-only reactions.label_commands block (review_label disabled,
 // fix_label set) that names an unregistered SCM provider.
@@ -1818,7 +1812,7 @@ Fix issue {{ .issue.identifier }}.
 `, issuesPath, workspaceRoot)
 }
 
-// TestLabelFixOnly_ConstructsSCMAdapter covers A1: a fix-only
+// TestLabelFixOnly_ConstructsSCMAdapter verifies that a fix-only
 // label_commands configuration (empty review_label, non-empty fix_label)
 // alone drives labelFixActive and the SCM-adapter construction attempt,
 // proven by an unregistered provider failing at the same "unknown SCM
@@ -1854,8 +1848,8 @@ func TestLabelFixOnly_ConstructsSCMAdapter(t *testing.T) {
 	}
 }
 
-// TestLabelFixOnly_JoinsProviderConflictCheck covers A1's second clause:
-// a fix-only label_commands configuration participates in the
+// TestLabelFixOnly_JoinsProviderConflictCheck verifies that a fix-only
+// label_commands configuration also participates in the
 // single-provider conflict check alongside another active SCM reaction.
 // No t.Parallel: calls t.Chdir.
 func TestLabelFixOnly_JoinsProviderConflictCheck(t *testing.T) {
@@ -1885,7 +1879,7 @@ func TestLabelFixOnly_JoinsProviderConflictCheck(t *testing.T) {
 	}
 }
 
-// TestLabelFixInactive_NothingFires covers V6: with label_commands
+// TestLabelFixInactive_NothingFires verifies that with label_commands
 // absent or its provider empty, neither label reaction activates and
 // startup proceeds normally.
 // No t.Parallel: subtests call t.Chdir.
@@ -1930,8 +1924,6 @@ func TestLabelFixInactive_NothingFires(t *testing.T) {
 		})
 	}
 }
-
-// --- Roster-gate consolidation coverage ---
 
 // labelCommandsBothLabelsEmptyRunWorkflow returns a WORKFLOW.md with a
 // reactions.label_commands block naming a provider while both command

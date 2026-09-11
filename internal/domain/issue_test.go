@@ -45,7 +45,6 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		}
 	}
 
-	// Scalar fields.
 	if m["id"] != "10001" {
 		t.Errorf("id = %v, want 10001", m["id"])
 	}
@@ -68,12 +67,10 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		t.Errorf("issue_type = %v, want Bug", m["issue_type"])
 	}
 
-	// Priority.
 	if p, ok := m["priority"].(int); !ok || p != 2 {
 		t.Errorf("priority = %v (%T), want 2 (int)", m["priority"], m["priority"])
 	}
 
-	// Parent.
 	parent, ok := m["parent"].(map[string]any)
 	if !ok {
 		t.Fatalf("parent type = %T, want map[string]any", m["parent"])
@@ -82,7 +79,6 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		t.Errorf("parent = %v, want id=10000 identifier=PROJ-40", parent)
 	}
 
-	// Comments.
 	comments, ok := m["comments"].([]map[string]any)
 	if !ok {
 		t.Fatalf("comments type = %T, want []map[string]any", m["comments"])
@@ -94,7 +90,6 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		t.Errorf("comments[0].author = %v, want bob", comments[0]["author"])
 	}
 
-	// BlockedBy.
 	blockers, ok := m["blocked_by"].([]map[string]any)
 	if !ok {
 		t.Fatalf("blocked_by type = %T, want []map[string]any", m["blocked_by"])
@@ -106,7 +101,6 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 		t.Errorf("blocked_by[0].state = %v, want To Do", blockers[0]["state"])
 	}
 
-	// Labels.
 	labels, ok := m["labels"].([]string)
 	if !ok {
 		t.Fatalf("labels type = %T, want []string", m["labels"])

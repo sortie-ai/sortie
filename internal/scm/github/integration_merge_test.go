@@ -175,7 +175,7 @@ func TestSCMAdapter_MergeFlow_Integration(t *testing.T) {
 
 	t.Run("MergePR_AlreadyMerged_IdempotentSuccess", func(t *testing.T) {
 		// Call MergePR again on the same PR that was just merged. GitHub
-		// returns HTTP 200 with the existing merge commit SHA — it does not
+		// returns HTTP 200 with the existing merge commit SHA; it does not
 		// re-evaluate the head-SHA precondition once the PR is merged.
 		result, err := a.MergePR(ctx, prNumber, owner, repo,
 			domain.StrategySquash, "", "", headSHA)

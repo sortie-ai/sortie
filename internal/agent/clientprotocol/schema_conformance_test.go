@@ -25,8 +25,6 @@ import (
 // without executing the generator: it reads wire_gen.go's own
 // definition-to-Go-type mapping table rather than restating it.
 
-// --- Pinned artifact loading and provenance ---
-
 // schemaAssetsDir is the directory holding the pinned schema artifact
 // and its provenance file, relative to this package's own directory.
 const schemaAssetsDir = "testdata/schema-v1.21.0"
@@ -110,8 +108,6 @@ func definition(defs map[string]any, name string) (map[string]any, bool) {
 	d, ok := defs[name].(map[string]any)
 	return d, ok
 }
-
-// --- Generated struct fields vs. the pinned definitions ---
 
 // goTypeRegistry maps every Go type name wire_gen.go's
 // wireTypeByDefinition table names for a plain-object-form definition
@@ -329,8 +325,6 @@ func assertStructMirrorsDefinition(t *testing.T, defName, goTypeName string, def
 	}
 }
 
-// --- Closed value sets ---
-
 // assertSetsEqual fails t on any member present in one set and absent
 // from the other, naming label and the offending member.
 func assertSetsEqual(t *testing.T, label string, schemaSet, goSet map[string]bool) {
@@ -422,8 +416,6 @@ func assertTaggedEnumMatches(t *testing.T, defs map[string]any, defName, tagProp
 
 	assertSetsEqual(t, defName, schemaSet, goSet)
 }
-
-// --- A generic conformance checker over the pinned artifact ---
 
 // conformanceChecker validates a decoded JSON value against a schema
 // definition. In strict mode (the client's own written request
@@ -810,8 +802,6 @@ func nextRequestLine(t *testing.T, out *outboundReader, wantMethod string) (raw 
 	}
 	return raw, hdr.ID
 }
-
-// --- TestSchemaConformance ---
 
 // TestSchemaConformance validates the generated types against the
 // pinned artifact without executing the generator, validates the

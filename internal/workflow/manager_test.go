@@ -304,10 +304,10 @@ func TestManager_ReloadRetainsOnConfigTypeFault(t *testing.T) {
 	}
 }
 
-// TestManager_ReloadRetainsOnInvalidRetentionDays covers R5: a reload whose
-// workspace.retention_days fails validation leaves the previously loaded
-// configuration in force rather than disabling the bound or terminating
-// the process.
+// TestManager_ReloadRetainsOnInvalidRetentionDays asserts that a reload
+// whose workspace.retention_days fails validation leaves the previously
+// loaded configuration in force rather than disabling the bound or
+// terminating the process.
 func TestManager_ReloadRetainsOnInvalidRetentionDays(t *testing.T) {
 	t.Parallel()
 
@@ -464,8 +464,8 @@ func TestManager_WatchInvalidRetainsGood(t *testing.T) {
 	// Write invalid YAML.
 	writeWorkflow(t, path, []byte("---\n[[[bad yaml\n---\nprompt\n"))
 
-	// Wait until the reload actually fired — confirmed by LastLoadError becoming
-	// set — then assert the last-known-good config was preserved.
+	// Wait until the reload actually fired; confirmed by LastLoadError becoming
+	// set; then assert the last-known-good config was preserved.
 	ok := pollUntil(func() bool {
 		return mgr.LastLoadError() != nil
 	})
@@ -601,7 +601,7 @@ func TestManager_DeleteAndRecreate(t *testing.T) {
 			mgr.Config().Polling.IntervalMS)
 	}
 
-	// Confirm watcher is still alive — write a third value.
+	// Confirm watcher is still alive; write a third value.
 	writeWorkflow(t, path, validWorkflow(9999))
 
 	ok = pollUntil(func() bool {
@@ -698,7 +698,7 @@ func TestManager_RecoverAfterInvalidReload(t *testing.T) {
 			mgr.Config().Polling.IntervalMS)
 	}
 
-	// Now write valid content again — watcher should recover.
+	// Now write valid content again; watcher should recover.
 	writeWorkflow(t, path, validWorkflow(7777))
 
 	ok := pollUntil(func() bool {
@@ -809,7 +809,7 @@ func TestManager_ReloadWithoutValidatorPromotesBothEmpty(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	// Overwrite with both state lists empty — no validator so should promote.
+	// Overwrite with both state lists empty; no validator so should promote.
 	mustWriteFile(t, path, workflowWithStates(nil, nil))
 
 	if err := mgr.Reload(); err != nil {
@@ -848,7 +848,7 @@ func TestManager_ReloadEmptyActiveNonEmptyTerminalPromotes(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	// Empty active_states but non-empty terminal_states — should pass.
+	// Empty active_states but non-empty terminal_states; should pass.
 	mustWriteFile(t, path, workflowWithStates(nil, []string{"Done"}))
 
 	if err := mgr.Reload(); err != nil {
@@ -871,7 +871,7 @@ func TestManager_ReloadNonEmptyActiveEmptyTerminalPromotes(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	// Non-empty active_states but empty terminal_states — should pass.
+	// Non-empty active_states but empty terminal_states; should pass.
 	mustWriteFile(t, path, workflowWithStates([]string{"In Progress"}, nil))
 
 	if err := mgr.Reload(); err != nil {
@@ -927,7 +927,7 @@ func TestManager_SetLogger(t *testing.T) {
 }
 
 func TestManager_SetLoggerNil(t *testing.T) {
-	// No t.Parallel — this test mutates the global slog.Default.
+	// No t.Parallel; this test mutates the global slog.Default.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -1156,7 +1156,7 @@ func TestManager_WithAgentKindProbe_AcceptsKnownKind(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
-	// Use a workflow with agent kind "mock" — probe accepts it.
+	// Use a workflow with agent kind "mock"; probe accepts it.
 	mustWriteFile(t, path, []byte(`---
 polling:
   interval_ms: 5000
@@ -1257,7 +1257,7 @@ func TestManager_PerRuleTemplate_FrontMatterRejected(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// Write a per-rule template that has front matter — must be rejected.
+	// Write a per-rule template that has front matter; must be rejected.
 	tmplDir := filepath.Join(dir, "prompts")
 	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -1306,12 +1306,12 @@ func labelCommandsWorkflow(promptBody string) []byte {
 
 const labelReviewWarnMessage = "label_commands active but prompt template has no label_review branch"
 
-// TestManager_WarnsWhenLabelReviewTokenMissing covers A12: with
+// TestManager_WarnsWhenLabelReviewTokenMissing asserts that with
 // label_commands active and a prompt body that never references
 // label_review, load emits a Warn; the same active block with a
 // {{ if .label_review }} branch in the prompt suppresses it; and an
 // inactive label_commands block suppresses it regardless of prompt
-// content. The warning is advisory only — NewManager never fails because
+// content. The warning is advisory only; NewManager never fails because
 // of it.
 func TestManager_WarnsWhenLabelReviewTokenMissing(t *testing.T) {
 	t.Parallel()
@@ -1409,12 +1409,12 @@ func labelFixDisabledWorkflow(promptBody string) []byte {
 
 const labelFixWarnMessage = "label_commands active but prompt template has no label_fix branch"
 
-// TestManager_WarnsWhenLabelFixTokenMissing covers A12: with
+// TestManager_WarnsWhenLabelFixTokenMissing asserts that with
 // label_commands active and fix_label set, a prompt body that never
 // references label_fix produces a Warn on load; the same active block
 // with a {{ if .label_fix }} branch in the prompt suppresses it; and an
 // explicitly disabled fix_label suppresses it regardless of prompt
-// content. The warning is advisory only — NewManager never fails
+// content. The warning is advisory only; NewManager never fails
 // because of it.
 func TestManager_WarnsWhenLabelFixTokenMissing(t *testing.T) {
 	t.Parallel()

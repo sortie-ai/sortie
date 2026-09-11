@@ -36,23 +36,22 @@ const teardownReturnOverhead = 2 * time.Second
 const teardownParkedOptionSize = 4*1024*1024 + 4096
 
 // teardownParkedScriptTemplate is the fake agent for the parked
-// teardown scenario. Substituting __DIR__ and __SIZE__ gives a script that:
-//
-//  1. Detaches two helper processes into their own session before
-//     doing anything else, escaping this script's own process group:
-//     one reads a small prefix of whatever arrives on its standard
-//     input and then stops reading while holding that pipe's read end
-//     open, and one simply holds its standard output's write end
-//     open. Each explicitly redirects the file descriptor it does not
-//     represent, and each is released from an ordinary shell "&"
-//     background job's own implicit /dev/null substitution for
-//     standard input by duplicating the saved descriptor explicitly
-//     rather than leaving it to inherit fd 0 unredirected.
-//  2. Writes a session/request_permission request whose selected
-//     option carries an identifier of at least four mebibytes,
-//     followed by a second, distinct request the adapter never
-//     answers before teardown begins.
-//  3. Closes its own copies of both piped descriptors and idles.
+// teardown scenario. Substituting __DIR__ and __SIZE__ gives a script
+// that first detaches two helper processes into their own session
+// before doing anything else, escaping this script's own process
+// group: one reads a small prefix of whatever arrives on its standard
+// input and then stops reading while holding that pipe's read end
+// open, and one simply holds its standard output's write end open.
+// Each explicitly redirects the file descriptor it does not
+// represent, and each is released from an ordinary shell "&"
+// background job's own implicit /dev/null substitution for standard
+// input by duplicating the saved descriptor explicitly rather than
+// leaving it to inherit fd 0 unredirected. It then writes a
+// session/request_permission request whose selected option carries an
+// identifier of at least four mebibytes, followed by a second,
+// distinct request the adapter never answers before teardown begins.
+// Finally it closes its own copies of both piped descriptors and
+// idles.
 const teardownParkedScriptTemplate = `dir='__DIR__'
 exec 3<&0
 exec 4>&1
@@ -422,8 +421,6 @@ func TestStopSessionTeardownControlNoStdoutClose(t *testing.T) {
 		{name: "drain_stderr_and_reap", run: drainStderrAndReap(context.Background())},
 	})
 }
-
-// --- Graceful-phase coverage ---
 
 // teardownGracefulExitScript is a fake agent that installs a handler
 // for the graceful signal: on TERM it waits delaySeconds, writes

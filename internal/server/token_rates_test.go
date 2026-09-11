@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// --- ParseTokenRates ---
-
 func TestParseTokenRates(t *testing.T) {
 	t.Parallel()
 
@@ -296,8 +294,6 @@ func TestParseTokenRates_EmptyKeyWarningMessage(t *testing.T) {
 	}
 }
 
-// --- EstimateCost ---
-
 func TestEstimateCost(t *testing.T) {
 	t.Parallel()
 
@@ -400,8 +396,6 @@ func TestEstimateCost(t *testing.T) {
 		})
 	}
 }
-
-// --- FormatCost ---
 
 func TestFormatCost(t *testing.T) {
 	t.Parallel()

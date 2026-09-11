@@ -18,8 +18,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 func fixedSnapshot(snap orchestrator.RuntimeSnapshotResult) SnapshotFunc {
 	return func() (orchestrator.RuntimeSnapshotResult, error) {
 		return snap, nil
@@ -60,8 +58,6 @@ func decodeJSON[T any](t *testing.T, resp *http.Response) T {
 	}
 	return v
 }
-
-// --- Wire-type constructor tests ---
 
 func TestToRunningEntryResponse(t *testing.T) {
 	t.Parallel()
@@ -239,7 +235,7 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 }
 
 // TestToRunningEntryResponse_UsageDispositionFields proves the four
-// new members are additive (P10): every member the JSON response
+// new members are additive: every member the JSON response
 // carried before this change keeps its name, type, and value. It
 // covers one incremental entry, whose APIRequestsMeasured is true and
 // TokensPending is always false, and one turn_end entry, whose
@@ -334,13 +330,12 @@ func TestToRunningEntryResponse_UsageDispositionFields(t *testing.T) {
 	}
 }
 
-// TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot
-// proves P5 the way the property requires: exercised from
-// [orchestrator.RuntimeSnapshot] outward over a real
+// TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot is
+// exercised from [orchestrator.RuntimeSnapshot] outward over a real
 // [orchestrator.State], because the breakdown's gate lives in
 // RuntimeSnapshot itself and a hand-built SnapshotRunningEntry would
-// bypass it. It also proves P4 along the way: api_requests_measured
-// equals api_request_count != null on the same serialized row.
+// bypass it. It also asserts that api_requests_measured equals
+// api_request_count != null on the same serialized row.
 func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -421,7 +416,7 @@ func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testi
 			if got.APIRequestsMeasured != tt.wantMeasured {
 				t.Fatalf("APIRequestsMeasured = %v, want %v", got.APIRequestsMeasured, tt.wantMeasured)
 			}
-			// P4: the boolean and the count's nullity must agree.
+			// The boolean and the count's nullity must agree.
 			if (got.APIRequestCount != nil) != got.APIRequestsMeasured {
 				t.Errorf("APIRequestCount != nil is %v, want it to equal APIRequestsMeasured (%v)",
 					got.APIRequestCount != nil, got.APIRequestsMeasured)
@@ -455,8 +450,8 @@ func TestToRunningEntryResponse_RequestsByModelGate_FromRuntimeSnapshot(t *testi
 	}
 }
 
-// TestToRunningEntryResponse_TokenFiguresNullGate proves P12, P13, and
-// P14: the four tokens members are nil together exactly when the
+// TestToRunningEntryResponse_TokenFiguresNullGate asserts that the four
+// tokens members are nil together exactly when the
 // entry's UsageMeasured is false, four numbers otherwise, including a
 // genuine zero the entry's own runtime reported, and a tokens_pending
 // entry carries four numbers rather than a null.
@@ -563,8 +558,6 @@ func TestToRunningEntryResponse_TokenFiguresNullGate(t *testing.T) {
 		}
 	})
 }
-
-// --- Per-session timing percentage tests ---
 
 // TestToRunningEntryResponse_TimingPercentages verifies that
 // toRunningEntryResponse computes correct tool_time_percent and
@@ -1421,8 +1414,6 @@ func TestBuildIssueDetail(t *testing.T) {
 	})
 }
 
-// --- HTTP endpoint tests ---
-
 func TestHandleState(t *testing.T) {
 	t.Parallel()
 
@@ -1965,8 +1956,6 @@ func TestHandleRefresh(t *testing.T) {
 	})
 }
 
-// --- Method enforcement tests ---
-
 func TestMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 
@@ -2017,8 +2006,6 @@ func TestMethodNotAllowed(t *testing.T) {
 		})
 	}
 }
-
-// --- JSON encoding tests ---
 
 func TestStateResponseJSON(t *testing.T) {
 	t.Parallel()
@@ -2073,7 +2060,7 @@ func TestWriteJSONMarshalFailure(t *testing.T) {
 	rec := httptest.NewRecorder()
 	logger := slog.New(slog.DiscardHandler)
 
-	// math.NaN is not representable in JSON — forces an encoding error.
+	// math.NaN is not representable in JSON; forces an encoding error.
 	writeJSON(rec, logger, http.StatusOK, math.NaN())
 
 	res := rec.Result()
@@ -2096,8 +2083,6 @@ func TestWriteJSONMarshalFailure(t *testing.T) {
 		t.Errorf("error code = %q, want %q", envelope.Error.Code, "internal_error")
 	}
 }
-
-// --- Health endpoint tests ---
 
 // testHealthServer creates a server with configurable health-check functions.
 func testHealthServer(t *testing.T, opts ...func(*Params)) *httptest.Server {

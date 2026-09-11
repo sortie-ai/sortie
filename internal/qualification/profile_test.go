@@ -86,9 +86,9 @@ func marshalProfileDoc(t *testing.T, doc map[string]any) []byte {
 	return data
 }
 
-// TestDecodeRuntimeProfile covers stage D of the validation table: one
-// subtest per rejected case, plus a baseline confirming the valid
-// fixture itself decodes cleanly.
+// TestDecodeRuntimeProfile covers DecodeRuntimeProfile's rejection
+// rules: one subtest per rejected case, plus a baseline confirming
+// the valid fixture itself decodes cleanly.
 func TestDecodeRuntimeProfile(t *testing.T) {
 	t.Parallel()
 
@@ -424,15 +424,15 @@ func mustWriteFile(t *testing.T, path, content string) {
 }
 
 // validPublishedSample is a minimal workflow front-matter document
-// satisfying the published_sample stage-R rule: agent.kind is
-// agent-client-protocol and agent.command carries an element past
-// element zero.
+// satisfying ReadRuntimeProfileFile's published_sample rule:
+// agent.kind is agent-client-protocol and agent.command carries an
+// element past element zero.
 const validPublishedSample = "---\nagent:\n  kind: agent-client-protocol\n  command: sample-runtime --acp\n---\nbody\n"
 
 // writeFakeRepo writes a synthetic repository root at root: a go.mod
 // marker and the three files sampleRuntimeProfileDoc's own paths name,
-// so ReadRuntimeProfileFile's stage-R file-existence and published
-// sample checks succeed against it.
+// so ReadRuntimeProfileFile's file-existence and published sample
+// checks succeed against it.
 func writeFakeRepo(t *testing.T, root string) {
 	t.Helper()
 	mustWriteFile(t, filepath.Join(root, "go.mod"), "module fixture\n\ngo 1.24\n")
@@ -453,9 +453,9 @@ func nestedPath(root string, depth int, leaf string) string {
 	return filepath.Join(segments...)
 }
 
-// TestReadRuntimeProfileFile covers stage R of the validation table:
-// repository-root resolution at two nesting depths, and one subtest
-// per rejected case.
+// TestReadRuntimeProfileFile covers ReadRuntimeProfileFile's own
+// rejection rules: repository-root resolution at two nesting depths,
+// and one subtest per rejected case.
 func TestReadRuntimeProfileFile(t *testing.T) {
 	t.Parallel()
 

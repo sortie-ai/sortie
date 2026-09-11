@@ -8,8 +8,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 // assertNoMessageContains fails the test if any diag's Message contains substr.
 func assertNoMessageContains(t *testing.T, diags []registry.ValidationDiag, substr string) {
 	t.Helper()
@@ -19,8 +17,6 @@ func assertNoMessageContains(t *testing.T, diags []registry.ValidationDiag, subs
 		}
 	}
 }
-
-// --- Tests ---
 
 func TestValidateReactionConfigs(t *testing.T) {
 	t.Parallel()

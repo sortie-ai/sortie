@@ -98,15 +98,11 @@ func cloneVars(in map[string]any) map[string]any {
 	return out
 }
 
-// --- Logger capture ---
-
 // newTextLogger returns a logger backed by w at Debug level so tests can assert
 // WARN output without depending on slog.Default().
 func newTextLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
-
-// --- Fixture loading ---
 
 // loadFixture reads a fixture body from testdata.
 func loadFixture(t *testing.T, name string) []byte {
@@ -117,8 +113,6 @@ func loadFixture(t *testing.T, name string) []byte {
 	}
 	return data
 }
-
-// --- Preflight seeding ---
 
 // seedPreflight queues the viewer and team-states responses a successful
 // construction requires, so per-test setup only queues the read responses.
@@ -148,8 +142,6 @@ func newTestAdapterWithFilter(t *testing.T, f *fakeGraphQLClient, queryFilter ma
 	}
 	return a.(*LinearAdapter)
 }
-
-// --- Error assertions ---
 
 // assertTrackerErrorKind asserts that err is a [*domain.TrackerError] with the
 // expected kind.

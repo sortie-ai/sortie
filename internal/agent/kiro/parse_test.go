@@ -273,11 +273,11 @@ func TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow(t *testing.T) {
 }
 
 // TestParseLine_CommittedStdoutCaptureIsObservedAsAssistantOutput pins
-// property 6 for kiro: the committed byte-exact turn_stdout.txt capture,
-// driven through ParseLine via a real turn, is observed as assistant
-// output. It also pins the capture's own digest and its absent final
-// newline byte, so an editor pass that normalizes the file reddens this
-// test rather than silently passing it.
+// that the committed byte-exact turn_stdout.txt capture, driven through
+// ParseLine via a real turn, is observed as assistant output. It also
+// pins the capture's own digest and its absent final newline byte, so
+// an editor pass that normalizes the file reddens this test rather than
+// silently passing it.
 func TestParseLine_CommittedStdoutCaptureIsObservedAsAssistantOutput(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)

@@ -28,8 +28,6 @@ func mustSCMAdapterWithProject(t *testing.T, endpoint, project string) *GiteaSCM
 	return a.(*GiteaSCMAdapter)
 }
 
-// --- VerifyAutoMergeScopes ---
-
 func TestGiteaSCMVerifyAutoMergeScopes(t *testing.T) {
 	t.Parallel()
 
@@ -194,8 +192,6 @@ func TestGiteaSCMVerifyAutoMergeScopes(t *testing.T) {
 		}
 	})
 }
-
-// --- parseBracketList ---
 
 func TestParseBracketList(t *testing.T) {
 	t.Parallel()

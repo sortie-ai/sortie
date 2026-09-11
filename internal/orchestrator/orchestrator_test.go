@@ -26,8 +26,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
-// --- stub types for orchestrator tests ---
-
 // stubWorkflowManager implements [WorkflowManager] with configurable returns.
 // All methods are safe for concurrent use.
 type stubWorkflowManager struct {
@@ -369,8 +367,6 @@ type stubObserver struct {
 
 func (o *stubObserver) OnStateChange() { o.calls.Add(1) }
 
-// --- TestShouldDispatchWithSets ---
-
 func TestShouldDispatchWithSets(t *testing.T) {
 	t.Parallel()
 
@@ -584,8 +580,6 @@ func TestShouldDispatchWithSets_parity(t *testing.T) {
 	}
 }
 
-// --- TestNewOrchestrator ---
-
 func TestNewOrchestrator(t *testing.T) {
 	t.Parallel()
 
@@ -678,8 +672,6 @@ func TestNewOrchestrator(t *testing.T) {
 	})
 }
 
-// --- PreflightOK tests ---
-
 func TestPreflightOK_InitialValue(t *testing.T) {
 	t.Parallel()
 
@@ -740,7 +732,6 @@ func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 		},
 	})
 
-	// Initially true.
 	if !o.PreflightOK() {
 		t.Fatal("PreflightOK() = false before tick, want true")
 	}
@@ -754,7 +745,7 @@ func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 		t.Error("PreflightOK() = true after tick with failing preflight, want false")
 	}
 
-	// Fix the reload and run another tick — should pass again.
+	// Fix the reload and run another tick, should pass again.
 	o.preflightParams.ReloadWorkflow = func() error { return nil }
 	o.handleTick(ctx)
 
@@ -762,8 +753,6 @@ func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 		t.Error("PreflightOK() = false after tick with passing preflight, want true")
 	}
 }
-
-// --- TestOrchestratorShutdown ---
 
 func TestOrchestratorShutdown(t *testing.T) {
 	t.Parallel()
@@ -800,8 +789,6 @@ func TestOrchestratorShutdown(t *testing.T) {
 		t.Fatal("Run did not return within 3 seconds of context cancellation")
 	}
 }
-
-// --- TestMakeWorkerFn ---
 
 func TestMakeWorkerFn(t *testing.T) {
 	t.Parallel()
@@ -1042,7 +1029,7 @@ func TestMakeWorkerFn(t *testing.T) {
 // makeWorkerFn derives WorkerDeps.Posture from the reactionKind argument
 // via dispatchPostureForReactionKind: ReactionKindLabelReview selects
 // PostureReview, ReactionKindLabelFix selects PostureFix, and every other
-// kind (including empty) selects PostureNormal (A3). Each case asserts
+// kind (including empty) selects PostureNormal. Each case asserts
 // the pure mapping output directly, then asserts the derived
 // WorkerDeps.Posture indirectly via the dispatch-time in-progress
 // transition, which only a DrivesIssueState-true posture performs.
@@ -1111,7 +1098,7 @@ func TestMakeWorkerFn_DerivesPostureFromReactionKind(t *testing.T) {
 
 // TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit verifies that
 // HandleWorkerExit derives its drivesIssue gate from the same
-// dispatchPostureForReactionKind mapping makeWorkerFn uses (A3), so the
+// dispatchPostureForReactionKind mapping makeWorkerFn uses, so the
 // dispatch builder and the exit handler can never disagree on a reaction
 // kind's posture. Observed via the continuation-retry branch, which fires
 // on a normal exit with an active issue and no handoff configured only
@@ -1162,8 +1149,6 @@ func TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit(t *testing.T) {
 		})
 	}
 }
-
-// --- TestOnRetryFire ---
 
 func TestOnRetryFire(t *testing.T) {
 	t.Parallel()
@@ -1231,8 +1216,6 @@ func TestOnRetryFire(t *testing.T) {
 	})
 }
 
-// --- TestNotifyObservers ---
-
 func TestNotifyObservers(t *testing.T) {
 	t.Parallel()
 
@@ -1260,8 +1243,6 @@ func TestNotifyObservers(t *testing.T) {
 		t.Errorf("observer2 calls = %d, want 2", got)
 	}
 }
-
-// --- TestOrchestratorDynamicConfig ---
 
 func TestOrchestratorDynamicConfig(t *testing.T) {
 	t.Parallel()
@@ -1367,8 +1348,6 @@ func (c *candidateTrackerAdapter) FetchCandidateIssues(ctx context.Context) ([]d
 	return nil, nil
 }
 
-// --- TestOrchestratorPreflightFailure ---
-
 func TestOrchestratorPreflightFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1444,8 +1423,6 @@ var errPreflightFailed = errorString("preflight: workflow reload failed")
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
-
-// --- TestTickLogging ---
 
 func TestTickLogging_ZeroCandidates(t *testing.T) {
 	t.Parallel()
@@ -1564,7 +1541,7 @@ func TestTickLogging_WithDispatches(t *testing.T) {
 
 // TestHandleTick_PassesEmptyReactionKind verifies that the poll-tick
 // candidate-dispatch call site invokes makeWorkerFn with an empty
-// reactionKind (A9): a freshly dispatched candidate issue is never
+// reactionKind: a freshly dispatched candidate issue is never
 // read-only, so its dispatch-time in-progress transition still fires.
 func TestHandleTick_PassesEmptyReactionKind(t *testing.T) {
 	t.Parallel()
@@ -1721,8 +1698,6 @@ func lifecycleIssues() []domain.Issue {
 	}
 }
 
-// --- TestOrchestratorLifecycle ---
-
 func TestOrchestratorLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -1842,9 +1817,8 @@ func TestOrchestratorLifecycle(t *testing.T) {
 // TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn drives a real
 // dispatch through the full event loop and asserts the in-flight token
 // ceiling stops the run mid-turn, before the fake adapter's configured
-// max_turns is ever reached: acceptance criterion 4 (a test drives a run
-// past the ceiling and asserts it is stopped during the run rather than
-// after it) and property 1's max-turns bound.
+// max_turns is ever reached: the ceiling stops the run during the run
+// rather than after it, independent of the max-turns bound.
 func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1974,8 +1948,6 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	}
 }
 
-// --- TestOrchestratorLifecycleRetry ---
-
 func TestOrchestratorLifecycleRetry(t *testing.T) {
 	t.Parallel()
 
@@ -2089,7 +2061,6 @@ func TestOrchestratorLifecycleRetry(t *testing.T) {
 
 	// After Run returns, state is safe to read.
 
-	// The OK issue completed.
 	if _, ok := state.Completed["id-ok"]; !ok {
 		t.Error("issue id-ok not in Completed set")
 	}
@@ -2107,8 +2078,6 @@ func TestOrchestratorLifecycleRetry(t *testing.T) {
 		t.Error("issue id-fail not in Claimed set after retry scheduling")
 	}
 }
-
-// --- TestDispatchLoopPerStateExhaustion ---
 
 func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	t.Parallel()
@@ -2246,8 +2215,6 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 		t.Error("ip-3 was dispatched before td-1 — per-state limit was not enforced")
 	}
 }
-
-// --- TestOrchestratorDynamicConfigReload ---
 
 // TestOrchestratorDynamicConfigReload verifies that handleTick propagates
 // config changes from the WorkflowManager to observable orchestrator state
@@ -3250,8 +3217,6 @@ do {{ .issue.identifier }}
 	})
 }
 
-// --- TestOrchestratorDynamicConfigReloadWithFileWatcher ---
-
 // TestOrchestratorDynamicConfigReloadWithFileWatcher exercises the full
 // reload pipeline: WORKFLOW.md change → fsnotify → workflow.Manager →
 // Config() → handleTick → state update.
@@ -3598,7 +3563,7 @@ do {{ .issue.identifier }}
 	})
 
 	// Overwrite WORKFLOW.md with empty state lists (valid YAML, but
-	// semantically dangerous — both active_states and terminal_states
+	// semantically dangerous: both active_states and terminal_states
 	// are empty).
 	brokenContent := `---
 tracker:
@@ -3711,8 +3676,6 @@ do {{ .issue.identifier }}
 
 	requireCheck(t, result, "dispatch.agent.missing_block")
 }
-
-// --- TestGracefulShutdown ---
 
 func TestGracefulShutdown(t *testing.T) {
 	t.Parallel()
@@ -3912,7 +3875,7 @@ func TestGracefulShutdown(t *testing.T) {
 		// calls OnExit (simulating a hung process).
 		go func() {
 			<-workerCtx.Done()
-			// Worker context cancelled but no result sent — hung.
+			// Worker context cancelled but no result sent, hung.
 		}()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -3995,7 +3958,7 @@ func TestGracefulShutdown(t *testing.T) {
 		case id := <-o.retryTimerCh:
 			t.Errorf("retryTimerCh received %q after shutdown, want no late fires", id)
 		default:
-			// No message — timer was stopped correctly.
+			// No message, timer was stopped correctly.
 		}
 	})
 
@@ -4056,8 +4019,6 @@ func TestGracefulShutdown(t *testing.T) {
 		}
 	})
 }
-
-// --- SnapshotFunc / RefreshFunc / AddObserver tests ---
 
 func TestSnapshotFunc(t *testing.T) {
 	t.Parallel()
@@ -4322,7 +4283,6 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 
 	refreshFn := o.RefreshFunc()
 
-	// Before drain, RefreshFunc should accept.
 	if !refreshFn() {
 		t.Fatal("RefreshFunc() = false before drain, want true")
 	}
@@ -4355,13 +4315,10 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 		t.Fatal("Run did not return within 5 seconds")
 	}
 
-	// After drain completes, RefreshFunc must return false.
 	if refreshFn() {
 		t.Error("RefreshFunc() = true after drain, want false")
 	}
 }
-
-// --- Budget Exhaustion Tick Tests ---
 
 // budgetTickConfig returns a workflow manager configured for per-tick
 // budget exhaustion tests.
@@ -5377,8 +5334,6 @@ func TestHandleTick_BudgetTickSummary(t *testing.T) {
 	}
 }
 
-// --- Incremental session_metadata write tests ---
-
 // tokenUsageEvent returns a token_usage agent event with cumulative counters.
 func tokenUsageEvent(input, output, total, cacheRead int64) domain.AgentEvent {
 	return domain.AgentEvent{
@@ -5553,7 +5508,7 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		}
 	})
 
-	// P6: this site's persisted row must carry the same
+	// This site's persisted row must carry the same
 	// measured-implies-count discipline HandleWorkerExit applies.
 	t.Run("unmeasured entry persists a zero count despite a non-zero raw count", func(t *testing.T) {
 		t.Parallel()
@@ -6111,8 +6066,6 @@ func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 	}
 }
 
-// --- TestOrchestratorScenarios ---
-
 // TestOrchestratorScenarios covers dispatch-to-exit edge cases through the
 // real event loop: soft-stop signals, handoff transitions, handoff failures,
 // reconciliation cancellation, and re-dispatch prevention after handoff.
@@ -6170,7 +6123,7 @@ func TestOrchestratorScenarios(t *testing.T) {
 		issue := scenarioIssue("hs-1", "HS-1")
 
 		// workspacePath is written by startSessionFn and read by runTurnFn.
-		// Both execute sequentially in the same worker goroutine — no race.
+		// Both execute sequentially in the same worker goroutine, no race.
 		var workspacePath string
 
 		mockTracker := &mockTrackerAdapter{
@@ -6814,8 +6767,6 @@ func (s *sweepThrottleTracker) CommentIssue(_ context.Context, _, _ string) erro
 
 func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error { return nil }
 
-// --- TestHandleTickSweepThrottle ---
-
 func TestHandleTickSweepThrottle(t *testing.T) {
 	t.Parallel()
 
@@ -6892,8 +6843,6 @@ func TestHandleTickSweepThrottle(t *testing.T) {
 	}
 }
 
-// --- TestHandleTick_WorkerWarningChangeDetection ---
-
 func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	t.Parallel()
 
@@ -6944,7 +6893,7 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 		t.Errorf("warning count after two identical ticks = %d, want 1\nlog:\n%s", got, buf.String())
 	}
 
-	// Change to a different invalid value — a new warning must appear.
+	// Change to a different invalid value, a new warning must appear.
 	cfg.SetExtensionSection("worker", map[string]any{
 		"ssh_strict_host_key_checking": "strict",
 	})
@@ -6954,7 +6903,7 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 		t.Errorf("warning count after changing value to 'strict' = %d, want 2\nlog:\n%s", got, buf.String())
 	}
 
-	// Change SSHHosts while keeping the same invalid value — warning must be suppressed.
+	// Change SSHHosts while keeping the same invalid value, warning must be suppressed.
 	cfg.SetExtensionSection("worker", map[string]any{
 		"ssh_strict_host_key_checking": "strict",
 		"ssh_hosts":                    []any{"host-a"},
@@ -7419,8 +7368,6 @@ func readMCPServers(t *testing.T, path string) map[string]any {
 	return servers
 }
 
-// --- Blocker gate observability (handleTick) ---
-
 // newBlockerGateOrchestrator builds an Orchestrator wired with a "mock"
 // tracker returning issues as its candidates and resolver as the
 // blocker resolver, logging at Debug so per-issue records are
@@ -7783,8 +7730,6 @@ func TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer(t *testing.T) {
 		}
 	})
 }
-
-// --- Budget Hold Tracker Notice Tests ---
 
 // TestHandleTick_BudgetHoldNoticeOnce fails if the notice repeats on a
 // second tick that re-observes the same hold, rather than posting exactly

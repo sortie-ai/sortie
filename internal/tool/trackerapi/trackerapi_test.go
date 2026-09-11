@@ -9,8 +9,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- mock tracker adapter ---
-
 // mockTrackerAdapter is a configurable test double for domain.TrackerAdapter.
 type mockTrackerAdapter struct {
 	fetchCandidatesFn func(ctx context.Context) ([]domain.Issue, error)
@@ -152,8 +150,6 @@ func assertErrorContains(t *testing.T, raw json.RawMessage, substr string) {
 		t.Errorf("error.message = %q, want to contain %q", errObj.Message, substr)
 	}
 }
-
-// --- tests ---
 
 func TestName(t *testing.T) {
 	t.Parallel()

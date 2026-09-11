@@ -1977,8 +1977,6 @@ func TestWriteErrorMapping(t *testing.T) {
 	}
 }
 
-// --- local helpers ---
-
 // assertFilterVar returns the recorded filter operation variable as a map,
 // failing the test when it is absent or not a map.
 func assertFilterVar(t *testing.T, call recordedCall) map[string]any {

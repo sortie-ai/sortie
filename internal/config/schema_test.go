@@ -187,7 +187,6 @@ func TestValidateFrontMatter(t *testing.T) {
 		wantFields  []string // expected Field values in order
 		wantMsgSubs []string // substring to find in warnings[i].Message (optional)
 	}{
-		// --- Nil / empty maps ---
 		{
 			name:      "nil raw returns no warnings",
 			raw:       nil,
@@ -199,7 +198,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Unknown top-level keys ---
 		{
 			name:       "unknown top-level key trackers",
 			raw:        map[string]any{"trackers": map[string]any{"kind": "file"}},
@@ -272,7 +270,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Unknown sub-keys in known sections ---
 		{
 			name: "unknown tracker sub-key",
 			raw: map[string]any{
@@ -368,7 +365,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.typo_field"},
 		},
 
-		// --- Section-level type mismatch (scalar instead of map) ---
 		{
 			name: "tracker section is scalar not map",
 			raw:  map[string]any{"tracker": "not-a-map"},
@@ -379,7 +375,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"tracker"},
 		},
 
-		// --- Field-level type mismatches ---
 		{
 			name: "type mismatch tracker.kind is integer",
 			raw: map[string]any{
@@ -447,7 +442,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"polling.interval_ms"},
 		},
 		{
-			// "30000" is a coercible string — treated as valid integer.
+			// "30000" is a coercible string; treated as valid integer.
 			name:      "polling.interval_ms coercible string produces no warning",
 			raw:       map[string]any{"polling": map[string]any{"interval_ms": "30000"}},
 			wantCount: 0,
@@ -489,7 +484,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.stall_timeout_ms"},
 		},
 
-		// --- Top-level db_path ---
 		{
 			name: "type mismatch db_path is integer",
 			raw:  map[string]any{"db_path": 123},
@@ -504,7 +498,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- hooks.timeout_ms semantic (non-positive) ---
 		{
 			// -5 passes the int-type check but fails the positive-value check.
 			name: "hooks.timeout_ms negative value",
@@ -533,7 +526,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- agent.max_concurrent_agents_by_state semantic ---
 		{
 			name: "agent.max_concurrent_agents_by_state non-numeric value",
 			raw: map[string]any{
@@ -574,7 +566,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- agent.max_consecutive_absences schema registration ---
 		{
 			name:      "agent.max_consecutive_absences known key produces no warning",
 			raw:       map[string]any{"agent": map[string]any{"max_consecutive_absences": 5}},
@@ -590,7 +581,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.max_consecutive_absences"},
 		},
 
-		// --- agent.stop_grace_ms schema registration ---
 		{
 			name:      "agent.stop_grace_ms known key produces no warning",
 			raw:       map[string]any{"agent": map[string]any{"stop_grace_ms": 5000}},
@@ -606,7 +596,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.stop_grace_ms"},
 		},
 
-		// --- Full valid config: no warnings ---
 		{
 			name: "fully valid config with all known keys produces no warnings",
 			raw: map[string]any{
@@ -672,8 +661,6 @@ func TestValidateFrontMatter(t *testing.T) {
 		})
 	}
 }
-
-// --- unresolved_extension_var warning tests ---
 
 // buildCfgWithExtension is a helper that constructs a ServiceConfig with an
 // extension block populated after env resolution so ValidateFrontMatter can

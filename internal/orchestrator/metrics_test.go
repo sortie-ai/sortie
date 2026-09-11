@@ -13,8 +13,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test doubles ---
-
 // spyMetrics records all domain.Metrics method calls for assertion.
 type spyMetrics struct {
 	mu sync.Mutex
@@ -254,8 +252,6 @@ func (s *spyMetrics) SetBudgetExhaustedIssues(reason string, count int) {
 	s.budgetExhaustedIssues = append(s.budgetExhaustedIssues, budgetExhaustedIssuesCall{reason, count})
 }
 
-// --- Tests ---
-
 func TestActiveElapsedSeconds(t *testing.T) {
 	t.Parallel()
 
@@ -376,7 +372,7 @@ func TestUpdateGauges_SSH(t *testing.T) {
 	}
 	o.updateGauges(now)
 
-	// Should have 2 calls — one per host.
+	// Should have 2 calls, one per host.
 	if len(spy.sshHostUsage) != 2 {
 		t.Fatalf("SetSSHHostUsage call count = %d, want 2", len(spy.sshHostUsage))
 	}

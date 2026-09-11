@@ -11,8 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- Test doubles for preflight tests ---
-
 // preflightVerifierStub implements AutoMergeScopeVerifier with configurable
 // return values for preflight unit tests.
 type preflightVerifierStub struct {
@@ -104,11 +102,9 @@ func logCapture() (*slog.Logger, *bytes.Buffer) {
 	return slog.New(h), &buf
 }
 
-// --- RunAutoMergePreflight tests ---
-
 // TestRunAutoMergePreflight_TransportFailureSchedulesRetry verifies that a
 // transport-class error emits a WARN log, returns (false, nil, err), and does
-// not log an ERROR (spec Test 21).
+// not log an ERROR.
 func TestRunAutoMergePreflight_TransportFailureSchedulesRetry(t *testing.T) {
 	t.Parallel()
 
@@ -141,8 +137,7 @@ func TestRunAutoMergePreflight_TransportFailureSchedulesRetry(t *testing.T) {
 }
 
 // TestRunAutoMergePreflight_MissingScopeErrors verifies that a missing scope
-// emits an ERROR log, returns (false, missing, nil), and does not set a retry
-// (spec Test 19).
+// emits an ERROR log, returns (false, missing, nil), and does not set a retry.
 func TestRunAutoMergePreflight_MissingScopeErrors(t *testing.T) {
 	t.Parallel()
 
@@ -179,7 +174,7 @@ func TestRunAutoMergePreflight_MissingScopeErrors(t *testing.T) {
 }
 
 // TestRunAutoMergePreflight_PassesWithRepoScope verifies that a classic "repo"
-// token passes and emits an INFO log (spec Test 18).
+// token passes and emits an INFO log.
 func TestRunAutoMergePreflight_PassesWithRepoScope(t *testing.T) {
 	t.Parallel()
 
@@ -317,11 +312,8 @@ func TestRunAutoMergePreflight_AdapterWithoutVerifier(t *testing.T) {
 	}
 }
 
-// --- RunAutoMergePreflightRetry tests ---
-
 // TestRunAutoMergePreflightRetry_TransportFailure verifies that a second
-// transport failure emits a distinct WARN log and returns (false, nil, err)
-// (spec Test 23).
+// transport failure emits a distinct WARN log and returns (false, nil, err).
 func TestRunAutoMergePreflightRetry_TransportFailure(t *testing.T) {
 	t.Parallel()
 
@@ -354,8 +346,7 @@ func TestRunAutoMergePreflightRetry_TransportFailure(t *testing.T) {
 }
 
 // TestRunAutoMergePreflightRetry_Success verifies that a successful retry emits
-// 'auto_merge preflight retry succeeded' and returns (true, nil, nil)
-// (spec Test 22).
+// 'auto_merge preflight retry succeeded' and returns (true, nil, nil).
 func TestRunAutoMergePreflightRetry_Success(t *testing.T) {
 	t.Parallel()
 
@@ -384,12 +375,10 @@ func TestRunAutoMergePreflightRetry_Success(t *testing.T) {
 	}
 }
 
-// --- RunLabelFixScopePreflight tests ---
-
 // TestRunLabelFixScopePreflight_MissingScopeLogsWarnNotError verifies that a
 // missing required scope logs a WARN, never an ERROR, because the fix
 // command is default-on and a review-only deployment must not see a startup
-// ERROR for a feature it did not intend to use (A10). This is the deliberate
+// ERROR for a feature it did not intend to use. This is the deliberate
 // divergence from RunAutoMergePreflight, which logs the same condition at
 // ERROR because auto-merge is opt-in.
 func TestRunLabelFixScopePreflight_MissingScopeLogsWarnNotError(t *testing.T) {
@@ -435,7 +424,7 @@ func TestRunLabelFixScopePreflight_MissingScopeLogsWarnNotError(t *testing.T) {
 
 // TestRunLabelFixScopePreflight_AdapterWithoutVerifierFailsOpen verifies
 // that an adapter not implementing AutoMergeScopeVerifier fails open with a
-// WARN log and no ERROR (A10).
+// WARN log and no ERROR.
 func TestRunLabelFixScopePreflight_AdapterWithoutVerifierFailsOpen(t *testing.T) {
 	t.Parallel()
 
@@ -468,7 +457,7 @@ func TestRunLabelFixScopePreflight_AdapterWithoutVerifierFailsOpen(t *testing.T)
 
 // TestRunLabelFixScopePreflight_NoScopeInformationFailsOpen verifies that a
 // provider returning no scope information (fine-grained PAT or GitHub App
-// installation token) fails open with a WARN log (A10).
+// installation token) fails open with a WARN log.
 func TestRunLabelFixScopePreflight_NoScopeInformationFailsOpen(t *testing.T) {
 	t.Parallel()
 
@@ -506,7 +495,7 @@ func TestRunLabelFixScopePreflight_NoScopeInformationFailsOpen(t *testing.T) {
 
 // TestRunLabelFixScopePreflight_TransportFailureLogsWarn verifies that a
 // transport-class error logs a WARN and returns (false, nil, err); the
-// caller discards the result rather than scheduling a retry (A10).
+// caller discards the result rather than scheduling a retry.
 func TestRunLabelFixScopePreflight_TransportFailureLogsWarn(t *testing.T) {
 	t.Parallel()
 
@@ -580,8 +569,6 @@ func TestRunLabelFixScopePreflight_PassesWithSufficientScope(t *testing.T) {
 	}
 }
 
-// --- IsAutoMergePreflightTransportClass tests ---
-
 // TestIsAutoMergePreflightTransportClass verifies the transport-class predicate.
 func TestIsAutoMergePreflightTransportClass(t *testing.T) {
 	t.Parallel()
@@ -634,8 +621,6 @@ func TestIsAutoMergePreflightTransportClass(t *testing.T) {
 	}
 }
 
-// --- buildRequiredScopeList tests ---
-
 // TestBuildRequiredScopeList verifies that the scope list includes
 // contents:write only when requireContents is true.
 func TestBuildRequiredScopeList(t *testing.T) {
@@ -661,11 +646,9 @@ func TestBuildRequiredScopeList(t *testing.T) {
 	}
 }
 
-// --- State wiring tests for preflight retry scheduling ---
-
 // TestAutoMergePreflight_TransportFailureSchedulesRetryInState verifies that
 // the orchestrator-level code correctly sets AutoMergePreflightRetryDueAt after
-// a transport-class startup failure (spec Test 21). This validates the state
+// a transport-class startup failure. This validates the state
 // mutation that reconcileAutoMerge later consumes.
 func TestAutoMergePreflight_TransportFailureSchedulesRetryInState(t *testing.T) {
 	t.Parallel()
@@ -691,12 +674,12 @@ func TestAutoMergePreflight_TransportFailureSchedulesRetryInState(t *testing.T) 
 }
 
 // TestAutoMergePreflight_AuthFailureDoesNotScheduleRetry verifies that a scope
-// mismatch (auth-class) does NOT set AutoMergePreflightRetryDueAt — only a
-// restart can recover an auth-class failure (spec Test 22, negative case).
+// mismatch (auth-class) does NOT set AutoMergePreflightRetryDueAt; only a
+// restart can recover an auth-class failure.
 func TestAutoMergePreflight_AuthFailureDoesNotScheduleRetry(t *testing.T) {
 	t.Parallel()
 
-	// Auth failures return (false, missing, nil) — err is nil, missing is non-empty.
+	// Auth failures return (false, missing, nil); err is nil, missing is non-empty.
 	missing := []string{"pull_requests:write"}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 

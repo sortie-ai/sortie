@@ -105,8 +105,6 @@ func collectEvents(t *testing.T) (onEvent func(domain.AgentEvent), collected fun
 	return onEvent, collected
 }
 
-// --- Integration test functions ---
-
 func TestIntegration_StartSession(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
@@ -293,10 +291,10 @@ func TestIntegration_RunTurn(t *testing.T) {
 
 // TestIntegration_RunTurn_InputTokenRecovery drives one real turn with
 // COPILOT_HOME pointed at a temporary directory, so a single assertion
-// covers both halves of R20: the runtime honors the variable, and the
-// adapter resolves the same session-state root from it. It asserts the
-// recorded input token count is greater than zero and total_tokens
-// equals input_tokens plus output_tokens.
+// covers both halves of the COPILOT_HOME contract: the runtime honors
+// the variable, and the adapter resolves the same session-state root
+// from it. It asserts the recorded input token count is greater than
+// zero and total_tokens equals input_tokens plus output_tokens.
 func TestIntegration_RunTurn_InputTokenRecovery(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 

@@ -343,9 +343,6 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	}
 }
 
-// --- Tool round-trip: the generated MCP config actually reaches a
-// callable sortie_status tool, and the model's call returns a result. ---
-
 // repoRoot returns the absolute path to the repository root, derived
 // from this test file's known location at internal/agent/opencode/.
 func repoRoot(t *testing.T) string {
@@ -416,11 +413,11 @@ func writeIntegrationMCPConfig(t *testing.T, workspace, sortieBin, wfPath string
 // TestIntegration_ToolRoundTrip drives one real turn with a generated
 // MCP config translated into the runtime's own inline configuration
 // document, and asserts the model calls a Sortie tool through the
-// resulting sidecar and receives its result. This is the round trip
-// the spec's own runtime probes left unverified: the sidecar is
-// spawned with its session environment, but whether the model's call
-// reaches it and a result comes back was never observed until this
-// test runs with a real credential.
+// resulting sidecar and receives its result. Earlier runtime probes
+// left this round trip unverified: the sidecar is spawned with its
+// session environment, but whether the model's call reaches it and a
+// result comes back was never observed until this test runs with a
+// real credential.
 func TestIntegration_ToolRoundTrip(t *testing.T) {
 	skipIfNotEnabled(t)
 

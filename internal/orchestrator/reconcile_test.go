@@ -19,8 +19,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // unsupportedReactionObservationStore lets unrelated store doubles satisfy
 // the compile-time interface while failing loudly if a merge-completion test
 // accidentally uses a double without real observation semantics. It also
@@ -257,8 +255,6 @@ func (panicOnAnyCIProvider) FetchCIStatus(context.Context, string) (domain.CIRes
 	panic("FetchCIStatus must not be called after a terminal release")
 }
 
-// --- Test helpers ---
-
 // reconcileBaseTime is a fixed reference for reconcile tests.
 var reconcileBaseTime = time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 
@@ -331,8 +327,6 @@ func stateWithTerminalReleaseFixture(t *testing.T, cc *cancelCounter) *State {
 	}
 	return state
 }
-
-// --- Part A: Stall detection tests ---
 
 func TestReconcileStalled_Disabled(t *testing.T) {
 	t.Parallel()
@@ -599,8 +593,6 @@ func TestReconcileStalled_PersistenceError(t *testing.T) {
 	}
 }
 
-// --- Part B: Tracker state refresh tests ---
-
 func TestReconcileTrackerState_NoRunningEntries(t *testing.T) {
 	t.Parallel()
 
@@ -642,7 +634,6 @@ func TestReconcileTrackerState_FetchFailure(t *testing.T) {
 
 	ReconcileRunningIssues(state, params)
 
-	// Workers kept running on fetch failure.
 	if _, ok := state.Running["ISSUE-1"]; !ok {
 		t.Error("running entry removed despite fetch failure")
 	}
@@ -688,11 +679,9 @@ func TestReconcileTrackerState_TerminalSetsPendingCleanup(t *testing.T) {
 	if got := state.Running["ISSUE-1"].ObservedTerminalState; got != "Done" {
 		t.Errorf("ObservedTerminalState = %q, want %q", got, "Done")
 	}
-	// Retry cancelled for terminal issue.
 	if _, ok := state.RetryAttempts["ISSUE-1"]; ok {
 		t.Error("retry not cancelled for terminal issue")
 	}
-	// DeleteRetryEntry called.
 	if len(store.deletedIssueID) != 1 {
 		t.Fatalf("DeleteRetryEntry called %d times, want 1", len(store.deletedIssueID))
 	}
@@ -758,7 +747,6 @@ func TestReconcileTrackerState_NonActiveNonTerminalCancelsWithoutCleanup(t *test
 	if state.Running["ISSUE-1"].PendingCleanup {
 		t.Error("PendingCleanup set for non-active non-terminal issue")
 	}
-	// DeleteRetryEntry called.
 	if len(store.deletedIssueID) != 1 {
 		t.Fatalf("DeleteRetryEntry called %d times, want 1", len(store.deletedIssueID))
 	}
@@ -767,7 +755,7 @@ func TestReconcileTrackerState_NonActiveNonTerminalCancelsWithoutCleanup(t *test
 // TestReconcileTrackerState_NonActiveNonTerminalPreservesIncumbent verifies
 // that when the retry slot is occupied, the non-active stop still cancels
 // the worker and still counts the reconciliation action, but leaves the
-// incumbent retry entry alone — neither CancelRetry nor
+// incumbent retry entry alone; neither CancelRetry nor
 // Store.DeleteRetryEntry runs.
 func TestReconcileTrackerState_NonActiveNonTerminalPreservesIncumbent(t *testing.T) {
 	t.Parallel()
@@ -866,7 +854,7 @@ func TestReconcileTrackerState_TerminalCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
 	store := &mockReconcileStore{}
-	// "DONE" uppercase — should match "Done" in TerminalStates.
+	// "DONE" uppercase, should match "Done" in TerminalStates.
 	tracker := &mockReconcileTracker{
 		states: map[string]string{"ISSUE-1": "DONE"},
 	}
@@ -1227,8 +1215,6 @@ func TestReconcileTrackerState_NilTrackerAdapterPendingOnly(t *testing.T) {
 	}
 }
 
-// --- Combined: stall + tracker state ---
-
 func TestReconcile_StalledAndTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -1331,8 +1317,6 @@ func TestReconcile_SameIssueStalledAndTerminal(t *testing.T) {
 	}
 }
 
-// --- Stall-retry guard tests ---
-
 func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 	t.Parallel()
 
@@ -1370,7 +1354,7 @@ func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 	}
 
 	// Second tick: same entry still stalled but retry already present.
-	// Guard should skip rescheduling — DueAtMS and save count unchanged.
+	// Guard should skip rescheduling; DueAtMS and save count unchanged.
 	ReconcileRunningIssues(state, params)
 
 	secondEntry, ok := state.RetryAttempts["ISSUE-1"]
@@ -1383,7 +1367,6 @@ func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 	if secondEntry.Attempt != firstAttempt {
 		t.Errorf("Attempt changed from %d to %d after second tick, want unchanged", firstAttempt, secondEntry.Attempt)
 	}
-	// No additional SaveRetryEntry call.
 	if len(store.savedEntries) != 1 {
 		t.Errorf("SaveRetryEntry called %d times after second tick, want 1 (no additional call)", len(store.savedEntries))
 	}
@@ -1392,8 +1375,6 @@ func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 		t.Errorf("CancelFunc called %d times after two ticks, want 2", cc.count)
 	}
 }
-
-// --- Log spy ---
 
 // logRecord captures the level and message of a single slog record.
 type logRecord struct {
@@ -1424,8 +1405,6 @@ func (h *recordHandler) countByMessage(msg string) int {
 	}
 	return n
 }
-
-// --- PendingCleanup idempotency tests ---
 
 func TestReconcileTerminal_PendingCleanupSkipsSecondTick(t *testing.T) {
 	t.Parallel()
@@ -1461,7 +1440,7 @@ func TestReconcileTerminal_PendingCleanupSkipsSecondTick(t *testing.T) {
 		t.Fatalf("DeleteRetryEntry called %d times after first tick, want 1", firstDeleteCount)
 	}
 
-	// Second tick: PendingCleanup already set — should be a no-op.
+	// Second tick: PendingCleanup already set, should be a no-op.
 	ReconcileRunningIssues(state, params)
 
 	if cc.count != 1 {
@@ -1470,7 +1449,6 @@ func TestReconcileTerminal_PendingCleanupSkipsSecondTick(t *testing.T) {
 	if len(store.deletedIssueID) != firstDeleteCount {
 		t.Errorf("DeleteRetryEntry called %d times after second tick, want %d (no additional call)", len(store.deletedIssueID), firstDeleteCount)
 	}
-	// PendingCleanup remains set.
 	if !state.Running["ISSUE-1"].PendingCleanup {
 		t.Error("PendingCleanup cleared after second tick, want still set")
 	}
@@ -1521,8 +1499,6 @@ func TestReconcileTerminal_PendingCleanupSkipsLogAndRetryDeletion(t *testing.T) 
 		t.Error("Info log emitted for already-pending-cleanup issue, want 0")
 	}
 }
-
-// --- Stall Warn log emitted every stalled tick test ---
 
 func TestReconcileStalled_WarnLogEveryStalledTick(t *testing.T) {
 	t.Parallel()
@@ -1640,8 +1616,6 @@ func TestReconcileStalled_DeferralSkipsMutations(t *testing.T) {
 	}
 }
 
-// --- SweepWorkspaces helpers ---
-
 // defaultSweepParams returns SweepWorkspacesParams with the given
 // root and tracker. TerminalStates, Ctx, Logger, and Metrics use
 // test-suitable defaults.
@@ -1680,8 +1654,6 @@ func assertSweepDirRemoved(t *testing.T, path string) {
 		t.Errorf("path %q should have been removed, want ErrNotExist", path)
 	}
 }
-
-// --- TestSweepWorkspaces ---
 
 func TestSweepWorkspaces(t *testing.T) {
 	t.Parallel()
@@ -1908,8 +1880,6 @@ func TestSweepWorkspaces(t *testing.T) {
 	})
 }
 
-// --- Handoff-state reconcile tests ---
-
 func TestReconcileRunningIssues_ReactionContinuationInHandoffStateKeepsRunning(t *testing.T) {
 	t.Parallel()
 
@@ -1920,7 +1890,7 @@ func TestReconcileRunningIssues_ReactionContinuationInHandoffStateKeepsRunning(t
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 0
 	params.HandoffState = "Ready For Review"
-	// defaultReconcileParams ActiveStates = ["In Progress", "In Review"] — handoff excluded.
+	// defaultReconcileParams ActiveStates = ["In Progress", "In Review"], handoff excluded.
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
@@ -2063,8 +2033,6 @@ func TestReconcileRunningIssues_ReactionInUnrelatedStateCancels(t *testing.T) {
 		t.Fatalf("DeleteRetryEntry called %d times, want 1", len(store.deletedIssueID))
 	}
 }
-
-// --- Age pass (workspace.retention_days) test doubles and helpers ---
 
 // sweepStoreDouble is a test double for [SweepStore] returning a fixed
 // completions map or a fixed error.
@@ -2216,11 +2184,9 @@ func recentSweepTimestamp() string {
 	return time.Now().UTC().Add(-2 * 24 * time.Hour).Format(time.RFC3339)
 }
 
-// --- R6: the retention floor and the recovery lookback are coupled ---
-
 // TestWorkspaceRetentionFloorMatchesRecoveryLookback asserts the equality
-// [Spec-706 §3.3.5] relies on: the age pass never removes a workspace
-// pending-reaction recovery would not already have treated as stale.
+// the age pass depends on: it never removes a workspace pending-reaction
+// recovery would not already have treated as stale.
 // Changing either constant without the other reintroduces that defect.
 func TestWorkspaceRetentionFloorMatchesRecoveryLookback(t *testing.T) {
 	t.Parallel()
@@ -2231,8 +2197,6 @@ func TestWorkspaceRetentionFloorMatchesRecoveryLookback(t *testing.T) {
 			floor, PendingReactionRecoveryLookback)
 	}
 }
-
-// --- R10: the narrowed pending-reaction exclusion ---
 
 func TestSweepWorkspaces_NarrowedReactionExclusion(t *testing.T) {
 	t.Parallel()
@@ -2255,8 +2219,6 @@ func TestSweepWorkspaces_NarrowedReactionExclusion(t *testing.T) {
 		t.Errorf("FetchIssueStatesByIdentifiers received %v, want to omit %q (review must exclude)", tracker.calledWith, "PROJ-RV")
 	}
 }
-
-// --- R12: the summary partition identity across six pass shapes ---
 
 func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 	t.Parallel()
@@ -2429,8 +2391,6 @@ func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
 	})
 }
 
-// --- R13: terminal-and-old is counted once, under removed_terminal ---
-
 func TestSweepWorkspaces_TerminalAndOldCountedOnceUnderTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -2458,8 +2418,6 @@ func TestSweepWorkspaces_TerminalAndOldCountedOnceUnderTerminal(t *testing.T) {
 		t.Errorf("removed_age = %d, want 0 (terminal check runs first and claims the key)", got)
 	}
 }
-
-// --- R14: Cleanup receives Identifier and IssueID both set to the key ---
 
 func TestSweepWorkspaces_AgeRemovalUsesIdentifierAndIssueIDAsKey(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -2498,8 +2456,6 @@ func TestSweepWorkspaces_AgeRemovalUsesIdentifierAndIssueIDAsKey(t *testing.T) {
 	}
 }
 
-// --- R15: the age pass removes eligible candidates on a failed tracker read ---
-
 func TestSweepWorkspaces_AgePassRemovesOnTrackerReadFailure(t *testing.T) {
 	t.Parallel()
 
@@ -2527,8 +2483,6 @@ func TestSweepWorkspaces_AgePassRemovesOnTrackerReadFailure(t *testing.T) {
 		t.Errorf("tracker_read = %q, want %q", got, "failed")
 	}
 }
-
-// --- R16: removal by age is independent of the issue's tracker condition ---
 
 func TestSweepWorkspaces_RemovedByAgeRegardlessOfTrackerCondition(t *testing.T) {
 	t.Parallel()
@@ -2570,8 +2524,6 @@ func TestSweepWorkspaces_RemovedByAgeRegardlessOfTrackerCondition(t *testing.T) 
 		})
 	}
 }
-
-// --- R17: no parseable activity retains the workspace regardless of age ---
 
 func TestSweepWorkspaces_RetainedNoActivity(t *testing.T) {
 	t.Parallel()
@@ -2625,8 +2577,6 @@ func TestSweepWorkspaces_RetainedNoActivity(t *testing.T) {
 		}
 	})
 }
-
-// --- R18: the anchor is the later of the two parsed timestamps ---
 
 func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
 	t.Parallel()
@@ -2691,8 +2641,6 @@ func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
 		assertSweepDirRemoved(t, wsPath)
 	})
 }
-
-// --- R19: running/retry precedence in the in-flight exclusion ---
 
 func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
 	t.Parallel()
@@ -2771,8 +2719,6 @@ func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
 	})
 }
 
-// --- R20: the sweep performs no reaction- or fingerprint-state mutation ---
-
 func TestSweepWorkspaces_AgeRemovalLeavesPendingReactionsAndFingerprintsUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -2810,8 +2756,6 @@ func TestSweepWorkspaces_AgeRemovalLeavesPendingReactionsAndFingerprintsUnchange
 		t.Errorf("GetReactionFingerprint = (%q, %v), want (%q, false)", fp, dispatched, "fp-nosidefx")
 	}
 }
-
-// --- R22: both removal mechanisms record their own metric in one pass ---
 
 func TestSweepWorkspaces_MetricsRecordBothMechanismsInSamePass(t *testing.T) {
 	t.Parallel()
@@ -2857,8 +2801,6 @@ func TestSweepWorkspaces_MetricsRecordBothMechanismsInSamePass(t *testing.T) {
 	}
 }
 
-// --- R23: an age removal log record carries the required attributes ---
-
 func TestSweepWorkspaces_AgeRemovalLogCarriesRequiredAttributes(t *testing.T) {
 	t.Parallel()
 
@@ -2891,8 +2833,6 @@ func TestSweepWorkspaces_AgeRemovalLogCarriesRequiredAttributes(t *testing.T) {
 		t.Errorf("workspace_key = %q, want %q", got, key)
 	}
 }
-
-// --- reconcileOverdueRetries tests ---
 
 // overdueRetryStore is a store double that records every method call so a
 // re-arm can be proven to perform none of them.

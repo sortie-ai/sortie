@@ -18,8 +18,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 func dashboardServer(t *testing.T, snapFn SnapshotFunc, version string, slotFunc SlotFunc) *httptest.Server {
 	t.Helper()
 	srv := New(Params{
@@ -98,8 +96,6 @@ func getDashboard(t *testing.T, ts *httptest.Server, path string) dashboardRespo
 	}
 	return dashboardResponse{Body: string(b), StatusCode: resp.StatusCode, Header: resp.Header}
 }
-
-// --- Tests ---
 
 func TestHandleDashboard_OK(t *testing.T) {
 	t.Parallel()
@@ -361,8 +357,6 @@ func TestBuildDashboardData(t *testing.T) {
 			t.Errorf("AvailableSlots = %d, want 0", data.AvailableSlots)
 		}
 	})
-
-	// --- Timing percentage formatting tests ---
 
 	t.Run("timing percentages formatted as string", func(t *testing.T) {
 		t.Parallel()
@@ -1758,8 +1752,6 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 	})
 }
 
-// --- Token-rate cost rendering ---
-
 func TestBuildDashboardData_TokenRates(t *testing.T) {
 	t.Parallel()
 
@@ -2151,8 +2143,6 @@ func TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote(t *testing.T) {
 	}
 }
 
-// --- Usage-reporting presentation rows ---
-
 // usageArrivalValues and usageAttributionValues enumerate every value
 // in each vocabulary, including its undeclared zero value, so a
 // totality test can cover the full combination space.
@@ -2438,8 +2428,8 @@ func TestHandleDashboard_UsageReportingPanel_NoAdapterOrLaunchModeStrings(t *tes
 	}
 }
 
-// TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst proves
-// P13: a rendered running-session panel states a usage-reporting fact
+// TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst asserts that
+// a rendered running-session panel states a usage-reporting fact
 // once, and the Usage reporting row precedes Model, API Requests,
 // Tokens, and Est. Cost in document order.
 func TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst(t *testing.T) {
@@ -2498,9 +2488,9 @@ func extractDashboardRow(t *testing.T, body, label string) string {
 	return strings.TrimSpace(m[1])
 }
 
-// TestRequestCountStateMatrix_RenderedRowAndWire proves P7: it walks
-// section 3.3's rule table as a state matrix over a SnapshotRunningEntry,
-// the struct both presenters consume, and for each row marshals a
+// TestRequestCountStateMatrix_RenderedRowAndWire walks the full state
+// matrix over a SnapshotRunningEntry, the struct both presenters consume,
+// and for each row marshals a
 // runningEntryResponse and renders the panel. The wire half checks that
 // api_request_count is null exactly when the verdict is false; the
 // rendered half extracts the API Requests row's own value from the body
@@ -2581,9 +2571,10 @@ func TestRequestCountStateMatrix_RenderedRowAndWire(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests is P10's
-// own reproduction, run end to end rather than at either row function
-// alone: a session whose runtime delivers usage on a turn-final event
+// TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests is a full
+// end-to-end reproduction, run rather than isolated at either row
+// function alone: a session whose runtime delivers usage on a
+// turn-final event
 // but never a token_usage event renders "not measured" in the API
 // Requests row and its real, non-zero token total in the Tokens row,
 // on the same card, with no zero standing in for either fact.

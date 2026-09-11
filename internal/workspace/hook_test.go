@@ -178,7 +178,7 @@ func TestRunHook(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 
 		// Signal 0 probes process existence without sending a real signal.
-		// ESRCH means the process group no longer exists — which is what we want.
+		// ESRCH means the process group no longer exists, which is what we want.
 		if err := syscall.Kill(-pgid, 0); err == nil {
 			t.Error("process group still alive after timeout; expected it to be killed")
 		}

@@ -241,7 +241,7 @@ var shippedExampleWorkflows = []string{
 	"WORKFLOW.agent-client-protocol.md",
 }
 
-// TestSampleWorkflowMergeConflictBranch verifies AC13: each shipped example
+// TestSampleWorkflowMergeConflictBranch verifies that each shipped example
 // workflow renders under missingkey=error both when merge_conflict is nil (the
 // branch is skipped, no error) and when it is populated (the branch renders and
 // the output carries the real base named by .merge_conflict.base).
@@ -290,7 +290,7 @@ func TestSampleWorkflowMergeConflictBranch(t *testing.T) {
 	}
 }
 
-// TestSampleWorkflowLabelReviewBranch verifies A5: each shipped example
+// TestSampleWorkflowLabelReviewBranch verifies that each shipped example
 // workflow renders under missingkey=error both when label_review is nil
 // (the branch is skipped, no error) and when it is populated (the branch
 // renders and the output carries the real PR number, owner/repo, and
@@ -379,7 +379,7 @@ func TestSampleWorkflowRetryBlock(t *testing.T) {
 
 	rc := prompt.RunContext{TurnNumber: 1, MaxTurns: 15, IsContinuation: false}
 
-	// Without retry attempt — no retry text.
+	// Without retry attempt, no retry text.
 	noRetry, err := tmpl.Render(issue, nil, rc)
 	if err != nil {
 		t.Fatalf("Render(no retry): %v", err)
@@ -388,7 +388,7 @@ func TestSampleWorkflowRetryBlock(t *testing.T) {
 		t.Error("Render(attempt=nil) should not contain retry text")
 	}
 
-	// With retry attempt=2 — retry text must appear.
+	// With retry attempt=2, retry text must appear.
 	withRetry, err := tmpl.Render(issue, 2, rc)
 	if err != nil {
 		t.Fatalf("Render(attempt=2): %v", err)
@@ -477,7 +477,7 @@ func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("workflow.Load(%s): %v", name, err)
 			}
-			// HTML comments must not appear — they are not
+			// HTML comments must not appear; they are not
 			// stripped by Go text/template and would leak into the prompt.
 			if strings.Contains(wf.PromptTemplate, "<!--") {
 				t.Errorf("%s prompt body contains HTML comment (<!--); use Go template comments {{/* */}} instead", name)

@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// --- Test helpers ---
-
 // writeConfig writes content to a "mcp.json" file inside a fresh
 // temp directory and returns its path.
 func writeConfig(t *testing.T, content string) string {
@@ -35,8 +33,6 @@ func mustParseError(t *testing.T, path string) *Error {
 	}
 	return parseErr
 }
-
-// --- Tests ---
 
 func TestParse_StdioEntry(t *testing.T) {
 	t.Parallel()

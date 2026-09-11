@@ -26,8 +26,6 @@ const (
 	testPipelineID = 501
 )
 
-// --- helpers ---
-
 // mustCIProvider constructs a *GitLabCIProvider against endpoint with a
 // throwaway token and testProject, or fails the test.
 func mustCIProvider(t *testing.T, endpoint string, maxLogLines int) *GitLabCIProvider {
@@ -123,8 +121,6 @@ func buildStatusesPage(t *testing.T, status string, start, n int) []byte {
 	return body
 }
 
-// --- job outcome mapping ---
-
 func TestMapJobOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -173,8 +169,6 @@ func TestMapJobOutcome(t *testing.T) {
 	}
 }
 
-// --- trace sanitization ---
-
 func TestTraceExcerpt(t *testing.T) {
 	t.Parallel()
 
@@ -208,8 +202,6 @@ func TestTraceExcerpt(t *testing.T) {
 		})
 	}
 }
-
-// --- registration and construction ---
 
 func TestGitLabCIProviderRegistration(t *testing.T) {
 	t.Parallel()
@@ -435,8 +427,6 @@ func TestNewGitLabCIProvider_TypeFaultVsAbsentKey(t *testing.T) {
 	})
 }
 
-// --- ref and pipeline resolution ---
-
 func TestFetchCIStatus_RefResolution(t *testing.T) {
 	t.Parallel()
 
@@ -528,8 +518,6 @@ func TestFetchCIStatus_RefResolution(t *testing.T) {
 		assertCIErrorKind(t, err, domain.ErrCINotFound)
 	})
 }
-
-// --- aggregate outcomes and details URL ---
 
 func TestFetchCIStatus_AggregateOutcomes(t *testing.T) {
 	t.Parallel()
@@ -694,8 +682,6 @@ func TestFetchCIStatus_AggregateOutcomes(t *testing.T) {
 	})
 }
 
-// --- pagination ---
-
 func TestFetchCIStatus_StatusPagination(t *testing.T) {
 	t.Parallel()
 
@@ -808,8 +794,6 @@ func TestFetchCIStatus_PageCeiling(t *testing.T) {
 	}
 }
 
-// --- superseded pipeline scoping ---
-
 func TestFetchCIStatus_SupersededPipelineScoping(t *testing.T) {
 	t.Parallel()
 
@@ -887,8 +871,6 @@ func TestFetchCIStatus_SupersededPipelineScoping(t *testing.T) {
 		adaptertest.AssertCIAggregateMatchesCore(t, got)
 	})
 }
-
-// --- log excerpt ---
 
 func TestFetchCIStatus_LogExcerpt(t *testing.T) {
 	t.Parallel()
@@ -1074,8 +1056,6 @@ func TestFetchCIStatus_LogExcerpt(t *testing.T) {
 	})
 }
 
-// --- error mapping and context cancellation ---
-
 func TestFetchCIStatus_ErrorMapping(t *testing.T) {
 	t.Parallel()
 
@@ -1156,8 +1136,6 @@ func TestFetchCIStatus_ContextCancelled(t *testing.T) {
 		t.Errorf("FetchCIStatus(cancelled context) = %v, want the context error without CIError conversion", ciErr)
 	}
 }
-
-// --- unrecognized status warning ---
 
 func TestFetchCIStatus_UnrecognizedStatusWarning(t *testing.T) {
 	t.Parallel()

@@ -36,9 +36,9 @@ func TestExtractBody_V2(t *testing.T) {
 	}
 }
 
-// TestNormalizeSearchIssue_V2WikiMarkupRoundTrip is the binding AC2
-// assertion: a v2 description carrying wiki-markup tokens normalizes
-// into domain.Issue.Description byte-for-byte, not stripped to clean
+// TestNormalizeSearchIssue_V2WikiMarkupRoundTrip asserts that a v2
+// description carrying wiki-markup tokens normalizes into
+// domain.Issue.Description byte-for-byte, not stripped to clean
 // prose.
 func TestNormalizeSearchIssue_V2WikiMarkupRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -71,8 +71,8 @@ func TestNormalizeSearchIssue_V2WikiMarkupRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNormalizeComments_V2WikiMarkupRoundTrip mirrors the AC2 assertion
-// for comment bodies.
+// TestNormalizeComments_V2WikiMarkupRoundTrip mirrors the wiki-markup
+// round-trip assertion above, for comment bodies.
 func TestNormalizeComments_V2WikiMarkupRoundTrip(t *testing.T) {
 	t.Parallel()
 

@@ -8,8 +8,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// --- Test helpers ---
-
 func newTestMetrics(t *testing.T) *PromMetrics {
 	t.Helper()
 	m := NewPromMetrics("1.0.0-test", "go1.26.1")
@@ -99,8 +97,6 @@ func matchLabels(pairs []*dto.LabelPair, want map[string]string) bool {
 	}
 	return true
 }
-
-// --- Tests ---
 
 func TestNewPromMetrics(t *testing.T) {
 	t.Parallel()
@@ -434,7 +430,7 @@ func TestPromMetricsCounters(t *testing.T) {
 			t.Errorf("sortie_tokens_total{type=input} after output add = %v, want 100", got)
 		}
 
-		// Negative values clamped — no panic.
+		// Negative values clamped; no panic.
 		m.AddTokens("input", -10)
 		families = gatherFamilies(t, m)
 		if got := counterValue(t, families, "sortie_tokens_total", map[string]string{"type": "input"}); got != 100 {
@@ -488,7 +484,7 @@ func TestPromMetricsCounters(t *testing.T) {
 			t.Errorf("sortie_agent_runtime_seconds_total = %v, want 60.5", got)
 		}
 
-		// Negative clamped — no panic.
+		// Negative clamped; no panic.
 		m.AddAgentRuntime(-1.0)
 		families = gatherFamilies(t, m)
 		if got := counterValue(t, families, "sortie_agent_runtime_seconds_total", nil); got != 60.5 {

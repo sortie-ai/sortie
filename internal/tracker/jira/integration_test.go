@@ -176,8 +176,6 @@ func assertValidIssue(t *testing.T, iss domain.Issue, endpoint string) {
 	}
 }
 
-// --- Integration test functions ---
-
 func TestIntegration_FetchCandidateIssues(t *testing.T) {
 	skipUnlessIntegration(t)
 

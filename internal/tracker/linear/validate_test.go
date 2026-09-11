@@ -7,8 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test helpers ---
-
 // hasDiagCheck reports whether any diag in the slice has the given check name.
 func hasDiagCheck(diags []registry.ValidationDiag, check string) bool {
 	for _, d := range diags {
@@ -29,8 +27,6 @@ func diagsWithSeverity(diags []registry.ValidationDiag, severity string) []regis
 	}
 	return out
 }
-
-// --- Tests ---
 
 func TestValidateProject(t *testing.T) {
 	t.Parallel()

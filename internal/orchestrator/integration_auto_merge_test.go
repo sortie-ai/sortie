@@ -428,7 +428,7 @@ func openInMemoryStore(t *testing.T) *persistence.Store {
 //	SORTIE_GITHUB_TOKEN=ghp_...   PAT with issues:write, pull_requests:write, contents:write
 //	SORTIE_GITHUB_PROJECT=sortie-ai/sortie-test
 //
-// No t.Parallel — the test mutates shared state in a live repository.
+// No t.Parallel; the test mutates shared state in a live repository.
 func TestReconcileAutoMerge_LiveAPI_E2E(t *testing.T) {
 	skipUnlessGitHubE2EAutoMerge(t)
 

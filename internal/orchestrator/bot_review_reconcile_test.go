@@ -12,8 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- bot-review metrics spy ---
-
 // botReviewMetricsSpy records bot-review-specific metric calls.
 type botReviewMetricsSpy struct {
 	domain.NoopMetrics
@@ -32,8 +30,6 @@ func (s *botReviewMetricsSpy) IncBotReviewChecks(result string) { s.botReviewChe
 func (s *botReviewMetricsSpy) IncBotReviewEscalations(action string) {
 	s.botReviewEscalations[action]++
 }
-
-// --- bot-review test helpers ---
 
 // botReviewBaseTime is a fixed reference time for bot-review reconcile tests.
 var botReviewBaseTime = time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
@@ -92,8 +88,6 @@ func botReviewParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker
 		NowFunc:             func() time.Time { return botReviewBaseTime },
 	}
 }
-
-// --- BuildBotReviewReactionConfig tests (6.2 → R4) ---
 
 func TestBuildBotReviewReactionConfig(t *testing.T) {
 	t.Parallel()
@@ -368,7 +362,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 
 // TestBuildBotReviewReactionConfig_ReviewDefaultsUnchanged verifies that the bot-review
 // defaults (MaxContinuationTurns=5, PollIntervalMS=60000) are independent of the review
-// kind defaults (MaxContinuationTurns=3, PollIntervalMS=120000). R4.
+// kind defaults (MaxContinuationTurns=3, PollIntervalMS=120000).
 func TestBuildBotReviewReactionConfig_ReviewDefaultsUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -394,8 +388,6 @@ func TestBuildBotReviewReactionConfig_ReviewDefaultsUnchanged(t *testing.T) {
 		t.Errorf("review PollIntervalMS = %d, want 120000", reviewGot.PollIntervalMS)
 	}
 }
-
-// --- reconcileBotReviewComments tests (6.3 → R5, R6) ---
 
 func TestReconcileBotReviewComments_NilAdapter(t *testing.T) {
 	t.Parallel()
@@ -537,7 +529,7 @@ func TestReconcileBotReviewComments_AllCommentsOutdated(t *testing.T) {
 	}
 }
 
-// TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce verifies R5: bot-review
+// TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce verifies that bot-review
 // dispatches on the same tick it detects actionable comments, with no debounce gate.
 // The comment timestamp can be brand-new (seconds ago) and dispatch still happens.
 func TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce(t *testing.T) {
@@ -546,7 +538,7 @@ func TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce(t *testing.T) {
 	state := stateWithBotReviewReaction(t, "BOT-IMM", 10)
 	rkey := ReactionKey("BOT-IMM", ReactionKindBotReview)
 
-	// Comment submitted just 2 seconds ago — within any plausible debounce window.
+	// Comment submitted just 2 seconds ago, within any plausible debounce window.
 	// The review path would NOT dispatch yet; the bot-review path MUST dispatch immediately.
 	freshComment := []domain.ReviewComment{
 		{ID: "bot-fresh", Body: "lint: line too long", SubmittedAt: botReviewBaseTime.Add(-2 * time.Second)},
@@ -586,7 +578,7 @@ func TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce(t *testing.T) {
 	}
 }
 
-// TestReconcileBotReviewComments_FingerprintChurn verifies R6: changing the set of
+// TestReconcileBotReviewComments_FingerprintChurn verifies that changing the set of
 // actionable comment IDs produces a new fingerprint, resets the dispatched flag,
 // and triggers re-dispatch on the next tick.
 func TestReconcileBotReviewComments_FingerprintChurn(t *testing.T) {
@@ -599,7 +591,7 @@ func TestReconcileBotReviewComments_FingerprintChurn(t *testing.T) {
 	}
 	firstFP := buildReviewFingerprint(firstSet)
 
-	// Second tick: comment set {c1, c2, c3} — churned.
+	// Second tick: comment set {c1, c2, c3}, churned.
 	secondSet := []domain.ReviewComment{
 		{ID: "c1", Body: "fix 1"},
 		{ID: "c2", Body: "fix 2"},
@@ -732,22 +724,17 @@ func TestReconcileBotReviewComments_SkipsNonBotReviewEntries(t *testing.T) {
 	}
 }
 
-// --- escalateBotReviewFailure tests (6.4 → R7, R10) ---
-
-// TestEscalateBotReviewFailure_CrossKindIsolation verifies R7 and R10:
-// a PR with both a review slot and a bot-review slot — after bot-review escalation:
-// - the bot-review PendingReaction is deleted
-// - the review slot remains untouched
-// - the merge slot remains untouched (if present)
-// - state.Claimed[issueID] is NOT cleared
-// - state.ReactionAttempts for bot-review is NOT reset.
+// TestEscalateBotReviewFailure_CrossKindIsolation verifies that after
+// bot-review escalation on a PR with both a review slot and a bot-review
+// slot, the bot-review PendingReaction is deleted while the review slot,
+// the merge slot (if present), state.Claimed[issueID], and
+// state.ReactionAttempts for bot-review are all left untouched.
 func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
 	issueID := "ISO-1"
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 
-	// Seed: review slot.
 	reviewKey := ReactionKey(issueID, ReactionKindReview)
 	state.PendingReactions[reviewKey] = &PendingReaction{
 		IssueID:    issueID,
@@ -757,7 +744,6 @@ func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 		KindData:   &ReviewReactionData{PRNumber: 77},
 	}
 
-	// Seed: merge (auto-merge) slot.
 	mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
 	state.PendingReactions[mergeKey] = &PendingReaction{
 		IssueID:    issueID,
@@ -767,7 +753,6 @@ func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 		KindData:   &AutoMergeReactionData{PRNumber: 77},
 	}
 
-	// Seed: bot-review slot at cap.
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	botPending := &PendingReaction{
 		IssueID:    issueID,
@@ -802,27 +787,21 @@ func TestEscalateBotReviewFailure_CrossKindIsolation(t *testing.T) {
 	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	// bot-review slot deleted.
 	if _, ok := state.PendingReactions[botKey]; ok {
 		t.Error("bot-review PendingReactions entry still present after escalation; want deleted")
 	}
-	// review slot untouched.
 	if _, ok := state.PendingReactions[reviewKey]; !ok {
 		t.Error("review PendingReactions entry removed by bot-review escalation; want untouched")
 	}
-	// merge slot untouched.
 	if _, ok := state.PendingReactions[mergeKey]; !ok {
 		t.Error("merge PendingReactions entry removed by bot-review escalation; want untouched")
 	}
-	// Claim untouched.
 	if _, ok := state.Claimed[issueID]; !ok {
 		t.Error("state.Claimed[issueID] cleared by bot-review escalation; want untouched")
 	}
-	// ReactionAttempts counter for bot-review is NOT cleared.
 	if state.ReactionAttempts[botKey] != 5 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 5 (residual counter preserved)", botKey, state.ReactionAttempts[botKey])
 	}
-	// Fingerprint delete was called.
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
 	}
@@ -978,11 +957,9 @@ func TestEscalateBotReviewFailure_NilTrackerAdapter(t *testing.T) {
 	escalateBotReviewFailure(state, params, botPending, 5, EscalationTriggerBudget, botData, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	// bot-review slot still removed.
 	if _, ok := state.PendingReactions[botKey]; ok {
 		t.Error("bot-review PendingReactions entry still present after nil-tracker escalation; want deleted")
 	}
-	// Fingerprint delete called.
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
 	}
@@ -990,7 +967,7 @@ func TestEscalateBotReviewFailure_NilTrackerAdapter(t *testing.T) {
 
 // TestReconcileBotReviewComments_TurnCapEscalates verifies that when
 // ReactionAttempts >= MaxContinuationTurns, escalateBotReviewFailure is called
-// via the reconcile loop and ONLY the bot-review slot is cleaned up (R7, R10).
+// via the reconcile loop and ONLY the bot-review slot is cleaned up.
 func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	t.Parallel()
 
@@ -1006,7 +983,6 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 		KindData:  &ReviewReactionData{PRNumber: 99},
 	}
 
-	// bot-review slot at cap.
 	botKey := ReactionKey(issueID, ReactionKindBotReview)
 	state.PendingReactions[botKey] = makeBotReviewPendingEntry(t, issueID, 99)
 	state.Claimed[issueID] = struct{}{}
@@ -1021,7 +997,6 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
 
-	// bot-review slot consumed.
 	if _, ok := state.PendingReactions[botKey]; ok {
 		t.Error("bot-review PendingReactions entry still present after turn cap; want deleted")
 	}
@@ -1033,11 +1008,9 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	if _, ok := state.Claimed[issueID]; !ok {
 		t.Error("state.Claimed[issueID] cleared by bot-review escalation; want preserved (R10)")
 	}
-	// Sibling review slot must be untouched.
 	if _, ok := state.PendingReactions[reviewKey]; !ok {
 		t.Error("review PendingReactions entry removed by bot-review escalation; want untouched (R7)")
 	}
-	// ReactionAttempts for bot-review is NOT cleared.
 	if state.ReactionAttempts[botKey] != 5 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 5 (residual counter preserved, R10)", botKey, state.ReactionAttempts[botKey])
 	}
@@ -1521,8 +1494,6 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 	}
 }
 
-// --- coexistence with the review reaction kind ---
-
 // TestReconcileBotReviewComments_CoexistsWithReview verifies how the review
 // and bot-review passes interact when both kinds are pending for the same
 // issue in one reconcile cycle.
@@ -1644,8 +1615,6 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 		t.Error("state.Claimed[issueID] cleared during deferral; want preserved")
 	}
 }
-
-// --- Triage gate integration ---
 
 // botReviewTriageParams returns botReviewParams wired with a real
 // workspace and the given triage script, so reactionTriageGate actually

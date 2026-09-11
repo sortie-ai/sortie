@@ -14,8 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- helpers ---
-
 func newTestCIProvider(t *testing.T, baseURL string, maxLogLines int) *GitHubCIProvider {
 	t.Helper()
 	p, err := NewGitHubCIProvider(maxLogLines, map[string]any{
@@ -43,8 +41,6 @@ func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {
 	}
 }
 
-// --- TestMapCheckRunStatus ---
-
 func TestMapCheckRunStatus(t *testing.T) {
 	t.Parallel()
 
@@ -70,8 +66,6 @@ func TestMapCheckRunStatus(t *testing.T) {
 		})
 	}
 }
-
-// --- TestMapCheckConclusion ---
 
 func TestMapCheckConclusion(t *testing.T) {
 	t.Parallel()
@@ -110,8 +104,6 @@ func TestMapCheckConclusion(t *testing.T) {
 	}
 }
 
-// --- TestStripANSI ---
-
 func TestStripANSI(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +134,6 @@ func TestStripANSI(t *testing.T) {
 		})
 	}
 }
-
-// --- TestTruncateLog ---
 
 func TestTruncateLog(t *testing.T) {
 	t.Parallel()
@@ -235,8 +225,6 @@ func TestTruncateLog_FixtureTail(t *testing.T) {
 	}
 }
 
-// --- Constructor tests ---
-
 func TestNewGitHubCIProvider_Valid(t *testing.T) {
 	t.Parallel()
 
@@ -325,7 +313,7 @@ func TestNewGitHubCIProvider_DefaultEndpoint(t *testing.T) {
 	p, err := NewGitHubCIProvider(0, map[string]any{
 		"api_key": "tok",
 		"project": "org/repo",
-		// endpoint omitted — should default to https://api.github.com
+		// endpoint omitted; should default to https://api.github.com
 	})
 	if err != nil {
 		t.Fatalf("NewGitHubCIProvider without endpoint: unexpected error: %v", err)
@@ -353,8 +341,6 @@ func TestNewGitHubCIProvider_MaxLogLinesStored(t *testing.T) {
 		t.Errorf("maxLogLines = %d, want 42", gh.maxLogLines)
 	}
 }
-
-// --- FetchCIStatus httptest tests ---
 
 func TestFetchCIStatus_AllPassing(t *testing.T) {
 	t.Parallel()

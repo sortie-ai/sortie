@@ -101,7 +101,7 @@ func TestLoad(t *testing.T) {
 			// YAML 1.1 treats bare NO, ON, YES as booleans. yaml.v3 follows
 			// YAML 1.2 core schema where these decode as strings when the
 			// target is map[string]any. Unquoted null is a genuine YAML null
-			// in both versions — the map entry is present with a nil value.
+			// in both versions; the map entry is present with a nil value.
 			name:    "YAML12StringPreservation",
 			content: []byte("---\na: NO\nb: ON\nc: YES\n---\nprompt\n"),
 			wantConfig: map[string]any{

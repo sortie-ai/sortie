@@ -1435,7 +1435,7 @@ func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	// A "text" part carries the turn's own work evidence, keeping this
-	// turn on row R7 (turn_completed) so the test still exercises
+	// turn on the turn_completed row so the test still exercises
 	// notification, malformed-event, and session-lifecycle visibility
 	// during an otherwise-successful turn, rather than becoming a
 	// duplicate of the dedicated zero-work-row pin.
@@ -1679,7 +1679,7 @@ sleep 1000`)
 		t.Fatalf("StartSession() error = %v", err)
 	}
 
-	// turnCtx is the context we'll cancel to trigger TurnCancelled.
+	// turnCtx is the context this test cancels to trigger TurnCancelled.
 	turnCtx, turnCancel := context.WithCancel(outerCtx)
 
 	gotEvent := make(chan struct{}, 1)
@@ -1997,7 +1997,8 @@ func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
 // terminal report, so DecideTurn genuinely consults Work here: reporting
 // turn_completed is proof the observer's ToolActivity field fired from
 // this shape of the committed fixture corpus, and it doubles as the
-// tool-activity-only case of property 1.
+// tool-activity-only case among the DecideTurn conformance checks the
+// committed fixture corpus exercises.
 func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
 	t.Parallel()
 
@@ -2018,7 +2019,7 @@ func TestRunTurn_ToolOnlyNoTerminalCompletes(t *testing.T) {
 	dispositiontest.AssertWorkEvidenceConsistent(t, events, result, err)
 }
 
-// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins property 9: a
+// TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals pins that a
 // session's second turn, whose stream carries neither declared signal,
 // reports turn_failed even though the first turn on the same session
 // carried both a text part and a completed tool_use part.

@@ -10,8 +10,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- Test doubles for auto-merge reconcile ---
-
 // controlledSCMAdapter is a full SCMAdapter where each method is individually
 // controllable via function fields. Used by auto-merge reconcile tests that
 // need to simulate different combinations of API responses and errors.
@@ -99,8 +97,6 @@ func newAutoMergeMetricsSpy() *autoMergeMetricsSpy {
 
 func (s *autoMergeMetricsSpy) IncAutoMergeReactions(result string) { s.autoMerge[result]++ }
 
-// --- Test helpers ---
-
 // autoMergeBaseTime is a fixed reference for auto-merge reconcile tests.
 var autoMergeBaseTime = time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
 
@@ -161,8 +157,6 @@ func autoMergeParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker
 	}
 }
 
-// --- reconcileAutoMerge tests ---
-
 // TestReconcileAutoMerge_NilAdapter verifies that reconcileAutoMerge is a no-op
 // when the SCM adapter is nil.
 func TestReconcileAutoMerge_NilAdapter(t *testing.T) {
@@ -185,7 +179,7 @@ func TestReconcileAutoMerge_NilAdapter(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_NotConfigured verifies that reconcileAutoMerge is a
-// no-op when AutoMergeReactionConfigured is false (spec Test 6).
+// no-op when AutoMergeReactionConfigured is false.
 func TestReconcileAutoMerge_NotConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -206,7 +200,7 @@ func TestReconcileAutoMerge_NotConfigured(t *testing.T) {
 
 // TestReconcileAutoMerge_HappyPath verifies that when review is APPROVED, CI
 // is success, and mergeability is clean, MergePR is called and the pending
-// entry is removed (spec Test 1).
+// entry is removed.
 func TestReconcileAutoMerge_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -255,7 +249,7 @@ func TestReconcileAutoMerge_HappyPath(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_CIPending verifies that the pending entry is
-// re-enqueued without merging when CI is pending (spec Test 2).
+// re-enqueued without merging when CI is pending.
 func TestReconcileAutoMerge_CIPending(t *testing.T) {
 	t.Parallel()
 
@@ -300,8 +294,7 @@ func TestReconcileAutoMerge_CIPending(t *testing.T) {
 	}
 }
 
-// TestReconcileAutoMerge_DraftPR verifies that a draft PR is not merged
-// (spec Test 5).
+// TestReconcileAutoMerge_DraftPR verifies that a draft PR is not merged.
 func TestReconcileAutoMerge_DraftPR(t *testing.T) {
 	t.Parallel()
 
@@ -377,7 +370,7 @@ func TestReconcileAutoMerge_ChangesRequested(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_FingerprintDedup verifies that a second tick with the
-// same headSHA and review decision does not re-call MergePR (spec Test 8).
+// same headSHA and review decision does not re-call MergePR.
 func TestReconcileAutoMerge_FingerprintDedup(t *testing.T) {
 	t.Parallel()
 
@@ -422,7 +415,7 @@ func TestReconcileAutoMerge_FingerprintDedup(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_MaxRetriesEscalation verifies that exhausting
-// MaxRetries triggers escalation instead of another merge attempt (spec Test 9).
+// MaxRetries triggers escalation instead of another merge attempt.
 func TestReconcileAutoMerge_MaxRetriesEscalation(t *testing.T) {
 	t.Parallel()
 
@@ -450,7 +443,7 @@ func TestReconcileAutoMerge_MaxRetriesEscalation(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_AlreadyMergedSuccess verifies that ErrSCMConflict with
-// "already merged" message is treated as success (spec Test 10).
+// "already merged" message is treated as success.
 func TestReconcileAutoMerge_AlreadyMergedSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -493,7 +486,7 @@ func TestReconcileAutoMerge_AlreadyMergedSuccess(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_AuthEscalatesImmediately verifies that ErrSCMAuth on
-// MergePR causes immediate escalation without re-enqueuing (spec Test 11).
+// MergePR causes immediate escalation without re-enqueuing.
 func TestReconcileAutoMerge_AuthEscalatesImmediately(t *testing.T) {
 	t.Parallel()
 
@@ -536,7 +529,7 @@ func TestReconcileAutoMerge_AuthEscalatesImmediately(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_AuthDedupe verifies that ErrSCMAuth on MergePR emits
-// the ERROR log at most once per issue ID across multiple ticks (spec Test 20).
+// the ERROR log at most once per issue ID across multiple ticks.
 func TestReconcileAutoMerge_AuthDedupe(t *testing.T) {
 	t.Parallel()
 
@@ -588,7 +581,7 @@ func TestReconcileAutoMerge_AuthDedupe(t *testing.T) {
 
 // TestReconcileAutoMerge_Conflict405Reenqueues verifies that an ErrSCMConflict
 // (e.g. HTTP 405 method not allowed) re-enqueues rather than escalating
-// immediately (spec Test 9 precondition).
+// immediately.
 func TestReconcileAutoMerge_Conflict405Reenqueues(t *testing.T) {
 	t.Parallel()
 
@@ -720,7 +713,7 @@ func TestReconcileAutoMerge_DoesNotMarkDispatchedOnTransientFailure(t *testing.T
 }
 
 // TestReconcileAutoMerge_CrossKindIsolationOnSuccess verifies that a successful
-// merge does not touch review-kind retry entries (spec Test 15).
+// merge does not touch review-kind retry entries.
 func TestReconcileAutoMerge_CrossKindIsolationOnSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -780,7 +773,7 @@ func TestReconcileAutoMerge_CrossKindIsolationOnSuccess(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_CrossKindIsolationOnEscalation verifies that
-// escalation does not remove review-kind retry entries (spec Test 16).
+// escalation does not remove review-kind retry entries.
 func TestReconcileAutoMerge_CrossKindIsolationOnEscalation(t *testing.T) {
 	t.Parallel()
 
@@ -826,7 +819,7 @@ func TestReconcileAutoMerge_CrossKindIsolationOnEscalation(t *testing.T) {
 }
 
 // TestReconcileAutoMerge_PreflightFailed verifies that entries are skipped when
-// the preflight flag is set (spec Test 19 ongoing behaviour).
+// the preflight flag is set.
 func TestReconcileAutoMerge_PreflightFailed(t *testing.T) {
 	t.Parallel()
 
@@ -859,7 +852,7 @@ func TestReconcileAutoMerge_PreflightFailed(t *testing.T) {
 
 // TestReconcileAutoMerge_PreflightRetrySucceeds verifies that when the retry
 // due-at has passed and the retry verifier succeeds, the preflight flag is
-// cleared and pending entries are processed in the same tick (spec Test 22).
+// cleared and pending entries are processed in the same tick.
 func TestReconcileAutoMerge_PreflightRetrySucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -909,7 +902,7 @@ func TestReconcileAutoMerge_PreflightRetrySucceeds(t *testing.T) {
 
 // TestReconcileAutoMerge_PreflightRetryExhausts verifies that when the retry
 // fails again with a transport error, the due-at is cleared but the flag stays
-// set (spec Test 23).
+// set.
 func TestReconcileAutoMerge_PreflightRetryExhausts(t *testing.T) {
 	t.Parallel()
 
@@ -1209,8 +1202,6 @@ func TestReconcileAutoMerge_WatchWindowElapsedLogsRenamedAttribute(t *testing.T)
 	}
 }
 
-// --- Pure function tests ---
-
 // TestBuildAutoMergeFingerprint verifies the SHA-256 hex fingerprint builder.
 func TestBuildAutoMergeFingerprint(t *testing.T) {
 	t.Parallel()
@@ -1318,8 +1309,6 @@ func TestComputeAutoMergePendingDelay(t *testing.T) {
 		})
 	}
 }
-
-// --- Helpers ---
 
 // logBuf captures structured log output for assertions.
 type logBuf struct {

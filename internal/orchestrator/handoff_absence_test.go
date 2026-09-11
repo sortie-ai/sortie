@@ -207,8 +207,8 @@ func TestHandoffAbsenceCeilingDefaultsCannotDrift(t *testing.T) {
 }
 
 // TestParkExhaustedAbsencesZeroValueConfigResolvesDefaultCeiling verifies
-// that a zero-value config.ServiceConfig{} — which never went through
-// buildAgentConfig's parse path — resolves the fallback ceiling of three
+// that a zero-value config.ServiceConfig{}, which never went through
+// buildAgentConfig's parse path, resolves the fallback ceiling of three
 // rather than zero, and that a candidate with zero recorded absences is
 // not parked under that fallback.
 func TestParkExhaustedAbsencesZeroValueConfigResolvesDefaultCeiling(t *testing.T) {

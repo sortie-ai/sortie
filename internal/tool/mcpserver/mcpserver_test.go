@@ -12,8 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- Test helpers ---
-
 // discardLogger returns a logger that writes nothing.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
@@ -105,8 +103,6 @@ func (s *stubTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessag
 }
 
 var _ domain.AgentTool = (*stubTool)(nil)
-
-// --- Tests ---
 
 func TestServe_Initialize(t *testing.T) {
 	t.Parallel()

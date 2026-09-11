@@ -91,7 +91,7 @@ func TestIsAgentError_WithPlainError(t *testing.T) {
 }
 
 func TestStartSession_SSHBinaryNotFound(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv which mutates process env.
+	// No t.Parallel(): uses t.Setenv which mutates process env.
 	t.Setenv("PATH", "/nonexistent-path-for-test")
 
 	adapter, _ := NewCodexAdapter(map[string]any{})

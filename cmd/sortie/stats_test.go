@@ -187,8 +187,6 @@ func pinStatsNow(t *testing.T, now time.Time) {
 	t.Cleanup(func() { statsNow = orig })
 }
 
-// --- percentile/mean worked examples and summary normalization ---
-
 func TestStatsSummaryFormulas(t *testing.T) {
 	t.Parallel()
 
@@ -269,8 +267,6 @@ func TestStatsSummaryFormulas(t *testing.T) {
 	})
 }
 
-// --- ci_failed row disclosure ---
-
 func TestStatsGroupDisclosure(t *testing.T) {
 	t.Parallel()
 
@@ -316,8 +312,6 @@ func TestStatsGroupDisclosure(t *testing.T) {
 		t.Errorf("Summary.ZeroDurationRuns = %d, want 1", report.Summary.ZeroDurationRuns)
 	}
 }
-
-// --- cost derivation across three rate configurations ---
 
 func TestStatsCostDerivation(t *testing.T) {
 	t.Parallel()
@@ -478,8 +472,6 @@ func TestStatsCostDerivation(t *testing.T) {
 		}
 	})
 }
-
-// --- stored total_tokens is reported unchanged ---
 
 func TestStatsTokenReporting(t *testing.T) {
 	t.Parallel()
@@ -660,8 +652,6 @@ func TestStatsTokenReporting(t *testing.T) {
 	})
 }
 
-// --- self-review aggregation ---
-
 func TestStatsSelfReview(t *testing.T) {
 	t.Parallel()
 
@@ -719,8 +709,6 @@ func TestStatsSelfReview(t *testing.T) {
 	}
 }
 
-// --- data-driven status set and group ordering ---
-
 func TestStatsStatusOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -749,8 +737,6 @@ func TestStatsStatusOrdering(t *testing.T) {
 		t.Errorf("weird_status group Runs = %d, want 1 (status set must not be hard-coded)", weird.Runs)
 	}
 }
-
-// --- range bound reporting ---
 
 // TestStatsAggregatorReport_UntilBound verifies that a non-nil until bound
 // populates statsReport.Until, mirroring the existing Since coverage.
@@ -795,8 +781,6 @@ func TestParseRangeBound(t *testing.T) {
 		})
 	}
 }
-
-// --- JSON report contract and byte-stability ---
 
 func TestRunStatsJSON(t *testing.T) {
 	// No t.Parallel: pinStatsNow mutates the package-level statsNow.
@@ -859,8 +843,6 @@ func TestRunStatsJSON(t *testing.T) {
 			stdout1.String(), stdout2.String())
 	}
 }
-
-// --- empty range ---
 
 func TestRunStatsEmptyRange(t *testing.T) {
 	t.Parallel()
@@ -945,8 +927,6 @@ func TestRunStatsEmptyRange(t *testing.T) {
 	})
 }
 
-// --- usage errors ---
-
 func TestRunStatsUsageErrors(t *testing.T) {
 	t.Parallel()
 
@@ -987,8 +967,6 @@ func TestRunStatsUsageErrors(t *testing.T) {
 		})
 	}
 }
-
-// --- concurrent read against a live writable store ---
 
 func TestRunStatsAgainstLiveWriter(t *testing.T) {
 	t.Parallel()
@@ -1047,8 +1025,6 @@ func TestRunStatsAgainstLiveWriter(t *testing.T) {
 		t.Errorf("database file mtime changed across the invocation: before %v, after %v", before.ModTime(), after.ModTime())
 	}
 }
-
-// --- degraded schema tier ---
 
 func TestDegradedSchemaWarning(t *testing.T) {
 	t.Parallel()
@@ -1199,8 +1175,6 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 	})
 }
 
-// --- config-resolution errors ---
-
 func TestRunStatsConfigErrors(t *testing.T) {
 	t.Parallel()
 
@@ -1258,8 +1232,6 @@ func TestRunStatsConfigErrors(t *testing.T) {
 		}
 	})
 }
-
-// --- db_path resolution ---
 
 func TestRunStatsDBPathResolution(t *testing.T) {
 	// No t.Parallel: the SORTIE_DB_PATH subtest uses t.Setenv, which

@@ -7,45 +7,36 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 
 	var m Metrics = &NoopMetrics{}
 
-	// Gauges
 	m.SetRunningSessions(5)
 	m.SetRetryingSessions(3)
 	m.SetAvailableSlots(2)
 	m.SetActiveSessionsElapsed(123.45)
 
-	// Counters — AddTokens
 	m.AddTokens("input", 1000)
 	m.AddTokens("output", 500)
 
-	// Counters — AddAgentRuntime
 	m.AddAgentRuntime(60.5)
 
-	// Counters — IncDispatches
 	m.IncDispatches("success")
 	m.IncDispatches("error")
 
-	// Counters — IncWorkerExits
 	m.IncWorkerExits("normal")
 	m.IncWorkerExits("error")
 	m.IncWorkerExits("cancelled")
 
-	// Counters — IncRetries
 	m.IncRetries("error")
 	m.IncRetries("continuation")
 	m.IncRetries("timer")
 	m.IncRetries("stall")
 
-	// Counters — IncReconciliationActions
 	m.IncReconciliationActions("stop")
 	m.IncReconciliationActions("cleanup")
 	m.IncReconciliationActions("keep")
 
-	// Counters — IncPollCycles
 	m.IncPollCycles("success")
 	m.IncPollCycles("error")
 	m.IncPollCycles("skipped")
 
-	// Counters — IncTrackerRequests (all 8 operations)
 	m.IncTrackerRequests("fetch_candidates", "success")
 	m.IncTrackerRequests("fetch_issue", "error")
 	m.IncTrackerRequests("fetch_comments", "success")
@@ -55,33 +46,26 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 	m.IncTrackerRequests("transition", "error")
 	m.IncTrackerRequests("comment", "success")
 
-	// Counters — IncHandoffTransitions
 	m.IncHandoffTransitions("success")
 	m.IncHandoffTransitions("error")
 	m.IncHandoffTransitions("skipped")
 
-	// Counters — IncDispatchTransitions
 	m.IncDispatchTransitions("success")
 	m.IncDispatchTransitions("error")
 
-	// Counters — IncToolCalls
 	m.IncToolCalls("Bash", "success")
 	m.IncToolCalls("Read", "error")
 
-	// Histograms — ObservePollDuration
 	m.ObservePollDuration(1.23)
 
-	// Histograms — ObserveWorkerDuration
 	m.ObserveWorkerDuration("normal", 300.5)
 	m.ObserveWorkerDuration("error", 10.0)
 	m.ObserveWorkerDuration("cancelled", 45.2)
 
-	// Counters — IncBotReviewChecks
 	m.IncBotReviewChecks("dispatched")
 	m.IncBotReviewChecks("error")
 	m.IncBotReviewChecks("skipped")
 
-	// Counters — IncBotReviewEscalations
 	m.IncBotReviewEscalations("label")
 	m.IncBotReviewEscalations("comment")
 	m.IncBotReviewEscalations("error")

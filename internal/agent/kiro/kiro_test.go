@@ -185,9 +185,10 @@ func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (dom
 	return domain.AgentEvent{}, false
 }
 
-// The observed success trailer and auth-failure line use the exact literals
-// from the adapter research notes: stderr carries "▸ Credits: … • Time: …" on
-// a turn that ran, and "Authentication failed." on an invalid-credential turn.
+// The observed success trailer and auth-failure line use the exact
+// literals a real kiro-cli run produces: stderr carries
+// "▸ Credits: … • Time: …" on a turn that ran, and "Authentication
+// failed." on an invalid-credential turn.
 const (
 	creditsLine  = "▸ Credits: 0.01 • Time: 1s\n"
 	authFailLine = "Authentication failed. Your API key may be invalid or expired.\n"
@@ -260,9 +261,9 @@ func TestOnFinalize_AuthFailed(t *testing.T) {
 	}, result, err)
 }
 
-// TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout pins property 10's
-// first case in its all-whitespace form: an authentication marker on
-// stderr and a stdout carrying only whitespace still reports
+// TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout pins the
+// all-whitespace form of the auth-failure case: an authentication marker
+// on stderr and a stdout carrying only whitespace still reports
 // turn_failed, because the observer's trim-then-check threshold treats
 // a whitespace-only line as no signal, so the authentication branch's
 // guard still fires.
@@ -387,7 +388,7 @@ func TestOnFinalize_NonZeroExit(t *testing.T) {
 // accompanied by a non-blank transcript line stops the auth-failure
 // guard from firing, and the observer's own report of the non-blank
 // line reports turn_completed. This is the one combination where the
-// stdout-substitution guard change flips the disposition (property 10).
+// stdout-substitution guard change flips the disposition.
 func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -411,11 +412,10 @@ func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 	}, result, err)
 }
 
-// TestOnFinalize_TranscriptNoCreditsNoAuthCompletes pins property 10's
-// second case: a zero exit with a transcript on stdout and no credits
-// trailer reports turn_completed, because the observer's own report of
-// the non-blank stdout line is now the positive signal, not a bare exit
-// code.
+// TestOnFinalize_TranscriptNoCreditsNoAuthCompletes pins that a zero
+// exit with a transcript on stdout and no credits trailer reports
+// turn_completed, because the observer's own report of the non-blank
+// stdout line is now the positive signal, not a bare exit code.
 func TestOnFinalize_TranscriptNoCreditsNoAuthCompletes(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -541,10 +541,10 @@ func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
 	}
 }
 
-// TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout pins
-// property 9: a session's second turn, whose stdout carries only
-// whitespace, reports turn_failed even though the first turn on the
-// same session had a non-blank transcript line.
+// TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout pins that a
+// session's second turn, whose stdout carries only whitespace, reports
+// turn_failed even though the first turn on the same session had a
+// non-blank transcript line.
 func TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)

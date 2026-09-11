@@ -200,14 +200,14 @@ func splitFixtureSegments(fixtureData []byte) []fixtureSegment {
 // the call.
 //
 // An empty segments list closes inPw immediately, reproducing a
-// clean end of stream with nothing scripted at all — this is safe
+// clean end of stream with nothing scripted at all: this is safe
 // because no call is ever left waiting on a response that might also
 // race a connection-termination signal. A non-empty segments list
 // never closes inPw on its own once exhausted; it keeps draining
 // outPr so a later fire-and-forget write (e.g. a Respond to a
 // server-initiated request) is never left to block forever on the
 // unbuffered pipe, and it leaves closing the connection, or ending
-// state.msgCh, to the test — closing eagerly right after a scripted
+// state.msgCh, to the test; closing eagerly right after a scripted
 // response would race jsonrpc.Conn.Call's own select between that
 // response and the connection's termination signal, which Go resolves
 // pseudo-randomly when both are ready. A test that needs the
@@ -281,7 +281,7 @@ func makeTestState(t *testing.T, fixtureData []byte) *sessionState {
 // the exact bytes RunTurn wrote back to the app-server. recorder sits
 // ahead of the pipe the fixture peer gates on, in one io.MultiWriter,
 // so a write is recorded before jsonrpc.Conn.write's call to the pipe
-// can even return — recording via the peer's own read of that pipe
+// can even return; recording via the peer's own read of that pipe
 // would race the caller reading recorder's contents immediately after
 // RunTurn returns.
 func makeTestStateWithStdin(t *testing.T, fixtureData []byte, recorder *capturingWriteCloser) *sessionState {
@@ -321,7 +321,7 @@ func makeTestStateWithStdin(t *testing.T, fixtureData []byte, recorder *capturin
 
 // makeTestStateWithMalformedBeforeResponse builds a sessionState like
 // makeTestState, except malformed is written only once the peer has
-// observed codex's turn/start write, immediately before response —
+// observed codex's turn/start write, immediately before response,
 // reproducing a line that fails to parse arriving on the wire between
 // a request and its response.
 func makeTestStateWithMalformedBeforeResponse(t *testing.T, malformed, response string) *sessionState {
@@ -906,7 +906,7 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	t.Parallel()
 
-	// Only the turn/start response — no turn/completed — so state.msgCh
+	// Only the turn/start response, no turn/completed, so state.msgCh
 	// is closed directly, right after turn/started, before turn/completed
 	// would arrive.
 	state := gatedTurnStartState(t, `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`)
@@ -970,7 +970,7 @@ func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
 func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 	t.Parallel()
 
-	// turn/start response carries an error — RunTurn should return ErrTurnFailed.
+	// turn/start response carries an error; RunTurn should return ErrTurnFailed.
 	fixture := "{\"id\":1,\"error\":{\"code\":-32000,\"message\":\"thread not found\"}}\n"
 	state := makeTestState(t, []byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
@@ -1298,8 +1298,6 @@ func TestRunTurn_MCPServerStartupFailureWarnsWithoutFailingTurn(t *testing.T) {
 	}
 }
 
-// --- Human-only-request recognition and refusal ---
-
 // runTurnFixtureWithServerRequest builds a turn/start response, a
 // turn/started notification, and one server request (a method carrying
 // both "id" and "method") for the given method and request id, followed
@@ -1582,8 +1580,6 @@ func TestRunTurn_CancelledReturnsWithinBoundWhenTurnCompletedNeverArrives(t *tes
 	}
 }
 
-// --- StopSession ---
-
 func TestStopSession_InvalidInternalType(t *testing.T) {
 	t.Parallel()
 
@@ -1669,7 +1665,7 @@ func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 func TestStopSession_NilState(t *testing.T) {
 	t.Parallel()
 
-	// State with nil proc and nil waitCh — StopSession should return nil.
+	// State with nil proc and nil waitCh; StopSession should return nil.
 	state := &sessionState{
 		stdin:  nopWriteCloser{},
 		waitCh: nil,
@@ -1706,13 +1702,11 @@ func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
 	}
 }
 
-// --- Handshake/turn-phase isolation and wait-loop termination ---
-
 // TestHandshakeIsolation_PreTurnMessagesDoNotReachFirstTurn drives one
 // jsonrpc.Conn through initializeHandshake, authenticateIfNeeded, and
 // startThread, then reproduces what the handshake-phase handler
-// queues before the turn phase begins — a notification and a line
-// that fails to parse — and calls beginTurnPhase before running one
+// queues before the turn phase begins: a notification and a line
+// that fails to parse, and calls beginTurnPhase before running one
 // turn on the same connection. It asserts the turn completes normally
 // and the pre-turn messages produce no event and do not fail the
 // turn.
@@ -1812,7 +1806,7 @@ func TestRunTurn_StdoutParseFailureBeforeResponse(t *testing.T) {
 // clean end of stream and asserts it returns the pinned text rather
 // than timing out, within 2s while readTimeout keeps its 30s default.
 func TestAuthenticateIfNeeded_LoginWaitEOF(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "test-key")
 
 	state := authWaitState(t, map[int64]string{
@@ -1848,7 +1842,7 @@ func TestAuthenticateIfNeeded_LoginWaitEOF(t *testing.T) {
 // past a read failure (rather than a clean end of stream) and asserts
 // it returns the pinned text naming the underlying error, within 2s.
 func TestAuthenticateIfNeeded_LoginWaitReadError(t *testing.T) {
-	// No t.Parallel() — uses t.Setenv.
+	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "test-key")
 
 	wantErr := errors.New("boom")

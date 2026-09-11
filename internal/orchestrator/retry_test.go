@@ -15,8 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// --- Test doubles ---
-
 // mockRetryStore records calls to RetryTimerStore methods and returns
 // configurable errors.
 type mockRetryStore struct {
@@ -141,7 +139,7 @@ func (m *mockRetryStore) UpsertBudgetHoldNotice(_ context.Context, notice persis
 
 // mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
 // FetchIssueByID is the primary entry point; FetchCandidateIssues panics
-// if called — HandleRetryTimer must not invoke it.
+// if called; HandleRetryTimer must not invoke it.
 type mockRetryTracker struct {
 	fetchedIssue domain.Issue
 	fetchErr     error
@@ -206,8 +204,6 @@ func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) e
 	return m.addLabelErr
 }
 
-// --- Test helpers ---
-
 // retryState creates a *State with a retry entry and claim for the given
 // issue. The retry entry has the specified attempt number.
 func retryState(t *testing.T, id, identifier string, attempt int) *State {
@@ -255,8 +251,6 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 	}
 }
 
-// --- Tests ---
-
 func TestHandleRetryTimer(t *testing.T) {
 	t.Parallel()
 
@@ -279,7 +273,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			issueID: "ISS-1",
 			state: func(t *testing.T, _ string) *State {
 				t.Helper()
-				// No retry entry for the issue — simulates race/cancelled timer.
+				// No retry entry for the issue, simulates race/cancelled timer.
 				return NewState(5000, 4, 0, nil, AgentTotals{})
 			},
 			store:   func() *mockRetryStore { return &mockRetryStore{} },
@@ -320,7 +314,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			tracker: func(_ string) *mockRetryTracker { return &mockRetryTracker{} },
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Entry was NOT popped — still in RetryAttempts.
+				// Entry was NOT popped, still in RetryAttempts.
 				if _, ok := state.RetryAttempts[id]; !ok {
 					t.Errorf("RetryAttempts[%s] missing, want present (stale timer should not pop)", id)
 				}
@@ -372,7 +366,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
 				t.Helper()
-				// Tracker was called — entry was NOT treated as stale.
+				// Tracker was called, entry was NOT treated as stale.
 				if tracker.fetchCount != 1 {
 					t.Errorf("FetchIssueByID call count = %d, want 1", tracker.fetchCount)
 				}
@@ -387,7 +381,6 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, ok := state.RetryAttempts[id]; ok {
 					t.Errorf("RetryAttempts[%s] still present after dispatch, want cleared", id)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -466,7 +459,6 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released", id)
 				}
@@ -528,7 +520,6 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, claimed := state.Claimed[id]; !claimed {
 					t.Errorf("Claimed[%s] missing, want claimed", id)
 				}
-				// Running map unchanged — no dispatch occurred.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (no dispatch)", id)
 				}
@@ -585,7 +576,6 @@ func TestHandleRetryTimer(t *testing.T) {
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
-				// Worker was invoked.
 				if !workerCalled {
 					t.Error("worker function not invoked, want invoked")
 				}
@@ -653,7 +643,6 @@ func TestHandleRetryTimer(t *testing.T) {
 				if entry.TimerHandle != nil {
 					entry.TimerHandle.Stop()
 				}
-				// Claim preserved.
 				if _, claimed := state.Claimed[id]; !claimed {
 					t.Errorf("Claimed[%s] missing, want claimed", id)
 				}
@@ -680,7 +669,6 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim still released despite delete error.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released despite delete error", id)
 				}
@@ -713,7 +701,6 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released due to blocker", id)
 				}
@@ -721,11 +708,9 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, ok := state.RetryAttempts[id]; ok {
 					t.Errorf("RetryAttempts[%s] still present, want removed", id)
 				}
-				// Not dispatched.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (blocked issue should not dispatch)", id)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -744,14 +729,13 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			store: func() *mockRetryStore { return &mockRetryStore{} },
 			tracker: func(id string) *mockRetryTracker {
-				// Issue has empty Title — fails required field check.
+				// Issue has empty Title, fails required field check.
 				return &mockRetryTracker{
 					fetchedIssue: domain.Issue{ID: id, Identifier: id, Title: "", State: "To Do"},
 				}
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released due to missing title", id)
 				}
@@ -759,11 +743,9 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, ok := state.RetryAttempts[id]; ok {
 					t.Errorf("RetryAttempts[%s] still present, want removed", id)
 				}
-				// Not dispatched.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (ineligible issue should not dispatch)", id)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -778,14 +760,13 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			store: func() *mockRetryStore { return &mockRetryStore{} },
 			tracker: func(id string) *mockRetryTracker {
-				// Issue is in terminal state "Done" — rejected by active-state check.
+				// Issue is in terminal state "Done", rejected by active-state check.
 				return &mockRetryTracker{
 					fetchedIssue: candidateIssue(id, id, "Done"),
 				}
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released due to terminal state", id)
 				}
@@ -793,11 +774,9 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, ok := state.RetryAttempts[id]; ok {
 					t.Errorf("RetryAttempts[%s] still present, want removed", id)
 				}
-				// Not dispatched.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (terminal issue should not dispatch)", id)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -823,11 +802,9 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released (budget exhausted)", id)
 				}
-				// Not dispatched.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (budget exhausted)", id)
 				}
@@ -835,11 +812,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
 					t.Errorf("BudgetExhausted[%s] missing, want present after budget exhaustion", id)
 				}
-				// Tracker never called — budget check runs before fetch.
+				// Tracker never called, budget check runs before fetch.
 				if tracker.fetchCount != 0 {
 					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -911,7 +887,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
 				t.Helper()
-				// CountRunHistoryByIssue never called — MaxSessions is 0.
+				// CountRunHistoryByIssue never called, MaxSessions is 0.
 				if len(store.countedIssueIDs) != 0 {
 					t.Errorf("CountRunHistoryByIssue calls = %v, want empty (MaxSessions=0)", store.countedIssueIDs)
 				}
@@ -957,7 +933,6 @@ func TestHandleRetryTimer(t *testing.T) {
 				if len(store.countedIssueIDs) != 1 || store.countedIssueIDs[0] != id {
 					t.Errorf("CountRunHistoryByIssue calls = %v, want [%s]", store.countedIssueIDs, id)
 				}
-				// Tracker called — fail-open.
 				if tracker.fetchCount != 1 {
 					t.Errorf("FetchIssueByID call count = %d, want 1 (fail-open)", tracker.fetchCount)
 				}
@@ -990,11 +965,9 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
 				t.Helper()
-				// Claim released.
 				if _, claimed := state.Claimed[id]; claimed {
 					t.Errorf("Claimed[%s] still present, want released (token budget exhausted)", id)
 				}
-				// Not dispatched.
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (token budget exhausted)", id)
 				}
@@ -1010,11 +983,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				if ShouldDispatch(candidateIssue(id, "PROJ-TOK", "To Do"), state, []string{"To Do", "In Progress"}, []string{"Done"}) {
 					t.Errorf("ShouldDispatch(%s) = true, want false (token budget exhausted)", id)
 				}
-				// Tracker never called — budget checks run before fetch.
+				// Tracker never called, budget checks run before fetch.
 				if tracker.fetchCount != 0 {
 					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 				}
-				// DeleteRetryEntry called.
 				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
@@ -1089,7 +1061,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
 				t.Helper()
-				// SumTotalTokensByIssue never called — MaxTokens is 0.
+				// SumTotalTokensByIssue never called, MaxTokens is 0.
 				if len(store.summedTokenIssueIDs) != 0 {
 					t.Errorf("SumTotalTokensByIssue calls = %v, want empty (MaxTokens=0)", store.summedTokenIssueIDs)
 				}
@@ -1134,11 +1106,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
 					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
 				}
-				// Tracker called — fail-open.
 				if tracker.fetchCount != 1 {
 					t.Errorf("FetchIssueByID call count = %d, want 1 (fail-open)", tracker.fetchCount)
 				}
-				// Issue dispatched despite sum error — never stranded.
+				// Issue dispatched despite sum error, never stranded.
 				if _, ok := state.Running[id]; !ok {
 					t.Fatalf("Running[%s] missing after dispatch, want present (fail-open)", id)
 				}
@@ -1232,7 +1203,7 @@ func TestHandleRetryTimer(t *testing.T) {
 				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
 					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
 				}
-				// Tracker never called — the session block short-circuits the fetch.
+				// Tracker never called, the session block short-circuits the fetch.
 				if tracker.fetchCount != 0 {
 					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 				}
@@ -1652,7 +1623,7 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 		t.Error("worker dispatched while issue still in Running, want no dispatch")
 	}
 
-	// FetchIssueByID should not be called — guard returns early.
+	// FetchIssueByID should not be called, guard returns early.
 	if tracker.fetchCount != 0 {
 		t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 	}
@@ -1671,7 +1642,6 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 		entry.TimerHandle.Stop()
 	}
 
-	// Claim preserved.
 	if _, claimed := state.Claimed["ISS-1"]; !claimed {
 		t.Error("Claimed[ISS-1] missing, want preserved")
 	}
@@ -1745,7 +1715,6 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 
 		HandleRetryTimer(state, "ISS-FULL", params)
 
-		// Not dispatched.
 		if _, ok := state.Running["ISS-FULL"]; ok {
 			t.Error("Running[ISS-FULL] present, want absent (no SSH capacity)")
 		}
@@ -1806,7 +1775,7 @@ func TestIsStaleRetryTimer(t *testing.T) {
 		{
 			name: "startup-reconstructed: always non-stale regardless of DueAtMS",
 			entry: &RetryEntry{
-				// scheduledAt is zero — startup-reconstructed entry.
+				// scheduledAt is zero, startup-reconstructed entry.
 				// No stale predecessor exists, so always non-stale.
 				DueAtMS: time.Now().UnixMilli() + 3_600_000,
 			},
@@ -1943,7 +1912,7 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 		t.Fatalf("BudgetExhausted[%s] missing after HandleRetryTimer budget exhaustion", id)
 	}
 
-	// Budget exhaustion must not emit a dispatch metric — no actual dispatch occurs.
+	// Budget exhaustion must not emit a dispatch metric; no actual dispatch occurs.
 	if len(spy.dispatches) != 0 {
 		t.Errorf("dispatches = %v, want [] (budget exhaustion is not a dispatch)", spy.dispatches)
 	}
@@ -2330,7 +2299,7 @@ func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    2,
-		// ReactionKind is intentionally empty — normal error retry.
+		// ReactionKind is intentionally empty, normal error retry.
 	}
 
 	store := &mockRetryStore{}
@@ -2399,7 +2368,7 @@ func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 	t.Parallel()
 
 	// When MarkReactionDispatched returns an error, the dispatch is not
-	// rolled back — the issue remains in Running and the error is non-fatal.
+	// rolled back; the issue remains in Running and the error is non-fatal.
 	const id = "ISS-CI-3"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2425,7 +2394,7 @@ func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 	if store.markDispatchedCalls != 1 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
 	}
-	// Dispatch was not rolled back — issue still running.
+	// Dispatch was not rolled back, issue still running.
 	if _, ok := state.Running[id]; !ok {
 		t.Errorf("Running[%s] missing after dispatch, want present (error is non-fatal)", id)
 	}
@@ -2470,7 +2439,7 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 
 // TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn verifies that a
 // popped retry entry's ReactionKind reaches MakeWorkerFn's reactionKind
-// argument (A9), which the worker builder uses to derive the read-only
+// argument, which the worker builder uses to derive the read-only
 // posture for label-review dispatches.
 func TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn(t *testing.T) {
 	t.Parallel()
@@ -2515,7 +2484,7 @@ func TestHandleRetryTimer_Reschedule_PreservesSessionID(t *testing.T) {
 
 	state := retryState(t, id, id, 2)
 	state.RetryAttempts[id].SessionID = wantSessionID
-	// Fill all slots so no dispatch occurs — forces the reschedule path.
+	// Fill all slots so no dispatch occurs, forces the reschedule path.
 	state.MaxConcurrentAgents = 1
 	state.Running["OTHER-1"] = &RunningEntry{
 		Identifier: "OTHER-1",
@@ -2542,8 +2511,6 @@ func TestHandleRetryTimer_Reschedule_PreservesSessionID(t *testing.T) {
 	}
 }
 
-// --- Handoff-state reaction retry tests ---
-
 func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
 	t.Parallel()
 
@@ -2552,7 +2519,7 @@ func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
 		"review_comments": map[string]any{"count": 3},
 	}
 
-	// No claim set — simulates post-handoff state.
+	// No claim set, simulates post-handoff state.
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2665,7 +2632,7 @@ func TestHandleRetryTimer_NonReactionInHandoffStateReleasesClaim(t *testing.T) {
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    1,
-		// ReactionKind is empty — non-reaction retry.
+		// ReactionKind is empty, non-reaction retry.
 	}
 
 	store := &mockRetryStore{}
@@ -3091,7 +3058,7 @@ func TestHandleRetryTimer_UnknownReactionKindInHandoffStateReleasesClaim(t *test
 		IssueID:      id,
 		Identifier:   id,
 		Attempt:      1,
-		ReactionKind: "merge_conflict", // unknown kind — not ci or review
+		ReactionKind: "merge_conflict", // unknown kind, not ci or review
 	}
 
 	store := &mockRetryStore{}
@@ -3115,7 +3082,6 @@ func TestHandleRetryTimer_UnknownReactionKindInHandoffStateReleasesClaim(t *test
 	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
 		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 	}
-	// Warning emitted for unknown reaction kind.
 	if handler.countByMessage("found unknown reaction kind in retry entry") != 1 {
 		t.Errorf("Warn('found unknown reaction kind in retry entry') emitted %d times, want 1",
 			handler.countByMessage("found unknown reaction kind in retry entry"))
@@ -3130,7 +3096,7 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 
 	const id = "HANDOFF-NO-CLAIM"
 
-	// state.Claimed is intentionally empty — no pre-existing claim for this
+	// state.Claimed is intentionally empty, no pre-existing claim for this
 	// issue. Guards against nil-map panics or early-return guards that
 	// incorrectly require a prior claim before dispatching a handoff-state
 	// reaction retry.
@@ -3160,8 +3126,6 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 		t.Errorf("Claimed[%s] absent after dispatch, want DispatchIssue to add claim", id)
 	}
 }
-
-// --- Frozen-selection tests ---
 
 // TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry verifies that
 // AgentKind, RuleName, and TemplateID are copied from the retry entry into
@@ -3375,8 +3339,6 @@ func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
 		t.Error("DeleteRetryEntry not called after adapter lookup failure")
 	}
 }
-
-// --- Paused-retry dwell bound tests (R29) ---
 
 func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 	t.Parallel()

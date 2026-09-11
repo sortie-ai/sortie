@@ -10,8 +10,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- Test helpers ---
-
 type testConstructor func() string
 
 type testMeta struct {
@@ -26,8 +24,6 @@ func newTestRegistry() *Registry[testConstructor, testMeta] {
 func dummyConstructor() testConstructor {
 	return func() string { return "marker" }
 }
-
-// --- Tests ---
 
 func TestRegisterAndGet(t *testing.T) {
 	t.Parallel()
@@ -431,8 +427,6 @@ func TestRegistryError_Error(t *testing.T) {
 		})
 	}
 }
-
-// --- Type-specific constructor tests ---
 
 var _ domain.Notifier = (*stubNotifier)(nil)
 

@@ -457,10 +457,10 @@ func TestPathWithin(t *testing.T) {
 	}
 }
 
-// gradingWiringProfile is the protocol-only profile step 3.4's wiring
-// runs under: both native surfaces declared absent, matching the
-// plan's own note that a protocol-only profile passes SurfaceProtocol
-// to SetSessionContinuation. Every measurable surface still carries its
+// gradingWiringProfile is the protocol-only profile Run's grading
+// wiring runs under: both native surfaces declared absent, so a
+// protocol-only profile passes SurfaceProtocol to
+// SetSessionContinuation. Every measurable surface still carries its
 // own entry point, matching what a real profile carries: an absent
 // surface is corroborated by launching it, so its entry point is never
 // omitted, only declared absent.
@@ -478,8 +478,8 @@ func gradingWiringProfile() qualification.RuntimeProfile {
 	}
 }
 
-// buildWiredFixture reproduces Run's own grading wiring (step 3.4)
-// against three independent inducer outcomes, one per wired row,
+// buildWiredFixture reproduces Run's own grading wiring against three
+// independent inducer outcomes, one per wired row,
 // without launching any live process: an unmeasured-variant fixture
 // carries every non-wired row at its scaffolded default, and the
 // three wired rows are set exactly as Run sets them from its own
@@ -505,8 +505,8 @@ func findNotesGrade(grades []qualification.NotesGrade, surface qualification.Sur
 	return nil
 }
 
-// TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow drives step
-// 3.4's grading wiring, the three fixture setters Run calls with each
+// TestRunGradingWiringAppliesEachInducerOutcomeToItsOwnRow drives
+// Run's grading wiring, the three fixture setters Run calls with each
 // inducer's own outcome, with each of the three grades an inducer can
 // report, for each of the three rows Run wires, and reads each row's
 // grade back through ExpectationFrom rather than off Fixture.Records

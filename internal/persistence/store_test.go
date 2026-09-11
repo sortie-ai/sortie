@@ -567,7 +567,6 @@ func TestSaveRetryEntry_Upsert_SessionID(t *testing.T) {
 	}
 }
 
-// --- Run History Tests ---
 // index for uniqueness. Error is nil (successful run).
 func newTestRun(i int) RunHistory {
 	return RunHistory{
@@ -1140,8 +1139,6 @@ func TestQueryRecentRunHistory_DisplayIDRoundTrip(t *testing.T) {
 	}
 }
 
-// --- Session Metadata Tests ---
-
 func TestUpsertSessionMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -1287,8 +1284,8 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 	}
 }
 
-// TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip proves P6 at
-// the storage boundary: a row written with the verdict true round-trips
+// TestUpsertSessionMetadata_APIRequestsMeasuredRoundTrip asserts that, at
+// the storage boundary, a row written with the verdict true round-trips
 // its raw count, including a genuine zero the measurement itself
 // produced, and a row written with the verdict false round-trips the
 // zero count the two orchestrator writers store for it, so the
@@ -1494,8 +1491,6 @@ func TestDeleteSessionMetadata_Nonexistent(t *testing.T) {
 	}
 }
 
-// --- Aggregate Metrics Tests ---
-
 func TestUpsertAggregateMetrics(t *testing.T) {
 	t.Parallel()
 
@@ -1644,8 +1639,6 @@ func TestUpsertAggregateMetrics_SecondsRunningPrecision(t *testing.T) {
 		t.Errorf("SecondsRunning = %v, want %v (diff=%v)", got.SecondsRunning, want, math.Abs(got.SecondsRunning-want))
 	}
 }
-
-// --- Startup Recovery Tests ---
 
 func TestLoadRetryEntriesForRecovery_Empty(t *testing.T) {
 	t.Parallel()
@@ -1840,8 +1833,6 @@ func TestLoadRetryEntriesForRecovery_DBError(t *testing.T) {
 	}
 }
 
-// --- CountRunHistoryByIssue Tests ---
-
 func TestCountRunHistoryByIssue(t *testing.T) {
 	t.Parallel()
 
@@ -1913,8 +1904,6 @@ func TestCountRunHistoryByIssue(t *testing.T) {
 		}
 	})
 }
-
-// --- QueryBudgetExhaustedIssues Tests ---
 
 func TestQueryBudgetExhaustedIssues(t *testing.T) {
 	t.Parallel()
@@ -2127,8 +2116,6 @@ func TestQueryBudgetExhaustedIssues(t *testing.T) {
 	})
 }
 
-// --- Health check tests ---
-
 func TestPing_OpenStore(t *testing.T) {
 	t.Parallel()
 
@@ -2157,8 +2144,6 @@ func TestPing_ClosedStore(t *testing.T) {
 		t.Fatal("Ping() on closed store = nil, want error")
 	}
 }
-
-// --- Extended Token Metrics Round-Trip Tests ---
 
 // TestUpsertSessionMetadata_ExtendedFields verifies that the new
 // CacheReadTokens, ModelName, and APIRequestCount fields survive a
@@ -2519,7 +2504,7 @@ func TestAppendRunHistory_ReviewMetadata_Null(t *testing.T) {
 	ctx := context.Background()
 
 	run := newTestRun(101)
-	// ReviewMetadata is nil — self-review did not run.
+	// ReviewMetadata is nil; self-review did not run.
 
 	got := appendOrFatal(t, s, run)
 	if got.ReviewMetadata != nil {
@@ -2537,8 +2522,6 @@ func TestAppendRunHistory_ReviewMetadata_Null(t *testing.T) {
 		t.Errorf("queried ReviewMetadata = %q, want nil", *entries[0].ReviewMetadata)
 	}
 }
-
-// --- LoadLatestSuccessfulRunsForReactionRecovery Tests ---
 
 // recoveryRefTime is a fixed reference for recovery query tests.
 var recoveryRefTime = time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)

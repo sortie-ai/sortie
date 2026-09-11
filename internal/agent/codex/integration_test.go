@@ -30,8 +30,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- Integration test helpers ---
-
 // skipUnlessCodexIntegration skips the current test when SORTIE_CODEX_TEST
 // is not set to "1", so disabled integration tests are reported as skipped
 // rather than silently passing.
@@ -180,8 +178,6 @@ func mustStartSession(t *testing.T, ctx context.Context, adapter *CodexAdapter, 
 	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
 	return session
 }
-
-// --- Integration test functions ---
 
 // TestIntegration_StartSession verifies that StartSession returns a populated
 // Session with a non-empty thread ID and process PID.
@@ -391,7 +387,7 @@ func TestIntegration_RunTurn_StopDuringTurn(t *testing.T) {
 	go func() {
 		r, e := adapter.RunTurn(outerCtx, session, domain.RunTurnParams{
 			// A prompt that causes the model to start a long tool execution,
-			// ensuring the turn is genuinely in-flight when we stop it.
+			// ensuring the turn is genuinely in-flight when it is stopped.
 			Prompt:  "Execute the shell command: sleep 30",
 			OnEvent: func(_ domain.AgentEvent) {},
 		})
@@ -593,9 +589,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 	}
 }
 
-// --- Tool round-trip: the generated MCP config actually reaches a
-// callable sortie_status tool, and the model's call returns a result. ---
-
 // repoRoot returns the absolute path to the repository root, derived
 // from this test file's known location at internal/agent/codex/.
 func repoRoot(t *testing.T) string {
@@ -667,11 +660,11 @@ func mustJSONString(t *testing.T, s string) string {
 // TestIntegration_ToolRoundTrip drives one real turn with a generated
 // MCP config translated into codex's own launch arguments, and
 // asserts the model calls a Sortie tool through the resulting sidecar
-// and receives its result. This is the round trip the spec's own
-// runtime probes left unverified: the sidecar is spawned with its
-// session environment, but whether the model's call reaches it and a
-// result comes back was never observed until this test runs with a
-// real credential.
+// and receives its result. Earlier runtime probes left this round
+// trip unverified: the sidecar is spawned with its session
+// environment, but whether the model's call reaches it and a result
+// comes back was never observed until this test runs with a real
+// credential.
 func TestIntegration_ToolRoundTrip(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 

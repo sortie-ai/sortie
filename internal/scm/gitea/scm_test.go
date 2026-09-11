@@ -37,8 +37,6 @@ func assertSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) {
 	adaptertest.AssertSCMErrorKind(t, err, want)
 }
 
-// --- NewGiteaSCMAdapter ---
-
 func TestNewGiteaSCMAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -273,8 +271,6 @@ func TestNewGiteaSCMAdapter_EmptyEndpointMessageIsPinned(t *testing.T) {
 	}
 }
 
-// --- SCM registration ---
-
 func TestGiteaSCMRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -302,8 +298,6 @@ func TestGiteaSCMRegistration(t *testing.T) {
 		t.Error(`Trackers.Has("gitea") = false, want true (SCM registration must not disturb the tracker registration)`)
 	}
 }
-
-// --- paginateSCM ---
 
 func TestGiteaPaginateSCM(t *testing.T) {
 	t.Parallel()
@@ -339,8 +333,6 @@ func TestGiteaPaginateSCM(t *testing.T) {
 		}
 	})
 }
-
-// --- Write-path transport ---
 
 func TestGiteaSCMWriteBoundary(t *testing.T) {
 	t.Parallel()

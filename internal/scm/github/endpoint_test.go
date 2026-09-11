@@ -7,8 +7,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- helpers ---
-
 // credentialEndpoint is a malformed endpoint carrying userinfo. url.Parse
 // rejects the unbracketed IPv6 host, and its error text quotes the whole
 // value, credential included, which is the disclosure the constructors
@@ -34,8 +32,6 @@ func assertUserinfoRedacted(t *testing.T, message string) {
 		}
 	}
 }
-
-// --- Tests ---
 
 // TestResolveEndpoint pins the shapes the GitHub adapters accept as a base
 // URL. The unbracketed IPv6 cases are the ones url.Parse rejects for having

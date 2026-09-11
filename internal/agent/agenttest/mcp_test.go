@@ -205,7 +205,7 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			surface:       MCPLaunchSurface{},
 		},
 		{
-			// Delivering a neighbouring file is not delivering the
+			// Delivering a neighboring file is not delivering the
 			// generated one: a supported adapter handed <path>.tmp has
 			// injected nothing, and the assertion must say so.
 			name:          "supported declared but the surface carries only a file extending the path",

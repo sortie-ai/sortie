@@ -307,8 +307,6 @@ func TestMCPInjectionConformance(t *testing.T) {
 	})
 }
 
-// --- renderMCPConfigDocument ---
-
 // TestRenderMCPConfigDocument_DeclaresEveryServer asserts that the
 // translated document declares every server from the generated file,
 // in the runtime's own "local"/"remote" entry shapes.

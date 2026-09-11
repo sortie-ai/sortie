@@ -421,8 +421,6 @@ func TestNewServiceConfig(t *testing.T) {
 		assertIntEqual(t, "Agent.StallTimeoutMS", 300000, cfg.Agent.StallTimeoutMS)
 	})
 
-	// --- DBPath subtests ---
-
 	t.Run("DBPath/Absent", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{})
@@ -495,7 +493,7 @@ func TestNewServiceConfig(t *testing.T) {
 
 	t.Run("DBPath/UnsetEnvVar", func(t *testing.T) {
 		// An explicit db_path whose env var resolves to empty must
-		// produce a ConfigError — silent fallback to the default
+		// produce a ConfigError; silent fallback to the default
 		// path would surprise the operator.
 		_, err := NewServiceConfig(map[string]any{
 			"db_path": "$SORTIE_UNSET_VAR_XYZ",
@@ -536,8 +534,6 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "Tracker.Endpoint", "", cfg.Tracker.Endpoint)
 		assertStringEqual(t, "Tracker.APIKey", "", cfg.Tracker.APIKey)
 	})
-
-	// --- HandoffState subtests ---
 
 	t.Run("HandoffState/Absent", func(t *testing.T) {
 		t.Parallel()
@@ -656,8 +652,6 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "tracker.handoff_state")
 	})
-
-	// --- NoChangeState subtests ---
 
 	t.Run("NoChangeState/Absent", func(t *testing.T) {
 		t.Parallel()
@@ -805,8 +799,6 @@ func TestNewServiceConfig(t *testing.T) {
 			})
 		}
 	})
-
-	// --- HandoffEvidence subtests ---
 
 	t.Run("HandoffEvidence/DefaultsToObserved", func(t *testing.T) {
 		t.Parallel()
@@ -1021,8 +1013,6 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "agent.max_tokens")
 	})
 
-	// --- InProgressState subtests ---
-
 	t.Run("InProgressState/Absent", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
@@ -1129,8 +1119,6 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "tracker.in_progress_state")
 	})
-
-	// --- Reactions subtests ---
 
 	t.Run("Reactions/Absent", func(t *testing.T) {
 		t.Parallel()
@@ -1335,13 +1323,10 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 }
 
-// --- reactions.<kind>.triage tests ---
-
-// TestReactionsTriage covers requirements 2, 3, and the parse half of 23:
-// triage is accepted on exactly the four members of
-// TriageSupportedReactionKeys and rejected elsewhere, timeout_ms defaults
-// and clamps to its documented range, and script must be a non-blank
-// string.
+// TestReactionsTriage asserts that triage is accepted on exactly the
+// four members of TriageSupportedReactionKeys and rejected elsewhere,
+// timeout_ms defaults and clamps to its documented range, and script
+// must be a non-blank string.
 func TestReactionsTriage(t *testing.T) {
 	t.Run("AcceptedOnSupportedKinds", func(t *testing.T) {
 		t.Parallel()
@@ -1585,8 +1570,6 @@ func TestReactionsTriage(t *testing.T) {
 		assertIntEqual(t, "CIFeedback.Triage.TimeoutMS", 30000, cfg.CIFeedback.Triage.TimeoutMS)
 	})
 }
-
-// --- buildLabelCommandsConfig tests ---
 
 func TestBuildLabelCommandsConfig_Defaults(t *testing.T) {
 	t.Parallel()
@@ -1941,8 +1924,6 @@ func TestNewServiceConfig_APIVersionCarveOutBool(t *testing.T) {
 	assertStringEqual(t, "ConfigError.Message", "expected string, got boolean", ce.Message)
 }
 
-// --- test helpers ---
-
 func assertConfigErrorField(t *testing.T, err error, wantField string) {
 	t.Helper()
 	if err == nil {
@@ -2063,7 +2044,7 @@ func TestValidateInProgressState(t *testing.T) {
 
 // setDotEnvPathForTest sets the dotenv path via the public API and
 // registers a cleanup to restore the original value. It does not call
-// t.Parallel() — callers are responsible for sequencing.
+// t.Parallel(); callers are responsible for sequencing.
 func setDotEnvPathForTest(t *testing.T, path string) {
 	t.Helper()
 	orig := getDotEnvPath()
@@ -2071,7 +2052,7 @@ func setDotEnvPathForTest(t *testing.T, path string) {
 	t.Cleanup(func() { SetDotEnvPath(orig) })
 }
 
-// TestNewServiceConfigEnvOverrides covers end-to-end env override behaviour
+// TestNewServiceConfigEnvOverrides covers end-to-end env override behavior
 // through the full NewServiceConfig pipeline. Each subtest uses t.Setenv for
 // isolation; none calls t.Parallel() to avoid races on dotenvPathOverride.
 func TestNewServiceConfigEnvOverrides(t *testing.T) {
@@ -2236,7 +2217,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		dotenvFile := writeDotEnvFile(t,
 			"SORTIE_TRACKER_KIND=file\nSORTIE_TRACKER_PROJECT=dot-env-project\n")
 		t.Setenv("SORTIE_ENV_FILE", dotenvFile)
-		// Real env absent — dotenv values should apply.
+		// Real env absent; dotenv values should apply.
 		t.Setenv("SORTIE_TRACKER_KIND", "")
 		t.Setenv("SORTIE_TRACKER_PROJECT", "")
 
@@ -3341,7 +3322,7 @@ func TestResolveExtensionEnvRefs(t *testing.T) {
 
 	t.Run("DollarDollar", func(t *testing.T) {
 		t.Parallel()
-		// os.ExpandEnv("$$") returns "" — the $$ sequence is consumed
+		// os.ExpandEnv("$$") returns ""; the $$ sequence is consumed
 		// and maps to an empty variable name which expands to empty.
 		// This is the documented behavior (no custom $$ escape).
 		ext := map[string]any{"myext": map[string]any{"val": "$$"}}
@@ -3455,8 +3436,6 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 		}
 	})
 }
-
-// --- AgentAdapterConfig tests ---
 
 // TestAgentAdapterConfig_ExactlySixKeysWithNoExtensions asserts that
 // AgentAdapterConfig returns exactly the six documented keys when
@@ -3595,8 +3574,6 @@ func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
 	}
 }
 
-// --- ExtensionBlockPresence tests ---
-
 // TestExtensionBlockPresence_ZeroValue asserts that a declared-but-unset
 // ExtensionBlockPresence equals ExtensionBlockPresent, so a value nothing
 // computed draws no diagnostic from a consumer that fails open on it.
@@ -3721,8 +3698,6 @@ func TestResolveAgentSettings_BlockPresenceMatchesAgentAdapterConfig(t *testing.
 		t.Errorf("ResolveAgentSettings().BlockDescription = %q, want %q", got.BlockDescription, wantDescription)
 	}
 }
-
-// --- ResolveAgentSettings tests ---
 
 // TestResolveAgentSettings_MCPConfigPath covers every row of the
 // mcp_config resolution table: the kind's block may be absent or not
@@ -3879,7 +3854,7 @@ func TestResolveAgentSettings_IndependentAllocationAcrossCalls(t *testing.T) {
 	}
 }
 
-// --- MergeAdapterExtensions tests ---
+// MergeAdapterExtensions tests.
 //
 // These cases re-home the coverage cmd/sortie's now-deleted
 // TestMergeExtensions gave the duplicate mergeExtensions helper before
@@ -3984,8 +3959,6 @@ func TestMergeAdapterExtensions(t *testing.T) {
 		}
 	})
 }
-
-// --- buildWorkspaceConfig / workspace.retention_days tests ---
 
 func TestBuildWorkspaceConfig(t *testing.T) {
 	t.Parallel()

@@ -160,13 +160,12 @@ exit 1
 `
 }
 
-// TestStartSessionEmitsCollectedStderrAtWarnOnFailedInitialize:
-// property 4 of spec 3.6. A fake agent that exits before answering
-// initialize still gets its collected stderr surfaced at Warn before
-// startSession returns its error. The property fails if the
-// EmitWarnLines call following doInitialize's failure branch is
-// removed: the returned error would be unaffected, but the marker
-// line would never reach the logger.
+// TestStartSessionEmitsCollectedStderrAtWarnOnFailedInitialize confirms
+// that a fake agent which exits before answering initialize still gets
+// its collected stderr surfaced at Warn before startSession returns its
+// error. The test fails if the EmitWarnLines call following
+// doInitialize's failure branch is removed: the returned error would be
+// unaffected, but the marker line would never reach the logger.
 func TestStartSessionEmitsCollectedStderrAtWarnOnFailedInitialize(t *testing.T) {
 	// No t.Parallel(): installs a process-wide slog default.
 
@@ -264,10 +263,11 @@ done
 `
 }
 
-// TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession is
-// the second half of property 4. startSession emits collected stderr on
-// two failure branches, and a control that reaches only the first lets
-// the second's emission be deleted without a test going red.
+// TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession
+// mirrors the initialize-failure case above for the resolve-session
+// failure branch. startSession emits collected stderr on two failure
+// branches, and a control that reaches only the first lets the
+// second's emission be deleted without a test going red.
 func TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession(t *testing.T) {
 	// No t.Parallel(): installs a process-wide slog default.
 
@@ -330,12 +330,12 @@ func TestStopSessionReachesGroupChild(t *testing.T) {
 	assertProcessGone(t, childPID, awaitTimeout)
 }
 
-// TestStopSessionDoesNotReachEscapedProcessGroupMember: property 3 of
-// spec 3.6, risk row 3. A descendant that detaches into its own
-// process group before the parent exits survives stopSession's
-// group-directed termination, so a leaked survivor is demonstrably
-// detectable by a direct process-liveness check rather than merely
-// assumed. This is not a defect in stopSession; procutil.SetGroupCancel
+// TestStopSessionDoesNotReachEscapedProcessGroupMember confirms that a
+// descendant which detaches into its own process group before the
+// parent exits survives stopSession's group-directed termination, so a
+// leaked survivor is demonstrably detectable by a direct
+// process-liveness check rather than merely assumed. This is not a
+// defect in stopSession; procutil.SetGroupCancel
 // and kill_process_group can only ever reach the group they targeted.
 func TestStopSessionDoesNotReachEscapedProcessGroupMember(t *testing.T) {
 	t.Parallel()

@@ -353,7 +353,7 @@ func TestEnsure(t *testing.T) {
 			t.Errorf("PathError.Op = %q, want %q", pe.Op, "conflict")
 		}
 
-		// File must NOT be deleted — non-destructive behavior.
+		// File must NOT be deleted; non-destructive behavior.
 		info, statErr := os.Lstat(filePath)
 		if statErr != nil {
 			t.Fatalf("file should still exist after conflict error: %v", statErr)

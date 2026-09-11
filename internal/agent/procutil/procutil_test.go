@@ -469,10 +469,10 @@ func TestStderrCollector_WarnLines_NilLogger(t *testing.T) {
 	t.Parallel()
 
 	c := NewStderrCollector(strings.NewReader("test line\n"), slog.Default())
-	// Must not panic when logger is nil — falls back to slog.Default().
+	// Must not panic when logger is nil: falls back to slog.Default().
 	c.WarnLines(nil)
 
-	// No assertion on output — the test verifies the nil guard does not panic.
+	// No assertion on output; the test verifies the nil guard does not panic.
 }
 
 func TestEmitWarnLines(t *testing.T) {
@@ -531,7 +531,7 @@ func TestEmitWarnLines(t *testing.T) {
 func TestEmitWarnLines_NilLogger(t *testing.T) {
 	t.Parallel()
 
-	// Must not panic when logger is nil — falls back to slog.Default().
+	// Must not panic when logger is nil: falls back to slog.Default().
 	EmitWarnLines([]string{"test line"}, nil)
 }
 

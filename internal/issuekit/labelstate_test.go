@@ -306,7 +306,7 @@ func TestDeriveLabelState(t *testing.T) {
 
 // TestDeriveLabelState_MultiMatchLogsWarning merges the Gitea and GitLab
 // multi-match WARN cases. Both now assert the shared issue_identifier
-// attribute (R21) in place of Gitea's former issue_index and GitLab's former
+// attribute in place of Gitea's former issue_index and GitLab's former
 // iid; the returned state, the message string, and the matched-label
 // assertions are unchanged from the two source tests.
 func TestDeriveLabelState_MultiMatchLogsWarning(t *testing.T) {

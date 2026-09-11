@@ -90,10 +90,6 @@ func TestRunUsage_NeverLowersASnapshot(t *testing.T) {
 	}
 }
 
-// --- Exhaustive property coverage (negative clamping, total invariant,
-// provisional replace-not-accumulate, settle-and-clear semantics, and
-// the componentwise-monotonic snapshot guarantee) ---
-
 func TestRunUsage_ClampsNegativeComponents_AllMethods(t *testing.T) {
 	t.Parallel()
 
@@ -189,8 +185,8 @@ func TestRunUsage_AddTurn_AccumulatesAcrossMultipleTurns(t *testing.T) {
 }
 
 // TestRunUsage_SetRunCumulative_ReplacesSettledAndClearsProvisional
-// verifies both halves of R10's SetRunCumulative contract: it replaces
-// the settled total outright (an earlier AddTurn contribution does not
+// verifies both halves of SetRunCumulative's contract: it replaces the
+// settled total outright (an earlier AddTurn contribution does not
 // survive), and it clears any in-flight provisional contribution (a
 // subsequent SetTurnProvisional(zero) reports only the replaced total).
 func TestRunUsage_SetRunCumulative_ReplacesSettledAndClearsProvisional(t *testing.T) {

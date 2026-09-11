@@ -599,8 +599,8 @@ func TestStatusTool_EmptyJSONInput(t *testing.T) {
 	}
 }
 
-// TestStatusTool_ExplicitlyUnmeasuredStateFile proves P19's first
-// half: a state file whose tokens_measured flag decodes false returns
+// TestStatusTool_ExplicitlyUnmeasuredStateFile asserts that a state file
+// whose tokens_measured flag decodes false returns
 // tokens_measured false and all four tokens members null, inside a
 // success envelope, never a failure envelope.
 func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
@@ -639,8 +639,8 @@ func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
 	}
 }
 
-// TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember proves
-// P19's second half: a state file written by a binary from before the
+// TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember asserts
+// that a state file written by a binary from before the
 // token figures gained their qualifier carries four numbers and no
 // tokens_measured member at all. Decoding it leaves TokensMeasured at
 // its Go zero value, false, so the tool nulls the four figures rather

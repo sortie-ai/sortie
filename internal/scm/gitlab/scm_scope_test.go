@@ -11,8 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// --- VerifyAutoMergeScopes: scope report (R25, R27, AC8) ---
-
 func TestVerifyAutoMergeScopes_ScopeReport(t *testing.T) {
 	t.Parallel()
 
@@ -56,8 +54,6 @@ func TestVerifyAutoMergeScopes_ScopeReport(t *testing.T) {
 		}
 	})
 }
-
-// --- VerifyAutoMergeScopes: fail-open sentinel (R26, R26a) ---
 
 func TestVerifyAutoMergeScopes_FailOpen(t *testing.T) {
 	t.Parallel()
@@ -143,8 +139,6 @@ func TestVerifyAutoMergeScopes_FailOpen(t *testing.T) {
 		}
 	})
 }
-
-// --- VerifyAutoMergeScopes: error classes (R29, AC8) ---
 
 func TestVerifyAutoMergeScopes_ErrorClasses(t *testing.T) {
 	t.Parallel()

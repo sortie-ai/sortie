@@ -17,8 +17,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// --- Test doubles ---
-
 // mockSCMAdapter is a controllable SCMAdapter for review reconcile tests.
 type mockSCMAdapter struct {
 	comments []domain.ReviewComment
@@ -190,8 +188,6 @@ func newReviewMetricsSpy() *reviewMetricsSpy {
 func (s *reviewMetricsSpy) IncReviewChecks(result string)      { s.reviewChecks[result]++ }
 func (s *reviewMetricsSpy) IncReviewEscalations(action string) { s.reviewEscalations[action]++ }
 
-// --- Test helpers ---
-
 // reviewBaseTime is a fixed reference for review reconcile tests.
 var reviewBaseTime = time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 
@@ -290,8 +286,6 @@ func reviewParams(store *reviewReconcileStore, scm domain.SCMAdapter, tracker do
 	}
 }
 
-// --- reconcileReviewComments tests ---
-
 func TestReconcileReviewComments_NilAdapter(t *testing.T) {
 	t.Parallel()
 
@@ -315,7 +309,7 @@ func TestReconcileReviewComments_NoPendingReviewEntries(t *testing.T) {
 	t.Parallel()
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	// Add a CI reaction entry — should not be processed by review reconcile.
+	// Add a CI reaction entry, should not be processed by review reconcile.
 	rkey := ReactionKey("ISS-R-CI", ReactionKindCI)
 	state.PendingReactions[rkey] = &PendingReaction{
 		Kind:      ReactionKindCI,
@@ -334,7 +328,6 @@ func TestReconcileReviewComments_NoPendingReviewEntries(t *testing.T) {
 	if scm.calls != 0 {
 		t.Errorf("FetchPendingReviews calls = %d, want 0 (no review entries)", scm.calls)
 	}
-	// CI entry must remain untouched.
 	if _, ok := state.PendingReactions[rkey]; !ok {
 		t.Error("CI PendingReactions entry removed by review reconcile; want untouched")
 	}
@@ -561,7 +554,6 @@ func TestReconcileReviewComments_SCMFetchError_ReEnqueues(t *testing.T) {
 	if entry.PendingAttempts != 1 {
 		t.Errorf("PendingAttempts = %d, want 1 after first error", entry.PendingAttempts)
 	}
-	// PendingRetryAt should be in the future (backoff applied).
 	if !entry.PendingRetryAt.After(reviewBaseTime) {
 		t.Error("PendingRetryAt not in future after SCM error; want backoff applied")
 	}
@@ -577,7 +569,7 @@ func TestReconcileReviewComments_NoActionableComments(t *testing.T) {
 	rkey := ReactionKey("ISS-R-5", ReactionKindReview)
 	store := &reviewReconcileStore{}
 	metrics := newReviewMetricsSpy()
-	// Empty slice — no actionable comments.
+	// Empty slice, no actionable comments.
 	scm := &mockSCMAdapter{comments: []domain.ReviewComment{}}
 	params := reviewParams(store, scm, nil)
 
@@ -655,7 +647,7 @@ func TestReconcileReviewComments_NewFingerprint_Dispatches(t *testing.T) {
 	state := stateWithReviewReaction(t, "ISS-R-8", 10)
 	rkey := ReactionKey("ISS-R-8", ReactionKindReview)
 
-	// Comment submitted 5 minutes ago — outside the 30s debounce window (defaultReviewConfig).
+	// Comment submitted 5 minutes ago, outside the 30s debounce window (defaultReviewConfig).
 	comments := []domain.ReviewComment{
 		{ID: "200", Body: "needs fix", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
 	}
@@ -784,15 +776,12 @@ func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry still present after turn cap; want consumed")
 	}
-	// Claim released.
 	if _, ok := state.Claimed["ISS-R-11"]; ok {
 		t.Error("claim not released after turn cap escalation; want released")
 	}
-	// DeleteRetryEntry called.
 	if len(store.deletedIssueIDs) != 1 || store.deletedIssueIDs[0] != "ISS-R-11" {
 		t.Errorf("DeleteRetryEntry calls = %v, want [ISS-R-11]", store.deletedIssueIDs)
 	}
-	// No retry scheduled.
 	if _, ok := state.RetryAttempts["ISS-R-11"]; ok {
 		t.Error("retry still scheduled after escalation; want none")
 	}
@@ -1020,8 +1009,6 @@ func TestReconcileReviewComments_BotAllowlistExclusion(t *testing.T) {
 	}
 }
 
-// --- buildReviewFingerprint tests ---
-
 func TestBuildReviewFingerprint_EmptyInput(t *testing.T) {
 	t.Parallel()
 
@@ -1080,8 +1067,6 @@ func TestBuildReviewFingerprint_Deterministic(t *testing.T) {
 		t.Errorf("buildReviewFingerprint not deterministic: %q != %q", fp1, fp2)
 	}
 }
-
-// --- buildReviewTemplateMap tests ---
 
 func TestBuildReviewTemplateMap_FieldMapping(t *testing.T) {
 	t.Parallel()
@@ -1166,8 +1151,6 @@ func TestBuildReviewTemplateMap_MultipleComments(t *testing.T) {
 		}
 	}
 }
-
-// --- BuildReviewReactionConfig tests ---
 
 func TestBuildReviewReactionConfig_Defaults(t *testing.T) {
 	t.Parallel()
@@ -1381,8 +1364,6 @@ func TestBuildReviewReactionConfig_InvalidEscalation(t *testing.T) {
 	}
 }
 
-// --- PollIntervalMS guard tests ---
-
 // TestReconcileReviewComments_ZeroPollInterval_NoActionableComments verifies
 // that a zero or negative PollIntervalMS falls back to reviewPendingBackoffBase
 // when re-enqueuing after receiving no actionable review comments.
@@ -1463,8 +1444,6 @@ func TestReconcileReviewComments_ZeroPollInterval_AlreadyDispatched(t *testing.T
 	}
 }
 
-// --- computeReviewPendingDelay tests ---
-
 func TestComputeReviewPendingDelay(t *testing.T) {
 	t.Parallel()
 
@@ -1508,7 +1487,7 @@ func TestReconcileReviewComments_ForeignIncumbentDefers(t *testing.T) {
 		ReactionKind: ReactionKindLabelReview,
 	}
 
-	// Comment submitted 5 minutes ago — outside the debounce window.
+	// Comment submitted 5 minutes ago, outside the debounce window.
 	comments := []domain.ReviewComment{
 		{ID: "900", Body: "needs fix", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
 	}
@@ -1540,8 +1519,6 @@ func TestReconcileReviewComments_ForeignIncumbentDefers(t *testing.T) {
 		t.Errorf(`IncReviewChecks("dispatched") = %d, want 0 (no dispatch on a defer)`, metrics.reviewChecks["dispatched"])
 	}
 }
-
-// --- Triage gate integration ---
 
 // reviewTriageParams returns reviewParams wired with a real workspace
 // and the given triage script, so reactionTriageGate actually starts a

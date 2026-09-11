@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// --- coercion function tests ---
-
 func TestCoerceEnvInt(t *testing.T) {
 	t.Parallel()
 
@@ -164,8 +162,6 @@ func TestCoerceEnvBool(t *testing.T) {
 	}
 }
 
-// --- ensureSubMap tests ---
-
 func TestEnsureSubMap(t *testing.T) {
 	t.Parallel()
 
@@ -249,8 +245,6 @@ func TestEnsureSubMap(t *testing.T) {
 	})
 }
 
-// --- applyEnvOverrides tests ---
-
 // assertEnvOverrideError verifies that err is a *ConfigError whose Field matches
 // wantField and whose Message contains wantMsgSubstr.
 func assertEnvOverrideError(t *testing.T, err error, wantField, wantMsgSubstr string) {
@@ -271,7 +265,7 @@ func assertEnvOverrideError(t *testing.T, err error, wantField, wantMsgSubstr st
 }
 
 func TestApplyEnvOverrides(t *testing.T) {
-	// Not parallel at outer level — subtests use t.Setenv and the
+	// Not parallel at outer level; subtests use t.Setenv and the
 	// package-level dotenvPathOverride (mutex-protected) needs isolation.
 	orig := getDotEnvPath()
 	SetDotEnvPath("")
@@ -401,7 +395,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 		// An empty env var value is treated as "not set" by applyEnvOverrides.
 		// Setting the var to "" means the env var is present but empty,
 		// and applyEnvOverrides skips it (val == "").
-		// To override to empty list requires a non-empty env mechanism — skip here.
+		// To override to empty list requires a non-empty env mechanism; skip here.
 		// This test verifies that an empty env var value is a no-op.
 		t.Setenv("SORTIE_TRACKER_ACTIVE_STATES", "")
 		t.Setenv("SORTIE_ENV_FILE", "") // no dotenv fallback
@@ -633,7 +627,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 	t.Run("non-map YAML section does not panic", func(t *testing.T) {
 		t.Setenv("SORTIE_TRACKER_KIND", "file")
 
-		// raw["tracker"] is a string — ensureSubMap must replace it.
+		// raw["tracker"] is a string; ensureSubMap must replace it.
 		raw := map[string]any{"tracker": "a-string"}
 		_, err := applyEnvOverrides(raw)
 		if err != nil {
@@ -698,7 +692,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 	})
 
 	t.Run("SetDotEnvPath takes priority over SORTIE_ENV_FILE", func(t *testing.T) {
-		// Not parallel — modifies package-level dotenvPathOverride.
+		// Not parallel; modifies package-level dotenvPathOverride.
 		file1 := writeDotEnvFile(t, "SORTIE_TRACKER_KIND=jira\n")
 		file2 := writeDotEnvFile(t, "SORTIE_TRACKER_KIND=file\n")
 

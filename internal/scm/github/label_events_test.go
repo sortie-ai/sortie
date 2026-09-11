@@ -67,8 +67,6 @@ func newTruncatedJournalServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// --- ListLabelEvents tests ---
-
 func TestListLabelEvents_Normalization(t *testing.T) {
 	t.Parallel()
 
@@ -239,8 +237,6 @@ func TestListLabelEvents_TransportError(t *testing.T) {
 	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
 	assertSCMErrorKind(t, err, domain.ErrSCMTransport)
 }
-
-// --- RemoveLabel tests ---
 
 func TestRemoveLabel_AbsentLabelIsNoOp(t *testing.T) {
 	t.Parallel()
