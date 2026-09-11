@@ -4,6 +4,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -148,6 +149,26 @@ func killGroupOnCleanup(t *testing.T, pid int) {
 	})
 }
 
+// killEscapedGroupOnCleanup registers a best-effort SIGKILL of the
+// process group led by the PID recorded in pidFile, read lazily at
+// cleanup time so a setsid-escaped descendant a fixture starts in the
+// background does not need to have already written it when this is
+// called. It tolerates a pidFile that never appears.
+func killEscapedGroupOnCleanup(t *testing.T, pidFile string) {
+	t.Helper()
+	t.Cleanup(func() {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if convErr != nil || pid <= 0 {
+			return
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	})
+}
+
 // TestStartSession_CancelSignalsProcessGroup verifies that cancelling the
 // context passed to StartSession, after the session has been established,
 // tears the app-server down through its process group: the group receives
@@ -206,4 +227,95 @@ func TestStartSession_CancelSignalsProcessGroup(t *testing.T) {
 	}
 	assertProcessDead(t, "app-server", directPID, 3*time.Second)
 	assertProcessDead(t, "descendant", descendantPID, 3*time.Second)
+}
+
+// writeFakeAppServerScriptEscapedTurn creates a script that fakes the
+// codex app-server handshake exactly as writeFakeAppServerScript does,
+// then answers one turn/start call (id 4, the next identifier
+// jsonrpc.Conn allocates after the handshake's three calls) and starts a
+// setsid grandchild that inherits standard output and exits without
+// waiting for it. Property P12 uses it to drive a real turn whose
+// runtime exits while an escaped descendant still holds the output
+// handle.
+func writeFakeAppServerScriptEscapedTurn(t *testing.T, dir, pidFile string) string {
+	t.Helper()
+	content := fmt.Sprintf(`read -r _init_req
+printf '{"id":1,"result":{}}\n'
+read -r _initialized_notif
+read -r _account_read_req
+printf '{"id":2,"result":{}}\n'
+read -r _thread_start_req
+printf '{"id":3,"result":{"thread":{"id":"fake-thread-1"}}}\n'
+printf '{"method":"thread/started","params":{}}\n'
+read -r _turn_start_req
+printf '{"id":4,"result":{"turn":{"id":"t1"}}}\n'
+setsid sh -c 'echo $$ > %s; sleep 3600' 2>/dev/null &
+while [ ! -s %s ]; do sleep 0.01; done
+exit 0
+`, pidFile, pidFile)
+	return agenttest.WriteScript(t, dir, "fake-codex-app-server-escaped-turn", content)
+}
+
+// TestStartSession_ReleaseEndsTurnWhenEscapedDescendantHoldsOutput
+// covers property P12: a session whose runtime exits while an escaped
+// descendant holds the output handle publishes the turn's outcome and
+// completes StopSession within the injected CodexAdapter.drainGrace
+// bound, leaving no goroutine of the session running.
+//
+// Not run with t.Parallel(): it pins CODEX_API_KEY via t.Setenv, which
+// forbids parallel use.
+func TestStartSession_ReleaseEndsTurnWhenEscapedDescendantHoldsOutput(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "")
+	agenttest.RequireSetsid(t)
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "escaped.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeFakeAppServerScriptEscapedTurn(t, tmpDir, pidFile)
+
+	adapter := &CodexAdapter{drainGrace: 300 * time.Millisecond}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v, want nil", err)
+	}
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+
+	start := time.Now()
+	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "work",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("RunTurn() took %v, want well under 2s (bounded by CodexAdapter.drainGrace)", elapsed)
+	}
+
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", runErr, domain.ErrPortExit)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	stopStart := time.Now()
+	if err := adapter.StopSession(context.Background(), session); err != nil {
+		t.Errorf("StopSession() = %v, want nil", err)
+	}
+	if elapsed := time.Since(stopStart); elapsed > 2*time.Second {
+		t.Errorf("StopSession() took %v, want well under 2s", elapsed)
+	}
+
+	select {
+	case <-state.readerDone:
+	default:
+		t.Error("session leak: the connection's reader goroutine is still running after StopSession returned")
+	}
 }
