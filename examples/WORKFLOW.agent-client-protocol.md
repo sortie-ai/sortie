@@ -46,64 +46,32 @@ server:
 
 {{/* Sortie sample workflow, GitHub Issues + Gemini CLI (Agent Client Protocol).
 
-     Gemini CLI has no dedicated adapter package; agent.kind above is
-     the generic agent-client-protocol kind, and agent.command puts
-     Gemini into protocol mode with --acp. See
-     docs/agent-client-protocol-adapter-notes.md for the transport and
-     docs/gemini-adapter-notes.md for what this runtime does and does
-     not deliver on it.
-
-     Prerequisites, run before pointing Sortie at a copy of this file:
-       1. Install: npm install -g @google/gemini-cli
-       2. Authenticate: sign in once so a login is stored under
-          ~/.gemini, or export GEMINI_API_KEY below.
-       3. Confirm the credential works under the same variables Sortie
-          will run under:
-            GEMINI_API_KEY=$GEMINI_API_KEY gemini -p "reply with ok"
-
      Required env vars:
        GITHUB_TOKEN          Fine-grained PAT with Issues read/write
                              permission for the tracker adapter.
        SORTIE_GITHUB_PROJECT Repository in owner/repo format.
        SORTIE_REPO_URL       Git clone URL for the repository.
        GEMINI_API_KEY        API key for Gemini CLI, unless a login is
-                             already stored under the configuration
-                             home Gemini reads.
-     Optional env vars:
+                             already stored under its own config home.
+
+     Optional:
        SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
                              (defaults to system temp).
-       GEMINI_CLI_HOME       Configuration home for the runtime. Unset,
-                             Gemini reads and writes ~/.gemini, which is
-                             why an existing login just works; set it to
-                             a directory the deployment owns and every
-                             file Gemini records lands there instead, at
-                             the cost that a login under one home is
-                             invisible under another.
+       GEMINI_CLI_HOME       Home it resolves ~/.gemini against.
 
-     max_turns: 15 is this project's sample default (see WORKFLOW.md,
-     WORKFLOW.codex.md, WORKFLOW.opencode.md), not a property of this
-     route.
-     Both switches below are required for a working run, not optional
-     hardening. --skip-trust grants the checkout the trust Gemini needs
-     to load declared tool servers at all; the exposure it opens is
-     bounded by who can place a file in the checked-out tree, so a
-     workflow that builds only the default branch is exposed far less
-     than one that checks out contributor-supplied refs. --approval-mode
-     yolo auto-approves every tool Gemini runs in that trusted checkout,
-     its own shell tool included; dropping it makes every tool call,
-     Sortie's and Gemini's own, wait for an approval an unattended run
-     cannot give. Run this agent inside a hardened sandbox.
+     Gemini-specific constraints on this route:
+       1. Install with: npm install -g @google/gemini-cli
+       2. --skip-trust is required for a working run, not hardening.
+       3. --approval-mode yolo auto-approves every tool, shell included.
+       4. --policy is the narrower alternative to yolo.
+       5. Confirm the credential first: gemini -p "reply with ok"
+       6. No --model is pinned above; this kind has no model key.
+       7. Run this agent inside a hardened sandbox.
+       8. max_turns: 15 above is a sample default, not a route property.
 
-     GEMINI_CLI_HOME above is recommended, not required, for narrowing
-     what a run can touch in ~/.gemini; it is not a substitute for
-     either switch.
-
-     No --model is pinned above: this kind has no model configuration
-     key. Qualification was measured against one pinned model; an
-     unpinned run resolves whatever the credential defaults to. To pin
-     one, add --model <id> to agent.command above, and see
-     docs/gemini-adapter-notes.md for how to list the models your
-     credential reaches. */}}
+     Full reference for this route, including both launch switches, the
+     narrower --policy alternative, token accounting and model pinning:
+     https://docs.sortie-ai.com/reference/agent-client-protocol-gemini/ */}}
 
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
