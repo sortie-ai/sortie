@@ -541,4 +541,23 @@ func TestAssertResolvedUsageReporting_TurnEndTerminalOrdering(t *testing.T) {
 			t.Errorf("assertResolvedUsageReporting(turn_end) recorded failures %v for a usage event followed by turn_completed, want none", reporter.errors)
 		}
 	})
+
+	t.Run("zero-payload usage event with no terminal event fails", func(t *testing.T) {
+		t.Parallel()
+
+		reporter := &fakeReporter{}
+		tc := UsageReportingCase{
+			Name: "zero figure, no terminal event",
+			Events: []domain.AgentEvent{
+				{Type: domain.EventToolResult},
+				{Type: domain.EventTokenUsage},
+			},
+			Result: domain.TurnResult{UsageMeasured: true},
+		}
+		assertResolvedUsageReporting(reporter, tc, registry.UsageArrivalTurnEnd, registry.UsageAttributionSessionTotal)
+
+		if len(reporter.errors) == 0 {
+			t.Error("assertResolvedUsageReporting(turn_end) recorded no failures for a zero-payload usage event with no trailing terminal event, want at least one")
+		}
+	})
 }

@@ -223,16 +223,19 @@ func assertResolvedUsageReporting(t usageContractReporter, tc UsageReportingCase
 		}
 		if arrival == registry.UsageArrivalTurnEnd {
 			for i, event := range tc.Events {
+				// The ordering rule binds every token_usage event,
+				// including one carrying an all-zero figure, which a
+				// genuine zero spend produces.
+				if event.Type == domain.EventTokenUsage && !followedByTerminalEvent(tc.Events, i) {
+					t.Errorf("case %q: event %d: declared turn_end, the usage event has no later turn-terminal event",
+						tc.Name, i)
+				}
 				if event.Usage == (domain.TokenUsage{}) {
 					continue
 				}
 				if !dominates(tc.Result.Usage, event.Usage) {
 					t.Errorf("case %q: event %d: declared turn_end, result.Usage %+v does not dominate a figure the turn reported %+v",
 						tc.Name, i, tc.Result.Usage, event.Usage)
-				}
-				if event.Type == domain.EventTokenUsage && !followedByTerminalEvent(tc.Events, i) {
-					t.Errorf("case %q: event %d: declared turn_end, the usage event has no later turn-terminal event",
-						tc.Name, i)
 				}
 			}
 		}
