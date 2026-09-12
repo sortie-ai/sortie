@@ -289,6 +289,28 @@ func TestReportStderr_AbandonsADrainThatCannotFinish(t *testing.T) {
 	}
 }
 
+// TestReportStderr_LatchesToOneEmissionAcrossRepeatedCalls pins
+// stderrReported: a session reports the runtime's standard error at
+// most once, however many failure paths reach reportStderr over the
+// session's life. A second call against the same dead runtime has
+// nothing new to add and must not re-emit the same lines.
+//
+// Not run with t.Parallel(): it installs a global slog default.
+func TestReportStderr_LatchesToOneEmissionAcrossRepeatedCalls(t *testing.T) {
+	spy := agenttest.InstallLogSpy(t)
+
+	state := &sessionState{drainGrace: time.Second}
+	state.stderrCollector = procutil.NewStderrCollector(strings.NewReader("codex: fatal provider error\n"), slog.Default())
+
+	state.reportStderr(slog.Default())
+	state.reportStderr(slog.Default())
+
+	lines := agenttest.RequireWarnLines(t, spy, "repeated reportStderr calls against a dead runtime")
+	if len(lines) != 1 {
+		t.Errorf("WarnLines() after two reportStderr calls = %v, want exactly one emission of the runtime's diagnostic", lines)
+	}
+}
+
 // TestReaderEnded_SeesTheConnectionBeforeTheWatcher covers the window a
 // turn/start failure lands in: Conn.Done() closes when the reader exits
 // and watchTermination closes readerDone only after that, so a predicate
