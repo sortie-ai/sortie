@@ -680,8 +680,10 @@ Standard-output and standard-error ownership:
 - The reap is anchored on the direct child's own exit. Once the reap and the process-group
   termination have run, every further wait an adapter performs on a reader is bounded: a
   descendant that inherits an output handle and outlives the direct child can no longer withhold
-  the reap, the process-group termination, or the turn's published outcome, and one WARN record
-  reports a descendant still holding a handle past its bound.
+  the reap, the process-group termination, or the turn's published outcome. An adapter that
+  gives up on a reader through an explicit bounded abandon operation emits one WARN record
+  naming the bound; one whose teardown closes its own read end instead reaches the same
+  release without such a record.
 - Reaping the process and terminating its group are what release such a reader in the ordinary
   case, so the turn keeps whatever output the reader had already collected.
 - An abandoned standard-output scan does not change the turn's disposition: the exit code and
