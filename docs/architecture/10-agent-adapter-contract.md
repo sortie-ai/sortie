@@ -692,8 +692,9 @@ Standard-output and standard-error ownership:
   behind it, and a turn whose terminal evidence was in that tail falls to the exit-based
   disposition rather than the one that evidence would have given. An abandoned
   standard-error drain still flips the disposition of an adapter whose success evidence lives on
-  standard error (Kiro CLI's disposition depends on its standard-error trailer), replacing the
-  collected output with a marker and reporting the turn failed rather than succeeded.
+  standard error (Kiro CLI's disposition depends on its standard-error trailer): whatever the
+  drain had already collected survives, an abandonment marker is appended after it to signal that
+  later output may be missing, and the turn is reported failed rather than succeeded.
 
 Per-family teardown totals, at default configuration:
 
@@ -707,7 +708,11 @@ Per-family teardown totals, at default configuration:
   unchanged by standard-output ownership. It separately carries a release bounded by the
   standard-output drain bound, running from session start through the handshake and every turn
   rather than as one of `StopSession`'s own waits, that ends a handshake call or a turn otherwise
-  left waiting on a reaped runtime whose reader did not end inside that bound.
+  left waiting on a reaped runtime whose reader did not end inside that bound. The same release
+  runs the standard-error collector's bounded wait concurrently with that standard-output wait,
+  both anchored on the subprocess having been reaped and both bounded by the same drain bound, so
+  a handshake or turn failure path that reports the runtime's standard error finds it already
+  resolved rather than paying the bound again.
 - A locally launched Agent Client Protocol runtime: its pinned teardown ceiling is unchanged,
   `agent.stop_grace_ms` plus three times the standard-error drain bound, 20 seconds at defaults.
   It reaches that ceiling through its own caller-owned pipes and a final pipe-release step now,
