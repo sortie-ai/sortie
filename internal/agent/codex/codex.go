@@ -971,6 +971,7 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		state.stdin.Close() //nolint:errcheck,gosec // best-effort cleanup
 	}
 	waitCh := state.waitCh
+	pipes := state.pipes
 	pid := 0
 	if state.proc != nil {
 		pid = state.proc.Pid
@@ -1019,8 +1020,8 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	// Release the connection's reader before waiting for it below: a
 	// descendant that inherited the output handle and outlived the
 	// direct child would otherwise leave that reader parked forever.
-	if state.pipes != nil {
-		state.pipes.CloseStdout() //nolint:errcheck,gosec // best-effort; unparks the connection's reader for the wait below
+	if pipes != nil {
+		pipes.CloseStdout() //nolint:errcheck,gosec // best-effort; unparks the connection's reader for the wait below
 	}
 
 	// Wait for the reader goroutine to finish after process exit.
