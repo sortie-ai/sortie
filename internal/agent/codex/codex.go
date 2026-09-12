@@ -199,6 +199,11 @@ func watchTermination(state *sessionState) {
 // handle. Every value it touches is captured at construction rather
 // than read from session state, so a failure path that clears
 // state.pipes under state.mu cannot race it.
+//
+// Closing the read end releases a reader parked in a read. It does not
+// release one parked inside the handler on a full message channel,
+// whose only escape is the stop channel: that reader issues no further
+// read and so never observes the close.
 func release(pipes *procutil.OwnedPipes, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
 	go func() {
 		<-reaperDone
