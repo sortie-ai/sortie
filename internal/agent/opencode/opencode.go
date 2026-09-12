@@ -505,20 +505,32 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			}
 
 		case <-postExitC:
+			// The non-blocking arm is not a bound on its own: a
+			// descendant that keeps writing holds lineCh ready, so the
+			// loop would take lines for as long as it produces them.
+			// The cap is checked first for the same reason.
+			drainCap := time.NewTimer(runtime.drainGrace)
 			for draining := true; draining; {
 				select {
-				case line, ok := <-lineCh:
-					if !ok {
-						draining = false
-						continue
-					}
-					if result, agentErr, done := handleLine(line); done {
-						return result, agentErr
-					}
-				default:
+				case <-drainCap.C:
 					draining = false
+				default:
+					select {
+					case line, ok := <-lineCh:
+						if !ok {
+							draining = false
+							continue
+						}
+						if result, agentErr, done := handleLine(line); done {
+							stopTimer(drainCap)
+							return result, agentErr
+						}
+					default:
+						draining = false
+					}
 				}
 			}
+			stopTimer(drainCap)
 			runtime.reader.Abandon(runtime.drainGrace)
 			return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 
@@ -535,6 +547,18 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			return result, nil
 
 		case <-readTimeoutC:
+			// Both arms can be ready at once, and the choice between
+			// them is random: the reap wins on the merits, because a
+			// subprocess already gone did not time out.
+			select {
+			case <-reapedCh:
+				reapedCh = nil
+				stopTimer(readTimer)
+				readTimeoutC = nil
+				continue
+			default:
+			}
+
 			killTurnProcess(runtime)
 			_ = waitForProcess(runtime)
 			drainReaderBounded(runtime.reader, runtime.drainGrace)
