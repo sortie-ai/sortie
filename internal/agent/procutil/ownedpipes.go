@@ -105,6 +105,14 @@ func (p *OwnedPipes) Close() error {
 	return stderrErr
 }
 
+// CloseStderr closes the standard-error read end alone, ending a
+// collector's scanner that an escaped descendant holding the write end
+// would otherwise keep blocked in a read for the process's lifetime.
+// Abandoning a drain releases the caller waiting for it; only closing
+// the read end releases the drain itself. Safe to call more than once,
+// and a later Close still closes the standard-output end.
+func (p *OwnedPipes) CloseStderr() error { return p.closeStderr() }
+
 // CloseStdout closes the standard-output read end alone, releasing a
 // reader parked on it while the standard-error collector keeps
 // draining. It is safe to call more than once, and a later Close still

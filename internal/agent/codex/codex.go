@@ -106,6 +106,12 @@ type sessionState struct {
 	// has nothing new to add.
 	stderrReported atomic.Bool
 
+	// reportMu serializes the stop marker below against the decision to
+	// warn, so a stop cannot land between reportStderr checking it and
+	// the warning reaching the operator. It is never held across the
+	// drain wait, which would make a stop pay for it.
+	reportMu sync.Mutex
+
 	// stopping reports that StopSession has begun tearing the session
 	// down. The stop closes the connection, which ends the message
 	// channel and sends an in-flight turn down the same path a runtime
@@ -213,6 +219,15 @@ func (state *sessionState) reportStderr(logger *slog.Logger) {
 		grace = procutil.DefaultDrainGrace
 	}
 	lines := collector.FinishAndCollect(grace)
+
+	// Re-check under the lock the stop also takes. The wait above can
+	// last the whole bound, and a stop that arrived inside it must not
+	// find the warning already on its way out.
+	state.reportMu.Lock()
+	defer state.reportMu.Unlock()
+	if state.stopping.Load() {
+		return
+	}
 	if state.stderrReported.Swap(true) {
 		return
 	}
@@ -322,7 +337,14 @@ func release(state *sessionState, pipes *procutil.OwnedPipes, collector *procuti
 	go func() {
 		<-reaperDone
 
-		go collector.FinishAndCollect(grace)
+		// Closing the read end once the bound has resolved is what ends
+		// the drain itself: abandoning it releases whoever waited for
+		// the lines, while the scanner stays blocked in a read for as
+		// long as an escaped descendant holds the write end.
+		go func() {
+			collector.FinishAndCollect(grace)
+			pipes.CloseStderr() //nolint:errcheck,gosec // best-effort; ends a drain nothing else can
+		}()
 
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
@@ -1113,7 +1135,9 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	// Before anything is closed: closing the connection ends the message
 	// channel, and a turn still running reads that as its runtime having
 	// died. A session the operator stopped has nothing to explain.
+	state.reportMu.Lock()
 	state.stopping.Store(true)
+	state.reportMu.Unlock()
 
 	// Signal the reader goroutine to stop and close the connection
 	// before closing stdin, preventing the handler from blocking on a

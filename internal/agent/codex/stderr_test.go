@@ -373,6 +373,51 @@ func TestRunTurn_MalformedLineDoesNotReportStderrOfALiveRuntime(t *testing.T) {
 	}
 }
 
+// TestRelease_EndsAStderrDrainNothingElseCanEnd pins the drain's own
+// exit, which abandoning it does not give: abandonment releases whoever
+// waited for the lines, while the scanner stays blocked in a read for as
+// long as something holds the write end. Holding it here is what an
+// escaped descendant does in production, and without the read-end close
+// the collector would outlive every turn of the session.
+func TestRelease_EndsAStderrDrainNothingElseCanEnd(t *testing.T) {
+	outRead, outWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	errRead, errWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = outWrite.Close()
+		_ = outRead.Close()
+		_ = errWrite.Close()
+		_ = errRead.Close()
+	})
+
+	const grace = 200 * time.Millisecond
+	collector := procutil.NewStderrCollector(errRead, slog.Default())
+	if _, err := io.WriteString(errWrite, "codex: written before the descendant kept the pipe\n"); err != nil {
+		t.Fatalf("writing to the stderr pipe: %v", err)
+	}
+	if collector.WaitDone(0) {
+		t.Fatal("the drain ended on its own, so this test would pass without release ending it")
+	}
+
+	pipes := &procutil.OwnedPipes{Stdout: outRead, Stderr: errRead}
+	reaped := make(chan struct{})
+	close(reaped)
+	release(&sessionState{}, pipes, collector, grace, make(chan struct{}), reaped, slog.Default())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !collector.WaitDone(0) {
+		if time.Now().After(deadline) {
+			t.Fatal("the standard-error drain is still blocked in its read, want release to have closed the read end once its bound resolved")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestReportStderr_AbandonsADrainThatCannotFinish pins the bound the
 // reporting paths depend on. A drain whose write end is still held
 // never reaches EOF, so an unbounded wait would park the caller that
@@ -480,6 +525,59 @@ func TestStopSession_JoinsADrainThatCannotFinishOnItsOwn(t *testing.T) {
 	for _, line := range spy.WarnLines() {
 		if strings.Contains(line, diagnostic) {
 			t.Errorf("the stop emitted the runtime's standard error %q, want it joined without reporting", line)
+		}
+	}
+}
+
+// TestReportStderr_StopInsideTheWaitSuppressesTheWarning covers the
+// window the stop marker alone leaves open: the wait for the drain can
+// last the whole bound, so a stop that arrives while a report is already
+// inside it must still suppress the warning. The write end is held here
+// for the same reason an escaped descendant holds it in production,
+// which is what makes the wait long enough for the stop to land in it.
+func TestReportStderr_StopInsideTheWaitSuppressesTheWarning(t *testing.T) {
+	spy := agenttest.InstallLogSpy(t)
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	const diagnostic = "codex: written before the operator stopped us"
+	state := &sessionState{drainGrace: 500 * time.Millisecond}
+	state.stderrCollector = procutil.NewStderrCollector(reader, slog.Default())
+	if _, err := io.WriteString(writer, diagnostic+"\n"); err != nil {
+		t.Fatalf("writing to the stderr pipe: %v", err)
+	}
+
+	reported := make(chan struct{})
+	go func() {
+		state.reportStderr(slog.Default())
+		close(reported)
+	}()
+
+	// The report is inside its wait by now: the drain cannot finish
+	// while this test holds the write end, so the wait runs the full
+	// bound and the stop below lands inside it.
+	time.Sleep(50 * time.Millisecond)
+	adapter := &CodexAdapter{}
+	if stopErr := adapter.StopSession(context.Background(), domain.Session{Internal: state}); stopErr != nil {
+		t.Errorf("StopSession() error = %v, want nil", stopErr)
+	}
+
+	select {
+	case <-reported:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reportStderr never returned")
+	}
+
+	for _, line := range spy.WarnLines() {
+		if strings.Contains(line, diagnostic) {
+			t.Errorf("a stop that arrived during the drain wait still reported %q, want the stop to suppress it", line)
 		}
 	}
 }
