@@ -376,7 +376,7 @@ func TestStopSessionTeardownOrder_ClosePipesPresenceControl(t *testing.T) {
 
 	order := defaultTeardownOrder(context.Background(), context.Background(), procutil.DefaultStopGrace)
 	steps := order[:len(order)-1]
-	if steps[len(steps)-1].name == "close_pipes" {
+	if order[len(order)-1].name != "close_pipes" {
 		t.Fatal("defaultTeardownOrder's last step is not close_pipes; this control no longer drops the right step")
 	}
 
