@@ -21,11 +21,11 @@ type StdoutReader struct {
 	done   chan struct{}
 	logger *slog.Logger
 
-	// err is written only by the scan goroutine, once, before it closes
-	// stream and done: either path through scan (a normal end of file, a
-	// read failure, or an abandonment observed mid-scan) assigns it
-	// exactly once, so a reader that has observed done closed needs no
-	// further synchronization to read it.
+	// mu guards err, which the scan goroutine writes once when its scan
+	// ends and Err reads. A consumer may call Err while the scan is
+	// still parked in a read, so the two cannot be ordered by the
+	// consumer alone.
+	mu  sync.Mutex
 	err error
 
 	abandonOnce sync.Once
@@ -67,11 +67,18 @@ func (r *StdoutReader) scan(src io.Reader) {
 		}
 	}
 
-	if abandoned {
+	// Read the latch rather than the local flag: Abandon can close it
+	// while this goroutine is parked in a read, and the read then ends
+	// on the pipe's close with a close error the consumer must not see
+	// as a scan failure.
+	r.mu.Lock()
+	select {
+	case <-r.abandoned:
 		r.err = ErrStdoutAbandoned
-	} else {
+	default:
 		r.err = scanner.Err()
 	}
+	r.mu.Unlock()
 
 	close(r.stream)
 	close(r.done)
@@ -138,12 +145,22 @@ func (r *StdoutReader) Abandon(bound time.Duration) {
 	})
 }
 
-// Err reports why the scan ended. It returns nil on end of file, the
-// scanner's error on a read failure, and ErrStdoutAbandoned when the
-// reader was abandoned before its scan returned. The scan goroutine
-// stores its outcome before it closes the channel Stream returns, so a
-// consumer that observed that close reads Err without further
-// synchronization.
+// Err reports why the scan ended: nil on end of file or while the scan
+// is still running, the scanner's error on a read failure, and
+// ErrStdoutAbandoned once the reader has been abandoned.
+//
+// Abandonment answers immediately and does not wait for the scan
+// goroutine. A consumer abandons a reader precisely when that goroutine
+// is parked in a read nothing but the pipe's close will release, so
+// waiting for it here would block the caller that just gave up on it.
 func (r *StdoutReader) Err() error {
+	select {
+	case <-r.abandoned:
+		return ErrStdoutAbandoned
+	default:
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.err
 }
