@@ -2795,3 +2795,48 @@ func TestRunTurn_LatchSetDuringPostExitDrain(t *testing.T) {
 		}
 	}
 }
+
+// TestRunTurn_ReadTimeoutDoesNotFireWhileStderrBoundRuns drives the gap
+// between the reap and the turn's published result. The wait goroutine
+// reaps first and only then applies the stderr bound, so an escaped
+// descendant holding the standard-error handle delays the result
+// channel by the whole drain grace. A read timeout shorter than that
+// delay fires inside the gap, on a subprocess that has already exited
+// and been reaped, unless the timer is disarmed from the reap itself.
+func TestRunTurn_ReadTimeoutDoesNotFireWhileStderrBoundRuns(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "stderr-holder-timeout.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf 'direct child stderr\n' >&2
+%sexit 0
+`, writeEscapedHolderSpawn(pidFile, ">/dev/null")))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 200},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	// Longer than the read timeout, so the escaped holder keeps the
+	// result channel shut for a window the timer would otherwise win.
+	session.Internal.(*sessionState).drainGrace = 1500 * time.Millisecond
+
+	_, result, runErr := collectEvents(t, a, session, "work")
+
+	var agentErr *domain.AgentError
+	if errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrResponseTimeout {
+		t.Fatalf("RunTurn() reported ErrResponseTimeout on a reaped subprocess: "+
+			"the read timer outlived the reap by the stderr bound; err = %v", runErr)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q (exit 0, no output at all)", result.ExitReason, domain.EventTurnFailed)
+	}
+}

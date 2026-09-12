@@ -87,6 +87,7 @@ type turnRuntime struct {
 	pid             string
 	proc            *os.Process
 	waitCh          chan waitResult
+	reapedCh        chan struct{}
 	reader          *procutil.StdoutReader
 	stderrCollector *procutil.StderrCollector
 	firstJSONSeen   bool
@@ -274,6 +275,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		pid:             strconv.Itoa(cmd.Process.Pid),
 		proc:            cmd.Process,
 		waitCh:          make(chan waitResult, 1),
+		reapedCh:        make(chan struct{}),
 		drainGrace:      state.drainGrace,
 		terminalOutcome: domain.EventTurnCompleted,
 		work:            agentcore.NewWorkObserver(agentcore.WorkSignals{AssistantOutput: true, ToolActivity: true}),
@@ -303,6 +305,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	readTimeoutC := readTimer.C
 	lineCh := runtime.reader.Stream()
 	waitCh := runtime.waitCh
+	reapedCh := runtime.reapedCh
 	var postExitC <-chan time.Time
 	var exit waitResult
 	processExited := false
@@ -484,12 +487,18 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				return result, agentErr
 			}
 
+		case <-reapedCh:
+			// Disabled once taken: the channel stays ready after it
+			// closes, and a live arm would spin for as long as the
+			// stderr bound runs.
+			reapedCh = nil
+			stopTimer(readTimer)
+			readTimeoutC = nil
+
 		case <-waitCh:
 			exit = waitForProcess(runtime)
 			processExited = true
 			waitCh = nil
-			stopTimer(readTimer)
-			readTimeoutC = nil
 			postExitC = time.After(runtime.drainGrace)
 			if lineCh == nil {
 				return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
@@ -698,6 +707,13 @@ func startWait(runtime *turnRuntime, cmd *exec.Cmd) {
 	go func() {
 		reaper := procutil.StartReaper(cmd)
 		<-reaper.Done()
+
+		// The turn's exit is published below, behind a stderr bound that
+		// can spend the whole drain grace. Anything that must react to
+		// the subprocess being gone rather than to its result reads this
+		// channel instead, so the delay cannot be mistaken for a turn
+		// still running.
+		close(runtime.reapedCh)
 
 		if !runtime.stderrCollector.WaitDone(runtime.drainGrace) {
 			runtime.stderrCollector.Abandon(runtime.drainGrace)
