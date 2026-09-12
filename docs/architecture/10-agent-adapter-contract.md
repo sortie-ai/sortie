@@ -707,7 +707,7 @@ Per-family teardown totals, at default configuration:
   unchanged by standard-output ownership. It separately carries a release bounded by the
   standard-output drain bound, running from session start through the handshake and every turn
   rather than as one of `StopSession`'s own waits, that ends a handshake call or a turn otherwise
-  left waiting on a runtime that died while an escaped descendant still held the output handle.
+  left waiting on a reaped runtime whose reader did not end inside that bound.
 - A locally launched Agent Client Protocol runtime: its pinned teardown ceiling is unchanged,
   `agent.stop_grace_ms` plus three times the standard-error drain bound, 20 seconds at defaults.
   It reaches that ceiling through its own caller-owned pipes and a final pipe-release step now,

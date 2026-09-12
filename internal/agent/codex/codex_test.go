@@ -3,6 +3,7 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1021,5 +1023,416 @@ func TestStartSession_TerminalMessageDeliveredWhileReaderParked(t *testing.T) {
 func TestStartSession_ReapClosingStdoutTruncatesTerminalMessage(t *testing.T) {
 	if runTerminalMessageFixture(t, true) {
 		t.Error("turn/completed was delivered despite closing the read end at the reap, want it lost (negative control did not reproduce the truncation)")
+	}
+}
+
+// syncBuffer is a lock-protected byte buffer, safe as a slog handler
+// destination when the code under test logs from a goroutine other than
+// the one asserting on the captured output.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// handlerParkedOutcome is what runHandlerParkedFixture's caller receives
+// once the RunTurn it started internally returns.
+type handlerParkedOutcome struct {
+	result domain.TurnResult
+	err    error
+}
+
+// fakeScenarioEnv names the fake app-server scenario a re-executed copy
+// of this test binary must serve. TestMain switches on it before the
+// package's own tests run, so a protocol fixture needs no external
+// interpreter and stays ordinary, debuggable Go.
+const fakeScenarioEnv = "SORTIE_TEST_CODEX_FAKE_SCENARIO"
+
+const (
+	// scenarioHandlerParked answers the handshake, then bursts more
+	// notifications than the client's message channel holds while a
+	// turn/start call is still in flight.
+	scenarioHandlerParked = "handler-parked"
+
+	// scenarioHandshakeOverflow bursts the same way before thread/start
+	// is answered, while the pre-turn handler still drops on a full
+	// channel rather than parking.
+	scenarioHandshakeOverflow = "handshake-overflow"
+)
+
+func TestMain(m *testing.M) {
+	if scenario := os.Getenv(fakeScenarioEnv); scenario != "" {
+		os.Exit(serveFakeAppServer(scenario, os.Stdin, os.Stdout))
+	}
+	os.Exit(m.Run())
+}
+
+// fakeAppServer points the adapter at this test binary, which TestMain
+// re-enters as the named scenario's fake app-server. The scenario
+// travels in the environment because the adapter launches its runtime
+// with the parent's own environment.
+func fakeAppServer(t *testing.T, scenario string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	t.Setenv(fakeScenarioEnv, scenario)
+	return self
+}
+
+// fakeFrame is the part of an incoming JSON-RPC frame a scenario acts
+// on: the id it echoes back in a reply, absent on a notification.
+type fakeFrame struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+}
+
+// serveFakeAppServer runs one scenario against the client on in and out
+// and returns the process exit code. A scenario whose input ends before
+// its sequence completes exits non-zero, which the adapter sees as the
+// runtime dying rather than as silence.
+func serveFakeAppServer(scenario string, in io.Reader, out io.Writer) int {
+	client := bufio.NewScanner(in)
+	client.Buffer(make([]byte, 0, 4096), 1024*1024)
+
+	switch scenario {
+	case scenarioHandlerParked:
+		return serveHandlerParked(client, out)
+	case scenarioHandshakeOverflow:
+		return serveHandshakeOverflow(client, out)
+	default:
+		fmt.Fprintf(os.Stderr, "fake app-server: unknown scenario %q\n", scenario)
+		return 2
+	}
+}
+
+// nextFrame reports the client's next frame, or false once the client
+// has stopped sending.
+func nextFrame(client *bufio.Scanner) (fakeFrame, bool) {
+	if !client.Scan() {
+		return fakeFrame{}, false
+	}
+	var frame fakeFrame
+	if err := json.Unmarshal(client.Bytes(), &frame); err != nil {
+		return fakeFrame{}, false
+	}
+	return frame, true
+}
+
+// writeFrame writes one frame to the client, reporting whether the
+// client is still reading it.
+func writeFrame(out io.Writer, format string, args ...any) bool {
+	_, err := fmt.Fprintf(out, format, args...)
+	return err == nil
+}
+
+// answerPreThreadHandshake replies to initialize and to account/read,
+// consuming the initialized notification between them: the exchange
+// every scenario shares before it diverges.
+func answerPreThreadHandshake(client *bufio.Scanner, out io.Writer) bool {
+	initialize, ok := nextFrame(client)
+	if !ok {
+		return false
+	}
+	if !writeFrame(out, "{\"id\":%s,\"result\":{}}\n", initialize.ID) {
+		return false
+	}
+
+	if _, ok := nextFrame(client); !ok {
+		return false
+	}
+
+	accountRead, ok := nextFrame(client)
+	if !ok {
+		return false
+	}
+	return writeFrame(out, "{\"id\":%s,\"result\":{}}\n", accountRead.ID)
+}
+
+// fillerNotifications returns count notifications as one string, so a
+// caller delivers the whole burst in a single write the way a runtime
+// flooding its output does.
+func fillerNotifications(count int) string {
+	var fill strings.Builder
+	for i := range count {
+		fmt.Fprintf(&fill, "{\"method\":\"filler/notification\",\"params\":{\"i\":%d}}\n", i)
+	}
+	return fill.String()
+}
+
+// serveHandlerParked answers the handshake, reads the fill count the
+// driver puts on the wire ahead of the turn, then reads turn/start
+// without answering it and bursts that many notifications. That burst
+// is what parks the client's reader inside its handler while the call
+// is in flight. It waits for the driver's wake-up line before exiting,
+// so the test rather than the fixture decides when the runtime dies.
+func serveHandlerParked(client *bufio.Scanner, out io.Writer) int {
+	if !answerPreThreadHandshake(client, out) {
+		return 1
+	}
+
+	threadStart, ok := nextFrame(client)
+	if !ok {
+		return 1
+	}
+	if !writeFrame(out, "{\"id\":%s,\"result\":{\"thread\":{\"id\":\"fake-thread-1\"}}}\n", threadStart.ID) {
+		return 1
+	}
+	if !writeFrame(out, "{\"method\":\"thread/started\",\"params\":{}}\n") {
+		return 1
+	}
+
+	if !client.Scan() {
+		return 1
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(client.Text()))
+	if err != nil {
+		return 1
+	}
+
+	if _, ok := nextFrame(client); !ok {
+		return 1
+	}
+	if _, err := io.WriteString(out, fillerNotifications(count)); err != nil {
+		return 1
+	}
+
+	client.Scan()
+	return 0
+}
+
+// handshakeOverflowFill exceeds any message-channel capacity this
+// adapter uses, so the burst cannot fit however that capacity changes.
+const handshakeOverflowFill = 64
+
+// serveHandshakeOverflow bursts past the channel's capacity while the
+// session is still in its handshake, then reads thread/start without
+// answering it and exits.
+func serveHandshakeOverflow(client *bufio.Scanner, out io.Writer) int {
+	if !answerPreThreadHandshake(client, out) {
+		return 1
+	}
+	if _, err := io.WriteString(out, fillerNotifications(handshakeOverflowFill)); err != nil {
+		return 1
+	}
+	client.Scan()
+	return 0
+}
+
+// runHandlerParkedFixture starts a session against the
+// scenarioHandlerParked fake app-server and drives it through the steps
+// properties P1 and P4 share: it writes the fill count over state.stdin
+// before ever starting RunTurn, so the count is on the wire ahead of the
+// turn/start request the script waits for; starts RunTurn in its own
+// goroutine so the caller can observe whether and when it returns; waits
+// for the reader to be parked delivering the fill, establishing P5's
+// evidence; and only then writes the wake-up line that lets the fake
+// runtime exit. The fill count travels over the wire as cap(state.msgCh)
+// + 1 rather than a literal, so a future change to that capacity cannot
+// silently stop parking the reader.
+func runHandlerParkedFixture(t *testing.T, adapter *CodexAdapter) (*sessionState, <-chan handlerParkedOutcome) {
+	t.Helper()
+	t.Setenv("CODEX_API_KEY", "")
+
+	command := fakeAppServer(t, scenarioHandlerParked)
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: command},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+	t.Cleanup(func() {
+		_ = adapter.StopSession(context.Background(), session)
+	})
+
+	capacity := cap(state.msgCh)
+	if _, err := fmt.Fprintf(state.stdin, "%d\n", capacity+1); err != nil {
+		t.Fatalf("write fill count: %v", err)
+	}
+
+	outcomeCh := make(chan handlerParkedOutcome, 1)
+	go func() {
+		result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "work",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		outcomeCh <- handlerParkedOutcome{result: result, err: runErr}
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(state.msgCh) < capacity {
+		if time.Now().After(deadline) {
+			t.Fatalf("len(state.msgCh) = %d, want %d within 5s (the reader must be parked delivering the fill)", len(state.msgCh), capacity)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if _, err := fmt.Fprintln(state.stdin, "go"); err != nil {
+		t.Fatalf("write go signal: %v", err)
+	}
+	return state, outcomeCh
+}
+
+// TestRunTurn_BoundedWhenRuntimeExitsWithFullChannel covers properties
+// P1, P2, P3, and P6: a session whose runtime exits while the message
+// channel is full, with the reader parked inside the handler and RunTurn
+// waiting on the turn/start response, returns from RunTurn within a bound
+// derived from the injected drainGrace, names the runtime's exit rather
+// than the transport error text, logs exactly one WARN record naming the
+// bound, and leaves no goroutine of the session running once StopSession
+// completes.
+func TestRunTurn_BoundedWhenRuntimeExitsWithFullChannel(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+
+	var buf syncBuffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	const grace = 300 * time.Millisecond
+	adapter := &CodexAdapter{drainGrace: grace}
+
+	state, outcomeCh := runHandlerParkedFixture(t, adapter)
+
+	// The drain bound starts at the reap, not at the wake-up line: the
+	// stderr drain that precedes the wait is unrelated to the bound and
+	// would otherwise be charged to it, leaving room for a release path
+	// that ignores the bound entirely to still pass.
+	select {
+	case <-state.waitCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the runtime was not reaped within 5s, so the drain bound never started")
+	}
+	reaped := time.Now()
+
+	var got handlerParkedOutcome
+	select {
+	case got = <-outcomeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTurn did not return within 2s of the reap, want it bounded by the injected drainGrace")
+	}
+	const schedulingMargin = 500 * time.Millisecond
+	if elapsed := time.Since(reaped); elapsed > grace+schedulingMargin {
+		t.Errorf("RunTurn() returned %v after the reap, want within the injected %v drainGrace plus %v of scheduling margin", elapsed, grace, schedulingMargin)
+	}
+
+	var agentErr *domain.AgentError
+	if !errors.As(got.err, &agentErr) {
+		t.Fatalf("RunTurn() error type = %T, want *domain.AgentError", got.err)
+	}
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrPortExit)
+	}
+	if agentErr.Message != outputAbandonedMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, outputAbandonedMessage)
+	}
+
+	const wantWarnMsg = `msg="agent stdout was not fully collected before the session ended"`
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(buf.String(), wantWarnMsg) {
+		if time.Now().After(deadline) {
+			t.Fatalf("WARN record with message %q not observed within 2s, log = %s", "agent stdout was not fully collected before the session ended", buf.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	output := buf.String()
+	if n := strings.Count(output, wantWarnMsg); n != 1 {
+		t.Errorf("occurrences of the WARN message = %d, want 1: %s", n, output)
+	}
+	if n := strings.Count(output, "level=WARN"); n != 1 {
+		t.Errorf("level=WARN record count = %d, want 1: %s", n, output)
+	}
+	if !strings.Contains(output, "drain_bound="+grace.String()) {
+		t.Errorf("WARN record missing drain_bound=%s: %s", grace, output)
+	}
+
+	if err := adapter.StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
+		t.Errorf("StopSession() = %v, want nil", err)
+	}
+	select {
+	case <-state.readerDone:
+	default:
+		t.Error("session leak: the connection's reader goroutine is still running after StopSession returned")
+	}
+}
+
+// TestRunTurn_ControlStaysRunningWithoutDrainBound covers property P4,
+// the control the issue asks for: with drainGrace set longer than this
+// test's own waiting window, the same fixture leaves RunTurn still
+// running when that window elapses, reproducing the pre-fix hang with the
+// injected bound as the only difference from
+// TestRunTurn_BoundedWhenRuntimeExitsWithFullChannel. StopSession then
+// releases the turn so the test strands no goroutine.
+//
+// Not run with t.Parallel(): runHandlerParkedFixture calls t.Setenv.
+func TestRunTurn_ControlStaysRunningWithoutDrainBound(t *testing.T) {
+	adapter := &CodexAdapter{drainGrace: 5 * time.Second}
+	state, outcomeCh := runHandlerParkedFixture(t, adapter)
+
+	select {
+	case got := <-outcomeCh:
+		t.Fatalf("RunTurn returned early with result=%+v err=%v, want it still running because drainGrace exceeds the waiting window", got.result, got.err)
+	case <-time.After(700 * time.Millisecond):
+	}
+
+	if err := adapter.StopSession(context.Background(), domain.Session{Internal: state}); err != nil {
+		t.Errorf("StopSession() = %v, want nil", err)
+	}
+
+	select {
+	case <-outcomeCh:
+	case <-time.After(2 * time.Second):
+		t.Error("RunTurn did not return after StopSession, want it released so this test strands no goroutine")
+	}
+}
+
+// TestStartSession_HandshakeGuardedAgainstFullChannel covers property P7:
+// a runtime that overflows the message channel before thread/start is
+// ever answered, then exits with that call still in flight, fails
+// StartSession within the read-timeout-derived deadline rather than the
+// much longer injected drainGrace. That gap is what proves the failure
+// came from the pre-turn handler's drop-on-full behavior, not from the
+// release path's own bound: a full channel cannot park the reader before
+// beginTurnPhase runs.
+//
+// Not run with t.Parallel(): pins CODEX_API_KEY via t.Setenv.
+func TestStartSession_HandshakeGuardedAgainstFullChannel(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "")
+
+	command := fakeAppServer(t, scenarioHandshakeOverflow)
+	adapter := &CodexAdapter{drainGrace: 3 * time.Second}
+
+	start := time.Now()
+	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig: domain.AgentConfig{
+			Command:       command,
+			ReadTimeoutMS: 200,
+		},
+	})
+	elapsed := time.Since(start)
+
+	requireAgentError(t, err, domain.ErrResponseError)
+	if elapsed > 2*time.Second {
+		t.Errorf("StartSession() took %v, want well under the injected 3s drainGrace (proves the pre-turn drop, not the release path, ended it)", elapsed)
 	}
 }
