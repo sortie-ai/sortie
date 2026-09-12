@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -282,5 +283,52 @@ func TestFinishStderrDrain_AbandonsADrainThatCannotFinish(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("finishStderrDrain never returned while the stderr write end was held: the wait is unbounded")
+	}
+}
+
+// TestReaderEnded_SeesTheConnectionBeforeTheWatcher covers the window a
+// turn/start failure lands in: Conn.Done() closes when the reader exits
+// and watchTermination closes readerDone only after that, so a predicate
+// reading readerDone alone would report a runtime that is already gone as
+// still alive and skip its diagnostic.
+func TestReaderEnded_SeesTheConnectionBeforeTheWatcher(t *testing.T) {
+	t.Parallel()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	state := &sessionState{readerDone: make(chan struct{})}
+	state.conn = jsonrpc.NewConn(io.Discard, reader, func(jsonrpc.Message) {})
+	t.Cleanup(state.conn.Close)
+
+	if state.readerEnded() {
+		t.Fatal("readerEnded() = true on a live connection, want false")
+	}
+
+	// End the stream the way a runtime exit does, and leave readerDone
+	// open: watchTermination has not run yet in this window.
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatalf("closing the write end: %v", closeErr)
+	}
+	select {
+	case <-state.conn.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection's reader did not exit after the stream ended")
+	}
+
+	select {
+	case <-state.readerDone:
+		t.Fatal("readerDone closed in this test, which no longer exercises the window between the two signals")
+	default:
+	}
+
+	if !state.readerEnded() {
+		t.Error("readerEnded() = false after the connection's reader exited, want true: the turn/start failure path would skip the runtime's diagnostic")
 	}
 }

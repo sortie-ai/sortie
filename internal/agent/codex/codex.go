@@ -200,10 +200,22 @@ func (state *sessionState) reportStderr(logger *slog.Logger) {
 
 // readerEnded reports whether the connection's reader has already
 // exited, which means the runtime's output stream is closed and its
-// standard-error drain will end on its own. It is a poll, never a wait:
-// a turn that failed while the runtime is still alive must not pay the
-// drain bound to find that out.
+// standard-error drain will end on its own.
+//
+// Both signals are polled, and conn.Done() first: a call released by the
+// reader's exit returns as soon as that channel closes, while
+// watchTermination closes readerDone just after, so reading readerDone
+// alone would miss the runtime in exactly the window a turn/start call
+// fails in. Neither is ever waited on, so a turn that failed while the
+// runtime is still alive does not pay the drain bound to find that out.
 func (state *sessionState) readerEnded() bool {
+	if state.conn != nil {
+		select {
+		case <-state.conn.Done():
+			return true
+		default:
+		}
+	}
 	if state.readerDone == nil {
 		return false
 	}
