@@ -127,6 +127,18 @@ func TestClassifyStderr(t *testing.T) {
 			wantCredits:    false,
 			wantAuthFailed: false,
 		},
+		{
+			name:           "credits trailer collected before abandonment does not prove a turn ran",
+			lines:          []string{"▸ Credits: 1.20 • Time: 12s", procutil.AbandonedMarker},
+			wantCredits:    false,
+			wantAuthFailed: false,
+		},
+		{
+			name:           "authentication failure survives abandonment",
+			lines:          []string{"Authentication failed.", procutil.AbandonedMarker},
+			wantCredits:    false,
+			wantAuthFailed: true,
+		},
 	}
 
 	for _, tt := range tests {
