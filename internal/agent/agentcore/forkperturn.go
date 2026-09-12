@@ -340,9 +340,19 @@ func (s *ForkPerTurnSession) RunTurn(
 	reaped := false
 	reaperDone := reaper.Done()
 	var deadline <-chan time.Time
+	var deadlineAt time.Time
 
 loop:
 	for {
+		// Checked ahead of the select, not as one of its arms: a
+		// descendant that keeps writing holds the line arm ready, and
+		// the choice among ready arms is random, so the deadline arm
+		// could be passed over for as long as that descendant talks.
+		if !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
+			drainReaderBounded(reader, deadlineAt, s.drainGrace, parseLine)
+			break loop
+		}
+
 		select {
 		case line, ok := <-reader.Stream():
 			if !ok {
@@ -362,37 +372,10 @@ loop:
 			reaped = true
 			reaperDone = nil
 			deadline = time.After(s.drainGrace)
+			deadlineAt = time.Now().Add(s.drainGrace)
 
 		case <-deadline:
-			// The non-blocking arm is not a bound on its own: a
-			// descendant that keeps writing holds Stream() ready, so the
-			// loop would take lines for as long as it produces them.
-			// The cap is checked first for the same reason.
-			drainCap := time.NewTimer(s.drainGrace)
-			for draining := true; draining; {
-				select {
-				case <-drainCap.C:
-					draining = false
-				default:
-					select {
-					case line, ok := <-reader.Stream():
-						if !ok {
-							draining = false
-							continue
-						}
-						parseLine(line)
-					default:
-						draining = false
-					}
-				}
-			}
-			if !drainCap.Stop() {
-				select {
-				case <-drainCap.C:
-				default:
-				}
-			}
-			reader.Abandon(s.drainGrace)
+			drainReaderBounded(reader, deadlineAt, s.drainGrace, parseLine)
 			break loop
 		}
 	}
@@ -557,4 +540,27 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}
+}
+
+// drainReaderBounded takes whatever the reader has already produced and
+// gives up on it at capAt, the one deadline the post-reap wait carries:
+// starting a fresh grace here would let a descendant that keeps writing
+// spend two of them. The deadline is checked before each line because a
+// descendant that keeps writing holds the stream ready, so an arm that
+// merely competes with it can be passed over indefinitely. grace is
+// reported in the abandonment record and does not extend the wait.
+func drainReaderBounded(reader *procutil.StdoutReader, capAt time.Time, grace time.Duration, parseLine func([]byte)) {
+	for time.Now().Before(capAt) {
+		select {
+		case line, ok := <-reader.Stream():
+			if !ok {
+				return
+			}
+			parseLine(line)
+		default:
+			reader.Abandon(grace)
+			return
+		}
+	}
+	reader.Abandon(grace)
 }
