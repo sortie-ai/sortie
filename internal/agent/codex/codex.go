@@ -317,14 +317,19 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 				Err:     err,
 			}
 		}
+		// Both pipe stages fail before cmd.Start, whose deferred cleanup
+		// is what closes the parent's stdin end on a failed launch, so
+		// these close it instead. The process-start stage needs none.
 		switch startErr.Stage {
 		case procutil.StageStdoutPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "failed to create stdout pipe",
 				Err:     startErr.Err,
 			}
 		case procutil.StageStderrPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "failed to create stderr pipe",
