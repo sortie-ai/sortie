@@ -3,6 +3,8 @@ package kiro
 import (
 	"regexp"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
 const (
@@ -35,8 +37,18 @@ func stripANSI(s string) string {
 // marker, the one positive proof that a turn ran. authFailed is true when
 // any line contains the authentication-failure marker. Both are matched by
 // substring containment, never by the numeric values that follow them.
+//
+// A transcript the collector marked incomplete cannot prove a turn ran:
+// the trailer is the last thing headless Kiro writes, so one collected
+// before the drain was cut short may belong to output whose remainder
+// never arrived. The failure marker survives, because a line that was
+// read was read whether or not the rest of the transcript followed.
 func classifyStderr(stderrLines []string) (creditsSeen bool, authFailed bool) {
+	var incomplete bool
 	for _, line := range stderrLines {
+		if strings.Contains(line, procutil.AbandonedMarker) {
+			incomplete = true
+		}
 		if strings.Contains(line, creditsMarker) {
 			creditsSeen = true
 		}
@@ -44,5 +56,5 @@ func classifyStderr(stderrLines []string) (creditsSeen bool, authFailed bool) {
 			authFailed = true
 		}
 	}
-	return creditsSeen, authFailed
+	return creditsSeen && !incomplete, authFailed
 }

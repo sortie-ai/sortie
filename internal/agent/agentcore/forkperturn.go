@@ -396,10 +396,7 @@ loop:
 	waitErr := reaper.Err()
 	scanErr := reader.Err()
 
-	if !stderrCollector.WaitDone(s.drainGrace) {
-		stderrCollector.Abandon(s.drainGrace)
-	}
-	stderrLines := stderrCollector.Lines()
+	stderrLines := stderrCollector.FinishAndCollect(s.drainGrace)
 
 	// An abandoned scan is not a read failure: the exit code is real and
 	// the transcript is complete except for the tail an abandoned reader

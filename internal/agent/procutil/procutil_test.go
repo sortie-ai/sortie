@@ -416,65 +416,6 @@ func TestStderrCollector_ByteBudget(t *testing.T) {
 	})
 }
 
-func TestStderrCollector_WarnLines(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		wantWarn []string
-	}{
-		{
-			name:     "empty collector produces no WARN",
-			input:    "",
-			wantWarn: nil,
-		},
-		{
-			name:     "single line re-emitted at WARN",
-			input:    "startup rejected: no license\n",
-			wantWarn: []string{"startup rejected: no license"},
-		},
-		{
-			name:     "multiple lines all re-emitted at WARN",
-			input:    "error one\nerror two\n",
-			wantWarn: []string{"error one", "error two"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			var buf bytes.Buffer
-			handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-			logger := slog.New(handler)
-
-			c := NewStderrCollector(strings.NewReader(tt.input), slog.Default())
-			c.WarnLines(logger)
-
-			output := buf.String()
-			for _, want := range tt.wantWarn {
-				if !strings.Contains(output, want) {
-					t.Errorf("WarnLines() output missing %q; got: %s", want, output)
-				}
-			}
-			if len(tt.wantWarn) == 0 && output != "" {
-				t.Errorf("WarnLines() produced output for empty collector; got: %s", output)
-			}
-		})
-	}
-}
-
-func TestStderrCollector_WarnLines_NilLogger(t *testing.T) {
-	t.Parallel()
-
-	c := NewStderrCollector(strings.NewReader("test line\n"), slog.Default())
-	// Must not panic when logger is nil: falls back to slog.Default().
-	c.WarnLines(nil)
-
-	// No assertion on output; the test verifies the nil guard does not panic.
-}
-
 func TestEmitWarnLines(t *testing.T) {
 	t.Parallel()
 
@@ -678,16 +619,16 @@ func TestStderrCollector_AbandonAfterWaitDoneTimeout(t *testing.T) {
 
 	warnDone := make(chan struct{})
 	go func() {
-		c.WarnLines(logger)
+		EmitWarnLines(c.Lines(), logger)
 		close(warnDone)
 	}()
 	select {
 	case <-warnDone:
 	case <-time.After(1 * time.Second):
-		t.Fatal("WarnLines() blocked more than 1 second after Abandon()")
+		t.Fatal("EmitWarnLines(c.Lines(), ...) blocked more than 1 second after Abandon()")
 	}
 	if !strings.Contains(buf.String(), AbandonedMarker) {
-		t.Errorf("WarnLines() after Abandon() did not emit the marker; output = %q", buf.String())
+		t.Errorf("EmitWarnLines(c.Lines(), ...) after Abandon() did not emit the marker; output = %q", buf.String())
 	}
 }
 
@@ -802,4 +743,111 @@ func TestStderrCollector_AbandonmentPriority(t *testing.T) {
 			t.Errorf("Lines() after Abandon() on a finished drain = %v, want %v", got, want)
 		}
 	})
+}
+
+// TestStderrCollector_FinishAndCollect_HealthyDrain pins the plain path:
+// a drain that finishes on its own returns the real lines with no
+// abandonment marker, and does not wait anywhere near the grace bound.
+func TestStderrCollector_FinishAndCollect_HealthyDrain(t *testing.T) {
+	t.Parallel()
+
+	c := NewStderrCollector(strings.NewReader("codex: ready\n"), slog.Default())
+
+	start := time.Now()
+	got := c.FinishAndCollect(DefaultDrainGrace)
+	if elapsed := time.Since(start); elapsed >= DefaultDrainGrace {
+		t.Errorf("FinishAndCollect(%v) on a finished drain took %v, want well under the bound", DefaultDrainGrace, elapsed)
+	}
+
+	want := []string{"codex: ready"}
+	if !slices.Equal(got, want) {
+		t.Errorf("FinishAndCollect(%v) = %v, want %v", DefaultDrainGrace, got, want)
+	}
+}
+
+// TestStderrCollector_FinishAndCollect_PreservesLinesOnAbandonment pins
+// the operator-facing point of FinishAndCollect: a drain that never
+// finishes still hands back whatever it had already collected, with
+// [AbandonedMarker] appended after it rather than in place of it.
+func TestStderrCollector_FinishAndCollect_PreservesLinesOnAbandonment(t *testing.T) {
+	t.Parallel()
+
+	const grace = 100 * time.Millisecond
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, slog.Default())
+
+	if _, err := io.WriteString(pw, "codex: fatal provider error\n"); err != nil {
+		t.Fatalf("pw.Write(line) = %v", err)
+	}
+
+	got := c.FinishAndCollect(grace)
+
+	want := []string{"codex: fatal provider error", AbandonedMarker}
+	if !slices.Equal(got, want) {
+		t.Errorf("FinishAndCollect(%v) on an abandoned drain = %v, want %v (collected output must survive, marker appended after it)", grace, got, want)
+	}
+}
+
+// TestStderrCollector_FinishAndCollect_SecondCallDoesNotWaitAgain pins
+// that FinishAndCollect pays its bounded wait once per collector
+// lifetime: a call that arrives after an earlier call already resolved
+// the wait (by abandoning a drain that never finishes) returns near
+// instantly rather than paying a fresh grace period of its own.
+func TestStderrCollector_FinishAndCollect_SecondCallDoesNotWaitAgain(t *testing.T) {
+	t.Parallel()
+
+	const grace = 200 * time.Millisecond
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, slog.Default())
+
+	c.FinishAndCollect(grace)
+
+	start := time.Now()
+	c.FinishAndCollect(grace)
+	if elapsed := time.Since(start); elapsed > grace/2 {
+		t.Errorf("FinishAndCollect(%v) called again after the wait already resolved took %v, want near-instant: a second bounded wait was paid", grace, elapsed)
+	}
+}
+
+// TestStderrCollector_FinishAndCollect_LateCallerSharesRemainder pins
+// the shared-wait semantics for a caller that arrives while an earlier
+// call is still in flight: it pays only the remainder of the wait
+// already under way, not a fresh grace period timed from its own
+// arrival. A caller arriving at grace/2 whose own elapsed time comes
+// out close to a full grace, rather than close to grace/2, is proof the
+// wait was paid twice.
+func TestStderrCollector_FinishAndCollect_LateCallerSharesRemainder(t *testing.T) {
+	t.Parallel()
+
+	const grace = 400 * time.Millisecond
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, slog.Default())
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		c.FinishAndCollect(grace)
+	}()
+
+	time.Sleep(grace / 2)
+
+	start := time.Now()
+	c.FinishAndCollect(grace)
+	elapsed := time.Since(start)
+
+	select {
+	case <-firstDone:
+	case <-time.After(grace):
+		t.Fatal("the first FinishAndCollect call had not returned within another full grace period")
+	}
+
+	if elapsed >= grace*3/4 {
+		t.Errorf("FinishAndCollect(%v) arriving at grace/2 took %v for its own elapsed time, want well under a full grace (the wait is shared, not paid twice)", grace, elapsed)
+	}
 }

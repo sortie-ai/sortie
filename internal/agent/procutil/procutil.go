@@ -38,10 +38,15 @@ const (
 	// exit has a bounded chance to reach that exit path first.
 	DefaultStopGrace = 5 * time.Second
 
-	// AbandonedMarker replaces the collected lines of a collector whose
-	// drain was abandoned. It is exported so an adapter that classifies
-	// stderr can pin, in its own tests, that the marker is not evidence.
-	AbandonedMarker = "... (agent stderr not collected: the output handle stayed open) ..."
+	// AbandonedMarker is appended after the lines collected by a
+	// collector whose drain was abandoned, signaling that later output
+	// may be missing rather than that none was collected. An adapter
+	// that reads stderr for evidence of an outcome, rather than only to
+	// show it to the operator, must treat a transcript carrying this
+	// marker as incomplete: what it does not contain proves nothing,
+	// and neither does what it does, once the runtime's own trailer may
+	// have been cut off.
+	AbandonedMarker = "... (agent stderr drain abandoned: later output may be missing) ..."
 
 	droppedMarkerFmt = "... (%d lines discarded) ..."
 )
@@ -130,6 +135,13 @@ func ExtractExitCode(err error) int {
 // total retained bytes. In both cases the collector continues draining
 // the reader to avoid blocking the subprocess.
 type StderrCollector struct {
+	// mu guards every field the drain goroutine mutates while it is
+	// still running: head, tail, tailPos, tailFull, dropped, and
+	// bytesUsed. A collector that has been abandoned but not yet
+	// finished keeps draining in the background, so a reader taken
+	// after abandonment locks the same mutex the drain goroutine holds
+	// around each line, rather than racing it.
+	mu         sync.Mutex
 	head       []string
 	tail       []string
 	tailPos    int
@@ -149,6 +161,13 @@ type StderrCollector struct {
 	// abandoned closes when Abandon gives up on the drain goroutine.
 	// Readers select on it alongside done.
 	abandoned chan struct{}
+
+	// finishOnce guards the single bounded wait FinishAndCollect pays.
+	// sync.Once blocks every concurrent caller until the first one's
+	// function returns, so a caller racing the one already in flight
+	// waits for that call to resolve rather than starting a second,
+	// independent grace period of its own.
+	finishOnce sync.Once
 }
 
 // NewStderrCollector starts a goroutine that drains r line by line,
@@ -204,39 +223,49 @@ func (c *StderrCollector) drain(r io.Reader) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		c.logger.Debug("agent stderr", slog.String("line", line))
-
-		if len(c.head) < c.headCap {
-			if c.bytesUsed+len(line) > c.maxBytes {
-				c.dropped++
-				continue
-			}
-			c.head = append(c.head, line)
-			c.bytesUsed += len(line)
-			continue
-		}
-
-		reclaimable := 0
-		if c.tailFull {
-			reclaimable = len(c.tail[c.tailPos])
-		}
-
-		if c.bytesUsed-reclaimable+len(line) > c.maxBytes {
-			c.dropped++
-			continue
-		}
-
-		if c.tailFull {
-			c.dropped++
-		}
-		c.tail[c.tailPos] = line
-		c.bytesUsed = c.bytesUsed - reclaimable + len(line)
-		c.tailPos = (c.tailPos + 1) % c.tailCap
-		if c.tailPos == 0 {
-			c.tailFull = true
-		}
+		c.appendLine(line)
 	}
 	if err := scanner.Err(); err != nil {
 		c.logger.Debug("agent stderr drain failed", slog.Any("error", err))
+	}
+}
+
+// appendLine records one scanned line into the head or tail section,
+// enforcing the line and byte caps, under mu so a concurrent read from
+// an abandoned-but-still-draining collector never observes a partial
+// update.
+func (c *StderrCollector) appendLine(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.head) < c.headCap {
+		if c.bytesUsed+len(line) > c.maxBytes {
+			c.dropped++
+			return
+		}
+		c.head = append(c.head, line)
+		c.bytesUsed += len(line)
+		return
+	}
+
+	reclaimable := 0
+	if c.tailFull {
+		reclaimable = len(c.tail[c.tailPos])
+	}
+
+	if c.bytesUsed-reclaimable+len(line) > c.maxBytes {
+		c.dropped++
+		return
+	}
+
+	if c.tailFull {
+		c.dropped++
+	}
+	c.tail[c.tailPos] = line
+	c.bytesUsed = c.bytesUsed - reclaimable + len(line)
+	c.tailPos = (c.tailPos + 1) % c.tailCap
+	if c.tailPos == 0 {
+		c.tailFull = true
 	}
 }
 
@@ -288,8 +317,8 @@ func (c *StderrCollector) WaitDone(d time.Duration) bool {
 }
 
 // Abandon gives up on a drain that a bounded wait did not finish, so
-// that Lines, Dropped, and WarnLines stop blocking on it. bound is the
-// wait that elapsed, reported with the warning Abandon logs.
+// that Lines and Dropped stop blocking on it. bound is the wait that
+// elapsed, reported with the warning Abandon logs.
 //
 // Abandon is a one-shot latch: only the first call across the
 // collector's lifetime has any effect, whatever the number of
@@ -317,22 +346,38 @@ func (c *StderrCollector) Abandon(bound time.Duration) {
 // call after the subprocess has exited.
 //
 // When the collector was abandoned before the drain finished, Lines
-// returns a single-element slice containing [AbandonedMarker] instead
-// of blocking. A drain that finishes after abandonment still wins: a
-// later call, or one already blocked when abandonment happened, reports
-// the real lines rather than the marker.
+// appends [AbandonedMarker] after whatever the drain had already
+// collected, rather than discarding it: a descendant that kept the
+// write end open past the bound cost the tail of the transcript, not
+// the whole of it. A drain that finishes after abandonment still wins:
+// a later call, or one already blocked when abandonment happened,
+// reports the real lines with no marker.
 func (c *StderrCollector) Lines() []string {
 	select {
 	case <-c.done:
 	case <-c.abandoned:
 	}
 
+	c.mu.Lock()
+	lines := c.linesLocked()
+	c.mu.Unlock()
+
 	select {
 	case <-c.done:
+		// Re-read under the lock: the snapshot above can predate the
+		// drain's final appendLine, and a drain that finished wins, so
+		// returning the earlier copy would drop the last line it wrote.
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.linesLocked()
 	default:
-		return []string{AbandonedMarker}
+		return append(lines, AbandonedMarker)
 	}
+}
 
+// linesLocked assembles the collected lines from head, tail, and the
+// dropped-line marker. Callers must hold mu.
+func (c *StderrCollector) linesLocked() []string {
 	hasTail := c.tailFull || c.tailPos > 0
 	if len(c.head) == 0 && !hasTail {
 		if c.dropped > 0 {
@@ -364,12 +409,16 @@ func (c *StderrCollector) Lines() []string {
 //
 // When the collector was abandoned before the drain finished, Dropped
 // returns 0. That zero reports an unknown count rather than an empty
-// one: an abandoned collector cannot know what the drain discarded.
+// one: an abandoned collector cannot know what the rest of the drain
+// would have discarded.
 func (c *StderrCollector) Dropped() int {
 	select {
 	case <-c.done:
 	case <-c.abandoned:
 	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	select {
 	case <-c.done:
@@ -379,26 +428,29 @@ func (c *StderrCollector) Dropped() int {
 	}
 }
 
-// WarnLines blocks until the drain goroutine finishes or the collector
-// is abandoned, then re-emits each collected line at WARN level using
-// logger. Intended for surfacing agent subprocess diagnostics (e.g.,
-// startup rejections) without requiring DEBUG logging.
+// FinishAndCollect waits up to grace for the drain to finish and, if it
+// has not by then, abandons it, then returns the collected lines. Call
+// it from the place each adapter family already anchors its teardown on
+// the subprocess having been reaped, and read [StderrCollector.Lines]
+// directly at every other site that wants the same diagnostic. It
+// bounds its own wait, not the collector's lifetime: a caller that
+// deliberately waits before reaping, as the client-protocol teardown
+// does to keep output a reap would cost, still pays that wait too.
 //
-// A caller that manages an [*exec.Cmd] and cannot use
-// [StderrCollector.WaitDone] still has the option of draining with
-// [StderrCollector.Lines] before calling [exec.Cmd.Wait]; [exec.Cmd.Wait]
-// closes the pipe read end, which can prevent the drain goroutine from
-// reading buffered data. A caller that can adopt the bounded wait
-// should prefer it instead, and use [EmitWarnLines] with the result of
-// [StderrCollector.Lines] to log pre-collected lines after
-// [exec.Cmd.Wait] returns.
-//
-// If logger is nil, WarnLines uses [slog.Default].
-func (c *StderrCollector) WarnLines(logger *slog.Logger) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	EmitWarnLines(c.Lines(), logger)
+// Every call shares the one bounded wait: sync.Once blocks a
+// concurrent caller until the in-flight wait resolves rather than
+// starting a second, independent grace period, and a call arriving
+// after the first has already resolved skips the wait entirely, since
+// Once never re-runs its function. A caller that arrived first pays up
+// to grace; every other caller pays no more than the remainder of that
+// same wait.
+func (c *StderrCollector) FinishAndCollect(grace time.Duration) []string {
+	c.finishOnce.Do(func() {
+		if !c.WaitDone(grace) {
+			c.Abandon(grace)
+		}
+	})
+	return c.Lines()
 }
 
 // EmitWarnLines re-emits each line in lines at WARN level with the

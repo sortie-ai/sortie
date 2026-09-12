@@ -692,8 +692,12 @@ Standard-output and standard-error ownership:
   behind it, and a turn whose terminal evidence was in that tail falls to the exit-based
   disposition rather than the one that evidence would have given. An abandoned
   standard-error drain still flips the disposition of an adapter whose success evidence lives on
-  standard error (Kiro CLI's disposition depends on its standard-error trailer), replacing the
-  collected output with a marker and reporting the turn failed rather than succeeded.
+  standard error (Kiro CLI's disposition depends on its standard-error trailer): whatever the
+  drain had already collected survives, an abandonment marker is appended after it to signal that
+  later output may be missing, and the trailer stops counting as the evidence that the turn
+  succeeded, because a trailer read before the bound expired may belong to output whose remainder
+  never arrived. The turn then falls to the shared disposition the exit code and the observed work
+  decide, which reports a turn that produced nothing as failed.
 
 Per-family teardown totals, at default configuration:
 
@@ -707,7 +711,14 @@ Per-family teardown totals, at default configuration:
   unchanged by standard-output ownership. It separately carries a release bounded by the
   standard-output drain bound, running from session start through the handshake and every turn
   rather than as one of `StopSession`'s own waits, that ends a handshake call or a turn otherwise
-  left waiting on a reaped runtime whose reader did not end inside that bound.
+  left waiting on a reaped runtime whose reader did not end inside that bound. The same release
+  runs the standard-error collector's bounded wait concurrently with that standard-output wait,
+  both anchored on the subprocess having been reaped and both bounded by the same drain bound, so
+  a handshake or turn failure path that reports the runtime's standard error finds it already
+  resolved rather than paying the bound again. Stopping the session waits for that collector once
+  more, so a stop issued before the release has resolved it, against a runtime whose escaped
+  descendant still holds the standard-error write end, spends one further drain bound inside
+  `StopSession` and carries the total to `agent.stop_grace_ms` plus twice that bound.
 - A locally launched Agent Client Protocol runtime: its pinned teardown ceiling is unchanged,
   `agent.stop_grace_ms` plus three times the standard-error drain bound, 20 seconds at defaults.
   It reaches that ceiling through its own caller-owned pipes and a final pipe-release step now,

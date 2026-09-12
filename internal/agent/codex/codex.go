@@ -99,6 +99,27 @@ type sessionState struct {
 	// atomic.Bool rather than mutex-guarded.
 	outputAbandoned atomic.Bool
 
+	// stderrReported latches the first call to reportStderr: a session
+	// reports the runtime's standard error at most once, however many
+	// handshake or turn failure paths reach it over the session's
+	// life, since every later failure against an already-dead runtime
+	// has nothing new to add.
+	stderrReported atomic.Bool
+
+	// reportMu serializes the stop marker below against the decision to
+	// warn, so a stop cannot land between reportStderr checking it and
+	// the warning reaching the operator. It is never held across the
+	// drain wait, which would make a stop pay for it.
+	reportMu sync.Mutex
+
+	// stopping reports that StopSession has begun tearing the session
+	// down. The stop closes the connection, which ends the message
+	// channel and sends an in-flight turn down the same path a runtime
+	// that died takes, so without this the operator would be warned
+	// about a runtime they stopped themselves. Set before anything is
+	// closed, read by reportStderr.
+	stopping atomic.Bool
+
 	// acc holds the session's run-cumulative token usage. Constructed
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
@@ -118,9 +139,10 @@ type sessionState struct {
 	usageMeasured bool
 
 	// mu guards proc, waitCh, stdin, pipes, and stderrCollector for
-	// concurrent access from StopSession and the process-exit
-	// watcher. It guards no write to the peer; conn owns its own
-	// write mutex.
+	// concurrent access from StopSession, the process-exit watcher, and
+	// the stderr reporting the handshake and turn failure paths reach
+	// through reportStderr. It guards no write to the peer; conn owns
+	// its own write mutex.
 	mu              sync.Mutex
 	proc            *os.Process
 	waitCh          <-chan struct{}
@@ -164,6 +186,81 @@ func (state *sessionState) closeConnAndStop() {
 			state.conn.Close()
 		}
 	})
+}
+
+// reportStderr re-emits what the runtime wrote to standard error at
+// WARN, the surface the other local-subprocess adapter kinds use for
+// the same diagnostics, so a failed session reports what the runtime
+// said rather than an exit code alone. Called on the paths where the
+// runtime is gone: every handshake failure, and a turn that ends
+// because the output stream did.
+//
+// The session's release goroutine already runs
+// [procutil.StderrCollector.FinishAndCollect] once, anchored on the
+// subprocess having been reaped, concurrently with its own wait for the
+// output stream to end; a call reaching here after that has resolved
+// costs nothing. A call that gets here first pays the bound itself, so
+// reportStderr is safe to call from a path release has not yet reached.
+// stderrReported latches the emission itself, so a session with more
+// than one failure path reporting against the same dead runtime warns
+// the operator once rather than once per path.
+func (state *sessionState) reportStderr(logger *slog.Logger) {
+	if state.stopping.Load() {
+		return
+	}
+	state.mu.Lock()
+	collector := state.stderrCollector
+	grace := state.drainGrace
+	state.mu.Unlock()
+	if collector == nil {
+		return
+	}
+	if grace <= 0 {
+		grace = procutil.DefaultDrainGrace
+	}
+	lines := collector.FinishAndCollect(grace)
+
+	// Re-check under the lock the stop also takes. The wait above can
+	// last the whole bound, and a stop that arrived inside it must not
+	// find the warning already on its way out.
+	state.reportMu.Lock()
+	defer state.reportMu.Unlock()
+	if state.stopping.Load() {
+		return
+	}
+	if state.stderrReported.Swap(true) {
+		return
+	}
+	procutil.EmitWarnLines(lines, logger)
+}
+
+// readerEnded reports whether the connection's reader has already
+// exited, which means the runtime's output stream is closed and its
+// standard-error drain will end on its own.
+//
+// Both signals are polled, and conn.Done() first: a call released by the
+// reader's exit returns as soon as that channel closes, while
+// watchTermination closes readerDone just after, so reading readerDone
+// alone would miss the runtime in exactly the window a turn/start call
+// fails in. Neither is ever waited on, so a turn that failed while the
+// runtime is still alive does not pay the drain bound to find that out.
+func (state *sessionState) readerEnded() bool {
+	if state.conn != nil {
+		select {
+		case <-state.conn.Done():
+			return true
+		default:
+		}
+	}
+	if state.readerDone == nil {
+		return false
+	}
+	select {
+	case <-state.readerDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // sessionHandler returns the [jsonrpc.Handler] bound to state. Before
@@ -229,9 +326,25 @@ func turnEndMessage(state *sessionState, fallback string) string {
 // the stop channel releases one parked inside the handler on a full
 // message channel. It does not reach a runtime that is still alive:
 // that reader is freed only once the reaper fires.
-func release(state *sessionState, pipes *procutil.OwnedPipes, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
+//
+// release also anchors the session's one standard-error bound: once
+// the subprocess is reaped, a second goroutine runs
+// [procutil.StderrCollector.FinishAndCollect] concurrently with the
+// standard-output wait above, both bounded by the same grace, so a
+// reportStderr call reaching either path afterward finds the drain
+// already finished or abandoned rather than paying grace again.
+func release(state *sessionState, pipes *procutil.OwnedPipes, collector *procutil.StderrCollector, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
 	go func() {
 		<-reaperDone
+
+		// Closing the read end once the bound has resolved is what ends
+		// the drain itself: abandoning it releases whoever waited for
+		// the lines, while the scanner stays blocked in a read for as
+		// long as an escaped descendant holds the write end.
+		go func() {
+			collector.FinishAndCollect(grace)
+			pipes.CloseStderr() //nolint:errcheck,gosec // best-effort; ends a drain nothing else can
+		}()
 
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
@@ -409,6 +522,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		case <-state.waitCh:
 		case <-time.After(3 * time.Second):
 		}
+		// Before the close below: standard error is read from the write
+		// end going away, and closing the read end here instead would
+		// drop whatever the runtime had written but the drain had not
+		// yet scanned.
+		state.reportStderr(logger)
+
 		state.mu.Lock()
 		state.proc = nil
 		state.stdin = nil
@@ -435,7 +554,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	// drain bound. It captures its own copies of pipes and the
 	// connection's done channel because killOnError clears state.pipes
 	// under state.mu on every handshake failure path below.
-	release(state, pipes, state.drainGrace, state.conn.Done(), reaper.Done(), logger)
+	release(state, pipes, state.stderrCollector, state.drainGrace, state.conn.Done(), reaper.Done(), logger)
 
 	if err := initializeHandshake(ctx, state); err != nil {
 		state.closeConnAndStop()
@@ -576,6 +695,13 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 	resp, err := state.conn.Call(ctx, "turn/start", turnParams)
 	if err != nil {
+		// A call that failed because the runtime is gone has the
+		// runtime's own diagnostic waiting in the collector; one that
+		// failed with the runtime still alive has nothing to report and
+		// must not wait for a drain that cannot finish.
+		if state.readerEnded() {
+			state.reportStderr(logger)
+		}
 		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
 			Message: turnEndMessage(state, fmt.Sprintf("turn/start failed: %v", err)),
@@ -646,6 +772,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		case msg, ok := <-state.msgCh:
 			if !ok {
 				// Channel closed, subprocess stdout ended.
+				state.reportStderr(logger)
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -663,6 +790,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return result, nil
 			}
 			if msg.Kind == jsonrpc.KindMalformed || msg.Kind == jsonrpc.KindStreamEnd {
+				// Only a stream end means the runtime is gone. The read
+				// loop dispatches a malformed line and keeps reading, so
+				// reporting here would wait the drain bound on a pipe a
+				// live runtime still holds, and latch the report away
+				// from the turn that really loses the runtime later.
+				if msg.Kind == jsonrpc.KindStreamEnd {
+					state.reportStderr(logger)
+				}
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -997,6 +1132,13 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
 
+	// Before anything is closed: closing the connection ends the message
+	// channel, and a turn still running reads that as its runtime having
+	// died. A session the operator stopped has nothing to explain.
+	state.reportMu.Lock()
+	state.stopping.Store(true)
+	state.reportMu.Unlock()
+
 	// Signal the reader goroutine to stop and close the connection
 	// before closing stdin, preventing the handler from blocking on a
 	// full msgCh during teardown.
@@ -1070,15 +1212,36 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		}
 	}
 
+	// Closing pipes below ends the standard-error drain: closing the
+	// read end while the collector's scanner is mid-read makes it
+	// return a read error, which the drain treats the same as end of
+	// file. A session the operator stopped does not report the runtime's
+	// standard error: the turn and handshake paths above already
+	// reported a runtime that failed, and there is nothing to explain
+	// for one that stopped on request.
 	state.mu.Lock()
 	state.proc = nil
 	state.stdin = nil
 	if state.pipes != nil {
 		state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
 	}
+	collector := state.stderrCollector
 	state.pipes = nil
 	state.waitCh = nil
+	grace := state.drainGrace
 	state.mu.Unlock()
+
+	// Closing the read end unparks the drain but does not wait for it.
+	// Joining it here is what makes "no collector goroutine outlives the
+	// session" a guarantee rather than a race the caller usually wins.
+	// The lines are discarded: reporting is the failure paths' job, and
+	// stopping is not a failure.
+	if collector != nil {
+		if grace <= 0 {
+			grace = procutil.DefaultDrainGrace
+		}
+		collector.FinishAndCollect(grace)
+	}
 
 	return stopErr
 }

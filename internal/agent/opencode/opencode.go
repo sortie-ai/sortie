@@ -728,9 +728,7 @@ func startWait(runtime *turnRuntime, cmd *exec.Cmd) {
 		// still running.
 		close(runtime.reapedCh)
 
-		if !runtime.stderrCollector.WaitDone(runtime.drainGrace) {
-			runtime.stderrCollector.Abandon(runtime.drainGrace)
-		}
+		runtime.stderrCollector.FinishAndCollect(runtime.drainGrace)
 
 		runtime.waitMu.Lock()
 		runtime.waitRes = waitResult{

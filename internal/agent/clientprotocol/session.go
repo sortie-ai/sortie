@@ -871,9 +871,7 @@ func drainStderrAndReap(callerCtx context.Context) func(state *sessionState) {
 		}
 
 		if !drained && state.stderrCollector != nil {
-			if !state.stderrCollector.WaitDone(procutil.DefaultDrainGrace) {
-				state.stderrCollector.Abandon(procutil.DefaultDrainGrace)
-			}
+			state.stderrCollector.FinishAndCollect(procutil.DefaultDrainGrace)
 		}
 	}
 }
