@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A coding-agent subprocess that spawns a descendant inheriting its standard output handle no longer wedges the turn, leaks the process, or loses buffered standard error, across the `claude-code`, `copilot-cli`, `kiro`, and `opencode` agent kinds. The `codex` app-server adapter no longer discards the runtime's last messages when it reaps the subprocess, and now also ends a turn or a session within a bound when the runtime dies while a descendant still holds the output handle. The `agent-client-protocol` adapter takes the same subprocess pipe ownership and releases those pipes as the last step of its teardown.
   ([#982](https://github.com/sortie-ai/sortie/issues/982))
 
+- The `codex` app-server adapter now reports what the agent runtime wrote to its standard error, so a session that fails during the handshake and a turn that ends because the runtime's output stream did both carry the runtime's own diagnostic rather than an exit code alone, on the same surface the other local-subprocess agent kinds use. The collected output was previously discarded unread. A session that ends now ends its standard-error drain with it, bounded so a descendant still holding the write handle cannot park the report.
+  ([#1083](https://github.com/sortie-ai/sortie/issues/1083))
+
 ## [1.24.0] - 2026-09-11
 
 ### Added
