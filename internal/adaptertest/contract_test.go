@@ -79,6 +79,7 @@ var contractBanTable = map[string]string{
 	"startScannerCh":         "jsonrpc.NewConn",
 	"readResponse":           "jsonrpc.Conn.Call",
 	"startOpenCodeReader":    "procutil.NewStdoutReader",
+	"finishStderrDrain":      "procutil.StderrCollector.FinishAndCollect",
 }
 
 // contractTrackerAdapterMethods are the tracker operation method names
