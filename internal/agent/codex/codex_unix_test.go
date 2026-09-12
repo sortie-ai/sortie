@@ -33,7 +33,13 @@ func writeDescendantScript(t *testing.T, dir, pidFile, markerFile string) string
 			"PID_FILE='%s'\n"+
 			"trap 'printf terminated > \"$MARKER\"; exit 0' TERM\n"+
 			"printf '%%s\\n' \"$$\" > \"$PID_FILE\"\n"+
-			"while :; do sleep 1; done\n",
+			// wait returns as soon as a trapped signal arrives, while a
+			// sleep loop runs the handler only after the current sleep
+			// ends. That delay competes with the grace period before the
+			// group is killed outright, which is the whole budget this
+			// fixture has to write its marker in.
+			"sleep 3600 &\n"+
+			"wait\n",
 		markerFile, pidFile,
 	)
 	return agenttest.WriteScript(t, dir, "fake-codex-descendant", content)
