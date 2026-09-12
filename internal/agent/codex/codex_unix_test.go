@@ -310,6 +310,14 @@ func TestStartSession_ReleaseEndsTurnWhenEscapedDescendantHoldsOutput(t *testing
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+	// This turn is past its turn/start response, so the connection's end
+	// reaches it through the event loop rather than through the call.
+	// Whichever of those two arms wins the race reports the abandonment,
+	// so asserting the message here is what keeps either of them from
+	// silently reverting to its transport text.
+	if agentErr.Message != outputAbandonedMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, outputAbandonedMessage)
+	}
 
 	stopStart := time.Now()
 	if err := adapter.StopSession(context.Background(), session); err != nil {
