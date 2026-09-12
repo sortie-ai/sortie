@@ -246,6 +246,35 @@ func TestResumePath(t *testing.T) {
 	})
 }
 
+// TestOnFinalize_CreditsBeforeAbandonmentDoesNotSelectSuccess pins the
+// disposition consequence the marker-only case cannot reach: a trailer
+// collected before the drain was cut short is present in the transcript,
+// so only disqualifying it keeps the turn off the success arm. Mirrors
+// the evidence StartSession's OnFinalize closure builds in kiro.go.
+func TestOnFinalize_CreditsBeforeAbandonmentDoesNotSelectSuccess(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"▸ Credits: 1.20 • Time: 12s", procutil.AbandonedMarker}
+	creditsSeen, authFailed := classifyStderr(lines)
+	if creditsSeen || authFailed {
+		t.Fatalf("classifyStderr(%v) = (creditsSeen=%v, authFailed=%v), want (false, false)",
+			lines, creditsSeen, authFailed)
+	}
+
+	ev := agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent",
+	}
+
+	got := agentcore.DecideTurn(ev)
+
+	if got.ExitReason != domain.EventTurnFailed {
+		t.Errorf("DecideTurn(%+v).ExitReason = %q, want %q", ev, got.ExitReason, domain.EventTurnFailed)
+	}
+}
+
 // TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow pins the disposition
 // consequence of an abandoned stderr drain: marker-only stderr classifies
 // as neither the credits trailer nor an authentication failure, so the
