@@ -416,65 +416,6 @@ func TestStderrCollector_ByteBudget(t *testing.T) {
 	})
 }
 
-func TestStderrCollector_WarnLines(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    string
-		wantWarn []string
-	}{
-		{
-			name:     "empty collector produces no WARN",
-			input:    "",
-			wantWarn: nil,
-		},
-		{
-			name:     "single line re-emitted at WARN",
-			input:    "startup rejected: no license\n",
-			wantWarn: []string{"startup rejected: no license"},
-		},
-		{
-			name:     "multiple lines all re-emitted at WARN",
-			input:    "error one\nerror two\n",
-			wantWarn: []string{"error one", "error two"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			var buf bytes.Buffer
-			handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-			logger := slog.New(handler)
-
-			c := NewStderrCollector(strings.NewReader(tt.input), slog.Default())
-			c.WarnLines(logger)
-
-			output := buf.String()
-			for _, want := range tt.wantWarn {
-				if !strings.Contains(output, want) {
-					t.Errorf("WarnLines() output missing %q; got: %s", want, output)
-				}
-			}
-			if len(tt.wantWarn) == 0 && output != "" {
-				t.Errorf("WarnLines() produced output for empty collector; got: %s", output)
-			}
-		})
-	}
-}
-
-func TestStderrCollector_WarnLines_NilLogger(t *testing.T) {
-	t.Parallel()
-
-	c := NewStderrCollector(strings.NewReader("test line\n"), slog.Default())
-	// Must not panic when logger is nil: falls back to slog.Default().
-	c.WarnLines(nil)
-
-	// No assertion on output; the test verifies the nil guard does not panic.
-}
-
 func TestEmitWarnLines(t *testing.T) {
 	t.Parallel()
 
@@ -678,16 +619,16 @@ func TestStderrCollector_AbandonAfterWaitDoneTimeout(t *testing.T) {
 
 	warnDone := make(chan struct{})
 	go func() {
-		c.WarnLines(logger)
+		EmitWarnLines(c.Lines(), logger)
 		close(warnDone)
 	}()
 	select {
 	case <-warnDone:
 	case <-time.After(1 * time.Second):
-		t.Fatal("WarnLines() blocked more than 1 second after Abandon()")
+		t.Fatal("EmitWarnLines(c.Lines(), ...) blocked more than 1 second after Abandon()")
 	}
 	if !strings.Contains(buf.String(), AbandonedMarker) {
-		t.Errorf("WarnLines() after Abandon() did not emit the marker; output = %q", buf.String())
+		t.Errorf("EmitWarnLines(c.Lines(), ...) after Abandon() did not emit the marker; output = %q", buf.String())
 	}
 }
 
