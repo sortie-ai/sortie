@@ -40,9 +40,12 @@ const (
 
 	// AbandonedMarker is appended after the lines collected by a
 	// collector whose drain was abandoned, signaling that later output
-	// may be missing rather than that none was collected. It is
-	// exported so an adapter that classifies stderr can pin, in its own
-	// tests, that the marker is not evidence.
+	// may be missing rather than that none was collected. An adapter
+	// that reads stderr for evidence of an outcome, rather than only to
+	// show it to the operator, must treat a transcript carrying this
+	// marker as incomplete: what it does not contain proves nothing,
+	// and neither does what it does, once the runtime's own trailer may
+	// have been cut off.
 	AbandonedMarker = "... (agent stderr drain abandoned: later output may be missing) ..."
 
 	droppedMarkerFmt = "... (%d lines discarded) ..."
@@ -361,7 +364,12 @@ func (c *StderrCollector) Lines() []string {
 
 	select {
 	case <-c.done:
-		return lines
+		// Re-read under the lock: the snapshot above can predate the
+		// drain's final appendLine, and a drain that finished wins, so
+		// returning the earlier copy would drop the last line it wrote.
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.linesLocked()
 	default:
 		return append(lines, AbandonedMarker)
 	}
@@ -421,12 +429,13 @@ func (c *StderrCollector) Dropped() int {
 }
 
 // FinishAndCollect waits up to grace for the drain to finish and, if it
-// has not by then, abandons it, then returns the collected lines. This
-// is the one bounded wait a subprocess's standard-error collector pays
-// in its lifetime: call it once, from the place each adapter family
-// already anchors its teardown on the subprocess having been reaped,
-// and read [StderrCollector.Lines] directly at every other site that
-// wants the same diagnostic.
+// has not by then, abandons it, then returns the collected lines. Call
+// it from the place each adapter family already anchors its teardown on
+// the subprocess having been reaped, and read [StderrCollector.Lines]
+// directly at every other site that wants the same diagnostic. It
+// bounds its own wait, not the collector's lifetime: a caller that
+// deliberately waits before reaping, as the client-protocol teardown
+// does to keep output a reap would cost, still pays that wait too.
 //
 // Every call shares the one bounded wait: sync.Once blocks a
 // concurrent caller until the in-flight wait resolves rather than
