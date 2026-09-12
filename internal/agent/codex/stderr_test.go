@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,8 +189,8 @@ func TestRunTurn_TurnStartOnDeadRuntimeReportsStderr(t *testing.T) {
 //
 // On this path the pipe close is what ends the drain. The case where the
 // close cannot end it, because a descendant that escaped the group still
-// holds the write end, is what finishStderrDrain's bound covers and is
-// pinned by TestFinishStderrDrain_AbandonsADrainThatCannotFinish.
+// holds the write end, is what reportStderr's bound covers and is
+// pinned by TestReportStderr_AbandonsADrainThatCannotFinish.
 //
 // Not run with t.Parallel(): see above.
 func TestStopSession_LeavesNoDrainRunning(t *testing.T) {
@@ -236,16 +237,17 @@ func TestStopSession_LeavesNoDrainRunning(t *testing.T) {
 	}
 }
 
-// TestFinishStderrDrain_AbandonsADrainThatCannotFinish pins the bound
-// the reporting paths depend on. A drain whose write end is still held
+// TestReportStderr_AbandonsADrainThatCannotFinish pins the bound the
+// reporting paths depend on. A drain whose write end is still held
 // never reaches EOF, so an unbounded wait would park the caller that
-// wants the diagnostic: the session's own drainGrace bounds the wait and
-// an unfinished drain is abandoned, which makes Lines report the
-// abandonment marker instead of blocking.
+// wants the diagnostic: the session's own drainGrace bounds the wait,
+// an unfinished drain is abandoned, and the abandonment marker is
+// appended after whatever the drain had already collected rather than
+// replacing it.
 //
 // Not run with t.Parallel(): it installs a global slog default.
-func TestFinishStderrDrain_AbandonsADrainThatCannotFinish(t *testing.T) {
-	agenttest.InstallLogSpy(t)
+func TestReportStderr_AbandonsADrainThatCannotFinish(t *testing.T) {
+	spy := agenttest.InstallLogSpy(t)
 
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -262,27 +264,28 @@ func TestFinishStderrDrain_AbandonsADrainThatCannotFinish(t *testing.T) {
 		t.Fatalf("writing to the stderr pipe: %v", err)
 	}
 
-	done := make(chan []string, 1)
+	done := make(chan struct{})
 	start := time.Now()
 	go func() {
-		collector := state.finishStderrDrain()
-		if collector == nil {
-			done <- nil
-			return
-		}
-		done <- collector.Lines()
+		state.reportStderr(slog.Default())
+		close(done)
 	}()
 
 	select {
-	case lines := <-done:
+	case <-done:
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
-			t.Errorf("finishStderrDrain took %v on a 100ms bound, want it to give up inside the bound", elapsed)
-		}
-		if len(lines) != 1 || lines[0] != procutil.AbandonedMarker {
-			t.Errorf("Lines() = %v, want the single %q marker: an abandoned drain reports the marker rather than the lines it may still be collecting", lines, procutil.AbandonedMarker)
+			t.Errorf("reportStderr took %v on a 100ms bound, want it to give up inside the bound", elapsed)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("finishStderrDrain never returned while the stderr write end was held: the wait is unbounded")
+		t.Fatal("reportStderr never returned while the stderr write end was held: the wait is unbounded")
+	}
+
+	lines := agenttest.RequireWarnLines(t, spy, "abandoned drain")
+	if !slices.Contains(lines, "codex: still writing") {
+		t.Errorf("WARN lines %v do not contain the line collected before abandonment", lines)
+	}
+	if !slices.Contains(lines, procutil.AbandonedMarker) {
+		t.Errorf("WARN lines %v do not contain the abandonment marker", lines)
 	}
 }
 

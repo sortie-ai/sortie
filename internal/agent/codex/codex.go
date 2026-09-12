@@ -99,6 +99,13 @@ type sessionState struct {
 	// atomic.Bool rather than mutex-guarded.
 	outputAbandoned atomic.Bool
 
+	// stderrReported latches the first call to reportStderr: a session
+	// reports the runtime's standard error at most once, however many
+	// handshake or turn failure paths reach it over the session's
+	// life, since every later failure against an already-dead runtime
+	// has nothing new to add.
+	stderrReported atomic.Bool
+
 	// acc holds the session's run-cumulative token usage. Constructed
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
@@ -120,8 +127,8 @@ type sessionState struct {
 	// mu guards proc, waitCh, stdin, pipes, and stderrCollector for
 	// concurrent access from StopSession, the process-exit watcher, and
 	// the stderr reporting the handshake and turn failure paths reach
-	// through finishStderrDrain. It guards no write to the peer; conn
-	// owns its own write mutex.
+	// through reportStderr. It guards no write to the peer; conn owns
+	// its own write mutex.
 	mu              sync.Mutex
 	proc            *os.Process
 	waitCh          <-chan struct{}
@@ -167,43 +174,38 @@ func (state *sessionState) closeConnAndStop() {
 	})
 }
 
-// finishStderrDrain ends the standard-error drain and returns the
-// collector, or nil when the session never started one. The drain reads
-// until the write end is gone, so callers reach it once the runtime has
-// exited or its pipes are closed; a runtime whose escaped descendant
-// still holds that end would park the drain forever, so the wait is
-// bounded by the session's own drainGrace and an unfinished drain is
-// abandoned. Abandonment makes Lines report its marker instead of
-// blocking, the same bound release applies to the output handle.
-func (state *sessionState) finishStderrDrain() *procutil.StderrCollector {
-	state.mu.Lock()
-	collector := state.stderrCollector
-	grace := state.drainGrace
-	state.mu.Unlock()
-	if collector == nil {
-		return nil
-	}
-	if grace <= 0 {
-		grace = procutil.DefaultDrainGrace
-	}
-	if !collector.WaitDone(grace) {
-		collector.Abandon(grace)
-	}
-	return collector
-}
-
 // reportStderr re-emits what the runtime wrote to standard error at
 // WARN, the surface the other local-subprocess adapter kinds use for
 // the same diagnostics, so a failed session reports what the runtime
 // said rather than an exit code alone. Called on the paths where the
 // runtime is gone: every handshake failure, and a turn that ends
 // because the output stream did.
+//
+// The session's release goroutine already runs
+// [procutil.StderrCollector.FinishAndCollect] once, anchored on the
+// subprocess having been reaped, concurrently with its own wait for the
+// output stream to end; a call reaching here after that has resolved
+// costs nothing. A call that gets here first pays the bound itself, so
+// reportStderr is safe to call from a path release has not yet reached.
+// stderrReported latches the emission itself, so a session with more
+// than one failure path reporting against the same dead runtime warns
+// the operator once rather than once per path.
 func (state *sessionState) reportStderr(logger *slog.Logger) {
-	collector := state.finishStderrDrain()
+	state.mu.Lock()
+	collector := state.stderrCollector
+	grace := state.drainGrace
+	state.mu.Unlock()
 	if collector == nil {
 		return
 	}
-	procutil.EmitWarnLines(collector.Lines(), logger)
+	if grace <= 0 {
+		grace = procutil.DefaultDrainGrace
+	}
+	lines := collector.FinishAndCollect(grace)
+	if state.stderrReported.Swap(true) {
+		return
+	}
+	procutil.EmitWarnLines(lines, logger)
 }
 
 // readerEnded reports whether the connection's reader has already
@@ -298,9 +300,18 @@ func turnEndMessage(state *sessionState, fallback string) string {
 // the stop channel releases one parked inside the handler on a full
 // message channel. It does not reach a runtime that is still alive:
 // that reader is freed only once the reaper fires.
-func release(state *sessionState, pipes *procutil.OwnedPipes, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
+//
+// release also anchors the session's one standard-error bound: once
+// the subprocess is reaped, a second goroutine runs
+// [procutil.StderrCollector.FinishAndCollect] concurrently with the
+// standard-output wait above, both bounded by the same grace, so a
+// reportStderr call reaching either path afterward finds the drain
+// already finished or abandoned rather than paying grace again.
+func release(state *sessionState, pipes *procutil.OwnedPipes, collector *procutil.StderrCollector, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
 	go func() {
 		<-reaperDone
+
+		go collector.FinishAndCollect(grace)
 
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
@@ -478,6 +489,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		case <-state.waitCh:
 		case <-time.After(3 * time.Second):
 		}
+		// Before the close below: standard error is read from the write
+		// end going away, and closing the read end here instead would
+		// drop whatever the runtime had written but the drain had not
+		// yet scanned.
+		state.reportStderr(logger)
+
 		state.mu.Lock()
 		state.proc = nil
 		state.stdin = nil
@@ -486,10 +503,6 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		}
 		state.pipes = nil
 		state.mu.Unlock()
-		// After the close above, so the drain sees the end of its read
-		// end and every handshake failure path reports what the runtime
-		// wrote before it gave up.
-		state.reportStderr(logger)
 	}
 
 	// Create stopCh, msgCh, and readerDone before the connection, so
@@ -508,7 +521,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	// drain bound. It captures its own copies of pipes and the
 	// connection's done channel because killOnError clears state.pipes
 	// under state.mu on every handshake failure path below.
-	release(state, pipes, state.drainGrace, state.conn.Done(), reaper.Done(), logger)
+	release(state, pipes, state.stderrCollector, state.drainGrace, state.conn.Done(), reaper.Done(), logger)
 
 	if err := initializeHandshake(ctx, state); err != nil {
 		state.closeConnAndStop()
@@ -1152,6 +1165,13 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		}
 	}
 
+	// Closing pipes below ends the standard-error drain: closing the
+	// read end while the collector's scanner is mid-read makes it
+	// return a read error, which the drain treats the same as end of
+	// file. A session the operator stopped does not report the runtime's
+	// standard error: the turn and handshake paths above already
+	// reported a runtime that failed, and there is nothing to explain
+	// for one that stopped on request.
 	state.mu.Lock()
 	state.proc = nil
 	state.stdin = nil
@@ -1161,12 +1181,6 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	state.pipes = nil
 	state.waitCh = nil
 	state.mu.Unlock()
-
-	// End the drain rather than leave its goroutine holding a buffer
-	// nothing will read. A stop does not re-emit the lines: the turn and
-	// handshake paths above already report a runtime that failed, and a
-	// session the operator stopped has nothing to explain.
-	state.finishStderrDrain()
 
 	return stopErr
 }
