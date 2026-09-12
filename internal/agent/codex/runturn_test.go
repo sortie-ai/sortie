@@ -1685,7 +1685,9 @@ func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
 	line := []byte("{\"method\":\"turn/started\",\"params\":{}}\n")
 	state := makeTestState(t, bytes.Repeat(line, 20))
 	// Simulate the subprocess having already exited so waitCh does not block.
-	close(state.waitCh)
+	closedWaitCh := make(chan struct{})
+	close(closedWaitCh)
+	state.waitCh = closedWaitCh
 
 	adapter, _ := NewCodexAdapter(map[string]any{})
 	err := adapter.StopSession(context.Background(), domain.Session{Internal: state})

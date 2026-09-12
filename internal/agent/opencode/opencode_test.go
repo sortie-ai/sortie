@@ -7,13 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -346,7 +346,6 @@ func TestRunTurn_ConcurrentRunRejected(t *testing.T) {
 	state := session.Internal.(*sessionState)
 	state.mu.Lock()
 	state.active = &turnRuntime{
-		stopCh: make(chan struct{}),
 		waitCh: make(chan waitResult),
 	}
 	state.mu.Unlock()
@@ -539,7 +538,6 @@ func startTurnRuntimeProcess(t *testing.T, scriptBody string) *turnRuntime {
 	runtime := &turnRuntime{
 		proc:   cmd.Process,
 		waitCh: make(chan waitResult),
-		stopCh: make(chan struct{}),
 	}
 	go func() {
 		waitErr := cmd.Wait()
@@ -2200,189 +2198,680 @@ fi`, counterFile, counterFile))
 	}
 }
 
-// TestStartWait_BlocksOnStderrDrainBeforeCmdWait drives startWait directly
-// with a stderrCollector built over an [io.Pipe] whose write end the test
-// holds open, decoupling the collector's drain from the race-prone real
-// stderr pipe entirely: instead of racing cmd.Wait's pipe close against a
-// concurrent read (the shape of the original bug, and why the fix's own
-// regression test flaked roughly one run in three), the drain is blocked
-// on a synchronization primitive the test controls outright, so the guard
-// under test either blocks forever or doesn't - no timing luck involved.
-//
-// The first arm keeps the pipe open under a 5-second grace: startWait's
-// goroutine cannot reach cmd.Wait while the pipe is held open, so
-// runtime.waitCh must still be open after a generous bounded wait.
-// Removing the WaitDone guard in startWait lets the goroutine call
-// cmd.Wait immediately after readerDone closes; since the underlying
-// process ("true") has already exited, waitCh closes within a few
-// milliseconds, deterministically failing the first select below.
-//
-// The second arm never closes the pipe at all, under a 100-millisecond
-// grace: startWait must still close waitCh, with a real waitResult built
-// from cmd.Wait rather than a synthesized one, and the abandoned
-// collector must report [procutil.AbandonedMarker] rather than block.
-func TestStartWait_BlocksOnStderrDrainBeforeCmdWait(t *testing.T) {
+// shellQuote wraps s in single quotes for embedding in a generated shell
+// script, escaping any embedded single quote.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// writeEscapedHolderSpawn returns shell script text that starts a
+// setsid-detached background job holding whichever standard streams
+// redirect leaves unredirected, and blocks the leader until the job's
+// own marker at pidFile proves its setsid() transition has already
+// completed. Waiting on that self-written marker, rather than on the
+// leader's own $!, is what keeps a later group-kill from racing the
+// descendant's escape: $! only proves the job was forked, not that it
+// has already left the process group, and setsid (without --fork) does
+// not create a second process to wait for, so nothing else observes
+// that transition from outside.
+func writeEscapedHolderSpawn(pidFile, redirect string) string {
+	return fmt.Sprintf(
+		"setsid sh -c 'echo $$ > %s; sleep 3600' %s &\n"+
+			"while [ ! -s %s ]; do sleep 0.01; done\n",
+		pidFile, redirect, pidFile,
+	)
+}
+
+// abandonmentWarnCount counts spy entries matching StdoutReader.Abandon's
+// fixed WARN record.
+func abandonmentWarnCount(spy *agenttest.LogSpy) int {
+	var n int
+	for _, e := range spy.Entries() {
+		if e.Level == slog.LevelWarn && e.Msg == "agent stdout was not fully collected before the turn ended" {
+			n++
+		}
+	}
+	return n
+}
+
+// isOpenCodeTestZombie reports whether pid is a zombie by reading
+// /proc/<pid>/stat. Returns false if the file cannot be read.
+func isOpenCodeTestZombie(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	if i := strings.LastIndex(string(data), ")"); i >= 0 && i+2 < len(data) {
+		return data[i+2] == 'Z'
+	}
+	return false
+}
+
+// assertOpenCodeProcessDead polls until pid is gone or a zombie, or
+// fails t after timeout.
+func assertOpenCodeProcessDead(t *testing.T, pid int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		if isOpenCodeTestZombie(pid) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("process %d still alive after %v, want gone", pid, timeout)
+}
+
+// killEscapedGroupOnCleanup registers a best-effort SIGKILL of the
+// process group led by the PID recorded in pidFile, so a setsid-escaped
+// descendant this file's fixtures leave running does not survive past
+// the test that started it. It tolerates a pidFile that never appears.
+func killEscapedGroupOnCleanup(t *testing.T, pidFile string) {
+	t.Helper()
+	t.Cleanup(func() {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if convErr != nil || pid <= 0 {
+			return
+		}
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	})
+}
+
+// readPIDFile reads a PID a script already wrote to path, fataling t if
+// the file is missing or does not hold a valid positive PID.
+func readPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) = %v", path, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("readPIDFile(%q) = %q, want a valid PID", path, data)
+	}
+	return pid
+}
+
+// pollOpenCodePIDFile polls pidFile until it contains a valid positive
+// PID, or fails t after timeout.
+func pollOpenCodePIDFile(t *testing.T, pidFile string, timeout time.Duration) int {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+			if convErr == nil && pid > 0 {
+				return pid
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("pollOpenCodePIDFile(%q): no valid PID after %v", pidFile, timeout)
+	return 0
+}
+
+// writeOpenCodeInGroupDescendantScript builds a script whose direct
+// child starts a long-running background job without redirecting its
+// own standard output, so the job inherits the same pipe write end,
+// writes the job's PID to pidFile, emits one step_start event carrying
+// sessionID, and exits normally. The reaper's unconditional group kill
+// is what ends the descendant once the turn returns.
+func writeOpenCodeInGroupDescendantScript(t *testing.T, dir, pidFile, sessionID string) string {
+	t.Helper()
+	body := fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+sleep 3600 &
+printf '%%s\n' "$!" > %s
+printf '{"type":"step_start","timestamp":1000,"sessionID":"%s","part":{"id":"p1","messageID":"m1","sessionID":"%s","snapshot":"","type":"step-start"}}\n'
+exit 0
+`, shellQuote(pidFile), sessionID, sessionID)
+	return writeOpenCodeScript(t, dir, body)
+}
+
+// writeOpenCodeEscapedDescendantScript behaves like
+// writeOpenCodeInGroupDescendantScript, except the background job is
+// started through setsid, so it leaves the process group while still
+// inheriting the standard-output handle and survives the group kill.
+func writeOpenCodeEscapedDescendantScript(t *testing.T, dir, pidFile, sessionID string) string {
+	t.Helper()
+	body := fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+%sprintf '{"type":"step_start","timestamp":1000,"sessionID":"%s","part":{"id":"p1","messageID":"m1","sessionID":"%s","snapshot":"","type":"step-start"}}\n'
+exit 0
+`, writeEscapedHolderSpawn(pidFile, "2>/dev/null"), sessionID, sessionID)
+	return writeOpenCodeScript(t, dir, body)
+}
+
+// TestRunTurn_DescendantHoldsStdout drives the two scripts above through
+// the normal waitCh/postExitC completion path (never through cancellation
+// or StopSession) and asserts properties P1, P3, P5, and P7: the
+// in-group descendant is dead once the turn returns and no abandonment
+// record fires, because the reaper's unconditional group kill releases
+// the reader before sessionState.drainGrace can fire; the escaped
+// descendant survives, the turn still publishes within that bound, and
+// exactly one abandonment record is emitted; and both variants publish
+// the identical disposition and error.
+func TestRunTurn_DescendantHoldsStdout(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stderr drain held open blocks the wait", func(t *testing.T) {
+	t.Run("in-group descendant: no abandonment, descendant dies", func(t *testing.T) {
 		t.Parallel()
 
-		pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
-		collector := procutil.NewStderrCollector(pr, slog.Default())
+		tmpDir := t.TempDir()
+		pidFile := filepath.Join(tmpDir, "descendant.pid")
+		script := writeOpenCodeInGroupDescendantScript(t, tmpDir, pidFile, "ses_ingroup")
 
-		cmd := exec.Command("true")
-		procutil.SetProcessGroup(cmd)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("cmd.Start() = %v", err)
+		spy := &agenttest.LogSpy{}
+		a, _ := NewOpenCodeAdapter(map[string]any{})
+		session := mustStartSession(t, a, tmpDir, script)
+		state := session.Internal.(*sessionState)
+		state.baseLogger = slog.New(spy)
+		state.drainGrace = 200 * time.Millisecond
+
+		start := time.Now()
+		_, result, err := collectEvents(t, a, session, "work")
+		elapsed := time.Since(start)
+
+		if elapsed > 3*time.Second {
+			t.Errorf("RunTurn() took %v, want well under 3s", elapsed)
+		}
+		if result.ExitReason != domain.EventTurnFailed {
+			t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+		}
+		var agentErr *domain.AgentError
+		if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 		}
 
-		readerDone := make(chan struct{})
-		close(readerDone)
+		assertOpenCodeProcessDead(t, readPIDFile(t, pidFile), 3*time.Second)
 
-		runtime := &turnRuntime{
-			readerDone:      readerDone,
-			stderrCollector: collector,
-			waitCh:          make(chan waitResult, 1),
-		}
-
-		startWait(runtime, cmd, 5*time.Second)
-
-		select {
-		case <-runtime.waitCh:
-			t.Fatal("startWait closed waitCh before the stderr drain finished; " +
-				"the WaitDone guard is missing or bypassed")
-		case <-time.After(300 * time.Millisecond):
-		}
-
-		if err := pw.Close(); err != nil {
-			t.Fatalf("pw.Close() = %v", err)
-		}
-
-		select {
-		case <-runtime.waitCh:
-		case <-time.After(5 * time.Second):
-			t.Fatal("startWait did not close waitCh after the stderr drain finished")
+		if got := abandonmentWarnCount(spy); got != 0 {
+			t.Errorf("abandonment WARN count = %d, want 0 (the group kill releases an in-group descendant before the bound fires)", got)
 		}
 	})
 
-	t.Run("stderr drain never reaching EOF is abandoned within the grace", func(t *testing.T) {
+	t.Run("escaped descendant: exactly one abandonment record, turn still bounded", func(t *testing.T) {
+		agenttest.RequireSetsid(t)
 		t.Parallel()
 
-		pr, pw := io.Pipe()
-		t.Cleanup(func() { _ = pw.Close() })
-		collector := procutil.NewStderrCollector(pr, slog.Default())
+		tmpDir := t.TempDir()
+		pidFile := filepath.Join(tmpDir, "escaped.pid")
+		killEscapedGroupOnCleanup(t, pidFile)
+		script := writeOpenCodeEscapedDescendantScript(t, tmpDir, pidFile, "ses_ingroup")
 
-		cmd := exec.Command("true")
-		procutil.SetProcessGroup(cmd)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("cmd.Start() = %v", err)
+		spy := &agenttest.LogSpy{}
+		a, _ := NewOpenCodeAdapter(map[string]any{})
+		session := mustStartSession(t, a, tmpDir, script)
+		state := session.Internal.(*sessionState)
+		state.baseLogger = slog.New(spy)
+		state.drainGrace = 200 * time.Millisecond
+
+		start := time.Now()
+		_, result, err := collectEvents(t, a, session, "work")
+		elapsed := time.Since(start)
+
+		if elapsed > 3*time.Second {
+			t.Errorf("RunTurn() took %v, want well under 3s (property P1: bounded by sessionState.drainGrace)", elapsed)
 		}
 
-		readerDone := make(chan struct{})
-		close(readerDone)
-
-		runtime := &turnRuntime{
-			readerDone:      readerDone,
-			stderrCollector: collector,
-			waitCh:          make(chan waitResult, 1),
+		if got := abandonmentWarnCount(spy); got != 1 {
+			t.Errorf("abandonment WARN count = %d, want exactly 1 (property P3)", got)
 		}
 
-		startWait(runtime, cmd, 100*time.Millisecond)
-
-		select {
-		case <-runtime.waitCh:
-		case <-time.After(5 * time.Second):
-			t.Fatal("startWait did not close waitCh within 5 seconds of a stderr drain that never reaches EOF")
+		if result.ExitReason != domain.EventTurnFailed {
+			t.Errorf("ExitReason = %q, want %q (same disposition as the unabandoned in-group variant, property P7)", result.ExitReason, domain.EventTurnFailed)
 		}
-
-		runtime.waitMu.Lock()
-		got := runtime.waitRes
-		runtime.waitMu.Unlock()
-		if got.exitCode != 0 || got.err != nil {
-			t.Errorf("waitResult = {exitCode: %d, err: %v}, want {exitCode: 0, err: nil}", got.exitCode, got.err)
-		}
-
-		linesCh := make(chan []string, 1)
-		go func() { linesCh <- collector.Lines() }()
-		select {
-		case lines := <-linesCh:
-			if want := []string{procutil.AbandonedMarker}; !slices.Equal(lines, want) {
-				t.Errorf("Lines() after abandonment = %v, want %v", lines, want)
-			}
-		case <-time.After(1 * time.Second):
-			t.Fatal("Lines() did not return the abandonment marker within 1 second")
+		var agentErr *domain.AgentError
+		if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q} (property P7)", err, domain.ErrTurnFailed)
 		}
 	})
 }
 
-// TestStartWait_NoBoundFiresOnLongTurn pins that a turn whose stdout reader
-// outlives the stderr grace is not mistaken for an abandoned drain. The
-// stderr write end is closed synchronously before startWait is invoked, so
-// the drain has already finished by the time the grace would matter; this
-// removes any dependency on a goroutine being scheduled inside the short
-// grace window. runtime.readerDone closes only after 300 milliseconds, so
-// the wait-channel assertion at 200 milliseconds catches an implementation
-// that anchors the stderr bound on anything earlier than that close.
-func TestStartWait_NoBoundFiresOnLongTurn(t *testing.T) {
-	// No t.Parallel(): installs a global slog default.
-	spy := agenttest.InstallLogSpy(t)
+// TestRunTurn_EscapedStderrHolderKeepsLinesUnblocked drives an escaped
+// descendant that holds only the standard-error handle open through a
+// turn whose standard output completes normally, and asserts that
+// startWait's post-reap stderr bound still runs and does not leave
+// finalizeExitedTurn's stderrCollector.Lines() call blocked. This is the
+// regression test the risk assessment names for rewriting
+// opencode.startWait: the package's only Abandon call must survive the
+// rewrite onto procutil.StartReaper.
+func TestRunTurn_EscapedStderrHolderKeepsLinesUnblocked(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
 
-	pr, pw := io.Pipe()
-	collector := procutil.NewStderrCollector(pr, slog.Default())
-	if _, err := io.WriteString(pw, "stderr line\n"); err != nil {
-		t.Fatalf("pw.Write(stderr line) = %v", err)
-	}
-	if err := pw.Close(); err != nil {
-		t.Fatalf("pw.Close() = %v", err)
-	}
-	select {
-	case <-collector.Done():
-	case <-time.After(1 * time.Second):
-		t.Fatal("collector.Done() did not close after the write end was closed")
-	}
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "stderr-holder.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf 'direct child stderr\n' >&2
+%sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_stderr_holder","part":{"id":"p1","messageID":"m1","sessionID":"ses_stderr_holder","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"text","timestamp":1001,"sessionID":"ses_stderr_holder","part":{"id":"p2","messageID":"m1","sessionID":"ses_stderr_holder","type":"text","text":"done","time":{"start":1001,"end":1001}}}\n'
+exit 0
+`, writeEscapedHolderSpawn(pidFile, ">/dev/null")))
 
-	cmd := exec.Command("true")
-	procutil.SetProcessGroup(cmd)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("cmd.Start() = %v", err)
-	}
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+	session.Internal.(*sessionState).drainGrace = 200 * time.Millisecond
 
-	readerDone := make(chan struct{})
+	done := make(chan struct{})
+	var result domain.TurnResult
+	var runErr error
 	go func() {
-		time.Sleep(300 * time.Millisecond)
-		close(readerDone)
+		defer close(done)
+		_, result, runErr = collectEvents(t, a, session, "work")
 	}()
 
-	runtime := &turnRuntime{
-		readerDone:      readerDone,
-		stderrCollector: collector,
-		waitCh:          make(chan waitResult, 1),
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunTurn did not return within 3s; stderrCollector.Lines() may be blocked on the escaped stderr holder")
 	}
 
-	startWait(runtime, cmd, 50*time.Millisecond)
+	if runErr != nil {
+		t.Errorf("RunTurn() error = %v, want nil", runErr)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+}
+
+// TestRunTurn_ContextCancellationArm_BoundedDrain exercises property P8
+// on opencode's context-cancellation early-return arm: with a descendant
+// holding the standard-output handle, the turn still publishes within
+// sessionState.drainGrace and emits exactly one abandonment record; with
+// no descendant, or one that dies with the group, it publishes without
+// spending the bound and without the record.
+func TestRunTurn_ContextCancellationArm_BoundedDrain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		spawn         func(pidFile string) string
+		requireSetsid bool
+		wantAbandon   bool
+		wantDead      bool
+	}{
+		{name: "no descendant"},
+		{
+			name:     "in-group descendant",
+			spawn:    func(pidFile string) string { return "sleep 3600 &\nprintf '%s\\n' \"$!\" > " + pidFile + "\n" },
+			wantDead: true,
+		},
+		{
+			name:          "escaped descendant",
+			spawn:         func(pidFile string) string { return writeEscapedHolderSpawn(pidFile, "2>/dev/null") },
+			requireSetsid: true,
+			wantAbandon:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.requireSetsid {
+				agenttest.RequireSetsid(t)
+			}
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			pidFile := filepath.Join(tmpDir, "descendant.pid")
+			killEscapedGroupOnCleanup(t, pidFile)
+			spawn := ""
+			if tt.spawn != nil {
+				spawn = tt.spawn(pidFile)
+			}
+			script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+%sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_ctxcancel","part":{"id":"p1","messageID":"m1","sessionID":"ses_ctxcancel","snapshot":"","type":"step-start"}}\n'
+sleep 3600
+`, spawn))
+
+			spy := &agenttest.LogSpy{}
+			a, _ := NewOpenCodeAdapter(map[string]any{})
+			session := mustStartSession(t, a, tmpDir, script)
+			state := session.Internal.(*sessionState)
+			state.baseLogger = slog.New(spy)
+			state.drainGrace = 200 * time.Millisecond
+
+			ctx, cancel := context.WithCancel(context.Background())
+			gotEvent := make(chan struct{}, 1)
+			type outcome struct {
+				result domain.TurnResult
+				err    error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				result, runErr := a.RunTurn(ctx, session, domain.RunTurnParams{
+					Prompt: "work",
+					OnEvent: func(domain.AgentEvent) {
+						select {
+						case gotEvent <- struct{}{}:
+						default:
+						}
+					},
+				})
+				done <- outcome{result, runErr}
+			}()
+
+			select {
+			case <-gotEvent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for the first event")
+			}
+
+			start := time.Now()
+			cancel()
+
+			var got outcome
+			select {
+			case got = <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("RunTurn did not return within 3s of cancellation")
+			}
+			if elapsed := time.Since(start); elapsed > 2*time.Second {
+				t.Errorf("RunTurn published %v after cancellation, want well under 2s", elapsed)
+			}
+
+			if got.result.ExitReason != domain.EventTurnCancelled {
+				t.Errorf("ExitReason = %q, want %q", got.result.ExitReason, domain.EventTurnCancelled)
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(got.err, &agentErr) || agentErr.Kind != domain.ErrTurnCancelled {
+				t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q}", got.err, domain.ErrTurnCancelled)
+			}
+
+			wantCount := 0
+			if tt.wantAbandon {
+				wantCount = 1
+			}
+			if got := abandonmentWarnCount(spy); got != wantCount {
+				t.Errorf("abandonment WARN count = %d, want %d", got, wantCount)
+			}
+
+			if tt.wantDead {
+				assertOpenCodeProcessDead(t, readPIDFile(t, pidFile), 3*time.Second)
+			}
+		})
+	}
+}
+
+// TestRunTurn_SessionMismatchArm_BoundedDrain exercises property P8 on
+// opencode's session-mismatch early-return arm: with an escaped
+// descendant holding the standard-output handle, the mismatch turn still
+// publishes within sessionState.drainGrace and emits exactly one
+// abandonment record.
+func TestRunTurn_SessionMismatchArm_BoundedDrain(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "escaped.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+%sprintf '{"type":"step_start","timestamp":1000,"sessionID":"ses_mismatch","part":{"id":"p1","messageID":"m1","sessionID":"ses_mismatch","snapshot":"","type":"step-start"}}\n'
+sleep 3600
+`, writeEscapedHolderSpawn(pidFile, "2>/dev/null")))
+
+	spy := &agenttest.LogSpy{}
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:   tmpDir,
+		AgentConfig:     domain.AgentConfig{Command: script},
+		ResumeSessionID: "ses_expected",
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	state := session.Internal.(*sessionState)
+	state.baseLogger = slog.New(spy)
+	state.drainGrace = 300 * time.Millisecond
+
+	start := time.Now()
+	_, result, runErr := collectEvents(t, a, session, "work")
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Errorf("RunTurn() took %v after a session mismatch, want well under 2s (bounded by sessionState.drainGrace)", elapsed)
+	}
+
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrResponseError {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", runErr, domain.ErrResponseError)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	if got := abandonmentWarnCount(spy); got != 1 {
+		t.Errorf("abandonment WARN count = %d, want exactly 1", got)
+	}
+}
+
+// TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit covers guarantee
+// O12 and the second half of property P8: agent.read_timeout_ms is
+// configured shorter than the injected sessionState.drainGrace, and the
+// subprocess exits without ever emitting a JSON event while an escaped
+// descendant holds the output handle. The published disposition must be
+// the exit-based one, never ErrResponseTimeout: the exit is observed and
+// the read timer disarmed well before read_timeout_ms could elapse.
+func TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "escaped.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+%sexit 0
+`, writeEscapedHolderSpawn(pidFile, "2>/dev/null")))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		// The leader's own exit waits on the escaped descendant's marker
+		// loop (writeEscapedHolderSpawn), polling every 10ms, so the
+		// read timeout needs enough margin over that polling latency to
+		// keep this deterministic rather than racing the scheduler.
+		AgentConfig: domain.AgentConfig{Command: script, ReadTimeoutMS: 300},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	session.Internal.(*sessionState).drainGrace = 800 * time.Millisecond
+
+	_, result, runErr := collectEvents(t, a, session, "work")
+
+	var agentErr *domain.AgentError
+	if errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrResponseTimeout {
+		t.Fatalf("RunTurn() reported ErrResponseTimeout, want the exit-based disposition (guarantee O12): err = %v", runErr)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q (exit 0, no output at all)", result.ExitReason, domain.EventTurnFailed)
+	}
+}
+
+// writeOpenCodeLatchMoveScript builds the fixture the P8 latch-move case
+// needs: a direct child that writes one standard-error line, writes
+// nothing to standard output, and exits; and an escaped descendant that
+// inherits the standard-output handle alone (never standard error too),
+// blocks on gatePath, then writes one JSON event that is neither an
+// error event nor a session-id mismatch, and exits.
+func writeOpenCodeLatchMoveScript(t *testing.T, dir, gatePath, pidFile, sessionID string) string {
+	t.Helper()
+	descendant := fmt.Sprintf(
+		"echo $$ > %s; "+
+			"while [ ! -f %s ]; do sleep 0.02; done; "+
+			`printf '{"type":"text","timestamp":1001,"sessionID":"%s","part":{"id":"p2","messageID":"m1","sessionID":"%s","type":"text","text":"done","time":{"start":1001,"end":1001}}}\n'`,
+		pidFile, shellQuote(gatePath), sessionID, sessionID,
+	)
+	body := fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf 'direct child stderr\n' >&2
+setsid sh -c %s 2>/dev/null &
+while [ ! -s %s ]; do sleep 0.01; done
+exit 0
+`, shellQuote(descendant), shellQuote(pidFile))
+	return writeOpenCodeScript(t, dir, body)
+}
+
+// TestRunTurn_LatchSetDuringPostExitDrain covers P8's third case: a turn
+// whose first JSON event is received only after the exit has been
+// observed must still set the first-JSON latch, so finalizeExitedTurn
+// does not re-emit the direct child's standard error at WARN on a turn
+// that otherwise succeeded. The gate opens no earlier than
+// agent.read_timeout_ms after the direct child has already exited and
+// started the descendant, so by the time it opens the read timer has
+// long been disarmed by the observed exit.
+func TestRunTurn_LatchSetDuringPostExitDrain(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	gatePath := filepath.Join(tmpDir, "gate")
+	pidFile := filepath.Join(tmpDir, "descendant.pid")
+	script := writeOpenCodeLatchMoveScript(t, tmpDir, gatePath, pidFile, "ses_latch")
+
+	spy := &agenttest.LogSpy{}
+	const readTimeoutMS = 150
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: readTimeoutMS},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	state := session.Internal.(*sessionState)
+	state.baseLogger = slog.New(spy)
+	state.drainGrace = 2 * time.Second
+
+	done := make(chan struct{})
+	var result domain.TurnResult
+	var runErr error
+	go func() {
+		defer close(done)
+		_, result, runErr = collectEvents(t, a, session, "work")
+	}()
+
+	descendantPID := pollOpenCodePIDFile(t, pidFile, 5*time.Second)
+	time.Sleep(readTimeoutMS * time.Millisecond)
+	if err := os.WriteFile(gatePath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile(gate) = %v", err)
+	}
+	t.Cleanup(func() { syscall.Kill(-descendantPID, syscall.SIGKILL) }) //nolint:errcheck // best-effort cleanup
 
 	select {
-	case <-runtime.waitCh:
-		t.Fatal("startWait closed waitCh before runtime.readerDone closed; " +
-			"the wait on the stdout reader must stay unbounded")
-	case <-time.After(200 * time.Millisecond):
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunTurn did not return within 3s of opening the gate")
 	}
 
-	select {
-	case <-runtime.waitCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("startWait did not close waitCh after runtime.readerDone closed")
+	var agentErr *domain.AgentError
+	if errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrResponseTimeout {
+		t.Fatalf("RunTurn() reported ErrResponseTimeout, want the exit-based disposition: err = %v", runErr)
 	}
+	_ = result
 
 	for _, e := range spy.Entries() {
-		if e.Level == slog.LevelWarn && e.Msg == "agent stderr was not fully collected before the process was reaped" {
-			t.Errorf("startWait() emitted an abandonment warning on a turn that outlived the grace; entry = %+v", e)
+		if e.Level == slog.LevelWarn && e.Msg == "agent stderr" {
+			t.Errorf("finalizeExitedTurn re-emitted the direct child's stderr at WARN, want none: the latch must be set from the post-exit JSON event: %+v", e)
 		}
 	}
+}
 
-	want := []string{"stderr line"}
-	if got := collector.Lines(); !slices.Equal(got, want) {
-		t.Errorf("Lines() = %v, want %v", got, want)
+// TestRunTurn_ReadTimeoutDoesNotFireWhileStderrBoundRuns drives the gap
+// between the reap and the turn's published result. The wait goroutine
+// reaps first and only then applies the stderr bound, so an escaped
+// descendant holding the standard-error handle delays the result
+// channel by the whole drain grace. A read timeout shorter than that
+// delay fires inside the gap, on a subprocess that has already exited
+// and been reaped, unless the timer is disarmed from the reap itself.
+func TestRunTurn_ReadTimeoutDoesNotFireWhileStderrBoundRuns(t *testing.T) {
+	agenttest.RequireSetsid(t)
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	pidFile := filepath.Join(tmpDir, "stderr-holder-timeout.pid")
+	killEscapedGroupOnCleanup(t, pidFile)
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf 'direct child stderr\n' >&2
+%sexit 0
+`, writeEscapedHolderSpawn(pidFile, ">/dev/null")))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 200},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	// Longer than the read timeout, so the escaped holder keeps the
+	// result channel shut for a window the timer would otherwise win.
+	session.Internal.(*sessionState).drainGrace = 1500 * time.Millisecond
+
+	_, result, runErr := collectEvents(t, a, session, "work")
+
+	var agentErr *domain.AgentError
+	if errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrResponseTimeout {
+		t.Fatalf("RunTurn() reported ErrResponseTimeout on a reaped subprocess: "+
+			"the read timer outlived the reap by the stderr bound; err = %v", runErr)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q (exit 0, no output at all)", result.ExitReason, domain.EventTurnFailed)
+	}
+}
+
+// TestRunTurn_LongTurnOutlivesTheDrainGrace pins where the post-exit
+// bound is anchored. It is armed when the subprocess is reaped, never
+// when the turn starts, so a turn that legitimately runs longer than
+// the grace keeps its output and its disposition. Moving the anchor to
+// the launch would cut every such turn short while every fixture that
+// exits immediately still passed.
+func TestRunTurn_LongTurnOutlivesTheDrainGrace(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+sleep 0.6
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_long","part":{"id":"p1","messageID":"m1","sessionID":"ses_long","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"text","timestamp":1001,"sessionID":"ses_long","part":{"id":"p2","messageID":"m1","sessionID":"ses_long","type":"text","text":"late but complete","time":{"start":1001,"end":1001}}}\n'
+exit 0
+`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+	// Far shorter than the turn: an anchor at launch would expire long
+	// before the agent says anything.
+	session.Internal.(*sessionState).drainGrace = 100 * time.Millisecond
+
+	_, result, runErr := collectEvents(t, a, session, "work")
+
+	if runErr != nil {
+		t.Fatalf("RunTurn() error = %v, want nil: a turn longer than the drain grace must not be cut short", runErr)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
 }

@@ -668,27 +668,54 @@ Graceful shutdown sequence:
 - After `cmd.Wait()` returns, a best-effort force kill is sent to the process group to reap any
   children that survived the graceful signal.
 
-Standard-error drain before reap:
+Standard-output and standard-error ownership:
 
-- The adapter waits for its subprocess's standard-error reader to finish before reaping the
-  process, because reaping closes the pipe's read end and races a reader still consuming
-  buffered output. That wait is bounded, so a descendant that inherits the standard-error
-  handle and outlives the direct child cannot withhold the reap, the process-group termination,
-  or the publication of the turn's outcome.
+- Every local-subprocess family (the shared fork-per-turn skeleton behind Claude Code, Copilot
+  CLI, and Kiro CLI; OpenCode CLI; the Codex app-server; and a locally launched Agent Client
+  Protocol runtime) owns both of its subprocess's pipe read ends for the session or turn's
+  lifetime rather than handing them to the platform's process object. Reaping the subprocess
+  therefore never closes a read end out from under a reader still consuming buffered output on
+  either stream, and the reap runs independently of both readers rather than waiting for either
+  to finish.
+- The reap is anchored on the direct child's own exit. Once the reap and the process-group
+  termination have run, every further wait an adapter performs on a reader is bounded: a
+  descendant that inherits an output handle and outlives the direct child can no longer withhold
+  the reap, the process-group termination, or the turn's published outcome. An adapter that
+  gives up on a reader through an explicit bounded abandon operation emits one WARN record
+  naming the bound; one whose teardown closes its own read end instead reaches the same
+  release without such a record.
 - Reaping the process and terminating its group are what release such a reader in the ordinary
-  case, so the turn keeps the standard-error output the reader had already collected.
-- When neither release ends the wait, the turn's collected standard-error output is replaced by
-  a marker, and an adapter whose success evidence lives on standard error reports the turn
-  failed rather than succeeded.
-- Teardown can spend time in up to four separately bounded waits: the graceful wait before the
-  force-terminate (`agent.stop_grace_ms`), the standard-error drain before the reap, the reap wait
-  where an adapter bounds it, and a second standard-error drain after that reap wait. The three
-  drain-related waits default to five seconds each; at the default `agent.stop_grace_ms` of 5000,
-  a teardown that runs all four spends at most 20 seconds in them, and raising
-  `agent.stop_grace_ms` lengthens that total by the same amount, less whenever the caller's
-  deadline is shorter. Where a session-close attempt runs, per the graceful shutdown sequence
-  above, it is bounded at half the graceful wait and spent inside it rather than beside it, so
-  it adds nothing to that total.
+  case, so the turn keeps whatever output the reader had already collected.
+- An abandoned standard-output scan is not itself reported as a read failure: the exit code
+  decides the turn, and the drain that precedes the abandonment takes the lines already offered
+  to the consumer. It is bounded, so a producer still writing when it expires loses the tail
+  behind it, and a turn whose terminal evidence was in that tail falls to the exit-based
+  disposition rather than the one that evidence would have given. An abandoned
+  standard-error drain still flips the disposition of an adapter whose success evidence lives on
+  standard error (Kiro CLI's disposition depends on its standard-error trailer), replacing the
+  collected output with a marker and reporting the turn failed rather than succeeded.
+
+Per-family teardown totals, at default configuration:
+
+- The shared fork-per-turn skeleton (Claude Code, Copilot CLI, Kiro CLI): the graceful signal
+  wait (`agent.stop_grace_ms`), the standard-error drain bound, and the standard-output
+  drain-after-reap bound, 15 seconds total at defaults.
+- OpenCode CLI: the same three waves, plus its own pre-turn read timeout
+  (`agent.read_timeout_ms`), which bounds the wait for the turn's first event rather than any
+  part of teardown.
+- The Codex app-server: its graceful wait and its two fixed two-second cleanup waits are
+  unchanged by standard-output ownership. It separately carries a release bounded by the
+  standard-output drain bound, running from session start through the handshake and every turn
+  rather than as one of `StopSession`'s own waits, that ends a handshake call or a turn otherwise
+  left waiting on a runtime that died while an escaped descendant still held the output handle.
+- A locally launched Agent Client Protocol runtime: its pinned teardown ceiling is unchanged,
+  `agent.stop_grace_ms` plus three times the standard-error drain bound, 20 seconds at defaults.
+  It reaches that ceiling through its own caller-owned pipes and a final pipe-release step now,
+  rather than through the platform's automatic close of pipes it did not own.
+
+Where a session-close attempt runs, per the graceful shutdown sequence above, it is bounded at
+half the graceful wait and spent inside it rather than beside it, so it adds nothing to any of
+these totals.
 
 Recommended additional process settings:
 

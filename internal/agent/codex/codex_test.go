@@ -722,16 +722,17 @@ func startFakeCodexProcess(t *testing.T, scriptBody string, stopGraceMS int) *se
 	readerDone := make(chan struct{})
 	close(readerDone)
 
+	waitCh := make(chan struct{})
 	state := &sessionState{
 		agentConfig: domain.AgentConfig{StopGraceMS: stopGraceMS},
 		proc:        cmd.Process,
-		waitCh:      make(chan struct{}),
+		waitCh:      waitCh,
 		readerDone:  readerDone,
 		stopCh:      make(chan struct{}),
 	}
 	go func() {
 		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit state is irrelevant here
-		close(state.waitCh)
+		close(waitCh)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -867,4 +868,158 @@ while :; do :; done`, 30000)
 			t.Errorf("StopSession()'s Warn record did not report the configured 30s ceiling: %s", output)
 		}
 	})
+}
+
+// writeFakeAppServerScriptTerminalParked creates a script that fakes the
+// codex app-server handshake exactly as writeFakeAppServerScript does,
+// then reads a decimal fill count from its own standard input, writes
+// that many filler notifications as a single write, and only after a
+// second line arrives on its standard input does it write the terminal
+// turn/completed notification and exit. Properties P10 and P11 drive
+// state.msgCh directly against this script rather than through RunTurn,
+// because a draining consumer cannot hold the reader parked and a
+// parked reader cannot deliver turn/start's own response in the first
+// place.
+func writeFakeAppServerScriptTerminalParked(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	content := `read -r _init_req
+printf '{"id":1,"result":{}}\n'
+read -r _initialized_notif
+read -r _account_read_req
+printf '{"id":2,"result":{}}\n'
+read -r _thread_start_req
+printf '{"id":3,"result":{"thread":{"id":"fake-thread-1"}}}\n'
+printf '{"method":"thread/started","params":{}}\n'
+read -r COUNT
+i=0
+FILL=""
+while [ "$i" -lt "$COUNT" ]; do
+  FILL="${FILL}{\"method\":\"filler/notification\",\"params\":{\"i\":$i}}
+"
+  i=$((i+1))
+done
+printf '%s' "$FILL"
+read -r _go
+printf '{"method":"turn/completed","params":{"turn":{"id":"t1","status":"completed"}}}\n'
+`
+	return agenttest.WriteScript(t, dir, "fake-codex-app-server-terminal-parked", content)
+}
+
+// runTerminalMessageFixture drives writeFakeAppServerScriptTerminalParked
+// through the five-step sequence properties P10 and P11 share: it fills
+// state.msgCh to capacity plus one so the connection's reader is parked
+// delivering the last filler message, waits for that to be observed,
+// signals the script to write its terminal message and exit, waits for
+// state.waitCh (Reaper.Done) so the reap is observed before the reader
+// can resume, and only then drains state.msgCh until it closes.
+//
+// closeStdoutAfterReap reproduces, locally in this test's own wiring,
+// the truncation exec.Cmd.Wait used to perform before the ownership
+// move: closing the standard-output read end at the instant the reap is
+// observed. It is never applied in production code. Property P10 calls
+// this with false; P11, the negative control, calls it with true and
+// expects the terminal message to be lost.
+//
+// It returns whether a turn/completed notification was among the
+// messages drained.
+func runTerminalMessageFixture(t *testing.T, closeStdoutAfterReap bool) bool {
+	t.Helper()
+	t.Setenv("CODEX_API_KEY", "")
+
+	script := writeFakeAppServerScriptTerminalParked(t)
+
+	adapter := &CodexAdapter{drainGrace: 10 * time.Second}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
+	}
+	t.Cleanup(func() {
+		_ = adapter.StopSession(context.Background(), session)
+	})
+
+	// The capacity travels over the wire rather than as a literal: a
+	// second copy of codex.go's make(chan jsonrpc.Message, 16) would
+	// silently stop exercising the park if that capacity ever changes.
+	capacity := cap(state.msgCh)
+	if _, err := fmt.Fprintf(state.stdin, "%d\n", capacity+1); err != nil {
+		t.Fatalf("write fill count: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(state.msgCh) < capacity {
+		if time.Now().After(deadline) {
+			t.Fatalf("len(state.msgCh) = %d, want %d within 5s (the reader must be parked delivering the fill)", len(state.msgCh), capacity)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if _, err := fmt.Fprintln(state.stdin, "go"); err != nil {
+		t.Fatalf("write go signal: %v", err)
+	}
+
+	select {
+	case <-state.waitCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("state.waitCh (Reaper.Done) did not close within 5s")
+	}
+
+	if closeStdoutAfterReap {
+		if state.pipes == nil {
+			t.Fatal("state.pipes is nil at the reap, want the pipes still owned by the session")
+		}
+		if err := state.pipes.CloseStdout(); err != nil {
+			t.Fatalf("CloseStdout() = %v", err)
+		}
+	}
+
+	var sawCompleted bool
+	drainDeadline := time.After(5 * time.Second)
+drain:
+	for {
+		select {
+		case msg, ok := <-state.msgCh:
+			if !ok {
+				break drain
+			}
+			if msg.Kind == jsonrpc.KindNotification && msg.Method == "turn/completed" {
+				sawCompleted = true
+			}
+		case <-drainDeadline:
+			t.Fatal("draining state.msgCh did not finish within 5s")
+		}
+	}
+
+	return sawCompleted
+}
+
+// TestStartSession_TerminalMessageDeliveredWhileReaderParked covers
+// property P10: a session whose runtime writes a terminal message and
+// exits while the connection's reader is parked mid-dispatch still
+// delivers that message to state.msgCh, because the reap no longer
+// closes the read end out from under it.
+func TestStartSession_TerminalMessageDeliveredWhileReaderParked(t *testing.T) {
+	if !runTerminalMessageFixture(t, false) {
+		t.Error("turn/completed was not delivered to state.msgCh, want it recovered once the reader resumed")
+	}
+}
+
+// TestStartSession_ReapClosingStdoutTruncatesTerminalMessage is
+// property P11, the negative control for P10: closing the standard-
+// output read end at the instant the reap is observed, which is where
+// exec.Cmd.Wait closed it before this change, loses the terminal
+// message P10 recovers. A green result here means the fixture never
+// parked the reader in the first place, and the fixture rather than the
+// production change would be what to fix.
+func TestStartSession_ReapClosingStdoutTruncatesTerminalMessage(t *testing.T) {
+	if runTerminalMessageFixture(t, true) {
+		t.Error("turn/completed was delivered despite closing the read end at the reap, want it lost (negative control did not reproduce the truncation)")
+	}
 }

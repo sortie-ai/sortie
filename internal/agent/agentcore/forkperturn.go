@@ -1,8 +1,8 @@
 package agentcore
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,21 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
-)
-
-const (
-	// stdoutScannerMaxTokenSize is the maximum JSONL token size for the
-	// stdout bufio.Scanner. Lines exceeding this limit cause
-	// scanner.Err() to return bufio.ErrTooLong, which is handled as a
-	// scan-error path (TurnFailed / ErrPortExit, or TurnCancelled if ctx
-	// was already done).
-	stdoutScannerMaxTokenSize = 10 * 1024 * 1024 // 10 MB
-
-	// stdoutScannerInitialBufSize is the initial buffer capacity
-	// allocated for the stdout scanner. Growth up to
-	// stdoutScannerMaxTokenSize is handled by bufio.Scanner automatically.
-	stdoutScannerInitialBufSize = 64 * 1024 // 64 KB
-
 )
 
 // ForkPerTurnHooks provides the adapter-specific behavior points plugged into
@@ -101,8 +86,10 @@ type ForkPerTurnHooks struct {
 	// lastParsed is the last non-nil value returned by ParseLine during
 	// the scan loop, or nil if no terminal event was observed.
 	// exitCode is the process exit code extracted by
-	// [procutil.ExtractExitCode]. stderrLines contains all lines drained
-	// from the stderr pipe before cmd.Wait() was called.
+	// [procutil.ExtractExitCode]. stderrLines contains the lines
+	// collected from the stderr pipe by the time the skeleton's bounded
+	// drain ended, which runs after the reap rather than before it; a
+	// drain that hit its bound reports the abandonment marker instead.
 	//
 	// The skeleton calls [procutil.EmitWarnLines] automatically when
 	// OnFinalize returns a non-nil *[domain.AgentError]. The adapter MUST
@@ -261,48 +248,65 @@ func (s *ForkPerTurnSession) RunTurn(
 	cmd.Dir = s.target.WorkspacePath
 	cmd.Env = os.Environ()
 
-	stdoutPipe, err := cmd.StdoutPipe()
+	// Lock before starting the pipes and the process together, so a Stop
+	// arriving in a reopened window cannot read s.proc == nil and miss
+	// signaling a process that was about to be recorded.
+	s.mu.Lock()
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
 	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stdout pipe",
-			Err:     err,
+		s.mu.Unlock()
+
+		var startErr *procutil.StartError
+		if !errors.As(err, &startErr) {
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to start subprocess",
+				Err:     err,
+			}
 		}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stderr pipe",
-			Err:     err,
+
+		switch startErr.Stage {
+		case procutil.StageStdoutPipe:
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to create stdout pipe",
+				Err:     startErr.Err,
+			}
+		case procutil.StageStderrPipe:
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to create stderr pipe",
+				Err:     startErr.Err,
+			}
+		default: // procutil.StageProcessStart
+			if ctx.Err() != nil {
+				usage := s.hooks.GetUsage()
+				EmitTurnCancelled(emit, "context cancelled", usage)
+				result := domain.TurnResult{
+					SessionID:  s.hooks.GetSessionID(),
+					ExitReason: domain.EventTurnCancelled,
+					Usage:      usage,
+				}
+				return result, &domain.AgentError{
+					Kind:    domain.ErrTurnCancelled,
+					Message: "turn cancelled",
+					Err:     ctx.Err(),
+				}
+			}
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to start subprocess",
+				Err:     startErr.Err,
+			}
 		}
 	}
 
-	// Lock before Start to prevent a race with Stop.
-	s.mu.Lock()
-	err = cmd.Start()
-	if err != nil {
-		s.mu.Unlock()
-		if ctx.Err() != nil {
-			usage := s.hooks.GetUsage()
-			EmitTurnCancelled(emit, "context cancelled", usage)
-			result := domain.TurnResult{
-				SessionID:  s.hooks.GetSessionID(),
-				ExitReason: domain.EventTurnCancelled,
-				Usage:      usage,
-			}
-			return result, &domain.AgentError{
-				Kind:    domain.ErrTurnCancelled,
-				Message: "turn cancelled",
-				Err:     ctx.Err(),
-			}
-		}
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to start subprocess",
-			Err:     err,
-		}
-	}
+	// The turn's only close of either pipe end: exec.Cmd closes neither
+	// once the pipes are caller-owned, and every return past this point
+	// sits behind the stderr collector's own bound below, so a deferred
+	// close here cannot cut that bound short.
+	defer pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
+
 	if assignErr := procutil.AssignProcess(cmd.Process.Pid, cmd.Process); assignErr != nil {
 		s.logger.Warn("process group assignment failed", slog.Any("error", assignErr))
 	}
@@ -317,37 +321,91 @@ func (s *ForkPerTurnSession) RunTurn(
 		EmitSessionStarted(emit, pidStr, s.hooks.EmitSessionStartID())
 	}
 
-	stderrCollector := procutil.NewStderrCollector(stderrPipe, s.logger)
-
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Buffer(make([]byte, 0, stdoutScannerInitialBufSize), stdoutScannerMaxTokenSize)
+	stderrCollector := procutil.NewStderrCollector(pipes.Stderr, s.logger)
+	reader := procutil.NewStdoutReader(pipes.Stdout, s.logger)
+	reaper := procutil.StartReaper(cmd)
 
 	var lastParsed any
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	parseLine := func(line []byte) {
 		result, parseErr := s.hooks.ParseLine(line, emit, pidStr)
 		if parseErr != nil {
 			EmitMalformed(emit, line)
-			continue
+			return
 		}
 		if result != nil {
 			lastParsed = result
 		}
 	}
 
-	if scanErr := scanner.Err(); scanErr != nil {
-		cancelCmd()
-		drained := stderrCollector.WaitDone(s.drainGrace) // bound the wait before cmd.Wait() closes the pipe
-		cmd.Wait()                                        //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
-		procutil.KillProcessGroup(cmd.Process.Pid)        //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
+	reaped := false
+	reaperDone := reaper.Done()
+	var deadline <-chan time.Time
+	var deadlineAt time.Time
+
+loop:
+	for {
+		// Checked ahead of the select, not as one of its arms: a
+		// descendant that keeps writing holds the line arm ready, and
+		// the choice among ready arms is random, so the deadline arm
+		// could be passed over for as long as that descendant talks.
+		if !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
+			drainReaderBounded(reader, deadlineAt, s.drainGrace, parseLine)
+			break loop
+		}
+
+		select {
+		case line, ok := <-reader.Stream():
+			if !ok {
+				if reader.Err() != nil && !reaped {
+					cancelCmd()
+				}
+				break loop
+			}
+			parseLine(line)
+
+		case <-reaperDone:
+			close(localWaitCh)
+			s.mu.Lock()
+			s.proc = nil
+			s.waitCh = nil
+			s.mu.Unlock()
+			reaped = true
+			reaperDone = nil
+			deadline = time.After(s.drainGrace)
+			deadlineAt = time.Now().Add(s.drainGrace)
+
+		case <-deadline:
+			drainReaderBounded(reader, deadlineAt, s.drainGrace, parseLine)
+			break loop
+		}
+	}
+
+	// Standard output reached end of file, so every write end is
+	// closed and the child has exited or is about to; a child that
+	// closed its output and kept running is a turn that is still
+	// running, so this wait carries no bound of its own.
+	if !reaped {
+		<-reaper.Done()
 		close(localWaitCh)
 		s.mu.Lock()
 		s.proc = nil
 		s.waitCh = nil
 		s.mu.Unlock()
+	}
 
+	waitErr := reaper.Err()
+	scanErr := reader.Err()
+
+	if !stderrCollector.WaitDone(s.drainGrace) {
+		stderrCollector.Abandon(s.drainGrace)
+	}
+	stderrLines := stderrCollector.Lines()
+
+	// An abandoned scan is not a read failure: the exit code is real and
+	// the transcript is complete except for the tail an abandoned reader
+	// can lose, so it falls through to the exit-based arms below rather
+	// than reporting a scanner error.
+	if scanErr != nil && !errors.Is(scanErr, procutil.ErrStdoutAbandoned) {
 		// Context cancellation propagates through exec.CommandContext
 		// and can surface as a pipe read error. Treat as cancellation.
 		if ctx.Err() != nil {
@@ -365,13 +423,6 @@ func (s *ForkPerTurnSession) RunTurn(
 			}
 		}
 
-		if !drained {
-			if !stderrCollector.WaitDone(s.drainGrace) {
-				stderrCollector.Abandon(s.drainGrace)
-			}
-		}
-		stderrLines := stderrCollector.Lines()
-
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		usage := s.hooks.GetUsage()
 		EmitTurnFailed(emit, "stdout read error: "+scanErr.Error(), 0, usage)
@@ -387,20 +438,6 @@ func (s *ForkPerTurnSession) RunTurn(
 		}
 	}
 
-	// Bound the wait for stderr before cmd.Wait() to avoid losing
-	// buffered data: cmd.Wait() closes the pipe read end, which can
-	// prevent the drain goroutine from reading data that the process
-	// already wrote.
-	drained := stderrCollector.WaitDone(s.drainGrace)
-	waitErr := cmd.Wait()
-	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-	procutil.CleanupProcess(cmd.Process.Pid)
-	close(localWaitCh)
-	s.mu.Lock()
-	s.proc = nil
-	s.waitCh = nil
-	s.mu.Unlock()
-
 	if ctx.Err() != nil {
 		usage := s.hooks.GetUsage()
 		EmitTurnCancelled(emit, "context cancelled", usage)
@@ -415,13 +452,6 @@ func (s *ForkPerTurnSession) RunTurn(
 			Err:     ctx.Err(),
 		}
 	}
-
-	if !drained {
-		if !stderrCollector.WaitDone(s.drainGrace) {
-			stderrCollector.Abandon(s.drainGrace)
-		}
-	}
-	stderrLines := stderrCollector.Lines()
 
 	exitCode := procutil.ExtractExitCode(waitErr)
 
@@ -467,9 +497,11 @@ func (s *ForkPerTurnSession) RunTurn(
 	return result, nil
 }
 
-// Stop signals the active subprocess to exit gracefully and waits for RunTurn
-// to complete cleanup. If no subprocess is running, Stop returns immediately
-// with nil.
+// Stop signals the active subprocess to exit gracefully and waits for it to
+// be reaped and its process group cleaned up, which RunTurn's wait sequence
+// reports as soon as the reap completes rather than at the end of its own
+// stdout drain. If no subprocess is running, Stop returns immediately with
+// nil.
 //
 // Shutdown sequence:
 //  1. SIGTERM to process group ([procutil.SignalGraceful])
@@ -508,4 +540,27 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}
+}
+
+// drainReaderBounded takes whatever the reader has already produced and
+// gives up on it at capAt, the one deadline the post-reap wait carries:
+// starting a fresh grace here would let a descendant that keeps writing
+// spend two of them. The deadline is checked before each line because a
+// descendant that keeps writing holds the stream ready, so an arm that
+// merely competes with it can be passed over indefinitely. grace is
+// reported in the abandonment record and does not extend the wait.
+func drainReaderBounded(reader *procutil.StdoutReader, capAt time.Time, grace time.Duration, parseLine func([]byte)) {
+	for time.Now().Before(capAt) {
+		select {
+		case line, ok := <-reader.Stream():
+			if !ok {
+				return
+			}
+			parseLine(line)
+		default:
+			reader.Abandon(grace)
+			return
+		}
+	}
+	reader.Abandon(grace)
 }

@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+// RequireSetsid skips t cleanly when the setsid binary is not on PATH.
+// An escaped-descendant fixture needs it to detach a background job into
+// its own session, so it survives the process-group termination the
+// fixture exercises. setsid ships with util-linux and is absent on
+// macOS, which keeps a suite failing there for a reason unrelated to
+// what it tests.
+func RequireSetsid(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skipf("skipping: setsid not found on PATH: %v", err)
+	}
+}
+
 // WriteScript writes an executable shell script with the given content to
 // dir/name and returns the absolute path.
 //

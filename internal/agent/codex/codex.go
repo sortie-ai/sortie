@@ -10,6 +10,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -50,6 +51,14 @@ var _ domain.AgentAdapter = (*CodexAdapter)(nil)
 // the [domain.Session] Internal field.
 type CodexAdapter struct {
 	passthrough passthroughConfig
+
+	// drainGrace bounds the post-reap release goroutine's wait for the
+	// connection's own reader to end normally, once StartSession copies
+	// it into sessionState.drainGrace. A non-positive value resolves to
+	// procutil.DefaultDrainGrace. Set by a test in this package before
+	// StartSession; every production caller reaches only NewCodexAdapter,
+	// which leaves it at its zero value.
+	drainGrace time.Duration
 }
 
 // sessionState is adapter-internal state stored in [domain.Session]
@@ -100,16 +109,22 @@ type sessionState struct {
 	// and never cleared.
 	usageMeasured bool
 
-	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
+	// mu guards proc, waitCh, stdin, pipes, and stderrCollector for
 	// concurrent access from StopSession and the process-exit
 	// watcher. It guards no write to the peer; conn owns its own
 	// write mutex.
 	mu              sync.Mutex
 	proc            *os.Process
-	waitCh          chan struct{}
+	waitCh          <-chan struct{}
 	stdin           io.WriteCloser
-	stdout          io.ReadCloser
+	pipes           *procutil.OwnedPipes
 	stderrCollector *procutil.StderrCollector
+
+	// drainGrace bounds the post-reap release goroutine's wait for the
+	// connection's own reader to end normally after the subprocess has
+	// been reaped. Copied from CodexAdapter.drainGrace in StartSession,
+	// resolving a non-positive value to procutil.DefaultDrainGrace.
+	drainGrace time.Duration
 
 	// Session-scoped delivery channel. The handler bound to this
 	// state, invoked on conn's reader goroutine, delivers every
@@ -173,6 +188,36 @@ func watchTermination(state *sessionState) {
 	<-state.conn.Done()
 	close(state.msgCh)
 	close(state.readerDone)
+}
+
+// release starts a goroutine that waits for the subprocess to be
+// reaped, then gives the connection's own reader up to grace to end on
+// its own before closing the standard-output read end itself. Without
+// it, a runtime that dies while an escaped descendant still holds the
+// output handle leaves every handshake call and turn waiting on a
+// reader that cannot end, because the reap no longer closes that
+// handle. Every value it touches is captured at construction rather
+// than read from session state, so a failure path that clears
+// state.pipes under state.mu cannot race it.
+//
+// Closing the read end releases a reader parked in a read. It does not
+// release one parked inside the handler on a full message channel,
+// whose only escape is the stop channel: that reader issues no further
+// read and so never observes the close.
+func release(pipes *procutil.OwnedPipes, grace time.Duration, connDone, reaperDone <-chan struct{}, logger *slog.Logger) {
+	go func() {
+		<-reaperDone
+
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-connDone:
+		case <-timer.C:
+			pipes.CloseStdout() //nolint:errcheck,gosec // best-effort; releases a reader parked on a dead runtime's descendant
+			logger.Warn("agent stdout was not fully collected before the session ended",
+				slog.Duration("drain_bound", grace))
+		}
+	}()
 }
 
 // beginTurnPhase discards whatever the handshake-phase handler
@@ -266,28 +311,41 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			Err:     err,
 		}
 	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stdout pipe",
-			Err:     err,
-		}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stderr pipe",
-			Err:     err,
-		}
-	}
 
-	if err := cmd.Start(); err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to start app-server subprocess",
-			Err:     err,
+	pipes, err := procutil.StartWithOwnedPipes(cmd)
+	if err != nil {
+		var startErr *procutil.StartError
+		if !errors.As(err, &startErr) {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to start app-server subprocess",
+				Err:     err,
+			}
+		}
+		// Both pipe stages fail before cmd.Start, whose deferred cleanup
+		// is what closes the parent's stdin end on a failed launch, so
+		// these close it instead. The process-start stage needs none.
+		switch startErr.Stage {
+		case procutil.StageStdoutPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to create stdout pipe",
+				Err:     startErr.Err,
+			}
+		case procutil.StageStderrPipe:
+			stdinPipe.Close() //nolint:errcheck,gosec // best-effort; the pipe error is what the caller needs
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to create stderr pipe",
+				Err:     startErr.Err,
+			}
+		default: // procutil.StageProcessStart
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: "failed to start app-server subprocess",
+				Err:     startErr.Err,
+			}
 		}
 	}
 
@@ -298,17 +356,15 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	state.proc = cmd.Process
 	state.stdin = stdinPipe
-	state.stdout = stdoutPipe
-	state.waitCh = make(chan struct{})
-	state.stderrCollector = procutil.NewStderrCollector(stderrPipe, logger)
+	state.pipes = pipes
+	state.drainGrace = a.drainGrace
+	if state.drainGrace <= 0 {
+		state.drainGrace = procutil.DefaultDrainGrace
+	}
+	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, logger)
 
-	// Background goroutine to close waitCh when the process exits.
-	go func() {
-		cmd.Wait()                                 //nolint:errcheck,gosec // exit code handled via waitCh
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-		close(state.waitCh)
-	}()
+	reaper := procutil.StartReaper(cmd)
+	state.waitCh = reaper.Done()
 
 	// killOnError is a cleanup closure used if any handshake step fails.
 	killOnError := func() {
@@ -316,8 +372,8 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		if state.stdin != nil {
 			state.stdin.Close() //nolint:errcheck,gosec // best-effort cleanup
 		}
-		if state.stdout != nil {
-			state.stdout.Close() //nolint:errcheck,gosec // unblock the reader goroutine on the read end
+		if state.pipes != nil {
+			state.pipes.CloseStdout() //nolint:errcheck,gosec // unblock the reader goroutine on the read end
 		}
 		state.mu.Unlock()
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup
@@ -329,7 +385,10 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		state.mu.Lock()
 		state.proc = nil
 		state.stdin = nil
-		state.stdout = nil
+		if state.pipes != nil {
+			state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup; StartSession's failure paths return no session to close these later
+		}
+		state.pipes = nil
 		state.mu.Unlock()
 	}
 
@@ -340,10 +399,16 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	state.msgCh = make(chan jsonrpc.Message, 16)
 	state.readerDone = make(chan struct{})
 
-	state.conn = jsonrpc.NewConn(stdinPipe, stdoutPipe, sessionHandler(state))
+	state.conn = jsonrpc.NewConn(stdinPipe, pipes.Stdout, sessionHandler(state))
 	// Started before the handshake so the handshake wait loops observe
 	// a closed msgCh, rather than timing out, when stdout ends mid-handshake.
 	go watchTermination(state)
+	// release ends a handshake call or a turn that would otherwise wait
+	// forever on a runtime that died while an escaped descendant still
+	// holds the output handle. It captures its own copies of pipes and
+	// the connection's done channel because killOnError clears
+	// state.pipes under state.mu on every handshake failure path below.
+	release(pipes, state.drainGrace, state.conn.Done(), reaper.Done(), logger)
 
 	if err := initializeHandshake(ctx, state); err != nil {
 		state.closeConnAndStop()
@@ -553,7 +618,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 		case msg, ok := <-state.msgCh:
 			if !ok {
-				// Channel closed — subprocess stdout ended.
+				// Channel closed, subprocess stdout ended.
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -916,6 +981,7 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		state.stdin.Close() //nolint:errcheck,gosec // best-effort cleanup
 	}
 	waitCh := state.waitCh
+	pipes := state.pipes
 	pid := 0
 	if state.proc != nil {
 		pid = state.proc.Pid
@@ -961,6 +1027,13 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		}
 	}
 
+	// Release the connection's reader before waiting for it below: a
+	// descendant that inherited the output handle and outlived the
+	// direct child would otherwise leave that reader parked forever.
+	if pipes != nil {
+		pipes.CloseStdout() //nolint:errcheck,gosec // best-effort; unparks the connection's reader for the wait below
+	}
+
 	// Wait for the reader goroutine to finish after process exit.
 	if state.readerDone != nil {
 		select {
@@ -973,7 +1046,10 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	state.mu.Lock()
 	state.proc = nil
 	state.stdin = nil
-	state.stdout = nil
+	if state.pipes != nil {
+		state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
+	}
+	state.pipes = nil
 	state.waitCh = nil
 	state.mu.Unlock()
 
