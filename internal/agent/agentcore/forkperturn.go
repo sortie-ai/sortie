@@ -86,8 +86,10 @@ type ForkPerTurnHooks struct {
 	// lastParsed is the last non-nil value returned by ParseLine during
 	// the scan loop, or nil if no terminal event was observed.
 	// exitCode is the process exit code extracted by
-	// [procutil.ExtractExitCode]. stderrLines contains all lines drained
-	// from the stderr pipe before cmd.Wait() was called.
+	// [procutil.ExtractExitCode]. stderrLines contains the lines
+	// collected from the stderr pipe by the time the skeleton's bounded
+	// drain ended, which runs after the reap rather than before it; a
+	// drain that hit its bound reports the abandonment marker instead.
 	//
 	// The skeleton calls [procutil.EmitWarnLines] automatically when
 	// OnFinalize returns a non-nil *[domain.AgentError]. The adapter MUST
@@ -362,16 +364,32 @@ loop:
 			deadline = time.After(s.drainGrace)
 
 		case <-deadline:
+			// The non-blocking arm is not a bound on its own: a
+			// descendant that keeps writing holds Stream() ready, so the
+			// loop would take lines for as long as it produces them.
+			// The cap is checked first for the same reason.
+			drainCap := time.NewTimer(s.drainGrace)
 			for draining := true; draining; {
 				select {
-				case line, ok := <-reader.Stream():
-					if !ok {
-						draining = false
-						continue
-					}
-					parseLine(line)
-				default:
+				case <-drainCap.C:
 					draining = false
+				default:
+					select {
+					case line, ok := <-reader.Stream():
+						if !ok {
+							draining = false
+							continue
+						}
+						parseLine(line)
+					default:
+						draining = false
+					}
+				}
+			}
+			if !drainCap.Stop() {
+				select {
+				case <-drainCap.C:
+				default:
 				}
 			}
 			reader.Abandon(s.drainGrace)
