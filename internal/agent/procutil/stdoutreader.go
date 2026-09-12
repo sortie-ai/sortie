@@ -21,12 +21,13 @@ type StdoutReader struct {
 	done   chan struct{}
 	logger *slog.Logger
 
-	// mu guards err, which the scan goroutine writes once when its scan
-	// ends and Err reads. A consumer may call Err while the scan is
-	// still parked in a read, so the two cannot be ordered by the
-	// consumer alone.
-	mu  sync.Mutex
-	err error
+	// mu guards err and finished. The scan goroutine publishes both
+	// when its scan ends and Abandon reads finished to decide whether
+	// there is anything left to give up on, so the completion and the
+	// abandonment are one transition rather than two racing ones.
+	mu       sync.Mutex
+	err      error
+	finished bool
 
 	abandonOnce sync.Once
 	abandoned   chan struct{}
@@ -78,6 +79,7 @@ func (r *StdoutReader) scan(src io.Reader) {
 	default:
 		r.err = scanner.Err()
 	}
+	r.finished = true
 	r.mu.Unlock()
 
 	close(r.stream)
@@ -86,8 +88,8 @@ func (r *StdoutReader) scan(src io.Reader) {
 
 // Stream returns the unbuffered channel the reader delivers scanned
 // lines on. Each received slice is owned by the consumer. The channel
-// closes when the scan goroutine returns, and never because of Abandon
-// alone.
+// closes when the scan goroutine returns, which Abandon can bring about
+// by releasing a delivery the goroutine is parked on.
 func (r *StdoutReader) Stream() <-chan []byte {
 	return r.stream
 }
@@ -134,14 +136,21 @@ func (r *StdoutReader) WaitDone(d time.Duration) bool {
 // latch and does nothing when the scan has already returned.
 func (r *StdoutReader) Abandon(bound time.Duration) {
 	r.abandonOnce.Do(func() {
-		select {
-		case <-r.done:
+		// Tested under the lock the scan goroutine publishes its
+		// completion with: reading the done channel instead would let a
+		// scan that ended between the test and the close be reported as
+		// abandoned, warning about a reader nothing gave up on and
+		// replacing the outcome it had already recorded.
+		r.mu.Lock()
+		if r.finished {
+			r.mu.Unlock()
 			return
-		default:
 		}
+		close(r.abandoned)
+		r.mu.Unlock()
+
 		r.logger.Warn("agent stdout was not fully collected before the turn ended",
 			slog.Duration("drain_bound", bound))
-		close(r.abandoned)
 	})
 }
 
@@ -154,13 +163,18 @@ func (r *StdoutReader) Abandon(bound time.Duration) {
 // is parked in a read nothing but the pipe's close will release, so
 // waiting for it here would block the caller that just gave up on it.
 func (r *StdoutReader) Err() error {
+	r.mu.Lock()
+	if r.finished {
+		err := r.err
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Unlock()
+
 	select {
 	case <-r.abandoned:
 		return ErrStdoutAbandoned
 	default:
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.err
+	return nil
 }

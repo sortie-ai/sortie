@@ -6,8 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -230,77 +230,119 @@ type failingReader struct{ err error }
 
 func (f *failingReader) Read([]byte) (int, error) { return 0, f.err }
 
+// parkedReader blocks its first Read until released, and reports when
+// the scan goroutine has actually entered it. Without that signal a
+// test racing Abandon against the scan can abandon a reader that is not
+// yet parked, and pass while proving nothing.
+type parkedReader struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *parkedReader) Read([]byte) (int, error) {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return 0, io.EOF
+}
+
+func newParkedReader() *parkedReader {
+	return &parkedReader{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
 // TestStdoutReader_AbandonWhileParkedInRead asserts that a reader
 // abandoned while its scan is parked in a read reports the abandonment
-// rather than the error the eventual pipe close produces. This is the
+// rather than whatever the eventual release produces. This is the
 // ordinary shape of abandonment, not an edge case: a consumer gives up
 // precisely because the scan is parked on a handle a descendant holds,
 // and the close that finally releases it is the consumer's own.
 func TestStdoutReader_AbandonWhileParkedInRead(t *testing.T) {
 	t.Parallel()
 
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	defer pw.Close() //nolint:errcheck // test cleanup
+	src := newParkedReader()
+	r := NewStdoutReader(src, slog.New(slog.DiscardHandler))
 
-	r := NewStdoutReader(pr, slog.New(slog.DiscardHandler))
-
-	// No write ever arrives, so the scan goroutine parks in Read. Only
-	// the close below can release it.
+	<-src.entered
 	r.Abandon(time.Second)
 
 	if err := r.Err(); !errors.Is(err, ErrStdoutAbandoned) {
-		t.Fatalf("Err() immediately after Abandon = %v, want ErrStdoutAbandoned", err)
+		t.Fatalf("Err() while the scan is still parked = %v, want ErrStdoutAbandoned", err)
 	}
 
-	pr.Close() //nolint:errcheck // releases the parked scan
+	close(src.release)
 
 	select {
 	case <-r.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("Done() did not close after the read end was closed")
+		t.Fatal("Done() did not close after the read was released")
 	}
 
 	if err := r.Err(); !errors.Is(err, ErrStdoutAbandoned) {
 		t.Errorf("Err() after the scan ended = %v, want ErrStdoutAbandoned; "+
-			"the close error must not replace the abandonment", err)
+			"the clean end of the released read must not replace the abandonment", err)
+	}
+}
+
+// TestStdoutReader_AbandonAfterScanEndedIsNoOp asserts the reverse
+// interleaving: a scan that has already finished keeps its own outcome,
+// and Abandon neither rewrites it nor warns about a reader nobody gave
+// up on.
+func TestStdoutReader_AbandonAfterScanEndedIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	var logged bytes.Buffer
+	r := NewStdoutReader(strings.NewReader("only\n"),
+		slog.New(slog.NewTextHandler(&logged, nil)))
+
+	for range r.Stream() {
+	}
+	<-r.Done()
+
+	r.Abandon(time.Second)
+
+	if err := r.Err(); err != nil {
+		t.Errorf("Err() = %v, want nil; Abandon after completion must not reclassify a finished scan", err)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("Abandon after completion logged %q, want no record", logged.String())
 	}
 }
 
 // TestStdoutReader_ErrIsRaceFreeBeforeDone asserts Err may be called
-// from another goroutine while the scan is still running. The race
-// detector is the assertion; without synchronization this reddens under
-// -race, which the project's test target always sets.
+// from another goroutine while the scan is still running, and keeps
+// calling it across the moment the scan publishes its outcome. The race
+// detector is the assertion, and the parked source is what guarantees
+// the two actually overlap.
 func TestStdoutReader_ErrIsRaceFreeBeforeDone(t *testing.T) {
 	t.Parallel()
 
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
+	src := newParkedReader()
+	r := NewStdoutReader(src, slog.New(slog.DiscardHandler))
 
-	r := NewStdoutReader(pr, slog.New(slog.DiscardHandler))
+	<-src.entered
 
+	stop := make(chan struct{})
 	polling := make(chan struct{})
 	go func() {
 		defer close(polling)
-		for range 200 {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			_ = r.Err()
 		}
 	}()
 
-	if _, err := pw.Write([]byte("one\ntwo\n")); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	pw.Close() //nolint:errcheck // ends the scan
-
-	for range r.Stream() {
-	}
+	// Released while the poller is still running, so the scan's write of
+	// its outcome overlaps the reads.
+	close(src.release)
+	<-r.Done()
+	close(stop)
 	<-polling
 
 	if err := r.Err(); err != nil {
-		t.Errorf("Err() = %v, want nil (clean end of file)", err)
+		t.Errorf("Err() = %v, want nil (clean end of the released read)", err)
 	}
 }
