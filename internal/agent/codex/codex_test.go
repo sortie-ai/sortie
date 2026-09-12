@@ -1259,6 +1259,9 @@ func runHandlerParkedFixture(t *testing.T, adapter *CodexAdapter) (*sessionState
 	if !ok {
 		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
 	}
+	t.Cleanup(func() {
+		_ = adapter.StopSession(context.Background(), session)
+	})
 
 	capacity := cap(state.msgCh)
 	if _, err := fmt.Fprintf(state.stdin, "%d\n", capacity+1); err != nil {
@@ -1285,7 +1288,6 @@ func runHandlerParkedFixture(t *testing.T, adapter *CodexAdapter) (*sessionState
 	if _, err := fmt.Fprintln(state.stdin, "go"); err != nil {
 		t.Fatalf("write go signal: %v", err)
 	}
-
 	return state, outcomeCh
 }
 
@@ -1308,18 +1310,28 @@ func TestRunTurn_BoundedWhenRuntimeExitsWithFullChannel(t *testing.T) {
 	const grace = 300 * time.Millisecond
 	adapter := &CodexAdapter{drainGrace: grace}
 
-	start := time.Now()
 	state, outcomeCh := runHandlerParkedFixture(t, adapter)
+
+	// The drain bound starts at the reap, not at the wake-up line: the
+	// stderr drain that precedes the wait is unrelated to the bound and
+	// would otherwise be charged to it, leaving room for a release path
+	// that ignores the bound entirely to still pass.
+	select {
+	case <-state.waitCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the runtime was not reaped within 5s, so the drain bound never started")
+	}
+	reaped := time.Now()
 
 	var got handlerParkedOutcome
 	select {
 	case got = <-outcomeCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("RunTurn did not return within 2s, want it bounded by the injected drainGrace")
+		t.Fatal("RunTurn did not return within 2s of the reap, want it bounded by the injected drainGrace")
 	}
-	elapsed := time.Since(start)
-	if elapsed > 2*time.Second {
-		t.Errorf("RunTurn() took %v, want well under 2s (bounded by the injected %v drainGrace)", elapsed, grace)
+	const schedulingMargin = 500 * time.Millisecond
+	if elapsed := time.Since(reaped); elapsed > grace+schedulingMargin {
+		t.Errorf("RunTurn() returned %v after the reap, want within the injected %v drainGrace plus %v of scheduling margin", elapsed, grace, schedulingMargin)
 	}
 
 	var agentErr *domain.AgentError
