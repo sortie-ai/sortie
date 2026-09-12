@@ -307,6 +307,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	waitCh := runtime.waitCh
 	reapedCh := runtime.reapedCh
 	var postExitC <-chan time.Time
+	var postExitAt time.Time
 	var exit waitResult
 	processExited := false
 
@@ -452,6 +453,17 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	}
 
 	for {
+		// Checked ahead of the select, not as one of its arms: a
+		// descendant that keeps writing holds the line arm ready, and
+		// the choice among ready arms is random, so the post-exit arm
+		// could be passed over for as long as that descendant talks.
+		if !postExitAt.IsZero() && !time.Now().Before(postExitAt) {
+			if result, agentErr, done := drainLinesBounded(lineCh, runtime, postExitAt, handleLine); done {
+				return result, agentErr
+			}
+			return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
+		}
+
 		select {
 		case line, ok := <-lineCh:
 			if !ok {
@@ -500,38 +512,15 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			processExited = true
 			waitCh = nil
 			postExitC = time.After(runtime.drainGrace)
+			postExitAt = time.Now().Add(runtime.drainGrace)
 			if lineCh == nil {
 				return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 			}
 
 		case <-postExitC:
-			// The non-blocking arm is not a bound on its own: a
-			// descendant that keeps writing holds lineCh ready, so the
-			// loop would take lines for as long as it produces them.
-			// The cap is checked first for the same reason.
-			drainCap := time.NewTimer(runtime.drainGrace)
-			for draining := true; draining; {
-				select {
-				case <-drainCap.C:
-					draining = false
-				default:
-					select {
-					case line, ok := <-lineCh:
-						if !ok {
-							draining = false
-							continue
-						}
-						if result, agentErr, done := handleLine(line); done {
-							stopTimer(drainCap)
-							return result, agentErr
-						}
-					default:
-						draining = false
-					}
-				}
+			if result, agentErr, done := drainLinesBounded(lineCh, runtime, postExitAt, handleLine); done {
+				return result, agentErr
 			}
-			stopTimer(drainCap)
-			runtime.reader.Abandon(runtime.drainGrace)
 			return a.finalizeExitedTurn(ctx, state, runtime, emit, exit)
 
 		case <-ctx.Done():
@@ -906,4 +895,35 @@ func isMaskedServerError(message string) bool {
 
 func hasUsage(usage exportUsage) bool {
 	return usage.InputTokens > 0 || usage.OutputTokens > 0 || usage.TotalTokens > 0 || usage.CacheReadTokens > 0
+}
+
+// drainLinesBounded takes whatever the reader has already produced and
+// gives up on it at capAt, the one deadline the post-exit wait carries:
+// starting a fresh grace here would let a descendant that keeps writing
+// spend two of them. The deadline is tested before each line for the
+// same reason the caller tests it before its select: a descendant that
+// keeps writing holds the channel ready, so an arm that merely competes
+// with it can be passed over indefinitely.
+func drainLinesBounded(
+	lineCh <-chan []byte,
+	runtime *turnRuntime,
+	capAt time.Time,
+	handleLine func([]byte) (domain.TurnResult, error, bool),
+) (domain.TurnResult, error, bool) {
+	for time.Now().Before(capAt) {
+		select {
+		case line, ok := <-lineCh:
+			if !ok {
+				return domain.TurnResult{}, nil, false
+			}
+			if result, agentErr, done := handleLine(line); done {
+				return result, agentErr, true
+			}
+		default:
+			runtime.reader.Abandon(runtime.drainGrace)
+			return domain.TurnResult{}, nil, false
+		}
+	}
+	runtime.reader.Abandon(runtime.drainGrace)
+	return domain.TurnResult{}, nil, false
 }

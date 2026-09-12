@@ -2840,3 +2840,38 @@ printf 'direct child stderr\n' >&2
 		t.Errorf("ExitReason = %q, want %q (exit 0, no output at all)", result.ExitReason, domain.EventTurnFailed)
 	}
 }
+
+// TestRunTurn_LongTurnOutlivesTheDrainGrace pins where the post-exit
+// bound is anchored. It is armed when the subprocess is reaped, never
+// when the turn starts, so a turn that legitimately runs longer than
+// the grace keeps its output and its disposition. Moving the anchor to
+// the launch would cut every such turn short while every fixture that
+// exits immediately still passed.
+func TestRunTurn_LongTurnOutlivesTheDrainGrace(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+sleep 0.6
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_long","part":{"id":"p1","messageID":"m1","sessionID":"ses_long","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"text","timestamp":1001,"sessionID":"ses_long","part":{"id":"p2","messageID":"m1","sessionID":"ses_long","type":"text","text":"late but complete","time":{"start":1001,"end":1001}}}\n'
+exit 0
+`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+	// Far shorter than the turn: an anchor at launch would expire long
+	// before the agent says anything.
+	session.Internal.(*sessionState).drainGrace = 100 * time.Millisecond
+
+	_, result, runErr := collectEvents(t, a, session, "work")
+
+	if runErr != nil {
+		t.Fatalf("RunTurn() error = %v, want nil: a turn longer than the drain grace must not be cut short", runErr)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+}
