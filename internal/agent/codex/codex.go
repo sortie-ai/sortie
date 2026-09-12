@@ -106,6 +106,14 @@ type sessionState struct {
 	// has nothing new to add.
 	stderrReported atomic.Bool
 
+	// stopping reports that StopSession has begun tearing the session
+	// down. The stop closes the connection, which ends the message
+	// channel and sends an in-flight turn down the same path a runtime
+	// that died takes, so without this the operator would be warned
+	// about a runtime they stopped themselves. Set before anything is
+	// closed, read by reportStderr.
+	stopping atomic.Bool
+
 	// acc holds the session's run-cumulative token usage. Constructed
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
@@ -191,6 +199,9 @@ func (state *sessionState) closeConnAndStop() {
 // than one failure path reporting against the same dead runtime warns
 // the operator once rather than once per path.
 func (state *sessionState) reportStderr(logger *slog.Logger) {
+	if state.stopping.Load() {
+		return
+	}
 	state.mu.Lock()
 	collector := state.stderrCollector
 	grace := state.drainGrace
@@ -757,7 +768,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return result, nil
 			}
 			if msg.Kind == jsonrpc.KindMalformed || msg.Kind == jsonrpc.KindStreamEnd {
-				state.reportStderr(logger)
+				// Only a stream end means the runtime is gone. The read
+				// loop dispatches a malformed line and keeps reading, so
+				// reporting here would wait the drain bound on a pipe a
+				// live runtime still holds, and latch the report away
+				// from the turn that really loses the runtime later.
+				if msg.Kind == jsonrpc.KindStreamEnd {
+					state.reportStderr(logger)
+				}
 				ev := agentcore.TurnEvidence{
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
@@ -1092,6 +1110,11 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
 
+	// Before anything is closed: closing the connection ends the message
+	// channel, and a turn still running reads that as its runtime having
+	// died. A session the operator stopped has nothing to explain.
+	state.stopping.Store(true)
+
 	// Signal the reader goroutine to stop and close the connection
 	// before closing stdin, preventing the handler from blocking on a
 	// full msgCh during teardown.
@@ -1178,9 +1201,23 @@ func (a *CodexAdapter) StopSession(ctx context.Context, session domain.Session) 
 	if state.pipes != nil {
 		state.pipes.Close() //nolint:errcheck,gosec // best-effort cleanup
 	}
+	collector := state.stderrCollector
 	state.pipes = nil
 	state.waitCh = nil
+	grace := state.drainGrace
 	state.mu.Unlock()
+
+	// Closing the read end unparks the drain but does not wait for it.
+	// Joining it here is what makes "no collector goroutine outlives the
+	// session" a guarantee rather than a race the caller usually wins.
+	// The lines are discarded: reporting is the failure paths' job, and
+	// stopping is not a failure.
+	if collector != nil {
+		if grace <= 0 {
+			grace = procutil.DefaultDrainGrace
+		}
+		collector.FinishAndCollect(grace)
+	}
 
 	return stopErr
 }

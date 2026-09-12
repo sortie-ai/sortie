@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -237,6 +238,141 @@ func TestStopSession_LeavesNoDrainRunning(t *testing.T) {
 	}
 }
 
+// writeFakeAppServerScriptStderrLiveRuntime creates a script that
+// completes the handshake, answers one turn/start call, writes a
+// diagnostic to standard error, marks readyFile so the test knows the
+// turn is past its opening call, and then stays alive. The runtime
+// holding its standard-error write end open is what separates a stop
+// and a malformed line from a runtime that actually died.
+func writeFakeAppServerScriptStderrLiveRuntime(t *testing.T, line, readyFile, extraStdout string) string {
+	t.Helper()
+	content := handshakeReplies + "read -r _turn_start_req\n" +
+		"printf '{\"id\":4,\"result\":{\"turn\":{\"id\":\"t1\"}}}\\n'\n" +
+		fmt.Sprintf("printf '%s\\n' >&2\n", line) +
+		extraStdout +
+		fmt.Sprintf("printf ready > %s\n", readyFile) +
+		"while :; do sleep 0.05; done\n"
+	return agenttest.WriteScript(t, t.TempDir(), "fake-codex-app-server-stderr-live", content)
+}
+
+// awaitReady blocks until the fake runtime has written its ready marker,
+// so a test acts on a runtime that has reached a known point rather than
+// on a sleep.
+func awaitReady(t *testing.T, readyFile string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if data, err := os.ReadFile(readyFile); err == nil && len(data) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake runtime never reached its ready marker")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestStopSession_DoesNotReportStderrOfATurnItInterrupts covers the
+// contract StopSession states: the stop closes the connection, which
+// ends the message channel and sends the turn still running down the
+// same path a runtime that died takes. The operator asked for the stop,
+// so the runtime's standard error is not a failure to explain.
+//
+// Not run with t.Parallel(): it installs a global slog default and pins
+// CODEX_API_KEY via t.Setenv.
+func TestStopSession_DoesNotReportStderrOfATurnItInterrupts(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "")
+	spy := agenttest.InstallLogSpy(t)
+
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	const diagnostic = "codex: still talking when the operator stopped us"
+	script := writeFakeAppServerScriptStderrLiveRuntime(t, diagnostic, readyFile, "")
+
+	adapter := &CodexAdapter{drainGrace: 2 * time.Second}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v, want nil", err)
+	}
+
+	turnDone := make(chan struct{})
+	go func() {
+		defer close(turnDone)
+		_, _ = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "work",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+	}()
+	awaitReady(t, readyFile)
+
+	if stopErr := adapter.StopSession(context.Background(), session); stopErr != nil {
+		t.Errorf("StopSession() error = %v, want nil", stopErr)
+	}
+	select {
+	case <-turnDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the turn did not end after the stop")
+	}
+
+	for _, line := range spy.WarnLines() {
+		if strings.Contains(line, diagnostic) {
+			t.Errorf("the stop reported the runtime's standard error %q, want a stop the operator asked for to explain nothing", line)
+		}
+	}
+}
+
+// TestRunTurn_MalformedLineDoesNotReportStderrOfALiveRuntime covers the
+// distinction between a stream that ended and a line that failed to
+// parse. The read loop dispatches a malformed line and keeps reading, so
+// the runtime is still there with its standard-error write end open:
+// reporting would wait the whole drain bound for output that is still
+// coming, and would spend the session's one report on a runtime that had
+// not died.
+//
+// Not run with t.Parallel(): it installs a global slog default and pins
+// CODEX_API_KEY via t.Setenv.
+func TestRunTurn_MalformedLineDoesNotReportStderrOfALiveRuntime(t *testing.T) {
+	t.Setenv("CODEX_API_KEY", "")
+	spy := agenttest.InstallLogSpy(t)
+
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	const diagnostic = "codex: a warning from a runtime that is still running"
+	const grace = 3 * time.Second
+	script := writeFakeAppServerScriptStderrLiveRuntime(t, diagnostic, readyFile,
+		"printf 'this is not json\\n'\n")
+
+	adapter := &CodexAdapter{drainGrace: grace}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+
+	start := time.Now()
+	_, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "work",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	elapsed := time.Since(start)
+
+	if runErr == nil {
+		t.Fatal("RunTurn() error = nil, want the malformed line to end the turn")
+	}
+	if elapsed >= grace {
+		t.Errorf("RunTurn() took %v, want well under the %v drain bound: a live runtime's output is still coming, so the turn must not wait for it", elapsed, grace)
+	}
+	for _, line := range spy.WarnLines() {
+		if strings.Contains(line, diagnostic) {
+			t.Errorf("a malformed line reported the standard error of a runtime that is still running: %q", line)
+		}
+	}
+}
+
 // TestReportStderr_AbandonsADrainThatCannotFinish pins the bound the
 // reporting paths depend on. A drain whose write end is still held
 // never reaches EOF, so an unbounded wait would park the caller that
@@ -286,6 +422,65 @@ func TestReportStderr_AbandonsADrainThatCannotFinish(t *testing.T) {
 	}
 	if !slices.Contains(lines, procutil.AbandonedMarker) {
 		t.Errorf("WARN lines %v do not contain the abandonment marker", lines)
+	}
+}
+
+// TestStopSession_JoinsADrainThatCannotFinishOnItsOwn pins the
+// no-collector-outlives-the-session guarantee against the case that can
+// actually break it. A drain whose write end nothing closes never
+// reaches end of file, so closing the read end is not enough on its own:
+// the stop has to wait for the drain to end or abandon it. Holding the
+// write end here is what the escaped descendant does in production.
+func TestStopSession_JoinsADrainThatCannotFinishOnItsOwn(t *testing.T) {
+	spy := agenttest.InstallLogSpy(t)
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	const diagnostic = "codex: written before the stop"
+	state := &sessionState{drainGrace: 100 * time.Millisecond}
+	state.stderrCollector = procutil.NewStderrCollector(reader, slog.Default())
+	if _, err := io.WriteString(writer, diagnostic+"\n"); err != nil {
+		t.Fatalf("writing to the stderr pipe: %v", err)
+	}
+	if state.stderrCollector.WaitDone(0) {
+		t.Fatal("the drain ended before the stop, so this test would pass without the stop ending it")
+	}
+
+	adapter := &CodexAdapter{}
+	start := time.Now()
+	if stopErr := adapter.StopSession(context.Background(), domain.Session{Internal: state}); stopErr != nil {
+		t.Errorf("StopSession() error = %v, want nil", stopErr)
+	}
+	elapsed := time.Since(start)
+
+	// A drain blocked in a read cannot be joined, only released by the
+	// bound, so the guarantee is that the stop does not return while the
+	// drain is still unresolved. Paying the bound is what proves it
+	// waited; a stop that skipped the wait returns at once.
+	if elapsed < state.drainGrace {
+		t.Errorf("StopSession() returned after %v, want it to have waited out the %v bound the unfinished drain needs", elapsed, state.drainGrace)
+	}
+	resolved := make(chan struct{})
+	go func() {
+		_ = state.stderrCollector.Lines()
+		close(resolved)
+	}()
+	select {
+	case <-resolved:
+	case <-time.After(2 * time.Second):
+		t.Error("the standard-error drain was still unresolved after StopSession returned, want the stop to have finished or abandoned it")
+	}
+	for _, line := range spy.WarnLines() {
+		if strings.Contains(line, diagnostic) {
+			t.Errorf("the stop emitted the runtime's standard error %q, want it joined without reporting", line)
+		}
 	}
 }
 
