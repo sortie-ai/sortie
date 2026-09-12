@@ -686,9 +686,11 @@ Standard-output and standard-error ownership:
   release without such a record.
 - Reaping the process and terminating its group are what release such a reader in the ordinary
   case, so the turn keeps whatever output the reader had already collected.
-- An abandoned standard-output scan does not change the turn's disposition: the exit code and
-  the collected transcript are what they would have been unabandoned, because a line already
-  offered to the consumer is drained before the reader is given up on. An abandoned
+- An abandoned standard-output scan is not itself reported as a read failure: the exit code
+  decides the turn, and the drain that precedes the abandonment takes the lines already offered
+  to the consumer. It is bounded, so a producer still writing when it expires loses the tail
+  behind it, and a turn whose terminal evidence was in that tail falls to the exit-based
+  disposition rather than the one that evidence would have given. An abandoned
   standard-error drain still flips the disposition of an adapter whose success evidence lives on
   standard error (Kiro CLI's disposition depends on its standard-error trailer), replacing the
   collected output with a marker and reporting the turn failed rather than succeeded.
