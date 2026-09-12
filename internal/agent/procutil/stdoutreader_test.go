@@ -245,7 +245,7 @@ func TestStdoutReader_AbandonWhileParkedInRead(t *testing.T) {
 	}
 	defer pw.Close() //nolint:errcheck // test cleanup
 
-	r := NewStdoutReader(pr, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := NewStdoutReader(pr, slog.New(slog.DiscardHandler))
 
 	// No write ever arrives, so the scan goroutine parks in Read. Only
 	// the close below can release it.
@@ -281,7 +281,7 @@ func TestStdoutReader_ErrIsRaceFreeBeforeDone(t *testing.T) {
 		t.Fatalf("os.Pipe() error = %v", err)
 	}
 
-	r := NewStdoutReader(pr, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := NewStdoutReader(pr, slog.New(slog.DiscardHandler))
 
 	polling := make(chan struct{})
 	go func() {
