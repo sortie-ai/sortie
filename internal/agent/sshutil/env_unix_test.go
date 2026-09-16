@@ -374,9 +374,9 @@ func TestBuildSSHLaunch_RealShellImportStep_NoDD(t *testing.T) {
 // element whose remote command ends in a top-level ; or &, with a
 // plain command and one carrying an agent argument as controls, under
 // every installed shell this file drives. An operator's own command
-// reaches the remote shell unsplit, so a group a semicolon closes turns
-// either ending into a syntax error the shell rejects before the agent
-// runs.
+// reaches the remote shell unsplit, and a newline closes the group
+// around it, so either ending keeps its meaning and the shell runs the
+// command instead of rejecting it.
 func TestBuildSSHLaunch_RealShellAgentCommandTerminator(t *testing.T) {
 	tests := []struct {
 		name string
