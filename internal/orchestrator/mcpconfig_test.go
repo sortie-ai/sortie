@@ -405,6 +405,32 @@ func TestGenerateMCPConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("stale_session_id_in_process_env_is_dropped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.ProcessEnv = map[string]string{
+			"SORTIE_SESSION_ID":      "stale-session-from-process",
+			"SORTIE_TRACKER_API_KEY": "kept",
+		}
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+		if _, present := env["SORTIE_SESSION_ID"]; present {
+			t.Errorf("env[%q] present = %v, want absent; a process-environment value must not be published as this dispatch's session identity", "SORTIE_SESSION_ID", env["SORTIE_SESSION_ID"])
+		}
+		if got, _ := env["SORTIE_TRACKER_API_KEY"].(string); got != "kept" {
+			t.Errorf("env[%q] = %q, want %q; unrelated process variables must still be copied", "SORTIE_TRACKER_API_KEY", got, "kept")
+		}
+	})
+
 	t.Run("gitignore_created_in_sortie_dir", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

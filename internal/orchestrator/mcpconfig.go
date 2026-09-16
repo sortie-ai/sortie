@@ -103,6 +103,8 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	// (higher precedence, always win).
 	env := make(map[string]string, len(params.ProcessEnv)+6)
 	maps.Copy(env, params.ProcessEnv)
+
+	delete(env, "SORTIE_SESSION_ID")
 	env["SORTIE_ISSUE_ID"] = params.IssueID
 	env["SORTIE_ISSUE_IDENTIFIER"] = params.Identifier
 	env["SORTIE_WORKSPACE"] = params.WorkspacePath
