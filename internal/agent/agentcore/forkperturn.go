@@ -233,14 +233,15 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	var cmd *exec.Cmd
 	if s.target.RemoteCommand != "" {
-		sshArgs := sshutil.BuildSSHArgs(
+		launch := sshutil.BuildSSHLaunch(
 			s.target.SSHHost,
 			s.target.WorkspacePath,
 			s.target.RemoteCommand,
 			cmdArgs,
-			sshutil.SSHOptions{StrictHostKeyChecking: s.target.SSHStrictHostKeyChecking},
+			s.target.SSHOptions(),
 		)
-		cmd = exec.CommandContext(cmdCtx, s.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(cmdCtx, s.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd.Stdin = launch.StdinReader()
 	} else {
 		allArgs := append(slices.Clip(s.target.Args), cmdArgs...)       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
 		cmd = exec.CommandContext(cmdCtx, s.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically

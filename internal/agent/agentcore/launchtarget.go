@@ -2,10 +2,12 @@ package agentcore
 
 import (
 	"cmp"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -47,6 +49,11 @@ type LaunchTarget struct {
 	// passed through from StartSessionParams. Empty means the SSH caller
 	// defaults to "accept-new".
 	SSHStrictHostKeyChecking string
+
+	// SSHEnvNames lists the environment variable names to carry into
+	// a remote session, passed through from StartSessionParams. Empty
+	// in local mode.
+	SSHEnvNames []string
 }
 
 // ResolveLaunchTarget resolves the workspace path and agent binary for a
@@ -58,9 +65,8 @@ type LaunchTarget struct {
 // is empty (e.g., "claude", "copilot", "codex app-server").
 //
 // Adapter-specific post-resolution steps (canary version checks, auth
-// preflights, environment variable prefixing for the remote command) are the
-// caller's responsibility and must run after ResolveLaunchTarget returns
-// successfully.
+// preflights) are the caller's responsibility and must run after
+// ResolveLaunchTarget returns successfully.
 func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string) (LaunchTarget, *domain.AgentError) {
 	absPath, agentErr := ResolveWorkspace(params.WorkspacePath)
 	if agentErr != nil {
@@ -93,6 +99,7 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 			RemoteCommand:            command,
 			SSHHost:                  sshHost,
 			SSHStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
+			SSHEnvNames:              params.SSHEnvNames,
 		}, nil
 	}
 
@@ -114,4 +121,46 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 		Args:          slices.Clone(parts[1:]),
 		WorkspacePath: absPath,
 	}, nil
+}
+
+// SSHOptions resolves t's SSH transport options for one remote
+// launch. It reads each of t.SSHEnvNames with [os.LookupEnv], in
+// order, carrying a name only when it is present and non-empty, then
+// appends every settings entry whose Value is non-empty. A name
+// already carried, whether from t.SSHEnvNames or from an earlier
+// settings entry, is not carried again.
+//
+// settings carries adapter-owned variables with computed values, such
+// as a tool-server setting. It MUST NOT carry a credential: a
+// credential reaches a remote launch only as a name in
+// t.SSHEnvNames. SSHOptions calls os.LookupEnv on every call, so
+// calling it once per launch reflects the orchestrator's environment
+// at that moment.
+func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions {
+	var carried []sshutil.EnvVar
+	skip := make(map[string]bool, len(t.SSHEnvNames)+len(settings))
+	for _, entry := range settings {
+		skip[entry.Name] = true
+	}
+
+	for _, name := range t.SSHEnvNames {
+		if skip[name] {
+			continue
+		}
+		skip[name] = true
+		if value, present := os.LookupEnv(name); present && value != "" {
+			carried = append(carried, sshutil.EnvVar{Name: name, Value: value})
+		}
+	}
+
+	for _, entry := range settings {
+		if entry.Value != "" {
+			carried = append(carried, entry)
+		}
+	}
+
+	return sshutil.SSHOptions{
+		StrictHostKeyChecking: t.SSHStrictHostKeyChecking,
+		Env:                   carried,
+	}
 }
