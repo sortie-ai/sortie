@@ -1,31 +1,14 @@
 package sshutil
 
 import (
-	"slices"
+	"errors"
+	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
-
-// sshOption returns true when args contains the pair "-o" "<key>=<val>".
-func sshOption(args []string, key, val string) bool {
-	target := key + "=" + val
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-o" && args[i+1] == target {
-			return true
-		}
-	}
-	return false
-}
-
-// hostAfterSep returns the element immediately following "--" in args.
-func hostAfterSep(args []string) string {
-	for i, a := range args {
-		if a == "--" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
-}
 
 func TestShellQuote(t *testing.T) {
 	t.Parallel()
@@ -52,229 +35,411 @@ func TestShellQuote(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := ShellQuote(tt.input)
+			got := shellQuote(tt.input)
 			if got != tt.want {
-				t.Errorf("ShellQuote(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-func TestBuildSSHArgs(t *testing.T) {
+// mustReadAllBytes drains r into a byte slice, or returns nil for a nil
+// reader.
+func mustReadAllBytes(t *testing.T, r io.Reader) []byte {
+	t.Helper()
+	if r == nil {
+		return nil
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("io.ReadAll: %v", err)
+	}
+	return data
+}
+
+// TestBuildSSHLaunch_ZeroEnv asserts that a nil or empty opts.Env
+// produces Args byte-identical between the two, with the exact
+// prefix and final-element shape BuildSSHArgs used to produce, and
+// carries no preamble.
+func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		host      string
-		workspace string
-		cmd       string
-		agentArgs []string
-		opts      SSHOptions
-		check     func(t *testing.T, args []string)
+		name          string
+		host          string
+		workspacePath string
+		remoteCommand string
+		agentArgs     []string
+		opts          SSHOptions
+		wantFinal     string
 	}{
 		{
-			name:      "default StrictHostKeyChecking is accept-new",
-			host:      "dev.host",
-			workspace: "/workspace",
-			cmd:       "claude",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				if !sshOption(args, "StrictHostKeyChecking", "accept-new") {
-					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=accept-new", args)
-				}
-			},
+			name:          "no args, default strict host key checking",
+			host:          "example.test",
+			workspacePath: "/workspace",
+			remoteCommand: "codex app-server",
+			wantFinal:     "cd -- '/workspace' && codex app-server",
 		},
 		{
-			name:      "custom StrictHostKeyChecking overrides default",
-			host:      "dev.host",
-			workspace: "/workspace",
-			cmd:       "copilot",
-			opts:      SSHOptions{StrictHostKeyChecking: "yes"},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				if !sshOption(args, "StrictHostKeyChecking", "yes") {
-					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=yes", args)
-				}
-				if sshOption(args, "StrictHostKeyChecking", "accept-new") {
-					t.Errorf("BuildSSHArgs() args = %v: unexpected StrictHostKeyChecking=accept-new", args)
-				}
-			},
+			name:          "with agent args needing quoting, whitespace-padded host",
+			host:          "  example.test  ",
+			workspacePath: "/work space",
+			remoteCommand: "run --acp",
+			agentArgs:     []string{"a b", "it's"},
+			wantFinal:     "cd -- '/work space' && run --acp 'a b' 'it'\\''s'",
 		},
 		{
-			name:      "custom StrictHostKeyChecking yes",
-			host:      "dev.host",
-			workspace: "/workspace",
-			cmd:       "copilot",
-			opts:      SSHOptions{StrictHostKeyChecking: "yes"},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				if !sshOption(args, "StrictHostKeyChecking", "yes") {
-					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=yes", args)
-				}
-			},
-		},
-		{
-			name:      "StrictHostKeyChecking no",
-			host:      "dev.host",
-			workspace: "/workspace",
-			cmd:       "copilot",
-			opts:      SSHOptions{StrictHostKeyChecking: "no"},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				if !sshOption(args, "StrictHostKeyChecking", "no") {
-					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=no", args)
-				}
-				if sshOption(args, "StrictHostKeyChecking", "accept-new") {
-					t.Errorf("BuildSSHArgs() args = %v: unexpected StrictHostKeyChecking=accept-new", args)
-				}
-			},
-		},
-		{
-			name:      "fixed connectivity options always present",
-			host:      "host",
-			workspace: "/w",
-			cmd:       "cmd",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				for _, pair := range [][2]string{
-					{"BatchMode", "yes"},
-					{"ConnectTimeout", "30"},
-					{"ServerAliveInterval", "15"},
-					{"ServerAliveCountMax", "3"},
-				} {
-					if !sshOption(args, pair[0], pair[1]) {
-						t.Errorf("BuildSSHArgs() args = %v: missing SSH option %s=%s", args, pair[0], pair[1])
-					}
-				}
-			},
-		},
-		{
-			name:      "-- separator and trimmed host",
-			host:      "target.host",
-			workspace: "/w",
-			cmd:       "cmd",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				found := slices.Contains(args, "--")
-				if !found {
-					t.Errorf("BuildSSHArgs() args = %v: missing '--' separator", args)
-				}
-				if h := hostAfterSep(args); h != "target.host" {
-					t.Errorf("host after '--' = %q, want %q", h, "target.host")
-				}
-			},
-		},
-		{
-			name:      "host whitespace is trimmed",
-			host:      "  spaced.host  ",
-			workspace: "/w",
-			cmd:       "cmd",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				if h := hostAfterSep(args); h != "spaced.host" {
-					t.Errorf("host = %q, want %q (whitespace stripped)", h, "spaced.host")
-				}
-			},
-		},
-		{
-			name:      "workspace cd in remote command",
-			host:      "host",
-			workspace: "/my/workspace",
-			cmd:       "claude",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				if !strings.HasPrefix(remote, "cd ") {
-					t.Errorf("remote cmd = %q: want prefix 'cd '", remote)
-				}
-				if !strings.Contains(remote, ShellQuote("/my/workspace")) {
-					t.Errorf("remote cmd = %q: missing quoted workspace %q", remote, ShellQuote("/my/workspace"))
-				}
-				if !strings.Contains(remote, "&&") {
-					t.Errorf("remote cmd = %q: missing '&&' separator", remote)
-				}
-			},
-		},
-		{
-			name:      "remote command format with no agent args",
-			host:      "host",
-			workspace: "/workspace",
-			cmd:       "claude",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				want := "cd -- " + ShellQuote("/workspace") + " && " + "claude"
-				if remote != want {
-					t.Errorf("remote cmd = %q, want %q", remote, want)
-				}
-			},
-		},
-		{
-			name:      "agent args are all shell-quoted in remote command",
-			host:      "host",
-			workspace: "/w",
-			cmd:       "copilot",
-			agentArgs: []string{"--task", "fix it up", "--model", "gpt-4"},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				for _, arg := range []string{"--task", "fix it up", "--model", "gpt-4"} {
-					if !strings.Contains(remote, ShellQuote(arg)) {
-						t.Errorf("remote cmd = %q: missing quoted arg %q", remote, ShellQuote(arg))
-					}
-				}
-			},
-		},
-		{
-			name:      "workspace path with spaces is quoted",
-			host:      "host",
-			workspace: "/home/user/my workspace",
-			cmd:       "claude",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				if !strings.Contains(remote, ShellQuote("/home/user/my workspace")) {
-					t.Errorf("remote cmd = %q: workspace with spaces not properly quoted", remote)
-				}
-			},
-		},
-		{
-			name:      "multi-token command is appended verbatim not quoted as single word",
-			host:      "host",
-			workspace: "/w",
-			cmd:       "codex app-server",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				if strings.Contains(remote, "'codex app-server'") {
-					t.Errorf("remote cmd = %q: multi-token command must not be single-quoted as one word", remote)
-				}
-				if !strings.Contains(remote, "codex app-server") {
-					t.Errorf("remote cmd = %q: want verbatim substring %q", remote, "codex app-server")
-				}
-			},
-		},
-		{
-			name:      "env-var prefix command is appended verbatim",
-			host:      "host",
-			workspace: "/w",
-			cmd:       "CODEX_API_KEY='sk-test' codex app-server",
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				remote := args[len(args)-1]
-				want := "CODEX_API_KEY='sk-test' codex app-server"
-				if !strings.Contains(remote, want) {
-					t.Errorf("remote cmd = %q: want verbatim substring %q", remote, want)
-				}
-			},
+			name:          "explicit strict host key checking",
+			host:          "example.test",
+			workspacePath: "/workspace",
+			remoteCommand: "opencode run",
+			opts:          SSHOptions{StrictHostKeyChecking: "no"},
+			wantFinal:     "cd -- '/workspace' && opencode run",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			args := BuildSSHArgs(tt.host, tt.workspace, tt.cmd, tt.agentArgs, tt.opts)
-			tt.check(t, args)
+
+			for _, label := range []string{"nil Env", "empty Env"} {
+				opts := tt.opts
+				if label == "empty Env" {
+					opts.Env = []EnvVar{}
+				}
+				launch := BuildSSHLaunch(tt.host, tt.workspacePath, tt.remoteCommand, tt.agentArgs, opts)
+
+				if len(launch.Args) == 0 {
+					t.Fatalf("%s: BuildSSHLaunch(...).Args is empty", label)
+				}
+				gotFinal := launch.Args[len(launch.Args)-1]
+				if gotFinal != tt.wantFinal {
+					t.Errorf("%s: Args final element = %q, want %q", label, gotFinal, tt.wantFinal)
+				}
+
+				strictHostKey := opts.StrictHostKeyChecking
+				if strictHostKey == "" {
+					strictHostKey = "accept-new"
+				}
+				wantPrefix := []string{
+					"-o", "StrictHostKeyChecking=" + strictHostKey,
+					"-o", "BatchMode=yes",
+					"-o", "ConnectTimeout=30",
+					"-o", "ServerAliveInterval=15",
+					"-o", "ServerAliveCountMax=3",
+					"--",
+					strings.TrimSpace(tt.host),
+				}
+				if len(launch.Args) != len(wantPrefix)+1 {
+					t.Fatalf("%s: Args length = %d, want %d", label, len(launch.Args), len(wantPrefix)+1)
+				}
+				for i, want := range wantPrefix {
+					if launch.Args[i] != want {
+						t.Errorf("%s: Args[%d] = %q, want %q", label, i, launch.Args[i], want)
+					}
+				}
+
+				if r := launch.StdinReader(); r != nil {
+					t.Errorf("%s: StdinReader() = non-nil, want a nil interface value", label)
+				}
+				var rec recordingWriteCloser
+				if got := launch.PrefixStdin(&rec); got != io.WriteCloser(&rec) {
+					t.Errorf("%s: PrefixStdin(w) = %v, want w itself", label, got)
+				}
+			}
 		})
+	}
+}
+
+// TestSSHLaunch_ZeroValue asserts that the zero SSHLaunch behaves the
+// same as a zero-Env BuildSSHLaunch result: no preamble, and
+// PrefixStdin returns its argument unchanged.
+func TestSSHLaunch_ZeroValue(t *testing.T) {
+	t.Parallel()
+
+	var zero SSHLaunch
+	if r := zero.StdinReader(); r != nil {
+		t.Errorf("zero SSHLaunch StdinReader() = non-nil, want a nil interface value")
+	}
+	var rec recordingWriteCloser
+	if got := zero.PrefixStdin(&rec); got != io.WriteCloser(&rec) {
+		t.Errorf("zero SSHLaunch PrefixStdin(w) = %v, want w itself", got)
+	}
+	if zero.Args != nil {
+		t.Errorf("zero SSHLaunch Args = %v, want nil", zero.Args)
+	}
+}
+
+// TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals pins the exact preamble
+// and final-element text for a two-entry Env.
+func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "run --acp", []string{"a"}, SSHOptions{
+		Env: []EnvVar{{Name: "A", Value: "x"}, {Name: "B", Value: "y z"}},
+	})
+
+	const wantPreamble = "unset _sortie_env && export A='x' B='y z'"
+	if len(wantPreamble) != 41 {
+		t.Fatalf("test fixture error: wantPreamble length = %d, want 41", len(wantPreamble))
+	}
+
+	gotPreamble := mustReadAllBytes(t, launch.StdinReader())
+	if string(gotPreamble) != wantPreamble {
+		t.Errorf("preamble = %q, want %q", string(gotPreamble), wantPreamble)
+	}
+
+	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && _sortie_env=$(dd bs=1 count=41 2>/dev/null) && eval "$_sortie_env" && run --acp 'a'`
+	gotFinal := launch.Args[len(launch.Args)-1]
+	if gotFinal != wantFinal {
+		t.Errorf("final element = %q, want %q", gotFinal, wantFinal)
+	}
+}
+
+// TestBuildSSHLaunch_ArgsNeverContainEnvValues asserts that no element
+// of Args contains a carried value as a substring.
+func TestBuildSSHLaunch_ArgsNeverContainEnvValues(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("host", "/workspace", "run --acp", []string{"arg1"}, SSHOptions{
+		Env: []EnvVar{
+			{Name: "A", Value: "occurs-nowhere-else-aaaa1111"},
+			{Name: "B", Value: "occurs-nowhere-else-bbbb2222"},
+		},
+	})
+
+	for _, value := range []string{"occurs-nowhere-else-aaaa1111", "occurs-nowhere-else-bbbb2222"} {
+		for i, arg := range launch.Args {
+			if strings.Contains(arg, value) {
+				t.Errorf("Args[%d] = %q, contains carried value %q", i, arg, value)
+			}
+		}
+	}
+}
+
+// TestBuildSSHLaunch_PanicsOnInvalidEnvName asserts that an invalid
+// Env name panics with a message naming the entry's index and neither
+// its name nor its value.
+func TestBuildSSHLaunch_PanicsOnInvalidEnvName(t *testing.T) {
+	t.Parallel()
+
+	const secretValue = "super-secret-value-should-never-appear"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("BuildSSHLaunch did not panic on an invalid Env name")
+		}
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, "2") {
+			t.Errorf("panic message = %q, want it to name index 2", msg)
+		}
+		if strings.Contains(msg, "1BAD") {
+			t.Errorf("panic message = %q, contains the invalid name", msg)
+		}
+		if strings.Contains(msg, secretValue) {
+			t.Errorf("panic message = %q, contains the value", msg)
+		}
+	}()
+
+	BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{
+		Env: []EnvVar{
+			{Name: "A", Value: "a"},
+			{Name: "B", Value: "b"},
+			{Name: "1BAD", Value: secretValue},
+		},
+	})
+}
+
+// recordingWriteCloser is a test double for io.WriteCloser that
+// records every Write call's bytes, optionally fails every Write with
+// a fixed error, and records whether Close was called.
+type recordingWriteCloser struct {
+	mu       sync.Mutex
+	writes   [][]byte
+	closed   bool
+	writeErr error
+}
+
+func (r *recordingWriteCloser) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.writeErr != nil {
+		return 0, r.writeErr
+	}
+	r.writes = append(r.writes, append([]byte(nil), p...))
+	return len(p), nil
+}
+
+func (r *recordingWriteCloser) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	return nil
+}
+
+func (r *recordingWriteCloser) recordedWrites() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]byte(nil), r.writes...)
+}
+
+// blockingWriteCloser is a test double for io.WriteCloser whose first
+// Write blocks until Close is called, then reports an error, so a test
+// can observe Close unblocking a Write in progress.
+type blockingWriteCloser struct {
+	mu      sync.Mutex
+	closed  bool
+	unblock chan struct{}
+	started chan struct{}
+}
+
+func newBlockingWriteCloser() *blockingWriteCloser {
+	return &blockingWriteCloser{unblock: make(chan struct{}), started: make(chan struct{}, 1)}
+}
+
+func (b *blockingWriteCloser) Write(p []byte) (int, error) {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	<-b.unblock
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return 0, errors.New("write on closed writer")
+	}
+	return len(p), nil
+}
+
+func (b *blockingWriteCloser) Close() error {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	close(b.unblock)
+	return nil
+}
+
+// TestPrefixStdin_Ordering asserts that the first Write sends the
+// preamble then the caller's own bytes, in order, and every later
+// Write passes straight through.
+func TestPrefixStdin_Ordering(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{Env: []EnvVar{{Name: "A", Value: "v"}}})
+	preamble := mustReadAllBytes(t, launch.StdinReader())
+
+	rec := &recordingWriteCloser{}
+	pw := launch.PrefixStdin(rec)
+
+	if _, err := pw.Write([]byte("first")); err != nil {
+		t.Fatalf("first Write() error = %v", err)
+	}
+	if _, err := pw.Write([]byte("second")); err != nil {
+		t.Fatalf("second Write() error = %v", err)
+	}
+
+	writes := rec.recordedWrites()
+	if len(writes) != 3 {
+		t.Fatalf("recorded %d writes, want 3 (preamble, first, second): %q", len(writes), writes)
+	}
+	if string(writes[0]) != string(preamble) {
+		t.Errorf("first recorded write = %q, want the preamble %q", writes[0], preamble)
+	}
+	if string(writes[1]) != "first" {
+		t.Errorf("second recorded write = %q, want %q", writes[1], "first")
+	}
+	if string(writes[2]) != "second" {
+		t.Errorf("third recorded write = %q, want %q", writes[2], "second")
+	}
+}
+
+// TestPrefixStdin_FailingPreambleWrite asserts that a failing preamble
+// write returns that error and the caller's own bytes are never
+// forwarded to the underlying writer.
+func TestPrefixStdin_FailingPreambleWrite(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{Env: []EnvVar{{Name: "A", Value: "v"}}})
+	wantErr := errors.New("boom")
+	rec := &recordingWriteCloser{writeErr: wantErr}
+	pw := launch.PrefixStdin(rec)
+
+	n, err := pw.Write([]byte("payload"))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Write() error = %v, want %v", err, wantErr)
+	}
+	if n != 0 {
+		t.Errorf("Write() n = %d, want 0", n)
+	}
+	for _, w := range rec.recordedWrites() {
+		if string(w) == "payload" {
+			t.Errorf("recorded writes include the caller's bytes, want none forwarded on a failing preamble write")
+		}
+	}
+}
+
+// TestPrefixStdin_CloseBeforeWrite asserts that Close before any Write
+// closes the underlying writer and forwards no bytes.
+func TestPrefixStdin_CloseBeforeWrite(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{Env: []EnvVar{{Name: "A", Value: "v"}}})
+	rec := &recordingWriteCloser{}
+	pw := launch.PrefixStdin(rec)
+
+	if err := pw.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if !rec.closed {
+		t.Error("underlying writer Close() was not called")
+	}
+	if writes := rec.recordedWrites(); len(writes) != 0 {
+		t.Errorf("recorded %d writes after Close before any Write, want 0", len(writes))
+	}
+}
+
+// TestPrefixStdin_CloseUnblocksInFlightWrite asserts that Close
+// returns while a Write is blocked on a peer that never reads, and
+// that blocked Write then returns an error.
+func TestPrefixStdin_CloseUnblocksInFlightWrite(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{Env: []EnvVar{{Name: "A", Value: "v"}}})
+	bw := newBlockingWriteCloser()
+	pw := launch.PrefixStdin(bw)
+
+	writeErrCh := make(chan error, 1)
+	go func() {
+		_, err := pw.Write([]byte("payload"))
+		writeErrCh <- err
+	}()
+
+	select {
+	case <-bw.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write did not start within 2s")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		pw.Close() //nolint:errcheck // exercising the unblock-in-flight-write behavior, not Close's own error
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return while a Write was blocked")
+	}
+
+	select {
+	case err := <-writeErrCh:
+		if err == nil {
+			t.Error("blocked Write returned nil error after Close, want an error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked Write did not return after Close")
 	}
 }
