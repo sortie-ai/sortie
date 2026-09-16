@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+// unsetEnvForTest removes name for the duration of the test and
+// restores whatever value the surrounding environment held. t.Setenv
+// registers that restore before the variable is removed; a name the
+// environment did not hold needs no restore.
+func unsetEnvForTest(t *testing.T, name string) {
+	t.Helper()
+	if prior, ok := os.LookupEnv(name); ok {
+		t.Setenv(name, prior)
+	}
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("Unsetenv(%s): %v", name, err)
+	}
+}
+
 func TestNewHostPool_LocalMode(t *testing.T) {
 	t.Parallel()
 
@@ -420,7 +434,7 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_GOOD", "some-value")
 	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_A", "some-value")
 	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_BLANK", " \t\r\n ")
-	os.Unsetenv("SORTIE_TEST_SSH_PASS_ENV_UNSET") //nolint:errcheck // best-effort; the variable may already be absent
+	unsetEnvForTest(t, "SORTIE_TEST_SSH_PASS_ENV_UNSET")
 
 	tests := []struct {
 		name                 string

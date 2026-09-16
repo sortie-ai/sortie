@@ -21,6 +21,20 @@ func fakeSSHDir(t *testing.T) string {
 	return dir
 }
 
+// unsetEnvForTest removes name for the duration of the test and
+// restores whatever value the surrounding environment held. t.Setenv
+// registers that restore before the variable is removed; a name the
+// environment did not hold needs no restore.
+func unsetEnvForTest(t *testing.T, name string) {
+	t.Helper()
+	if prior, ok := os.LookupEnv(name); ok {
+		t.Setenv(name, prior)
+	}
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("Unsetenv(%s): %v", name, err)
+	}
+}
+
 // emptyDir returns a temp directory that contains no binaries.
 func emptyDir(t *testing.T) string {
 	t.Helper()
@@ -283,9 +297,7 @@ func TestLaunchTarget_SSHOptions(t *testing.T) {
 	t.Setenv("SSH_OPTIONS_TEST_A", "a-value")
 	t.Setenv("SSH_OPTIONS_TEST_C", "")
 	t.Setenv("SSH_OPTIONS_TEST_W", " \t\r\n ")
-	if err := os.Unsetenv("SSH_OPTIONS_TEST_D"); err != nil {
-		t.Fatalf("Unsetenv(SSH_OPTIONS_TEST_D): %v", err)
-	}
+	unsetEnvForTest(t, "SSH_OPTIONS_TEST_D")
 
 	target := LaunchTarget{
 		SSHStrictHostKeyChecking: "yes",
