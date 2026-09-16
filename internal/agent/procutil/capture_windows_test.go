@@ -50,8 +50,9 @@ func uint32Sizeof(v any) uint32 {
 	}
 }
 
-// suspendedSysProcAttr returns the creation flags S2 sets, for a test
-// that assigns a process to a Job Object itself before resuming it.
+// suspendedSysProcAttr returns the creation flags the suspended start
+// sets, for a test that assigns a process to a Job Object itself
+// before resuming it.
 func suspendedSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED | windows.CREATE_NEW_PROCESS_GROUP}
 }
@@ -203,10 +204,10 @@ func latestCaptureTeardownRecord(spy *captureWinLogSpy, from int) (captureWinLog
 
 // TestCapture_HeldDescendantInheritedJobMembership pins that a child a
 // captured leader starts, inheriting the leader's standard output and
-// hanging, is a Job Object member because S4 assigns the leader before
-// it resumes and Windows extends membership to every process a member
-// creates by default. RunCapture returns within 3s with WaitErr nil,
-// OutputComplete true, and the child gone.
+// hanging, is a Job Object member because assigning the leader to its
+// Job Object happens before it resumes and Windows extends membership
+// to every process a member creates by default. RunCapture returns
+// within 3s with WaitErr nil, OutputComplete true, and the child gone.
 func TestCapture_HeldDescendantInheritedJobMembership(t *testing.T) {
 	dir := t.TempDir()
 	childPath := agenttest.FakeRuntime(t, dir, "descendant", agenttest.OutputScenario, agenttest.Output{Hang: true})
@@ -246,14 +247,15 @@ func TestCapture_HeldDescendantInheritedJobMembership(t *testing.T) {
 }
 
 // TestCapture_AssignSeamDelayDoesNotLowerJobMembership pins the
-// StartCapture half of P15, moved from the workspace package's former
-// TestRunHook_EscapeWithSeamDelay now that the suspended-start-and-
-// resume routine, and its assign seam, live in this package. With the
-// assign seam delaying S4 by 50ms and a script starting a background
-// child at once, the job's total_processes (read from the teardown
-// record) is no lower than the highest of three runs without the
-// delay: CREATE_SUSPENDED keeps the child from running before the Job
-// Object assignment completes, whatever the delay.
+// StartCapture half of this seam-delay pair, moved from the workspace
+// package's former TestRunHook_EscapeWithSeamDelay now that the
+// suspended-start-and-resume routine, and its assign seam, live in
+// this package. With the assign seam delaying the Job Object
+// assignment by 50ms and a script starting a background child at
+// once, the job's total_processes (read from the teardown record) is
+// no lower than the highest of three runs without the delay:
+// CREATE_SUSPENDED keeps the child from running before the Job Object
+// assignment completes, whatever the delay.
 func TestCapture_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -301,10 +303,10 @@ func TestCapture_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 }
 
 // TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership
-// pins the StartWithOwnedPipes half of P15: the registered job's
-// accounting counters, read after the script exits and before
-// KillProcessGroup, are no lower than the highest of three runs
-// without the delay.
+// pins the StartWithOwnedPipes half of this seam-delay pair: the
+// registered job's accounting counters, read after the script exits
+// and before KillProcessGroup, are no lower than the highest of three
+// runs without the delay.
 func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing.T) {
 	runOnce := func(t *testing.T) int64 {
 		t.Helper()
@@ -482,11 +484,12 @@ func TestRunJobDrain(t *testing.T) {
 	})
 }
 
-// TestStartCapture_ResumeSeamFailure pins the StartCapture half of P17:
-// with the test-replaced resume returning an error, the call returns
-// within 3s a *StartError with StageProcessResume, the process is
-// gone, and it logged one process resume failed record carrying an
-// error attribute and one teardown record.
+// TestStartCapture_ResumeSeamFailure pins the StartCapture half of
+// this resume-failure pair: with the test-replaced resume returning
+// an error, the call returns within 3s a *StartError with
+// StageProcessResume, the process is gone, and it logged one process
+// resume failed record carrying an error attribute and one teardown
+// record.
 func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)
@@ -558,8 +561,9 @@ func TestStartCapture_ResumeSeamFailure(t *testing.T) {
 	}
 }
 
-// TestStartWithOwnedPipes_ResumeSeamFailure pins the StartWithOwnedPipes
-// half of P17.
+// TestStartWithOwnedPipes_ResumeSeamFailure pins the
+// StartWithOwnedPipes half of the resume-failure pair with
+// TestStartCapture_ResumeSeamFailure above.
 func TestStartWithOwnedPipes_ResumeSeamFailure(t *testing.T) {
 	spy := &captureWinLogSpy{}
 	logger := slog.New(spy)

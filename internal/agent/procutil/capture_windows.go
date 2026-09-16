@@ -74,12 +74,11 @@ func defaultResumeProcess(pid int) error {
 }
 
 // startAndAssign creates cmd suspended within a new process group,
-// starts it, and assigns, registers, and resumes it, following S2
-// through S4 of the capture sequence. keepJobHandle requests a
-// duplicate Job Object handle for a caller that drains the job itself
-// later (a Capture); the returned handle is zero when keepJobHandle is
-// false, when assignment failed, or when Unix has no Job Object
-// analogue.
+// starts it, and assigns, registers, and resumes it. keepJobHandle
+// requests a duplicate Job Object handle for a caller that drains the
+// job itself later (a Capture); the returned handle is zero when
+// keepJobHandle is false, when assignment failed, or when Unix has no
+// Job Object analogue.
 //
 // A returned error with a nil cmd.Process means cmd.Start failed. Any
 // other error means the process started but could not be resumed: by
