@@ -21,8 +21,9 @@ type NotificationBackend struct {
 	// notifier registry at sidecar startup.
 	Kind string
 
-	// MaxPerSession is the per-session notification cap. 0 selects the
-	// default at cap selection time; it never means unlimited.
+	// MaxPerSession is the notification cap for one tool server process.
+	// 0 selects the default at cap selection time; it never means
+	// unlimited.
 	MaxPerSession int
 
 	// Config holds the entry's per-backend fields with $VAR references

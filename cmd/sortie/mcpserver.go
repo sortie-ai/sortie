@@ -23,9 +23,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
-// defaultMaxPerSession is the per-session notification cap selected when
-// no backend declares a non-zero max_per_session. 0 in config selects
-// this default; it never means unlimited.
+// defaultMaxPerSession is the notification cap selected when no backend
+// declares a non-zero max_per_session. 0 in config selects this default;
+// it never means unlimited.
 const defaultMaxPerSession = 20
 
 func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -177,11 +177,11 @@ func buildNotifyTool(configured []config.NotificationBackend, env notify.Notific
 	return notify.New(backends, env, sessionID, resolveNotificationCap(configured)), nil
 }
 
-// resolveNotificationCap selects the single per-session cap for the tool
-// from the configured backends. It returns the maximum non-zero
-// max_per_session across entries and falls back to defaultMaxPerSession
-// when every entry is 0 or unset. The cap counts notify_operator calls,
-// not per-backend sends, so it is a tool-level property.
+// resolveNotificationCap selects the single cap for the tool from the
+// configured backends. It returns the maximum non-zero max_per_session
+// across entries and falls back to defaultMaxPerSession when every entry
+// is 0 or unset. The cap counts notify_operator calls, not per-backend
+// sends, so it is a tool-level property.
 func resolveNotificationCap(backends []config.NotificationBackend) int {
 	maxCap := 0
 	for _, b := range backends {

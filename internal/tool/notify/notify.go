@@ -119,11 +119,11 @@ type toolInput struct {
 	Category string `json:"category,omitempty"`
 }
 
-// Execute validates the message, enforces the per-session cap, and
-// delivers one [domain.Notification] to the configured backends in
-// configuration order. The first backend that fails short-circuits the
-// loop and yields a send_failed result; partial delivery across
-// backends is not reported in this version. Domain failures are encoded
+// Execute validates the message, enforces the cap, and delivers one
+// [domain.Notification] to the configured backends in configuration
+// order. The first backend that fails short-circuits the loop and yields
+// a send_failed result; partial delivery across backends is not reported
+// in this version. Domain failures are encoded
 // in the JSON result with success: false and a nil Go error. The Go
 // error return is reserved for a result-marshal failure.
 func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
