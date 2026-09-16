@@ -198,10 +198,12 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 // TestBuildSSHLaunch_AgentArgsAndCommandTerminator pins where agent
 // arguments land when the operator's own command ends in a top-level
 // ; or &. They go in front of that terminator, which ends the command
-// and would otherwise make them a command of their own. A terminator
-// the fragment escapes, and a doubled one, are not terminators of the
-// operator's command, so the arguments follow them as they follow any
-// other fragment.
+// and would otherwise make them a command of their own. A trailing
+// newline, which a multi-line block in the workflow leaves on the
+// fragment, ends the command the same way and is dropped. A
+// terminator the fragment escapes, and a doubled one, are not
+// terminators of the operator's command, so the arguments follow them
+// as they follow any other fragment.
 func TestBuildSSHLaunch_AgentArgsAndCommandTerminator(t *testing.T) {
 	t.Parallel()
 
@@ -239,6 +241,30 @@ func TestBuildSSHLaunch_AgentArgsAndCommandTerminator(t *testing.T) {
 			remoteCommand: "agent \t; ",
 			agentArgs:     []string{"a"},
 			wantFinal:     "cd -- '/w' && { agent 'a' ;\n}",
+		},
+		{
+			name:          "trailing newline with an argument",
+			remoteCommand: "agent\n",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a'\n}",
+		},
+		{
+			name:          "trailing newline after a semicolon",
+			remoteCommand: "agent;\n",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a' ;\n}",
+		},
+		{
+			name:          "trailing newline after an ampersand",
+			remoteCommand: "agent &\n",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a' &\n}",
+		},
+		{
+			name:          "carriage return belongs to the command",
+			remoteCommand: "agent\r",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent\r 'a'\n}",
 		},
 		{
 			name:          "redirection before the terminator",

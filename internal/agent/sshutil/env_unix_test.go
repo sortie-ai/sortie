@@ -399,6 +399,10 @@ func TestBuildSSHLaunch_RealShellAgentCommandTerminator(t *testing.T) {
 		{name: "trailing semicolon with agent argument", suffix: ";", withArg: true},
 		{name: "trailing ampersand", suffix: " &", background: true},
 		{name: "trailing ampersand with agent argument", suffix: " &", withArg: true, background: true},
+		{name: "trailing newline", suffix: "\n"},
+		{name: "trailing newline with agent argument", suffix: "\n", withArg: true},
+		{name: "trailing newline after a semicolon with agent argument", suffix: ";\n", withArg: true},
+		{name: "trailing newline after an ampersand with agent argument", suffix: " &\n", withArg: true, background: true},
 	}
 
 	for _, shell := range availableShells(t) {

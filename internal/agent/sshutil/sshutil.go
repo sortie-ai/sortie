@@ -133,30 +133,42 @@ func agentGroup(remoteCommand string, agentArgs []string) string {
 	return "{ " + strings.Join(parts, " ") + "\n}"
 }
 
+// shellBlanks holds the trailing characters a POSIX shell either
+// ignores or reads as the end of a command, so dropping them from a
+// fragment leaves the operator's own command unchanged. A carriage
+// return is not one of them: the shell reads it as an ordinary
+// character inside a word, so dropping one would rename the command
+// the operator wrote.
+const shellBlanks = " \t\n"
+
 // splitCommandTerminator splits a remote command fragment into the
 // command and the single top-level ; or & that ends it, returning an
-// empty terminator when the fragment ends in neither. A terminator
-// ends the command rather than belonging to it, so arguments placed
-// after one run as a command of their own instead of reaching the
-// agent, while arguments placed in front of it reach the agent and
-// leave the operator's own terminator its meaning. A terminator the
-// fragment escapes, as find -exec does with \;, is an argument of the
+// empty terminator when the fragment ends in neither, and drops the
+// blanks and newlines that trail either one. A fragment written as a
+// multi-line block in the workflow arrives ending in a newline, which
+// ends the command just as a terminator does, so arguments left after
+// it would run as a command of their own. A terminator ends the
+// command rather than belonging to it, so arguments placed after one
+// run as a command of their own instead of reaching the agent, while
+// arguments placed in front of it reach the agent and leave the
+// operator's own terminator its meaning. A terminator the fragment
+// escapes, as find -exec does with \;, is an argument of the
 // operator's command, and a doubled one is part of an operator the
 // fragment leaves incomplete; both stay where they are.
 func splitCommandTerminator(fragment string) (command, terminator string) {
-	trimmed := strings.TrimRight(fragment, " \t")
+	trimmed := strings.TrimRight(fragment, shellBlanks)
 	if trimmed == "" {
-		return fragment, ""
+		return trimmed, ""
 	}
 	last := trimmed[len(trimmed)-1]
 	if last != ';' && last != '&' {
-		return fragment, ""
+		return trimmed, ""
 	}
 	head := trimmed[:len(trimmed)-1]
 	if endsInEscape(head) || strings.HasSuffix(head, string(last)) {
-		return fragment, ""
+		return trimmed, ""
 	}
-	return strings.TrimRight(head, " \t"), string(last)
+	return strings.TrimRight(head, shellBlanks), string(last)
 }
 
 // endsInEscape reports whether s ends in an odd number of backslashes,
@@ -170,12 +182,13 @@ func endsInEscape(s string) bool {
 // remoteCommand is treated as a pre-formed POSIX shell fragment;
 // callers are responsible for any quoting within that fragment.
 // agentArgs are individually shell-quoted and appended after
-// remoteCommand, or in front of a single unescaped ; or & that ends
-// it, so they reach the fragment's own command rather than forming a
-// command of their own and the fragment keeps the meaning its
-// terminator gives it. The fragment and its arguments run as one
-// compound command, so a top-level || or ; inside the fragment cannot
-// run when the cd or the environment import ahead of it failed.
+// remoteCommand, past any blank or newline that ends it, or in front
+// of a single unescaped ; or & that ends it, so they reach the
+// fragment's own command rather than forming a command of their own
+// and the fragment keeps the meaning its terminator gives it. The
+// fragment and its arguments run as one compound command, so a
+// top-level || or ; inside the fragment cannot run when the cd or the
+// environment import ahead of it failed.
 //
 // SSH options applied (unless overridden via opts):
 //   - StrictHostKeyChecking=accept-new (TOFU), configurable via opts
