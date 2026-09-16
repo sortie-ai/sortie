@@ -153,10 +153,13 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 		}
 	}
 
+	added := make(map[string]bool, len(settings))
 	for _, entry := range settings {
-		if entry.Value != "" {
-			carried = append(carried, entry)
+		if entry.Value == "" || added[entry.Name] {
+			continue
 		}
+		added[entry.Name] = true
+		carried = append(carried, entry)
 	}
 
 	return sshutil.SSHOptions{
