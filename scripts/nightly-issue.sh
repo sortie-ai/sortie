@@ -9,47 +9,93 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=scripts/lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
 
+readonly CI_LABEL_NAME="ci-nightly"
+readonly CI_LABEL_COLOR="D73A4A"
+readonly CI_LABEL_DESCRIPTION="Nightly integration test failures"
+
+readonly AGENT_LABEL_NAME="area:agent-adapter"
+readonly AGENT_LABEL_COLOR="0E8A16"
+readonly AGENT_LABEL_DESCRIPTION="Agent interface, Claude Code adapter, Copilot adapter, mock"
+
+readonly TRACKER_LABEL_NAME="area:tracker-adapter"
+readonly TRACKER_LABEL_COLOR="006B75"
+readonly TRACKER_LABEL_DESCRIPTION="Tracker interface, Jira adapter, GitHub adapter, file adapter"
+
+readonly SCM_LABEL_NAME="area:scm"
+readonly SCM_LABEL_COLOR="ad076e"
+readonly SCM_LABEL_DESCRIPTION="SCM interface, pull request reviews, merge and branch operations, CI status providers"
+
+readonly ORCHESTRATOR_LABEL_NAME="area:orchestrator"
+readonly ORCHESTRATOR_LABEL_COLOR="5319E7"
+readonly ORCHESTRATOR_LABEL_DESCRIPTION="Dispatch, retry, reconciliation, state machine, poll loop"
+
 issue_number() {
 	_in_issues=$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title)
 	printf '%s\n' "$_in_issues" |
 		jq -r --arg title "$TITLE" '[.[] | select(.title == $title) | .number] | (first // empty)'
 }
 
+resolve_area_label() {
+	AREA_LABEL_NAME=""
+	AREA_LABEL_COLOR=""
+	AREA_LABEL_DESCRIPTION=""
+	case "$KIND" in
+	agent)
+		AREA_LABEL_NAME=$AGENT_LABEL_NAME
+		AREA_LABEL_COLOR=$AGENT_LABEL_COLOR
+		AREA_LABEL_DESCRIPTION=$AGENT_LABEL_DESCRIPTION
+		;;
+	tracker)
+		AREA_LABEL_NAME=$TRACKER_LABEL_NAME
+		AREA_LABEL_COLOR=$TRACKER_LABEL_COLOR
+		AREA_LABEL_DESCRIPTION=$TRACKER_LABEL_DESCRIPTION
+		;;
+	SCM)
+		AREA_LABEL_NAME=$SCM_LABEL_NAME
+		AREA_LABEL_COLOR=$SCM_LABEL_COLOR
+		AREA_LABEL_DESCRIPTION=$SCM_LABEL_DESCRIPTION
+		;;
+	"orchestrator E2E")
+		AREA_LABEL_NAME=$ORCHESTRATOR_LABEL_NAME
+		AREA_LABEL_COLOR=$ORCHESTRATOR_LABEL_COLOR
+		AREA_LABEL_DESCRIPTION=$ORCHESTRATOR_LABEL_DESCRIPTION
+		;;
+	esac
+}
+
+ensure_label() {
+	gh label create "$1" --color "$2" --description "$3" --force >/dev/null 2>&1 || true
+}
+
+label_node_id() {
+	_lni_name=$(printf '%s' "$1" | jq -sRr @uri)
+	gh api "repos/${GITHUB_REPOSITORY}/labels/${_lni_name}" --jq .node_id
+}
+
 provision_labels() {
-	gh label create ci-nightly --color D73A4A \
-		--description "Nightly integration test failures" --force >/dev/null 2>&1 || true
-	if [ "$KIND" = "agent" ]; then
-		gh label create area:agent-adapter --color D4C5F9 \
-			--description "Agent interface, Claude Code adapter, Copilot adapter, mock" \
-			--force >/dev/null 2>&1 || true
+	ensure_label "$CI_LABEL_NAME" "$CI_LABEL_COLOR" "$CI_LABEL_DESCRIPTION"
+	if [ -n "$AREA_LABEL_NAME" ]; then
+		ensure_label "$AREA_LABEL_NAME" "$AREA_LABEL_COLOR" "$AREA_LABEL_DESCRIPTION"
 	fi
 }
 
 create_issue() {
 	_repository_id=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .node_id)
-	_ci_label_id=$(gh api "repos/${GITHUB_REPOSITORY}/labels/ci-nightly" --jq .node_id)
-
-	if [ "$KIND" = "agent" ]; then
-		_agent_label_id=$(gh api "repos/${GITHUB_REPOSITORY}/labels/area%3Aagent-adapter" --jq .node_id)
-		gh api graphql \
-			-f query='mutation($repository: ID!, $title: String!, $body: String!, $type: ID!, $ciLabel: ID!, $areaLabel: ID!) { createIssue(input: {repositoryId: $repository, title: $title, body: $body, issueTypeId: $type, labelIds: [$ciLabel, $areaLabel]}) { issue { number } } }' \
-			-f repository="$_repository_id" \
-			-f title="$TITLE" \
-			-F body="@${BODY_FILE}" \
-			-f type="$TEST_ISSUE_TYPE_ID" \
-			-f ciLabel="$_ci_label_id" \
-			-f areaLabel="$_agent_label_id" \
-			--jq .data.createIssue.issue.number
-	else
-		gh api graphql \
-			-f query='mutation($repository: ID!, $title: String!, $body: String!, $type: ID!, $ciLabel: ID!) { createIssue(input: {repositoryId: $repository, title: $title, body: $body, issueTypeId: $type, labelIds: [$ciLabel]}) { issue { number } } }' \
-			-f repository="$_repository_id" \
-			-f title="$TITLE" \
-			-F body="@${BODY_FILE}" \
-			-f type="$TEST_ISSUE_TYPE_ID" \
-			-f ciLabel="$_ci_label_id" \
-			--jq .data.createIssue.issue.number
+	_ci_label_id=$(label_node_id "$CI_LABEL_NAME")
+	set -- -f "labels[]=${_ci_label_id}"
+	if [ -n "$AREA_LABEL_NAME" ]; then
+		_area_label_id=$(label_node_id "$AREA_LABEL_NAME")
+		set -- "$@" -f "labels[]=${_area_label_id}"
 	fi
+
+	gh api graphql \
+		-f query='mutation($repository: ID!, $title: String!, $body: String!, $type: ID!, $labels: [ID!]!) { createIssue(input: {repositoryId: $repository, title: $title, body: $body, issueTypeId: $type, labelIds: $labels}) { issue { number } } }' \
+		-f repository="$_repository_id" \
+		-f title="$TITLE" \
+		-F body="@${BODY_FILE}" \
+		-f type="$TEST_ISSUE_TYPE_ID" \
+		"$@" \
+		--jq .data.createIssue.issue.number
 }
 
 set_test_type() {
@@ -105,13 +151,14 @@ report_failure() {
 	BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/sortie-nightly-issue.XXXXXX")
 	trap 'rm -f "$BODY_FILE"' EXIT HUP INT TERM
 	write_report_body
+	resolve_area_label
 	provision_labels
 
 	_number=$(issue_number)
 	if [ -n "$_number" ]; then
 		gh issue comment "$_number" --body-file "$BODY_FILE"
-		if [ "$KIND" = "agent" ]; then
-			gh issue edit "$_number" --add-label area:agent-adapter
+		if [ -n "$AREA_LABEL_NAME" ]; then
+			gh issue edit "$_number" --add-label "$AREA_LABEL_NAME"
 		fi
 		set_test_type "$_number"
 		printf 'Updated existing issue #%s\n' "$_number"
