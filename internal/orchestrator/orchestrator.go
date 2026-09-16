@@ -355,10 +355,13 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 			slog.Int("max_per_host", hostPool.maxPerHost),
 		)
 	} else {
-		// Warn if max_concurrent_agents_per_host, ssh_pass_env, or
-		// ssh_disallow_pass_env is set without ssh_hosts.
+		// The pool above comes from OrchestratorParams.HostPool, which
+		// the running binary leaves unset: the first tick parses the
+		// worker block and applies its hosts. A workflow that configures
+		// SSH therefore still looks local here, so these warnings read
+		// the block rather than the pool.
 		cfg := params.WorkflowManager.Config()
-		if worker := cfg.ExtensionSection("worker"); worker != nil {
+		if worker := cfg.ExtensionSection("worker"); worker != nil && len(ParseWorkerConfig(worker).SSHHosts) == 0 {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
 				logger.Warn("max_concurrent_agents_per_host has no effect without worker.ssh_hosts")
 			}

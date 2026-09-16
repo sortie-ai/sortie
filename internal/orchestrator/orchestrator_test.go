@@ -693,7 +693,9 @@ func TestNewOrchestrator(t *testing.T) {
 // NewOrchestrator logs the "has no effect without worker.ssh_hosts"
 // warning for each of ssh_pass_env and ssh_disallow_pass_env, exactly
 // once, when SSH is not enabled and the worker block names that key,
-// and logs neither when the worker block names neither key.
+// logs neither when the worker block names neither key, and logs
+// neither when the worker block names a host, which the pool it holds
+// at this point does not yet reflect.
 func TestNewOrchestrator_SSHPassEnvNoHostsWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -753,6 +755,35 @@ func TestNewOrchestrator_SSHPassEnvNoHostsWarnings(t *testing.T) {
 		}
 		if strings.Contains(output, "ssh_disallow_pass_env has no effect") {
 			t.Errorf("NewOrchestrator() log output = %s, want no ssh_disallow_pass_env no-hosts warning when the key is absent", output)
+		}
+	})
+
+	t.Run("both keys present with hosts configured", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.ServiceConfig{}
+		cfg.SetExtensionSection("worker", map[string]any{
+			"ssh_hosts":                      []any{"build01.internal"},
+			"max_concurrent_agents_per_host": 2,
+			"ssh_pass_env":                   []any{"EXAMPLE_TOKEN"},
+			"ssh_disallow_pass_env":          []any{"GITHUB_TOKEN"},
+		})
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
+		NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          logger,
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{config: cfg},
+			Store:           &stubStore{},
+		})
+
+		if output := logs.String(); strings.Contains(output, "has no effect without worker.ssh_hosts") {
+			t.Errorf("NewOrchestrator() log output = %s, want no no-hosts warning when worker.ssh_hosts names a host", output)
 		}
 	})
 }
