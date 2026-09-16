@@ -50,6 +50,7 @@ func makeNotification() domain.Notification {
 			Source:         "test-host",
 			IssueID:        "issue-7",
 			Identifier:     "PROJ-7",
+			DispatchID:     "dispatch-uuid-001",
 			SessionID:      "sess-xyz",
 			Attempt:        new(2),
 			Agent:          "claude-code",
@@ -167,6 +168,7 @@ func TestWebhook_Send_PostsEnvelopeAndMessage(t *testing.T) {
 		"source":          "test-host",
 		"issue_id":        "issue-7",
 		"identifier":      "PROJ-7",
+		"dispatch_id":     "dispatch-uuid-001",
 		"session_id":      "sess-xyz",
 		"agent":           "claude-code",
 		"severity":        "warning",
@@ -189,6 +191,42 @@ func TestWebhook_Send_PostsEnvelopeAndMessage(t *testing.T) {
 		t.Error("body[\"attempt\"] missing")
 	} else if attempt, ok := attemptRaw.(float64); !ok || int(attempt) != 2 {
 		t.Errorf("body[\"attempt\"] = %v, want 2", attemptRaw)
+	}
+}
+
+// TestWebhook_Send_EmptySessionIDPostsEmptyString proves the body keeps
+// the session_id key, with an empty string value, when the envelope's
+// SessionID has not yet been accepted.
+func TestWebhook_Send_EmptySessionIDPostsEmptyString(t *testing.T) {
+	t.Parallel()
+
+	srv, getBody := captureServer(t, http.StatusOK)
+
+	n, err := newNotifier(map[string]any{"url": srv.URL})
+	if err != nil {
+		t.Fatalf("newNotifier: %v", err)
+	}
+
+	notif := makeNotification()
+	notif.Envelope.SessionID = ""
+	if err := n.Send(context.Background(), notif); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(getBody(), &m); err != nil {
+		t.Fatalf("Send body unmarshal: %v", err)
+	}
+
+	got, ok := m["session_id"]
+	if !ok {
+		t.Fatal("body[\"session_id\"] key absent, want present with an empty value")
+	}
+	if got != "" {
+		t.Errorf("body[\"session_id\"] = %v, want empty string", got)
+	}
+	if got, _ := m["dispatch_id"].(string); got != notif.Envelope.DispatchID {
+		t.Errorf("body[\"dispatch_id\"] = %q, want %q", got, notif.Envelope.DispatchID)
 	}
 }
 

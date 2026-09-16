@@ -12,6 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // SessionToolParams holds the per-session inputs that gate tool
@@ -44,12 +45,10 @@ type SessionToolParams struct {
 	// notify_operator envelope context only.
 	Identifier string
 
-	// SessionID is the running-session id. It gates no tool's
-	// registration; it feeds only the notify_operator envelope.
-	SessionID string
-
-	// DispatchID is cost_budget's running-session match key. It gates
-	// no tool's registration; it feeds only cost_budget.
+	// DispatchID is cost_budget's running-session match key and the
+	// notify_operator envelope's dispatch id, and gates the
+	// dispatch-fenced session ID lookup that feeds the notify_operator
+	// envelope. It gates no tool's registration.
 	DispatchID string
 
 	// Attempt is the retry or continuation attempt number for the
@@ -135,13 +134,16 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 		}
 	}
 
+	sessionIDFunc := func() string {
+		return workspace.ReadDispatchSessionID(params.WorkspacePath, params.DispatchID, logger)
+	}
 	notifyTool, err := buildNotifyTool(params.Notifications, notify.NotificationEnvelopeContext{
 		IssueID:    params.IssueID,
 		Identifier: params.Identifier,
-		SessionID:  params.SessionID,
+		DispatchID: params.DispatchID,
 		Attempt:    params.Attempt,
 		Agent:      params.AgentKind,
-	})
+	}, sessionIDFunc)
 	if err != nil {
 		if store != nil {
 			store.Close() //nolint:errcheck,gosec // best-effort cleanup on construction failure

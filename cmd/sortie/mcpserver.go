@@ -139,7 +139,6 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 		DBPath:         getenv("SORTIE_DB_PATH"),
 		IssueID:        getenv("SORTIE_ISSUE_ID"),
 		Identifier:     getenv("SORTIE_ISSUE_IDENTIFIER"),
-		SessionID:      getenv("SORTIE_SESSION_ID"),
 		DispatchID:     getenv("SORTIE_DISPATCH_ID"),
 		Attempt:        attempt,
 		AgentKind:      getenv("SORTIE_SESSION_AGENT_KIND"),
@@ -154,10 +153,10 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 // configured, so the caller skips registration. An unknown kind or a
 // constructor error (including a required secret that resolved to the
 // empty string) is fatal and returned as a non-nil error rather than a
-// partial registration. The caller supplies env: the function reads no
-// process environment itself, so the gating decision stays a pure
-// function of explicit inputs.
-func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext) (domain.AgentTool, error) {
+// partial registration. The caller supplies env and sessionID: the
+// function reads no process environment itself, so the gating decision
+// stays a pure function of explicit inputs.
+func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext, sessionID notify.SessionIDFunc) (domain.AgentTool, error) {
 	if len(configured) == 0 {
 		return nil, nil
 	}
@@ -175,7 +174,7 @@ func buildNotifyTool(configured []config.NotificationBackend, env notify.Notific
 		backends = append(backends, notifier)
 	}
 
-	return notify.New(backends, env, resolveNotificationCap(configured)), nil
+	return notify.New(backends, env, sessionID, resolveNotificationCap(configured)), nil
 }
 
 // resolveNotificationCap selects the single per-session cap for the tool

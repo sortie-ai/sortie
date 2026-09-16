@@ -794,12 +794,12 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// renders into the first-turn advertisement, so the advertised set
 	// matches the set the MCP sidecar serves over tools/list. It captures
 	// the session-invariant gating inputs and receives the late-bound
-	// inputs (issue id, workspace path, session id) at call time. The
-	// read-only store the builder opens to make the database-backed tools
+	// inputs (issue id, workspace path) at call time. The read-only
+	// store the builder opens to make the database-backed tools
 	// constructible is closed before the registry is returned: the worker
 	// reads only tool metadata, never executing the tools, so the
 	// connection is not needed beyond construction.
-	sessionToolFunc := func(ctx context.Context, issueID, workspacePath, sessionID string) (*domain.ToolRegistry, error) {
+	sessionToolFunc := func(ctx context.Context, issueID, workspacePath string) (*domain.ToolRegistry, error) {
 		sessionTools, err := BuildSessionToolRegistry(ctx, br.logger, SessionToolParams{
 			TrackerAdapter: br.trackerAdapter,
 			Project:        br.cfg.Tracker.Project,
@@ -809,7 +809,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			Notifications:  br.cfg.Notifications.Backends,
 			IssueID:        issueID,
 			WorkspacePath:  workspacePath,
-			SessionID:      sessionID,
 		})
 		if err != nil {
 			return nil, err

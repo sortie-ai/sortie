@@ -4570,6 +4570,323 @@ func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 	})
 }
 
+// readDispatchRecord reads and decodes .sortie/dispatch.json inside
+// wsPath as a workspace.DispatchIdentity.
+func readDispatchRecord(t *testing.T, wsPath string) workspace.DispatchIdentity {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(wsPath, ".sortie", "dispatch.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(.sortie/dispatch.json): %v", err)
+	}
+	var rec workspace.DispatchIdentity
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("Unmarshal dispatch.json %q: %v", data, err)
+	}
+	return rec
+}
+
+// dispatchRecordExists reports whether .sortie/dispatch.json exists
+// inside wsPath.
+func dispatchRecordExists(wsPath string) bool {
+	_, err := os.Stat(filepath.Join(wsPath, ".sortie", "dispatch.json"))
+	return err == nil
+}
+
+// TestRunWorkerAttempt_DispatchIdentityRecordPoints covers every record
+// point the worker keeps current in .sortie/dispatch.json: the record
+// exists with the accepted session ID once the first RunTurn begins,
+// a relayed session_started with a non-empty ID updates it before
+// OnEvent returns to the adapter, an empty-ID event leaves it
+// unchanged, a record removed mid-turn exists again at the next turn
+// start (coding or self-review), and no record is written at all when
+// the workflow path or the dispatch ID is empty.
+func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
+	t.Parallel()
+
+	t.Run("coding turns: session-start and relayed-event records, and survival of mid-turn removal", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 2
+
+		startFn, wsPath := captureWorkspacePath()
+		var turn int
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					turn++
+					if turn == 2 {
+						rec := readDispatchRecord(t, wsPath())
+						want := workspace.DispatchIdentity{DispatchID: "D1", SessionID: "X1"}
+						if rec != want {
+							t.Errorf("record at second RunTurn = %+v, want %+v (rewritten at turn start after mid-turn removal)", rec, want)
+						}
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					}
+
+					rec := readDispatchRecord(t, wsPath())
+					want := workspace.DispatchIdentity{DispatchID: "D1", SessionID: session.ID}
+					if rec != want {
+						t.Errorf("record at first RunTurn = %+v, want %+v", rec, want)
+					}
+
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "X1", Timestamp: time.Now().UTC()})
+					rec = readDispatchRecord(t, wsPath())
+					want = workspace.DispatchIdentity{DispatchID: "D1", SessionID: "X1"}
+					if rec != want {
+						t.Errorf("record after session_started(X1) returns = %+v, want %+v", rec, want)
+					}
+
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "", Timestamp: time.Now().UTC()})
+					rec = readDispatchRecord(t, wsPath())
+					if rec != want {
+						t.Errorf("record after an empty-SessionID session_started = %+v, want unchanged %+v", rec, want)
+					}
+
+					if err := os.Remove(filepath.Join(wsPath(), ".sortie", "dispatch.json")); err != nil {
+						t.Fatalf("Remove(dispatch.json): %v", err)
+					}
+					if dispatchRecordExists(wsPath()) {
+						t.Fatal("dispatch.json still exists immediately after Remove")
+					}
+
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+			DispatchID:             "D1",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if turn != 2 {
+			t.Fatalf("RunTurn called %d times, want 2", turn)
+		}
+	})
+
+	t.Run("self-review turn: the turn-start record is rewritten before the turn runs, and updated before OnEvent returns", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 10
+		cfg.SelfReview = config.SelfReviewConfig{
+			Enabled:               true,
+			MaxIterations:         1,
+			VerificationCommands:  []string{"echo ok"},
+			VerificationTimeoutMS: 5000,
+		}
+
+		startFn, wsPath := captureWorkspacePath()
+		var codingDone bool
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					switch {
+					case isSelfReviewTurnPrompt(params.Prompt):
+						rec := readDispatchRecord(t, wsPath())
+						want := workspace.DispatchIdentity{DispatchID: "D1", SessionID: session.ID}
+						if rec != want {
+							t.Errorf("record at self-review turn start = %+v, want %+v (rewritten before the turn runs)", rec, want)
+						}
+
+						params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "R1", Timestamp: time.Now().UTC()})
+						rec = readDispatchRecord(t, wsPath())
+						want = workspace.DispatchIdentity{DispatchID: "D1", SessionID: "R1"}
+						if rec != want {
+							t.Errorf("record after self-review session_started(R1) returns = %+v, want %+v", rec, want)
+						}
+
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+					case !codingDone:
+						codingDone = true
+						writeStatusFile(t, wsPath(), "needs-human-review")
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+			DispatchID:             "D1",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+	})
+
+	t.Run("no record when workflow path is empty", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		startFn, wsPath := captureWorkspacePath()
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{startSessionFn: startFn},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "",
+			DispatchID:             "D1",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if dispatchRecordExists(wsPath()) {
+			t.Error("dispatch.json exists, want none when WorkflowPath is empty")
+		}
+	})
+
+	t.Run("no record when dispatch id is empty", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		startFn, wsPath := captureWorkspacePath()
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{startSessionFn: startFn},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+			DispatchID:             "",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if dispatchRecordExists(wsPath()) {
+			t.Error("dispatch.json exists, want none when DispatchID is empty")
+		}
+	})
+}
+
+// TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment proves
+// writeWorkerState is containment-safe: a symbolic link planted at
+// state.json or state.json.tmp, pointing outside the workspace, is
+// replaced without ever being followed, and the destination ends up a
+// regular file holding the state content.
+func TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"state.json", "state.json.tmp"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			cfg := defaultWorkerConfig(tmpDir)
+			cfg.Agent.MaxTurns = 1
+
+			outsideDir := t.TempDir()
+			targetPath := filepath.Join(outsideDir, "target-"+name)
+			if err := os.WriteFile(targetPath, []byte("outside-content"), 0o600); err != nil {
+				t.Fatalf("WriteFile(target): %v", err)
+			}
+
+			var linkPath string
+			ec := newExitCapture()
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &mockAgentAdapter{
+					startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+						linkPath = filepath.Join(params.WorkspacePath, ".sortie", name)
+						mustSymlink(t, targetPath, linkPath)
+						return domain.Session{ID: "sess-1"}, nil
+					},
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+				WorkflowPath:           "/fake/WORKFLOW.md",
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+			result := ec.waitResult(t)
+			if result.ExitKind != WorkerExitNormal {
+				t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+			}
+
+			targetData, err := os.ReadFile(targetPath)
+			if err != nil {
+				t.Fatalf("ReadFile(target): %v", err)
+			}
+			if string(targetData) != "outside-content" {
+				t.Errorf("symlink target for %q content = %q, want unchanged %q", name, targetData, "outside-content")
+			}
+
+			if name == "state.json.tmp" {
+				fi, err := os.Lstat(linkPath)
+				if err != nil {
+					t.Fatalf("Lstat(%q): %v", name, err)
+				}
+				if fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("%q is no longer a symlink, want untouched (writeWorkerState uses a fresh temp name)", name)
+				}
+				return
+			}
+
+			fi, err := os.Lstat(linkPath)
+			if err != nil {
+				t.Fatalf("Lstat(%q): %v", name, err)
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				t.Errorf("%q is still a symlink, want a regular file (link replaced, not followed)", name)
+			}
+			destData, err := os.ReadFile(linkPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q): %v", name, err)
+			}
+			var s workerState
+			if err := json.Unmarshal(destData, &s); err != nil {
+				t.Fatalf("Unmarshal %q %q: %v", name, destData, err)
+			}
+		})
+	}
+}
+
 // TestRunWorkerAttempt_UsageArrivalNoneDiscardsFigures verifies the worker
 // mirror discards a none run's figures from both the event relay and the
 // turn result.
@@ -5581,7 +5898,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+			SessionToolRegistryFunc: func(_ context.Context, _, _ string) (*domain.ToolRegistry, error) {
 				return fakeAllToolsRegistry(), nil
 			},
 			AgentToolChannelFunc: func(string, bool) bool { return true },
@@ -5646,7 +5963,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+			SessionToolRegistryFunc: func(_ context.Context, _, _ string) (*domain.ToolRegistry, error) {
 				return fakeAllToolsRegistry(), nil
 			},
 			AgentToolChannelFunc: func(string, bool) bool { return true },
@@ -5701,7 +6018,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+			SessionToolRegistryFunc: func(_ context.Context, _, _ string) (*domain.ToolRegistry, error) {
 				return fakeAllToolsRegistry(), nil
 			},
 			AgentToolChannelFunc: func(string, bool) bool { return true },
@@ -5768,7 +6085,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 logger,
-			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+			SessionToolRegistryFunc: func(_ context.Context, _, _ string) (*domain.ToolRegistry, error) {
 				return nil, errors.New("simulated builder failure")
 			},
 			AgentToolChannelFunc: func(string, bool) bool { return true },

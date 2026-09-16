@@ -75,40 +75,15 @@ func (s workerState) withTokens(usage domain.TokenUsage, measured bool) workerSt
 	return s
 }
 
-// writeWorkerState atomically writes session runtime state to
-// .sortie/state.json inside the workspace. The write uses a
-// temp-file-plus-rename pattern so readers never observe a partial
-// write. Errors are returned to the caller, which logs and continues.
-//
-// The .sortie directory is validated with Lstat to reject symlinks;
-// an agent that replaces .sortie with a symlink cannot trick the
-// orchestrator into writing outside the workspace.
+// writeWorkerState writes session runtime state to .sortie/state.json
+// inside the workspace. Errors are returned to the caller, which logs
+// and continues.
 func writeWorkerState(workspacePath string, state workerState) error {
-	dir := filepath.Join(workspacePath, ".sortie")
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		return fmt.Errorf("stat .sortie dir: %w", err)
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf(".sortie is a symlink, refusing to write state file")
-	}
-	if !fi.IsDir() {
-		return fmt.Errorf(".sortie is not a directory")
-	}
-
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal worker state: %w", err)
 	}
-	tmpPath := filepath.Join(dir, "state.json.tmp")
-	outPath := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("write worker state temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		return fmt.Errorf("rename worker state file: %w", err)
-	}
-	return nil
+	return workspace.WriteSortieFile(workspacePath, "state.json", data)
 }
 
 // WorkerResult is the terminal outcome of a single worker attempt,
@@ -236,14 +211,13 @@ type WorkerResult struct {
 }
 
 // SessionToolRegistryFunc builds the per-session tool registry rendered
-// into the first-turn advertisement. issueID, workspacePath, and
-// sessionID are the gating inputs the worker resolves late: issueID per
-// dispatch, workspacePath after workspace preparation, and sessionID
-// after the agent session starts. The wiring layer has already captured
-// every session-invariant gating input. A nil value means no builder
-// was injected, in which case the worker falls back to the static
-// [WorkerDeps.ToolRegistry].
-type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath, sessionID string) (*domain.ToolRegistry, error)
+// into the first-turn advertisement. issueID and workspacePath are the
+// gating inputs the worker resolves late: issueID per dispatch and
+// workspacePath after workspace preparation. The wiring layer has
+// already captured every session-invariant gating input. A nil value
+// means no builder was injected, in which case the worker falls back to
+// the static [WorkerDeps.ToolRegistry].
+type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath string) (*domain.ToolRegistry, error)
 
 // AgentToolChannelFunc reports whether a session of the given agent
 // kind, launched in the given mode, can execute the tools the
@@ -976,7 +950,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			IssueID:               issue.ID,
 			Identifier:            issue.Identifier,
 			DBPath:                deps.DBPath,
-			SessionID:             "",
 			DispatchID:            deps.DispatchID,
 			Attempt:               attempt,
 			AgentKind:             agentKind,
@@ -1008,6 +981,26 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			slog.String("mcp_config_path", generatedPath),
 			slog.String("agent_kind", agentKind),
 			slog.String("operator_mcp_config_path", settings.MCPConfigPath))
+	}
+
+	// acceptedSessionID mirrors, on the worker goroutine, the latest
+	// session ID the worker has accepted for this attempt: the
+	// StartSession result, then any later value a relayed
+	// session_started event carries. record keeps the workspace's
+	// dispatch identity record current with that value so a tool
+	// server process reading it under this dispatch's own ID resolves
+	// the same session the worker has accepted.
+	var acceptedSessionID string
+	record := func(sessionID string) {
+		if mcpConfigPath == "" || deps.DispatchID == "" {
+			return
+		}
+		if err := workspace.WriteDispatchIdentity(wsResult.Path, workspace.DispatchIdentity{
+			DispatchID: deps.DispatchID,
+			SessionID:  sessionID,
+		}); err != nil {
+			logger.Warn("failed to write dispatch identity record", slog.Any("error", err))
+		}
 	}
 
 	// Check context between workspace preparation and session start.
@@ -1077,6 +1070,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	sessionID = session.ID
 	logger = logging.WithSession(logger, session.ID)
 	logger.Info("agent session started")
+
+	acceptedSessionID = session.ID
+	record(acceptedSessionID)
 
 	sessionStartedAt = time.Now().UTC()
 
@@ -1155,7 +1151,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					slog.String("agent_kind", agentKind), slog.Bool("remote", remote))
 			default:
 				if deps.SessionToolRegistryFunc != nil {
-					sessionReg, err := deps.SessionToolRegistryFunc(ctx, issue.ID, wsResult.Path, session.ID)
+					sessionReg, err := deps.SessionToolRegistryFunc(ctx, issue.ID, wsResult.Path)
 					if err != nil {
 						logger.Warn("failed to build session tool advertisement", slog.Any("error", err))
 					} else if sessionReg != nil && sessionReg.Len() > 0 {
@@ -1177,6 +1173,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if turnNumber == 1 {
 			localMeasured = false
 		}
+
+		record(acceptedSessionID)
 
 		// The turn-start write follows the flip above: publishing it
 		// earlier would put a measured verdict on disk for the whole of
@@ -1217,6 +1215,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					}.withTokens(localUsage, localMeasured)); err != nil {
 						logger.Warn("failed to write status state file on token event", slog.Any("error", err))
 					}
+				}
+				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
+					acceptedSessionID = event.SessionID
+					record(acceptedSessionID)
 				}
 				deps.OnEvent(issue.ID, event)
 			},
@@ -1411,11 +1413,16 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
 				foldRelayedEvent(event)
+				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
+					acceptedSessionID = event.SessionID
+					record(acceptedSessionID)
+				}
 				deps.OnEvent(issueID, event)
 			},
 			OnProgress: deps.OnProgress,
 			OnTurnStarted: func() {
 				turnsStarted++
+				record(acceptedSessionID)
 				if deps.OnTurnStarted != nil {
 					deps.OnTurnStarted(issue.ID, turnsStarted)
 				}

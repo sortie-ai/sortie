@@ -43,8 +43,22 @@ type NotificationEnvelope struct {
 	// Identifier is the human-readable issue key.
 	Identifier string
 
-	// SessionID is the agent session id. It may be empty early in a
-	// lifecycle.
+	// DispatchID is the non-empty ID minted for the current worker
+	// attempt, sourced from the tool server's SORTIE_DISPATCH_ID. It is
+	// the same for every notification and every tool server process of
+	// one dispatch, and new for every dispatch, retry, and
+	// continuation. It is empty only when the tool server started
+	// outside a Sortie dispatch.
+	DispatchID string
+
+	// SessionID is read from the workspace's dispatch identity record
+	// at send time, and used only when that record's dispatch ID
+	// matches DispatchID. It holds the latest session ID the worker
+	// accepted within the dispatch, and may repeat across a resumed
+	// dispatch. It is empty when no session ID has been accepted yet,
+	// the agent kind never reports one, the record is absent or
+	// rejected, the record names another dispatch, or DispatchID is
+	// empty. It is never filled from DispatchID.
 	SessionID string
 
 	// Attempt is the retry or continuation attempt. It is nil on the

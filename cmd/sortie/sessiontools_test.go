@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -171,7 +173,6 @@ func TestBuildSessionToolRegistry_AllToolsPresent(t *testing.T) {
 		WorkspacePath:  tmpDir,
 		DBPath:         dbPath,
 		IssueID:        "issue-1",
-		SessionID:      "sess-1",
 		MaxTokens:      100000,
 		MaxSessions:    10,
 		Notifications:  []config.NotificationBackend{webhookBackend(t)},
@@ -507,6 +508,93 @@ func TestBuildSessionToolRegistry_StoreOpenedThenNotifierError(t *testing.T) {
 			}
 			if result.Registry != nil {
 				t.Errorf("BuildSessionToolRegistry(%q) result.Registry non-nil on error, want nil", tt.name)
+			}
+		})
+	}
+}
+
+// TestBuildSessionToolRegistry_NotifyOperatorSessionIDGating proves
+// notify_operator registers whenever a backend is configured, whether
+// or not WorkspacePath and DispatchID are set, and that with either
+// empty its notifications carry an empty session_id.
+func TestBuildSessionToolRegistry_NotifyOperatorSessionIDGating(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name          string
+		workspacePath string
+		dispatchID    string
+	}{
+		{name: "missing workspace path", workspacePath: "", dispatchID: "dispatch-1"},
+		{name: "missing dispatch id", workspacePath: tmpDir, dispatchID: ""},
+		{name: "both missing", workspacePath: "", dispatchID: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read posted body: %v", err)
+				}
+				captured = b
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(srv.Close)
+
+			params := SessionToolParams{
+				WorkspacePath: tt.workspacePath,
+				DispatchID:    tt.dispatchID,
+				Notifications: []config.NotificationBackend{
+					{Kind: "webhook", Config: map[string]any{"url": srv.URL}},
+				},
+			}
+
+			result, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+			if err != nil {
+				t.Fatalf("BuildSessionToolRegistry(%q) error = %v, want nil", tt.name, err)
+			}
+			t.Cleanup(func() { closeResult(t, result) })
+
+			names := toolNamesFromResult(result)
+			if !slices.Contains(names, "notify_operator") {
+				t.Fatalf("BuildSessionToolRegistry(%q) tool names = %v, want notify_operator present", tt.name, names)
+			}
+
+			tool, ok := result.Registry.Get("notify_operator")
+			if !ok {
+				t.Fatalf("BuildSessionToolRegistry(%q): notify_operator not retrievable from registry", tt.name)
+			}
+
+			raw, execErr := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B"}`))
+			if execErr != nil {
+				t.Fatalf("Execute: %v", execErr)
+			}
+			var result2 struct {
+				Success bool `json:"success"`
+			}
+			if err := json.Unmarshal(raw, &result2); err != nil {
+				t.Fatalf("unmarshal Execute result: %v", err)
+			}
+			if !result2.Success {
+				t.Fatalf("Execute result success = false: %s", raw)
+			}
+
+			var body map[string]any
+			if err := json.Unmarshal(captured, &body); err != nil {
+				t.Fatalf("unmarshal posted body %q: %v", captured, err)
+			}
+			got, present := body["session_id"]
+			if !present {
+				t.Fatal("posted body has no session_id key, want present with an empty value")
+			}
+			if got != "" {
+				t.Errorf("posted body[session_id] = %v, want empty", got)
 			}
 		})
 	}
