@@ -74,12 +74,11 @@ func defaultResumeProcess(pid int) error {
 }
 
 // startAndAssign creates cmd suspended within a new process group,
-// starts it, and assigns, registers, and resumes it, following S2
-// through S4 of the capture sequence. keepJobHandle requests a
-// duplicate Job Object handle for a caller that drains the job itself
-// later (a Capture); the returned handle is zero when keepJobHandle is
-// false, when assignment failed, or when Unix has no Job Object
-// analogue.
+// starts it, and assigns, registers, and resumes it. keepJobHandle
+// requests a duplicate Job Object handle for a caller that drains the
+// job itself later (a Capture); the returned handle is zero when
+// keepJobHandle is false, when assignment failed, or when Unix has no
+// Job Object analogue.
 //
 // A returned error with a nil cmd.Process means cmd.Start failed. Any
 // other error means the process started but could not be resumed: by
@@ -97,6 +96,16 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 
+	// os/exec may run Cancel as soon as Start returns, and a cancellation
+	// that looked up the job before its registration would miss it.
+	registered := make(chan struct{})
+	if cancel := cmd.Cancel; cancel != nil {
+		cmd.Cancel = func() error {
+			<-registered
+			return cancel()
+		}
+	}
+
 	if startErr := cmd.Start(); startErr != nil {
 		return 0, time.Time{}, startErr
 	}
@@ -112,6 +121,7 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 			slog.Any("error", assignErr))
 	}
 	registerJobAssignment(cmd.Process.Pid, cmd.Process, job)
+	close(registered)
 
 	resumeSeam()
 

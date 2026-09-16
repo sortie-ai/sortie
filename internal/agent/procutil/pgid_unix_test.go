@@ -4,6 +4,7 @@ package procutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -62,7 +64,6 @@ func TestSetProcessGroup(t *testing.T) {
 func TestSignalProcessGroup_ESRCH(t *testing.T) {
 	t.Parallel()
 
-	// math.MaxInt32 is an implausible PID; no such process group can exist.
 	err := SignalProcessGroup(math.MaxInt32, syscall.SIGTERM)
 	if err != nil {
 		t.Errorf("SignalProcessGroup(MaxInt32, SIGTERM) = %v, want nil (ESRCH must be suppressed)", err)
@@ -72,7 +73,6 @@ func TestSignalProcessGroup_ESRCH(t *testing.T) {
 func TestSignalGraceful_ESRCH(t *testing.T) {
 	t.Parallel()
 
-	// math.MaxInt32 is an implausible PID; ESRCH is silently swallowed.
 	err := SignalGraceful(math.MaxInt32)
 	if err != nil {
 		t.Errorf("SignalGraceful(MaxInt32) = %v, want nil (ESRCH must be suppressed)", err)
@@ -100,7 +100,6 @@ func TestSignalProcessGroup_LiveProcess(t *testing.T) {
 	}
 }
 
-// pollForPID polls path until it holds a positive integer, returning it.
 func pollForPID(t *testing.T, path string, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -116,7 +115,6 @@ func pollForPID(t *testing.T, path string, timeout time.Duration) int {
 	return 0
 }
 
-// pollForFile reports whether path appears before the timeout expires.
 func pollForFile(path string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -128,19 +126,11 @@ func pollForFile(path string, timeout time.Duration) bool {
 	return false
 }
 
-// groupLeaderParams parameterizes the procutil.group-leader scenario: a
-// fake runtime that starts a descendant fake runtime and waits for it,
-// remaining a member of the process group SetGroupCancel places its own
-// launch command into.
 type groupLeaderParams struct {
 	DescendantPath string
 }
 
 func runGroupLeader(_ []string, params groupLeaderParams) int {
-	// Disables the default, uncatchable SIGTERM disposition so the
-	// leader survives long enough to wait for (and so reap) the
-	// descendant, rather than leaving it a zombie for the test's
-	// kill(pid, 0) liveness check to trip over.
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 
 	cmd := exec.Command(params.DescendantPath) //nolint:gosec // fake runtime path under t.TempDir()
@@ -155,18 +145,12 @@ func runGroupLeader(_ []string, params groupLeaderParams) int {
 	return 0
 }
 
-// groupDescendantParams parameterizes the procutil.group-descendant
-// scenario: a fake runtime that records its own PID, then traps a
-// catchable termination signal and records that it caught one.
 type groupDescendantParams struct {
 	Marker  string
 	PIDFile string
 }
 
 func runGroupDescendant(_ []string, params groupDescendantParams) int {
-	// The handler is installed before the PID file publishes readiness:
-	// the test cancels as soon as it reads that file, and the default
-	// disposition would end this process before it records the signal.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM)
 
@@ -184,18 +168,6 @@ func runGroupDescendant(_ []string, params groupDescendantParams) int {
 	return 0
 }
 
-// TestSetGroupCancel_CancelReachesDescendant verifies that cancelling the
-// context of a command prepared by SetGroupCancel delivers a catchable
-// termination signal to the whole process group, not just to the direct
-// child.
-//
-// The evidence is a marker a grandchild writes from inside its own
-// signal handler. A grandchild is reachable only through the group, and
-// it can only run a handler if the signal was catchable, so the marker
-// distinguishes a group-wide graceful signal from os/exec's default of
-// force-killing the direct child alone. The leader waits for the
-// descendant before exiting, so it is reaped rather than left a zombie,
-// and cmd.Wait cannot return until the marker is on disk.
 func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 	t.Parallel()
 
@@ -235,13 +207,6 @@ func TestSetGroupCancel_CancelReachesDescendant(t *testing.T) {
 	}
 }
 
-// TestKillProcessGroupReportingLeftover_ReturnsPromptlyOnceGone pins that
-// the wait returns as soon as the group reports itself gone rather than
-// always paying groupDrainBound in full: an already-exited, already-reaped
-// group answers ESRCH on the first send, well inside a shortened bound.
-//
-// groupDrainBound is mutated, so this test does not run in parallel with
-// the package's other parallel tests.
 func TestKillProcessGroupReportingLeftover_ReturnsPromptlyOnceGone(t *testing.T) {
 	cmd := fakeRuntimeCmd(t, agenttest.Output{})
 	SetProcessGroup(cmd)
@@ -272,14 +237,6 @@ func TestKillProcessGroupReportingLeftover_ReturnsPromptlyOnceGone(t *testing.T)
 	}
 }
 
-// TestKillProcessGroupReportingLeftover_ResendsUntilGone pins that the
-// wait resends the group signal rather than sending it once: a process
-// joining the group after the first signal is the reason the loop exists,
-// so a leftover member that only stops answering after several sends must
-// still be observed gone.
-//
-// groupKillFunc and groupDrainBound are mutated, so this test does not run
-// in parallel with the package's other parallel tests.
 func TestKillProcessGroupReportingLeftover_ResendsUntilGone(t *testing.T) {
 	origBound, origKill := groupDrainBound, groupKillFunc
 	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
@@ -308,13 +265,6 @@ func TestKillProcessGroupReportingLeftover_ResendsUntilGone(t *testing.T) {
 	}
 }
 
-// TestKillProcessGroupReportingLeftover_BoundElapsed pins that a group
-// that keeps answering past groupDrainBound is reported as a non-nil
-// error, and that the wait does not run away past the bound: it stops
-// within about one extra poll interval of it, not several multiples.
-//
-// groupKillFunc and groupDrainBound are mutated, so this test does not run
-// in parallel with the package's other parallel tests.
 func TestKillProcessGroupReportingLeftover_BoundElapsed(t *testing.T) {
 	origBound, origKill := groupDrainBound, groupKillFunc
 	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
@@ -344,15 +294,6 @@ func TestKillProcessGroupReportingLeftover_BoundElapsed(t *testing.T) {
 	}
 }
 
-// TestStartReaper_DoneWaitsForGroupDrain pins the user-visible half of the
-// defect: StartReaper's Done must not close, and therefore a launch's
-// outcome must not be published, while killProcessGroupReportingLeftover
-// is still resending because a group member has not yet confirmed gone.
-// The direct child here exits almost immediately, so any premature close
-// of Done would come from not waiting on the group drain.
-//
-// groupKillFunc is mutated, so this test does not run in parallel with the
-// package's other parallel tests.
 func TestStartReaper_DoneWaitsForGroupDrain(t *testing.T) {
 	cmd := fakeRuntimeCmd(t, agenttest.Output{})
 	SetProcessGroup(cmd)
@@ -393,12 +334,6 @@ func TestStartReaper_DoneWaitsForGroupDrain(t *testing.T) {
 	}
 }
 
-// blockingWarnHandler wraps a [captureLogSpy] and blocks inside Handle
-// for the one record whose message equals msg, signaling hit once it
-// has entered that block. A test uses hit to know the record has been
-// handed to the logger, then release to let the call return, so it can
-// observe that [Reaper.Done] is still open while StartReaper's log call
-// is in flight and only closes once that call has returned.
 type blockingWarnHandler struct {
 	inner   *captureLogSpy
 	msg     string
@@ -420,14 +355,6 @@ func (h *blockingWarnHandler) Handle(ctx context.Context, r slog.Record) error {
 func (h *blockingWarnHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *blockingWarnHandler) WithGroup(string) slog.Handler      { return h }
 
-// TestStartReaper_CleanupFailureLogsOneRecordBeforeDoneCloses pins the
-// fix's core claim: a reap whose group termination cannot prove the
-// process tree gone logs exactly one CaptureCleanupWarning record,
-// carrying the command and error attributes, and that record is written
-// before Done closes rather than after.
-//
-// groupKillFunc and groupDrainBound are mutated, so this test does not
-// run in parallel with the package's other parallel tests.
 func TestStartReaper_CleanupFailureLogsOneRecordBeforeDoneCloses(t *testing.T) {
 	origBound, origKill := groupDrainBound, groupKillFunc
 	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
@@ -487,13 +414,6 @@ func TestStartReaper_CleanupFailureLogsOneRecordBeforeDoneCloses(t *testing.T) {
 	}
 }
 
-// TestStartReaper_NilLoggerLogsThroughDefault pins StartReaper's nil
-// fallback: a reap started with a nil logger neither panics nor loses
-// the CaptureCleanupWarning record, which lands on slog.Default().
-//
-// groupKillFunc and groupDrainBound are mutated and slog.Default() is
-// replaced, so this test does not run in parallel with the package's
-// other parallel tests.
 func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
 	origBound, origKill := groupDrainBound, groupKillFunc
 	t.Cleanup(func() { groupDrainBound, groupKillFunc = origBound, origKill })
@@ -526,4 +446,93 @@ func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
 	if got := len(record.Attrs); got != 2 {
 		t.Errorf("record carries %d attributes, want exactly 2 (command, error); got %v", got, record.Attrs)
 	}
+}
+
+func TestGroupHasMember(t *testing.T) {
+	origKill := groupKillFunc
+	t.Cleanup(func() { groupKillFunc = origKill })
+
+	tests := []struct {
+		name        string
+		killErr     error
+		wantPresent bool
+		wantErr     bool
+	}{
+		{name: "live group", killErr: nil, wantPresent: true, wantErr: false},
+		{name: "group already gone", killErr: syscall.ESRCH, wantPresent: false, wantErr: false},
+		{name: "arbitrary other error", killErr: syscall.EPERM, wantPresent: false, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPID int
+			var gotSig syscall.Signal
+			groupKillFunc = func(pid int, sig syscall.Signal) error {
+				gotPID, gotSig = pid, sig
+				return tt.killErr
+			}
+
+			present, err := groupHasMember(4242)
+
+			if present != tt.wantPresent {
+				t.Errorf("groupHasMember(4242) present = %t, want %t", present, tt.wantPresent)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, tt.killErr) {
+					t.Errorf("groupHasMember(4242) error = %v, want %v", err, tt.killErr)
+				}
+			} else if err != nil {
+				t.Errorf("groupHasMember(4242) error = %v, want nil", err)
+			}
+			if gotPID != -4242 {
+				t.Errorf("groupKillFunc called with pid = %d, want %d (a negative pid signals the whole group)", gotPID, -4242)
+			}
+			if gotSig != 0 {
+				t.Errorf("groupKillFunc called with signal = %d, want 0 (signal 0 probes existence without delivering)", gotSig)
+			}
+		})
+	}
+}
+
+func armEscalationForceSendProbe(t *testing.T, pid int) (calls *atomic.Int32, waitForQuiet func(quietPeriod time.Duration, notBefore time.Time, timeout time.Duration)) {
+	t.Helper()
+	orig := groupKillFunc
+	t.Cleanup(func() { groupKillFunc = orig })
+
+	want := -pid
+	calls = &atomic.Int32{}
+	notify := make(chan struct{}, 8192)
+	groupKillFunc = func(gotPID int, sig syscall.Signal) error {
+		res := orig(gotPID, sig)
+		if gotPID == want {
+			if sig == syscall.SIGKILL {
+				calls.Add(1)
+			}
+			notify <- struct{}{}
+		}
+		return res
+	}
+
+	waitForQuiet = func(quietPeriod time.Duration, notBefore time.Time, timeout time.Duration) {
+		t.Helper()
+		timeoutAt := time.Now().Add(timeout)
+		for {
+			wait := quietPeriod
+			if untilNotBefore := time.Until(notBefore); untilNotBefore > wait {
+				wait = untilNotBefore
+			}
+			select {
+			case <-notify:
+				if !time.Now().Before(timeoutAt) {
+					return
+				}
+			case <-time.After(wait):
+				if time.Now().Before(notBefore) {
+					continue
+				}
+				return
+			}
+		}
+	}
+	return calls, waitForQuiet
 }

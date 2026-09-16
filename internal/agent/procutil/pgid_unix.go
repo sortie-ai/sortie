@@ -41,26 +41,10 @@ func KillProcessGroup(pid int) error {
 	return err
 }
 
-// groupKillFunc is killProcessGroupReportingLeftover's underlying
-// signal call. Only a test replaces it, to simulate a member the
-// bounded wait never confirms gone.
 var groupKillFunc = syscall.Kill
 
-// killProcessGroupReportingLeftover sends SIGKILL to the process group
-// led by pid, resending it every groupDrainPollInterval until a send
-// finds no group left to receive it or groupDrainBound passes, and
-// reports whether the first send reached a member: a direct child
-// StartReaper has already reaped no longer belongs to the group, so a
-// first send that reaches a live process means at least one other
-// member was still alive to receive it.
-//
 // SIGKILL delivery is asynchronous and does not reap a member stuck in
-// an uninterruptible wait, so a member the first send reached can
-// outlive it; resending on every poll also reaches a member the group
-// gains after the first send, the same way the Windows drain this
-// shares its bound with repeats its own termination call. A non-nil
-// error means the group still answered a send when the bound ran out,
-// so a descendant may have survived the reap.
+// an uninterruptible wait, so the signal is resent until the group drains.
 func killProcessGroupReportingLeftover(pid int) (leftover bool, err error) {
 	deadline := time.Now().Add(groupDrainBound)
 	for {
@@ -85,10 +69,36 @@ func SignalGraceful(pid int) error {
 	return SignalProcessGroup(pid, syscall.SIGTERM)
 }
 
-// assignProcess is a no-op on Unix. Process group membership is
-// established at fork time via Setpgid.
 func assignProcess(_ int, _ *os.Process) error { return nil }
 
-// CleanupProcess is a no-op on Unix. Process group resources are
-// managed by the kernel.
+// CleanupProcess releases platform-specific process-group resources.
 func CleanupProcess(_ int) {}
+
+func groupHasMember(pid int) (bool, error) {
+	err := groupKillFunc(-pid, 0)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	return false, err
+}
+
+type groupEscalationTarget struct {
+	pid int
+}
+
+func captureGroupEscalation(pid int) (groupEscalationTarget, bool) {
+	return groupEscalationTarget{pid: pid}, true
+}
+
+func (t groupEscalationTarget) hasRunningMember() (bool, error) {
+	return groupHasMember(t.pid)
+}
+
+func (t groupEscalationTarget) terminateAll() error {
+	return KillProcessGroup(t.pid)
+}
+
+func (t groupEscalationTarget) close() {}

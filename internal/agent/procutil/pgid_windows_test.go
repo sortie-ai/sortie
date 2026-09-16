@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -50,8 +51,6 @@ func TestSetProcessGroup_CreationFlags(t *testing.T) {
 func TestAssignProcess_CleanupProcess_Idempotent(t *testing.T) {
 	t.Parallel()
 
-	// Use a process that stays alive long enough for AssignProcess to succeed.
-	// ping reliably blocks in non-interactive environments.
 	cmd := exec.Command("cmd.exe", "/C", "ping -n 10 127.0.0.1 >nul")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
@@ -66,17 +65,12 @@ func TestAssignProcess_CleanupProcess_Idempotent(t *testing.T) {
 	}
 	registerJobAssignment(pid, cmd.Process, job)
 
-	// Kill the process so the test doesn't wait 5 seconds.
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 
-	// First CleanupProcess removes the job entry.
+	CleanupProcess(pid)
 	CleanupProcess(pid)
 
-	// Second CleanupProcess must be a no-op (no panic, no double-close).
-	CleanupProcess(pid)
-
-	// The job entry must be absent.
 	if _, ok := jobs.Load(pid); ok {
 		t.Error("job entry still present after CleanupProcess; want removed")
 	}
@@ -85,10 +79,6 @@ func TestAssignProcess_CleanupProcess_Idempotent(t *testing.T) {
 func TestKillProcessGroup_KillsChildAndGrandchild(t *testing.T) {
 	t.Parallel()
 
-	// Spawn cmd.exe that runs a background child via "start /b".
-	// The Job Object with KILL_ON_JOB_CLOSE terminates all descendants.
-	// Use ping instead of pause because pause exits immediately when
-	// stdin is closed (the Go exec default).
 	cmd := exec.Command("cmd.exe", "/C", "start /b ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -104,14 +94,12 @@ func TestKillProcessGroup_KillsChildAndGrandchild(t *testing.T) {
 	}
 	registerJobAssignment(pid, cmd.Process, job)
 
-	// Allow the child process tree to spawn.
 	time.Sleep(300 * time.Millisecond)
 
 	if err := KillProcessGroup(pid); err != nil {
 		t.Fatalf("KillProcessGroup() = %v, want nil", err)
 	}
 
-	// The process group leader must exit promptly after Job Object termination.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
@@ -119,16 +107,9 @@ func TestKillProcessGroup_KillsChildAndGrandchild(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("process group leader still alive 3s after KillProcessGroup")
 	case <-done:
-		// Process exited as expected.
 	}
 }
 
-// TestKillProcessGroupReportingLeftover_ReapedFailOpenEntry pins that a
-// launch registered without a Job Object reports no cleanup error once the
-// reap has already waited for its direct child. That is the order the reap
-// runs in, so os.Process.Kill answers os.ErrProcessDone for it, and
-// reporting that would raise the cleanup warning on every launch that ran
-// without a Job Object and exited cleanly.
 func TestKillProcessGroupReportingLeftover_ReapedFailOpenEntry(t *testing.T) {
 	t.Parallel()
 
@@ -141,8 +122,6 @@ func TestKillProcessGroupReportingLeftover_ReapedFailOpenEntry(t *testing.T) {
 		t.Fatalf("cmd.Wait() = %v, want nil", err)
 	}
 
-	// A zero handle is what startAndAssign registers when Job Object
-	// creation or assignment failed and the launch ran without one.
 	registerJobAssignment(pid, cmd.Process, 0)
 	t.Cleanup(func() { jobs.Delete(pid) })
 
@@ -155,11 +134,6 @@ func TestKillProcessGroupReportingLeftover_ReapedFailOpenEntry(t *testing.T) {
 	}
 }
 
-// TestProcessAlreadyGone pins which kill outcomes count as the process
-// having been gone. A successful Wait on Windows releases the handle
-// rather than marking the process done, so Kill answers with a bare
-// EINVAL there and never with ErrProcessDone; a kill that reached a
-// live process and failed must still be reported.
 func TestProcessAlreadyGone(t *testing.T) {
 	t.Parallel()
 
@@ -189,13 +163,8 @@ func TestProcessAlreadyGone(t *testing.T) {
 func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	t.Parallel()
 
-	// STATUS_CONTROL_C_EXIT is the expected exit code when a console
-	// process is terminated by CTRL_BREAK_EVENT.
 	const statusControlCExit = uint32(0xC000013A)
 
-	// Launch ping directly (not via cmd.exe) so that ping.exe IS the
-	// process group leader and receives CTRL_BREAK_EVENT without
-	// cmd.exe intercepting or swallowing the signal.
 	cmd := exec.Command("ping", "-n", "31", "127.0.0.1")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -212,7 +181,6 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	registerJobAssignment(pid, cmd.Process, job)
 	t.Cleanup(func() { CleanupProcess(pid) })
 
-	// Allow the process to initialize its console.
 	time.Sleep(100 * time.Millisecond)
 
 	if err := SignalGraceful(pid); err != nil {
@@ -226,7 +194,6 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 
 	select {
 	case <-done:
-		// Process responded to CTRL_BREAK_EVENT; accept any exit code.
 		code := uint32(cmd.ProcessState.ExitCode())
 		if code != statusControlCExit {
 			t.Logf("exit code %#x (expected %#x for STATUS_CONTROL_C_EXIT, but process did exit)", code, statusControlCExit)
@@ -234,9 +201,6 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		_ = KillProcessGroup(pid)
 		<-done
-		// CTRL_BREAK_EVENT delivery requires an attached console.
-		// GitHub Actions Windows runners may run headless, so the
-		// event is not delivered. Skip rather than fail.
 		t.Skip("CTRL_BREAK_EVENT not delivered; likely a headless CI session without an attached console")
 	}
 }
@@ -244,7 +208,6 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 func TestWasSignaled_NormalExit1_NotSignaled(t *testing.T) {
 	t.Parallel()
 
-	// A normal "exit 1" must NOT be classified as signaled.
 	cmd := exec.Command("cmd.exe", "/C", "exit 1")
 	err := cmd.Run()
 	if err == nil {
@@ -258,10 +221,6 @@ func TestWasSignaled_NormalExit1_NotSignaled(t *testing.T) {
 func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 	t.Parallel()
 
-	// A process killed via KillProcessGroup (Job Object with
-	// STATUS_CONTROL_C_EXIT exit code) must be classified as signaled.
-	// Use ping as a long-running process that reliably blocks in
-	// non-interactive environments.
 	cmd := exec.Command("cmd.exe", "/C", "ping -n 31 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
@@ -297,21 +256,6 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 	}
 }
 
-// TestDrainJobObject pins that drainJobObject resends job termination on
-// every poll, the same reason TestKillProcessGroupReportingLeftover_ResendsUntilGone
-// resends on Unix, and reports a non-nil error once groupDrainBound
-// elapses with a member jobHasRunningMember still finds live, rather than
-// returning as soon as the first termination call was accepted.
-//
-// Cannot run on this host; on the CI Windows job this reddens under a
-// mutation that makes drainJobObject return right after the first
-// terminateJobObjectFunc call succeeds, without checking
-// jobHasRunningMember or looping: the "resends" subtest's call count
-// would drop to 1 and its nil-error check would fail, since the held
-// member newCaptureTestHeldMember started is still running.
-//
-// groupDrainBound and terminateJobObjectFunc are mutated, so this test
-// does not run in parallel with the package's other parallel tests.
 func TestDrainJobObject(t *testing.T) {
 	t.Run("resends termination while a member is held live and reports the bound-elapsed failure", func(t *testing.T) {
 		job, cleanup := newCaptureTestJob(t)
@@ -351,23 +295,6 @@ func TestDrainJobObject(t *testing.T) {
 	})
 }
 
-// TestDrainJobObject_UnreadableMemberList pins that a job whose member
-// list cannot be read is reported as unconfirmed rather than drained.
-// jobHasRunningMember answers false both for a job it read and found
-// empty and for one it could not read at all, and letting the second
-// end the drain would publish a launch's outcome with its tree
-// unproven, which is the guarantee the resend loop exists to make.
-//
-// An invalid job handle is what makes QueryInformationJobObject fail
-// deterministically; terminateJobObjectFunc is stubbed so the failure
-// under test is the member-list read rather than the termination.
-//
-// Cannot run on this host; on the CI Windows job this reddens under a
-// mutation that drops jobHasRunningMember's error, because drainJobObject
-// then returns nil on its first poll instead of reporting the bound.
-//
-// groupDrainBound and terminateJobObjectFunc are mutated, so this test
-// does not run in parallel with the package's other parallel tests.
 func TestDrainJobObject_UnreadableMemberList(t *testing.T) {
 	origBound, origTerm := groupDrainBound, terminateJobObjectFunc
 	defer func() { groupDrainBound, terminateJobObjectFunc = origBound, origTerm }()
@@ -380,4 +307,278 @@ func TestDrainJobObject_UnreadableMemberList(t *testing.T) {
 	if err == nil {
 		t.Fatal("drainJobObject(unreadable job) error = nil, want non-nil (an unread member list does not confirm an empty job)")
 	}
+}
+
+func TestGroupEscalationTarget_NoMemberExitLeavesRegistryUntouched(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command("cmd.exe", "/C", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cmd.Wait() = %v, want nil", err)
+	}
+
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+	registerJobAssignment(pid, cmd.Process, job)
+	t.Cleanup(func() { CleanupProcess(pid) })
+
+	target, ok := captureGroupEscalation(pid)
+	if !ok {
+		t.Fatal("captureGroupEscalation() ok = false, want true")
+	}
+
+	present, memberErr := target.hasRunningMember()
+	if memberErr != nil {
+		t.Fatalf("hasMember() error = %v, want nil", memberErr)
+	}
+	if present {
+		t.Fatal("hasMember() = true, want false (no process was ever assigned to the job)")
+	}
+	target.close()
+
+	v, ok := jobs.Load(pid)
+	if !ok {
+		t.Fatal("jobs.Load(pid) after the no-member exit = not found, want the entry still registered")
+	}
+	entry := v.(*jobEntry)
+	entry.mu.Lock()
+	gotJob := entry.job
+	entry.mu.Unlock()
+	if gotJob != job {
+		t.Errorf("registered job handle = %#x after the no-member exit, want unchanged %#x", gotJob, job)
+	}
+
+	leftover, cleanupErr := killProcessGroupReportingLeftover(pid)
+	if cleanupErr != nil {
+		t.Errorf("killProcessGroupReportingLeftover(%d) error = %v, want nil", pid, cleanupErr)
+	}
+	if leftover {
+		t.Error("killProcessGroupReportingLeftover() leftover = true, want false")
+	}
+}
+
+func newKillOnCloseJob(t *testing.T) windows.Handle {
+	t.Helper()
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptrOf(&info), uint32Sizeof(info)); err != nil {
+		_ = windows.CloseHandle(job)
+		t.Fatalf("SetInformationJobObject() error = %v", err)
+	}
+	return job
+}
+
+func newExitedProcess(t *testing.T) *os.Process {
+	t.Helper()
+	cmd := exec.Command("cmd.exe", "/C", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() error = %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cmd.Wait() error = %v, want nil", err)
+	}
+	return cmd.Process
+}
+
+func TestArmGroupEscalation_ReleasesDuplicateOnEveryExitPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no-member exit", func(t *testing.T) {
+		t.Parallel()
+
+		job := newKillOnCloseJob(t)
+		proc := newExitedProcess(t)
+		pid := proc.Pid
+		registerJobAssignment(pid, proc, job)
+		t.Cleanup(func() { CleanupProcess(pid) })
+
+		const grace = 100 * time.Millisecond
+		armGroupEscalation(pid, grace)
+
+		time.Sleep(grace + 200*time.Millisecond)
+
+		canary := newCaptureTestHeldMember(t, job)
+		CleanupProcess(pid)
+
+		assertCaptureWinProcessGone(t, canary.Process.Pid, 2*time.Second)
+	})
+
+	t.Run("terminate exit", func(t *testing.T) {
+		t.Parallel()
+
+		job := newKillOnCloseJob(t)
+		proc := newExitedProcess(t)
+		pid := proc.Pid
+		registerJobAssignment(pid, proc, job)
+		t.Cleanup(func() { CleanupProcess(pid) })
+
+		startCaptureTestHeldMember(t, job)
+		armGroupEscalation(pid, 100*time.Millisecond)
+
+		time.Sleep(100*time.Millisecond + groupDrainBound + 500*time.Millisecond)
+
+		canary := newCaptureTestHeldMember(t, job)
+		CleanupProcess(pid)
+
+		assertCaptureWinProcessGone(t, canary.Process.Pid, 2*time.Second)
+	})
+}
+
+func TestDuplicateJobHandle_NoDuplicateAfterTeardown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("after killProcessGroupReportingLeftover", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.Command("cmd.exe", "/C", "exit 0")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+		pid := cmd.Process.Pid
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("cmd.Wait() = %v, want nil", err)
+		}
+		job, err := windows.CreateJobObject(nil, nil)
+		if err != nil {
+			t.Fatalf("CreateJobObject() error = %v", err)
+		}
+		registerJobAssignment(pid, cmd.Process, job)
+		v, ok := jobs.Load(pid)
+		if !ok {
+			t.Fatalf("jobs.Load(%d) = not found, want the entry just registered", pid)
+		}
+		entry := v.(*jobEntry)
+
+		if _, err := killProcessGroupReportingLeftover(pid); err != nil {
+			t.Fatalf("killProcessGroupReportingLeftover(%d) error = %v, want nil", pid, err)
+		}
+
+		entry.mu.Lock()
+		gotJob := entry.job
+		entry.mu.Unlock()
+		if gotJob != 0 {
+			t.Errorf("entry.job after killProcessGroupReportingLeftover = %#x, want 0", gotJob)
+		}
+
+		if _, ok := duplicateJobHandle(pid); ok {
+			t.Errorf("duplicateJobHandle(%d) after killProcessGroupReportingLeftover reported true, want false", pid)
+		}
+	})
+
+	t.Run("after CleanupProcess", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.Command("cmd.exe", "/C", "exit 0")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+		pid := cmd.Process.Pid
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("cmd.Wait() = %v, want nil", err)
+		}
+		job, err := windows.CreateJobObject(nil, nil)
+		if err != nil {
+			t.Fatalf("CreateJobObject() error = %v", err)
+		}
+		registerJobAssignment(pid, cmd.Process, job)
+		v, ok := jobs.Load(pid)
+		if !ok {
+			t.Fatalf("jobs.Load(%d) = not found, want the entry just registered", pid)
+		}
+		entry := v.(*jobEntry)
+
+		CleanupProcess(pid)
+
+		entry.mu.Lock()
+		gotJob := entry.job
+		entry.mu.Unlock()
+		if gotJob != 0 {
+			t.Errorf("entry.job after CleanupProcess = %#x, want 0", gotJob)
+		}
+
+		if _, ok := duplicateJobHandle(pid); ok {
+			t.Errorf("duplicateJobHandle(%d) after CleanupProcess reported true, want false", pid)
+		}
+	})
+
+	t.Run("no registered entry", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := duplicateJobHandle(999999999); ok {
+			t.Error("duplicateJobHandle() for an unregistered pid reported true, want false")
+		}
+	})
+}
+
+func TestDuplicateJobHandle_RefusesAnEntryCloseJobHasCleared(t *testing.T) {
+	t.Parallel()
+
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+
+	const pid = 918273645
+	entry := &jobEntry{job: job}
+	jobs.Store(pid, entry)
+	t.Cleanup(func() { jobs.Delete(pid) })
+
+	entry.closeJob()
+
+	if entry.job != 0 {
+		t.Fatalf("(*jobEntry).closeJob() left job = %#x, want 0", entry.job)
+	}
+
+	if _, ok := duplicateJobHandle(pid); ok {
+		t.Error("duplicateJobHandle() against an entry closeJob already cleared reported true, want false")
+	}
+}
+
+func armEscalationForceSendProbe(t *testing.T, _ int) (calls *atomic.Int32, waitForQuiet func(quietPeriod time.Duration, notBefore time.Time, timeout time.Duration)) {
+	t.Helper()
+	orig := terminateJobObjectFunc
+	t.Cleanup(func() { terminateJobObjectFunc = orig })
+
+	calls = &atomic.Int32{}
+	notify := make(chan struct{}, 8192)
+	terminateJobObjectFunc = func(job windows.Handle, exitCode uint32) error {
+		res := orig(job, exitCode)
+		calls.Add(1)
+		notify <- struct{}{}
+		return res
+	}
+
+	waitForQuiet = func(quietPeriod time.Duration, notBefore time.Time, timeout time.Duration) {
+		t.Helper()
+		timeoutAt := time.Now().Add(timeout)
+		for {
+			wait := quietPeriod
+			if untilNotBefore := time.Until(notBefore); untilNotBefore > wait {
+				wait = untilNotBefore
+			}
+			select {
+			case <-notify:
+				if !time.Now().Before(timeoutAt) {
+					return
+				}
+			case <-time.After(wait):
+				if time.Now().Before(notBefore) {
+					continue
+				}
+				return
+			}
+		}
+	}
+	return calls, waitForQuiet
 }
