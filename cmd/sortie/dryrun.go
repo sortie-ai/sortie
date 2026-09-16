@@ -38,9 +38,9 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 		orchestrator.AgentTotals{},
 	)
 
-	wc := orchestrator.ParseWorkerConfig(cfg.ExtensionSection("worker"))
+	wc := orchestrator.ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
 	for _, w := range wc.Warnings {
-		logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message is one of two fixed string constants from parseSSHStrictHostKeyChecking
+		logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message comes from one of a fixed set of string constants ParseWorkerConfig produces
 	}
 	hostPool := orchestrator.NewHostPool(wc.SSHHosts, wc.MaxPerHost)
 

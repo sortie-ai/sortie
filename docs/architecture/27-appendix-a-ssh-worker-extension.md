@@ -10,7 +10,8 @@ This appendix describes a common extension profile in which Sortie keeps one cen
 - `workspace.root` is interpreted on the remote host, not on the orchestrator host. The orchestrator validates workspace safety invariants locally (path sanitization, no traversal) and trusts the remote host to enforce filesystem permissions.
 - The coding-agent is launched over SSH stdio instead of as a local subprocess, so the orchestrator still owns the session lifecycle even though commands execute remotely.
 - Continuation turns inside one worker lifetime should stay on the same host and workspace.
-- A remote host should satisfy the same basic contract as a local worker environment: reachable shell, writable workspace root, coding-agent executable, and any required auth or repository prerequisites.
+- A remote host should satisfy the same basic contract as a local worker environment: reachable POSIX-compatible login shell, writable workspace root, coding-agent executable, and any required auth or repository prerequisites; a launch that carries an environment variable additionally requires the standard `dd` utility on the remote host.
+- Orchestrator environment variables reach a remote agent only when `worker.ssh_pass_env` names them or the agent kind declares them as its runtime's own credential variables, and only when `worker.ssh_disallow_pass_env` does not name them. A carried variable arrives on the SSH session's standard input, ahead of the agent command, never as part of a process argument. A kind that computes a setting of its own for its runtime sends that setting on the same carrier, named by neither list; everything else the agent's environment holds comes from the host itself. A kind whose startup protocol carries a credential exchange of its own can still send a credential from the orchestrator in that exchange, where it reaches the runtime as a protocol message and never as an environment variable.
 
 ### A.2 Scheduling Notes
 

@@ -121,6 +121,31 @@ func (c ServiceConfig) ExtensionValue(name string) (any, bool) {
 	return v, ok
 }
 
+// ExtensionEnvRefPaths returns the set of field paths under the
+// top-level extension section name whose configured text held a $VAR
+// or ${VAR} reference, keyed relative to that section (for example
+// "ssh_pass_env[0]"). It returns nil when no field under the section
+// held one.
+//
+// A resolved value carries no record of the reference that produced
+// it, so a caller whose field must be written literally reads this
+// set to tell the two apart.
+func (c ServiceConfig) ExtensionEnvRefPaths(name string) map[string]bool {
+	prefix := name + "."
+	var paths map[string]bool
+	for path := range c.extensionsPreResolution {
+		relative, found := strings.CutPrefix(path, prefix)
+		if !found {
+			continue
+		}
+		if paths == nil {
+			paths = make(map[string]bool)
+		}
+		paths[relative] = true
+	}
+	return paths
+}
+
 // SetExtensionSection replaces the top-level extension section named
 // name with section. It exists for callers that build a ServiceConfig
 // directly instead of through [NewServiceConfig], matching the

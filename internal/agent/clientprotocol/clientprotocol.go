@@ -25,6 +25,7 @@ func init() {
 		MCPInjection:        registry.MCPInjectionTranslated,
 		UsageArrival:        registry.UsageArrivalNone,
 		UsageAttribution:    registry.UsageAttributionNone,
+		CredentialEnv:       registry.DeclareCredentialEnv(),
 	})
 }
 

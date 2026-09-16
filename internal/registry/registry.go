@@ -215,6 +215,43 @@ type AgentMeta struct {
 	// requirement satisfiable for every registry-conformant kind,
 	// including one whose rules are numerous.
 	UsageSessionRules []UsageSessionRule
+
+	// CredentialEnv declares the environment variable names this
+	// kind's runtime reads as the credential for its default
+	// provider. The zero value means undeclared.
+	CredentialEnv CredentialEnv
+}
+
+// CredentialEnv declares the environment variable names an agent
+// kind's runtime reads as the credential for its default provider.
+// The zero value is undeclared; construct a declared value with
+// [DeclareCredentialEnv].
+type CredentialEnv struct {
+	names    []string
+	declared bool
+}
+
+// DeclareCredentialEnv returns a declared [CredentialEnv] holding
+// names in the given order. Called with no arguments, it declares
+// that the kind carries no credential variable of its own.
+func DeclareCredentialEnv(names ...string) CredentialEnv {
+	return CredentialEnv{names: slices.Clone(names), declared: true}
+}
+
+// Declared reports whether c was built by [DeclareCredentialEnv]. The
+// zero value reports false.
+func (c CredentialEnv) Declared() bool {
+	return c.declared
+}
+
+// Names returns a newly allocated copy of c's declared names, nil
+// when c holds none. The caller may freely mutate the returned slice
+// without affecting c or any other caller's copy.
+func (c CredentialEnv) Names() []string {
+	if len(c.names) == 0 {
+		return nil
+	}
+	return slices.Clone(c.names)
 }
 
 // UsageArrival declares when a usage figure for the agent session

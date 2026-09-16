@@ -5,6 +5,7 @@ package clientprotocol
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,7 @@ const (
 	scenarioParkedAgent   = "clientprotocol.parked-agent"
 	scenarioBoundedReader = "clientprotocol.bounded-reader"
 	scenarioHoldOpen      = "clientprotocol.hold-open"
+	scenarioSSHStandIn    = "clientprotocol.ssh-stand-in"
 )
 
 func init() {
@@ -33,6 +35,49 @@ func init() {
 	fakeRuntimeScenarios[scenarioParkedAgent] = agenttest.Typed(runParkedAgent)
 	fakeRuntimeScenarios[scenarioBoundedReader] = agenttest.Typed(runBoundedReader)
 	fakeRuntimeScenarios[scenarioHoldOpen] = agenttest.Typed(runHoldOpen)
+	fakeRuntimeScenarios[scenarioSSHStandIn] = agenttest.Typed(runSSHStandIn)
+}
+
+// sshStandInParams configures [runSSHStandIn]: path is the PATH value
+// its dropped-environment child receives.
+type sshStandInParams struct {
+	PATH string
+}
+
+// runSSHStandIn is a stand-in "ssh" runtime: it ignores every argument
+// ahead of the last one, the remote command sshutil.BuildSSHLaunch
+// produced, and runs that command through sh -c with its own
+// environment dropped and replaced by params.PATH alone, and its
+// standard input, output, and error inherited. Dropping the
+// environment is what proves a carried variable reaches the remote
+// command only through the SSH session's standard input, never
+// through this process's own inherited environment.
+func runSSHStandIn(args []string, params sshStandInParams) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "ssh stand-in: no arguments")
+		return 2
+	}
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssh stand-in: sh not found: %v\n", err)
+		return 2
+	}
+
+	remoteCommand := args[len(args)-1]
+	cmd := exec.Command(shPath, "-c", remoteCommand) //nolint:gosec // remoteCommand is the launch this test built
+	cmd.Env = []string{"PATH=" + params.PATH}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "ssh stand-in: %v\n", err)
+		return 2
+	}
+	return 0
 }
 
 // gracefulMode selects how a protocolAgent scenario reacts to the
@@ -94,6 +139,13 @@ type protocolAgentParams struct {
 	// the idle wait begins, so a caller that signals the process
 	// does not race its own startup.
 	ReadyPath string
+
+	// EnvCaptureName and EnvCapturePath, when both set, write the
+	// named environment variable's value (empty string if unset) to
+	// EnvCapturePath before anything else runs, so a test can observe
+	// a value carried onto this process's own environment.
+	EnvCaptureName string
+	EnvCapturePath string
 }
 
 // runProtocolAgent is the fake agent scenario every clientprotocol
@@ -105,6 +157,12 @@ type protocolAgentParams struct {
 // which keeps the fixture portable to platforms where that binary is
 // absent.
 func runProtocolAgent(_ []string, params protocolAgentParams) int {
+	if params.EnvCaptureName != "" {
+		if err := os.WriteFile(params.EnvCapturePath, []byte(os.Getenv(params.EnvCaptureName)), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "protocol agent: write env capture: %v\n", err)
+			return 2
+		}
+	}
 	if params.ExitImmediately {
 		return 0
 	}

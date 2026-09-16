@@ -3479,6 +3479,38 @@ func TestCIFailureMigration(t *testing.T) {
 	})
 }
 
+// TestExtensionEnvRefPaths covers the section-relative view of the
+// pre-resolution snapshot: a slice element and a nested field under the
+// named section are reported with the section prefix stripped, a leaf
+// under another section is excluded, and a section holding no reference
+// reports nil.
+func TestExtensionEnvRefPaths(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServiceConfig{
+		extensionsPreResolution: map[string]string{
+			"worker.ssh_pass_env[1]": "$SORTIE_TEST_ENV_REF_PATHS",
+			"worker.nested.field":    "${SORTIE_TEST_ENV_REF_PATHS}",
+			"other.key":              "$SORTIE_TEST_ENV_REF_PATHS",
+		},
+	}
+
+	got := cfg.ExtensionEnvRefPaths("worker")
+	want := map[string]bool{"ssh_pass_env[1]": true, "nested.field": true}
+	if len(got) != len(want) {
+		t.Fatalf("ExtensionEnvRefPaths(\"worker\") = %v, want %v", got, want)
+	}
+	for path := range want {
+		if !got[path] {
+			t.Errorf("ExtensionEnvRefPaths(\"worker\") = %v, want it to report %q", got, path)
+		}
+	}
+
+	if got := cfg.ExtensionEnvRefPaths("absent"); got != nil {
+		t.Errorf("ExtensionEnvRefPaths(\"absent\") = %v, want nil", got)
+	}
+}
+
 // TestResolveExtensionEnvRefs covers the recursive walker at the unit level:
 // nested maps, slices of strings, slices of maps, non-string leaves, nil map,
 // the braced ${VAR} form, and the $$ -> "" contract.

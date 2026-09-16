@@ -7,8 +7,7 @@
 //	SORTIE_CLIENTPROTOCOL_COMMAND    the protocol-speaking binary's launch
 //	                                  command, including whatever flag
 //	                                  puts it into Agent Client Protocol
-//	                                  mode (for example "copilot --acp" or
-//	                                  "opencode acp")
+//	                                  mode
 //
 // This suite names no default binary: the kind is generic, with no
 // runtime of its own, and naming one would make a single vendor the

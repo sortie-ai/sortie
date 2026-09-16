@@ -235,11 +235,10 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	state.inbox = jsonrpc.NewInbox[pumpItem]()
 
 	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
 	if remote {
-		sshArgs := sshutil.BuildSSHArgs(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, sshutil.SSHOptions{
-			StrictHostKeyChecking: target.SSHStrictHostKeyChecking,
-		})
-		cmd = exec.CommandContext(ctx, target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, target.SSHOptions())
+		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 		cmd.Dir = target.WorkspacePath
@@ -252,6 +251,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	if err != nil {
 		return domain.Session{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "failed to create stdin pipe", Err: err}
 	}
+	prefixedStdin := launch.PrefixStdin(stdinPipe)
 
 	pipes, err := procutil.StartWithOwnedPipes(cmd, state.logger)
 	if err != nil {
@@ -276,11 +276,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	}
 
 	state.pid = cmd.Process.Pid
-	state.stdinCloser = stdinPipe
+	state.stdinCloser = prefixedStdin
 	state.pipes = pipes
 	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 
-	state.conn = jsonrpc.NewConn(stdinPipe, pipes.Stdout, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
+	state.conn = jsonrpc.NewConn(prefixedStdin, pipes.Stdout, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(clientProtocolMaxLineBytes))
 
 	// The reap runs independently of the connection's reader: the pipes

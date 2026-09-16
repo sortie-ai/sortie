@@ -3151,3 +3151,95 @@ sleep 1000`)
 			result.Usage.InputTokens, result.Usage.OutputTokens)
 	}
 }
+
+// writeRunFixtureScriptWithCapture is [writeRunFixtureScript] extended
+// to record, only for the primary run invocation (not the export
+// sub-invocation the case statement intercepts first), the argument
+// vector and the whole of standard input it received.
+func writeRunFixtureScriptWithCapture(t *testing.T, dir, fixtureName, argvPath, stdinPath string) string {
+	t.Helper()
+
+	runPath := filepath.Join(dir, fixtureName)
+	if err := os.WriteFile(runPath, loadFixture(t, fixtureName), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", fixtureName, err)
+	}
+
+	exportPath := filepath.Join(dir, "export.json")
+	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(export.json): %v", err)
+	}
+
+	body := `case "$1" in
+  export) cat '` + exportPath + `'; exit 0;;
+esac
+cat > '` + stdinPath + `'
+printf '%s\n' "$@" > '` + argvPath + `'
+cat '` + runPath + `'`
+
+	return writeOpenCodeScript(t, dir, body)
+}
+
+// TestRunTurn_LocalLaunchIgnoresSSHEnvNames asserts that a local turn
+// (RemoteCommand empty) sends the same argument vector and empty
+// standard input whether or not LaunchTarget.SSHEnvNames names a set
+// variable: RunTurn's local branch never consults it. This reddens if
+// that branch starts treating a non-empty SSHEnvNames as a signal to
+// take the remote path, which would replace the local argument vector
+// with an SSH option vector and attach a non-empty preamble to
+// standard input.
+func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
+	// Not parallel: sets the carried variable via t.Setenv.
+	const varName = "SORTIE_OPENCODE_RUNTURN_LOCAL_INVARIANCE"
+	t.Setenv(varName, "should-never-reach-a-local-launch")
+
+	for _, tc := range []struct {
+		name        string
+		sshEnvNames []string
+	}{
+		{"SSHEnvNames absent", nil},
+		{"SSHEnvNames naming a set variable", []string{varName}},
+	} {
+		tmpDir := t.TempDir()
+		argvPath := filepath.Join(tmpDir, "argv.txt")
+		stdinPath := filepath.Join(tmpDir, "stdin.txt")
+		script := writeRunFixtureScriptWithCapture(t, tmpDir, "simple_turn.jsonl", argvPath, stdinPath)
+
+		a, err := NewOpenCodeAdapter(map[string]any{})
+		if err != nil {
+			t.Fatalf("%s: NewOpenCodeAdapter() error = %v, want nil", tc.name, err)
+		}
+		session := mustStartSession(t, a, tmpDir, script)
+		state, ok := session.Internal.(*sessionState)
+		if !ok {
+			t.Fatalf("%s: session.Internal type = %T, want *sessionState", tc.name, session.Internal)
+		}
+		state.target.SSHEnvNames = tc.sshEnvNames
+
+		events, result, err := collectEvents(t, a, session, "work")
+		if err != nil {
+			t.Fatalf("%s: RunTurn() error = %v, want nil", tc.name, err)
+		}
+		if result.ExitReason != domain.EventTurnCompleted {
+			t.Errorf("%s: ExitReason = %q, want %q", tc.name, result.ExitReason, domain.EventTurnCompleted)
+		}
+		if len(events) == 0 {
+			t.Errorf("%s: events = 0, want > 0", tc.name)
+		}
+
+		argv, err := os.ReadFile(argvPath)
+		if err != nil {
+			t.Fatalf("%s: ReadFile(argv.txt): %v", tc.name, err)
+		}
+		if strings.Contains(string(argv), "StrictHostKeyChecking") {
+			t.Errorf("%s: argv = %q, want the local argument vector, not an SSH option vector", tc.name, argv)
+		}
+
+		stdin, err := os.ReadFile(stdinPath)
+		if err != nil {
+			t.Fatalf("%s: ReadFile(stdin.txt): %v", tc.name, err)
+		}
+		if len(stdin) != 0 {
+			t.Errorf("%s: subprocess standard input = %q, want empty on a local launch", tc.name, stdin)
+		}
+	}
+}

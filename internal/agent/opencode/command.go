@@ -149,24 +149,22 @@ func buildRunEnv(base []string, pt passthroughConfig) ([]string, error) {
 	return env, nil
 }
 
-func buildSSHRemoteCommand(remoteCommand string, extraEnv map[string]string) string {
-	if len(extraEnv) == 0 {
-		return remoteCommand
-	}
-
-	keys := make([]string, 0, len(extraEnv))
-	for key := range extraEnv {
+// sortedEnvVars converts managed into a name-sorted slice of
+// [sshutil.EnvVar], so every SSH launch site carries the adapter's
+// managed settings to [agentcore.LaunchTarget.SSHOptions] in the same
+// deterministic order.
+func sortedEnvVars(managed map[string]string) []sshutil.EnvVar {
+	keys := make([]string, 0, len(managed))
+	for key := range managed {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
 
-	parts := make([]string, 0, len(keys)+1)
+	vars := make([]sshutil.EnvVar, 0, len(keys))
 	for _, key := range keys {
-		parts = append(parts, key+"="+sshutil.ShellQuote(extraEnv[key]))
+		vars = append(vars, sshutil.EnvVar{Name: key, Value: managed[key]})
 	}
-	parts = append(parts, remoteCommand)
-
-	return strings.Join(parts, " ")
+	return vars
 }
 
 func buildManagedEnv(pt passthroughConfig) (map[string]string, error) {

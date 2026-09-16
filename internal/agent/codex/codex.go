@@ -39,6 +39,7 @@ func init() {
 		MCPInjection:        registry.MCPInjectionTranslated,
 		UsageArrival:        registry.UsageArrivalIncremental,
 		UsageAttribution:    registry.UsageAttributionPerModel,
+		CredentialEnv:       registry.DeclareCredentialEnv(),
 	})
 }
 
@@ -389,12 +390,10 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
 	if target.RemoteCommand != "" {
-		remoteCmd := buildSSHRemoteCmd(target.RemoteCommand, os.Getenv("CODEX_API_KEY"))
-		sshArgs := sshutil.BuildSSHArgs(target.SSHHost, target.WorkspacePath, remoteCmd, nil, sshutil.SSHOptions{
-			StrictHostKeyChecking: target.SSHStrictHostKeyChecking,
-		})
-		cmd = exec.CommandContext(ctx, target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		launch = sshutil.BuildSSHLaunch(target.SSHHost, target.WorkspacePath, target.RemoteCommand, nil, target.SSHOptions())
+		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
@@ -411,6 +410,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			Err:     err,
 		}
 	}
+	prefixedStdin := launch.PrefixStdin(stdinPipe)
 
 	logger := slog.Default().With(slog.String("component", "codex-adapter"))
 	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
@@ -452,7 +452,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	state.proc = cmd.Process
-	state.stdin = stdinPipe
+	state.stdin = prefixedStdin
 	state.pipes = pipes
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -499,7 +499,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	state.inbox = jsonrpc.NewInbox[jsonrpc.Message]()
 	state.readerDone = make(chan struct{})
 
-	state.conn = jsonrpc.NewConn(stdinPipe, pipes.Stdout, jsonrpc.Deliver(state.inbox, identity))
+	state.conn = jsonrpc.NewConn(prefixedStdin, pipes.Stdout, jsonrpc.Deliver(state.inbox, identity))
 	// Started before the handshake so the handshake wait loops observe
 	// a closed inbox, rather than timing out, when stdout ends mid-handshake.
 	go watchTermination(state)

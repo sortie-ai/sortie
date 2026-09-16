@@ -689,6 +689,247 @@ func TestNewOrchestrator(t *testing.T) {
 	})
 }
 
+// TestNewOrchestrator_SSHPassEnvNoHostsWarnings asserts that
+// NewOrchestrator logs the "has no effect without worker.ssh_hosts"
+// warning for each of ssh_pass_env and ssh_disallow_pass_env, exactly
+// once, when SSH is not enabled and the worker block names that key,
+// logs neither when the worker block names neither key, and logs
+// neither when the worker block names a host, which the pool it holds
+// at this point does not yet reflect.
+func TestNewOrchestrator_SSHPassEnvNoHostsWarnings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("both keys present without hosts", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.ServiceConfig{}
+		cfg.SetExtensionSection("worker", map[string]any{
+			"ssh_pass_env":          []any{"EXAMPLE_TOKEN"},
+			"ssh_disallow_pass_env": []any{"GITHUB_TOKEN"},
+		})
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
+		NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          logger,
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{config: cfg},
+			Store:           &stubStore{},
+		})
+
+		output := logs.String()
+		if !strings.Contains(output, "ssh_pass_env has no effect without worker.ssh_hosts") {
+			t.Errorf("NewOrchestrator() log output = %s, want the ssh_pass_env no-hosts warning", output)
+		}
+		if !strings.Contains(output, "ssh_disallow_pass_env has no effect without worker.ssh_hosts") {
+			t.Errorf("NewOrchestrator() log output = %s, want the ssh_disallow_pass_env no-hosts warning", output)
+		}
+	})
+
+	t.Run("neither key present without hosts", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.ServiceConfig{}
+		cfg.SetExtensionSection("worker", map[string]any{})
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
+		NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          logger,
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{config: cfg},
+			Store:           &stubStore{},
+		})
+
+		output := logs.String()
+		if strings.Contains(output, "ssh_pass_env has no effect") {
+			t.Errorf("NewOrchestrator() log output = %s, want no ssh_pass_env no-hosts warning when the key is absent", output)
+		}
+		if strings.Contains(output, "ssh_disallow_pass_env has no effect") {
+			t.Errorf("NewOrchestrator() log output = %s, want no ssh_disallow_pass_env no-hosts warning when the key is absent", output)
+		}
+	})
+
+	t.Run("both keys present with hosts configured", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := config.ServiceConfig{}
+		cfg.SetExtensionSection("worker", map[string]any{
+			"ssh_hosts":                      []any{"build01.internal"},
+			"max_concurrent_agents_per_host": 2,
+			"ssh_pass_env":                   []any{"EXAMPLE_TOKEN"},
+			"ssh_disallow_pass_env":          []any{"GITHUB_TOKEN"},
+		})
+
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+		state := NewState(1000, 1, 0, nil, AgentTotals{})
+		NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          logger,
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{config: cfg},
+			Store:           &stubStore{},
+		})
+
+		if output := logs.String(); strings.Contains(output, "has no effect without worker.ssh_hosts") {
+			t.Errorf("NewOrchestrator() log output = %s, want no no-hosts warning when worker.ssh_hosts names a host", output)
+		}
+	})
+}
+
+// TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload asserts that the
+// tick that parses the worker block updates
+// Orchestrator.sshPassEnv and Orchestrator.sshDisallowPassEnv, and
+// that a reload removing both keys clears them on the next tick.
+func TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.ServiceConfig{
+		Polling: config.PollingConfig{IntervalMS: 60000},
+		Agent:   config.AgentConfig{Kind: "mock", Command: "/usr/bin/agent", MaxConcurrentAgents: 1},
+		Tracker: config.TrackerConfig{Kind: "mock", APIKey: "key", ActiveStates: []string{"To Do"}},
+	}
+	cfg.SetExtensionSection("worker", map[string]any{
+		"ssh_hosts":             []any{"build01.internal"},
+		"ssh_pass_env":          []any{"EXAMPLE_TOKEN"},
+		"ssh_disallow_pass_env": []any{"GITHUB_TOKEN"},
+	})
+
+	wm := &stubWorkflowManager{config: cfg}
+	regs := passingPreflightRegistries()
+
+	state := NewState(60000, 1, 0, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	ctx := context.Background()
+	o.handleTick(ctx)
+
+	if !slices.Equal(o.sshPassEnv, []string{"EXAMPLE_TOKEN"}) {
+		t.Fatalf("sshPassEnv after first tick = %v, want [EXAMPLE_TOKEN]", o.sshPassEnv)
+	}
+	if !slices.Equal(o.sshDisallowPassEnv, []string{"GITHUB_TOKEN"}) {
+		t.Fatalf("sshDisallowPassEnv after first tick = %v, want [GITHUB_TOKEN]", o.sshDisallowPassEnv)
+	}
+
+	reloaded := cfg
+	reloaded.SetExtensionSection("worker", map[string]any{
+		"ssh_hosts": []any{"build01.internal"},
+	})
+	wm.setConfig(reloaded)
+
+	o.handleTick(ctx)
+
+	if o.sshPassEnv != nil {
+		t.Errorf("sshPassEnv after a reload removing the key = %v, want nil", o.sshPassEnv)
+	}
+	if o.sshDisallowPassEnv != nil {
+		t.Errorf("sshDisallowPassEnv after a reload removing the key = %v, want nil", o.sshDisallowPassEnv)
+	}
+}
+
+// TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists asserts
+// that the SSHEnvNamesFunc closure makeWorkerFn builds around
+// carriedEnvNames joins a kind's registry-declared credential names
+// with the operator's listed and disallowed names, live from
+// Orchestrator.sshPassEnv and Orchestrator.sshDisallowPassEnv at
+// dispatch time: with listed names [L, K1, D], disallowed names
+// [K2, D], and a registered kind declaring [K1, K2], a remote session
+// of that kind receives SSHEnvNames [K1, L] on StartSessionParams,
+// with K2 and D withheld even though each is both named and
+// disallowed.
+func TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists(t *testing.T) {
+	t.Parallel()
+
+	const kind = "ssh-join-test-kind"
+
+	state := NewState(1000, 5, 0, nil, AgentTotals{})
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.Kind = kind
+	tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+
+	var capturedSSHEnvNames []string
+	agent := &mockAgentAdapter{
+		startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+			capturedSSHEnvNames = params.SSHEnvNames
+			return domain.Session{ID: "sess-1"}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+
+	agentRegistry := &stubAgentRegistry{
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(k string) (registry.AgentMeta, bool) {
+			if k != kind {
+				return registry.AgentMeta{}, false
+			}
+			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("K1", "K2")}, true
+		},
+	}
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    agent,
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{AgentRegistry: agentRegistry},
+	})
+
+	o.sshPassEnv = []string{"L", "K1", "D"}
+	o.sshDisallowPassEnv = []string{"K2", "D"}
+
+	issue := workerTestIssue()
+	state.Running[issue.ID] = &RunningEntry{
+		Identifier: issue.Identifier,
+		Issue:      issue,
+	}
+
+	wfn := o.makeWorkerFn("", "user@stand-in-host", kind, "", "", nil, registry.UsageArrivalUndeclared)
+
+	exitDone := make(chan struct{})
+	go func() {
+		wfn(context.Background(), issue, nil)
+		close(exitDone)
+	}()
+
+	select {
+	case <-exitDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not exit within 10 seconds")
+	}
+
+	if !slices.Equal(capturedSSHEnvNames, []string{"K1", "L"}) {
+		t.Errorf("StartSessionParams.SSHEnvNames = %v, want [K1 L]", capturedSSHEnvNames)
+	}
+}
+
 func TestPreflightOK_InitialValue(t *testing.T) {
 	t.Parallel()
 

@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -612,5 +614,243 @@ func TestRunTurnEndsBoundedWhenRuntimeExitsWithEscapedDescendantHoldingOutput(t 
 	ceiling := procutil.DefaultStopGrace + 3*procutil.DefaultDrainGrace + teardownReturnOverhead
 	if stopElapsed := time.Since(stopStart); stopElapsed >= ceiling {
 		t.Errorf("StopSession() took %v, want under %v (the pinned teardown ceiling)", stopElapsed, ceiling)
+	}
+}
+
+// sshStandInEnvPath returns the PATH value the ssh stand-in's dropped-
+// environment child should receive: a directory holding only a
+// symlink to sh, and, when includeDD is true, a symlink to dd as well.
+// Building an isolated directory rather than reusing sh's own
+// directory matters because a real sh and a real dd usually share one
+// directory (/usr/bin, /bin), so reusing it for the no-dd case would
+// resolve dd anyway.
+func sshStandInEnvPath(t *testing.T, includeDD bool) string {
+	t.Helper()
+
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh not found on PATH: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.Symlink(shPath, filepath.Join(dir, "sh")); err != nil {
+		t.Fatalf("Symlink(sh): %v", err)
+	}
+
+	if includeDD {
+		ddPath, err := exec.LookPath("dd")
+		if err != nil {
+			t.Skipf("dd not found on PATH: %v", err)
+		}
+		if err := os.Symlink(ddPath, filepath.Join(dir, "dd")); err != nil {
+			t.Fatalf("Symlink(dd): %v", err)
+		}
+	}
+	return dir
+}
+
+// TestStartSessionSSH_CarriesEnvironmentVariable drives a remote
+// session through the stand-in ssh runtime and asserts that the fake
+// agent observes a carried variable's value, delivered only through
+// the SSH session's standard input rather than through the stand-in's
+// own inherited environment, since the stand-in drops its environment
+// before running the remote command.
+func TestStartSessionSSH_CarriesEnvironmentVariable(t *testing.T) {
+	// Not parallel: sets PATH and the carried variable via t.Setenv.
+	dir := t.TempDir()
+	sshDir := t.TempDir()
+
+	agenttest.FakeRuntime(t, sshDir, "ssh", scenarioSSHStandIn, sshStandInParams{PATH: sshStandInEnvPath(t, true)})
+	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const carriedName = "CLIENTPROTOCOL_TEST_CARRY"
+	const carriedValue = "carried-value-clientprotocol"
+	t.Setenv(carriedName, carriedValue)
+
+	capturePath := filepath.Join(dir, "captured.txt")
+	agentPath := agenttest.FakeRuntime(t, dir, "agent", scenarioProtocolAgent, protocolAgentParams{
+		Handshake:      true,
+		EnvCaptureName: carriedName,
+		EnvCapturePath: capturePath,
+	})
+
+	session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: agentPath},
+		SSHHost:       "user@stand-in-host",
+		SSHEnvNames:   []string{carriedName},
+	})
+	if err != nil {
+		t.Fatalf("startSession() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stopSession(context.Background(), session); err != nil {
+			t.Errorf("stopSession() error = %v", err)
+		}
+	})
+
+	got, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("ReadFile(captured.txt): %v", err)
+	}
+	if string(got) != carriedValue {
+		t.Errorf("remote agent observed %q, want %q", string(got), carriedValue)
+	}
+}
+
+// TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound asserts that
+// a remote host without dd fails the handshake as port_exit /
+// "agent connection ended before responding", never the agent-not-
+// found category, and that the guard's stderr line reaches a WARN
+// "agent stderr" record.
+func TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T) {
+	// Not parallel: installs a process-wide slog default and sets PATH
+	// and the carried variable via t.Setenv.
+	const ddMissingMessage = "sortie: dd is required on the remote host to receive environment variables"
+
+	dir := t.TempDir()
+	sshDir := t.TempDir()
+
+	agenttest.FakeRuntime(t, sshDir, "ssh", scenarioSSHStandIn, sshStandInParams{PATH: sshStandInEnvPath(t, false)})
+	t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const carriedName = "CLIENTPROTOCOL_TEST_CARRY_NODD"
+	t.Setenv(carriedName, "some-value")
+
+	agentPath := agenttest.FakeRuntime(t, dir, "agent", scenarioProtocolAgent, protocolAgentParams{Handshake: true})
+
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	_, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: agentPath},
+		SSHHost:       "user@stand-in-host",
+		SSHEnvNames:   []string{carriedName},
+	})
+
+	agentErr, ok := errors.AsType[*domain.AgentError](err)
+	if !ok {
+		t.Fatalf("startSession() error = %v (%T), want a non-nil *domain.AgentError", err, err)
+	}
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("startSession() error kind = %q, want %q (never the agent-not-found category)", agentErr.Kind, domain.ErrPortExit)
+	}
+	const wantMessage = "agent connection ended before responding"
+	if agentErr.Message != wantMessage {
+		t.Errorf("startSession() error message = %q, want %q", agentErr.Message, wantMessage)
+	}
+
+	output := buf.String()
+	wantLineAttr := fmt.Sprintf("line=%q", ddMissingMessage)
+	found := false
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, `msg="agent stderr"`) && strings.Contains(line, wantLineAttr) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("startSession() output = %s, want a WARN agent stderr record carrying the guard's message %q", output, ddMissingMessage)
+	}
+}
+
+// captureCwdAndFirstLineThenHandshakeScript is [mcpHandshakeScript]
+// extended to capture, ahead of the handshake, the process's working
+// directory and the raw bytes of the very first line its standard
+// input carries. A remote launch's preamble, were one ever built for
+// this local invocation, would land ahead of the initialize request
+// on that same first line, since [sshutil.SSHLaunch.PrefixStdin] sends
+// its whole preamble on the wrapped writer's first Write with no
+// trailing newline of its own; a remote launch's own branch also
+// never sets cmd.Dir, so a cwd inherited from the test binary rather
+// than the configured workspace is the other observable sign the
+// wrong branch ran.
+func captureCwdAndFirstLineThenHandshakeScript(cwdPath, firstLinePath string) string {
+	return `pwd > '` + cwdPath + `'
+first='` + firstLinePath + `'
+capture_first=1
+while IFS= read -r line; do
+  if [ "$capture_first" = "1" ]; then
+    printf '%s' "$line" > "$first"
+    capture_first=0
+  fi
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+      ;;
+    *'"method":"session/new"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-1"}}'
+      ;;
+  esac
+done
+`
+}
+
+// TestStartSessionLocalLaunchIgnoresSSHEnvNames asserts that a local
+// launch (no SSHHost) completes the same way whether or not
+// StartSessionParams.SSHEnvNames names a set variable: the runtime
+// runs in the configured workspace directory and the very first bytes
+// its standard input carries are the initialize request alone, in
+// both cases. This reddens if startSession's local branch starts
+// treating a non-empty SSHEnvNames as a signal to take the remote
+// path, which skips setting cmd.Dir to the workspace and would
+// prepend an unwanted preamble ahead of the initialize request on the
+// wire.
+func TestStartSessionLocalLaunchIgnoresSSHEnvNames(t *testing.T) {
+	// Not parallel: sets the carried variable via t.Setenv.
+	const varName = "CLIENTPROTOCOL_TEST_LOCAL_INVARIANCE"
+	t.Setenv(varName, "should-never-reach-a-local-launch")
+
+	for _, tc := range []struct {
+		name        string
+		sshEnvNames []string
+	}{
+		{"SSHEnvNames absent", nil},
+		{"SSHEnvNames naming a set variable", []string{varName}},
+	} {
+		dir := t.TempDir()
+		cwdPath := filepath.Join(dir, "cwd.txt")
+		firstLinePath := filepath.Join(dir, "first_line.txt")
+		scriptPath := agenttest.WriteScript(t, dir, "agent.sh", captureCwdAndFirstLineThenHandshakeScript(cwdPath, firstLinePath))
+
+		workspacePath := t.TempDir()
+		session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+			WorkspacePath: workspacePath,
+			AgentConfig:   domain.AgentConfig{Command: scriptPath},
+			SSHEnvNames:   tc.sshEnvNames,
+		})
+		if err != nil {
+			t.Fatalf("%s: startSession() error = %v, want nil", tc.name, err)
+		}
+		if err := stopSession(context.Background(), session); err != nil {
+			t.Errorf("%s: stopSession() error = %v", tc.name, err)
+		}
+
+		firstLine, err := os.ReadFile(firstLinePath)
+		if err != nil {
+			t.Fatalf("%s: ReadFile(first_line.txt): %v", tc.name, err)
+		}
+		if !strings.HasPrefix(string(firstLine), "{") {
+			t.Errorf("%s: first stdin line = %q, want it to start with the initialize request's own %q", tc.name, firstLine, "{")
+		}
+
+		wantCwd, err := filepath.EvalSymlinks(workspacePath)
+		if err != nil {
+			t.Fatalf("%s: EvalSymlinks(workspacePath): %v", tc.name, err)
+		}
+		gotCwdRaw, err := os.ReadFile(cwdPath)
+		if err != nil {
+			t.Fatalf("%s: ReadFile(cwd.txt): %v", tc.name, err)
+		}
+		gotCwd, err := filepath.EvalSymlinks(strings.TrimSpace(string(gotCwdRaw)))
+		if err != nil {
+			t.Fatalf("%s: EvalSymlinks(captured cwd): %v", tc.name, err)
+		}
+		if gotCwd != wantCwd {
+			t.Errorf("%s: runtime cwd = %q, want the configured workspace %q", tc.name, gotCwd, wantCwd)
+		}
 	}
 }

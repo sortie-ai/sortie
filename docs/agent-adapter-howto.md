@@ -10,7 +10,7 @@ This guide is the ordered procedure for two situations: adding a new agent adapt
 
 3. **Reuse shared helpers instead of writing your own.** Check `internal/agent/agentcore` (session, event, and disposition helpers, including binary resolution via `agentcore.ResolveBinary`), `internal/agent/procutil` (subprocess group handling, graceful shutdown, Windows process containment, and bounded output capture for auxiliary launches), `internal/agent/mcpconfig` (MCP configuration parsing), `internal/agent/sshutil` (SSH invocation), `internal/agent/jsonrpc` (newline-delimited JSON-RPC framing and non-blocking message delivery, for a persistent-session protocol), and `internal/agent/agenttest` (shared conformance assertions every adapter's own tests call, including `agenttest.AssertMCPInjection` and `agenttest.AssertUsageReporting`) before writing an equivalent. A helper this task needs that does not exist yet belongs in a new package named for the concern it serves, not folded into `internal/domain` or duplicated per adapter.
 
-4. **Register the kind in `init()`.** Call `registry.Agents.RegisterWithMeta` (or the bare `Register` when the adapter needs no declared metadata) with the adapter's kind string and constructor:
+4. **Register the kind in `init()`.** Call `registry.Agents.RegisterWithMeta` with the adapter's kind string and constructor. Every registered kind declares its credential variables, so this is the registration form a new adapter uses; the bare `Register` leaves `CredentialEnv` undeclared and fails the completeness check in step 7:
 
    ```go
    func init() {
@@ -20,9 +20,12 @@ This guide is the ordered procedure for two situations: adding a new agent adapt
            MCPInjection:        registry.MCPInjectionSupported, // or Translated, or Unsupported
            UsageArrival:        registry.UsageArrivalIncremental, // or TurnEnd, or None
            UsageAttribution:    registry.UsageAttributionPerModel, // or SessionTotal, or None
+           CredentialEnv:       registry.DeclareCredentialEnv("YOUR_API_KEY"),
        })
    }
    ```
+
+   `CredentialEnv` names the environment variables this kind's runtime reads as the credential for its default provider, in the order a remote launch carries them. A kind whose runtime reads none says so explicitly with `registry.DeclareCredentialEnv()` and no arguments, which is a different thing from leaving the field unset. Each name must be a valid environment variable name, must not repeat, and must not be one the SSH carrier reserves for itself.
 
    Set `MCPInjection`, `UsageArrival`, and `UsageAttribution` to what the adapter actually does today, not what the underlying CLI could in principle support. Derive `UsageArrival` and `UsageAttribution` from the adapter's own emission code, not from the CLI's documentation: re-read the symbol that decides when a `token_usage` event fires and whether it carries a model before writing the literal. Add a `UsageSessionRules` entry only when some passthrough setting or launch mode narrows the pair for part of this kind's configuration space, and add `SessionResumeBlockedBy` only if some config key of this adapter's own can block session resume under a given passthrough.
 

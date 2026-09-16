@@ -3,9 +3,11 @@ package agentcore
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -17,6 +19,20 @@ func fakeSSHDir(t *testing.T) string {
 	dir := t.TempDir()
 	agenttest.FakeRuntime(t, dir, "ssh", agenttest.OutputScenario, agenttest.Output{})
 	return dir
+}
+
+// unsetEnvForTest removes name for the duration of the test and
+// restores whatever value the surrounding environment held. t.Setenv
+// registers that restore before the variable is removed; a name the
+// environment did not hold needs no restore.
+func unsetEnvForTest(t *testing.T, name string) {
+	t.Helper()
+	if prior, ok := os.LookupEnv(name); ok {
+		t.Setenv(name, prior)
+	}
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("Unsetenv(%s): %v", name, err)
+	}
 }
 
 // emptyDir returns a temp directory that contains no binaries.
@@ -228,4 +244,92 @@ func TestResolveLaunchTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveLaunchTarget_SSHEnvNames asserts that ResolveLaunchTarget
+// sets LaunchTarget.SSHEnvNames from params.SSHEnvNames in SSH mode and
+// leaves it nil in local mode, even when the caller sets it.
+func TestResolveLaunchTarget_SSHEnvNames(t *testing.T) {
+	// Not parallel: the SSH-mode subtest uses t.Setenv.
+	dir := t.TempDir()
+	binPath := agenttest.FakeRuntime(t, t.TempDir(), "agent", agenttest.OutputScenario, agenttest.Output{})
+
+	t.Run("ssh mode carries the resolved names", func(t *testing.T) {
+		t.Setenv("PATH", fakeSSHDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		params := makeParams(t, dir, "user@host", "claude")
+		params.SSHEnvNames = []string{"EXAMPLE_TOKEN"}
+
+		lt, agentErr := ResolveLaunchTarget(params, "claude")
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget() error = %v", agentErr)
+		}
+		if !slices.Equal(lt.SSHEnvNames, []string{"EXAMPLE_TOKEN"}) {
+			t.Errorf("LaunchTarget.SSHEnvNames = %v, want %v", lt.SSHEnvNames, []string{"EXAMPLE_TOKEN"})
+		}
+	})
+
+	t.Run("local mode leaves SSHEnvNames nil even when params set it", func(t *testing.T) {
+		t.Parallel()
+
+		params := makeParams(t, dir, "", binPath)
+		params.SSHEnvNames = []string{"EXAMPLE_TOKEN"}
+
+		lt, agentErr := ResolveLaunchTarget(params, binPath)
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget() error = %v", agentErr)
+		}
+		if lt.SSHEnvNames != nil {
+			t.Errorf("LaunchTarget.SSHEnvNames = %v, want nil in local mode", lt.SSHEnvNames)
+		}
+	})
+}
+
+// TestLaunchTarget_SSHOptions asserts the resolution order:
+// t.SSHEnvNames is walked in order, a name already claimed by
+// settings or already carried is skipped, each remaining name is
+// looked up and carried only when its value holds a non-whitespace
+// character, then every settings entry whose Value is non-empty is
+// appended, keeping the first entry for a name a later entry repeats.
+func TestLaunchTarget_SSHOptions(t *testing.T) {
+	// Not parallel: sets process environment via t.Setenv.
+	t.Setenv("SSH_OPTIONS_TEST_B", "b-value")
+	t.Setenv("SSH_OPTIONS_TEST_A", "a-value")
+	t.Setenv("SSH_OPTIONS_TEST_C", "")
+	t.Setenv("SSH_OPTIONS_TEST_W", " \t\r\n ")
+	unsetEnvForTest(t, "SSH_OPTIONS_TEST_D")
+
+	target := LaunchTarget{
+		SSHStrictHostKeyChecking: "yes",
+		SSHEnvNames: []string{
+			"SSH_OPTIONS_TEST_B", "SSH_OPTIONS_TEST_A", "SSH_OPTIONS_TEST_B",
+			"SSH_OPTIONS_TEST_C", "SSH_OPTIONS_TEST_W", "SSH_OPTIONS_TEST_D",
+		},
+	}
+	settings := []sshutil.EnvVar{
+		{Name: "SSH_OPTIONS_TEST_C", Value: "managed"},
+		{Name: "SSH_OPTIONS_TEST_E", Value: ""},
+		{Name: "SSH_OPTIONS_TEST_C", Value: "managed-again"},
+	}
+
+	got := target.SSHOptions(settings...)
+
+	want := []sshutil.EnvVar{
+		{Name: "SSH_OPTIONS_TEST_B", Value: "b-value"},
+		{Name: "SSH_OPTIONS_TEST_A", Value: "a-value"},
+		{Name: "SSH_OPTIONS_TEST_C", Value: "managed"},
+	}
+	if !slices.Equal(got.Env, want) {
+		t.Errorf("SSHOptions(...).Env = %+v, want %+v", got.Env, want)
+	}
+	if got.StrictHostKeyChecking != "yes" {
+		t.Errorf("SSHOptions(...).StrictHostKeyChecking = %q, want %q", got.StrictHostKeyChecking, "yes")
+	}
+
+	t.Run("no names and no settings yields nil Env", func(t *testing.T) {
+		var empty LaunchTarget
+		if got := empty.SSHOptions(); got.Env != nil {
+			t.Errorf("SSHOptions() Env = %v, want nil", got.Env)
+		}
+	})
 }

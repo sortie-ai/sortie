@@ -855,3 +855,46 @@ func TestForkPerTurnSession(t *testing.T) {
 		}
 	})
 }
+
+// TestForkPerTurnSession_LocalLaunchIgnoresSSHEnvNames asserts that a
+// local launch (RemoteCommand empty) behaves identically whether or
+// not LaunchTarget.SSHEnvNames names a set variable: the local branch
+// never reads SSHEnvNames, so both launches complete the same way.
+//
+// Not a subtest of TestForkPerTurnSession: that function calls
+// t.Parallel(), and t.Setenv panics under a parallel ancestor.
+func TestForkPerTurnSession_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
+	const varName = "SORTIE_FORKPERTURN_LOCAL_INVARIANCE"
+	t.Setenv(varName, "should-never-reach-a-local-launch")
+
+	tmpDir := t.TempDir()
+	script := agenttest.FakeRuntime(t, tmpDir, "agent", agenttest.OutputScenario, agenttest.Output{})
+
+	baseline := newTestTarget(tmpDir, script)
+	withNames := &LaunchTarget{
+		Command:       baseline.Command,
+		WorkspacePath: baseline.WorkspacePath,
+		SSHEnvNames:   []string{varName},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		target *LaunchTarget
+	}{
+		{"SSHEnvNames absent", baseline},
+		{"SSHEnvNames naming a set variable", withNames},
+	} {
+		sess := NewForkPerTurnSession(tc.target, noopHooks(), slog.Default(), 0)
+		emit, events := sinkEvents()
+		result, err := sess.RunTurn(context.Background(), "p", emit)
+		if err != nil {
+			t.Fatalf("%s: RunTurn() error = %v, want nil", tc.name, err)
+		}
+		if result.ExitReason != domain.EventTurnCompleted {
+			t.Errorf("%s: ExitReason = %q, want %q", tc.name, result.ExitReason, domain.EventTurnCompleted)
+		}
+		if !hasEventType(*events, domain.EventTurnCompleted) {
+			t.Errorf("%s: EventTurnCompleted not emitted; got %v", tc.name, *events)
+		}
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -119,16 +118,4 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 
 	args = append(args, "--", prompt)
 	return args
-}
-
-// buildSSHRemoteCmd returns the remote command string for SSH mode.
-// When apiKey is non-empty, KIRO_API_KEY is prepended and the value is
-// shell-quoted, because OpenSSH drops the orchestrator's local environment
-// and a key containing shell metacharacters would otherwise be misparsed by
-// the remote shell.
-func buildSSHRemoteCmd(remoteCommand, apiKey string) string {
-	if apiKey == "" {
-		return remoteCommand
-	}
-	return "KIRO_API_KEY=" + sshutil.ShellQuote(apiKey) + " " + remoteCommand
 }

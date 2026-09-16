@@ -114,73 +114,81 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		// samplePassthrough and wantKey apply only when declaresResumeBlocker
 		// is true; a kind that declares nothing has no subject for them.
 		tests := []struct {
-			name                  string
-			kind                  string
-			wantCommand           bool
-			wantMCPInjection      registry.MCPInjection
-			wantUsageArrival      registry.UsageArrival
-			wantUsageAttribution  registry.UsageAttribution
-			declaresResumeBlocker bool
-			samplePassthrough     map[string]any
-			wantKey               string
+			name                   string
+			kind                   string
+			wantCommand            bool
+			wantMCPInjection       registry.MCPInjection
+			wantUsageArrival       registry.UsageArrival
+			wantUsageAttribution   registry.UsageAttribution
+			declaresResumeBlocker  bool
+			samplePassthrough      map[string]any
+			wantKey                string
+			wantCredentialEnvNames []string
 		}{
 			{
-				name:                 "agent-client-protocol requires command, declares MCP injection translated, declares none/none usage, and declares no resume blocker",
-				kind:                 "agent-client-protocol",
-				wantCommand:          true,
-				wantMCPInjection:     registry.MCPInjectionTranslated,
-				wantUsageArrival:     registry.UsageArrivalNone,
-				wantUsageAttribution: registry.UsageAttributionNone,
+				name:                   "agent-client-protocol requires command, declares MCP injection translated, declares none/none usage, declares no resume blocker, and declares no credential names",
+				kind:                   "agent-client-protocol",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionTranslated,
+				wantUsageArrival:       registry.UsageArrivalNone,
+				wantUsageAttribution:   registry.UsageAttributionNone,
+				wantCredentialEnvNames: nil,
 			},
 			{
-				name:                  "claude-code requires command, declares MCP injection supported, declares incremental/per_model usage, and declares session_persistence as a resume blocker",
-				kind:                  "claude-code",
-				wantCommand:           true,
-				wantMCPInjection:      registry.MCPInjectionSupported,
-				wantUsageArrival:      registry.UsageArrivalIncremental,
-				wantUsageAttribution:  registry.UsageAttributionPerModel,
-				declaresResumeBlocker: true,
-				samplePassthrough:     map[string]any{"session_persistence": false},
-				wantKey:               "session_persistence",
+				name:                   "claude-code requires command, declares MCP injection supported, declares incremental/per_model usage, declares session_persistence as a resume blocker, and declares its Anthropic credential names",
+				kind:                   "claude-code",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionSupported,
+				wantUsageArrival:       registry.UsageArrivalIncremental,
+				wantUsageAttribution:   registry.UsageAttributionPerModel,
+				declaresResumeBlocker:  true,
+				samplePassthrough:      map[string]any{"session_persistence": false},
+				wantKey:                "session_persistence",
+				wantCredentialEnvNames: []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"},
 			},
 			{
-				name:                 "copilot-cli requires command, declares MCP injection supported, declares turn_end/per_model usage, and declares no resume blocker",
-				kind:                 "copilot-cli",
-				wantCommand:          true,
-				wantMCPInjection:     registry.MCPInjectionSupported,
-				wantUsageArrival:     registry.UsageArrivalTurnEnd,
-				wantUsageAttribution: registry.UsageAttributionPerModel,
+				name:                   "copilot-cli requires command, declares MCP injection supported, declares turn_end/per_model usage, declares no resume blocker, and declares its GitHub-token credential names",
+				kind:                   "copilot-cli",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionSupported,
+				wantUsageArrival:       registry.UsageArrivalTurnEnd,
+				wantUsageAttribution:   registry.UsageAttributionPerModel,
+				wantCredentialEnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
 			},
 			{
-				name:                 "codex requires command, declares MCP injection translated, declares incremental/per_model usage, and declares no resume blocker",
-				kind:                 "codex",
-				wantCommand:          true,
-				wantMCPInjection:     registry.MCPInjectionTranslated,
-				wantUsageArrival:     registry.UsageArrivalIncremental,
-				wantUsageAttribution: registry.UsageAttributionPerModel,
+				name:                   "codex requires command, declares MCP injection translated, declares incremental/per_model usage, declares no resume blocker, and declares no credential names",
+				kind:                   "codex",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionTranslated,
+				wantUsageArrival:       registry.UsageArrivalIncremental,
+				wantUsageAttribution:   registry.UsageAttributionPerModel,
+				wantCredentialEnvNames: nil,
 			},
 			{
-				name:                 "kiro requires command, declares MCP injection unsupported, declares none/none usage, and declares no resume blocker",
-				kind:                 "kiro",
-				wantCommand:          true,
-				wantMCPInjection:     registry.MCPInjectionUnsupported,
-				wantUsageArrival:     registry.UsageArrivalNone,
-				wantUsageAttribution: registry.UsageAttributionNone,
+				name:                   "kiro requires command, declares MCP injection unsupported, declares none/none usage, declares no resume blocker, and declares its API key credential name",
+				kind:                   "kiro",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionUnsupported,
+				wantUsageArrival:       registry.UsageArrivalNone,
+				wantUsageAttribution:   registry.UsageAttributionNone,
+				wantCredentialEnvNames: []string{"KIRO_API_KEY"},
 			},
 			{
-				name:                 "opencode requires command, declares MCP injection translated, declares turn_end/per_model usage, and declares no resume blocker",
-				kind:                 "opencode",
-				wantCommand:          true,
-				wantMCPInjection:     registry.MCPInjectionTranslated,
-				wantUsageArrival:     registry.UsageArrivalTurnEnd,
-				wantUsageAttribution: registry.UsageAttributionPerModel,
+				name:                   "opencode requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
+				kind:                   "opencode",
+				wantCommand:            true,
+				wantMCPInjection:       registry.MCPInjectionTranslated,
+				wantUsageArrival:       registry.UsageArrivalTurnEnd,
+				wantUsageAttribution:   registry.UsageAttributionPerModel,
+				wantCredentialEnvNames: nil,
 			},
 			{
-				name:                 "mock requires nothing, declares MCP injection unsupported, declares incremental/session_total usage, and declares no resume blocker",
-				kind:                 "mock",
-				wantMCPInjection:     registry.MCPInjectionUnsupported,
-				wantUsageArrival:     registry.UsageArrivalIncremental,
-				wantUsageAttribution: registry.UsageAttributionSessionTotal,
+				name:                   "mock requires nothing, declares MCP injection unsupported, declares incremental/session_total usage, declares no resume blocker, and declares no credential names",
+				kind:                   "mock",
+				wantMCPInjection:       registry.MCPInjectionUnsupported,
+				wantUsageArrival:       registry.UsageArrivalIncremental,
+				wantUsageAttribution:   registry.UsageAttributionSessionTotal,
+				wantCredentialEnvNames: nil,
 			},
 		}
 
@@ -228,6 +236,13 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				}
 				if meta.UsageAttribution != tt.wantUsageAttribution {
 					t.Errorf("Agents.Meta(%q).UsageAttribution = %q, want %q", tt.kind, meta.UsageAttribution, tt.wantUsageAttribution)
+				}
+
+				if !meta.CredentialEnv.Declared() {
+					t.Errorf("Agents.Meta(%q).CredentialEnv.Declared() = false, want true: every registered kind declares its credential names", tt.kind)
+				}
+				if got := meta.CredentialEnv.Names(); !slices.Equal(got, tt.wantCredentialEnvNames) {
+					t.Errorf("Agents.Meta(%q).CredentialEnv.Names() = %v, want %v", tt.kind, got, tt.wantCredentialEnvNames)
 				}
 
 				if !tt.declaresResumeBlocker {
