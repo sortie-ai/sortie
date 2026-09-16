@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -931,6 +932,59 @@ func TestAgentMeta_UsageDisposition(t *testing.T) {
 		if arrival != UsageArrivalNone || attribution != UsageAttributionNone {
 			t.Errorf("UsageDisposition() = (%q, %q), want first rule's (%q, %q)",
 				arrival, attribution, UsageArrivalNone, UsageAttributionNone)
+		}
+	})
+}
+
+func TestCredentialEnv(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero value is undeclared with no names", func(t *testing.T) {
+		t.Parallel()
+
+		var zero CredentialEnv
+		if zero.Declared() {
+			t.Error("zero CredentialEnv Declared() = true, want false")
+		}
+		if got := zero.Names(); got != nil {
+			t.Errorf("zero CredentialEnv Names() = %v, want nil", got)
+		}
+	})
+
+	t.Run("no-argument declaration is declared with no names", func(t *testing.T) {
+		t.Parallel()
+
+		c := DeclareCredentialEnv()
+		if !c.Declared() {
+			t.Error("DeclareCredentialEnv().Declared() = false, want true")
+		}
+		if got := c.Names(); got != nil {
+			t.Errorf("DeclareCredentialEnv().Names() = %v, want nil", got)
+		}
+	})
+
+	t.Run("declared names are held in order", func(t *testing.T) {
+		t.Parallel()
+
+		c := DeclareCredentialEnv("FIRST", "SECOND")
+		want := []string{"FIRST", "SECOND"}
+		if got := c.Names(); !slices.Equal(got, want) {
+			t.Errorf("Names() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("Names returns a fresh copy each call", func(t *testing.T) {
+		t.Parallel()
+
+		c := DeclareCredentialEnv("FIRST", "SECOND")
+
+		first := c.Names()
+		first[0] = "MUTATED"
+
+		second := c.Names()
+		want := []string{"FIRST", "SECOND"}
+		if !slices.Equal(second, want) {
+			t.Errorf("Names() after mutating a previous call's result = %v, want %v (unaffected)", second, want)
 		}
 	})
 }
