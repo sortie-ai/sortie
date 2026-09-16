@@ -337,8 +337,8 @@ func TestStopSessionTeardownOrder_ClosePipesPresenceControl(t *testing.T) {
 // before the write end closes. This wiring needs no real subprocess:
 // closePipes and drainStderrAndReap operate on state.pipes and
 // state.stderrCollector alone, so the ordering claim is verified
-// against a plain os.Pipe, matching procutil's own P9 negative control
-// for the shared skeleton and opencode.
+// against a plain os.Pipe, matching procutil's own P9 negative
+// control.
 func TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr(t *testing.T) {
 	t.Parallel()
 
