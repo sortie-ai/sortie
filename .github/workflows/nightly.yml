@@ -3,12 +3,10 @@ name: Nightly
 
 on:
   schedule:
-    # 02:17 UTC daily. Off the hour to avoid GitHub's on-the-hour scheduling lag.
     - cron: "17 2 * * *"
   workflow_dispatch:
 
 permissions:
-  # Checkout only. Issues are filed with CICDBOT_TOKEN, not the workflow token.
   contents: read
 
 concurrency:
