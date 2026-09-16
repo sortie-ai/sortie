@@ -12,20 +12,6 @@
 NEWLINE='
 '
 
-# Diagnostics go to stderr so stdout carries only the coordinate assignments.
-log() {
-	printf '%s\n' "$*" >&2
-}
-
-require_tools() {
-	for _rt_tool in "$@"; do
-		if ! command -v "$_rt_tool" >/dev/null 2>&1; then
-			log "required command not found: ${_rt_tool}"
-			return 1
-		fi
-	done
-}
-
 # Surface container logs on a non-zero exit. The container is left running: CI
 # discards the runner, and the next local run clears it.
 dump_logs_on_error() {

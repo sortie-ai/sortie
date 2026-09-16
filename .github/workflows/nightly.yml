@@ -3,12 +3,10 @@ name: Nightly
 
 on:
   schedule:
-    # 02:17 UTC daily. Off the hour to avoid GitHub's on-the-hour scheduling lag.
     - cron: "17 2 * * *"
   workflow_dispatch:
 
 permissions:
-  # Checkout only. Issues are filed with CICDBOT_TOKEN, not the workflow token.
   contents: read
 
 concurrency:
@@ -334,54 +332,9 @@ jobs:
           ADAPTER_NAME: ${{ matrix.name }}
           KIND: ${{ matrix.kind }}
           SOURCE: ${{ matrix.source }}
-        run: |
-          # Backticks in the printf formats below are literal Markdown for the
-          # issue body, not command substitution.
-          # shellcheck disable=SC2016
-          set -euo pipefail
-          export TITLE="Nightly integration failure: ${ADAPTER_NAME}"
-
-          FAILED=""
-          LOG="Install step failed before tests ran; no test output captured."
-          if [ -f gotest.json ]; then
-            FAILED="$(jq -rR 'fromjson? | select(.Action == "fail" and (.Test != null)) | .Test' gotest.json 2>/dev/null | sort -u)"
-            LOG="$(jq -jR 'fromjson? | select(.Action == "output") | .Output' gotest.json 2>/dev/null | tail -c 6000)"
-            if [ -z "${LOG}" ]; then LOG="$(tail -c 6000 gotest.json)"; fi
-          fi
-
-          if [ -n "${FAILED}" ]; then
-            FAILED_MD="$(printf '%s\n' "${FAILED}" | sed 's/^/- `/; s/$/`/')"
-          else
-            FAILED_MD="_No test-level failures parsed (build error, panic, timeout, or install failure). See the log excerpt._"
-          fi
-
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
-
-          {
-            printf 'Nightly integration tests failed for `%s`.\n\n' "${ADAPTER}"
-            printf '| Field | Value |\n|---|---|\n'
-            printf '| Adapter | `%s` (%s) |\n' "${ADAPTER}" "${KIND}"
-            printf '| Tested version | %s |\n' "${ADAPTER_VERSION}"
-            printf '| Install source | %s |\n' "${SOURCE}"
-            printf '| Run | %s |\n' "${RUN_URL}"
-            printf '| Commit | `%s` |\n' "${GITHUB_SHA}"
-            printf '| Date | %s |\n\n' "${NOW}"
-            printf '### Failing tests\n\n%s\n\n' "${FAILED_MD}"
-            printf '### Log excerpt\n\n```\n%s\n```\n\n' "${LOG}"
-            printf '%s\n' "_Filed by the nightly integration monitor. It comments on recurrence and closes automatically when this adapter passes again._"
-          } > body.md
-
-          NUM="$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title \
-            | jq -r --arg t "${TITLE}" '[.[] | select(.title == $t) | .number] | (first // empty)')"
-
-          if [ -n "${NUM}" ]; then
-            gh issue comment "${NUM}" --body-file body.md
-            echo "Updated existing issue #${NUM}"
-          else
-            gh label create ci-nightly --color D73A4A --description "Nightly integration test failures" --force >/dev/null 2>&1 || true
-            gh issue create --title "${TITLE}" --label ci-nightly --body-file body.md
-          fi
+          # See  `gh api orgs/sortie-ai/issue-types`
+          TEST_ISSUE_TYPE_ID: IT_kwDOEAsIKM4B7Iak
+        run: scripts/nightly-issue.sh report
 
       - name: Close resolved issue
         if: steps.check.outputs.outcome == 'success'
@@ -390,20 +343,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           ADAPTER: ${{ matrix.adapter }}
           ADAPTER_NAME: ${{ matrix.name }}
-        run: |
-          set -euo pipefail
-          export TITLE="Nightly integration failure: ${ADAPTER_NAME}"
-
-          NUM="$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title \
-            | jq -r --arg t "${TITLE}" '[.[] | select(.title == $t) | .number] | (first // empty)')"
-
-          if [ -n "${NUM}" ]; then
-            RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-            NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
-            gh issue comment "${NUM}" --body "Recovered: \`${ADAPTER}\` integration tests passed on ${NOW}. Closing. Run: ${RUN_URL}"
-            gh issue close "${NUM}"
-            echo "Closed issue #${NUM} (recovered)"
-          fi
+        run: scripts/nightly-issue.sh resolve
 
       - name: Fail job on integration failure
         if: steps.check.outputs.outcome == 'failure'

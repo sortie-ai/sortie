@@ -7,6 +7,10 @@
 
 set -eu
 
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/lib/common.sh
+. "${SCRIPT_DIR}/lib/common.sh"
+
 tag=${1:?usage: release-contributors.sh <tag> [previous-tag]}
 prev=${2:-}
 
@@ -25,10 +29,6 @@ serghei-dev sergeyklay
 NEWLINE='
 '
 
-log() {
-	printf 'release-contributors: %s\n' "$*" >&2
-}
-
 # Rewrites the login in field 1, so it serves both the "<login>" and the
 # "<login> <pr>" streams.
 canonicalize() {
@@ -43,10 +43,7 @@ canonicalize() {
 	'
 }
 
-if ! command -v gh >/dev/null 2>&1; then
-	log "the GitHub CLI (gh) is required"
-	exit 1
-fi
+require_tools gh git sed awk grep wc tr sort
 
 repo=${GITHUB_REPOSITORY:-}
 if [ -z "$repo" ]; then
