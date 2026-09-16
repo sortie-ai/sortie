@@ -104,7 +104,10 @@ func sshStandInEnvPath(t *testing.T, includeDD bool) string {
 
 // writeCodexHandshakeScriptWithEnvCapture writes carriedName's value to
 // capturePath before answering codex's three-call handshake exactly as
-// writeFakeAppServerScript does, then idles.
+// writeFakeAppServerScript does, then idles on standard input until it
+// closes. It idles on the read built-in rather than on sleep because
+// the stand-in's PATH holds only sh and dd, so a sleep loop would spin
+// on a command that cannot resolve.
 func writeCodexHandshakeScriptWithEnvCapture(t *testing.T, dir, carriedName, capturePath string) string {
 	t.Helper()
 	content := "printf '%s' \"$" + carriedName + "\" > '" + capturePath + "'\n" +
@@ -116,7 +119,7 @@ func writeCodexHandshakeScriptWithEnvCapture(t *testing.T, dir, carriedName, cap
 		"read -r _thread_start_req\n" +
 		"printf '{\"id\":3,\"result\":{\"thread\":{\"id\":\"fake-thread-1\"}}}\\n'\n" +
 		"printf '{\"method\":\"thread/started\",\"params\":{}}\\n'\n" +
-		"while :; do sleep 3600; done\n"
+		"while IFS= read -r _; do :; done\n"
 	return agenttest.WriteScript(t, dir, "fake-codex-app-server-env", content)
 }
 
