@@ -3204,7 +3204,10 @@ func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 		stdinPath := filepath.Join(tmpDir, "stdin.txt")
 		script := writeRunFixtureScriptWithCapture(t, tmpDir, "simple_turn.jsonl", argvPath, stdinPath)
 
-		a, _ := NewOpenCodeAdapter(map[string]any{})
+		a, err := NewOpenCodeAdapter(map[string]any{})
+		if err != nil {
+			t.Fatalf("%s: NewOpenCodeAdapter() error = %v, want nil", tc.name, err)
+		}
 		session := mustStartSession(t, a, tmpDir, script)
 		state, ok := session.Internal.(*sessionState)
 		if !ok {
