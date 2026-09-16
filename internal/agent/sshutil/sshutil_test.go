@@ -78,7 +78,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			host:          "example.test",
 			workspacePath: "/workspace",
 			remoteCommand: "codex app-server",
-			wantFinal:     "cd -- '/workspace' && codex app-server",
+			wantFinal:     "cd -- '/workspace' && { codex app-server; }",
 		},
 		{
 			name:          "with agent args needing quoting, whitespace-padded host",
@@ -86,7 +86,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			workspacePath: "/work space",
 			remoteCommand: "run --acp",
 			agentArgs:     []string{"a b", "it's"},
-			wantFinal:     "cd -- '/work space' && run --acp 'a b' 'it'\\''s'",
+			wantFinal:     "cd -- '/work space' && { run --acp 'a b' 'it'\\''s'; }",
 		},
 		{
 			name:          "explicit strict host key checking",
@@ -94,7 +94,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			workspacePath: "/workspace",
 			remoteCommand: "opencode run",
 			opts:          SSHOptions{StrictHostKeyChecking: "no"},
-			wantFinal:     "cd -- '/workspace' && opencode run",
+			wantFinal:     "cd -- '/workspace' && { opencode run; }",
 		},
 	}
 
@@ -189,7 +189,7 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 		t.Errorf("preamble = %q, want %q", string(gotPreamble), wantPreamble)
 	}
 
-	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=63 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && run --acp 'a'`
+	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=63 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && { run --acp 'a'; }`
 	gotFinal := launch.Args[len(launch.Args)-1]
 	if gotFinal != wantFinal {
 		t.Errorf("final element = %q, want %q", gotFinal, wantFinal)
@@ -412,6 +412,47 @@ func TestPrefixStdin_FailingPreambleWrite(t *testing.T) {
 	for _, w := range rec.recordedWrites() {
 		if string(w) == "payload" {
 			t.Errorf("recorded writes include the caller's bytes, want none forwarded on a failing preamble write")
+		}
+	}
+}
+
+// shortWriteCloser is a test double for io.WriteCloser that reports a
+// short count with a nil error on its first Write, the contract
+// violation a preamble write must not accept as a delivered preamble.
+type shortWriteCloser struct {
+	writes [][]byte
+}
+
+func (s *shortWriteCloser) Write(p []byte) (int, error) {
+	s.writes = append(s.writes, append([]byte(nil), p...))
+	if len(s.writes) == 1 {
+		return len(p) - 1, nil
+	}
+	return len(p), nil
+}
+
+func (s *shortWriteCloser) Close() error { return nil }
+
+// TestPrefixStdin_ShortPreambleWrite asserts that a preamble write
+// reporting fewer bytes than the preamble holds, with a nil error,
+// fails with io.ErrShortWrite and forwards none of the caller's bytes.
+func TestPrefixStdin_ShortPreambleWrite(t *testing.T) {
+	t.Parallel()
+
+	launch := BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{Env: []EnvVar{{Name: "A", Value: "v"}}})
+	rec := &shortWriteCloser{}
+	pw := launch.PrefixStdin(rec)
+
+	n, err := pw.Write([]byte("payload"))
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Errorf("Write() error = %v, want %v", err, io.ErrShortWrite)
+	}
+	if n != 0 {
+		t.Errorf("Write() n = %d, want 0", n)
+	}
+	for _, w := range rec.writes {
+		if string(w) == "payload" {
+			t.Error("recorded writes include the caller's bytes, want none forwarded after a short preamble write")
 		}
 	}
 }

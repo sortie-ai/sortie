@@ -253,6 +253,82 @@ func TestBuildSSHLaunch_RealShellImportStep_ValidPrefixShortRead(t *testing.T) {
 	}
 }
 
+// bypassFixture holds a launch whose remote command carries a
+// top-level shell operator, plus the marker each side of that operator
+// touches, so a test can tell which of them ran.
+type bypassFixture struct {
+	launch       SSHLaunch
+	finalElement string
+	agentMarker  string
+	tailMarker   string
+}
+
+// buildBypassFixture builds a launch whose remote command is
+// "touch <agentMarker> <operator> touch <tailMarker>", so each marker
+// records whether its own side of the operator ran.
+func buildBypassFixture(t *testing.T, operator string) bypassFixture {
+	t.Helper()
+
+	dir := t.TempDir()
+	agentMarker := filepath.Join(dir, "AGENT")
+	tailMarker := filepath.Join(dir, "TAIL")
+
+	remoteCommand := "touch '" + agentMarker + "' " + operator + " touch '" + tailMarker + "'"
+	launch := BuildSSHLaunch("host", dir, remoteCommand, nil, SSHOptions{
+		Env: []EnvVar{{Name: "TESTVAR", Value: "carried"}},
+	})
+
+	return bypassFixture{
+		launch:       launch,
+		finalElement: launch.Args[len(launch.Args)-1],
+		agentMarker:  agentMarker,
+		tailMarker:   tailMarker,
+	}
+}
+
+// TestBuildSSHLaunch_RealShellImportStep_NoBypassByCommandOperator runs
+// a final element whose remote command carries a top-level || or ;
+// under every installed shell this file drives. With the preamble
+// delivered both the command and its operator behave normally; with the
+// preamble withheld the import step fails and neither side runs. An
+// ungrouped fragment would bind that operator to the launch's own &&
+// chain, so its right-hand side would start the agent carrying none of
+// the variables the launch was to deliver.
+func TestBuildSSHLaunch_RealShellImportStep_NoBypassByCommandOperator(t *testing.T) {
+	for _, shell := range availableShells(t) {
+		for _, operator := range []string{"||", ";"} {
+			t.Run(shell.name+"/"+operator, func(t *testing.T) {
+				t.Parallel()
+
+				delivered := buildBypassFixture(t, operator)
+				stdin := append(append([]byte{}, mustReadPreamble(t, delivered.launch)...), []byte("\n")...)
+				cmd := exec.Command(shell.path, "-c", delivered.finalElement) //nolint:gosec // shell.path resolved via exec.LookPath, finalElement built from t.TempDir() paths
+				cmd.Stdin = bytes.NewReader(stdin)
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("%s: command failed with the preamble delivered: %v", shell.name, err)
+				}
+				if _, err := os.Stat(delivered.agentMarker); err != nil {
+					t.Fatalf("%s: agent side did not run with the preamble delivered, so this fixture cannot observe a bypass", shell.name)
+				}
+
+				withheld := buildBypassFixture(t, operator)
+				const malformed = `"unterminated stdin bytes with no closing quote`
+				cmd = exec.Command(shell.path, "-c", withheld.finalElement) //nolint:gosec // shell.path resolved via exec.LookPath, finalElement built from t.TempDir() paths
+				cmd.Stdin = bytes.NewReader([]byte(malformed))
+				if err := cmd.Run(); err == nil {
+					t.Errorf("%s: command succeeded with the preamble withheld, want a failure", shell.name)
+				}
+				if _, err := os.Stat(withheld.agentMarker); err == nil {
+					t.Errorf("%s: left side of %q ran with the preamble withheld, want neither side to run", shell.name, operator)
+				}
+				if _, err := os.Stat(withheld.tailMarker); err == nil {
+					t.Errorf("%s: right side of %q ran with the preamble withheld, want neither side to run", shell.name, operator)
+				}
+			})
+		}
+	}
+}
+
 // TestBuildSSHLaunch_RealShellImportStep_NoDD runs the final element
 // with a PATH that resolves no dd binary. The guard exits 1 before the
 // verify script runs, and standard error is exactly the guard's

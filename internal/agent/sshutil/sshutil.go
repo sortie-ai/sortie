@@ -111,12 +111,28 @@ func buildSSHOpts(host string, opts SSHOptions) []string {
 	}
 }
 
+// agentGroup renders remoteCommand and its arguments as one compound
+// command. && and || share a single precedence level in a POSIX
+// shell, so an ungrouped fragment carrying a top-level || or ; binds
+// to the launch's own && chain: its right-hand side would then run
+// even though the cd or the environment import ahead of it failed.
+func agentGroup(remoteCommand string, agentArgs []string) string {
+	parts := make([]string, 0, len(agentArgs)+1)
+	parts = append(parts, remoteCommand)
+	for _, arg := range agentArgs {
+		parts = append(parts, shellQuote(arg))
+	}
+	return "{ " + strings.Join(parts, " ") + "; }"
+}
+
 // BuildSSHLaunch constructs the SSH invocation arguments for remote
 // agent execution. The workspace path sets the remote cwd via cd.
-// remoteCommand is treated as a pre-formed POSIX shell fragment and
-// appended verbatim; callers are responsible for any quoting within
-// that fragment. agentArgs are individually shell-quoted and appended
-// after remoteCommand.
+// remoteCommand is treated as a pre-formed POSIX shell fragment;
+// callers are responsible for any quoting within that fragment.
+// agentArgs are individually shell-quoted and appended after
+// remoteCommand. The fragment and its arguments run as one compound
+// command, so a top-level || or ; inside the fragment cannot run when
+// the cd or the environment import ahead of it failed.
 //
 // SSH options applied (unless overridden via opts):
 //   - StrictHostKeyChecking=accept-new (TOFU), configurable via opts
@@ -143,13 +159,10 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	sshOpts := buildSSHOpts(host, opts)
 
 	if len(opts.Env) == 0 {
-		var parts []string
-		parts = append(parts, "cd", "--", shellQuote(workspacePath), "&&")
-		parts = append(parts, remoteCommand)
-		for _, arg := range agentArgs {
-			parts = append(parts, shellQuote(arg))
-		}
-		return SSHLaunch{Args: append(sshOpts, strings.Join(parts, " "))}
+		remoteCmd := strings.Join([]string{
+			"cd", "--", shellQuote(workspacePath), "&&", agentGroup(remoteCommand, agentArgs),
+		}, " ")
+		return SSHLaunch{Args: append(sshOpts, remoteCmd)}
 	}
 
 	for i, entry := range opts.Env {
@@ -170,13 +183,9 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	guard := "{ command -v dd >/dev/null 2>&1 || { echo '" + ddMissingMessage + "' >&2; exit 1; }; }"
 	importStep := fmt.Sprintf(`unset %[1]s && _sortie_env=$(dd bs=1 count=%[2]d 2>/dev/null) && eval "$_sortie_env" && [ "${%[1]s-}" = 1 ]`, completionMarkerName, len(preamble))
 
-	var parts []string
-	parts = append(parts, "cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&")
-	parts = append(parts, remoteCommand)
-	for _, arg := range agentArgs {
-		parts = append(parts, shellQuote(arg))
-	}
-	remoteCmd := strings.Join(parts, " ")
+	remoteCmd := strings.Join([]string{
+		"cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&", agentGroup(remoteCommand, agentArgs),
+	}, " ")
 
 	return SSHLaunch{
 		Args:     append(sshOpts, remoteCmd),
@@ -250,9 +259,10 @@ func (l SSHLaunch) StdinReader() io.Reader {
 // PrefixStdin returns w unchanged when the launch carries no
 // preamble. Otherwise it returns a writer whose first Write sends the
 // whole preamble to w followed by the caller's bytes, returning the
-// preamble's own write error and none of the caller's bytes on
-// failure; every later Write passes straight through to w; and Close
-// closes w without waiting for a Write in progress.
+// preamble's own write error, or [io.ErrShortWrite] when w accepted
+// only part of it, and none of the caller's bytes on failure; every
+// later Write passes straight through to w; and Close closes w
+// without waiting for a Write in progress.
 func (l SSHLaunch) PrefixStdin(w io.WriteCloser) io.WriteCloser {
 	if len(l.preamble) == 0 {
 		return w
@@ -270,10 +280,17 @@ type preambleWriter struct {
 	preambleErr error
 }
 
-// Write implements [io.Writer].
+// Write implements [io.Writer]. A preamble only partly accepted fails
+// the write with [io.ErrShortWrite] rather than starting the agent
+// without the variables the launch carries, so a writer reporting a
+// short count and no error cannot pass for a delivered preamble.
 func (p *preambleWriter) Write(b []byte) (int, error) {
 	p.once.Do(func() {
-		_, p.preambleErr = p.w.Write(p.preamble)
+		n, err := p.w.Write(p.preamble)
+		if err == nil && n != len(p.preamble) {
+			err = io.ErrShortWrite
+		}
+		p.preambleErr = err
 	})
 	if p.preambleErr != nil {
 		return 0, p.preambleErr
