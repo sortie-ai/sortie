@@ -251,6 +251,43 @@ func TestBuildSSHLaunch_PanicsOnInvalidEnvName(t *testing.T) {
 	})
 }
 
+// TestBuildSSHLaunch_PanicsOnReservedEnvName asserts that an Env entry
+// naming the completion marker panics with a message naming the
+// entry's index and neither its name nor its value. Carrying that name
+// would break the marker both ways: the preamble's own trailing
+// assignment overwrites the carried value, and a preamble truncated
+// just after the carried assignment satisfies the completeness test
+// with none of the later variables exported.
+func TestBuildSSHLaunch_PanicsOnReservedEnvName(t *testing.T) {
+	t.Parallel()
+
+	const secretValue = "reserved-name-value-should-never-appear"
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("BuildSSHLaunch did not panic on a reserved Env name")
+		}
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, "1") {
+			t.Errorf("panic message = %q, want it to name index 1", msg)
+		}
+		if strings.Contains(msg, "_sortie_complete") {
+			t.Errorf("panic message = %q, contains the reserved name", msg)
+		}
+		if strings.Contains(msg, secretValue) {
+			t.Errorf("panic message = %q, contains the value", msg)
+		}
+	}()
+
+	BuildSSHLaunch("h", "/w", "cmd", nil, SSHOptions{
+		Env: []EnvVar{
+			{Name: "A", Value: "a"},
+			{Name: "_sortie_complete", Value: secretValue},
+		},
+	})
+}
+
 // recordingWriteCloser is a test double for io.WriteCloser that
 // records every Write call's bytes, optionally fails every Write with
 // a fixed error, and records whether Close was called.

@@ -500,6 +500,17 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 			wantWarningIndexes:   []int{1, -1, -1},
 			wantWarningVariables: []string{"", "SORTIE_TEST_SSH_PASS_ENV_B", "SORTIE_TEST_SSH_PASS_ENV_C"},
 		},
+		{
+			name: "a reserved ssh_pass_env name is dropped and named in its own warning",
+			workerSection: map[string]any{
+				"ssh_pass_env": []any{"_sortie_complete", "SORTIE_TEST_SSH_PASS_ENV_GOOD"},
+			},
+			wantListed: []string{"SORTIE_TEST_SSH_PASS_ENV_GOOD"},
+			wantWarningMessages: []string{
+				"ssh_pass_env variable is reserved by Sortie, not carrying it",
+			},
+			wantWarningVariables: []string{"_sortie_complete"},
+		},
 	}
 
 	for _, tt := range tests {

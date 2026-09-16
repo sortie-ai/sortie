@@ -282,7 +282,9 @@ func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
 	disallowed, disallowedWarnings := nameList(workerSection, "ssh_disallow_pass_env",
 		"received non-list ssh_disallow_pass_env, disallowing no variables",
 		"ignored ssh_disallow_pass_env entry that is not an environment variable name")
+	listed, reservedWarnings := dropReservedNames(listed)
 	warnings = append(warnings, listedWarnings...)
+	warnings = append(warnings, reservedWarnings...)
 	warnings = append(warnings, disallowedWarnings...)
 
 	hosts = deduplicateHosts(hosts)
@@ -349,6 +351,27 @@ func nameList(workerSection map[string]any, key, nonListMessage, entryMessage st
 		}
 	}
 	return names, warnings
+}
+
+// dropReservedNames removes every name the SSH carrier reserves for
+// itself from names, returning the remainder and one warning per
+// dropped name. A reserved name satisfies [sshutil.IsEnvName], so it
+// reaches here rather than nameList's entry check, and carrying it
+// would collide with the carrier's own launch-completeness marker.
+func dropReservedNames(names []string) ([]string, []WorkerWarning) {
+	var kept []string
+	var warnings []WorkerWarning
+	for _, name := range names {
+		if sshutil.IsReservedEnvName(name) {
+			warnings = append(warnings, WorkerWarning{
+				Message: "ssh_pass_env variable is reserved by Sortie, not carrying it",
+				Attrs:   []slog.Attr{slog.String("variable", name)},
+			})
+			continue
+		}
+		kept = append(kept, name)
+	}
+	return kept, warnings
 }
 
 // carriedEnvNames returns the union of declared then listed, in

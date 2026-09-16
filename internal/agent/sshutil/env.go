@@ -28,6 +28,13 @@ func IsEnvName(name string) bool {
 	return true
 }
 
+// IsReservedEnvName reports whether name is one the SSH carrier uses
+// for itself, so a launch must not carry it even though [IsEnvName]
+// accepts it.
+func IsReservedEnvName(name string) bool {
+	return name == completionMarkerName
+}
+
 // EnvVar is one environment variable carried into a remote agent
 // launch. Every rendering of an EnvVar - through [fmt], through a
 // [log/slog] handler, or through [encoding/json.Marshal] - carries

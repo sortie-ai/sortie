@@ -66,6 +66,14 @@ func (o SSHOptions) MarshalJSON() ([]byte, error) {
 // on PATH.
 const ddMissingMessage = "sortie: dd is required on the remote host to receive environment variables"
 
+// completionMarkerName is the shell variable the preamble assigns last
+// and the import step tests, so a preamble that arrives incomplete
+// fails the launch. A launch must not carry an entry of this name: the
+// marker assignment would overwrite the carried value, and a preamble
+// truncated just after that carried assignment would satisfy the test
+// the marker exists to fail. [IsReservedEnvName] reports it.
+const completionMarkerName = "_sortie_complete"
+
 // SSHLaunch is the SSH invocation arguments and, when the launch
 // carries environment variables, the standard input preamble the
 // remote shell must receive ahead of the agent's own protocol bytes.
@@ -129,8 +137,8 @@ func buildSSHOpts(host string, opts SSHOptions) []string {
 // BuildSSHLaunch neither reorders nor deduplicates opts.Env.
 //
 // BuildSSHLaunch panics when an opts.Env entry's Name fails
-// [IsEnvName]; the panic message names the entry's index and carries
-// neither its Name nor its Value.
+// [IsEnvName] or is one [IsReservedEnvName] reports; the panic message
+// names the entry's index and carries neither its Name nor its Value.
 func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []string, opts SSHOptions) SSHLaunch {
 	sshOpts := buildSSHOpts(host, opts)
 
@@ -145,8 +153,11 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	}
 
 	for i, entry := range opts.Env {
-		if !IsEnvName(entry.Name) {
+		switch {
+		case !IsEnvName(entry.Name):
 			panic(fmt.Sprintf("sshutil: BuildSSHLaunch: invalid environment variable name at Env[%d]", i))
+		case IsReservedEnvName(entry.Name):
+			panic(fmt.Sprintf("sshutil: BuildSSHLaunch: reserved environment variable name at Env[%d]", i))
 		}
 	}
 
@@ -154,10 +165,10 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	for i, entry := range opts.Env {
 		assignments[i] = entry.Name + "=" + shellQuote(entry.Value)
 	}
-	preamble := "unset _sortie_env && export " + strings.Join(assignments, " ") + " && _sortie_complete=1"
+	preamble := "unset _sortie_env && export " + strings.Join(assignments, " ") + " && " + completionMarkerName + "=1"
 
 	guard := "{ command -v dd >/dev/null 2>&1 || { echo '" + ddMissingMessage + "' >&2; exit 1; }; }"
-	importStep := fmt.Sprintf(`unset _sortie_complete && _sortie_env=$(dd bs=1 count=%d 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ]`, len(preamble))
+	importStep := fmt.Sprintf(`unset %[1]s && _sortie_env=$(dd bs=1 count=%[2]d 2>/dev/null) && eval "$_sortie_env" && [ "${%[1]s-}" = 1 ]`, completionMarkerName, len(preamble))
 
 	var parts []string
 	parts = append(parts, "cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&")

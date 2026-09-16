@@ -28,8 +28,9 @@ type credentialEnvIssue struct {
 // checkCredentialEnvCoverage validates every kind in kinds against
 // lookup, in the given order, and returns one credentialEnvIssue per
 // kind that is not registered, whose CredentialEnv is undeclared, that
-// declares a name failing sshutil.IsEnvName, or that declares a name
-// more than once.
+// declares a name failing sshutil.IsEnvName, that declares a name
+// sshutil reserves for the SSH carrier, or that declares a name more
+// than once.
 func checkCredentialEnvCoverage(kinds []string, lookup func(kind string) (registry.AgentMeta, bool)) []credentialEnvIssue {
 	var issues []credentialEnvIssue
 	for _, kind := range kinds {
@@ -48,6 +49,8 @@ func checkCredentialEnvCoverage(kinds []string, lookup func(kind string) (regist
 			switch {
 			case !sshutil.IsEnvName(name):
 				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q, which fails sshutil.IsEnvName", name)})
+			case sshutil.IsReservedEnvName(name):
+				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q, which sshutil reserves", name)})
 			case seen[name]:
 				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q more than once", name)})
 			default:
@@ -81,9 +84,9 @@ func TestEveryAgentKindHasCredentialEnvCoverage(t *testing.T) {
 // TestCheckCredentialEnvCoverage_NegativeControl proves the
 // completeness mechanism itself can fail: a fixture kind whose lookup
 // returns the zero CredentialEnv is reported, one declaring a name
-// that fails sshutil.IsEnvName is reported, one declaring the same
-// name twice is reported, and a kind declaring valid, non-repeating
-// names is not.
+// that fails sshutil.IsEnvName is reported, one declaring a name
+// sshutil reserves is reported, one declaring the same name twice is
+// reported, and a kind declaring valid, non-repeating names is not.
 func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +98,8 @@ func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 			return registry.AgentMeta{}, true
 		case "invalid-name-fixture":
 			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("1BAD")}, true
+		case "reserved-name-fixture":
+			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("_sortie_complete")}, true
 		case "duplicate-name-fixture":
 			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("DUP", "DUP")}, true
 		default:
@@ -102,7 +107,7 @@ func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 		}
 	}
 
-	kinds := []string{"declared-ok-fixture", "undeclared-fixture", "invalid-name-fixture", "duplicate-name-fixture", "unregistered-fixture"}
+	kinds := []string{"declared-ok-fixture", "undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "duplicate-name-fixture", "unregistered-fixture"}
 	issues := checkCredentialEnvCoverage(kinds, lookup)
 
 	byKind := make(map[string]bool, len(issues))
@@ -113,7 +118,7 @@ func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 	if byKind["declared-ok-fixture"] {
 		t.Error("declared-ok-fixture reported an issue, want none: it declares one valid, non-repeating name")
 	}
-	for _, wantReported := range []string{"undeclared-fixture", "invalid-name-fixture", "duplicate-name-fixture", "unregistered-fixture"} {
+	for _, wantReported := range []string{"undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "duplicate-name-fixture", "unregistered-fixture"} {
 		if !byKind[wantReported] {
 			t.Errorf("%s reported no issue, want one", wantReported)
 		}

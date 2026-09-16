@@ -43,6 +43,37 @@ func TestIsEnvName(t *testing.T) {
 	}
 }
 
+// TestIsReservedEnvName asserts that the carrier reserves the marker
+// its import step tests and nothing else. The preamble's other
+// internal name stays carryable: the preamble's leading unset frees it
+// before the exports run.
+func TestIsReservedEnvName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"completion marker", "_sortie_complete", true},
+		{"preamble scratch name", "_sortie_env", false},
+		{"ordinary name", "EXAMPLE_TOKEN", false},
+		{"empty", "", false},
+		{"marker with a suffix", "_sortie_complete_x", false},
+		{"marker uppercased", "_SORTIE_COMPLETE", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := IsReservedEnvName(tt.input); got != tt.want {
+				t.Errorf("IsReservedEnvName(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // envVarRenderers exercises every rendering path EnvVar must redact
 // through: fmt with several verbs, alone and inside a slice, a slog
 // text handler, and encoding/json.Marshal.
