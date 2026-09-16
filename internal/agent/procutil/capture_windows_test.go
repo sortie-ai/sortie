@@ -362,15 +362,7 @@ func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing
 }
 
 func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testing.T) {
-	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "descendant.pid")
-
-	descendantPath := agenttest.FakeRuntime(t, dir, "descendant", "procutil.escalation-descendant", escalationDescendantParams{
-		PIDFile: pidFile,
-	})
-	leaderPath := agenttest.FakeRuntime(t, dir, "leader", "procutil.escalation-leader", escalationLeaderParams{
-		DescendantPath: descendantPath,
-	})
+	leaderPath := agenttest.FakeRuntime(t, t.TempDir(), "leader", agenttest.OutputScenario, agenttest.Output{Hang: true})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -384,14 +376,28 @@ func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testin
 		return groupCancel()
 	}
 
-	origSeam := assignSeam
-	t.Cleanup(func() { assignSeam = origSeam })
+	origAssignSeam, origResumeSeam := assignSeam, resumeSeam
+	t.Cleanup(func() { assignSeam, resumeSeam = origAssignSeam, origResumeSeam })
 	assignSeam = func() {
 		cancel()
 		select {
 		case <-cancelReturned:
 		case <-time.After(time.Second):
 		}
+	}
+
+	// The graceful signal reaches the leader as it starts, before its
+	// runtime can catch one, so the leader may exit without starting a
+	// descendant. The job gets a member of the test's own instead, added
+	// while the leader is still suspended.
+	var member *exec.Cmd
+	resumeSeam = func() {
+		v, ok := jobs.Load(cmd.Process.Pid)
+		if !ok {
+			t.Fatal("no job registered before the resume, want the launch's job")
+		}
+		entry := v.(*jobEntry) //nolint:errcheck // test-only assertion on the internal registration
+		member = newCaptureTestHeldMember(t, entry.job)
 	}
 
 	pipes, err := StartWithOwnedPipes(cmd, slog.New(slog.DiscardHandler))
@@ -403,12 +409,19 @@ func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testin
 	leaderPID := cmd.Process.Pid
 	t.Cleanup(func() { _ = KillProcessGroup(leaderPID) })
 
-	descendantPID := pollEscalationPID(t, pidFile, 5*time.Second)
 	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
 
+	memberPID, err := dwordPID(member.Process.Pid)
+	if err != nil {
+		t.Fatalf("dwordPID() error = %v", err)
+	}
 	wait := escalationGrace + groupDrainBound + 2*time.Second
-	if !pollProcessGone(descendantPID, wait) {
-		t.Errorf("descendant %d still alive %v after a cancellation that preceded job registration, want gone", descendantPID, wait)
+	deadline := time.Now().Add(wait)
+	for processIsRunning(memberPID) {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("job member %d still running %v after a cancellation that preceded job registration, want gone", memberPID, wait)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
