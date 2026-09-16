@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -407,6 +408,139 @@ func TestActivateReconstructedRetries(t *testing.T) {
 				entry.IssueTokensCompleted, 1200)
 		}
 	})
+}
+
+const (
+	recoveredRetryIssueID = "recovered-1"
+	recoveredRetryHost    = "build01.internal"
+	recoveredRetryEnvName = "EXAMPLE_TOKEN"
+)
+
+// recoveredRetryTracker serves the recovered issue to the retry lane
+// while tolerating the candidate sweep a tick makes.
+type recoveredRetryTracker struct {
+	*mockTrackerAdapter
+	issue domain.Issue
+}
+
+func (t *recoveredRetryTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	return t.issue, nil
+}
+
+// TestRun_RecoveredPastDueRetryLaunchesUnderWorkerSettings drives the
+// event loop over a past-due retry reconstructed at startup, which the
+// loop can dispatch on its first pass, ahead of the first tick. That
+// launch must reach a configured SSH host carrying the variable the
+// operator listed.
+//
+// The loop picks uniformly between the queued retry and the zero-delay
+// tick timer, so an attempt whose tick wins observes no launch and is
+// retried. That tick is held inside its workflow reload, upstream of
+// where a tick applies the worker block, so any launch an attempt does
+// observe can only have read settings applied before the retry was
+// activated.
+func TestRun_RecoveredPastDueRetryLaunchesUnderWorkerSettings(t *testing.T) {
+	t.Parallel()
+
+	for range 32 {
+		launch, dispatched := runRecoveredPastDueRetry(t)
+		if !dispatched {
+			continue
+		}
+		if launch.SSHHost != recoveredRetryHost {
+			t.Errorf("StartSessionParams.SSHHost = %q, want %q", launch.SSHHost, recoveredRetryHost)
+		}
+		if !slices.Contains(launch.SSHEnvNames, recoveredRetryEnvName) {
+			t.Errorf("StartSessionParams.SSHEnvNames = %v, want it to carry %q", launch.SSHEnvNames, recoveredRetryEnvName)
+		}
+		return
+	}
+
+	t.Fatal("no attempt dispatched the recovered retry ahead of the first tick")
+}
+
+// runRecoveredPastDueRetry runs one attempt of the scenario
+// [TestRun_RecoveredPastDueRetryLaunchesUnderWorkerSettings] describes,
+// reporting the launch parameters when the recovered retry reached
+// dispatch before the first tick could complete.
+func runRecoveredPastDueRetry(t *testing.T) (domain.StartSessionParams, bool) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Tracker.Kind = "mock"
+	cfg.Polling.IntervalMS = 60000
+	cfg.Agent.MaxConcurrentAgents = 1
+	cfg.SetExtensionSection("worker", map[string]any{
+		"ssh_hosts":    []any{recoveredRetryHost},
+		"ssh_pass_env": []any{recoveredRetryEnvName},
+	})
+
+	launched := make(chan domain.StartSessionParams, 1)
+	agent := &mockAgentAdapter{
+		startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+			select {
+			case launched <- params:
+			default:
+			}
+			return domain.Session{ID: "sess-1"}, nil
+		},
+	}
+
+	issue := candidateIssue(recoveredRetryIssueID, "RECOVERED-1", "To Do")
+	state := NewState(cfg.Polling.IntervalMS, 1, 0, nil, AgentTotals{})
+	state.RetryAttempts[recoveredRetryIssueID] = &RetryEntry{
+		IssueID:    recoveredRetryIssueID,
+		Identifier: issue.Identifier,
+	}
+	state.Claimed[recoveredRetryIssueID] = struct{}{}
+
+	wm := &stubWorkflowManager{config: cfg, template: mustParseTemplate(t, "do {{ .issue.identifier }}")}
+
+	preflight := passingPreflightRegistries()
+	preflight.ConfigFunc = wm.Config
+	// A tick reloads the workflow before it applies the worker block, so
+	// holding the reload keeps a tick that wins the select from supplying
+	// the settings the dispatch must already carry.
+	preflight.ReloadWorkflow = func() error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:              state,
+		Logger:             discardLogger(),
+		TrackerAdapter:     &recoveredRetryTracker{mockTrackerAdapter: &mockTrackerAdapter{}, issue: issue},
+		AgentAdapter:       agent,
+		AgentAdapterByKind: func(string) (domain.AgentAdapter, error) { return agent, nil },
+		WorkflowManager:    wm,
+		Store:              &stubStore{},
+		PreflightParams:    preflight,
+	})
+	o.drainTimeout = 100 * time.Millisecond
+
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	var (
+		launch     domain.StartSessionParams
+		dispatched bool
+	)
+	select {
+	case launch = <-launched:
+		dispatched = true
+	case <-time.After(3 * time.Second):
+	}
+
+	cancel()
+	<-done
+
+	return launch, dispatched
 }
 
 func TestPopulateRetries_SessionID(t *testing.T) {

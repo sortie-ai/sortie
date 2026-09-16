@@ -306,14 +306,17 @@ type Orchestrator struct {
 	ciTriage config.ReactionTriageConfig
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
-	// StrictHostKeyChecking value. Written by handleTick on every
-	// tick/reload; read by makeWorkerFn at dispatch time.
+	// StrictHostKeyChecking value. Written by applyWorkerConfig, which
+	// Run calls before activating recovered retries and handleTick
+	// calls on every tick/reload; read by makeWorkerFn at dispatch
+	// time.
 	sshStrictHostKeyChecking string
 
 	// sshPassEnv and sshDisallowPassEnv are the current effective
 	// worker.ssh_pass_env and worker.ssh_disallow_pass_env lists.
-	// Written by handleTick on every tick/reload; read by
-	// makeWorkerFn at dispatch time.
+	// Written by applyWorkerConfig, which Run calls before activating
+	// recovered retries and handleTick calls on every tick/reload;
+	// read by makeWorkerFn at dispatch time.
 	sshPassEnv         []string
 	sshDisallowPassEnv []string
 
@@ -356,10 +359,10 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		)
 	} else {
 		// The pool above comes from OrchestratorParams.HostPool, which
-		// the running binary leaves unset: the first tick parses the
-		// worker block and applies its hosts. A workflow that configures
-		// SSH therefore still looks local here, so these warnings read
-		// the block rather than the pool.
+		// the running binary leaves unset: Run parses the worker block
+		// and applies its hosts before its first tick. A workflow that
+		// configures SSH therefore still looks local here, so these
+		// warnings read the block rather than the pool.
 		cfg := params.WorkflowManager.Config()
 		if worker := cfg.ExtensionSection("worker"); worker != nil && len(ParseWorkerConfig(worker, cfg.ExtensionEnvRefPaths("worker")).SSHHosts) == 0 {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
@@ -577,6 +580,10 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 // [HandleAgentEvent]), pending retry timers are stopped, and the
 // function returns.
 func (o *Orchestrator) Run(ctx context.Context) {
+	// A past-due recovered retry can dispatch on the loop's first pass,
+	// ahead of the first tick, so the worker settings it launches under
+	// have to be in force before it is activated.
+	o.applyWorkerConfig(o.workflowManager.Config())
 	o.activateReconstructedRetries()
 
 	tickTimer := time.NewTimer(0)
@@ -676,6 +683,20 @@ func (o *Orchestrator) updateGauges(now time.Time) {
 	}
 }
 
+// applyWorkerConfig parses the worker extension section and applies it
+// to the host pool and to the SSH launch fields makeWorkerFn reads at
+// dispatch time, returning the parsing diagnostics for the caller to
+// report. Run applies it once before activating recovered retries, and
+// handleTick applies it on every tick so a reload takes effect.
+func (o *Orchestrator) applyWorkerConfig(cfg config.ServiceConfig) []WorkerWarning {
+	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
+	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
+	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
+	o.sshPassEnv = wc.SSHPassEnv
+	o.sshDisallowPassEnv = wc.SSHDisallowPassEnv
+	return wc.Warnings
+}
+
 // handleTick executes a single poll-and-dispatch cycle: preflight,
 // config read, reconcile, fetch, sort, dispatch. Called from the event
 // loop on each tick timer fire.
@@ -710,18 +731,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.MaxTokens = cfg.Agent.MaxTokens
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
-	// Update host pool from config extensions.
-	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
-	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
-	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
-	o.sshPassEnv = wc.SSHPassEnv
-	o.sshDisallowPassEnv = wc.SSHDisallowPassEnv
+	warnings := o.applyWorkerConfig(cfg)
 
-	if !workerWarningsEqual(o.prevWorkerWarnings, wc.Warnings) {
-		for _, w := range wc.Warnings {
+	if !workerWarningsEqual(o.prevWorkerWarnings, warnings) {
+		for _, w := range warnings {
 			o.logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message comes from one of a fixed set of string constants ParseWorkerConfig produces
 		}
-		o.prevWorkerWarnings = wc.Warnings
+		o.prevWorkerWarnings = warnings
 	}
 
 	// Reconcile running issues unconditionally so in-flight workers
