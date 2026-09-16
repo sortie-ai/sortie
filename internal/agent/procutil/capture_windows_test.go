@@ -201,7 +201,7 @@ func latestCaptureTeardownRecord(spy *captureWinLogSpy, from int) (captureWinLog
 	return captureWinLogRecord{}, false
 }
 
-// TestCapture_HeldDescendantInheritedJobMembership pins P8: a child a
+// TestCapture_HeldDescendantInheritedJobMembership pins that a child a
 // captured leader starts, inheriting the leader's standard output and
 // hanging, is a Job Object member because S4 assigns the leader before
 // it resumes and Windows extends membership to every process a member
@@ -359,7 +359,7 @@ func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing
 	}
 }
 
-// TestRunJobDrain pins P16: the job drain terminates repeatedly until
+// TestRunJobDrain pins that the job drain terminates repeatedly until
 // the job reports no active process or its bound passes, records a
 // failed termination without stopping, and stops polling on a failed
 // accounting query.
@@ -749,7 +749,7 @@ func TestStartWithOwnedPipes_AssignJobObjectFailure(t *testing.T) {
 	}
 }
 
-// TestStartCapture_ResumeSeamCancelsRegisteredCapture pins P18: with
+// TestStartCapture_ResumeSeamCancelsRegisteredCapture pins that, with
 // the resume seam cancelling the command's context and waiting until
 // jobs no longer holds the pid, whether StartCapture then fails with
 // StageProcessResume or succeeds and Wait returns, the one teardown
