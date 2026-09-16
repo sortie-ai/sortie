@@ -668,6 +668,67 @@ func TestWriteReviewSummary_SymlinkRejected(t *testing.T) {
 	}
 }
 
+func TestWriteReviewSummary_SymlinkAtDestinationReplacedNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"review_summary.md", "review_summary.md.tmp"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			sortieDirPath := filepath.Join(wsPath, ".sortie")
+			if err := os.MkdirAll(sortieDirPath, 0o755); err != nil {
+				t.Fatalf("MkdirAll(.sortie): %v", err)
+			}
+
+			outsideDir := t.TempDir()
+			targetPath := filepath.Join(outsideDir, "target-"+name)
+			if err := os.WriteFile(targetPath, []byte("outside-content"), 0o600); err != nil {
+				t.Fatalf("WriteFile(target): %v", err)
+			}
+			linkPath := filepath.Join(sortieDirPath, name)
+			mustSymlink(t, targetPath, linkPath)
+
+			meta := domain.ReviewMetadata{Enabled: true, FinalVerdict: "pass", TotalIterations: 1}
+			writeReviewSummary(wsPath, meta, discardLogger())
+
+			targetData, err := os.ReadFile(targetPath)
+			if err != nil {
+				t.Fatalf("ReadFile(target): %v", err)
+			}
+			if string(targetData) != "outside-content" {
+				t.Errorf("symlink target for %q content = %q, want unchanged %q", name, targetData, "outside-content")
+			}
+
+			if name == "review_summary.md.tmp" {
+				fi, err := os.Lstat(linkPath)
+				if err != nil {
+					t.Fatalf("Lstat(%q): %v", name, err)
+				}
+				if fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("%q is no longer a symlink, want untouched (writeReviewSummary uses a fresh temp name)", name)
+				}
+				return
+			}
+
+			fi, err := os.Lstat(linkPath)
+			if err != nil {
+				t.Fatalf("Lstat(%q): %v", name, err)
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				t.Errorf("%q is still a symlink, want a regular file (link replaced, not followed)", name)
+			}
+			destData, err := os.ReadFile(linkPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q): %v", name, err)
+			}
+			if !strings.Contains(string(destData), "Self-Review Summary") {
+				t.Errorf("%q content = %q, want the rendered summary", name, destData)
+			}
+		})
+	}
+}
+
 func TestRunVerification_Success(t *testing.T) {
 	t.Parallel()
 

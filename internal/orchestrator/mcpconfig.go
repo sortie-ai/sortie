@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // resolveToolServerBinary returns the absolute, symlink-free path to the
@@ -58,9 +60,6 @@ type MCPConfigParams struct {
 	// DBPath is the absolute path to the SQLite database.
 	DBPath string
 
-	// SessionID is the agent session identifier (may be empty).
-	SessionID string
-
 	// DispatchID is written to the tool server environment as
 	// SORTIE_DISPATCH_ID.
 	DispatchID string
@@ -86,8 +85,8 @@ type MCPConfigParams struct {
 	// indirection in the workflow file (e.g., tracker credentials).
 	//
 	// Per-session variables (IssueID, Identifier, WorkspacePath,
-	// DBPath, SessionID, DispatchID) take precedence over same-named
-	// keys in ProcessEnv.
+	// DBPath, DispatchID) take precedence over same-named keys in
+	// ProcessEnv.
 	ProcessEnv map[string]string
 }
 
@@ -104,11 +103,12 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	// (higher precedence, always win).
 	env := make(map[string]string, len(params.ProcessEnv)+6)
 	maps.Copy(env, params.ProcessEnv)
+
+	delete(env, "SORTIE_SESSION_ID")
 	env["SORTIE_ISSUE_ID"] = params.IssueID
 	env["SORTIE_ISSUE_IDENTIFIER"] = params.Identifier
 	env["SORTIE_WORKSPACE"] = params.WorkspacePath
 	env["SORTIE_DB_PATH"] = params.DBPath
-	env["SORTIE_SESSION_ID"] = params.SessionID
 	env["SORTIE_DISPATCH_ID"] = params.DispatchID
 	env["SORTIE_SESSION_AGENT_KIND"] = params.AgentKind
 	if params.Attempt != nil {
@@ -118,12 +118,8 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	entry := map[string]any{
 		"type":    "stdio",
 		"command": params.BinaryPath,
-		// WorkflowPath is an absolute path supplied by the orchestrator at
-		// workspace allocation time. The agent runtime already operates within
-		// the workspace directory and has full access to the filesystem, so
-		// passing the absolute workflow path here does not expand its access.
-		"args": []string{"mcp-server", "--workflow", params.WorkflowPath},
-		"env":  env,
+		"args":    []string{"mcp-server", "--workflow", params.WorkflowPath},
+		"env":     env,
 	}
 
 	var merged map[string]any
@@ -171,10 +167,8 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		return "", fmt.Errorf("creating .sortie directory: %w", err)
 	}
 
-	// Exclude all .sortie/ contents from git. Written on every call so
-	// it is restored if an agent or hook removes it between runs.
-	gitignorePath := filepath.Join(dir, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("*\n"), 0o600); err != nil {
+	// Restore this rule when an agent or hook removes it between runs.
+	if err := workspace.WriteSortieFile(params.WorkspacePath, ".gitignore", []byte("*\n")); err != nil {
 		return "", fmt.Errorf("writing .sortie gitignore: %w", err)
 	}
 
@@ -183,17 +177,11 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		return "", fmt.Errorf("marshalling MCP config: %w", err)
 	}
 
-	tmpPath := filepath.Join(dir, "mcp.json.tmp")
-	outPath := filepath.Join(dir, "mcp.json")
-
-	if err := os.WriteFile(tmpPath, encoded, 0o600); err != nil {
-		return "", fmt.Errorf("writing MCP config temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		return "", fmt.Errorf("renaming MCP config file: %w", err)
+	if err := workspace.WriteSortieFile(params.WorkspacePath, "mcp.json", encoded); err != nil {
+		return "", fmt.Errorf("writing MCP config file: %w", err)
 	}
 
-	return outPath, nil
+	return filepath.Join(dir, "mcp.json"), nil
 }
 
 // CollectSortieEnv scans the process environment and returns all

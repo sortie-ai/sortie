@@ -3,8 +3,6 @@ package domain
 import "context"
 
 // Notifier sends a normalized [Notification] to a single backend.
-// One method keeps every backend interchangeable and lets any producer
-// reuse the family.
 type Notifier interface {
 	// Send delivers the notification. It returns nil on a successful
 	// send and a classified error on transport failure, a non-2xx
@@ -14,17 +12,13 @@ type Notifier interface {
 	Send(ctx context.Context, n Notification) error
 }
 
-// Notification is the normalized payload every notifier backend
-// consumes. The envelope is filled by the producer; the message is
-// supplied by the agent. The value is self-contained: every field a
-// backend needs rides in it, with no dependency on producer-only state.
+// Notification is the normalized payload every notifier backend consumes.
 type Notification struct {
 	Envelope NotificationEnvelope
 	Message  NotificationMessage
 }
 
-// NotificationEnvelope carries system-owned session context. The agent
-// neither provides it nor can override it.
+// NotificationEnvelope carries system-owned session context.
 type NotificationEnvelope struct {
 	// NotificationID is a generated unique id, such as a UUID.
 	NotificationID string
@@ -43,8 +37,10 @@ type NotificationEnvelope struct {
 	// Identifier is the human-readable issue key.
 	Identifier string
 
-	// SessionID is the agent session id. It may be empty early in a
-	// lifecycle.
+	// DispatchID fences session identity to a single worker attempt.
+	DispatchID string
+
+	// SessionID is accepted only from a record fenced by DispatchID.
 	SessionID string
 
 	// Attempt is the retry or continuation attempt. It is nil on the

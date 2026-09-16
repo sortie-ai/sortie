@@ -508,14 +508,14 @@ Per-entry fields:
 - `kind` (string)
   - Required. The registry discriminator, resolved against the notifier registry (Section 10.4.7) at sidecar startup. v1 backends are `webhook` and `slack`.
 - `max_per_session` (integer, optional)
-  - The per-session `notify_operator` call cap. It is not a per-entry default: an omitted, `null`, or `0` value contributes nothing to cap selection, which then falls back to the default of `20` only when every entry is `0` or unset (see "Validation and resolution" below). `0` never means unlimited. A negative value is rejected at config parse time.
+  - The `notify_operator` call cap for one `sortie mcp-server` process. It is not a per-entry default: an omitted, `null`, or `0` value contributes nothing to cap selection, which then falls back to the default of `20` only when every entry is `0` or unset (see "Validation and resolution" below). `0` never means unlimited. A negative value is rejected at config parse time.
 - backend-specific fields
   - Passed through to the backend constructor untyped, with `$VAR` references resolved. The `webhook` backend requires `url`; the `slack` backend requires `webhook_url`.
 
 Validation and resolution:
 
 - The list is structurally validated when the config is parsed: a non-sequence value, an entry that is not a map, an entry with an empty `kind`, or a negative `max_per_session` aborts config construction (Section 6.3).
-- When more than one backend is configured, the effective per-session cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends.
+- When more than one backend is configured, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends, and belongs to one `sortie mcp-server` process: a runtime that starts a new tool server process for each turn starts a new count with each turn rather than sharing one across the session.
 - A backend secret SHOULD be given as a reference to a `SORTIE_`-prefixed environment variable (`$SORTIE_NAME` or `${SORTIE_NAME}`). The `notify_operator` tool runs in a separate `sortie mcp-server` process whose environment is constructed by the agent's MCP host. The orchestrator guarantees that only its `SORTIE_`-prefixed variables are propagated into that process for `$VAR` resolution; the host MAY additionally inherit other variables from its own environment, so a reference without the prefix is not guaranteed to resolve and MAY resolve to the empty string. References are expanded against the sidecar process environment with no prefix enforcement, so the `SORTIE_` prefix is the way to guarantee a secret resolves regardless of host. When a required secret resolves to the empty string, the backend rejects it, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
 
 ### 5.4 Prompt Template Contract

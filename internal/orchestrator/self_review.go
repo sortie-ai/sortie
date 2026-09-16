@@ -399,18 +399,6 @@ func buildFixPrompt(verdict *domain.ReviewVerdict, parseErr string, iteration, m
 }
 
 func writeReviewSummary(workspacePath string, meta domain.ReviewMetadata, logger *slog.Logger) {
-	dir := filepath.Join(workspacePath, ".sortie")
-
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		logger.Warn("review summary: cannot stat .sortie directory", slog.Any("error", err))
-		return
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		logger.Warn("review summary: .sortie is a symlink, refusing to write")
-		return
-	}
-
 	var sb strings.Builder
 	sb.WriteString("## Self-Review Summary\n\n")
 
@@ -459,14 +447,8 @@ func writeReviewSummary(workspacePath string, meta domain.ReviewMetadata, logger
 		sb.WriteString("\n")
 	}
 
-	tmpPath := filepath.Join(dir, "review_summary.md.tmp")
-	outPath := filepath.Join(dir, "review_summary.md")
-	if err := os.WriteFile(tmpPath, []byte(sb.String()), 0o600); err != nil {
+	if err := workspace.WriteSortieFile(workspacePath, "review_summary.md", []byte(sb.String())); err != nil {
 		logger.Warn("review summary write failed", slog.Any("error", err))
-		return
-	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		logger.Warn("review summary rename failed", slog.Any("error", err))
 	}
 }
 

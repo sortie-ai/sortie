@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,6 @@ func mcpParams(workspacePath string) MCPConfigParams {
 		IssueID:       "issue-42",
 		Identifier:    "PROJ-42",
 		DBPath:        "/var/db/sortie.sqlite",
-		SessionID:     "",
 	}
 }
 
@@ -129,7 +129,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 			"SORTIE_ISSUE_IDENTIFIER":   p.Identifier,
 			"SORTIE_WORKSPACE":          p.WorkspacePath,
 			"SORTIE_DB_PATH":            p.DBPath,
-			"SORTIE_SESSION_ID":         p.SessionID,
 			"SORTIE_DISPATCH_ID":        p.DispatchID,
 			"SORTIE_SESSION_AGENT_KIND": p.AgentKind,
 		}
@@ -138,8 +137,8 @@ func TestGenerateMCPConfig(t *testing.T) {
 				t.Errorf("env[%q] = %q, want %q", k, env[k], want)
 			}
 		}
-		if len(env) != 7 {
-			t.Errorf("env key count = %d, want 7: %v", len(env), env)
+		if len(env) != 6 {
+			t.Errorf("env key count = %d, want 6: %v", len(env), env)
 		}
 	})
 
@@ -329,7 +328,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// Process-level vars reach the env block.
 		if got, _ := env["SORTIE_TRACKER_API_KEY"].(string); got != "secret-key" {
 			t.Errorf("SORTIE_TRACKER_API_KEY = %q, want %q", got, "secret-key")
 		}
@@ -337,13 +335,11 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Errorf("SORTIE_ENV_FILE = %q, want %q", got, "/opt/secret.env")
 		}
 
-		// Per-session vars are also present and correct.
 		for k, want := range map[string]string{
 			"SORTIE_ISSUE_ID":           p.IssueID,
 			"SORTIE_ISSUE_IDENTIFIER":   p.Identifier,
 			"SORTIE_WORKSPACE":          p.WorkspacePath,
 			"SORTIE_DB_PATH":            p.DBPath,
-			"SORTIE_SESSION_ID":         p.SessionID,
 			"SORTIE_DISPATCH_ID":        p.DispatchID,
 			"SORTIE_SESSION_AGENT_KIND": p.AgentKind,
 		} {
@@ -352,9 +348,8 @@ func TestGenerateMCPConfig(t *testing.T) {
 			}
 		}
 
-		// 7 per-session + 2 process-level.
-		if len(env) != 9 {
-			t.Errorf("env key count = %d, want 9: %v", len(env), env)
+		if len(env) != 8 {
+			t.Errorf("env key count = %d, want 8: %v", len(env), env)
 		}
 	})
 
@@ -363,9 +358,9 @@ func TestGenerateMCPConfig(t *testing.T) {
 		dir := t.TempDir()
 		p := mcpParams(dir)
 		p.ProcessEnv = map[string]string{
-			"SORTIE_ISSUE_ID":    "stale-id",
-			"SORTIE_SESSION_ID":  "stale-session",
-			"SORTIE_DISPATCH_ID": "stale-dispatch",
+			"SORTIE_ISSUE_ID":      "stale-id",
+			"SORTIE_TRACKER_TOKEN": "unrelated-value",
+			"SORTIE_DISPATCH_ID":   "stale-dispatch",
 		}
 		_, err := GenerateMCPConfig(p)
 		if err != nil {
@@ -377,20 +372,62 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// Per-session values win over stale process-env values.
 		if got, _ := env["SORTIE_ISSUE_ID"].(string); got != p.IssueID {
 			t.Errorf("SORTIE_ISSUE_ID = %q, want %q (per-session wins)", got, p.IssueID)
-		}
-		if got, _ := env["SORTIE_SESSION_ID"].(string); got != p.SessionID {
-			t.Errorf("SORTIE_SESSION_ID = %q, want %q (per-session wins)", got, p.SessionID)
 		}
 		if got, _ := env["SORTIE_DISPATCH_ID"].(string); got != p.DispatchID {
 			t.Errorf("SORTIE_DISPATCH_ID = %q, want %q (per-session wins, even when empty)", got, p.DispatchID)
 		}
+		if got, _ := env["SORTIE_TRACKER_TOKEN"].(string); got != "unrelated-value" {
+			t.Errorf("SORTIE_TRACKER_TOKEN = %q, want %q (untouched pass-through)", got, "unrelated-value")
+		}
 
-		// Overwritten keys do not inflate the map; count stays at 7.
 		if len(env) != 7 {
 			t.Errorf("env key count = %d, want 7: %v", len(env), env)
+		}
+	})
+
+	t.Run("no_session_id_key_written", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		_, err := GenerateMCPConfig(mcpParams(dir))
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+		if _, present := env["SORTIE_SESSION_ID"]; present {
+			t.Errorf("env[%q] present = %v, want absent", "SORTIE_SESSION_ID", env["SORTIE_SESSION_ID"])
+		}
+	})
+
+	t.Run("stale_session_id_in_process_env_is_dropped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.ProcessEnv = map[string]string{
+			"SORTIE_SESSION_ID":      "stale-session-from-process",
+			"SORTIE_TRACKER_API_KEY": "kept",
+		}
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+		if _, present := env["SORTIE_SESSION_ID"]; present {
+			t.Errorf("env[%q] present = %v, want absent; a process-environment value must not be published as this dispatch's session identity", "SORTIE_SESSION_ID", env["SORTIE_SESSION_ID"])
+		}
+		if got, _ := env["SORTIE_TRACKER_API_KEY"].(string); got != "kept" {
+			t.Errorf("env[%q] = %q, want %q; unrelated process variables must still be copied", "SORTIE_TRACKER_API_KEY", got, "kept")
 		}
 	})
 
@@ -476,8 +513,8 @@ func TestGenerateMCPConfig_Attempt(t *testing.T) {
 		if got, ok := env["SORTIE_ATTEMPT"].(string); !ok || got != "2" {
 			t.Errorf("env[%q] = %q, want %q", "SORTIE_ATTEMPT", env["SORTIE_ATTEMPT"], "2")
 		}
-		if len(env) != 8 {
-			t.Errorf("env key count = %d, want 8: %v", len(env), env)
+		if len(env) != 7 {
+			t.Errorf("env key count = %d, want 7: %v", len(env), env)
 		}
 	})
 
@@ -657,13 +694,10 @@ func TestGenerateMCPConfig_AgentKind(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// The per-session agent kind must be written as SORTIE_SESSION_AGENT_KIND.
 		if _, present := env["SORTIE_SESSION_AGENT_KIND"]; !present {
 			t.Error("env[\"SORTIE_SESSION_AGENT_KIND\"] absent; per-session agent kind not written")
 		}
-		// SORTIE_AGENT_KIND is the config-override variable. It must NOT be
-		// written by GenerateMCPConfig; writing it would collide with the
-		// env-override registry and rewrite the workflow default agent.kind.
+		// SORTIE_AGENT_KIND overrides workflow configuration; do not emit it here.
 		if _, present := env["SORTIE_AGENT_KIND"]; present {
 			t.Error("env[\"SORTIE_AGENT_KIND\"] present; GenerateMCPConfig must not write the override variable")
 		}
@@ -691,6 +725,112 @@ func TestGenerateMCPConfig_AgentKind(t *testing.T) {
 		}
 		if got != "" {
 			t.Errorf("env[%q] = %q, want empty string when AgentKind is empty", "SORTIE_SESSION_AGENT_KIND", got)
+		}
+	})
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires elevated privileges on Windows")
+		}
+		t.Fatalf("Symlink(%q, %q): %v", target, link, err)
+	}
+}
+
+func TestGenerateMCPConfig_SymlinkContainment(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{".gitignore", "mcp.json", "mcp.json.tmp"} {
+		t.Run("symlink_at_"+name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			sortieDirPath := filepath.Join(dir, ".sortie")
+			if err := os.MkdirAll(sortieDirPath, 0o750); err != nil {
+				t.Fatalf("MkdirAll(.sortie): %v", err)
+			}
+
+			outsideDir := t.TempDir()
+			targetPath := filepath.Join(outsideDir, "target-"+name)
+			if err := os.WriteFile(targetPath, []byte("outside-content"), 0o600); err != nil {
+				t.Fatalf("WriteFile(target): %v", err)
+			}
+
+			linkPath := filepath.Join(sortieDirPath, name)
+			mustSymlink(t, targetPath, linkPath)
+
+			if _, err := GenerateMCPConfig(mcpParams(dir)); err != nil {
+				t.Fatalf("GenerateMCPConfig(symlink at %q) = %v, want nil", name, err)
+			}
+
+			targetData, err := os.ReadFile(targetPath)
+			if err != nil {
+				t.Fatalf("ReadFile(target): %v", err)
+			}
+			if string(targetData) != "outside-content" {
+				t.Errorf("symlink target for %q content = %q, want unchanged %q", name, targetData, "outside-content")
+			}
+
+			// WriteSortieFile uses randomized temporary names, so this unused link remains.
+			if name == "mcp.json.tmp" {
+				fi, err := os.Lstat(linkPath)
+				if err != nil {
+					t.Fatalf("Lstat(%q): %v", name, err)
+				}
+				if fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("%q is no longer a symlink, want untouched", name)
+				}
+				return
+			}
+
+			fi, err := os.Lstat(linkPath)
+			if err != nil {
+				t.Fatalf("Lstat(%q): %v", name, err)
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				t.Errorf("%q is still a symlink, want a regular file (link replaced, not followed)", name)
+			}
+			if !fi.Mode().IsRegular() {
+				t.Errorf("%q mode = %v, want a regular file", name, fi.Mode())
+			}
+
+			destData, err := os.ReadFile(linkPath)
+			if err != nil {
+				t.Fatalf("ReadFile(%q): %v", name, err)
+			}
+			if name == ".gitignore" {
+				if string(destData) != "*\n" {
+					t.Errorf(".gitignore content = %q, want %q", destData, "*\n")
+				}
+			} else {
+				var m map[string]any
+				if err := json.Unmarshal(destData, &m); err != nil {
+					t.Fatalf("Unmarshal(mcp.json) after replacing symlink: %v", err)
+				}
+				sortieEntry(t, m)
+			}
+		})
+	}
+
+	t.Run("sortie_dir_itself_a_symlink_to_a_directory", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		targetDir := t.TempDir()
+		mustSymlink(t, targetDir, filepath.Join(dir, ".sortie"))
+
+		if _, err := GenerateMCPConfig(mcpParams(dir)); err == nil {
+			t.Fatal("GenerateMCPConfig(.sortie is a symlink to a directory) = nil, want error")
+		}
+
+		entries, err := os.ReadDir(targetDir)
+		if err != nil {
+			t.Fatalf("ReadDir(target directory): %v", err)
+		}
+		if len(entries) != 0 {
+			t.Errorf(".sortie symlink target directory gained entries: %v, want none", entries)
 		}
 	})
 }

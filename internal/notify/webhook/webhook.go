@@ -71,6 +71,7 @@ type wirePayload struct {
 	Source         string `json:"source"`
 	IssueID        string `json:"issue_id"`
 	Identifier     string `json:"identifier"`
+	DispatchID     string `json:"dispatch_id"`
 	SessionID      string `json:"session_id"`
 	Attempt        *int   `json:"attempt"`
 	Agent          string `json:"agent"`
@@ -90,6 +91,7 @@ func (n *notifier) Send(ctx context.Context, notification domain.Notification) e
 		Source:         notification.Envelope.Source,
 		IssueID:        notification.Envelope.IssueID,
 		Identifier:     notification.Envelope.Identifier,
+		DispatchID:     notification.Envelope.DispatchID,
 		SessionID:      notification.Envelope.SessionID,
 		Attempt:        notification.Envelope.Attempt,
 		Agent:          notification.Envelope.Agent,

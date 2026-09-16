@@ -62,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancelling a local agent process now terminates every process still in its process group when graceful shutdown expires, instead of leaving descendants running against the workspace.
   ([#1035](https://github.com/sortie-ai/sortie/issues/1035))
 
+- `webhook` notifications now carry a `dispatch_id`, identifying the agent run that sent them, and `session_id` now carries the agent's own session ID once the agent reports one, instead of staying empty for the whole run.
+  ([#1104](https://github.com/sortie-ai/sortie/issues/1104))
+
+- Sortie no longer writes through a symbolic link placed in a workspace's `.sortie` directory, and a run whose `.sortie` directory is itself a symbolic link now fails before the agent starts.
+  ([#1104](https://github.com/sortie-ai/sortie/issues/1104))
+
 ### Changed
 
 - On Linux and macOS, a process that a workspace hook, the reaction triage command, or a self-review verification command leaves running is now terminated when the command exits, matching what Windows hooks already did; a verification command's leftover processes on Windows are now terminated too. A service meant to outlive the command now has to start through a supervisor, which the workflow reference documents per platform, and hooks and the reaction triage command now receive `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` so they can reach the user's service manager. Two log messages are new: `leftover processes terminated after the command exited`, logged when that termination reached a process the command left behind, and `subprocess group termination failed after the launch returned`, logged whenever Sortie cannot confirm that a command's or an agent session's processes are gone. On Windows, the warnings `hook process tree did not settle`, `hook job object creation failed; child tree may survive timeout`, and `hook process resume failed` are renamed `subprocess tree did not settle`, `process group assignment failed`, and `process resume failed` and now cover launches other than hooks, while `hook job termination after wait failed; drain may not settle`, `hook job accounting query failed; drain skipped`, and `hook job processes still active after drain deadline` are no longer logged; an alert built on any of the old text stops matching.
