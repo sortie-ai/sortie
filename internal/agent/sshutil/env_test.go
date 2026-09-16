@@ -157,12 +157,12 @@ type redactionSubject struct {
 	secrets []string
 }
 
-// renderEverywhere renders v alone and as a slice element through
-// every fmt verb V9 lists, through both slog handlers, and through
-// encoding/json.Marshal, keyed by a label identifying the rendering
-// path. sliceOf wraps v in a single-element slice of v's own type,
-// since a %v over []any loses the type-specific Format method a slice
-// of the concrete type would use.
+// renderEverywhere renders v alone and as a slice element through the
+// %v, %+v, %#v, %s, and %q fmt verbs, through both slog handlers, and
+// through encoding/json.Marshal, keyed by a label identifying the
+// rendering path. sliceOf wraps v in a single-element slice of v's own
+// type, since a %v over []any loses the type-specific Format method a
+// slice of the concrete type would use.
 func renderEverywhere(v any, sliceOf func(any) any) map[string]string {
 	renderings := map[string]string{
 		"%v":  fmt.Sprintf("%v", v),
@@ -209,13 +209,15 @@ func assertRedacted(t *testing.T, subject redactionSubject, got map[string]strin
 	}
 }
 
-// TestRedaction_V9Matrix drives every type [R2] names - EnvVar,
+// TestRedaction_AllCarrierTypesAcrossAllRenderings drives every type
+// that carries a secret through the ssh launch path - EnvVar,
 // SSHOptions, SSHLaunch, the reader StdinReader returns, and the
-// writer PrefixStdin returns - through every verb and handler V9
-// lists, alone, as a slice element, and as an exported struct field,
-// with a value occurring nowhere else in the test binary, and asserts
-// no rendering contains it or its shell-quoted form.
-func TestRedaction_V9Matrix(t *testing.T) {
+// writer PrefixStdin returns - through every fmt verb, both slog
+// handlers, and encoding/json.Marshal, alone, as a slice element, and
+// as an exported struct field, with a value occurring nowhere else in
+// the test binary, and asserts no rendering contains it or its
+// shell-quoted form.
+func TestRedaction_AllCarrierTypesAcrossAllRenderings(t *testing.T) {
 	t.Parallel()
 
 	const secretValue = "v9-matrix-secret-9d2f1a7c"
