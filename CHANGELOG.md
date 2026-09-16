@@ -17,9 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Cancelling a local agent process now terminates every process still in its process group when graceful shutdown expires, instead of leaving descendants running against the workspace.
-  ([#1035](https://github.com/sortie-ai/sortie/issues/1035))
-
 - A coding-agent subprocess that spawns a descendant inheriting its standard output handle no longer wedges the turn, leaks the process, or loses buffered standard error, across the `claude-code`, `copilot-cli`, `kiro`, and `opencode` agent kinds. The `codex` app-server adapter no longer discards the runtime's last messages when it reaps the subprocess, and now also ends a turn or a session within a bound when the runtime dies while a descendant still holds the output handle. The `agent-client-protocol` adapter takes the same subprocess pipe ownership and releases those pipes as the last step of its teardown, and now also ends a turn or a session within a bound when its runtime exits while a descendant still holds the output handle.
   ([#982](https://github.com/sortie-ai/sortie/issues/982), [#1084](https://github.com/sortie-ai/sortie/issues/1084), [#1081](https://github.com/sortie-ai/sortie/issues/1081))
 
@@ -61,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A retry that came due while Sortie was stopped now starts on one of the hosts `worker.ssh_hosts` names and carries the variables `worker.ssh_pass_env` names, even when it is the first work Sortie dispatches after the restart. Such a retry could previously start on the machine running Sortie, or start remotely without those variables, because it could be dispatched before Sortie had read the `worker` settings for the first time.
   ([#1048](https://github.com/sortie-ai/sortie/issues/1048))
+
+- Cancelling a local agent process now terminates every process still in its process group when graceful shutdown expires, instead of leaving descendants running against the workspace.
+  ([#1035](https://github.com/sortie-ai/sortie/issues/1035))
 
 ### Changed
 
