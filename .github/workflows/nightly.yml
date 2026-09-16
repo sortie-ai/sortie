@@ -334,6 +334,7 @@ jobs:
           ADAPTER_NAME: ${{ matrix.name }}
           KIND: ${{ matrix.kind }}
           SOURCE: ${{ matrix.source }}
+          # See  `gh api orgs/sortie-ai/issue-types`
           TEST_ISSUE_TYPE_ID: IT_kwDOEAsIKM4B7Iak
         run: scripts/nightly-issue.sh report
 
