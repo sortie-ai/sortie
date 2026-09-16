@@ -115,14 +115,18 @@ func buildSSHOpts(host string, opts SSHOptions) []string {
 // command. && and || share a single precedence level in a POSIX
 // shell, so an ungrouped fragment carrying a top-level || or ; binds
 // to the launch's own && chain: its right-hand side would then run
-// even though the cd or the environment import ahead of it failed.
+// even though the cd or the environment import ahead of it failed. A
+// newline closes the group rather than a semicolon: the fragment is
+// the operator's own command and may itself end in ; or &, either of
+// which a semicolon after it turns into a syntax error the remote
+// shell rejects before the agent runs.
 func agentGroup(remoteCommand string, agentArgs []string) string {
 	parts := make([]string, 0, len(agentArgs)+1)
 	parts = append(parts, remoteCommand)
 	for _, arg := range agentArgs {
 		parts = append(parts, shellQuote(arg))
 	}
-	return "{ " + strings.Join(parts, " ") + "; }"
+	return "{ " + strings.Join(parts, " ") + "\n}"
 }
 
 // BuildSSHLaunch constructs the SSH invocation arguments for remote

@@ -369,3 +369,74 @@ func TestBuildSSHLaunch_RealShellImportStep_NoDD(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSSHLaunch_RealShellAgentCommandTerminator runs a final
+// element whose remote command ends in a top-level ; or &, with a
+// plain command and one carrying an agent argument as controls, under
+// every installed shell this file drives. An operator's own command
+// reaches the remote shell unsplit, so a group a semicolon closes turns
+// either ending into a syntax error the shell rejects before the agent
+// runs.
+func TestBuildSSHLaunch_RealShellAgentCommandTerminator(t *testing.T) {
+	tests := []struct {
+		name string
+		// suffix ends the operator's own command, reaching the remote
+		// shell unsplit as agent.command does.
+		suffix string
+		// withArg appends an agent argument the launch shell-quotes.
+		withArg bool
+		// background ends the command with &, so the group returns
+		// before the command has necessarily touched its marker.
+		background bool
+	}{
+		{name: "plain"},
+		{name: "with agent argument", withArg: true},
+		{name: "trailing semicolon", suffix: ";"},
+		{name: "trailing ampersand", suffix: " &", background: true},
+	}
+
+	for _, shell := range availableShells(t) {
+		for _, tt := range tests {
+			t.Run(shell.name+"/"+tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				agentMarker := filepath.Join(dir, "AGENT")
+				argMarker := filepath.Join(dir, "ARG")
+
+				var agentArgs []string
+				if tt.withArg {
+					agentArgs = []string{argMarker}
+				}
+				launch := BuildSSHLaunch("host", dir, "touch '"+agentMarker+"'"+tt.suffix, agentArgs, SSHOptions{
+					Env: []EnvVar{{Name: "TESTVAR", Value: "carried"}},
+				})
+				finalElement := launch.Args[len(launch.Args)-1]
+
+				cmd := exec.Command(shell.path, "-c", finalElement) //nolint:gosec // shell.path resolved via exec.LookPath, finalElement built from t.TempDir() paths
+				cmd.Stdin = bytes.NewReader(mustReadPreamble(t, launch))
+				var stderr bytes.Buffer
+				cmd.Stderr = &stderr
+
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("%s: %q failed: %v, stderr: %s", shell.name, finalElement, err, stderr.String())
+				}
+				if got := stderr.String(); got != "" {
+					t.Errorf("%s: stderr = %q, want empty", shell.name, got)
+				}
+
+				if tt.background {
+					return
+				}
+				if _, err := os.Stat(agentMarker); err != nil {
+					t.Errorf("%s: agent command did not run: %v", shell.name, err)
+				}
+				if tt.withArg {
+					if _, err := os.Stat(argMarker); err != nil {
+						t.Errorf("%s: agent argument did not reach the command: %v", shell.name, err)
+					}
+				}
+			})
+		}
+	}
+}

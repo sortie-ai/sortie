@@ -58,9 +58,8 @@ func mustReadAllBytes(t *testing.T, r io.Reader) []byte {
 }
 
 // TestBuildSSHLaunch_ZeroEnv asserts that a nil or empty opts.Env
-// produces Args byte-identical between the two, with the exact
-// prefix and final-element shape BuildSSHArgs used to produce, and
-// carries no preamble.
+// produces Args byte-identical between the two, with the exact option
+// prefix and final-element text, and carries no preamble.
 func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +77,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			host:          "example.test",
 			workspacePath: "/workspace",
 			remoteCommand: "codex app-server",
-			wantFinal:     "cd -- '/workspace' && { codex app-server; }",
+			wantFinal:     "cd -- '/workspace' && { codex app-server\n}",
 		},
 		{
 			name:          "with agent args needing quoting, whitespace-padded host",
@@ -86,7 +85,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			workspacePath: "/work space",
 			remoteCommand: "run --acp",
 			agentArgs:     []string{"a b", "it's"},
-			wantFinal:     "cd -- '/work space' && { run --acp 'a b' 'it'\\''s'; }",
+			wantFinal:     "cd -- '/work space' && { run --acp 'a b' 'it'\\''s'\n}",
 		},
 		{
 			name:          "explicit strict host key checking",
@@ -94,7 +93,7 @@ func TestBuildSSHLaunch_ZeroEnv(t *testing.T) {
 			workspacePath: "/workspace",
 			remoteCommand: "opencode run",
 			opts:          SSHOptions{StrictHostKeyChecking: "no"},
-			wantFinal:     "cd -- '/workspace' && { opencode run; }",
+			wantFinal:     "cd -- '/workspace' && { opencode run\n}",
 		},
 	}
 
@@ -189,7 +188,7 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 		t.Errorf("preamble = %q, want %q", string(gotPreamble), wantPreamble)
 	}
 
-	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=63 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && { run --acp 'a'; }`
+	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=63 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && { run --acp 'a'` + "\n}"
 	gotFinal := launch.Args[len(launch.Args)-1]
 	if gotFinal != wantFinal {
 		t.Errorf("final element = %q, want %q", gotFinal, wantFinal)
