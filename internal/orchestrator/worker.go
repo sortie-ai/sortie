@@ -252,6 +252,13 @@ type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath, s
 // not that no channel exists.
 type AgentToolChannelFunc func(kind string, remote bool) bool
 
+// SSHEnvNamesFunc returns the environment variable names to carry
+// into a remote session of the given agent kind: the kind's declared
+// credential names plus the operator-listed names, less the
+// operator-disallowed names. A nil [WorkerDeps.SSHEnvNamesFunc] means
+// no name is carried.
+type SSHEnvNamesFunc func(kind string) []string
+
 // DispatchPosture selects the worker behavior for a dispatch. Exactly
 // one posture applies per dispatch; the type makes the invariant
 // representable and eliminates invalid flag combinations.
@@ -400,6 +407,11 @@ type WorkerDeps struct {
 	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
 	// value for this worker's agent sessions. Empty means "accept-new".
 	SSHStrictHostKeyChecking string
+
+	// SSHEnvNamesFunc returns the environment variable names to carry
+	// into a remote session of a given agent kind. Nil means no name
+	// is carried.
+	SSHEnvNamesFunc SSHEnvNamesFunc
 
 	// Metrics records dispatch-time instrumentation counters.
 	// Always non-nil: NewOrchestrator falls back to NoopMetrics
@@ -1027,12 +1039,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}
 
+	var sshEnvNames []string
+	if strings.TrimSpace(deps.SSHHost) != "" && deps.SSHEnvNamesFunc != nil {
+		sshEnvNames = deps.SSHEnvNamesFunc(agentKind)
+	}
+
 	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:            wsResult.Path,
 		AgentConfig:              toDomainAgentConfig(cfg.Agent, agentKind),
 		ResumeSessionID:          deps.ResumeSessionID,
 		SSHHost:                  deps.SSHHost,
 		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
+		SSHEnvNames:              sshEnvNames,
 		MCPConfigPath:            mcpConfigPath,
 	})
 	if err != nil {

@@ -3,12 +3,15 @@ package orchestrator
 import (
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 )
 
 // HostPool manages SSH host allocation for dispatch. Not safe for
-// concurrent access — all methods must be called from the event loop.
+// concurrent access; all methods must be called from the event loop.
 type HostPool struct {
 	hosts       []string
 	maxPerHost  int
@@ -215,6 +218,16 @@ type WorkerConfig struct {
 	// Valid values: "accept-new", "yes", "no". Empty means "accept-new".
 	SSHStrictHostKeyChecking string
 
+	// SSHPassEnv lists the valid entries of worker.ssh_pass_env, in
+	// declared order, deduplicated to first occurrence. Nil when
+	// absent, empty, or entirely invalid.
+	SSHPassEnv []string
+
+	// SSHDisallowPassEnv lists the valid entries of
+	// worker.ssh_disallow_pass_env, in declared order, deduplicated to
+	// first occurrence. Nil when absent, empty, or entirely invalid.
+	SSHDisallowPassEnv []string
+
 	// Warnings contains structured validation diagnostics produced
 	// during parsing. Empty when all values are valid or absent.
 	// The caller logs these through its scoped logger after
@@ -263,13 +276,99 @@ func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
 		warnings = append(warnings, *warn)
 	}
 
+	listed, listedWarnings := nameList(workerSection, "ssh_pass_env",
+		"received non-list ssh_pass_env, carrying no variables",
+		"ignored ssh_pass_env entry that is not an environment variable name")
+	disallowed, disallowedWarnings := nameList(workerSection, "ssh_disallow_pass_env",
+		"received non-list ssh_disallow_pass_env, disallowing no variables",
+		"ignored ssh_disallow_pass_env entry that is not an environment variable name")
+	warnings = append(warnings, listedWarnings...)
+	warnings = append(warnings, disallowedWarnings...)
+
 	hosts = deduplicateHosts(hosts)
+
+	if len(hosts) > 0 {
+		for _, name := range listed {
+			if slices.Contains(disallowed, name) {
+				warnings = append(warnings, WorkerWarning{
+					Message: "ssh_pass_env variable is disallowed by ssh_disallow_pass_env, not carrying it",
+					Attrs:   []slog.Attr{slog.String("variable", name)},
+				})
+				continue
+			}
+			if value, present := os.LookupEnv(name); !present || value == "" {
+				warnings = append(warnings, WorkerWarning{
+					Message: "ssh_pass_env variable is not set or empty in the orchestrator environment",
+					Attrs:   []slog.Attr{slog.String("variable", name)},
+				})
+			}
+		}
+	}
+
 	return WorkerConfig{
 		SSHHosts:                 hosts,
 		MaxPerHost:               maxPerHost,
 		SSHStrictHostKeyChecking: strictHostKeyChecking,
+		SSHPassEnv:               listed,
+		SSHDisallowPassEnv:       disallowed,
 		Warnings:                 warnings,
 	}
+}
+
+// nameList extracts and validates the environment variable name list
+// under key in workerSection. An absent key or an explicit null
+// returns (nil, nil). A value that is not a list produces
+// nonListMessage and (nil, warnings). Each element that is not a
+// string or fails [sshutil.IsEnvName] produces entryMessage carrying
+// only its index, never its text, and is skipped. A valid name
+// already seen is dropped, keeping the first occurrence.
+func nameList(workerSection map[string]any, key, nonListMessage, entryMessage string) ([]string, []WorkerWarning) {
+	raw, present := workerSection[key]
+	if !present || raw == nil {
+		return nil, nil
+	}
+
+	rawList, ok := raw.([]any)
+	if !ok {
+		return nil, []WorkerWarning{{Message: nonListMessage}}
+	}
+
+	var names []string
+	var warnings []WorkerWarning
+	for i, element := range rawList {
+		s, ok := element.(string)
+		if !ok || !sshutil.IsEnvName(s) {
+			warnings = append(warnings, WorkerWarning{
+				Message: entryMessage,
+				Attrs:   []slog.Attr{slog.Int("index", i)},
+			})
+			continue
+		}
+		if !slices.Contains(names, s) {
+			names = append(names, s)
+		}
+	}
+	return names, warnings
+}
+
+// carriedEnvNames returns the union of declared then listed, in
+// order, deduplicated to first occurrence, less any name in
+// disallowed. Nil when the result is empty.
+func carriedEnvNames(declared, listed, disallowed []string) []string {
+	var names []string
+	add := func(name string) {
+		if slices.Contains(disallowed, name) || slices.Contains(names, name) {
+			return
+		}
+		names = append(names, name)
+	}
+	for _, name := range declared {
+		add(name)
+	}
+	for _, name := range listed {
+		add(name)
+	}
+	return names
 }
 
 // parseSSHStrictHostKeyChecking extracts and validates the

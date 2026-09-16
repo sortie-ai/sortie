@@ -514,6 +514,85 @@ func TestToDomainAgentConfig(t *testing.T) {
 	})
 }
 
+// TestRunWorkerAttempt_SSHEnvNamesFunc asserts that RunWorkerAttempt
+// sets StartSessionParams.SSHEnvNames from deps.SSHEnvNamesFunc only
+// when the dispatch is remote (deps.SSHHost non-empty) and the func is
+// non-nil, and leaves it nil otherwise.
+func TestRunWorkerAttempt_SSHEnvNamesFunc(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+
+	tests := []struct {
+		name            string
+		sshHost         string
+		sshEnvNamesFunc SSHEnvNamesFunc
+		want            []string
+	}{
+		{
+			name:    "remote dispatch receives the resolved names",
+			sshHost: "build01.internal",
+			sshEnvNamesFunc: func(string) []string {
+				return []string{"K1", "L"}
+			},
+			want: []string{"K1", "L"},
+		},
+		{
+			name:    "local dispatch receives nil even with a func set",
+			sshHost: "",
+			sshEnvNamesFunc: func(string) []string {
+				return []string{"K1", "L"}
+			},
+			want: nil,
+		},
+		{
+			name:            "nil func leaves SSHEnvNames nil on a remote dispatch",
+			sshHost:         "build01.internal",
+			sshEnvNamesFunc: nil,
+			want:            nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var captured []string
+			var capturedSet bool
+			ec := newExitCapture()
+
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &mockAgentAdapter{
+					startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+						captured = params.SSHEnvNames
+						capturedSet = true
+						return domain.Session{ID: "sess-1"}, nil
+					},
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+				SSHHost:                tt.sshHost,
+				SSHEnvNamesFunc:        tt.sshEnvNamesFunc,
+			}
+
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+			ec.waitResult(t)
+
+			if !capturedSet {
+				t.Fatal("StartSession was never called")
+			}
+			if !slices.Equal(captured, tt.want) {
+				t.Errorf("StartSessionParams.SSHEnvNames = %v, want %v", captured, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunWorkerAttempt(t *testing.T) {
 	t.Parallel()
 

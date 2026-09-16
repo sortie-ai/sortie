@@ -310,6 +310,13 @@ type Orchestrator struct {
 	// tick/reload; read by makeWorkerFn at dispatch time.
 	sshStrictHostKeyChecking string
 
+	// sshPassEnv and sshDisallowPassEnv are the current effective
+	// worker.ssh_pass_env and worker.ssh_disallow_pass_env lists.
+	// Written by handleTick on every tick/reload; read by
+	// makeWorkerFn at dispatch time.
+	sshPassEnv         []string
+	sshDisallowPassEnv []string
+
 	prevWorkerWarnings []WorkerWarning
 }
 
@@ -348,11 +355,18 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 			slog.Int("max_per_host", hostPool.maxPerHost),
 		)
 	} else {
-		// Warn if max_concurrent_agents_per_host is set without ssh_hosts.
+		// Warn if max_concurrent_agents_per_host, ssh_pass_env, or
+		// ssh_disallow_pass_env is set without ssh_hosts.
 		cfg := params.WorkflowManager.Config()
 		if worker := cfg.ExtensionSection("worker"); worker != nil {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
 				logger.Warn("max_concurrent_agents_per_host has no effect without worker.ssh_hosts")
+			}
+			if _, hasPassEnv := worker["ssh_pass_env"]; hasPassEnv {
+				logger.Warn("ssh_pass_env has no effect without worker.ssh_hosts")
+			}
+			if _, hasDisallowPassEnv := worker["ssh_disallow_pass_env"]; hasDisallowPassEnv {
+				logger.Warn("ssh_disallow_pass_env has no effect without worker.ssh_hosts")
 			}
 		}
 	}
@@ -697,10 +711,12 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"))
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
 	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
+	o.sshPassEnv = wc.SSHPassEnv
+	o.sshDisallowPassEnv = wc.SSHDisallowPassEnv
 
 	if !workerWarningsEqual(o.prevWorkerWarnings, wc.Warnings) {
 		for _, w := range wc.Warnings {
-			o.logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message is one of two fixed string constants from parseSSHStrictHostKeyChecking
+			o.logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message comes from one of a fixed set of string constants ParseWorkerConfig produces
 		}
 		o.prevWorkerWarnings = wc.Warnings
 	}
@@ -973,6 +989,8 @@ func (o *Orchestrator) recordCandidateHold(decision CandidateDecision, pass *Tic
 // Running map.
 func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, usageArrival registry.UsageArrival) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
+	sshPassEnv := o.sshPassEnv
+	sshDisallowPassEnv := o.sshDisallowPassEnv
 	posture := dispatchPostureForReactionKind(reactionKind)
 	if adapter == nil {
 		adapter = o.agentAdapter
@@ -1030,11 +1048,15 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			},
 			SSHHost:                  sshHost,
 			SSHStrictHostKeyChecking: strictHostKeyChecking,
-			Metrics:                  o.metrics,
-			WorkflowPath:             o.workflowManager.WorkflowAbsPath(),
-			DBPath:                   o.dbPath,
-			MCPServerBinary:          o.mcpServerBinary,
-			Posture:                  posture,
+			SSHEnvNamesFunc: func(kind string) []string {
+				meta, _ := o.preflightParams.AgentRegistry.Meta(kind)
+				return carriedEnvNames(meta.CredentialEnv.Names(), sshPassEnv, sshDisallowPassEnv)
+			},
+			Metrics:         o.metrics,
+			WorkflowPath:    o.workflowManager.WorkflowAbsPath(),
+			DBPath:          o.dbPath,
+			MCPServerBinary: o.mcpServerBinary,
+			Posture:         posture,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
