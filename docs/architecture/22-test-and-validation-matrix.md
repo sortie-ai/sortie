@@ -257,7 +257,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.5 Coding-Agent Adapter Client
 
 - Launch command uses workspace cwd and execs the resolved binary directly with an argument vector
-- If the SSH worker extension is implemented, a remote launch invokes the local `ssh` binary, runs the agent in the remote workspace, and delivers every carried variable on the session's standard input ahead of the agent command, with no carried value in any argument; a remote host without `dd` fails the launch with the operator-visible message instead of running the agent, a preamble that arrives incomplete fails the launch rather than starting the agent without its variables, and a local launch carries none of it
+- A remote launch invokes the local `ssh` binary, runs the agent in the remote workspace, and delivers every carried variable on the session's standard input ahead of the agent command, with no carried value in any argument; a remote host without `dd` fails the launch with the operator-visible message instead of running the agent, a preamble that arrives incomplete fails the launch rather than starting the agent without its variables, and a local launch carries none of it
 - Startup handshake sequence is adapter-defined and tested per adapter
 - Policy-related startup payloads use the implementation's documented approval/sandbox settings
 - Session identifiers are parsed and `session_started` event is emitted
