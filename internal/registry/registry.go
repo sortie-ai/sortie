@@ -248,6 +248,9 @@ func (c CredentialEnv) Declared() bool {
 // when c holds none. The caller may freely mutate the returned slice
 // without affecting c or any other caller's copy.
 func (c CredentialEnv) Names() []string {
+	if len(c.names) == 0 {
+		return nil
+	}
 	return slices.Clone(c.names)
 }
 

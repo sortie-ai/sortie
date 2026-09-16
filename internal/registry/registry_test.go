@@ -963,6 +963,18 @@ func TestCredentialEnv(t *testing.T) {
 		}
 	})
 
+	t.Run("explicitly empty declaration is declared with no names", func(t *testing.T) {
+		t.Parallel()
+
+		c := DeclareCredentialEnv([]string{}...)
+		if !c.Declared() {
+			t.Error("DeclareCredentialEnv([]string{}...).Declared() = false, want true")
+		}
+		if got := c.Names(); got != nil {
+			t.Errorf("DeclareCredentialEnv([]string{}...).Names() = %v, want nil", got)
+		}
+	})
+
 	t.Run("declared names are held in order", func(t *testing.T) {
 		t.Parallel()
 
