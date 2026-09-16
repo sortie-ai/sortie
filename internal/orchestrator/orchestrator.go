@@ -361,7 +361,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		// SSH therefore still looks local here, so these warnings read
 		// the block rather than the pool.
 		cfg := params.WorkflowManager.Config()
-		if worker := cfg.ExtensionSection("worker"); worker != nil && len(ParseWorkerConfig(worker).SSHHosts) == 0 {
+		if worker := cfg.ExtensionSection("worker"); worker != nil && len(ParseWorkerConfig(worker, cfg.ExtensionEnvRefPaths("worker")).SSHHosts) == 0 {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
 				logger.Warn("max_concurrent_agents_per_host has no effect without worker.ssh_hosts")
 			}
@@ -711,7 +711,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	// Update host pool from config extensions.
-	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"))
+	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
 	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
 	o.sshPassEnv = wc.SSHPassEnv

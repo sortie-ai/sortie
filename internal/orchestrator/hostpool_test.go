@@ -385,7 +385,7 @@ func TestParseWorkerConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			wc := ParseWorkerConfig(tt.workerSection)
+			wc := ParseWorkerConfig(tt.workerSection, nil)
 
 			if len(wc.SSHHosts) != len(tt.wantHosts) {
 				t.Fatalf("ParseWorkerConfig() SSHHosts = %v, want %v", wc.SSHHosts, tt.wantHosts)
@@ -439,6 +439,7 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 	tests := []struct {
 		name                 string
 		workerSection        map[string]any
+		envRefPaths          map[string]bool
 		wantListed           []string
 		wantDisallowed       []string
 		wantWarningMessages  []string
@@ -539,13 +540,38 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 			},
 			wantWarningVariables: []string{"_sortie_complete"},
 		},
+		{
+			name: "an ssh_pass_env entry from a $VAR reference is dropped and warned by index",
+			workerSection: map[string]any{
+				"ssh_hosts":    []any{"host-a"},
+				"ssh_pass_env": []any{"SORTIE_TEST_SSH_PASS_ENV_GOOD", "ghp_0123456789abcdefghij"},
+			},
+			envRefPaths: map[string]bool{"ssh_pass_env[1]": true},
+			wantListed:  []string{"SORTIE_TEST_SSH_PASS_ENV_GOOD"},
+			wantWarningMessages: []string{
+				"ignored ssh_pass_env entry that came from a $VAR reference; list the variable name itself",
+			},
+			wantWarningIndexes: []int{1},
+		},
+		{
+			name: "an ssh_disallow_pass_env entry from a $VAR reference is dropped and warned by index",
+			workerSection: map[string]any{
+				"ssh_disallow_pass_env": []any{"ghp_0123456789abcdefghij", "GITHUB_TOKEN"},
+			},
+			envRefPaths:    map[string]bool{"ssh_disallow_pass_env[0]": true},
+			wantDisallowed: []string{"GITHUB_TOKEN"},
+			wantWarningMessages: []string{
+				"ignored ssh_disallow_pass_env entry that came from a $VAR reference; list the variable name itself",
+			},
+			wantWarningIndexes: []int{0},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			wc := ParseWorkerConfig(tt.workerSection)
+			wc := ParseWorkerConfig(tt.workerSection, tt.envRefPaths)
 
 			if !slices.Equal(wc.SSHPassEnv, tt.wantListed) {
 				t.Errorf("ParseWorkerConfig(...).SSHPassEnv = %v, want %v", wc.SSHPassEnv, tt.wantListed)
@@ -588,7 +614,7 @@ func TestParseWorkerConfig_SSHPassEnv_NoEntryTextLeaked(t *testing.T) {
 	const secret = "super-secret-should-never-be-logged"
 	wc := ParseWorkerConfig(map[string]any{
 		"ssh_pass_env": []any{secret},
-	})
+	}, nil)
 
 	for _, w := range wc.Warnings {
 		if strings.Contains(w.Message, secret) {
@@ -597,6 +623,42 @@ func TestParseWorkerConfig_SSHPassEnv_NoEntryTextLeaked(t *testing.T) {
 		for _, attr := range w.Attrs {
 			if strings.Contains(attr.Value.String(), secret) {
 				t.Errorf("warning attr %s=%q contains the malformed entry's text", attr.Key, attr.Value.String())
+			}
+		}
+	}
+}
+
+// TestParseWorkerConfig_SSHPassEnv_NoExpandedValueLeaked asserts that an
+// entry a $VAR reference produced leaks nothing: the value it expanded
+// to is neither carried as a name nor named in any warning. The value
+// here satisfies the environment variable name grammar, so without the
+// reference check it would pass for a name the operator wrote.
+func TestParseWorkerConfig_SSHPassEnv_NoExpandedValueLeaked(t *testing.T) {
+	t.Parallel()
+
+	const expanded = "ghp_0123456789abcdefghijklmnopqrstuv"
+	wc := ParseWorkerConfig(map[string]any{
+		"ssh_hosts":             []any{"host-a"},
+		"ssh_pass_env":          []any{expanded},
+		"ssh_disallow_pass_env": []any{expanded},
+	}, map[string]bool{
+		"ssh_pass_env[0]":          true,
+		"ssh_disallow_pass_env[0]": true,
+	})
+
+	if slices.Contains(wc.SSHPassEnv, expanded) {
+		t.Errorf("ParseWorkerConfig(...).SSHPassEnv = %v, want the expanded value dropped", wc.SSHPassEnv)
+	}
+	if slices.Contains(wc.SSHDisallowPassEnv, expanded) {
+		t.Errorf("ParseWorkerConfig(...).SSHDisallowPassEnv = %v, want the expanded value dropped", wc.SSHDisallowPassEnv)
+	}
+	for _, w := range wc.Warnings {
+		if strings.Contains(w.Message, expanded) {
+			t.Errorf("warning message %q contains the expanded value", w.Message)
+		}
+		for _, attr := range w.Attrs {
+			if strings.Contains(attr.Value.String(), expanded) {
+				t.Errorf("warning attr %s=%q contains the expanded value", attr.Key, attr.Value.String())
 			}
 		}
 	}

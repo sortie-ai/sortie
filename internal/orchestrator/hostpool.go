@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -239,7 +240,15 @@ type WorkerConfig struct {
 // [WorkerConfig] with SSH host list, per-host concurrency cap, and SSH
 // StrictHostKeyChecking behavior. When workerSection is nil, returns
 // zero-value defaults (local mode).
-func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
+//
+// envRefPaths names the fields whose configured text held a $VAR
+// reference, relative to the section (for example "ssh_pass_env[0]").
+// Both name lists are written literally, so an entry a reference
+// produced is dropped rather than read as a name: the entry now holds
+// that variable's value, and a value satisfying the name grammar
+// would otherwise be carried, and named in a warning, as though the
+// operator had written it.
+func ParseWorkerConfig(workerSection map[string]any, envRefPaths map[string]bool) WorkerConfig {
 	if workerSection == nil {
 		return WorkerConfig{}
 	}
@@ -276,12 +285,14 @@ func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
 		warnings = append(warnings, *warn)
 	}
 
-	listed, listedWarnings := nameList(workerSection, "ssh_pass_env",
+	listed, listedWarnings := nameList(workerSection, envRefPaths, "ssh_pass_env",
 		"received non-list ssh_pass_env, carrying no variables",
-		"ignored ssh_pass_env entry that is not an environment variable name")
-	disallowed, disallowedWarnings := nameList(workerSection, "ssh_disallow_pass_env",
+		"ignored ssh_pass_env entry that is not an environment variable name",
+		"ignored ssh_pass_env entry that came from a $VAR reference; list the variable name itself")
+	disallowed, disallowedWarnings := nameList(workerSection, envRefPaths, "ssh_disallow_pass_env",
 		"received non-list ssh_disallow_pass_env, disallowing no variables",
-		"ignored ssh_disallow_pass_env entry that is not an environment variable name")
+		"ignored ssh_disallow_pass_env entry that is not an environment variable name",
+		"ignored ssh_disallow_pass_env entry that came from a $VAR reference; list the variable name itself")
 	listed, reservedWarnings := dropReservedNames(listed)
 	warnings = append(warnings, listedWarnings...)
 	warnings = append(warnings, reservedWarnings...)
@@ -320,11 +331,14 @@ func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
 // nameList extracts and validates the environment variable name list
 // under key in workerSection. An absent key or an explicit null
 // returns (nil, nil). A value that is not a list produces
-// nonListMessage and (nil, warnings). Each element that is not a
-// string or fails [sshutil.IsEnvName] produces entryMessage carrying
-// only its index, never its text, and is skipped. A valid name
-// already seen is dropped, keeping the first occurrence.
-func nameList(workerSection map[string]any, key, nonListMessage, entryMessage string) ([]string, []WorkerWarning) {
+// nonListMessage and (nil, warnings). An element whose configured
+// text held a $VAR reference, per envRefPaths, produces envRefMessage
+// carrying only its index and is skipped: that element holds a value
+// rather than a name. Each remaining element that is not a string or
+// fails [sshutil.IsEnvName] produces entryMessage carrying only its
+// index, never its text, and is skipped. A valid name already seen is
+// dropped, keeping the first occurrence.
+func nameList(workerSection map[string]any, envRefPaths map[string]bool, key, nonListMessage, entryMessage, envRefMessage string) ([]string, []WorkerWarning) {
 	raw, present := workerSection[key]
 	if !present || raw == nil {
 		return nil, nil
@@ -338,6 +352,13 @@ func nameList(workerSection map[string]any, key, nonListMessage, entryMessage st
 	var names []string
 	var warnings []WorkerWarning
 	for i, element := range rawList {
+		if envRefPaths[key+"["+strconv.Itoa(i)+"]"] {
+			warnings = append(warnings, WorkerWarning{
+				Message: envRefMessage,
+				Attrs:   []slog.Attr{slog.Int("index", i)},
+			})
+			continue
+		}
 		s, ok := element.(string)
 		if !ok || !sshutil.IsEnvName(s) {
 			warnings = append(warnings, WorkerWarning{

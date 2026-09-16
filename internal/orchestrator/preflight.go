@@ -215,7 +215,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// resolved under: worker.ssh_hosts is the one configuration key
 	// that can produce a remote session, so its presence decides the
 	// mode for every session this configuration can produce.
-	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker")).SSHHosts) > 0
+	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker")).SSHHosts) > 0
 
 	// tokenRatePricedKinds is the set of kind strings token_rates
 	// prices, read once per validation call. Only the key set is

@@ -115,8 +115,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs locally
 - `worker.max_concurrent_agents_per_host` (extension): positive integer, optional; shared per-host cap applied across configured SSH hosts
 - `worker.ssh_strict_host_key_checking` (extension): string, default `accept-new`; OpenSSH `StrictHostKeyChecking` value applied to a remote launch
-- `worker.ssh_pass_env` (extension): list of environment variable names, optional, default absent; names carried from the orchestrator's own environment into every remote launch
-- `worker.ssh_disallow_pass_env` (extension): list of environment variable names, optional, default absent; names that are never carried into a remote launch
+- `worker.ssh_pass_env` (extension): list of environment variable names, optional, default absent; names carried from the orchestrator's own environment into every remote launch; entries are written literally, so an entry produced by a `$VAR` reference is rejected with a warning naming only its position
+- `worker.ssh_disallow_pass_env` (extension): list of environment variable names, optional, default absent; names the orchestrator never carries into a remote launch; entries are written literally, so an entry produced by a `$VAR` reference is rejected with a warning naming only its position
 - `hooks.after_create`: shell script or null
 - `hooks.before_run`: shell script or null
 - `hooks.after_run`: shell script or null
