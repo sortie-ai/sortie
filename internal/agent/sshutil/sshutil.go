@@ -121,8 +121,12 @@ func buildSSHOpts(host string, opts SSHOptions) []string {
 // non-empty opts.Env, the final element of Args guards for a POSIX dd
 // on the remote host, imports the preamble [SSHLaunch.StdinReader] or
 // [SSHLaunch.PrefixStdin] delivers, and exports each name before
-// running remoteCommand. BuildSSHLaunch neither reorders nor
-// deduplicates opts.Env.
+// running remoteCommand. A preamble that arrives incomplete fails the
+// launch instead of running the agent without its variables: dd
+// reports success when the input ends before its count, and a
+// truncated preamble can be valid shell that exports nothing, so the
+// import step requires the completion marker the preamble sets last.
+// BuildSSHLaunch neither reorders nor deduplicates opts.Env.
 //
 // BuildSSHLaunch panics when an opts.Env entry's Name fails
 // [IsEnvName]; the panic message names the entry's index and carries
@@ -150,10 +154,10 @@ func BuildSSHLaunch(host, workspacePath, remoteCommand string, agentArgs []strin
 	for i, entry := range opts.Env {
 		assignments[i] = entry.Name + "=" + shellQuote(entry.Value)
 	}
-	preamble := "unset _sortie_env && export " + strings.Join(assignments, " ")
+	preamble := "unset _sortie_env && export " + strings.Join(assignments, " ") + " && _sortie_complete=1"
 
 	guard := "{ command -v dd >/dev/null 2>&1 || { echo '" + ddMissingMessage + "' >&2; exit 1; }; }"
-	importStep := fmt.Sprintf(`_sortie_env=$(dd bs=1 count=%d 2>/dev/null) && eval "$_sortie_env"`, len(preamble))
+	importStep := fmt.Sprintf(`unset _sortie_complete && _sortie_env=$(dd bs=1 count=%d 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ]`, len(preamble))
 
 	var parts []string
 	parts = append(parts, "cd", "--", shellQuote(workspacePath), "&&", guard, "&&", importStep, "&&")

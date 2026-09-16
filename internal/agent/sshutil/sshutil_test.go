@@ -179,9 +179,9 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 		Env: []EnvVar{{Name: "A", Value: "x"}, {Name: "B", Value: "y z"}},
 	})
 
-	const wantPreamble = "unset _sortie_env && export A='x' B='y z'"
-	if len(wantPreamble) != 41 {
-		t.Fatalf("test fixture error: wantPreamble length = %d, want 41", len(wantPreamble))
+	const wantPreamble = "unset _sortie_env && export A='x' B='y z' && _sortie_complete=1"
+	if len(wantPreamble) != 63 {
+		t.Fatalf("test fixture error: wantPreamble length = %d, want 63", len(wantPreamble))
 	}
 
 	gotPreamble := mustReadAllBytes(t, launch.StdinReader())
@@ -189,7 +189,7 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 		t.Errorf("preamble = %q, want %q", string(gotPreamble), wantPreamble)
 	}
 
-	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && _sortie_env=$(dd bs=1 count=41 2>/dev/null) && eval "$_sortie_env" && run --acp 'a'`
+	const wantFinal = `cd -- '/w' && { command -v dd >/dev/null 2>&1 || { echo 'sortie: dd is required on the remote host to receive environment variables' >&2; exit 1; }; } && unset _sortie_complete && _sortie_env=$(dd bs=1 count=63 2>/dev/null) && eval "$_sortie_env" && [ "${_sortie_complete-}" = 1 ] && run --acp 'a'`
 	gotFinal := launch.Args[len(launch.Args)-1]
 	if gotFinal != wantFinal {
 		t.Errorf("final element = %q, want %q", gotFinal, wantFinal)

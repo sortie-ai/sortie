@@ -220,6 +220,39 @@ func TestBuildSSHLaunch_RealShellImportStep_ShortRead(t *testing.T) {
 	}
 }
 
+// TestBuildSSHLaunch_RealShellImportStep_ValidPrefixShortRead runs the
+// final element with the preamble truncated to its leading unset
+// command, a prefix that is valid shell on its own and evaluates
+// without error. dd reports success when its input ends before the
+// count it was given, so the completion marker is the only thing that
+// separates this from a whole preamble: the import step fails and the
+// verify script never runs, rather than the agent starting with none
+// of the variables the launch was supposed to carry.
+func TestBuildSSHLaunch_RealShellImportStep_ValidPrefixShortRead(t *testing.T) {
+	for _, shell := range availableShells(t) {
+		t.Run(shell.name, func(t *testing.T) {
+			t.Parallel()
+
+			fx := buildImportStepFixture(t, shell)
+			preamble := mustReadPreamble(t, fx.launch)
+			cut := bytes.Index(preamble, []byte(" && export "))
+			if cut <= 0 {
+				t.Fatalf("test fixture error: preamble %q carries no export clause", string(preamble))
+			}
+
+			cmd := exec.Command(shell.path, "-c", fx.finalElement) //nolint:gosec // shell.path resolved via exec.LookPath, finalElement built from t.TempDir() paths
+			cmd.Stdin = bytes.NewReader(preamble[:cut])
+			if err := cmd.Run(); err == nil {
+				t.Errorf("%s: command succeeded on a valid-prefix short read, want a failure before the verify script ran", shell.name)
+			}
+
+			if _, err := os.Stat(fx.envFile); err == nil {
+				t.Errorf("%s: verify script ran on a valid-prefix short read, want it never to run", shell.name)
+			}
+		})
+	}
+}
+
 // TestBuildSSHLaunch_RealShellImportStep_NoDD runs the final element
 // with a PATH that resolves no dd binary. The guard exits 1 before the
 // verify script runs, and standard error is exactly the guard's
