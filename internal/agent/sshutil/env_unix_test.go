@@ -371,12 +371,16 @@ func TestBuildSSHLaunch_RealShellImportStep_NoDD(t *testing.T) {
 }
 
 // TestBuildSSHLaunch_RealShellAgentCommandTerminator runs a final
-// element whose remote command ends in a top-level ; or &, with a
-// plain command and one carrying an agent argument as controls, under
-// every installed shell this file drives. An operator's own command
-// reaches the remote shell unsplit, and a newline closes the group
-// around it, so either ending keeps its meaning and the shell runs the
-// command instead of rejecting it.
+// element whose remote command ends in a top-level ; or &, with and
+// without an agent argument, and a plain command either way as
+// controls, under every installed shell this file drives. An
+// operator's own command reaches the remote shell unsplit, and a
+// newline closes the group around it, so either ending keeps its
+// meaning and the shell runs the command instead of rejecting it. A
+// terminator ends the command, so an argument placed after one runs as
+// a command of its own and never reaches the agent: the argument goes
+// in front of the terminator, and the marker each row checks is what
+// tells the two apart.
 func TestBuildSSHLaunch_RealShellAgentCommandTerminator(t *testing.T) {
 	tests := []struct {
 		name string
@@ -392,7 +396,9 @@ func TestBuildSSHLaunch_RealShellAgentCommandTerminator(t *testing.T) {
 		{name: "plain"},
 		{name: "with agent argument", withArg: true},
 		{name: "trailing semicolon", suffix: ";"},
+		{name: "trailing semicolon with agent argument", suffix: ";", withArg: true},
 		{name: "trailing ampersand", suffix: " &", background: true},
+		{name: "trailing ampersand with agent argument", suffix: " &", withArg: true, background: true},
 	}
 
 	for _, shell := range availableShells(t) {

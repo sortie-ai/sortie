@@ -195,6 +195,90 @@ func TestBuildSSHLaunch_NonEmptyEnv_ExactLiterals(t *testing.T) {
 	}
 }
 
+// TestBuildSSHLaunch_AgentArgsAndCommandTerminator pins where agent
+// arguments land when the operator's own command ends in a top-level
+// ; or &. They go in front of that terminator, which ends the command
+// and would otherwise make them a command of their own. A terminator
+// the fragment escapes, and a doubled one, are not terminators of the
+// operator's command, so the arguments follow them as they follow any
+// other fragment.
+func TestBuildSSHLaunch_AgentArgsAndCommandTerminator(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		remoteCommand string
+		agentArgs     []string
+		wantFinal     string
+	}{
+		{
+			name:          "plain command with an argument",
+			remoteCommand: "agent",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a'\n}",
+		},
+		{
+			name:          "trailing semicolon with no argument",
+			remoteCommand: "agent;",
+			wantFinal:     "cd -- '/w' && { agent ;\n}",
+		},
+		{
+			name:          "trailing semicolon with an argument",
+			remoteCommand: "agent;",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a' ;\n}",
+		},
+		{
+			name:          "trailing ampersand with an argument",
+			remoteCommand: "agent &",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a' &\n}",
+		},
+		{
+			name:          "blanks around the terminator",
+			remoteCommand: "agent \t; ",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent 'a' ;\n}",
+		},
+		{
+			name:          "redirection before the terminator",
+			remoteCommand: "agent >/dev/null 2>&1 &",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent >/dev/null 2>&1 'a' &\n}",
+		},
+		{
+			name:          "escaped semicolon is the command's own argument",
+			remoteCommand: `find . -exec agent \;`,
+			agentArgs:     []string{"a"},
+			wantFinal:     `cd -- '/w' && { find . -exec agent \; 'a'` + "\n}",
+		},
+		{
+			name:          "escaped backslash before the terminator",
+			remoteCommand: `agent \\;`,
+			agentArgs:     []string{"a"},
+			wantFinal:     `cd -- '/w' && { agent \\ 'a' ;` + "\n}",
+		},
+		{
+			name:          "incomplete and operator keeps its second ampersand",
+			remoteCommand: "agent &&",
+			agentArgs:     []string{"a"},
+			wantFinal:     "cd -- '/w' && { agent && 'a'\n}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			launch := BuildSSHLaunch("h", "/w", tt.remoteCommand, tt.agentArgs, SSHOptions{})
+			gotFinal := launch.Args[len(launch.Args)-1]
+			if gotFinal != tt.wantFinal {
+				t.Errorf("final element = %q, want %q", gotFinal, tt.wantFinal)
+			}
+		})
+	}
+}
+
 // TestBuildSSHLaunch_ArgsNeverContainEnvValues asserts that no element
 // of Args contains a carried value as a substring.
 func TestBuildSSHLaunch_ArgsNeverContainEnvValues(t *testing.T) {

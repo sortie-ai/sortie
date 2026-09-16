@@ -117,16 +117,52 @@ func buildSSHOpts(host string, opts SSHOptions) []string {
 // to the launch's own && chain: its right-hand side would then run
 // even though the cd or the environment import ahead of it failed. A
 // newline closes the group rather than a semicolon: the fragment is
-// the operator's own command and may itself end in ; or &, either of
-// which a semicolon after it turns into a syntax error the remote
-// shell rejects before the agent runs.
+// the operator's own command and may itself end in &, which a
+// semicolon after it turns into a syntax error the remote shell
+// rejects before the agent runs.
 func agentGroup(remoteCommand string, agentArgs []string) string {
-	parts := make([]string, 0, len(agentArgs)+1)
-	parts = append(parts, remoteCommand)
+	command, terminator := splitCommandTerminator(remoteCommand)
+	parts := make([]string, 0, len(agentArgs)+2)
+	parts = append(parts, command)
 	for _, arg := range agentArgs {
 		parts = append(parts, shellQuote(arg))
 	}
+	if terminator != "" {
+		parts = append(parts, terminator)
+	}
 	return "{ " + strings.Join(parts, " ") + "\n}"
+}
+
+// splitCommandTerminator splits a remote command fragment into the
+// command and the single top-level ; or & that ends it, returning an
+// empty terminator when the fragment ends in neither. A terminator
+// ends the command rather than belonging to it, so arguments placed
+// after one run as a command of their own instead of reaching the
+// agent, while arguments placed in front of it reach the agent and
+// leave the operator's own terminator its meaning. A terminator the
+// fragment escapes, as find -exec does with \;, is an argument of the
+// operator's command, and a doubled one is part of an operator the
+// fragment leaves incomplete; both stay where they are.
+func splitCommandTerminator(fragment string) (command, terminator string) {
+	trimmed := strings.TrimRight(fragment, " \t")
+	if trimmed == "" {
+		return fragment, ""
+	}
+	last := trimmed[len(trimmed)-1]
+	if last != ';' && last != '&' {
+		return fragment, ""
+	}
+	head := trimmed[:len(trimmed)-1]
+	if endsInEscape(head) || strings.HasSuffix(head, string(last)) {
+		return fragment, ""
+	}
+	return strings.TrimRight(head, " \t"), string(last)
+}
+
+// endsInEscape reports whether s ends in an odd number of backslashes,
+// which escapes whatever character follows them.
+func endsInEscape(s string) bool {
+	return (len(s)-len(strings.TrimRight(s, `\`)))%2 == 1
 }
 
 // BuildSSHLaunch constructs the SSH invocation arguments for remote
@@ -134,9 +170,12 @@ func agentGroup(remoteCommand string, agentArgs []string) string {
 // remoteCommand is treated as a pre-formed POSIX shell fragment;
 // callers are responsible for any quoting within that fragment.
 // agentArgs are individually shell-quoted and appended after
-// remoteCommand. The fragment and its arguments run as one compound
-// command, so a top-level || or ; inside the fragment cannot run when
-// the cd or the environment import ahead of it failed.
+// remoteCommand, or in front of a single unescaped ; or & that ends
+// it, so they reach the fragment's own command rather than forming a
+// command of their own and the fragment keeps the meaning its
+// terminator gives it. The fragment and its arguments run as one
+// compound command, so a top-level || or ; inside the fragment cannot
+// run when the cd or the environment import ahead of it failed.
 //
 // SSH options applied (unless overridden via opts):
 //   - StrictHostKeyChecking=accept-new (TOFU), configurable via opts
