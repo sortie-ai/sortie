@@ -66,7 +66,7 @@ Work evidence for the turn is this turn's own parsed assistant parts, text, reas
 
 `StartSession` parses the worker-generated MCP configuration and translates it into OpenCode's own configuration document, keyed under `mcp`. That document is delivered on every turn's subprocess through the runtime's inline configuration environment variable, additive to whatever an operator's own project or global configuration already declares, never as the generated file's path handed over verbatim; live probing found the runtime rejects that standard `mcpServers` key outright. The variable is set only in the turn's own environment build and never in the shared managed-environment builder, so the `export` and `models` auxiliary invocations that builder also serves never carry it and never spawn a tool sidecar of their own.
 
-Delivery happens on a local launch only. An SSH session gets no document: delivering the generated servers over the session's carrier is not built, so the adapter sends nothing there and the session runs exactly as it does today, without tools.
+Delivery happens on a local launch only. An SSH session gets no document: delivering the generated servers over the session's carrier is not built, so the session runs exactly as it does today, without tools. The carrier itself is in use on a remote launch, for the managed settings and for any variable the launch carries, so what an SSH session lacks is the generated document, not an environment.
 
 The run projection this adapter reads carries no MCP startup-status signal: see "The surface we drive, and what it is not" above for the event types it omits. A server that fails to start is visible only indirectly, as the agent's own tool calls failing, not as a distinct diagnostic on this surface.
 
