@@ -148,6 +148,7 @@ Invariants:
 - The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
 - Duplicate names panic (programming error, not runtime input).
 - The registry feeds both the prompt-time tool advertisement and the runtime execution channel for an agent kind whose declared disposition delivers one; a kind whose declaration delivers none receives neither, which is what keeps the two consistent for every kind. What decides is the declaration, not the kind. The execution channel, where one exists, is an MCP stdio sidecar exposed by the `sortie mcp-server` subcommand.
+- The worker generates the tool server configuration once per dispatch. The agent runtime decides how many `sortie mcp-server` processes it starts from that configuration and for how long each lives: a runtime that starts one subprocess per turn starts a new tool server process with each turn, while a session-long runtime keeps one process for the whole session. Every tool server process of one dispatch receives the same environment.
 
 #### 10.4.4 Tool tiers
 
@@ -254,7 +255,7 @@ This result shape supersedes the five-field description of ADR-0013 (`docs/decis
 
 Availability: registered only when at least one valid notifier backend is configured in the `notifications` list (Section 5.3.11). The registration derives from the same workflow file the main process reads, so the sidecar and the main process agree on the tool set. When the list is empty or absent, the tool is not registered.
 
-The agent supplies only the message; the system owns the envelope and the agent cannot set or forge any envelope field. The input schema rejects unknown fields:
+The agent supplies only the message; the system owns the envelope and the tool input cannot set any envelope field. The input schema rejects unknown fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -263,9 +264,11 @@ The agent supplies only the message; the system owns the envelope and the agent 
 | `body` | string | Yes | Non-empty notification detail |
 | `category` | string | No | One of `decision_needed`, `progress`, `blocked`, `completed`, `other` |
 
-The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a source (the hostname by default), the issue id and identifier, the session id, the attempt, and the dispatch-frozen agent kind. The envelope correlates the notification to a session for an operator and a machine consumer.
+The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a source (the hostname by default), the issue id and identifier, the dispatch id, the session id, the attempt, and the dispatch-frozen agent kind. The envelope correlates the notification to a dispatch and a session for an operator and a machine consumer.
 
-Rate limiting: the tool enforces a per-session cap, `max_per_session`, where `0` selects the default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing. An accepted call increments the counter once, after delivery, not once per backend.
+The dispatch id and the session id are distinct identities. The dispatch id is minted once for the current worker attempt and stays the same for every notification and every tool server process of that attempt; it is new for every dispatch, retry, and continuation. The session id is read from the workspace's dispatch identity record (Section 9.5.2) each time an envelope is built, and reflects the latest session id the worker has accepted for the tool server's own dispatch; it stays empty until the worker accepts one, and an agent kind that never reports a session id leaves it empty for the whole dispatch. A record naming a different dispatch id, or no record at all, also yields an empty session id, so a tool server outliving its dispatch cannot post another dispatch's session id.
+
+Rate limiting: the tool enforces a per-session cap, `max_per_session`, where `0` selects the default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing. An accepted call increments the counter once, after delivery, not once per backend. A session id change never resets the count.
 
 Result semantics: on success the tool returns `{"success": true, "data": {"delivered": <int>, "notification_id": "<id>"}}`, the uniform success envelope of Section 10.4.2. On a domain failure it returns `{"success": false, "error": {"kind": "...", "message": "..."}}` with `error.kind` in the closed set below. The Go error return is reserved for an internal marshal failure.
 
@@ -318,9 +321,9 @@ Operator notifications are an adapter family, the same shape as the tracker, age
 The family has the following parts:
 
 - **The `domain.Notifier` interface** exposes one method, `Send(ctx, Notification) error`. A single method keeps every backend interchangeable and lets any producer reuse the family. An implementation applies a per-call timeout and never logs the endpoint URL, the request body, or the response body.
-- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and carries the notification id, timestamp, source, issue id and identifier, session id, attempt, and dispatch-frozen agent kind. The message is agent-supplied and carries `severity`, `title`, `body`, and an optional `category`. The value is self-contained: every field a backend needs rides in it, with no dependency on producer-only state, so a future orchestrator producer can fill the envelope without an interface change.
+- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and carries the notification id, timestamp, source, issue id and identifier, dispatch id, session id, attempt, and dispatch-frozen agent kind. The message is agent-supplied and carries `severity`, `title`, `body`, and an optional `category`. The value is self-contained: every field a backend needs rides in it, with no dependency on producer-only state, so a future orchestrator producer can fill the envelope without an interface change.
 - **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend packages register in `init()`; the sidecar resolves backends by `kind` at runtime. This mirrors `registry.SCMAdapters` exactly.
-- **The backend packages** are one per `kind`. v1 ships `webhook` (posts the notification as a JSON object using generic field names) and `slack` (posts a Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies its own transport and non-2xx errors into a category that omits the URL and payload.
+- **The backend packages** are one per `kind`. v1 ships `webhook` (posts the notification as a JSON object using generic field names) and `slack` (posts a Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies its own transport and non-2xx errors into a category that omits the URL and payload. The `webhook` body carries every envelope and message field under snake_case keys, `dispatch_id` and `session_id` included.
 
 The backend packages obey the adapter-family boundary rules: no cross-adapter imports, no importing the orchestrator, normalization to the domain type at the boundary, and generic `notifier_*` vocabulary in the core, never `slack_*`.
 

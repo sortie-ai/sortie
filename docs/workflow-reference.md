@@ -1212,7 +1212,7 @@ The value is a sequence, not a single object. A second channel is a second list 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
 | `kind` | string | Yes | _(none)_ | Backend discriminator. v1 backends are `webhook` and `slack`. |
-| `max_per_session` | int | No | `20` | Per-session notification cap. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
+| `max_per_session` | int | No | `20` | Notification cap for one `sortie mcp-server` process. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
 
 Per-backend fields depend on `kind` and are passed through to the backend untyped:
 
@@ -1223,7 +1223,25 @@ Per-backend fields depend on `kind` and are passed through to the backend untype
 
 The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint. It is unrelated to inbound tracker webhooks ([architecture §20](architecture/25-webhook-support.md)), which trigger reconciliation. The two share a name but not a direction.
 
-When the list configures more than one backend, the effective per-session cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends.
+When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends, and belongs to one `sortie mcp-server` process: an agent runtime that starts a new tool server process for each turn starts a new count with each turn, rather than sharing one count across the whole session.
+
+The `webhook` backend posts a JSON object whose keys use the generic notifier vocabulary, so any consumer can correlate and route without backend-specific knowledge:
+
+| Key | Type | Meaning |
+| --- | ---- | ------- |
+| `notification_id` | string | Generated unique id for this notification. |
+| `timestamp` | string | Send time, ISO-8601 UTC. |
+| `source` | string | The Sortie instance identifier; the hostname by default. |
+| `issue_id` | string | Tracker-internal issue id. |
+| `identifier` | string | Human-readable issue key. |
+| `dispatch_id` | string | Identifies the one agent run that sent the notification. New on every retry and continuation. |
+| `session_id` | string | The agent's own session id once reported; `""` until then, and always `""` for an agent that reports none. Repeats across runs that continue one conversation. |
+| `attempt` | integer or null | Retry or continuation attempt; `null` on the first run. |
+| `agent` | string | Dispatch-frozen agent kind. |
+| `severity` | string | `info`, `warning`, or `critical`. |
+| `title` | string | Short summary the agent supplied. |
+| `body` | string | Notification detail the agent supplied. |
+| `category` | string | Optional: `decision_needed`, `progress`, `blocked`, `completed`, or `other`. Absent when the agent did not set it. |
 
 **`SORTIE_`-prefixed secret rule:**
 
@@ -2931,7 +2949,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
 | `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Notifier backend list; `notify_operator` tool; absent = tool unregistered             |
 | `notifications[].kind`                  | string           | _(required)_                 | —                                        | Backend discriminator; v1: `webhook`, `slack`                                          |
-| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | Per-session `notify_operator` cap; `0` selects the default; never unlimited; non-negative |
+| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for one `sortie mcp-server` process; `0` selects the default; never unlimited; non-negative |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |

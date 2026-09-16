@@ -154,6 +154,12 @@ The first removal happens before each new dispatch to a workspace, so a stale va
 
 The read after each completed coding turn, outside the self-review phase, removes nothing: a recognized value read there is left in the file, and a run that never enters the phase carries that value through to teardown.
 
+#### 9.5.2 Dispatch identity record (`.sortie/dispatch.json`)
+
+The `.sortie/dispatch.json` file records, for the current dispatch, the latest session id the worker has accepted from the agent runtime. The worker keeps it current through the same writer every `.sortie/` file uses, and its write follows Invariant 7 below. The worker writes the record when the agent session starts, before each coding and self-review turn, and whenever a relayed event reports a new session id, so a tool server process reading it always sees the worker's most recent acceptance for the dispatch that wrote it.
+
+The record holds one JSON object with two fields, `dispatch_id` and `session_id`. A reader accepts the recorded session id only when the record's `dispatch_id` equals its own dispatch id, so a tool server process outliving its dispatch, or reading a record a later dispatch has since overwritten, never observes a session id that is not its own. The reader rejects a `.sortie` directory or a record that is a symbolic link or not the expected type, opens the record without waiting for a writer, and reads at most 4096 bytes; any rejection yields an empty session id rather than an error. Like `.sortie/mcp.json`, the agent may also write this file directly.
+
 ### 9.6 Safety Invariants
 
 This is the most important portability constraint.
@@ -181,3 +187,5 @@ Invariant 4a: A workspace key held by a pending reaction entry is a sweep candid
 Invariant 5: `workspace.retention_days` cannot be configured below its floor, and that floor in days equals the pending-reaction recovery lookback in days. Any workspace the age bound may remove is one that pending reaction recovery would already have skipped as stale, so removing it cannot silently break recovery for an issue recovery still regards as live.
 
 Invariant 6: The age bound performs no tracker write, no source-control write, no reaction fingerprint write, and no creation or deletion of a pending reaction entry. Reaction state is read-only to the age bound. Every removal it performs routes through the same workspace removal path as the terminal gate, so key sanitization, containment under the workspace root, and the `before_remove` hook apply unchanged. The age bound introduces no new way to reach the filesystem.
+
+Invariant 7: Every file the orchestrator writes into a workspace's `.sortie/` directory replaces its destination through an exclusive create under a fresh name and a rename, with every step resolved inside the workspace directory. A `.sortie` that is a symbolic link or not a directory is refused, so no link planted in the workspace, or in place of `.sortie` itself, redirects the write.
