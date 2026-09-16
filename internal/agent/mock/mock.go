@@ -22,6 +22,7 @@ func init() {
 		MCPInjection:     registry.MCPInjectionUnsupported,
 		UsageArrival:     registry.UsageArrivalIncremental,
 		UsageAttribution: registry.UsageAttributionSessionTotal,
+		CredentialEnv:    registry.DeclareCredentialEnv(),
 		UsageSessionRules: []registry.UsageSessionRule{
 			{
 				// Reuses the constructor's own boolFromConfig read so

@@ -31,6 +31,7 @@ func init() {
 		SessionResumeBlockedBy: sessionResumeBlockedBy,
 		UsageArrival:           registry.UsageArrivalIncremental,
 		UsageAttribution:       registry.UsageAttributionPerModel,
+		CredentialEnv:          registry.DeclareCredentialEnv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
 	})
 }
 

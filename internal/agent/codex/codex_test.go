@@ -1243,3 +1243,40 @@ func TestStartSession_HandshakeBurstDoesNotLoseAwaitedNotification(t *testing.T)
 		})
 	}
 }
+
+// TestStartSession_LocalLaunchIgnoresSSHEnvNames asserts that a local
+// launch (no SSHHost) completes the same way whether or not
+// StartSessionParams.SSHEnvNames names a set variable: StartSession's
+// local branch never consults it. This reddens if that branch starts
+// treating a non-empty SSHEnvNames as a signal to take the remote
+// path, which would prepend an unwanted preamble ahead of the
+// handshake's first request and break the fake app-server's JSON
+// decoding of it.
+func TestStartSession_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
+	// Not parallel: sets the carried variable via t.Setenv.
+	const varName = "SORTIE_CODEX_STARTSESSION_LOCAL_INVARIANCE"
+	t.Setenv(varName, "should-never-reach-a-local-launch")
+
+	for _, tc := range []struct {
+		name        string
+		sshEnvNames []string
+	}{
+		{"SSHEnvNames absent", nil},
+		{"SSHEnvNames naming a set variable", []string{varName}},
+	} {
+		command := fakeAppServer(t, scenarioHandshakeBurstThread)
+		adapter := &CodexAdapter{}
+
+		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   domain.AgentConfig{Command: command},
+			SSHEnvNames:   tc.sshEnvNames,
+		})
+		if err != nil {
+			t.Fatalf("%s: StartSession() error = %v, want nil", tc.name, err)
+		}
+		if err := adapter.StopSession(context.Background(), session); err != nil {
+			t.Errorf("%s: StopSession() error = %v", tc.name, err)
+		}
+	}
+}

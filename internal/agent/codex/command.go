@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
-	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -58,18 +57,6 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 		TurnSandboxPolicy: typeutil.MapFrom(config, "turn_sandbox_policy"),
 		Personality:       personality,
 	}, nil
-}
-
-// buildSSHRemoteCmd returns the remote command string for SSH mode.
-// When apiKey is non-empty, CODEX_API_KEY is prepended and the value
-// is shell-quoted to prevent injection through the remote shell when
-// the key contains metacharacters such as single quotes, dollar signs,
-// semicolons, or backticks.
-func buildSSHRemoteCmd(remoteCommand, apiKey string) string {
-	if apiKey == "" {
-		return remoteCommand
-	}
-	return "CODEX_API_KEY=" + sshutil.ShellQuote(apiKey) + " " + remoteCommand
 }
 
 // renderMCPServerOverrides renders each server as a "-c"/

@@ -47,6 +47,7 @@ func init() {
 		MCPInjection:        registry.MCPInjectionUnsupported,
 		UsageArrival:        registry.UsageArrivalNone,
 		UsageAttribution:    registry.UsageAttributionNone,
+		CredentialEnv:       registry.DeclareCredentialEnv("KIRO_API_KEY"),
 	})
 }
 
@@ -124,8 +125,7 @@ func NewKiroAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // In local mode it confirms KIRO_API_KEY is present and runs a "kiro-cli
 // whoami" canary, because a missing credential makes headless chat hang on
 // interactive login and an invalid credential exits 0 with empty output. In
-// SSH mode the credential preflight is skipped and KIRO_API_KEY is injected
-// inline into the remote command.
+// SSH mode the credential preflight is skipped.
 func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "kiro-cli")
 	if agentErr != nil {
@@ -136,8 +136,6 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		if authErr := checkCredential(ctx, target.Command, procutil.StopGrace(params.AgentConfig.StopGraceMS)); authErr != nil {
 			return domain.Session{}, authErr
 		}
-	} else {
-		target.RemoteCommand = buildSSHRemoteCmd(target.RemoteCommand, os.Getenv("KIRO_API_KEY"))
 	}
 
 	state := &sessionState{

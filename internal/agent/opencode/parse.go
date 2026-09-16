@@ -195,22 +195,23 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 
 	exportArgs := []string{"export", "--sanitize", sessionID}
 	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
 	if state.target.RemoteCommand != "" {
-		remoteCommand := buildSSHRemoteCommand(state.target.RemoteCommand, managedEnv)
-		sshArgs := sshutil.BuildSSHArgs(
+		launch = sshutil.BuildSSHLaunch(
 			state.target.SSHHost,
 			state.target.WorkspacePath,
-			remoteCommand,
+			state.target.RemoteCommand,
 			exportArgs,
-			sshutil.SSHOptions{StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking},
+			state.target.SSHOptions(sortedEnvVars(managedEnv)...),
 		)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(queryCtx, state.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		allArgs := append(slices.Clone(state.target.Args), exportArgs...)
 		cmd = exec.CommandContext(queryCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
+	cmd.Stdin = launch.StdinReader()
 
 	var stdout bytes.Buffer
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
@@ -264,22 +265,23 @@ func queryModelNotFound(ctx context.Context, state *sessionState) (message strin
 
 	modelsArgs := []string{"models"}
 	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
 	if state.target.RemoteCommand != "" {
-		remoteCommand := buildSSHRemoteCommand(state.target.RemoteCommand, managedEnv)
-		sshArgs := sshutil.BuildSSHArgs(
+		launch = sshutil.BuildSSHLaunch(
 			state.target.SSHHost,
 			state.target.WorkspacePath,
-			remoteCommand,
+			state.target.RemoteCommand,
 			modelsArgs,
-			sshutil.SSHOptions{StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking},
+			state.target.SSHOptions(sortedEnvVars(managedEnv)...),
 		)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(queryCtx, state.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		allArgs := append(slices.Clone(state.target.Args), modelsArgs...)
 		cmd = exec.CommandContext(queryCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
+	cmd.Stdin = launch.StdinReader()
 
 	var stdout bytes.Buffer
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{

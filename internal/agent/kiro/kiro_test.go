@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -750,77 +749,4 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "kiro-cli"},
 	})
 	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
-}
-
-func TestBuildSSHRemoteCmd(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name          string
-		remoteCommand string
-		apiKey        string
-		want          string
-	}{
-		{
-			name:          "empty key returns command unchanged",
-			remoteCommand: "kiro-cli",
-			apiKey:        "",
-			want:          "kiro-cli",
-		},
-		{
-			name:          "key is prepended and shell-quoted",
-			remoteCommand: "kiro-cli",
-			apiKey:        "abc123",
-			want:          "KIRO_API_KEY='abc123' kiro-cli",
-		},
-		{
-			name:          "key with single quote is escaped",
-			remoteCommand: "kiro-cli",
-			apiKey:        "a'b",
-			want:          `KIRO_API_KEY='a'\''b' kiro-cli`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := buildSSHRemoteCmd(tt.remoteCommand, tt.apiKey)
-			if got != tt.want {
-				t.Errorf("buildSSHRemoteCmd(%q, %q) = %q, want %q", tt.remoteCommand, tt.apiKey, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestStartSession_SSHModeInjectsKey verifies SSH mode skips the credential
-// canary and injects KIRO_API_KEY inline into the remote command.
-func TestStartSession_SSHModeInjectsKey(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-	t.Setenv("KIRO_API_KEY", "ssh-key-value")
-
-	if _, err := exec.LookPath("ssh"); err != nil {
-		t.Skip("ssh not available on PATH")
-	}
-
-	adapter, err := NewKiroAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewKiroAdapter: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: "kiro-cli"},
-		SSHHost:       "dev-host.example.com",
-	})
-	if err != nil {
-		t.Fatalf("StartSession() (SSH mode) error = %v", err)
-	}
-
-	state := session.Internal.(*sessionState)
-	if !strings.Contains(state.target.RemoteCommand, "KIRO_API_KEY='ssh-key-value'") {
-		t.Errorf("state.target.RemoteCommand = %q, want it to inject the API key inline", state.target.RemoteCommand)
-	}
-	if !strings.Contains(state.target.RemoteCommand, "kiro-cli") {
-		t.Errorf("state.target.RemoteCommand = %q, want it to retain the kiro-cli command", state.target.RemoteCommand)
-	}
 }

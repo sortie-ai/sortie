@@ -11,6 +11,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -537,6 +538,52 @@ func TestBuildRunArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
 	assertHasFlag(t, args, "--dangerously-skip-permissions")
 }
 
+// TestSortedEnvVars asserts that sortedEnvVars converts a managed map
+// into a name-sorted []sshutil.EnvVar slice, nil for an empty or nil
+// map.
+func TestSortedEnvVars(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		managed map[string]string
+		want    []sshutil.EnvVar
+	}{
+		{
+			name:    "nil map yields nil",
+			managed: nil,
+			want:    nil,
+		},
+		{
+			name:    "empty map yields nil",
+			managed: map[string]string{},
+			want:    nil,
+		},
+		{
+			name: "sorted by name regardless of map iteration order",
+			managed: map[string]string{
+				"OPENCODE_DISABLE_AUTOUPDATE": "true",
+				"OPENCODE_AUTO_SHARE":         "false",
+			},
+			want: []sshutil.EnvVar{
+				{Name: "OPENCODE_AUTO_SHARE", Value: "false"},
+				{Name: "OPENCODE_DISABLE_AUTOUPDATE", Value: "true"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := sortedEnvVars(tt.managed)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("sortedEnvVars(%v) = %+v, want %+v", tt.managed, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildRunEnv(t *testing.T) {
 	t.Parallel()
 
@@ -650,72 +697,4 @@ func TestBuildRunEnv(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSSHRemoteCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("env_prefixed", func(t *testing.T) {
-		t.Parallel()
-
-		extra := map[string]string{
-			"KEY_A": "value_a",
-			"KEY_B": "value_b",
-		}
-		got := buildSSHRemoteCommand("opencode", extra)
-
-		if !strings.Contains(got, "KEY_A=") {
-			t.Errorf("result %q missing KEY_A", got)
-		}
-		if !strings.Contains(got, "KEY_B=") {
-			t.Errorf("result %q missing KEY_B", got)
-		}
-		if !strings.HasSuffix(got, " opencode") {
-			t.Errorf("result %q does not end with remote command", got)
-		}
-	})
-
-	t.Run("values_shell_quoted", func(t *testing.T) {
-		t.Parallel()
-
-		extra := map[string]string{
-			"KEY": "value with spaces",
-		}
-		got := buildSSHRemoteCommand("opencode", extra)
-
-		// ShellQuote wraps in single quotes.
-		if !strings.Contains(got, "'value with spaces'") {
-			t.Errorf("result %q: value with spaces not single-quoted", got)
-		}
-	})
-
-	t.Run("no_extra_env_returns_command", func(t *testing.T) {
-		t.Parallel()
-
-		got := buildSSHRemoteCommand("opencode run --format json", nil)
-		if got != "opencode run --format json" {
-			t.Errorf("result = %q, want %q", got, "opencode run --format json")
-		}
-	})
-
-	t.Run("no_arbitrary_env", func(t *testing.T) {
-		t.Parallel()
-
-		extra := map[string]string{
-			"MY_KEY": "my_val",
-		}
-		got := buildSSHRemoteCommand("opencode", extra)
-
-		// Only MY_KEY should appear as an env prefix; no other KEY= patterns.
-		parts := strings.Fields(got)
-		envCount := 0
-		for _, p := range parts {
-			if strings.Contains(p, "=") && p != "opencode" {
-				envCount++
-			}
-		}
-		if envCount != 1 {
-			t.Errorf("env prefix count = %d, want 1; result = %q", envCount, got)
-		}
-	})
 }

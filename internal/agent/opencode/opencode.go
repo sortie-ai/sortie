@@ -44,6 +44,7 @@ func init() {
 		MCPInjection:        registry.MCPInjectionTranslated,
 		UsageArrival:        registry.UsageArrivalTurnEnd,
 		UsageAttribution:    registry.UsageAttributionPerModel,
+		CredentialEnv:       registry.DeclareCredentialEnv(),
 	})
 }
 
@@ -216,16 +217,16 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	logger := state.loggerLocked()
 
 	var cmd *exec.Cmd
+	var launch sshutil.SSHLaunch
 	if state.target.RemoteCommand != "" {
-		remoteCommand := buildSSHRemoteCommand(state.target.RemoteCommand, managedEnv)
-		sshArgs := sshutil.BuildSSHArgs(
+		launch = sshutil.BuildSSHLaunch(
 			state.target.SSHHost,
 			state.target.WorkspacePath,
-			remoteCommand,
+			state.target.RemoteCommand,
 			cmdArgs,
-			sshutil.SSHOptions{StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking},
+			state.target.SSHOptions(sortedEnvVars(managedEnv)...),
 		)
-		cmd = exec.CommandContext(ctx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(ctx, state.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		allArgs := append(slices.Clone(state.target.Args), cmdArgs...)
 		cmd = exec.CommandContext(ctx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
@@ -233,6 +234,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS))
 	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = env
+	cmd.Stdin = launch.StdinReader()
 
 	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
