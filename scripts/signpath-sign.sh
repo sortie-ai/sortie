@@ -15,24 +15,27 @@
 
 set -eu
 
-artifact=${1:?usage: signpath-sign.sh <path-to-binary>}
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/lib/common.sh
+. "${SCRIPT_DIR}/lib/common.sh"
 
+artifact=${1:?usage: signpath-sign.sh <path-to-binary>}
 
 # Only Authenticode-sign Windows PE executables.
 case "$artifact" in
-    *.exe) ;;
-    *) exit 0 ;;
+	*.exe) ;;
+	*) exit 0 ;;
 esac
 
 # Skip when credentials are absent (snapshot / pull-request / local builds).
-if [ -z "${SIGNPATH_API_TOKEN:-}" ] || [ -z "${SIGNPATH_ORG_ID:-}" ]; then
-    echo "signpath-sign: SIGNPATH_ORG_ID/SIGNPATH_API_TOKEN not set; skipping ${artifact}" >&2
-    exit 0
+if ! require_env SIGNPATH_API_TOKEN SIGNPATH_ORG_ID >/dev/null 2>&1; then
+	log "SIGNPATH_ORG_ID/SIGNPATH_API_TOKEN not set; skipping ${artifact}"
+	exit 0
 fi
 
-if ! command -v pwsh >/dev/null 2>&1; then
-    echo "signpath-sign: pwsh (PowerShell 7+) is required to sign ${artifact}" >&2
-    exit 1
+if ! require_tools pwsh >/dev/null 2>&1; then
+	log "pwsh (PowerShell 7+) is required to sign ${artifact}"
+	exit 1
 fi
 
 # Hand off to PowerShell; the SignPath module is PowerShell-only. The artifact
@@ -55,7 +58,7 @@ SIGNPATH_ARTIFACT="$artifact" pwsh -NoProfile -Command '
     $project = if ($env:SIGNPATH_PROJECT_SLUG) { $env:SIGNPATH_PROJECT_SLUG } else { "sortie" }
     $policy  = if ($env:SIGNPATH_POLICY_SLUG)  { $env:SIGNPATH_POLICY_SLUG }  else { "release" }
 
-    Write-Host "signpath-sign: signing $($env:SIGNPATH_ARTIFACT) (project=$project policy=$policy)"
+    Write-Host "signing $($env:SIGNPATH_ARTIFACT) (project=$project policy=$policy)"
     Submit-SigningRequest `
         -OrganizationId     $env:SIGNPATH_ORG_ID `
         -ProjectSlug        $project `

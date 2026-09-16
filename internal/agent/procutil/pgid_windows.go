@@ -21,8 +21,13 @@ import (
 // jobEntry holds the Windows Job Object handle and the process
 // reference associated with a managed process. The proc field is
 // always set by registerJobAssignment; the job field is zero when Job
-// Object creation failed (degraded mode).
+// Object creation failed (degraded mode) or once [*jobEntry.closeJob]
+// has released it. mu guards job: closeJob is the only place in this
+// package that closes it, and duplicateJobHandle holds the same mutex
+// while duplicating it, so the two never observe a value the other is
+// in the middle of tearing down.
 type jobEntry struct {
+	mu   sync.Mutex // guards job
 	job  windows.Handle
 	proc *os.Process
 }
@@ -30,6 +35,49 @@ type jobEntry struct {
 // jobs maps PIDs to their Job Object entries. Concurrent access is
 // safe via sync.Map lock-free reads and safe concurrent writes.
 var jobs sync.Map // map[int]*jobEntry
+
+// closeJob zeroes e's Job Object handle field under mu, then closes
+// it after releasing the lock. A concurrent duplicateJobHandle call
+// either completes its duplicate on the still-valid handle first, or
+// observes the field already zero and takes nothing; either way it
+// never observes the handle while this call is closing it.
+// Safe to call when the field is already zero.
+func (e *jobEntry) closeJob() {
+	e.mu.Lock()
+	job := e.job
+	e.job = 0
+	e.mu.Unlock()
+	if job != 0 {
+		_ = windows.CloseHandle(job)
+	}
+}
+
+// duplicateJobHandle takes a duplicate of the Job Object handle
+// registered for pid, independent of the registry's own reference, so
+// a caller acting on it after this call returns is unaffected by a
+// concurrent closeJob. It reports false, taking nothing, when no entry
+// is registered for pid, the entry's handle has already been released,
+// or the duplicate itself fails.
+func duplicateJobHandle(pid int) (windows.Handle, bool) {
+	v, ok := jobs.Load(pid)
+	if !ok {
+		return 0, false
+	}
+	entry := v.(*jobEntry)
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.job == 0 {
+		return 0, false
+	}
+
+	self := windows.CurrentProcess()
+	var dup windows.Handle
+	if err := windows.DuplicateHandle(self, entry.job, self, &dup, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return 0, false
+	}
+	return dup, true
+}
 
 // SetProcessGroup configures cmd to start in a new console process
 // group. Must be called before [exec.Cmd.Start]. Any pre-existing
@@ -100,8 +148,9 @@ const jobTerminateExitCode uint32 = 0xC000013A
 // If no entry is registered (the process was never assigned), returns
 // nil: the process either already exited or was never started.
 //
-// LoadAndDelete atomicity ensures exactly one concurrent caller gets
-// the handle when RunTurn and StopSession race.
+// The registry entry's own mutex, not the removal of the entry from
+// the registry, is what keeps a concurrent [duplicateJobHandle] call
+// from racing this call's own close of the handle.
 func KillProcessGroup(pid int) error {
 	_, err := killProcessGroupReportingLeftover(pid)
 	return err
@@ -144,7 +193,12 @@ func killProcessGroupReportingLeftover(pid int) (leftover bool, err error) {
 		return false, nil
 	}
 	entry := v.(*jobEntry)
-	if entry.job == 0 {
+
+	entry.mu.Lock()
+	job := entry.job
+	entry.mu.Unlock()
+
+	if job == 0 {
 		if entry.proc == nil {
 			return false, nil
 		}
@@ -164,13 +218,12 @@ func killProcessGroupReportingLeftover(pid int) (leftover bool, err error) {
 	// with nothing to report: the INFO record it feeds names processes
 	// this teardown observed alive, so a launch that left none behind
 	// must not raise it on a query that failed. The drain below reports
-	// that same failure as a teardown it could not confirm.
-	leftover, _ = jobHasRunningMember(entry.job)
-	err = drainJobObject(pid, entry.job)
-	// A failing CloseHandle means the handle was already invalid, which
-	// leaves the caller nothing to act on; the drain result is the one
-	// worth reporting.
-	_ = windows.CloseHandle(entry.job)
+	// that same failure as a teardown it could not confirm. The drain
+	// itself runs outside entry.mu: it reads the handle value copied
+	// above, so no drain bound is ever spent holding the lock.
+	leftover, _ = jobHasRunningMember(job)
+	err = drainJobObject(pid, job)
+	entry.closeJob()
 	return leftover, err
 }
 
@@ -291,9 +344,7 @@ func CleanupProcess(pid int) {
 	v, ok := jobs.LoadAndDelete(pid)
 	if ok {
 		entry := v.(*jobEntry)
-		if entry.job != 0 {
-			_ = windows.CloseHandle(entry.job)
-		}
+		entry.closeJob()
 	}
 }
 
@@ -432,4 +483,43 @@ func memberIsRunning(job windows.Handle, pid uint32) bool {
 	// finding the handle already signaled.
 	event, err := windows.WaitForSingleObject(handle, 0)
 	return err == nil && event == uint32(windows.WAIT_TIMEOUT)
+}
+
+// groupEscalationTarget is the Job Object an armed escalation
+// force-terminates at the stop grace deadline, gated on a membership
+// observation, reached through a duplicate handle independent of the
+// jobs registry entry. The zero value is not usable; construct it with
+// [captureGroupEscalation].
+type groupEscalationTarget struct {
+	pid int
+	job windows.Handle
+}
+
+// captureGroupEscalation takes the duplicate handle the escalation
+// force-terminates for the Job Object registered for pid, and does not
+// otherwise touch the jobs registry. It reports false, taking nothing,
+// exactly when [duplicateJobHandle] does.
+func captureGroupEscalation(pid int) (groupEscalationTarget, bool) {
+	job, ok := duplicateJobHandle(pid)
+	if !ok {
+		return groupEscalationTarget{}, false
+	}
+	return groupEscalationTarget{pid: pid, job: job}, true
+}
+
+// hasMember reports whether t's Job Object still holds a running
+// member.
+func (t groupEscalationTarget) hasMember() (bool, error) {
+	return jobHasRunningMember(t.job)
+}
+
+// terminate force-terminates t's Job Object, resending until it
+// reports no running member left or the group-drain bound elapses.
+func (t groupEscalationTarget) terminate() error {
+	return drainJobObject(t.pid, t.job)
+}
+
+// release closes t's duplicate handle.
+func (t groupEscalationTarget) release() {
+	_ = windows.CloseHandle(t.job)
 }

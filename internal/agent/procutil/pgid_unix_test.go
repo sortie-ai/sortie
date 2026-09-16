@@ -4,6 +4,7 @@ package procutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -526,4 +528,119 @@ func TestStartReaper_NilLoggerLogsThroughDefault(t *testing.T) {
 	if got := len(record.Attrs); got != 2 {
 		t.Errorf("record carries %d attributes, want exactly 2 (command, error); got %v", got, record.Attrs)
 	}
+}
+
+// TestGroupHasMember pins groupHasMember's three reported outcomes: a
+// live group answers from a nil groupKillFunc error, an already-gone
+// group answers from ESRCH, and any other error is reported unchanged.
+// It replaces groupKillFunc rather than sending a real signal, so no
+// escalation arms and no membership poll reaches this fake.
+//
+// groupKillFunc is mutated, so this test does not run in parallel with
+// the package's other parallel tests.
+func TestGroupHasMember(t *testing.T) {
+	origKill := groupKillFunc
+	t.Cleanup(func() { groupKillFunc = origKill })
+
+	tests := []struct {
+		name        string
+		killErr     error
+		wantPresent bool
+		wantErr     bool
+	}{
+		{name: "live group", killErr: nil, wantPresent: true, wantErr: false},
+		{name: "group already gone", killErr: syscall.ESRCH, wantPresent: false, wantErr: false},
+		{name: "arbitrary other error", killErr: syscall.EPERM, wantPresent: false, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPID int
+			var gotSig syscall.Signal
+			groupKillFunc = func(pid int, sig syscall.Signal) error {
+				gotPID, gotSig = pid, sig
+				return tt.killErr
+			}
+
+			present, err := groupHasMember(4242)
+
+			if present != tt.wantPresent {
+				t.Errorf("groupHasMember(4242) present = %t, want %t", present, tt.wantPresent)
+			}
+			if tt.wantErr {
+				if !errors.Is(err, tt.killErr) {
+					t.Errorf("groupHasMember(4242) error = %v, want %v", err, tt.killErr)
+				}
+			} else if err != nil {
+				t.Errorf("groupHasMember(4242) error = %v, want nil", err)
+			}
+			if gotPID != -4242 {
+				t.Errorf("groupKillFunc called with pid = %d, want %d (a negative pid signals the whole group)", gotPID, -4242)
+			}
+			if gotSig != 0 {
+				t.Errorf("groupKillFunc called with signal = %d, want 0 (signal 0 probes existence without delivering)", gotSig)
+			}
+		})
+	}
+}
+
+// armEscalationForceSendProbe installs a probe on groupKillFunc,
+// escalation_test.go's platform-neutral hook into the force-
+// termination seam killProcessGroupReportingLeftover shares with
+// groupHasMember's membership poll (signal 0): it counts only a call
+// carrying the force signal against pid's own group, delegating every
+// call to the original groupKillFunc so both polling and force
+// termination keep working. Scoping by pid keeps a dangling escalation
+// or reap from an earlier, unrelated test in this same package from
+// being counted as a force send against the group this test observes.
+// Restored on cleanup.
+//
+// The armed escalation runs on its own goroutine with no completion
+// signal, so drainUntilQuiescent gives the caller a happens-before
+// edge into its reads instead of a sleep, which orders nothing in the
+// Go memory model: it blocks on notify until floor has passed and
+// then no call arrives for quiescence, or until budget elapses. Call
+// it, and only then read the count, before the test returns and
+// cleanup restores groupKillFunc.
+func armEscalationForceSendProbe(t *testing.T, pid int) (calls *atomic.Int32, drainUntilQuiescent func(quiescence time.Duration, floor time.Time, budget time.Duration)) {
+	t.Helper()
+	orig := groupKillFunc
+	t.Cleanup(func() { groupKillFunc = orig })
+
+	want := -pid
+	calls = &atomic.Int32{}
+	notify := make(chan struct{}, 8192)
+	groupKillFunc = func(gotPID int, sig syscall.Signal) error {
+		res := orig(gotPID, sig)
+		if gotPID == want {
+			if sig == syscall.SIGKILL {
+				calls.Add(1)
+			}
+			notify <- struct{}{}
+		}
+		return res
+	}
+
+	drainUntilQuiescent = func(quiescence time.Duration, floor time.Time, budget time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(budget)
+		for {
+			wait := quiescence
+			if untilFloor := time.Until(floor); untilFloor > wait {
+				wait = untilFloor
+			}
+			select {
+			case <-notify:
+				if !time.Now().Before(deadline) {
+					return
+				}
+			case <-time.After(wait):
+				if time.Now().Before(floor) {
+					continue
+				}
+				return
+			}
+		}
+	}
+	return calls, drainUntilQuiescent
 }

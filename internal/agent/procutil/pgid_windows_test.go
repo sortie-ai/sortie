@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -380,4 +381,363 @@ func TestDrainJobObject_UnreadableMemberList(t *testing.T) {
 	if err == nil {
 		t.Fatal("drainJobObject(unreadable job) error = nil, want non-nil (an unread member list does not confirm an empty job)")
 	}
+}
+
+// TestGroupEscalationTarget_NoMemberExitLeavesRegistryUntouched pins
+// the reap's inputs staying untouched by an escalation that observes
+// no member: it reads only its own duplicate handle. jobs.Load(pid)
+// still returns the entry, its job field still holds the handle
+// registered for the launch, and killProcessGroupReportingLeftover's
+// own LoadAndDelete therefore still finds it and drains the job state
+// it reads today. A terminate arm races the reap's own member read
+// instead, so no leftover-value assertion belongs there and none is
+// added here. The escalation's own close of its duplicate is pinned
+// separately, by TestArmGroupEscalation_ReleasesDuplicateOnEveryExitPath.
+func TestGroupEscalationTarget_NoMemberExitLeavesRegistryUntouched(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command("cmd.exe", "/C", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cmd.Wait() = %v, want nil", err)
+	}
+
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+	registerJobAssignment(pid, cmd.Process, job)
+	t.Cleanup(func() { CleanupProcess(pid) })
+
+	target, ok := captureGroupEscalation(pid)
+	if !ok {
+		t.Fatal("captureGroupEscalation() ok = false, want true")
+	}
+
+	present, memberErr := target.hasMember()
+	if memberErr != nil {
+		t.Fatalf("hasMember() error = %v, want nil", memberErr)
+	}
+	if present {
+		t.Fatal("hasMember() = true, want false (no process was ever assigned to the job)")
+	}
+	target.release()
+
+	v, ok := jobs.Load(pid)
+	if !ok {
+		t.Fatal("jobs.Load(pid) after the no-member exit = not found, want the entry still registered")
+	}
+	entry := v.(*jobEntry)
+	entry.mu.Lock()
+	gotJob := entry.job
+	entry.mu.Unlock()
+	if gotJob != job {
+		t.Errorf("registered job handle = %#x after the no-member exit, want unchanged %#x", gotJob, job)
+	}
+
+	leftover, cleanupErr := killProcessGroupReportingLeftover(pid)
+	if cleanupErr != nil {
+		t.Errorf("killProcessGroupReportingLeftover(%d) error = %v, want nil", pid, cleanupErr)
+	}
+	if leftover {
+		t.Error("killProcessGroupReportingLeftover() leftover = true, want false")
+	}
+}
+
+// newKillOnCloseJob creates a Job Object with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, for ownership transfer into the
+// jobs registry: the caller closes it only through a production
+// closer, never through a cleanup of its own.
+func newKillOnCloseJob(t *testing.T) windows.Handle {
+	t.Helper()
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptrOf(&info), uint32Sizeof(info)); err != nil {
+		_ = windows.CloseHandle(job)
+		t.Fatalf("SetInformationJobObject() error = %v", err)
+	}
+	return job
+}
+
+// newExitedProcess starts and waits for a trivial command, returning
+// its *os.Process for use as a jobs registry key that names no
+// process of its own still running.
+func newExitedProcess(t *testing.T) *os.Process {
+	t.Helper()
+	cmd := exec.Command("cmd.exe", "/C", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() error = %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cmd.Wait() error = %v, want nil", err)
+	}
+	return cmd.Process
+}
+
+// TestArmGroupEscalation_ReleasesDuplicateOnEveryExitPath pins the
+// escalation's release guarantee by observing its effect rather than
+// calling release itself: a job carries
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so once every handle referencing
+// it has closed, Windows kills whatever member the job still holds.
+// Each subtest arms the real
+// armGroupEscalation, adds a canary member to the job once the
+// escalation has had the chance to reach its own exit, and then closes
+// the jobs registry's own handle through CleanupProcess: if the
+// escalation released its duplicate, that close is the job's last
+// handle and the canary dies; if the duplicate leaked, the canary
+// survives.
+func TestArmGroupEscalation_ReleasesDuplicateOnEveryExitPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no-member exit", func(t *testing.T) {
+		t.Parallel()
+
+		job := newKillOnCloseJob(t)
+		proc := newExitedProcess(t)
+		pid := proc.Pid
+		registerJobAssignment(pid, proc, job)
+		t.Cleanup(func() { CleanupProcess(pid) })
+
+		const grace = 100 * time.Millisecond
+		armGroupEscalation(pid, grace)
+
+		// The job holds no member for the whole grace window, so the
+		// escalation's final check finds none and it has already called
+		// release before this wait returns. Adding the canary only now,
+		// rather than racing the escalation's own poll, is what keeps
+		// this subtest pinned to the no-member exit instead of drifting
+		// into the terminate exit the sibling subtest already covers:
+		// terminate would kill the canary directly through
+		// terminateJobObjectFunc, which would pass regardless of
+		// whether release ran.
+		time.Sleep(grace + 200*time.Millisecond)
+
+		canary := newCaptureTestHeldMember(t, job)
+		CleanupProcess(pid)
+
+		assertCaptureWinProcessGone(t, canary.Process.Pid, 2*time.Second)
+	})
+
+	t.Run("terminate exit", func(t *testing.T) {
+		t.Parallel()
+
+		job := newKillOnCloseJob(t)
+		proc := newExitedProcess(t)
+		pid := proc.Pid
+		registerJobAssignment(pid, proc, job)
+		t.Cleanup(func() { CleanupProcess(pid) })
+
+		startCaptureTestHeldMember(t, job)
+		armGroupEscalation(pid, 100*time.Millisecond)
+
+		// The original member above is terminated as part of the drain
+		// itself, so it proves nothing about release; the canary below
+		// is added only once the drain has had time to finish, and it
+		// tests release the same way the no-member subtest does.
+		time.Sleep(100*time.Millisecond + groupDrainBound + 500*time.Millisecond)
+
+		canary := newCaptureTestHeldMember(t, job)
+		CleanupProcess(pid)
+
+		assertCaptureWinProcessGone(t, canary.Process.Pid, 2*time.Second)
+	})
+}
+
+// TestDuplicateJobHandle_NoDuplicateAfterTeardown pins the guarantee
+// against both production closers: a jobs entry whose handle a
+// releaser has closed must not yield a duplicate. The check is
+// deterministic, resting on each closer having already returned rather
+// than on the race detector, which the Windows CI job does not run.
+func TestDuplicateJobHandle_NoDuplicateAfterTeardown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("after killProcessGroupReportingLeftover", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.Command("cmd.exe", "/C", "exit 0")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+		pid := cmd.Process.Pid
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("cmd.Wait() = %v, want nil", err)
+		}
+		job, err := windows.CreateJobObject(nil, nil)
+		if err != nil {
+			t.Fatalf("CreateJobObject() error = %v", err)
+		}
+		registerJobAssignment(pid, cmd.Process, job)
+		v, ok := jobs.Load(pid)
+		if !ok {
+			t.Fatalf("jobs.Load(%d) = not found, want the entry just registered", pid)
+		}
+		entry := v.(*jobEntry)
+
+		if _, err := killProcessGroupReportingLeftover(pid); err != nil {
+			t.Fatalf("killProcessGroupReportingLeftover(%d) error = %v, want nil", pid, err)
+		}
+
+		// Read from the entry pointer captured before the closer ran,
+		// the way a concurrent reader would have it, rather than from a
+		// fresh jobs.Load the closer's own LoadAndDelete has already
+		// emptied: a closer that skipped closeJob and closed the handle
+		// directly would leave this field non-zero.
+		entry.mu.Lock()
+		gotJob := entry.job
+		entry.mu.Unlock()
+		if gotJob != 0 {
+			t.Errorf("entry.job after killProcessGroupReportingLeftover = %#x, want 0", gotJob)
+		}
+
+		if _, ok := duplicateJobHandle(pid); ok {
+			t.Errorf("duplicateJobHandle(%d) after killProcessGroupReportingLeftover reported true, want false", pid)
+		}
+	})
+
+	t.Run("after CleanupProcess", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := exec.Command("cmd.exe", "/C", "exit 0")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+		pid := cmd.Process.Pid
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("cmd.Wait() = %v, want nil", err)
+		}
+		job, err := windows.CreateJobObject(nil, nil)
+		if err != nil {
+			t.Fatalf("CreateJobObject() error = %v", err)
+		}
+		registerJobAssignment(pid, cmd.Process, job)
+		v, ok := jobs.Load(pid)
+		if !ok {
+			t.Fatalf("jobs.Load(%d) = not found, want the entry just registered", pid)
+		}
+		entry := v.(*jobEntry)
+
+		CleanupProcess(pid)
+
+		// Read from the entry pointer captured before the closer ran,
+		// the way a concurrent reader would have it, rather than from a
+		// fresh jobs.Load the closer's own LoadAndDelete has already
+		// emptied: a closer that skipped closeJob and closed the handle
+		// directly would leave this field non-zero.
+		entry.mu.Lock()
+		gotJob := entry.job
+		entry.mu.Unlock()
+		if gotJob != 0 {
+			t.Errorf("entry.job after CleanupProcess = %#x, want 0", gotJob)
+		}
+
+		if _, ok := duplicateJobHandle(pid); ok {
+			t.Errorf("duplicateJobHandle(%d) after CleanupProcess reported true, want false", pid)
+		}
+	})
+
+	t.Run("no registered entry", func(t *testing.T) {
+		t.Parallel()
+
+		if _, ok := duplicateJobHandle(999999999); ok {
+			t.Error("duplicateJobHandle() for an unregistered pid reported true, want false")
+		}
+	})
+}
+
+// TestDuplicateJobHandle_RefusesAnEntryCloseJobHasCleared pins the
+// same guarantee directly, deterministically and without a concurrent
+// closer: an entry still present in the registry, whose
+// (*jobEntry).closeJob has already run, must not yield a duplicate. A
+// closeJob that left entry.job non-zero after closing is caught by the
+// first assertion below; duplicateJobHandle's own answer is then
+// checked against that exact state, independent of whichever
+// production caller reaches closeJob.
+func TestDuplicateJobHandle_RefusesAnEntryCloseJobHasCleared(t *testing.T) {
+	t.Parallel()
+
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		t.Fatalf("CreateJobObject() error = %v", err)
+	}
+
+	const pid = 918273645 // arbitrary; this entry is never a real registered launch
+	entry := &jobEntry{job: job}
+	jobs.Store(pid, entry)
+	t.Cleanup(func() { jobs.Delete(pid) })
+
+	entry.closeJob()
+
+	if entry.job != 0 {
+		t.Fatalf("(*jobEntry).closeJob() left job = %#x, want 0", entry.job)
+	}
+
+	if _, ok := duplicateJobHandle(pid); ok {
+		t.Error("duplicateJobHandle() against an entry closeJob already cleared reported true, want false")
+	}
+}
+
+// armEscalationForceSendProbe installs a probe on
+// terminateJobObjectFunc, escalation_test.go's platform-neutral hook
+// into the force-termination seam: every call it counts is a genuine
+// termination attempt, since every production caller (drainJobObject,
+// runJobDrain) only ever calls it from a drain. Delegates every call
+// to the original terminateJobObjectFunc so real termination keeps
+// working. Restored on cleanup.
+//
+// Unlike the Unix probe, this one cannot filter by pid: the seam
+// carries only a Job Object handle, so a dangling escalation or reap
+// left running by an earlier, unrelated test in this same package
+// could still be counted against a job it does not own.
+//
+// The armed escalation runs on its own goroutine with no completion
+// signal, so drainUntilQuiescent gives the caller a happens-before
+// edge into its reads instead of a sleep, which orders nothing in the
+// Go memory model: it blocks on notify until floor has passed and
+// then no call arrives for quiescence, or until budget elapses. Call
+// it, and only then read the count, before the test returns and
+// cleanup restores terminateJobObjectFunc.
+func armEscalationForceSendProbe(t *testing.T, _ int) (calls *atomic.Int32, drainUntilQuiescent func(quiescence time.Duration, floor time.Time, budget time.Duration)) {
+	t.Helper()
+	orig := terminateJobObjectFunc
+	t.Cleanup(func() { terminateJobObjectFunc = orig })
+
+	calls = &atomic.Int32{}
+	notify := make(chan struct{}, 8192)
+	terminateJobObjectFunc = func(job windows.Handle, exitCode uint32) error {
+		res := orig(job, exitCode)
+		calls.Add(1)
+		notify <- struct{}{}
+		return res
+	}
+
+	drainUntilQuiescent = func(quiescence time.Duration, floor time.Time, budget time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(budget)
+		for {
+			wait := quiescence
+			if untilFloor := time.Until(floor); untilFloor > wait {
+				wait = untilFloor
+			}
+			select {
+			case <-notify:
+				if !time.Now().Before(deadline) {
+					return
+				}
+			case <-time.After(wait):
+				if time.Now().Before(floor) {
+					continue
+				}
+				return
+			}
+		}
+	}
+	return calls, drainUntilQuiescent
 }
