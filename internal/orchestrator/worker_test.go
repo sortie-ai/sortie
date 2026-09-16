@@ -4570,8 +4570,6 @@ func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 	})
 }
 
-// readDispatchRecord reads and decodes .sortie/dispatch.json inside
-// wsPath as a workspace.DispatchIdentity.
 func readDispatchRecord(t *testing.T, wsPath string) workspace.DispatchIdentity {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(wsPath, ".sortie", "dispatch.json"))
@@ -4585,21 +4583,11 @@ func readDispatchRecord(t *testing.T, wsPath string) workspace.DispatchIdentity 
 	return rec
 }
 
-// dispatchRecordExists reports whether .sortie/dispatch.json exists
-// inside wsPath.
 func dispatchRecordExists(wsPath string) bool {
 	_, err := os.Stat(filepath.Join(wsPath, ".sortie", "dispatch.json"))
 	return err == nil
 }
 
-// TestRunWorkerAttempt_DispatchIdentityRecordPoints covers every record
-// point the worker keeps current in .sortie/dispatch.json: the record
-// exists with the accepted session ID once the first RunTurn begins,
-// a relayed session_started with a non-empty ID updates it before
-// OnEvent returns to the adapter, an empty-ID event leaves it
-// unchanged, a record removed mid-turn exists again at the next turn
-// start (coding or self-review), and no record is written at all when
-// the workflow path or the dispatch ID is empty.
 func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 	t.Parallel()
 
@@ -4802,11 +4790,6 @@ func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 	})
 }
 
-// TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment proves
-// writeWorkerState is containment-safe: a symbolic link planted at
-// state.json or state.json.tmp, pointing outside the workspace, is
-// replaced without ever being followed, and the destination ends up a
-// regular file holding the state content.
 func TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment(t *testing.T) {
 	t.Parallel()
 

@@ -75,9 +75,7 @@ func (s workerState) withTokens(usage domain.TokenUsage, measured bool) workerSt
 	return s
 }
 
-// writeWorkerState writes session runtime state to .sortie/state.json
-// inside the workspace. Errors are returned to the caller, which logs
-// and continues.
+// writeWorkerState writes session runtime state to .sortie/state.json.
 func writeWorkerState(workspacePath string, state workerState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -210,13 +208,7 @@ type WorkerResult struct {
 	APIRequestCount int
 }
 
-// SessionToolRegistryFunc builds the per-session tool registry rendered
-// into the first-turn advertisement. issueID and workspacePath are the
-// gating inputs the worker resolves late: issueID per dispatch and
-// workspacePath after workspace preparation. The wiring layer has
-// already captured every session-invariant gating input. A nil value
-// means no builder was injected, in which case the worker falls back to
-// the static [WorkerDeps.ToolRegistry].
+// SessionToolRegistryFunc builds the first-turn tool advertisement.
 type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath string) (*domain.ToolRegistry, error)
 
 // AgentToolChannelFunc reports whether a session of the given agent
@@ -346,8 +338,7 @@ type WorkerDeps struct {
 	// populates this from the previous RunningEntry.SessionID.
 	ResumeSessionID string
 
-	// DispatchID is this run's dispatch ID. Empty when the worker was
-	// not started through [Orchestrator.makeWorkerFn].
+	// DispatchID fences session identity to this worker attempt.
 	DispatchID string
 
 	// ToolRegistry holds the tools available to agent sessions. May
@@ -983,15 +974,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			slog.String("operator_mcp_config_path", settings.MCPConfigPath))
 	}
 
-	// acceptedSessionID mirrors, on the worker goroutine, the latest
-	// session ID the worker has accepted for this attempt: the
-	// StartSession result, then any later value a relayed
-	// session_started event carries. record keeps the workspace's
-	// dispatch identity record current with that value so a tool
-	// server process reading it under this dispatch's own ID resolves
-	// the same session the worker has accepted.
 	var acceptedSessionID string
-	record := func(sessionID string) {
+	writeDispatchIdentity := func(sessionID string) {
 		if mcpConfigPath == "" || deps.DispatchID == "" {
 			return
 		}
@@ -1072,7 +1056,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	logger.Info("agent session started")
 
 	acceptedSessionID = session.ID
-	record(acceptedSessionID)
+	writeDispatchIdentity(acceptedSessionID)
 
 	sessionStartedAt = time.Now().UTC()
 
@@ -1174,7 +1158,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			localMeasured = false
 		}
 
-		record(acceptedSessionID)
+		writeDispatchIdentity(acceptedSessionID)
 
 		// The turn-start write follows the flip above: publishing it
 		// earlier would put a measured verdict on disk for the whole of
@@ -1218,7 +1202,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				}
 				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
 					acceptedSessionID = event.SessionID
-					record(acceptedSessionID)
+					writeDispatchIdentity(acceptedSessionID)
 				}
 				deps.OnEvent(issue.ID, event)
 			},
@@ -1415,14 +1399,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				foldRelayedEvent(event)
 				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
 					acceptedSessionID = event.SessionID
-					record(acceptedSessionID)
+					writeDispatchIdentity(acceptedSessionID)
 				}
 				deps.OnEvent(issueID, event)
 			},
 			OnProgress: deps.OnProgress,
 			OnTurnStarted: func() {
 				turnsStarted++
-				record(acceptedSessionID)
+				writeDispatchIdentity(acceptedSessionID)
 				if deps.OnTurnStarted != nil {
 					deps.OnTurnStarted(issue.ID, turnsStarted)
 				}

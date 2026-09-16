@@ -15,10 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// SessionToolParams holds the per-session inputs that gate tool
-// registration. Both the sidecar startup path and the worker
-// prompt-advertisement path populate this from the same session
-// context so the advertised and served tool sets match.
+// SessionToolParams contains the inputs that determine a session's tools.
 type SessionToolParams struct {
 	// TrackerAdapter is the configured tracker adapter, or nil when no
 	// tracker is configured. With Project, gates tracker_api.
@@ -45,19 +42,13 @@ type SessionToolParams struct {
 	// notify_operator envelope context only.
 	Identifier string
 
-	// DispatchID is cost_budget's running-session match key and the
-	// notify_operator envelope's dispatch id, and gates the
-	// dispatch-fenced session ID lookup that feeds the notify_operator
-	// envelope. It gates no tool's registration.
+	// DispatchID fences a notification's session ID to this dispatch.
 	DispatchID string
 
-	// Attempt is the retry or continuation attempt number for the
-	// notify_operator envelope context, or nil on the first run. It gates
-	// no tool's registration.
+	// Attempt is nil on the first run.
 	Attempt *int
 
-	// AgentKind is the dispatch-frozen agent kind for the notify_operator
-	// envelope context. It gates no tool's registration.
+	// AgentKind is the agent kind frozen at dispatch time.
 	AgentKind string
 
 	// MaxTokens is the agent.max_tokens ceiling reported by cost_budget.
@@ -88,23 +79,10 @@ type SessionToolRegistry struct {
 	Store *persistence.Store
 }
 
-// BuildSessionToolRegistry returns a registry containing exactly the
-// tools whose gating inputs are satisfied by params. It is the single
-// source of truth for the per-session tool set: the sortie mcp-server
-// subcommand serves the returned registry over tools/list, and the
-// orchestrator worker renders the same registry into the first-turn
-// prompt advertisement.
+// BuildSessionToolRegistry returns tools whose registration inputs are satisfied.
 //
-// On success the returned [SessionToolRegistry.Store] is non-nil only
-// when a database-backed tool was registered; the caller must close it
-// once registry consumption is complete. A read-only database open
-// failure is non-fatal: the two database-backed tools are skipped and a
-// warning is logged. A notifier construction failure is returned as a
-// non-nil error so the sidecar preserves its fatal-on-misconfiguration
-// behavior. The function reads no process environment variables; callers
-// resolve environment into params, including the notify_operator
-// envelope fields ([SessionToolParams.Identifier], [SessionToolParams.Attempt],
-// [SessionToolParams.AgentKind]).
+// An unavailable read-only database omits its tools, but notifier
+// misconfiguration is fatal to avoid a partially configured notification path.
 func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params SessionToolParams) (SessionToolRegistry, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -146,7 +124,7 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	}, sessionIDFunc)
 	if err != nil {
 		if store != nil {
-			store.Close() //nolint:errcheck,gosec // best-effort cleanup on construction failure
+			store.Close() //nolint:errcheck,gosec // There is no recovery path during cleanup.
 		}
 		return SessionToolRegistry{}, err
 	}

@@ -38,8 +38,6 @@ func testEnv() NotificationEnvelopeContext {
 	}
 }
 
-// testSessionIDFunc is the [SessionIDFunc] most tests in this file
-// supply, returning a fixed session ID.
 func testSessionIDFunc() string { return "sess-001" }
 
 // executeJSON runs Execute with the given JSON input and unmarshals the
@@ -258,11 +256,7 @@ func TestExecute_EnvelopeCarriesSessionContext(t *testing.T) {
 	}
 }
 
-// TestExecute_SessionIDResolvedAtCallTimeNotConstruction proves
-// SessionIDFunc is called once per envelope build, at send time: New
-// must not call it, and a changed return value must appear in the very
-// next notification rather than the value seen at construction.
-func TestExecute_SessionIDResolvedAtCallTimeNotConstruction(t *testing.T) {
+func TestExecute_ResolvesSessionIDPerNotification(t *testing.T) {
 	t.Parallel()
 
 	var calls int
@@ -360,11 +354,7 @@ func TestExecute_InvalidInput_UnknownField(t *testing.T) {
 	assertFailureKind(t, m, "invalid_input")
 }
 
-// TestExecute_InvalidInput_EnvelopeFieldRejected proves the agent cannot
-// set any system-owned envelope field through the tool input: each one
-// is rejected as an unknown field, sends nothing, and leaves the
-// counter unchanged.
-func TestExecute_InvalidInput_EnvelopeFieldRejected(t *testing.T) {
+func TestExecute_RejectsSystemOwnedFields(t *testing.T) {
 	t.Parallel()
 
 	envelopeFields := map[string]string{
@@ -485,11 +475,7 @@ func TestExecute_RateLimited_PastCap(t *testing.T) {
 	assertFailureKind(t, m, "rate_limited")
 }
 
-// TestExecute_RateLimited_UnaffectedByChangingSessionID proves a
-// changing SessionIDFunc value never resets or bypasses the per-session
-// cap: with cap 2, the third call is rate_limited even though the
-// resolved session id differs on every call.
-func TestExecute_RateLimited_UnaffectedByChangingSessionID(t *testing.T) {
+func TestExecute_RateLimitPersistsAcrossSessionIDChanges(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
@@ -598,9 +584,7 @@ func (e *classifiedSendError) Error() string { return e.Category }
 func TestExecute_SendFailed_MessageRedacted(t *testing.T) {
 	t.Parallel()
 
-	// A real backend (webhook/slack) returns a *sendError whose Error()
-	// returns only a category string (e.g. "connection failure"), never
-	// the URL or secret. The tool should propagate that category.
+	// Backends expose only a classified error so URLs and secrets cannot reach tool output.
 	const secretURL = "https://secret-endpoint.example.com/tok"
 	mock := &mockNotifier{err: &classifiedSendError{Category: "connection failure"}}
 	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
@@ -616,7 +600,6 @@ func TestExecute_SendFailed_MessageRedacted(t *testing.T) {
 	if strings.Contains(msg, secretURL) {
 		t.Errorf("send_failed message contains URL %q: %q", secretURL, msg)
 	}
-	// The message should contain the classified category.
 	if !strings.Contains(msg, "connection failure") {
 		t.Errorf("send_failed message = %q, want to contain %q", msg, "connection failure")
 	}

@@ -328,7 +328,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// Process-level vars reach the env block.
 		if got, _ := env["SORTIE_TRACKER_API_KEY"].(string); got != "secret-key" {
 			t.Errorf("SORTIE_TRACKER_API_KEY = %q, want %q", got, "secret-key")
 		}
@@ -336,7 +335,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Errorf("SORTIE_ENV_FILE = %q, want %q", got, "/opt/secret.env")
 		}
 
-		// Per-session vars are also present and correct.
 		for k, want := range map[string]string{
 			"SORTIE_ISSUE_ID":           p.IssueID,
 			"SORTIE_ISSUE_IDENTIFIER":   p.Identifier,
@@ -350,7 +348,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 			}
 		}
 
-		// 6 per-session + 2 process-level.
 		if len(env) != 8 {
 			t.Errorf("env key count = %d, want 8: %v", len(env), env)
 		}
@@ -375,20 +372,16 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// Per-session values win over stale process-env values.
 		if got, _ := env["SORTIE_ISSUE_ID"].(string); got != p.IssueID {
 			t.Errorf("SORTIE_ISSUE_ID = %q, want %q (per-session wins)", got, p.IssueID)
 		}
 		if got, _ := env["SORTIE_DISPATCH_ID"].(string); got != p.DispatchID {
 			t.Errorf("SORTIE_DISPATCH_ID = %q, want %q (per-session wins, even when empty)", got, p.DispatchID)
 		}
-		// An unrelated process-env key with no per-session counterpart
-		// passes through unmodified.
 		if got, _ := env["SORTIE_TRACKER_TOKEN"].(string); got != "unrelated-value" {
 			t.Errorf("SORTIE_TRACKER_TOKEN = %q, want %q (untouched pass-through)", got, "unrelated-value")
 		}
 
-		// Overwritten keys do not inflate the map; count stays at 7.
 		if len(env) != 7 {
 			t.Errorf("env key count = %d, want 7: %v", len(env), env)
 		}
@@ -675,13 +668,10 @@ func TestGenerateMCPConfig_AgentKind(t *testing.T) {
 			t.Fatal("env is not an object")
 		}
 
-		// The per-session agent kind must be written as SORTIE_SESSION_AGENT_KIND.
 		if _, present := env["SORTIE_SESSION_AGENT_KIND"]; !present {
 			t.Error("env[\"SORTIE_SESSION_AGENT_KIND\"] absent; per-session agent kind not written")
 		}
-		// SORTIE_AGENT_KIND is the config-override variable. It must NOT be
-		// written by GenerateMCPConfig; writing it would collide with the
-		// env-override registry and rewrite the workflow default agent.kind.
+		// SORTIE_AGENT_KIND overrides workflow configuration; do not emit it here.
 		if _, present := env["SORTIE_AGENT_KIND"]; present {
 			t.Error("env[\"SORTIE_AGENT_KIND\"] present; GenerateMCPConfig must not write the override variable")
 		}
@@ -713,9 +703,6 @@ func TestGenerateMCPConfig_AgentKind(t *testing.T) {
 	})
 }
 
-// mustSymlink creates a symbolic link at link pointing to target,
-// skipping the calling test on Windows when link creation requires a
-// privilege the test process lacks.
 func mustSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
@@ -726,10 +713,6 @@ func mustSymlink(t *testing.T, target, link string) {
 	}
 }
 
-// TestGenerateMCPConfig_SymlinkContainment proves GenerateMCPConfig's
-// writes are containment-safe: a symbolic link planted at any name it
-// writes must be replaced, never followed, and a .sortie that is
-// itself a symbolic link must be refused.
 func TestGenerateMCPConfig_SymlinkContainment(t *testing.T) {
 	t.Parallel()
 
@@ -764,9 +747,7 @@ func TestGenerateMCPConfig_SymlinkContainment(t *testing.T) {
 				t.Errorf("symlink target for %q content = %q, want unchanged %q", name, targetData, "outside-content")
 			}
 
-			// mcp.json.tmp is not a name GenerateMCPConfig writes today
-			// (WriteSortieFile uses a fresh random temp name), so its
-			// planted symlink is simply left alone.
+			// WriteSortieFile uses randomized temporary names, so this unused link remains.
 			if name == "mcp.json.tmp" {
 				fi, err := os.Lstat(linkPath)
 				if err != nil {

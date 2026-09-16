@@ -116,12 +116,8 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	entry := map[string]any{
 		"type":    "stdio",
 		"command": params.BinaryPath,
-		// WorkflowPath is an absolute path supplied by the orchestrator at
-		// workspace allocation time. The agent runtime already operates within
-		// the workspace directory and has full access to the filesystem, so
-		// passing the absolute workflow path here does not expand its access.
-		"args": []string{"mcp-server", "--workflow", params.WorkflowPath},
-		"env":  env,
+		"args":    []string{"mcp-server", "--workflow", params.WorkflowPath},
+		"env":     env,
 	}
 
 	var merged map[string]any
@@ -169,8 +165,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		return "", fmt.Errorf("creating .sortie directory: %w", err)
 	}
 
-	// Exclude all .sortie/ contents from git. Written on every call so
-	// it is restored if an agent or hook removes it between runs.
+	// Restore this rule when an agent or hook removes it between runs.
 	if err := workspace.WriteSortieFile(params.WorkspacePath, ".gitignore", []byte("*\n")); err != nil {
 		return "", fmt.Errorf("writing .sortie gitignore: %w", err)
 	}

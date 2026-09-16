@@ -23,12 +23,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// fixtureNotifyAgentKind and fixtureNotifyTrackerKind name the agent and
-// tracker kinds this test's fixtures register. The orchestrator's
-// dispatch preflight requires cfg.Agent.Kind and cfg.Tracker.Kind to
-// resolve in their registries even though this harness supplies both
-// adapters directly, so the kinds are registered here rather than
-// depending on a real adapter package's own registration.
+// Preflight resolves configured kinds through the registries even when this
+// harness injects adapters directly.
 const (
 	fixtureNotifyAgentKind   = "mcpserver-notify-e2e-agent"
 	fixtureNotifyTrackerKind = "mcpserver-notify-e2e-tracker"
@@ -47,8 +43,6 @@ func init() {
 	}, registry.TrackerMeta{})
 }
 
-// notifyE2ETracker is a minimal domain.TrackerAdapter fixture reporting
-// a fixed set of issues as active candidates.
 type notifyE2ETracker struct {
 	issues []domain.Issue
 }
@@ -96,10 +90,6 @@ func (tr *notifyE2ETracker) TransitionIssue(_ context.Context, _ string, _ strin
 func (tr *notifyE2ETracker) CommentIssue(_ context.Context, _ string, _ string) error    { return nil }
 func (tr *notifyE2ETracker) AddLabel(_ context.Context, _ string, _ string) error        { return nil }
 
-// turnController lets a test drive one open agent turn from the outside:
-// wait for RunTurn to begin, hand the adapter an event to relay and
-// wait until the relay's OnEvent call has returned, or let the turn
-// complete.
 type turnController struct {
 	sessionID   string
 	startParams domain.StartSessionParams
@@ -136,10 +126,6 @@ func runControlledTurn(ctx context.Context, tc *turnController, session domain.S
 	}
 }
 
-// sequentialAgent is a domain.AgentAdapter fixture for scenarios with
-// at most one open turn at a time. StartSession adopts a non-empty
-// ResumeSessionID as its own session id, simulating a runtime that
-// resumes a conversation; otherwise it consults sessionIDFor.
 type sequentialAgent struct {
 	sessionIDFor func(call int) string
 	calls        atomic.Int64
@@ -176,10 +162,6 @@ func (a *sequentialAgent) RunTurn(ctx context.Context, session domain.Session, p
 
 func (a *sequentialAgent) StopSession(_ context.Context, _ domain.Session) error { return nil }
 
-// concurrentAgent is a domain.AgentAdapter fixture for scenarios with
-// more than one open turn at once. It correlates a RunTurn call with
-// the StartSession call that produced its session, so sessionIDFor
-// must return a unique, non-empty value for every call.
 type concurrentAgent struct {
 	sessionIDFor func(call int) string
 	calls        atomic.Int64
@@ -219,8 +201,6 @@ func (a *concurrentAgent) RunTurn(ctx context.Context, session domain.Session, p
 
 func (a *concurrentAgent) StopSession(_ context.Context, _ domain.Session) error { return nil }
 
-// notifyE2EWorkflowManager implements orchestrator.WorkflowManager with
-// a frozen configuration and one prompt template.
 type notifyE2EWorkflowManager struct {
 	config   config.ServiceConfig
 	template *prompt.Template
@@ -242,11 +222,6 @@ func (m *notifyE2EWorkflowManager) PromptTemplateByID(id string) *prompt.Templat
 func (m *notifyE2EWorkflowManager) Reload() error           { return nil }
 func (m *notifyE2EWorkflowManager) WorkflowAbsPath() string { return m.absPath }
 
-// notifyE2EBaseConfig returns the shared configuration shape every
-// scenario in this file starts from: a single active tracker state, no
-// handoff state (so a normally exited issue is naturally continued),
-// and one turn per dispatch, held open by the test through a
-// turnController.
 func notifyE2EBaseConfig(root string) config.ServiceConfig {
 	return config.ServiceConfig{
 		Polling:   config.PollingConfig{IntervalMS: 20},
@@ -270,9 +245,6 @@ func notifyE2EBaseConfig(root string) config.ServiceConfig {
 	}
 }
 
-// startNotifyOrchestrator migrates a fresh database at dbPath, wires
-// tracker and agent into a real orchestrator.Orchestrator, and runs it
-// in the background until the test ends.
 func startNotifyOrchestrator(t *testing.T, cfg config.ServiceConfig, tracker domain.TrackerAdapter, agent domain.AgentAdapter, dbPath string) {
 	t.Helper()
 
@@ -335,8 +307,6 @@ func startNotifyOrchestrator(t *testing.T, cfg config.ServiceConfig, tracker dom
 	})
 }
 
-// waitHandle receives the next turnController a fixture agent hands out
-// through handles, failing the test if none arrives promptly.
 func waitHandle(t *testing.T, handles <-chan *turnController) *turnController {
 	t.Helper()
 	select {
@@ -348,10 +318,7 @@ func waitHandle(t *testing.T, handles <-chan *turnController) *turnController {
 	}
 }
 
-// waitEntered blocks until tc's RunTurn call has begun, meaning the
-// session-start and turn-start dispatch identity records have already
-// been written for that dispatch.
-func waitEntered(t *testing.T, tc *turnController) {
+func waitForDispatchIdentityWritten(t *testing.T, tc *turnController) {
 	t.Helper()
 	select {
 	case <-tc.entered:
@@ -360,9 +327,7 @@ func waitEntered(t *testing.T, tc *turnController) {
 	}
 }
 
-// sendEventAndWait hands event to the adapter's open turn and blocks
-// until the relay's OnEvent call has returned, so the caller observes
-// only post-relay state, never a fixed sleep.
+// Wait for OnEvent to return so callers observe post-relay state without sleeps.
 func sendEventAndWait(t *testing.T, tc *turnController, event domain.AgentEvent) {
 	t.Helper()
 	select {
@@ -377,8 +342,6 @@ func sendEventAndWait(t *testing.T, tc *turnController, event domain.AgentEvent)
 	}
 }
 
-// readMCPEnv reads the sortie-tools env block out of the mcp.json the
-// worker wrote at mcpConfigPath.
 func readMCPEnv(t *testing.T, mcpConfigPath string) map[string]string {
 	t.Helper()
 	raw, err := os.ReadFile(mcpConfigPath)
@@ -400,9 +363,6 @@ func readMCPEnv(t *testing.T, mcpConfigPath string) map[string]string {
 	return entry.Env
 }
 
-// sessionParamsFromMCPConfig resolves SessionToolParams the same way
-// the sidecar does: reading the generated mcp.json's environment
-// through sessionToolParamsFromEnv.
 func sessionParamsFromMCPConfig(t *testing.T, cfg config.ServiceConfig, mcpConfigPath string) SessionToolParams {
 	t.Helper()
 	env := readMCPEnv(t, mcpConfigPath)
@@ -410,8 +370,6 @@ func sessionParamsFromMCPConfig(t *testing.T, cfg config.ServiceConfig, mcpConfi
 	return sessionToolParamsFromEnv(getenv, cfg, nil)
 }
 
-// buildNotifyRegistry builds the session tool registry through the same
-// entry point the sidecar uses, closing its store, if any, at test end.
 func buildNotifyRegistry(t *testing.T, params SessionToolParams) SessionToolRegistry {
 	t.Helper()
 	reg, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
@@ -428,7 +386,6 @@ func buildNotifyRegistry(t *testing.T, params SessionToolParams) SessionToolRegi
 	return reg
 }
 
-// mustNotifyTool retrieves notify_operator from reg or fails the test.
 func mustNotifyTool(t *testing.T, reg SessionToolRegistry) domain.AgentTool {
 	t.Helper()
 	tool, ok := reg.Registry.Get("notify_operator")
@@ -438,8 +395,6 @@ func mustNotifyTool(t *testing.T, reg SessionToolRegistry) domain.AgentTool {
 	return tool
 }
 
-// notifyExecResult decodes the fields of notify_operator's response
-// this file's tests assert on.
 type notifyExecResult struct {
 	Success bool `json:"success"`
 	Error   struct {
@@ -447,8 +402,6 @@ type notifyExecResult struct {
 	} `json:"error"`
 }
 
-// execNotify calls notify_operator with a minimal valid input and
-// decodes its result envelope.
 func execNotify(t *testing.T, tool domain.AgentTool) notifyExecResult {
 	t.Helper()
 	raw, err := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B"}`))
@@ -462,8 +415,7 @@ func execNotify(t *testing.T, tool domain.AgentTool) notifyExecResult {
 	return res
 }
 
-// bodyRecorder captures posted webhook bodies from a spawned server
-// goroutine, safe for concurrent reads from the test body.
+// Protects bodies written by the server goroutine and read by the test.
 type bodyRecorder struct {
 	mu     sync.Mutex
 	bodies [][]byte
@@ -481,8 +433,6 @@ func (r *bodyRecorder) count() int {
 	return len(r.bodies)
 }
 
-// latest decodes the most recently captured body, failing the test if
-// none has arrived yet.
 func (r *bodyRecorder) latest(t *testing.T) map[string]any {
 	t.Helper()
 	r.mu.Lock()
@@ -497,8 +447,6 @@ func (r *bodyRecorder) latest(t *testing.T) map[string]any {
 	return m
 }
 
-// newCapturingServer starts an httptest.Server recording every posted
-// body into the returned recorder.
 func newCapturingServer(t *testing.T) (*httptest.Server, *bodyRecorder) {
 	t.Helper()
 	rec := &bodyRecorder{}
@@ -513,8 +461,6 @@ func newCapturingServer(t *testing.T) (*httptest.Server, *bodyRecorder) {
 	return srv, rec
 }
 
-// assertNotifyBody fails the test unless body carries exactly
-// wantDispatchID and wantSessionID.
 func assertNotifyBody(t *testing.T, body map[string]any, wantDispatchID, wantSessionID string) {
 	t.Helper()
 	if got, _ := body["dispatch_id"].(string); got != wantDispatchID {
@@ -530,16 +476,6 @@ func assertNotifyBody(t *testing.T, body map[string]any, wantDispatchID, wantSes
 	}
 }
 
-// TestMCPServerNotify_EndToEnd runs a real orchestrator.Orchestrator
-// dispatch against a fake tracker and a fake domain.AgentAdapter, reads
-// the worker's own generated mcp.json, resolves it through
-// sessionToolParamsFromEnv, builds the registry through
-// BuildSessionToolRegistry, and executes the registered notify_operator
-// tool. No dispatch id or session id enters SessionToolParams,
-// NotificationEnvelopeContext, notify.New, or .sortie/dispatch.json
-// except through DispatchIssue, the worker, and the fake adapter's own
-// StartSession result and events. It carries no build tag and no
-// SORTIE_*_TEST gate, so it runs on every CI platform.
 func TestMCPServerNotify_EndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -559,7 +495,7 @@ func TestMCPServerNotify_EndToEnd(t *testing.T) {
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-e2e.db"))
 
 	tc := waitHandle(t, agent.handles)
-	waitEntered(t, tc)
+	waitForDispatchIdentityWritten(t, tc)
 
 	params := sessionParamsFromMCPConfig(t, cfg, tc.startParams.MCPConfigPath)
 	dispatchID := params.DispatchID
@@ -605,13 +541,6 @@ func TestMCPServerNotify_EndToEnd(t *testing.T) {
 	close(tc.finish)
 }
 
-// TestMCPServerNotify_Continuation proves a continuation keeps the
-// runtime session id while minting a new dispatch id: the first
-// dispatch's StartSession returns a non-empty session id and sends one
-// notification, exits normally with the issue still active and no
-// handoff state configured, and the natural continuation retry that
-// follows resumes under that session id while its own tool server posts
-// a distinct dispatch id.
 func TestMCPServerNotify_Continuation(t *testing.T) {
 	t.Parallel()
 
@@ -636,7 +565,7 @@ func TestMCPServerNotify_Continuation(t *testing.T) {
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-continuation.db"))
 
 	tc1 := waitHandle(t, agent.handles)
-	waitEntered(t, tc1)
+	waitForDispatchIdentityWritten(t, tc1)
 	if tc1.sessionID != "S0" {
 		t.Fatalf("first dispatch StartSession returned %q, want %q", tc1.sessionID, "S0")
 	}
@@ -657,7 +586,7 @@ func TestMCPServerNotify_Continuation(t *testing.T) {
 	close(tc1.finish)
 
 	tc2 := waitHandle(t, agent.handles)
-	waitEntered(t, tc2)
+	waitForDispatchIdentityWritten(t, tc2)
 
 	if tc2.startParams.ResumeSessionID != "S0" {
 		t.Fatalf("continuation StartSessionParams.ResumeSessionID = %q, want %q", tc2.startParams.ResumeSessionID, "S0")
@@ -685,10 +614,6 @@ func TestMCPServerNotify_Continuation(t *testing.T) {
 	close(tc2.finish)
 }
 
-// TestMCPServerNotify_NoSessionID proves that when StartSession returns
-// "" and no event ever carries a non-empty session id, including a
-// session_started event with an empty one, every notification of the
-// dispatch carries a non-empty dispatch id and an empty session id.
 func TestMCPServerNotify_NoSessionID(t *testing.T) {
 	t.Parallel()
 
@@ -708,7 +633,7 @@ func TestMCPServerNotify_NoSessionID(t *testing.T) {
 	startNotifyOrchestrator(t, cfg, tracker, agent, filepath.Join(tmpDir, "notify-nosession.db"))
 
 	tc := waitHandle(t, agent.handles)
-	waitEntered(t, tc)
+	waitForDispatchIdentityWritten(t, tc)
 
 	params := sessionParamsFromMCPConfig(t, cfg, tc.startParams.MCPConfigPath)
 	dispatchID := params.DispatchID
@@ -735,11 +660,6 @@ func TestMCPServerNotify_NoSessionID(t *testing.T) {
 	close(tc.finish)
 }
 
-// TestMCPServerNotify_Concurrent runs two dispatches at once and proves
-// each notification carries only its own dispatch's identity: each is
-// sent after the other dispatch's session_started event, so a leak
-// through a shared workspace key or a misrouted read would surface as
-// the wrong session id or a colliding dispatch id.
 func TestMCPServerNotify_Concurrent(t *testing.T) {
 	t.Parallel()
 
@@ -762,8 +682,8 @@ func TestMCPServerNotify_Concurrent(t *testing.T) {
 
 	tcA := waitHandle(t, agent.handles)
 	tcB := waitHandle(t, agent.handles)
-	waitEntered(t, tcA)
-	waitEntered(t, tcB)
+	waitForDispatchIdentityWritten(t, tcA)
+	waitForDispatchIdentityWritten(t, tcB)
 
 	paramsA := sessionParamsFromMCPConfig(t, cfg, tcA.startParams.MCPConfigPath)
 	paramsB := sessionParamsFromMCPConfig(t, cfg, tcB.startParams.MCPConfigPath)
@@ -777,9 +697,7 @@ func TestMCPServerNotify_Concurrent(t *testing.T) {
 	toolA := mustNotifyTool(t, buildNotifyRegistry(t, paramsA))
 	toolB := mustNotifyTool(t, buildNotifyRegistry(t, paramsB))
 
-	// Each dispatch reports its own accepted session id before either
-	// notify_operator call, so each dispatch's notification is sent
-	// after the other dispatch's session_started event.
+	// Deliver both session events before either notification to expose shared-state leaks.
 	sendEventAndWait(t, tcA, domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S-A", Timestamp: time.Now().UTC()})
 	sendEventAndWait(t, tcB, domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S-B", Timestamp: time.Now().UTC()})
 

@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// mustSymlink creates a symbolic link at link pointing to target,
-// skipping the calling test on Windows when link creation requires a
-// privilege the test process lacks.
 func mustSymlink(t *testing.T, target, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
@@ -20,8 +17,6 @@ func mustSymlink(t *testing.T, target, link string) {
 	}
 }
 
-// listSortieDir returns the names of every entry directly inside
-// <workspacePath>/.sortie, or nil if the directory does not exist.
 func listSortieDir(t *testing.T, workspacePath string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(workspacePath, sortieDir))
@@ -130,8 +125,6 @@ func TestWriteSortieFile_SortieDirAbsent(t *testing.T) {
 	t.Parallel()
 
 	ws := t.TempDir()
-	// .sortie is never created here.
-
 	if err := WriteSortieFile(ws, "f.txt", []byte("x")); err == nil {
 		t.Fatal("WriteSortieFile(.sortie absent) = nil, want error")
 	}
@@ -206,11 +199,6 @@ func TestWriteSortieFile_SortieIsSymlink(t *testing.T) {
 	})
 }
 
-// TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed proves the write
-// replaces a symbolic link planted at name rather than following it: the
-// link's target content is unchanged, the destination becomes a regular
-// file holding the written data, and every other .sortie entry that
-// existed before the call is unchanged.
 func TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed(t *testing.T) {
 	t.Parallel()
 
@@ -219,7 +207,6 @@ func TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed(t *testing.T) {
 		t.Fatalf("Mkdir(.sortie): %v", err)
 	}
 
-	// A sibling entry that must survive untouched.
 	sibling := filepath.Join(ws, sortieDir, "sibling.txt")
 	if err := os.WriteFile(sibling, []byte("sibling-content"), 0o600); err != nil {
 		t.Fatalf("WriteFile(sibling): %v", err)
@@ -238,7 +225,6 @@ func TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed(t *testing.T) {
 		t.Fatalf("WriteSortieFile(symlink at name) = %v, want nil (link replaced, not followed)", err)
 	}
 
-	// The outside target must be untouched.
 	targetData, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatalf("ReadFile(target): %v", err)
@@ -247,7 +233,6 @@ func TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed(t *testing.T) {
 		t.Errorf("symlink target content = %q, want unchanged %q", targetData, "outside-content")
 	}
 
-	// The destination must now be a regular file with the written content.
 	fi, err := os.Lstat(linkPath)
 	if err != nil {
 		t.Fatalf("Lstat(destination): %v", err)
@@ -266,7 +251,6 @@ func TestWriteSortieFile_SymlinkAtNameReplacedNotFollowed(t *testing.T) {
 		t.Errorf("destination content = %q, want %q", destData, "written-content")
 	}
 
-	// The sibling entry must be unchanged.
 	siblingData, err := os.ReadFile(sibling)
 	if err != nil {
 		t.Fatalf("ReadFile(sibling): %v", err)
@@ -302,9 +286,6 @@ func TestWriteSortieFile_NonEmptyDirectoryAtName(t *testing.T) {
 	}
 }
 
-// TestWriteSortieFile_NoStrayEntries proves that, whether a call
-// succeeds or fails, .sortie gains no entry other than name: no leaked
-// temporary file survives.
 func TestWriteSortieFile_NoStrayEntries(t *testing.T) {
 	t.Parallel()
 
@@ -350,7 +331,6 @@ func TestWriteSortieFile_NoStrayEntries(t *testing.T) {
 	})
 }
 
-// diffEntries returns the names present in after but not in before.
 func diffEntries(before, after []string) map[string]bool {
 	beforeSet := make(map[string]bool, len(before))
 	for _, n := range before {

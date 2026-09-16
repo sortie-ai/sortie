@@ -513,11 +513,7 @@ func TestBuildSessionToolRegistry_StoreOpenedThenNotifierError(t *testing.T) {
 	}
 }
 
-// TestBuildSessionToolRegistry_NotifyOperatorSessionIDGating proves
-// notify_operator registers whenever a backend is configured, whether
-// or not WorkspacePath and DispatchID are set, and that with either
-// empty its notifications carry an empty session_id.
-func TestBuildSessionToolRegistry_NotifyOperatorSessionIDGating(t *testing.T) {
+func TestBuildSessionToolRegistry_NotifyOperatorWithoutIdentity(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -538,11 +534,7 @@ func TestBuildSessionToolRegistry_NotifyOperatorSessionIDGating(t *testing.T) {
 
 			var captured []byte
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				b, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Errorf("read posted body: %v", err)
-				}
-				captured = b
+				captured, _ = io.ReadAll(r.Body)
 				w.WriteHeader(http.StatusOK)
 			}))
 			t.Cleanup(srv.Close)

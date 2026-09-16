@@ -194,9 +194,6 @@ func TestWebhook_Send_PostsEnvelopeAndMessage(t *testing.T) {
 	}
 }
 
-// TestWebhook_Send_EmptySessionIDPostsEmptyString proves the body keeps
-// the session_id key, with an empty string value, when the envelope's
-// SessionID has not yet been accepted.
 func TestWebhook_Send_EmptySessionIDPostsEmptyString(t *testing.T) {
 	t.Parallel()
 

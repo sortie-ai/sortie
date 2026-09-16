@@ -3,8 +3,6 @@ package domain
 import "context"
 
 // Notifier sends a normalized [Notification] to a single backend.
-// One method keeps every backend interchangeable and lets any producer
-// reuse the family.
 type Notifier interface {
 	// Send delivers the notification. It returns nil on a successful
 	// send and a classified error on transport failure, a non-2xx
@@ -14,17 +12,13 @@ type Notifier interface {
 	Send(ctx context.Context, n Notification) error
 }
 
-// Notification is the normalized payload every notifier backend
-// consumes. The envelope is filled by the producer; the message is
-// supplied by the agent. The value is self-contained: every field a
-// backend needs rides in it, with no dependency on producer-only state.
+// Notification is the normalized payload every notifier backend consumes.
 type Notification struct {
 	Envelope NotificationEnvelope
 	Message  NotificationMessage
 }
 
-// NotificationEnvelope carries system-owned session context. The agent
-// neither provides it nor can override it.
+// NotificationEnvelope carries system-owned session context.
 type NotificationEnvelope struct {
 	// NotificationID is a generated unique id, such as a UUID.
 	NotificationID string
@@ -43,22 +37,10 @@ type NotificationEnvelope struct {
 	// Identifier is the human-readable issue key.
 	Identifier string
 
-	// DispatchID is the non-empty ID minted for the current worker
-	// attempt, sourced from the tool server's SORTIE_DISPATCH_ID. It is
-	// the same for every notification and every tool server process of
-	// one dispatch, and new for every dispatch, retry, and
-	// continuation. It is empty only when the tool server started
-	// outside a Sortie dispatch.
+	// DispatchID fences session identity to a single worker attempt.
 	DispatchID string
 
-	// SessionID is read from the workspace's dispatch identity record
-	// at send time, and used only when that record's dispatch ID
-	// matches DispatchID. It holds the latest session ID the worker
-	// accepted within the dispatch, and may repeat across a resumed
-	// dispatch. It is empty when no session ID has been accepted yet,
-	// the agent kind never reports one, the record is absent or
-	// rejected, the record names another dispatch, or DispatchID is
-	// empty. It is never filled from DispatchID.
+	// SessionID is accepted only from a record fenced by DispatchID.
 	SessionID string
 
 	// Attempt is the retry or continuation attempt. It is nil on the

@@ -1,11 +1,4 @@
-// Package notify implements [domain.AgentTool] for the notify_operator
-// tool. The tool fills a system-owned envelope from session context;
-// the tool input cannot set any envelope field. It validates the
-// agent-supplied message, enforces a per-session cap, and delivers a
-// normalized [domain.Notification] to the configured backends in
-// configuration order, stopping at the first backend that fails. It
-// knows nothing about Slack or HTTP; backends arrive as a resolved
-// slice of [domain.Notifier].
+// Package notify implements the notify_operator agent tool.
 package notify
 
 import (
@@ -35,14 +28,12 @@ var inputSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
-// validSeverities is the closed set of accepted severity values.
 var validSeverities = map[string]bool{
 	"info":     true,
 	"warning":  true,
 	"critical": true,
 }
 
-// validCategories is the closed set of accepted optional category values.
 var validCategories = map[string]bool{
 	"decision_needed": true,
 	"progress":        true,
@@ -55,8 +46,7 @@ var validCategories = map[string]bool{
 // "" when none is available.
 type SessionIDFunc func() string
 
-// NotificationEnvelopeContext carries the system-owned envelope inputs
-// read from the sidecar environment. The agent supplies none of these.
+// NotificationEnvelopeContext contains system-owned notification metadata.
 type NotificationEnvelopeContext struct {
 	// IssueID is the tracker-internal issue id.
 	IssueID string
@@ -64,9 +54,7 @@ type NotificationEnvelopeContext struct {
 	// Identifier is the human-readable issue key.
 	Identifier string
 
-	// DispatchID is the dispatch-frozen ID for the current worker
-	// attempt; may be empty when the tool server started outside a
-	// Sortie dispatch.
+	// DispatchID is empty outside a Sortie dispatch.
 	DispatchID string
 
 	// Attempt is the retry or continuation attempt; nil on the first run.
@@ -81,8 +69,6 @@ type NotificationEnvelopeContext struct {
 }
 
 // NotifyTool implements [domain.AgentTool] for notify_operator.
-// Construct via [New] with the resolved backends, the session envelope
-// context, and the session ID resolver.
 type NotifyTool struct {
 	backends      []domain.Notifier
 	env           NotificationEnvelopeContext
@@ -91,14 +77,7 @@ type NotifyTool struct {
 	count         int
 }
 
-// New returns a [NotifyTool]. backends is the ordered set of resolved
-// notifiers; the caller gates registration on a configured backend, so
-// New panics when backends is empty (programming error). env carries
-// the system-owned envelope context. sessionID is called once per
-// envelope built, at send time rather than here, to resolve the
-// envelope's session ID; New panics when sessionID is nil.
-// maxPerSession is the effective per-session cap after default
-// resolution.
+// New returns a [NotifyTool]. It panics when backends is empty or sessionID is nil.
 func New(backends []domain.Notifier, env NotificationEnvelopeContext, sessionID SessionIDFunc, maxPerSession int) *NotifyTool {
 	if len(backends) == 0 {
 		panic("notify.New: backends must not be empty")
@@ -125,9 +104,7 @@ func (t *NotifyTool) Description() string {
 		"issue, session, and agent context is attached automatically."
 }
 
-// InputSchema returns the JSON Schema for notify_operator input. The
-// agent supplies only the message; the envelope is system-owned and
-// absent from the schema. The returned slice is a defensive copy.
+// InputSchema returns a copy of the JSON Schema for notify_operator input.
 func (t *NotifyTool) InputSchema() json.RawMessage {
 	out := make(json.RawMessage, len(inputSchema))
 	copy(out, inputSchema)
@@ -203,10 +180,6 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 	})
 }
 
-// buildEnvelope generates the notification id and timestamp at call
-// time, resolves the session ID through t.sessionID, and copies the
-// remaining session context from the stored envelope context. The tool
-// input cannot set any envelope field.
 func (t *NotifyTool) buildEnvelope() domain.NotificationEnvelope {
 	source := t.env.Source
 	if source == "" {

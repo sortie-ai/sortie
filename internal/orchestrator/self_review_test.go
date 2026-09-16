@@ -668,11 +668,6 @@ func TestWriteReviewSummary_SymlinkRejected(t *testing.T) {
 	}
 }
 
-// TestWriteReviewSummary_SymlinkAtDestinationReplacedNotFollowed proves
-// writeReviewSummary is containment-safe: a symbolic link planted at
-// review_summary.md or review_summary.md.tmp, pointing outside the
-// workspace, is replaced without ever being followed, and the
-// destination ends up a regular file holding the summary content.
 func TestWriteReviewSummary_SymlinkAtDestinationReplacedNotFollowed(t *testing.T) {
 	t.Parallel()
 

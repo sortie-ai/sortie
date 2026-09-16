@@ -611,8 +611,6 @@ func TestSessionToolParamsFromEnv_Attempt(t *testing.T) {
 	}
 }
 
-// testNotifySessionIDFunc is the [notify.SessionIDFunc] buildNotifyTool
-// tests supply, returning a fixed session ID.
 func testNotifySessionIDFunc() string { return "" }
 
 func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
@@ -668,11 +666,7 @@ func TestBuildNotifyTool_ValidWebhookBackend_ReturnsNonNilTool(t *testing.T) {
 	}
 }
 
-// TestBuildNotifyTool_SessionIDFuncReachesConstructedTool proves the
-// sessionID parameter buildNotifyTool receives actually reaches the
-// constructed tool: a distinct fixed value and env.DispatchID both
-// appear in the webhook body a call posts.
-func TestBuildNotifyTool_SessionIDFuncReachesConstructedTool(t *testing.T) {
+func TestBuildNotifyTool_PropagatesSessionID(t *testing.T) {
 	t.Parallel()
 
 	var captured []byte

@@ -10,26 +10,12 @@ import (
 	"strings"
 )
 
-// sortieDir is the workspace-relative directory every WriteSortieFile
-// write targets.
 const sortieDir = ".sortie"
 
-// WriteSortieFile replaces <workspacePath>/.sortie/<name> with data. It
-// is the single writer for every file the orchestrator places in a
-// workspace's .sortie directory.
+// WriteSortieFile replaces <workspacePath>/.sortie/<name> with data.
 //
-// Every filesystem step resolves through an os.Root opened at
-// workspacePath, so no step reaches outside the workspace directory
-// whatever symbolic links exist there or appear during the call.
-// WriteSortieFile returns an error, touching nothing, when name is
-// empty, ".", "..", or contains a path separator. It returns an error,
-// creating nothing, when .sortie is absent, a symbolic link, or not a
-// directory; it never creates .sortie itself. It writes through a
-// fresh, exclusively created temporary file inside .sortie and renames
-// it onto name, so it never opens a pre-existing path for writing: a
-// symbolic link already at name is replaced, not followed. It removes
-// the temporary file when a step before the rename fails. It does not
-// log.
+// Operations are rooted at workspacePath to prevent symlinks from escaping the
+// workspace. A fresh temporary file avoids writing through a pre-existing link.
 func WriteSortieFile(workspacePath, name string, data []byte) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return fmt.Errorf("sortie file name %q is invalid", name)
@@ -39,7 +25,7 @@ func WriteSortieFile(workspacePath, name string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("open workspace root: %w", err)
 	}
-	defer root.Close() //nolint:errcheck // best-effort cleanup in defer
+	defer root.Close() //nolint:errcheck // There is no recovery path during cleanup.
 
 	fi, err := root.Lstat(sortieDir)
 	if err != nil {
@@ -64,11 +50,6 @@ func WriteSortieFile(workspacePath, name string, data []byte) error {
 	return nil
 }
 
-// createSortieTempFile creates a temporary file inside .sortie under a
-// fresh random name, the naming scheme [os.CreateTemp] uses, mode 0600,
-// writes data, and closes it. It returns the temporary file's name
-// relative to .sortie. The caller removes the temp file on any later
-// failure.
 func createSortieTempFile(root *os.Root, data []byte) (string, error) {
 	for range 10000 {
 		suffix, err := randomHex(16)
@@ -98,9 +79,6 @@ func createSortieTempFile(root *os.Root, data []byte) (string, error) {
 	return "", errors.New("create temp file: exhausted random name attempts")
 }
 
-// randomHex returns a random hex-encoded string of n random bytes, read
-// from crypto/rand so a temp file's name cannot be guessed ahead of its
-// creation.
 func randomHex(n int) (string, error) {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {

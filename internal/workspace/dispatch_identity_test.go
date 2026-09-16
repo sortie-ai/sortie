@@ -10,26 +10,20 @@ import (
 	"testing"
 )
 
-// slogCapture returns a slog.Logger backed by an in-memory buffer at
-// warn level and a function retrieving the captured output.
 func slogCapture() (*slog.Logger, func() string) {
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	return slog.New(h), func() string { return buf.String() }
 }
 
-// mkSortieDir creates <ws>/.sortie so [WriteDispatchIdentity], which
-// never creates it, has somewhere to write.
-func mkSortieDir(t *testing.T, ws string) {
+func createSortieDir(t *testing.T, ws string) {
 	t.Helper()
 	if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
 		t.Fatalf("Mkdir(.sortie): %v", err)
 	}
 }
 
-// writeRawDispatchRecord writes raw bytes directly to
-// <ws>/.sortie/dispatch.json, bypassing WriteSortieFile, so a test can
-// plant malformed or oversized content.
+// Bypasses WriteSortieFile to create invalid dispatch-record fixtures.
 func writeRawDispatchRecord(t *testing.T, ws string, data []byte) {
 	t.Helper()
 	dir := filepath.Join(ws, sortieDir)
@@ -71,7 +65,7 @@ func TestReadDispatchSessionID_ExactMatch(t *testing.T) {
 	t.Parallel()
 
 	ws := t.TempDir()
-	mkSortieDir(t, ws)
+	createSortieDir(t, ws)
 	if err := WriteDispatchIdentity(ws, DispatchIdentity{DispatchID: "D1", SessionID: "S1"}); err != nil {
 		t.Fatalf("WriteDispatchIdentity: %v", err)
 	}
@@ -92,7 +86,7 @@ func TestReadDispatchSessionID_SilentEmptyCases(t *testing.T) {
 	t.Run("empty dispatchID", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		mkSortieDir(t, ws)
+		createSortieDir(t, ws)
 		if err := WriteDispatchIdentity(ws, DispatchIdentity{DispatchID: "D1", SessionID: "S1"}); err != nil {
 			t.Fatalf("WriteDispatchIdentity: %v", err)
 		}
@@ -150,7 +144,7 @@ func TestReadDispatchSessionID_SilentEmptyCases(t *testing.T) {
 	t.Run("mismatched dispatch id", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		mkSortieDir(t, ws)
+		createSortieDir(t, ws)
 		if err := WriteDispatchIdentity(ws, DispatchIdentity{DispatchID: "D1", SessionID: "S1"}); err != nil {
 			t.Fatalf("WriteDispatchIdentity: %v", err)
 		}
@@ -167,7 +161,7 @@ func TestReadDispatchSessionID_SilentEmptyCases(t *testing.T) {
 	t.Run("empty record dispatch id", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		mkSortieDir(t, ws)
+		createSortieDir(t, ws)
 		if err := WriteDispatchIdentity(ws, DispatchIdentity{DispatchID: "", SessionID: "S1"}); err != nil {
 			t.Fatalf("WriteDispatchIdentity: %v", err)
 		}
@@ -182,20 +176,11 @@ func TestReadDispatchSessionID_SilentEmptyCases(t *testing.T) {
 	})
 }
 
-// TestReadDispatchSessionID_MismatchFailsWithoutTheComparison proves the
-// mismatch case is load-bearing: with the DispatchID comparison removed
-// (simulated here by asking for the record's own dispatch id, which
-// would incorrectly succeed if ReadDispatchSessionID returned
-// record.SessionID unconditionally), the exact-match test above is what
-// would catch a broken comparison. This test documents the mismatch
-// case's own assertion is not vacuously true: a record does exist and
-// does carry a session id, so an implementation that ignored the
-// dispatch id argument would return "S1" here instead of "".
-func TestReadDispatchSessionID_MismatchFailsWithoutTheComparison(t *testing.T) {
+func TestReadDispatchSessionID_RejectsMismatchedDispatchID(t *testing.T) {
 	t.Parallel()
 
 	ws := t.TempDir()
-	mkSortieDir(t, ws)
+	createSortieDir(t, ws)
 	if err := WriteDispatchIdentity(ws, DispatchIdentity{DispatchID: "D1", SessionID: "S1"}); err != nil {
 		t.Fatalf("WriteDispatchIdentity: %v", err)
 	}
@@ -261,7 +246,6 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 	t.Run("oversized record", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		// 4097 bytes: one past maxDispatchIdentityBytes.
 		padding := strings.Repeat("a", maxDispatchIdentityBytes+1-len(`{"dispatch_id":"D1","session_id":"S1","pad":""}`)+2)
 		raw := []byte(`{"dispatch_id":"D1","session_id":"S1","pad":"` + padding + `"}`)
 		if len(raw) <= maxDispatchIdentityBytes {
@@ -305,8 +289,6 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 	})
 }
 
-// assertWarnReason fails the test unless log contains the documented
-// warning message and the given reason attribute.
 func assertWarnReason(t *testing.T, log, reason string) {
 	t.Helper()
 	if !strings.Contains(log, "dispatch identity record unusable") {
