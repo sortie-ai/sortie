@@ -81,6 +81,8 @@ var contractBanTable = map[string]string{
 	"startOpenCodeReader":    "procutil.NewStdoutReader",
 	"finishStderrDrain":      "procutil.StderrCollector.FinishAndCollect",
 	"release":                "procutil.StartOutputRelease",
+	"buildSSHRemoteCmd":      "registry.AgentMeta.CredentialEnv",
+	"buildSSHRemoteCommand":  "agentcore.LaunchTarget.SSHOptions",
 }
 
 // contractTrackerAdapterMethods are the tracker operation method names
@@ -2679,6 +2681,62 @@ func TestContractCaptureAndTeardown(t *testing.T) {
 // any adapter package, so a regression in a rule is caught even when
 // every real adapter happens to comply. Each fixture is parsed as the
 // single file of a one-file package named by dirName.
+// TestCheckAdapterContract_DetectsSSHRemoteCommandHelpers pins the two
+// ban-table entries for the retired per-adapter SSH prefix helpers,
+// against an inline fixture rather than the current state of any real
+// package, so a regression is caught even when every real adapter
+// happens to comply.
+func TestCheckAdapterContract_DetectsSSHRemoteCommandHelpers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		src        string
+		wantSubstr string
+	}{
+		{
+			name: "buildSSHRemoteCmd",
+			src: `package fixture
+
+func buildSSHRemoteCmd(cmd, key string) string {
+	return cmd
+}
+`,
+			wantSubstr: "call registry.AgentMeta.CredentialEnv",
+		},
+		{
+			name: "buildSSHRemoteCommand",
+			src: `package fixture
+
+func buildSSHRemoteCommand(cmd string, env map[string]string) string {
+	return cmd
+}
+`,
+			wantSubstr: "call agentcore.LaunchTarget.SSHOptions",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			pkg := contractPackage{dirName: "fixture", importPath: "github.com/sortie-ai/sortie/internal/agent/fixture", files: []*ast.File{file}}
+			got := checkAdapterContractPackage(fset, pkg)
+			if !slices.ContainsFunc(got, func(v contractViolation) bool {
+				return strings.Contains(v.text, tt.wantSubstr)
+			}) {
+				t.Errorf("checkAdapterContractPackage() violations = %+v, want one containing %q", got, tt.wantSubstr)
+			}
+		})
+	}
+}
+
 func TestCheckAdapterContract_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
