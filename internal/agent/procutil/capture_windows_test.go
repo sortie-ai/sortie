@@ -359,6 +359,57 @@ func TestStartWithOwnedPipes_AssignSeamDelayDoesNotLowerJobMembership(t *testing
 	}
 }
 
+func TestStartWithOwnedPipes_CancelBeforeJobRegistrationArmsEscalation(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "descendant.pid")
+
+	descendantPath := agenttest.FakeRuntime(t, dir, "descendant", "procutil.escalation-descendant", escalationDescendantParams{
+		PIDFile: pidFile,
+	})
+	leaderPath := agenttest.FakeRuntime(t, dir, "leader", "procutil.escalation-leader", escalationLeaderParams{
+		DescendantPath: descendantPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, leaderPath) //nolint:gosec // fake runtime path under t.TempDir()
+	SetGroupCancel(cmd, escalationGrace)
+	groupCancel := cmd.Cancel
+	cancelReturned := make(chan struct{})
+	cmd.Cancel = func() error {
+		defer close(cancelReturned)
+		return groupCancel()
+	}
+
+	origSeam := assignSeam
+	t.Cleanup(func() { assignSeam = origSeam })
+	assignSeam = func() {
+		cancel()
+		select {
+		case <-cancelReturned:
+		case <-time.After(time.Second):
+		}
+	}
+
+	pipes, err := StartWithOwnedPipes(cmd, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("StartWithOwnedPipes() = %v, want nil", err)
+	}
+	defer func() { _ = pipes.Close() }()
+
+	leaderPID := cmd.Process.Pid
+	t.Cleanup(func() { _ = KillProcessGroup(leaderPID) })
+
+	descendantPID := pollEscalationPID(t, pidFile, 5*time.Second)
+	_ = cmd.Wait() //nolint:errcheck // a cancelled command reports the cancellation, not a fault
+
+	wait := escalationGrace + groupDrainBound + 2*time.Second
+	if !pollProcessGone(descendantPID, wait) {
+		t.Errorf("descendant %d still alive %v after a cancellation that preceded job registration, want gone", descendantPID, wait)
+	}
+}
+
 // TestRunJobDrain pins that the job drain terminates repeatedly until
 // the job reports no active process or its bound passes, records a
 // failed termination without stopping, and stops polling on a failed

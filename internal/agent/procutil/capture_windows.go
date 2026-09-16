@@ -97,6 +97,16 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 
+	// os/exec may run Cancel as soon as Start returns, and a cancellation
+	// that looked up the job before its registration would miss it.
+	registered := make(chan struct{})
+	if cancel := cmd.Cancel; cancel != nil {
+		cmd.Cancel = func() error {
+			<-registered
+			return cancel()
+		}
+	}
+
 	if startErr := cmd.Start(); startErr != nil {
 		return 0, time.Time{}, startErr
 	}
@@ -112,6 +122,7 @@ func startAndAssign(cmd *exec.Cmd, logger *slog.Logger, keepJobHandle bool) (job
 			slog.Any("error", assignErr))
 	}
 	registerJobAssignment(cmd.Process.Pid, cmd.Process, job)
+	close(registered)
 
 	resumeSeam()
 
