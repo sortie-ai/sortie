@@ -1762,6 +1762,11 @@ worker:
     - build02.internal
   max_concurrent_agents_per_host: 2
   ssh_strict_host_key_checking: accept-new
+  ssh_pass_env:
+    - EXAMPLE_API_KEY
+    - EXAMPLE_PROJECT
+  ssh_disallow_pass_env:
+    - GITHUB_TOKEN
 ```
 
 When `worker.ssh_hosts` is configured, Sortie dispatches agent runs to remote hosts over SSH using the system `ssh` binary. Each dispatch selects the host with the fewest active sessions (least-loaded selection). When a per-host concurrency cap is set, hosts at capacity are skipped. On retry, the previous host is preferred if it still has capacity.
@@ -1773,6 +1778,8 @@ When `worker.ssh_hosts` is absent or empty, all agents run locally on the host w
 | `worker.ssh_hosts`                      | list of strings  | No       | _(absent — work runs locally)_ | SSH host targets for remote agent execution.                                                |
 | `worker.max_concurrent_agents_per_host` | positive integer | No       | _(absent)_                     | Per-host concurrency cap shared across configured SSH hosts. Hosts at capacity are skipped. |
 | `worker.ssh_strict_host_key_checking`   | string           | No       | `accept-new`                   | OpenSSH `StrictHostKeyChecking` value: `accept-new`, `yes`, or `no`.                       |
+| `worker.ssh_pass_env`                   | list of strings  | No       | _(absent)_                     | Names of environment variables to carry from Sortie's own environment into a remote session. |
+| `worker.ssh_disallow_pass_env`          | list of strings  | No       | _(absent)_                     | Names of environment variables that are never carried into a remote session.                |
 
 #### SSH Hook Environment
 
@@ -1797,6 +1804,10 @@ ssh "$SORTIE_SSH_HOST" "rm -rf \"$SORTIE_WORKSPACE\""
 - **SSH connectivity is validated at dispatch time**, not at startup. Hosts that are temporarily unreachable cause the worker to fail and retry with exponential backoff.
 - **Process lifecycle:** The remote agent process receives stdin EOF when the SSH connection closes (e.g., on cancellation or stall timeout). The agent should terminate on stdin EOF or SIGHUP.
 - **SSH options:** Sortie sets `ServerAliveInterval=15`, `ServerAliveCountMax=3`, and `StrictHostKeyChecking=accept-new` by default. The `StrictHostKeyChecking` value is configurable via `worker.ssh_strict_host_key_checking`. Set to `yes` when `known_hosts` is pre-populated by configuration management; set to `no` only in isolated test environments. Invalid values fall back to `accept-new` with a warning. Operators should ensure SSH key-based authentication is configured for all target hosts.
+- **Carrying environment variables to a remote agent:** `worker.ssh_pass_env` names environment variables, never values, that Sortie reads from its own process environment and sends to every remote agent launch. Each agent kind also carries a fixed set of credential variables on a remote launch, without being listed: `claude-code` carries `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_OAUTH_TOKEN`; `copilot-cli` carries `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN`; `kiro` carries `KIRO_API_KEY`. A variable carried this way, whether listed or carried automatically for the kind, overrides any value or login already present on the remote host. A listed name that is unset or empty in Sortie's own environment is skipped and logged as a warning; a name carried automatically for the kind is skipped silently when unset or empty. `worker.ssh_disallow_pass_env` names variables that are never carried, whether they come from `worker.ssh_pass_env` or from the kind's own credential set; the remote host's own value or login stays in effect for a disallowed name. Neither key affects a local (non-SSH) launch, and neither key affects a setting an agent kind computes for itself. A change to either key on reload takes effect for sessions dispatched after the reload; a session already running keeps the names it started with.
+- **Keeping a remote host's own login:** an agent kind's automatically carried credential takes precedence over a login already stored on the remote host. For example, if Sortie's own environment sets `GITHUB_TOKEN` for another purpose (say, `tracker.api_key: $GITHUB_TOKEN`) while `copilot-cli` hosts are meant to sign in on their own, name `GITHUB_TOKEN` under `worker.ssh_disallow_pass_env` to keep the host's own login in effect.
+- **What is exposed and how to avoid it:** a carried variable's value travels over the SSH connection's standard input, never as part of a command line, so it never appears in a process list on either the machine running Sortie or the remote host. On the remote host it sits in the launched agent's own environment, readable by that account and by root, the same as it would be on a local launch. To keep a value off a remote host entirely, set it on the remote host itself and name it under `worker.ssh_disallow_pass_env`.
+- **Remote host requirements for carried variables:** a remote host must offer a POSIX-compatible login shell, and it must have the standard `dd` utility installed for any launch that carries a variable, which includes every remote `opencode` launch regardless of configuration. A host missing `dd` fails the launch, logs `sortie: dd is required on the remote host to receive environment variables`, and the failed launch is retried the same way any other failed remote launch is.
 
 #### Complete SSH-Mode Example
 
@@ -2080,7 +2091,7 @@ The `kiro` block is forwarded to the Kiro adapter, which runs `kiro-cli chat --n
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the canary is skipped and the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command instead. |
+| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the canary is skipped; see [Section 4.3](#43-worker--ssh-worker-extension) for how the key reaches a remote session. |
 
 **Token usage and budgets:** The Kiro adapter emits no token-usage events. `kiro-cli` does not report token counts on the headless path (only an abstract credits figure on stderr), so `TurnResult.Usage` is the zero value and `token_rates.kiro` produces no cost estimate. Token-based budget enforcement does not apply to Kiro; `agent.turn_timeout_ms` is the wall-clock budget bound. A turn that goes silent is caught first by `agent.stall_timeout_ms`.
 
@@ -2928,6 +2939,8 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | —                                        | SSH host targets; dynamic reload                                                       |
 | `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | —                                        | Per-host cap; dynamic reload                                                           |
 | `worker.ssh_strict_host_key_checking`   | string           | `accept-new`                 | —                                        | `accept-new`, `yes`, `no`; dynamic reload                                              |
+| `worker.ssh_pass_env`                   | `[string]`       | _(absent)_                   | —                                        | Names of variables to carry into a remote session; dynamic reload                     |
+| `worker.ssh_disallow_pass_env`          | `[string]`       | _(absent)_                   | —                                        | Names of variables never carried into a remote session; dynamic reload                |
 
 ---
 

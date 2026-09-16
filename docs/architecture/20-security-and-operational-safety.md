@@ -71,7 +71,7 @@ The workspace Sortie creates and hands over is the boundary that matters, and tw
 
 Sortie launches a local agent with the orchestrator's environment, so any credential present there is readable by an agent running with approvals disabled in a write-capable sandbox. Whether a tracker credential is present depends on how it is supplied. A value named indirectly through an environment variable, or supplied by an environment override, sits in the orchestrator's environment and is inherited. A value written literally into workflow configuration does not, and reaches the tracker client without passing through the environment, although it then sits in the configuration file instead.
 
-Dispatching a run to a remote host bounds this differently. Only an explicitly constructed set of variables crosses with the command, so the remote agent inherits that set rather than the orchestrator's environment, and the exposure is the size of that set.
+Dispatching a run to a remote host bounds this differently. Only the variables the operator names plus the credential variables the agent kind declares, less the variables the operator disallows, cross to the remote host, delivered outside any process argument list, so the remote agent inherits that set rather than the orchestrator's environment, and the exposure is still the size of that set.
 
 The sandbox does not help in either case. It governs filesystem and network reach, not what a process reads from the environment it was started with.
 
