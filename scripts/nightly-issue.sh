@@ -10,14 +10,22 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "${SCRIPT_DIR}/lib/common.sh"
 
 issue_number() {
-	gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title |
+	_in_issues=$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title)
+	printf '%s\n' "$_in_issues" |
 		jq -r --arg title "$TITLE" '[.[] | select(.title == $title) | .number] | (first // empty)'
 }
 
-create_issue() {
+provision_labels() {
 	gh label create ci-nightly --color D73A4A \
 		--description "Nightly integration test failures" --force >/dev/null 2>&1 || true
+	if [ "$KIND" = "agent" ]; then
+		gh label create area:agent-adapter --color D4C5F9 \
+			--description "Agent interface, Claude Code adapter, Copilot adapter, mock" \
+			--force >/dev/null 2>&1 || true
+	fi
+}
 
+create_issue() {
 	_repository_id=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .node_id)
 	_ci_label_id=$(gh api "repos/${GITHUB_REPOSITORY}/labels/ci-nightly" --jq .node_id)
 
@@ -97,6 +105,7 @@ report_failure() {
 	BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/sortie-nightly-issue.XXXXXX")
 	trap 'rm -f "$BODY_FILE"' EXIT HUP INT TERM
 	write_report_body
+	provision_labels
 
 	_number=$(issue_number)
 	if [ -n "$_number" ]; then
