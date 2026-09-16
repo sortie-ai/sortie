@@ -125,10 +125,14 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 
 // SSHOptions resolves t's SSH transport options for one remote
 // launch. It reads each of t.SSHEnvNames with [os.LookupEnv], in
-// order, carrying a name only when it is present and non-empty, then
-// appends every settings entry whose Value is non-empty. A name
-// already carried, whether from t.SSHEnvNames or from an earlier
-// settings entry, is not carried again.
+// order, carrying a name only when its value holds a non-whitespace
+// character, then appends every settings entry whose Value is
+// non-empty. A name already carried, whether from t.SSHEnvNames or
+// from an earlier settings entry, is not carried again.
+//
+// A variable that is unset, empty, or only whitespace is left behind,
+// so a blank value on the orchestrator cannot override the credential
+// or login the remote host already holds.
 //
 // settings carries adapter-owned variables with computed values, such
 // as a tool-server setting. It MUST NOT carry a credential: a
@@ -148,9 +152,11 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 			continue
 		}
 		skip[name] = true
-		if value, present := os.LookupEnv(name); present && value != "" {
-			carried = append(carried, sshutil.EnvVar{Name: name, Value: value})
+		value, present := os.LookupEnv(name)
+		if !present || strings.TrimSpace(value) == "" {
+			continue
 		}
+		carried = append(carried, sshutil.EnvVar{Name: name, Value: value})
 	}
 
 	added := make(map[string]bool, len(settings))

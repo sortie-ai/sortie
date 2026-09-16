@@ -298,7 +298,7 @@ func ParseWorkerConfig(workerSection map[string]any) WorkerConfig {
 				})
 				continue
 			}
-			if value, present := os.LookupEnv(name); !present || value == "" {
+			if value, present := os.LookupEnv(name); !present || strings.TrimSpace(value) == "" {
 				warnings = append(warnings, WorkerWarning{
 					Message: "ssh_pass_env variable is not set or empty in the orchestrator environment",
 					Attrs:   []slog.Attr{slog.String("variable", name)},

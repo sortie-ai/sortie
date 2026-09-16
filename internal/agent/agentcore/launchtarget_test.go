@@ -271,17 +271,18 @@ func TestResolveLaunchTarget_SSHEnvNames(t *testing.T) {
 	})
 }
 
-// TestLaunchTarget_SSHOptions asserts the resolution order R8
-// describes: t.SSHEnvNames is walked in order, a name already claimed
-// by settings or already carried is skipped, each remaining name is
-// looked up and carried only when present and non-empty, then every
-// settings entry whose Value is non-empty is appended, keeping the
-// first entry for a name a later entry repeats.
+// TestLaunchTarget_SSHOptions asserts the resolution order:
+// t.SSHEnvNames is walked in order, a name already claimed by
+// settings or already carried is skipped, each remaining name is
+// looked up and carried only when its value holds a non-whitespace
+// character, then every settings entry whose Value is non-empty is
+// appended, keeping the first entry for a name a later entry repeats.
 func TestLaunchTarget_SSHOptions(t *testing.T) {
 	// Not parallel: sets process environment via t.Setenv.
 	t.Setenv("SSH_OPTIONS_TEST_B", "b-value")
 	t.Setenv("SSH_OPTIONS_TEST_A", "a-value")
 	t.Setenv("SSH_OPTIONS_TEST_C", "")
+	t.Setenv("SSH_OPTIONS_TEST_W", " \t\r\n ")
 	if err := os.Unsetenv("SSH_OPTIONS_TEST_D"); err != nil {
 		t.Fatalf("Unsetenv(SSH_OPTIONS_TEST_D): %v", err)
 	}
@@ -290,7 +291,7 @@ func TestLaunchTarget_SSHOptions(t *testing.T) {
 		SSHStrictHostKeyChecking: "yes",
 		SSHEnvNames: []string{
 			"SSH_OPTIONS_TEST_B", "SSH_OPTIONS_TEST_A", "SSH_OPTIONS_TEST_B",
-			"SSH_OPTIONS_TEST_C", "SSH_OPTIONS_TEST_D",
+			"SSH_OPTIONS_TEST_C", "SSH_OPTIONS_TEST_W", "SSH_OPTIONS_TEST_D",
 		},
 	}
 	settings := []sshutil.EnvVar{

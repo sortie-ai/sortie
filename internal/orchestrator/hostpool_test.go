@@ -419,6 +419,7 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 	// Not parallel: uses t.Setenv.
 	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_GOOD", "some-value")
 	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_A", "some-value")
+	t.Setenv("SORTIE_TEST_SSH_PASS_ENV_BLANK", " \t\r\n ")
 	os.Unsetenv("SORTIE_TEST_SSH_PASS_ENV_UNSET") //nolint:errcheck // best-effort; the variable may already be absent
 
 	tests := []struct {
@@ -499,6 +500,19 @@ func TestParseWorkerConfig_SSHPassEnv(t *testing.T) {
 			},
 			wantWarningIndexes:   []int{1, -1, -1},
 			wantWarningVariables: []string{"", "SORTIE_TEST_SSH_PASS_ENV_B", "SORTIE_TEST_SSH_PASS_ENV_C"},
+		},
+		{
+			name: "whitespace-only listed variable warns as an unset one does, with hosts configured",
+			workerSection: map[string]any{
+				"ssh_hosts":    []any{"host-a"},
+				"ssh_pass_env": []any{"SORTIE_TEST_SSH_PASS_ENV_GOOD", "SORTIE_TEST_SSH_PASS_ENV_BLANK"},
+			},
+			wantListed: []string{"SORTIE_TEST_SSH_PASS_ENV_GOOD", "SORTIE_TEST_SSH_PASS_ENV_BLANK"},
+			wantWarningMessages: []string{
+				"ssh_pass_env variable is not set or empty in the orchestrator environment",
+			},
+			wantWarningIndexes:   []int{-1},
+			wantWarningVariables: []string{"SORTIE_TEST_SSH_PASS_ENV_BLANK"},
 		},
 		{
 			name: "a reserved ssh_pass_env name is dropped and named in its own warning",
