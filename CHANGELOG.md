@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.1] - 2026-09-17
+
 ### Added
 
 - The dashboard and `GET /api/v1/state` now disclose, by reason, how many sessions the token and cost totals leave out: `running_unreported` for a running session that has not reported usage yet, `running_non_reporting` for a running session whose agent reports no usage at all, `unmeasured_sessions` for an already-ended session whose usage was never recorded, and `cost_unpriced_running` for a running session left out of `Est. Cost` because no rate is configured for its agent. The dashboard's footer note for each reason now reads correctly for a single session instead of always using the plural. The already-ended count survives a restart and, after the upgrade, also includes earlier sessions that ended without recorded usage, back to v1.19.0.
@@ -957,7 +959,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline with `golangci-lint`, `gofmt` enforcement, and test execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.24.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.24.1...HEAD
+[1.24.1]: https://github.com/sortie-ai/sortie/compare/v1.24.0...v1.24.1
 [1.24.0]: https://github.com/sortie-ai/sortie/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/sortie-ai/sortie/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/sortie-ai/sortie/compare/v1.21.0...v1.22.0
