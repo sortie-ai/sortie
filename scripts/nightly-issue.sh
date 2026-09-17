@@ -1,5 +1,5 @@
 #!/bin/sh
-# Decide and carry out the nightly-monitor's action for one nightly
+# Decide and carry out NITE's action for one nightly
 # integration shard.
 # Usage: nightly-issue.sh decide
 # shellcheck disable=SC2016
@@ -30,7 +30,7 @@ readonly ORCHESTRATOR_LABEL_NAME="area:orchestrator"
 readonly ORCHESTRATOR_LABEL_COLOR="5319E7"
 readonly ORCHESTRATOR_LABEL_DESCRIPTION="Dispatch, retry, reconciliation, state machine, poll loop"
 
-# The nightly monitor's own default thresholds (internal/nightlymonitor).
+# NITE's own default thresholds (tools/nite).
 # No shard overrides them yet, so the shell uses the same values to
 # bound how many prior samples it fetches.
 readonly MONITOR_FAILURE_THRESHOLD=2
@@ -123,7 +123,8 @@ list_nightly_incidents() {
 	_lni_page=1
 	while :; do
 		_lni_page_json=$(gh api "repos/${GITHUB_REPOSITORY}/issues?state=all&labels=${CI_LABEL_NAME}&sort=created&direction=desc&per_page=100&page=${_lni_page}") || return 1
-		printf '%s' "$_lni_page_json" | jq -r '.[] | "\(.number)\t\(.state)\t\(.title)"' >>"$_lni_out"
+		printf '%s' "$_lni_page_json" | jq -r \
+			'.[] | select(.pull_request == null) | "\(.number)\t\(.state)\t\(.title)"' >>"$_lni_out"
 		_lni_count=$(printf '%s' "$_lni_page_json" | jq -r 'length')
 		if [ "$_lni_count" -lt 100 ]; then
 			return 0
@@ -208,9 +209,9 @@ decide_exit_trap() {
 	fi
 	DECIDE_TRAP_RUNNING=1
 
-	printf '::error::nightly-issue.sh decide for %s terminated before a decision was carried out\n' "${ADAPTER_NAME:-unknown}"
+	printf '::error::nightly-issue.sh decide for %s terminated before a NITE decision was carried out\n' "${ADAPTER_NAME:-unknown}"
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-		printf '%s: no nightly-monitor decision was executed; see the job log for the failure\n' "${ADAPTER_NAME:-unknown}" >>"$GITHUB_STEP_SUMMARY"
+		printf '%s: no NITE decision was executed; see the job log for the failure\n' "${ADAPTER_NAME:-unknown}" >>"$GITHUB_STEP_SUMMARY"
 	fi
 	exit 0
 }
@@ -220,7 +221,7 @@ decide() {
 	trap decide_exit_trap EXIT HUP INT TERM
 
 	require_tools gh jq date mktemp sort head cut
-	require_env GH_TOKEN RUN_HISTORY_TOKEN GH_REPO ADAPTER ADAPTER_NAME KIND SOURCE \
+	require_env GH_TOKEN RUN_HISTORY_TOKEN GH_REPO NITE_BIN ADAPTER ADAPTER_NAME KIND SOURCE \
 		ADAPTER_VERSION TEST_ISSUE_TYPE_ID JOB_NAME OUTCOME DEFAULT_BRANCH \
 		GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_SERVER_URL GITHUB_SHA GITHUB_STEP_SUMMARY
 
@@ -288,7 +289,7 @@ decide() {
 			history_read: $history_read, history: $history
 		}')
 
-	_decision_json=$(printf '%s' "$_input_json" | go run ./internal/nightlymonitor \
+	_decision_json=$(printf '%s' "$_input_json" | "$NITE_BIN" \
 		-failure-threshold "$MONITOR_FAILURE_THRESHOLD" \
 		-pass-threshold "$MONITOR_PASS_THRESHOLD" \
 		-lookback "$MONITOR_LOOKBACK")
@@ -330,7 +331,7 @@ decide() {
 		;;
 	none) ;;
 	*)
-		log "unrecognized nightly-monitor action: ${_action}"
+		log "unrecognized NITE action: ${_action}"
 		return 1
 		;;
 	esac

@@ -68,7 +68,7 @@ func renderFailingBody(ctx renderContext) string {
 	b.WriteString("\n### Log excerpt\n\n```\n")
 	b.WriteString(ctx.classification.excerpt)
 	b.WriteString("\n```\n\n")
-	b.WriteString("_Filed by the nightly integration monitor. It comments on recurrence and closes automatically when this adapter passes again._\n")
+	b.WriteString("_Filed by NITE. It comments on recurrence and closes automatically after the required consecutive passing samples._\n")
 	return b.String()
 }
 
@@ -123,7 +123,7 @@ func renderSummary(ctx renderContext, action string, incidentNumber int) string 
 		incident = fmt.Sprintf("#%d", incidentNumber)
 	}
 	return fmt.Sprintf(
-		"### Nightly incident decision for `%s`\n\n"+
+		"### NITE decision for `%s`\n\n"+
 			"| Field | Value |\n|---|---|\n"+
 			"| Classification | %s |\n"+
 			"| Action | %s |\n"+

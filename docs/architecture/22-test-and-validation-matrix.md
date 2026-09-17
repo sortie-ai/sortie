@@ -314,7 +314,7 @@ These checks are recommended for production readiness and may be skipped in CI w
 - Real integration tests should use isolated test identifiers/workspaces and clean up tracker artifacts when practical.
 - A skipped real-integration test should be reported as skipped, not silently treated as passed.
 - If a real-integration profile is explicitly enabled in CI or release validation, failures should fail that job.
-- A nightly monitor applies a consecutive-sample stability policy to each shard's real-integration run: a configurable number of consecutive failing samples opens or reopens one durable incident per shard, and a configurable number of consecutive passing samples closes it, rather than a single failing or passing sample changing the incident's state by itself.
+- NITE (Nightly Incident Triage Engine) applies a consecutive-sample stability policy to each shard's real-integration run: a configurable number of consecutive failing samples opens or reopens one durable incident per shard, and a configurable number of consecutive passing samples closes it, rather than a single failing or passing sample changing the incident's state by itself.
 - A shard's own job still fails on its first failing sample regardless of the incident's state; the stability policy governs only the durable incident, never the shard's pass/fail conclusion.
 - A degraded read of the incident listing or of the prior-sample history downgrades an incident-opening, reopening, or closing action and raises a visible annotation on the run, rather than silently filing nothing or asserting a recovery the read could not confirm.
 

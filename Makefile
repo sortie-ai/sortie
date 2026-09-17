@@ -25,6 +25,10 @@ clean: ## Remove the binary and all coverage files
 test: ## Run tests with the race detector (PKG=./path/to/pkg  RUN=TestFoo)
 	$(GO) test -race -count=1 $(if $(PKG),$(PKG),./...) $(if $(RUN),-run '$(RUN)',)
 
+.PHONY: test-shell
+test-shell: ## Run shell integration tests
+	sh tests/scripts/nightly-issue.sh
+
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage and print per-package percentages
 	$(GO) test -race -count=1 -covermode=atomic -coverprofile=$(COVERAGE_OUT) \
@@ -96,7 +100,7 @@ generate-check: ## Verify wire_gen.go matches what the generator emits, without 
 	fi
 
 .PHONY: check
-check: lint lint-no-tests lint-shell test generate-check ## Run the CI gates; shell lint covers all tracked scripts
+check: lint lint-no-tests lint-shell test test-shell generate-check ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod

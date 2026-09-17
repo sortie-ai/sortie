@@ -628,7 +628,9 @@ func TestRecordedShapeViolations(t *testing.T) {
 	t.Run("S-3/session_load_then_session_new", func(t *testing.T) {
 		t.Parallel()
 		capture := addSecondSessionNewResponse(mutateSessionEstablishedByLoad(t, base), 4, "sess-0002")
-		_, _, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
 		want := []string{methodSessionLoad, methodSessionNew}
 		if !slices.Equal(observed.establishedBy, want) {
 			t.Errorf("recordedShapeViolations() observed.establishedBy = %v, want %v", observed.establishedBy, want)

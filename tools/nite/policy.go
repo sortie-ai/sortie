@@ -100,12 +100,10 @@ type decision struct {
 // decideAction chooses the action for one sample from the incident
 // state, sample verdict, and derived streaks, following the
 // incident-state/sample/threshold decision table. A HistoryRead of
-// false downgrades open and reopen to none and close to comment; an
-// IncidentRead of false downgrades open to none. Annotation carries a
-// non-empty GitHub workflow command whenever the decision suppresses or
-// downgrades an action on a failing sample: a warning when a failing
-// streak sits below its threshold, an error when a degraded read forced
-// the downgrade.
+// false downgrades open and reopen to none and close to comment. An
+// IncidentRead of false suppresses every incident-state mutation. Annotation
+// carries a non-empty GitHub workflow command whenever a read failure forces
+// a downgrade, or a warning when a failing streak is below its threshold.
 func decideAction(incidentState string, incidentNumber int, current sampleVerdict, streaks streakResult, failureThreshold, passThreshold int, historyRead, incidentRead bool) decision {
 	if current == verdictNotASample {
 		return decision{Action: "none", IncidentNumber: incidentNumber, Reason: "the sample executed no test and does not affect the streak"}
@@ -123,21 +121,31 @@ func decideAction(incidentState string, incidentNumber int, current sampleVerdic
 		case "close":
 			action = "comment"
 			reason = "the prior-run history could not be read, so the recovery is reported without closing the incident"
+			degradedBy = "history"
 		}
 	}
-	if !incidentRead && action == "open" {
-		action = "none"
-		reason = "the incident listing could not be read, so an existing incident cannot be ruled out"
-		degradedBy = "incident"
+	if !incidentRead {
+		switch action {
+		case "open":
+			action = "none"
+			reason = "the incident listing could not be read, so an existing incident cannot be ruled out"
+			degradedBy = "incident"
+		case "reopen", "close":
+			action = "none"
+			reason = "the incident listing could not be read, so the incident state cannot be confirmed"
+			degradedBy = "incident"
+		case "comment":
+			action = "none"
+			reason = "the incident listing could not be read, so the incident cannot be confirmed"
+			degradedBy = "incident"
+		}
 	}
 
 	annotation := ""
-	if current == verdictFailing && action == "none" {
-		if degradedBy != "" {
-			annotation = "::error::" + reason
-		} else {
-			annotation = "::warning::" + reason
-		}
+	if degradedBy != "" {
+		annotation = "::error::" + reason
+	} else if current == verdictFailing && action == "none" {
+		annotation = "::warning::" + reason
 	}
 
 	return decision{Action: action, IncidentNumber: incidentNumber, Reason: reason, Annotation: annotation}

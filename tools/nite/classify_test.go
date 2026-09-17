@@ -129,4 +129,20 @@ func TestClassifySample(t *testing.T) {
 			t.Errorf("classifySample(...).excerpt = last %d bytes mismatch, want the tail of the written output", excerptByteLimit)
 		}
 	})
+
+	t.Run("scanner_error_makes_report_unusable", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "oversized.json")
+		content := `{"Action":"fail","Test":"TestBeforeLimit"}` + "\n" + strings.Repeat("x", 4*1024*1024+1)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+
+		got := classifySample("failure", path)
+
+		if got.Classification != "environment" {
+			t.Errorf("classifySample(%q, %q).Classification = %q, want %q", "failure", path, got.Classification, "environment")
+		}
+	})
 }

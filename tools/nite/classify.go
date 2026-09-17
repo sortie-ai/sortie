@@ -118,6 +118,9 @@ func readTestReport(testReportPath string) (report testReport, reportUsable bool
 			failed[event.Test] = true
 		}
 	}
+	if scanner.Err() != nil {
+		return testReport{}, false
+	}
 
 	if decoded == 0 {
 		if raw, readErr := os.ReadFile(testReportPath); readErr == nil { //nolint:gosec // G304: testReportPath is the workflow's own test-report location

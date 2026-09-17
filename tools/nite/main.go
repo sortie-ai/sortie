@@ -1,16 +1,12 @@
-// Package main implements the nightly-monitor tool: a consecutive-
-// sample stability policy for one nightly integration shard, driven
-// entirely over standard input and standard output. It follows the
-// internal/agent/clientprotocol/schemagen precedent of a tool under
-// internal/ that is reachable only through `go run` and never enters
-// the shipped binary. Start reading at monitorInput and monitorDecision,
-// the wire-boundary shapes main reads and writes.
+// Command nite applies a consecutive-sample incident policy to one nightly
+// integration shard. It is a CI tool and never enters the shipped binary.
 package main
 
 import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -53,24 +49,32 @@ type monitorDecision struct {
 }
 
 func main() {
-	failureThreshold := flag.Int("failure-threshold", 2, "consecutive failing samples required to open or reopen the incident")
-	passThreshold := flag.Int("pass-threshold", 2, "consecutive passing samples required to close the incident")
-	lookback := flag.Int("lookback", 10, "how many prior runs the caller may examine")
-	flag.Parse()
+	os.Exit(run(os.Stdin, os.Stdout, os.Stderr, os.Args[1:]))
+}
+
+func run(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
+	flags := flag.NewFlagSet("nite", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	failureThreshold := flags.Int("failure-threshold", 2, "consecutive failing samples required to open or reopen the incident")
+	passThreshold := flags.Int("pass-threshold", 2, "consecutive passing samples required to close the incident")
+	lookback := flags.Int("lookback", 10, "how many prior runs the caller may examine")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
 
 	if err := validateThresholds(*failureThreshold, *passThreshold, *lookback); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		_, _ = fmt.Fprintln(stderr, err)
+		return 2
 	}
 
 	var input monitorInput
-	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
-		fmt.Fprintf(os.Stderr, "decode monitor input: %v\n", err)
-		os.Exit(2)
+	if err := json.NewDecoder(stdin).Decode(&input); err != nil {
+		_, _ = fmt.Fprintf(stderr, "decode monitor input: %v\n", err)
+		return 2
 	}
 	if err := validateInput(input); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		_, _ = fmt.Fprintln(stderr, err)
+		return 2
 	}
 
 	classification := classifySample(input.Outcome, input.TestReportPath)
@@ -96,10 +100,11 @@ func main() {
 		Annotation:     chosen.Annotation,
 	}
 
-	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
-		fmt.Fprintf(os.Stderr, "encode monitor decision: %v\n", err)
-		os.Exit(1)
+	if err := json.NewEncoder(stdout).Encode(result); err != nil {
+		_, _ = fmt.Fprintf(stderr, "encode monitor decision: %v\n", err)
+		return 1
 	}
+	return 0
 }
 
 // validateThresholds reports an error naming the first flag below its
@@ -120,8 +125,12 @@ func validateThresholds(failureThreshold, passThreshold, lookback int) error {
 // validateInput reports an error naming the first required field that
 // is missing, empty, or out of range in input.
 func validateInput(input monitorInput) error {
-	if input.Outcome == "" {
+	switch input.Outcome {
+	case "success", "failure":
+	case "":
 		return fmt.Errorf("missing required field: outcome")
+	default:
+		return fmt.Errorf("outcome must be success or failure, got %q", input.Outcome)
 	}
 	if input.JobName == "" {
 		return fmt.Errorf("missing required field: job_name")

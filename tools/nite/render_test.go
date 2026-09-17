@@ -63,6 +63,16 @@ func TestRenderBody(t *testing.T) {
 		}
 	})
 
+	t.Run("failing_body_names_consecutive_pass_policy", func(t *testing.T) {
+		t.Parallel()
+
+		got := renderBody("open", verdictFailing, baseRenderContext())
+
+		if !strings.Contains(got, "required consecutive passing samples") {
+			t.Errorf("renderBody(%q, ...) = %q, want consecutive-pass closure wording", "open", got)
+		}
+	})
+
 	t.Run("comment_on_failing_sample_matches_open_body", func(t *testing.T) {
 		t.Parallel()
 

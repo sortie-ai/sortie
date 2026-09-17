@@ -294,17 +294,27 @@ func TestStreaksAndDecideAction(t *testing.T) {
 		}
 	})
 
-	t.Run("incident_read_false_does_not_affect_reopen_or_close", func(t *testing.T) {
+	t.Run("incident_read_false_suppresses_existing_incident_mutations", func(t *testing.T) {
 		t.Parallel()
 
 		reopened := decideAction("closed", 5, verdictFailing, streakResult{failStreak: 2}, 2, 2, true, false)
-		if reopened.Action != "reopen" {
-			t.Errorf("decideAction(%q, ..., incidentRead=false) = %q, want %q", "closed", reopened.Action, "reopen")
+		if reopened.Action != "none" {
+			t.Errorf("decideAction(%q, ..., incidentRead=false) = %q, want %q", "closed", reopened.Action, "none")
 		}
 
 		closed := decideAction("open", 5, verdictPassing, streakResult{passStreak: 2}, 2, 2, true, false)
-		if closed.Action != "close" {
-			t.Errorf("decideAction(%q, ..., incidentRead=false) = %q, want %q", "open", closed.Action, "close")
+		if closed.Action != "none" {
+			t.Errorf("decideAction(%q, ..., incidentRead=false) = %q, want %q", "open", closed.Action, "none")
+		}
+
+		commented := decideAction("open", 5, verdictFailing, streakResult{failStreak: 1}, 2, 2, true, false)
+		if commented.Action != "none" {
+			t.Errorf("decideAction(%q, ..., incidentRead=false) = %q, want %q", "open", commented.Action, "none")
+		}
+		for _, got := range []decision{reopened, closed, commented} {
+			if got.Annotation == "" {
+				t.Errorf("decideAction(..., incidentRead=false).Annotation is empty, want a degraded-read annotation")
+			}
 		}
 	})
 
@@ -327,6 +337,9 @@ func TestStreaksAndDecideAction(t *testing.T) {
 		closed := decideAction("open", 5, verdictPassing, streakResult{passStreak: 1}, 1, 1, false, true)
 		if closed.Action != "comment" {
 			t.Errorf("decideAction(%q, ..., historyRead=false) = %q, want %q", "open", closed.Action, "comment")
+		}
+		if closed.Annotation == "" {
+			t.Error("decideAction(open, ..., historyRead=false).Annotation is empty, want a degraded-read annotation")
 		}
 	})
 
