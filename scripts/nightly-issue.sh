@@ -220,7 +220,7 @@ decide() {
 	DECIDE_DONE=0
 	trap decide_exit_trap EXIT HUP INT TERM
 
-	require_tools gh jq date mktemp sort head cut
+	require_tools gh jq awk date mktemp sort head cut
 	require_env GH_TOKEN RUN_HISTORY_TOKEN GH_REPO NITE_BIN ADAPTER ADAPTER_NAME KIND SOURCE \
 		ADAPTER_VERSION TEST_ISSUE_TYPE_ID JOB_NAME OUTCOME DEFAULT_BRANCH \
 		GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_SERVER_URL GITHUB_SHA GITHUB_STEP_SUMMARY
