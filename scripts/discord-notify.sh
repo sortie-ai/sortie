@@ -19,7 +19,10 @@ main() {
 	require_tools curl jq
 	require_env DISCORD_WEBHOOK
 
-	_body=$(jq -Rs --argjson limit "$CONTENT_LIMIT" '{content: .[0:$limit]}')
+	# A webhook parses user mentions out of content unless told otherwise, and
+	# the callers put tracker-supplied text in there.
+	_body=$(jq -Rs --argjson limit "$CONTENT_LIMIT" \
+		'{content: .[0:$limit], allowed_mentions: {parse: []}}')
 
 	if ! _status=$(printf '%s' "$_body" | curl -s -o /dev/null -w '%{http_code}' \
 		--max-time 30 \
