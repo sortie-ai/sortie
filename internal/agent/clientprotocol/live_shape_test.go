@@ -68,7 +68,7 @@ func (e liveEnvelope) hasError() bool {
 // recordedShapeViolations is the whole contract, as a pure function over
 // one capture. It performs no I/O and touches no testing.T, so the
 // ungated controls drive it directly.
-func recordedShapeViolations(clientLines, agentLines [][]byte, events []domain.AgentEvent, expect captureExpectation) (violations []string, observed shapeObservation) {
+func recordedShapeViolations(clientLines, agentLines [][]byte, events []domain.AgentEvent, expect captureExpectation) (violations, observations []string, observed shapeObservation) {
 	observed.sessionUpdates = make(map[string]int)
 
 	// The client direction supplies the JSON-RPC id to method map,
@@ -224,10 +224,10 @@ func recordedShapeViolations(clientLines, agentLines [][]byte, events []domain.A
 	}
 
 	if expect == expectToolForcingTurn && observed.toolCallPairs == 0 {
-		violations = append(violations, "S-10: no tool_call was paired with a terminal tool_call_update (completed or failed)")
+		observations = append(observations, "model-dependent observation: no tool_call was paired with a terminal tool_call_update (completed or failed)")
 	}
 
-	return violations, observed
+	return violations, observations, observed
 }
 
 // shapeFixtureLine is one decoded JSON-RPC line from a live_shape
@@ -309,7 +309,7 @@ func (c shapeCapture) clone(t *testing.T) shapeCapture {
 }
 
 // violations encodes c and drives recordedShapeViolations over it.
-func (c shapeCapture) violations(t *testing.T, expect captureExpectation, events []domain.AgentEvent) ([]string, shapeObservation) {
+func (c shapeCapture) violations(t *testing.T, expect captureExpectation, events []domain.AgentEvent) ([]string, []string, shapeObservation) {
 	t.Helper()
 	return recordedShapeViolations(encodeShapeFixtureLines(t, c.client), encodeShapeFixtureLines(t, c.agent), events, expect)
 }
@@ -565,6 +565,17 @@ func assertNoViolations(t *testing.T, violations []string) {
 	}
 }
 
+// assertNoObservations fails t unless observations is empty. Every
+// deterministic control keeps producing an empty observations slice,
+// per Verification property 2: only the S-10 measurement is
+// model-dependent, and no control in this test drives it.
+func assertNoObservations(t *testing.T, observations []string) {
+	t.Helper()
+	if len(observations) != 0 {
+		t.Errorf("recordedShapeViolations() observations = %v, want none", observations)
+	}
+}
+
 // assertViolationsExactly fails t unless violations has exactly one
 // entry per wantPrefixes, each starting with the corresponding
 // prefix, order-independent. A mutation that empties every observed
@@ -601,21 +612,23 @@ func TestRecordedShapeViolations(t *testing.T) {
 
 	t.Run("clean_capture", func(t *testing.T) {
 		t.Parallel()
-		violations, _ := base.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, _ := base.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-3/session_load_only", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateSessionEstablishedByLoad(t, base)
-		violations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-3/session_load_then_session_new", func(t *testing.T) {
 		t.Parallel()
 		capture := addSecondSessionNewResponse(mutateSessionEstablishedByLoad(t, base), 4, "sess-0002")
-		_, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		_, _, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		want := []string{methodSessionLoad, methodSessionNew}
 		if !slices.Equal(observed.establishedBy, want) {
 			t.Errorf("recordedShapeViolations() observed.establishedBy = %v, want %v", observed.establishedBy, want)
@@ -625,43 +638,49 @@ func TestRecordedShapeViolations(t *testing.T) {
 	t.Run("handshake_only/no_violation_under_handshake_only", func(t *testing.T) {
 		t.Parallel()
 		capture := handshakeOnlyCapture(t, base)
-		violations, _ := capture.violations(t, expectHandshakeOnly, nil)
+		violations, observations, _ := capture.violations(t, expectHandshakeOnly, nil)
 		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("handshake_only/S-4_violation_under_completed_turn", func(t *testing.T) {
 		t.Parallel()
 		capture := handshakeOnlyCapture(t, base)
-		violations, _ := capture.violations(t, expectCompletedTurn, nil)
+		violations, observations, _ := capture.violations(t, expectCompletedTurn, nil)
 		assertViolationsExactly(t, violations, "S-4:", "S-6:", "S-7:")
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-2/agentInfo_removed", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateInitAgentInfoRemoved(t, base)
-		violations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertViolationsExactly(t, violations, "S-2:")
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-2/agentInfo_version_empty", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateInitAgentInfoVersionEmpty(t, base)
-		violations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertViolationsExactly(t, violations, "S-2:")
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-5/stop_reason_changed", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateStopReasonChanged(t, base, string(stopReasonMaxTurnRequests))
-		violations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, _ := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertViolationsExactly(t, violations, "S-5:")
+		assertNoObservations(t, observations)
 	})
 
 	t.Run("S-6/agent_message_chunk_removed", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateEveryAgentMessageChunkRemoved(t, base)
-		violations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertViolationsExactly(t, violations, "S-6:", "S-7:")
+		assertNoObservations(t, observations)
 		if observed.sessionUpdates[sessionUpdateAgentMessageChunk] != 0 {
 			t.Errorf("observed.sessionUpdates[%q] = %d, want 0", sessionUpdateAgentMessageChunk, observed.sessionUpdates[sessionUpdateAgentMessageChunk])
 		}
@@ -670,8 +689,9 @@ func TestRecordedShapeViolations(t *testing.T) {
 	t.Run("S-7/all_chunks_non_text", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateAllAgentMessageChunksToNonText(t, base)
-		violations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertViolationsExactly(t, violations, "S-7:")
+		assertNoObservations(t, observations)
 		if observed.nonTextChunks == 0 {
 			t.Errorf("observed.nonTextChunks = %d, want greater than 0", observed.nonTextChunks)
 		}
@@ -680,8 +700,9 @@ func TestRecordedShapeViolations(t *testing.T) {
 	t.Run("S-7/one_chunk_non_text", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateOneAgentMessageChunkToNonText(t, base)
-		violations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		violations, observations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
 		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
 		if observed.nonTextChunks != 1 {
 			t.Errorf("observed.nonTextChunks = %d, want 1", observed.nonTextChunks)
 		}
@@ -689,8 +710,9 @@ func TestRecordedShapeViolations(t *testing.T) {
 
 	t.Run("S-9/tool_result_event_missing", func(t *testing.T) {
 		t.Parallel()
-		violations, observed := base.violations(t, expectToolForcingTurn, nil)
+		violations, observations, observed := base.violations(t, expectToolForcingTurn, nil)
 		assertViolationsExactly(t, violations, "S-9:")
+		assertNoObservations(t, observations)
 		if observed.toolCallPairs == 0 {
 			t.Errorf("observed.toolCallPairs = %d, want greater than 0", observed.toolCallPairs)
 		}
@@ -699,8 +721,11 @@ func TestRecordedShapeViolations(t *testing.T) {
 	t.Run("S-10/tool_call_removed", func(t *testing.T) {
 		t.Parallel()
 		capture := mutateEveryToolCallRemoved(t, base)
-		violations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
-		assertViolationsExactly(t, violations, "S-10:")
+		violations, observations, observed := capture.violations(t, expectToolForcingTurn, toolResultEvents)
+		assertNoViolations(t, violations)
+		if len(observations) != 1 || !strings.HasPrefix(observations[0], "model-dependent observation: ") {
+			t.Errorf("recordedShapeViolations() observations = %v, want exactly one entry prefixed %q", observations, "model-dependent observation: ")
+		}
 		if observed.toolCallPairs != 0 {
 			t.Errorf("observed.toolCallPairs = %d, want 0", observed.toolCallPairs)
 		}

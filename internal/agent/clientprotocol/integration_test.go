@@ -186,9 +186,12 @@ func assertLiveProtocolConformance(t *testing.T, capture liveProtocolCapture) {
 	if capture.events != nil {
 		events = capture.events()
 	}
-	shapeViolations, observed := recordedShapeViolations(capturedJSONLines(t, capture.clientPath), capturedJSONLines(t, capture.agentPath), events, capture.expect)
+	shapeViolations, shapeObservations, observed := recordedShapeViolations(capturedJSONLines(t, capture.clientPath), capturedJSONLines(t, capture.agentPath), events, capture.expect)
 	for _, v := range shapeViolations {
 		t.Errorf("live shape violation: %s", v)
+	}
+	for _, o := range shapeObservations {
+		t.Logf("live shape observation: %s", o)
 	}
 	t.Logf("live shape observation: %+v", observed)
 }
