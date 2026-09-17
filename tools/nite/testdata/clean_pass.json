@@ -1,0 +1,6 @@
+{"Time":"2026-09-08T02:14:01.001Z","Action":"run","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestHandshake"}
+{"Time":"2026-09-08T02:14:01.002Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestHandshake","Output":"=== RUN   TestHandshake\n"}
+{"Time":"2026-09-08T02:14:01.150Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestHandshake","Output":"--- PASS: TestHandshake (0.15s)\n"}
+{"Time":"2026-09-08T02:14:01.150Z","Action":"pass","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestHandshake","Elapsed":0.15}
+{"Time":"2026-09-08T02:14:01.151Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Output":"PASS\n"}
+{"Time":"2026-09-08T02:14:01.151Z","Action":"pass","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Elapsed":0.151}

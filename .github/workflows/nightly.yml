@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: nightly
@@ -224,6 +225,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Build NITE
+        run: go build -o "$RUNNER_TEMP/nite" ./tools/nite
+
       - name: Set up Node.js
         if: ${{ matrix.node }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -323,27 +327,24 @@ jobs:
             echo "outcome=success" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: File or update failure issue
-        if: steps.check.outputs.outcome == 'failure'
+      - name: Decide nightly incident state
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CICDBOT_TOKEN }}
+          RUN_HISTORY_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          NITE_BIN: ${{ runner.temp }}/nite
           ADAPTER: ${{ matrix.adapter }}
           ADAPTER_NAME: ${{ matrix.name }}
           KIND: ${{ matrix.kind }}
           SOURCE: ${{ matrix.source }}
           # See  `gh api orgs/sortie-ai/issue-types`
           TEST_ISSUE_TYPE_ID: IT_kwDOEAsIKM4B7Iak
-        run: scripts/nightly-issue.sh report
-
-      - name: Close resolved issue
-        if: steps.check.outputs.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.CICDBOT_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          ADAPTER: ${{ matrix.adapter }}
-          ADAPTER_NAME: ${{ matrix.name }}
-        run: scripts/nightly-issue.sh resolve
+          JOB_NAME: "Integration: ${{ matrix.name }}"
+          TEST_REPORT_PATH: gotest.json
+          OUTCOME: ${{ steps.check.outputs.outcome }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: scripts/nightly-issue.sh decide
 
       - name: Fail job on integration failure
         if: steps.check.outputs.outcome == 'failure'

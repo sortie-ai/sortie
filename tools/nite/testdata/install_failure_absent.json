@@ -1,0 +1,3 @@
+go: downloading github.com/sortie-ai/fake-dep v1.4.0
+go: github.com/sortie-ai/fake-dep@v1.4.0: reading github.com/sortie-ai/fake-dep/go.mod at revision v1.4.0: unknown revision v1.4.0
+FAIL	github.com/sortie-ai/sortie/internal/agent/clientprotocol [setup failed]
