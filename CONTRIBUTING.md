@@ -15,7 +15,7 @@ If nothing catches your eye, test coverage and documentation fixes are always us
 make test-coverage | grep -v '100.0%' | sort -k3 -n
 ```
 
-For larger work - new features, new adapters, architectural changes - open an issue first to discuss the approach.
+For larger work - new features, new adapters, architectural changes - open an issue first to discuss the approach. To talk it through before writing anything down, join the [Discord server](https://discord.gg/MCNrc8Wf9M). Decisions still land in the issue, so they stay findable.
 
 ## Setup
 
