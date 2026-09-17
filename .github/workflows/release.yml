@@ -13,6 +13,18 @@ on:
         required: false
         type: boolean
         default: false
+      # Off by default. The free-trial certificate is self-signed, so a signed
+      # binary is no more trusted on Windows than an unsigned one, and the
+      # trial's yearly artifact-volume quota is spent. Enabling this needs a
+      # certificate chained to a CA in the Microsoft Trusted Root Program, plus
+      # a `!inputs.dry_run` gate on the signing hook: a dry run submits the same
+      # two Windows binaries as a real release and spends half the quota on
+      # artifacts it discards.
+      sign_windows:
+        description: "Authenticode-sign the Windows binaries with SignPath"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -602,7 +614,7 @@ jobs:
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
 
       - name: Verify SignPath configuration is present
-        if: ${{ !inputs.dry_run }}
+        if: ${{ inputs.sign_windows && !inputs.dry_run }}
         env:
           SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -618,7 +630,7 @@ jobs:
           echo "✓ SignPath configuration is present"
 
       - name: Install SignPath signing module
-        if: ${{ vars.SIGNPATH_ORG_ID != '' }}
+        if: ${{ inputs.sign_windows && vars.SIGNPATH_ORG_ID != '' }}
         shell: pwsh
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
@@ -656,8 +668,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ inputs.sign_windows && vars.SIGNPATH_ORG_ID || '' }}
+          SIGNPATH_API_TOKEN: ${{ inputs.sign_windows && secrets.SIGNPATH_API_TOKEN || '' }}
           SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
 
