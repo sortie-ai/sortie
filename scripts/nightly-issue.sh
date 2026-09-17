@@ -162,12 +162,12 @@ fetch_run_history() {
 		fi
 		_frh_examined=$((_frh_examined + 1))
 
-		if ! _frh_jobs_json=$(GH_TOKEN="$RUN_HISTORY_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${_frh_run_id}/jobs?per_page=100"); then
+		if ! _frh_jobs_json=$(GH_TOKEN="$RUN_HISTORY_TOKEN" gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${_frh_run_id}/jobs?per_page=100" --jq '.jobs[]'); then
 			_frh_failed=1
 			break
 		fi
-		_frh_conclusion=$(printf '%s' "$_frh_jobs_json" | jq -r --arg name "$JOB_NAME" \
-			'[.jobs[] | select(.name == $name) | .conclusion] | (first // empty)')
+		_frh_conclusion=$(printf '%s' "$_frh_jobs_json" | jq -r -s --arg name "$JOB_NAME" \
+			'[.[] | select(.name == $name) | .conclusion] | (first // empty)')
 		if [ -z "$_frh_conclusion" ]; then
 			continue
 		fi
