@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
+name: Issue notification
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+# Cancelling drops the notification outright.
+concurrency:
+  group: issue-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    name: Notify Discord
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # The Nightly workflow already reports its own incidents. Filtering on the
+    # label is sound because scripts/nightly-issue.sh attaches it inside the
+    # same GraphQL createIssue mutation that files the issue, so it is present
+    # in this payload rather than added by a later call racing this workflow.
+    if: >-
+      !contains(github.event.issue.labels.*.name, 'ci-nightly')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Post the new issue
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
+          # An issue title is attacker-controlled, and `${{ }}` inside a run
+          # block substitutes before the shell parses it.
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+        run: |
+          if [ -z "${DISCORD_WEBHOOK}" ]; then
+            echo "::warning::DISCORD_WEBHOOK_CI is not configured; skipping"
+            exit 0
+          fi
+
+          {
+            printf 'New issue #%s by %s\n' "${ISSUE_NUMBER}" "${ISSUE_AUTHOR}"
+            printf '%s\n' "${ISSUE_TITLE}"
+            printf '<%s>\n' "${ISSUE_URL}"
+          } >message.txt
+
+          scripts/discord-notify.sh <message.txt
