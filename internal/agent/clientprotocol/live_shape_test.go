@@ -430,13 +430,14 @@ func shapeResponseResult(t *testing.T, lines []shapeFixtureLine, id int) map[str
 }
 
 // nonTextContentBlock is a synthetic content block whose type is not
-// text, for the S-7 controls.
+// text, for the controls over text content.
 func nonTextContentBlock() map[string]any {
 	return map[string]any{"type": contentBlockImage, "data": "ZmFrZQ==", "mimeType": "image/png"}
 }
 
 // mutateInitAgentInfoRemoved removes the initialize response's
-// agentInfo member entirely, targeting S-2.
+// agentInfo member entirely, so the agentInfo completeness check has
+// nothing to read.
 func mutateInitAgentInfoRemoved(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -445,7 +446,8 @@ func mutateInitAgentInfoRemoved(t *testing.T, c shapeCapture) shapeCapture {
 }
 
 // mutateInitAgentInfoVersionEmpty sets the initialize response's
-// agentInfo.version to the empty string, targeting S-2.
+// agentInfo.version to the empty string, driving the agentInfo
+// completeness check through its empty-value arm.
 func mutateInitAgentInfoVersionEmpty(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -458,7 +460,7 @@ func mutateInitAgentInfoVersionEmpty(t *testing.T, c shapeCapture) shapeCapture 
 }
 
 // mutateStopReasonChanged rewrites the session/prompt response's
-// stopReason to reason, targeting S-5.
+// stopReason to reason, driving the stop-reason check.
 func mutateStopReasonChanged(t *testing.T, c shapeCapture, reason string) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -467,7 +469,7 @@ func mutateStopReasonChanged(t *testing.T, c shapeCapture, reason string) shapeC
 }
 
 // mutateEveryAgentMessageChunkRemoved drops every agent_message_chunk
-// session/update notification, targeting S-6.
+// session/update notification, driving the chunk-presence check.
 func mutateEveryAgentMessageChunkRemoved(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -477,7 +479,7 @@ func mutateEveryAgentMessageChunkRemoved(t *testing.T, c shapeCapture) shapeCapt
 
 // mutateEveryToolCallRemoved drops every tool_call session/update
 // notification, leaving its tool_call_update counterpart in place so
-// the pairing that closes S-10 cannot form, targeting S-10.
+// the tool-call pairing cannot form.
 func mutateEveryToolCallRemoved(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -486,8 +488,8 @@ func mutateEveryToolCallRemoved(t *testing.T, c shapeCapture) shapeCapture {
 }
 
 // mutateAllAgentMessageChunksToNonText replaces the content block of
-// every agent_message_chunk notification with a non-text one,
-// targeting the S-7-violated control.
+// every agent_message_chunk notification with a non-text one, so no
+// chunk carries text.
 func mutateAllAgentMessageChunksToNonText(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -499,7 +501,7 @@ func mutateAllAgentMessageChunksToNonText(t *testing.T, c shapeCapture) shapeCap
 
 // mutateOneAgentMessageChunkToNonText replaces the content block of
 // the first agent_message_chunk notification only, leaving at least
-// one text chunk, targeting the S-7-satisfied control.
+// one text chunk, so the text-content check still passes.
 func mutateOneAgentMessageChunkToNonText(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -519,7 +521,8 @@ func mutateOneAgentMessageChunkToNonText(t *testing.T, c shapeCapture) shapeCapt
 
 // mutateSessionEstablishedByLoad retargets the session/new request to
 // session/load, so the matching response resolves through the
-// session/load branch of S-3 instead of session/new.
+// session/load branch of the session-establishing check instead of
+// session/new.
 func mutateSessionEstablishedByLoad(t *testing.T, c shapeCapture) shapeCapture {
 	t.Helper()
 	mutated := c.clone(t)
@@ -566,9 +569,9 @@ func assertNoViolations(t *testing.T, violations []string) {
 }
 
 // assertNoObservations fails t unless observations is empty. Every
-// deterministic control keeps producing an empty observations slice,
-// per Verification property 2: only the S-10 measurement is
-// model-dependent, and no control in this test drives it.
+// deterministic control keeps producing an empty observations slice:
+// only the tool-path measurement is model-dependent, and no control in
+// this test drives it.
 func assertNoObservations(t *testing.T, observations []string) {
 	t.Helper()
 	if len(observations) != 0 {
@@ -579,8 +582,9 @@ func assertNoObservations(t *testing.T, observations []string) {
 // assertViolationsExactly fails t unless violations has exactly one
 // entry per wantPrefixes, each starting with the corresponding
 // prefix, order-independent. A mutation that empties every observed
-// agent_message_chunk, for example, legitimately breaks both S-6 and
-// S-7 at once, per the rule the two checks apply independently; this
+// agent_message_chunk, for example, legitimately breaks both the
+// chunk-presence and the text-content checks at once, because the two
+// apply independently; this
 // asserts the whole set a control produces, not just one member of
 // it, so an unrelated extra violation still fails the test.
 func assertViolationsExactly(t *testing.T, violations []string, wantPrefixes ...string) {
