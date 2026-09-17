@@ -14,7 +14,7 @@ Sortie follows [Semantic Versioning](https://semver.org/). Security fixes are ap
 
 | Version | Supported |
 |---------|-----------|
-| 1.24.x | Yes (1.24.0 recommended) |
+| 1.24.x | Yes (1.24.1 recommended) |
 | 1.23.x | Security patches until 11 Dec 2026 |
 | < 1.23 | No |
 
