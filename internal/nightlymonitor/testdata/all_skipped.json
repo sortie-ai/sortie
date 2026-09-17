@@ -1,0 +1,6 @@
+{"Time":"2026-09-08T02:14:01.001Z","Action":"run","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestGatedLiveCapture"}
+{"Time":"2026-09-08T02:14:01.002Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestGatedLiveCapture","Output":"=== RUN   TestGatedLiveCapture\n"}
+{"Time":"2026-09-08T02:14:01.003Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestGatedLiveCapture","Output":"    live_shape_test.go:42: skipping: set SORTIE_CLIENTPROTOCOL_TEST=1 to enable\n"}
+{"Time":"2026-09-08T02:14:01.003Z","Action":"skip","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestGatedLiveCapture","Elapsed":0}
+{"Time":"2026-09-08T02:14:01.004Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Output":"PASS\n"}
+{"Time":"2026-09-08T02:14:01.004Z","Action":"pass","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Elapsed":0.004}

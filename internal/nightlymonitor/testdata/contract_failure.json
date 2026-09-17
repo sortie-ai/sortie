@@ -1,0 +1,7 @@
+{"Time":"2026-09-08T02:14:01.001Z","Action":"run","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestRecordedShapeViolations/S-9/tool_result_event_missing"}
+{"Time":"2026-09-08T02:14:01.002Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestRecordedShapeViolations/S-9/tool_result_event_missing","Output":"=== RUN   TestRecordedShapeViolations/S-9/tool_result_event_missing\n"}
+panic: runtime error: index out of range [3] with length 3
+{"Time":"2026-09-08T02:14:01.090Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestRecordedShapeViolations/S-9/tool_result_event_missing","Output":"    live_shape_test.go:693: recordedShapeViolations() unexpected violation \"S-11: extra\"\n"}
+{"Time":"2026-09-08T02:14:01.091Z","Action":"fail","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Test":"TestRecordedShapeViolations/S-9/tool_result_event_missing","Elapsed":0.09}
+{"Time":"2026-09-08T02:14:01.092Z","Action":"output","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Output":"FAIL\n"}
+{"Time":"2026-09-08T02:14:01.092Z","Action":"fail","Package":"github.com/sortie-ai/sortie/internal/agent/clientprotocol","Elapsed":0.092}
