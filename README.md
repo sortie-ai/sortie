@@ -14,7 +14,7 @@ Run the coding agents you already use on tasks from your issue tracker - in para
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
 [![Go Reference](https://pkg.go.dev/badge/github.com/sortie-ai/sortie.svg)](https://pkg.go.dev/github.com/sortie-ai/sortie)
 
-[Website](https://sortie-ai.com) · [Documentation](https://docs.sortie-ai.com) · [Contributing](CONTRIBUTING.md)
+[Website](https://sortie-ai.com) · [Documentation](https://docs.sortie-ai.com) · [Discord](https://discord.gg/MCNrc8Wf9M) · [Contributing](CONTRIBUTING.md)
 
 **English | [简体中文](README.zh-CN.md)**
 
