@@ -20,12 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// spawnDetachedChildScenario names the Go fake runtime
-// TestLaunchNativeProbe's process-group case launches as its own
-// leader: it starts hangPath as a background child, left in the same
-// process group since it sets no SysProcAttr of its own, and writes
-// the child's pid to args[0] before exiting - mirroring a shell leader
-// that backgrounds a job and reports its own $!.
 const spawnDetachedChildScenario = "spawn-detached-child"
 
 func spawnDetachedChild(args []string, hangPath string) int {
@@ -45,11 +39,6 @@ func spawnDetachedChild(args []string, hangPath string) int {
 	return 0
 }
 
-// versionCanaryScenario names the Go fake runtime
-// TestRunAuthenticationCanary launches: it answers out when its first
-// argument is --version, matching sampleProfileJSON's own
-// version_args, and otherwise fails loudly so a canary that stopped
-// passing that argument would redden this control rather than pass it.
 const versionCanaryScenario = "version-canary"
 
 func runVersionCanary(args []string, out agenttest.Output) int {
@@ -60,9 +49,6 @@ func runVersionCanary(args []string, out agenttest.Output) int {
 	return out.Run()
 }
 
-// init registers this build tag's own fake-runtime scenarios into
-// probeScenarios, declared in probe_test.go, alongside the
-// agenttest.OutputScenario every platform can already launch.
 func init() {
 	probeScenarios[mcpToolServerScenario] = agenttest.Typed(runMCPToolServer)
 	probeScenarios[spawnDetachedChildScenario] = agenttest.Typed(spawnDetachedChild)
@@ -104,8 +90,6 @@ func TestSetProcessGroup(t *testing.T) {
 	})
 }
 
-// waitStatusSignaled reports whether waitErr, an *exec.ExitError from a
-// process this test started, terminated by signal.
 func waitStatusSignaled(t *testing.T, waitErr error) bool {
 	t.Helper()
 	var exitErr *exec.ExitError
@@ -119,10 +103,6 @@ func waitStatusSignaled(t *testing.T, waitErr error) bool {
 	return status.Signaled()
 }
 
-// TestSignalProcessGroup covers the ESRCH-suppression contract that
-// distinguishes this function from a bare syscall.Kill, and proves the
-// signal is actually delivered to a live process group rather than
-// merely returning nil unconditionally.
 func TestSignalProcessGroup(t *testing.T) {
 	t.Parallel()
 
@@ -160,9 +140,6 @@ func TestSignalProcessGroup(t *testing.T) {
 	})
 }
 
-// TestLaunchNativeProbe drives launchNativeProbe against a real stub
-// executable per case, so every assertion below is provable against a
-// live subprocess rather than a canned return value.
 func TestLaunchNativeProbe(t *testing.T) {
 	t.Parallel()
 
@@ -221,13 +198,11 @@ func TestLaunchNativeProbe(t *testing.T) {
 
 		dir := t.TempDir()
 		pidFile := filepath.Join(dir, "descendant.pid")
-		// spawnDetachedChild starts the grandchild with a nil Stdout and
-		// Stderr, which os/exec connects to the null device rather than
-		// inheriting the leader's own piped Stdout and Stderr: os/exec's
-		// Wait blocks until every holder of the write end of a piped
-		// Stdout or Stderr closes it, and an inherited pipe would hold
-		// that open for as long as the grandchild hangs, stalling
-		// cmd.Wait() long after the leader itself has exited.
+		// The grandchild is started with nil Stdout/Stderr, which os/exec routes
+		// to the null device rather than inheriting the leader's piped streams:
+		// cmd.Wait blocks until every holder of a piped stream's write end closes
+		// it, so an inherited pipe would stall Wait for as long as the grandchild
+		// hangs, long after the leader exited.
 		hangPath := agenttest.FakeRuntime(t, dir, "grandchild", agenttest.OutputScenario, agenttest.Output{Hang: true})
 		script := agenttest.FakeRuntime(t, dir, "leader", spawnDetachedChildScenario, hangPath)
 
@@ -264,11 +239,6 @@ func corroborateAbsentSurfaceCoordinates(t *testing.T, runtimePath string) Coord
 	return Coordinates{CommandPath: runtimePath, Model: "fixture-model", Profile: profile}
 }
 
-// TestCorroborateAbsentSurface confirms the ordinary path: a native
-// launch whose output the profile's recognizer does not recognize
-// corroborates the declared absence and passes, driven through the
-// real recognizer against a real subprocess rather than a canned
-// return value.
 func TestCorroborateAbsentSurface(t *testing.T) {
 	t.Parallel()
 
@@ -277,21 +247,6 @@ func TestCorroborateAbsentSurface(t *testing.T) {
 	corroborateAbsentSurface(t, coords, qualification.SurfaceNativeJSON)
 }
 
-// TestCorroborateAbsentSurfaceFailsOnARecognizedTerminal is the
-// function's mandatory negative control: a native launch whose output
-// the same recognizer DOES recognize as a terminal outcome - the
-// function's own regression target, a runtime that starts responding
-// on a surface its profile still declares absent - must fail the
-// corroboration rather than pass it silently. Tuning the stub toward
-// this expectation would make the test fail, not pass, which is why
-// this direction cannot be gamed the way a positive-only assertion
-// could be.
-//
-// The failing call runs in a subprocess, matching the
-// TestGatedFatalsOnInvalidCoordinate idiom already established in
-// probe_test.go: calling t.Fatalf directly against this test's own
-// *testing.T would mark this whole package's run failed, which is not
-// the behavior under test here.
 func TestCorroborateAbsentSurfaceFailsOnARecognizedTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -314,9 +269,6 @@ func TestCorroborateAbsentSurfaceFailsOnARecognizedTerminal(t *testing.T) {
 	}
 }
 
-// TestDefaultOutputDir confirms the ordinary path: a fresh,
-// run-scoped, sortie-qualification-prefixed directory outside the
-// repository tree, removed by this test once observed.
 func TestDefaultOutputDir(t *testing.T) {
 	t.Parallel()
 
@@ -340,14 +292,6 @@ func TestDefaultOutputDir(t *testing.T) {
 	}
 }
 
-// TestDefaultOutputDirRejectsRepositoryTreeTempDir drives the guard
-// through a helper subprocess, matching the TestGatedFatalsOnInvalidCoordinate
-// idiom already established in probe_test.go: calling t.Fatalf directly
-// against this test's own *testing.T would mark this whole package's
-// run failed, which is not the behavior under test. TMPDIR is
-// redirected into a scratch directory under the repository tree so
-// os.MkdirTemp resolves there, giving the guard a real overlap to
-// reject instead of a canned one.
 func TestDefaultOutputDirRejectsRepositoryTreeTempDir(t *testing.T) {
 	t.Parallel()
 
@@ -382,10 +326,6 @@ func TestDefaultOutputDirRejectsRepositoryTreeTempDir(t *testing.T) {
 	}
 }
 
-// TestMustRepositoryRoot confirms mustRepositoryRoot forwards to
-// qualification.RepositoryRootFromWD rather than returning some other
-// directory, and that what it returns actually carries the repository
-// root marker.
 func TestMustRepositoryRoot(t *testing.T) {
 	t.Parallel()
 
@@ -447,10 +387,6 @@ func TestRunAuthenticationCanary(t *testing.T) {
 	})
 }
 
-// TestPathWithin covers the containment check the profile-supplied
-// paths rely on, including the case a textual comparison cannot see: a
-// symlink inside the tree pointing outside it. This repository itself
-// carries such a link, so the case is not hypothetical.
 func TestPathWithin(t *testing.T) {
 	t.Parallel()
 
@@ -500,10 +436,6 @@ func TestPathWithin(t *testing.T) {
 	}
 }
 
-// reapedProcessGroupLeaderPID starts and waits out a trivial process
-// group leader, returning its pid once the kernel has reaped it, so a
-// test can assert against a process group that provably no longer
-// exists rather than one merely assumed absent.
 func reapedProcessGroupLeaderPID(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("true")
@@ -518,10 +450,6 @@ func reapedProcessGroupLeaderPID(t *testing.T) int {
 	return pid
 }
 
-// TestAssertSessionGroupAbsent confirms the ordinary path: a session
-// whose AgentPID names a process group the kernel has already reaped
-// is confirmed absent without failing t, driven against a real
-// subprocess's own pid rather than a canned one.
 func TestAssertSessionGroupAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -529,13 +457,6 @@ func TestAssertSessionGroupAbsent(t *testing.T) {
 	assertSessionGroupAbsent(t, domain.Session{AgentPID: strconv.Itoa(pid)})
 }
 
-// TestAssertSessionGroupAbsentFailsOnUnparsablePID is the function's
-// negative control: an AgentPID that does not parse as a process id
-// must fail t rather than silently skip the liveness check. The
-// failing call runs in a subprocess, matching the idiom already
-// established above: calling t.Fatalf directly against this test's
-// own *testing.T would fail the whole package run rather than exercise
-// the behavior under test.
 func TestAssertSessionGroupAbsentFailsOnUnparsablePID(t *testing.T) {
 	t.Parallel()
 
@@ -556,10 +477,6 @@ func TestAssertSessionGroupAbsentFailsOnUnparsablePID(t *testing.T) {
 	}
 }
 
-// TestRepositoryPath covers the two non-fatal outcomes: a rel that
-// does not exist yet, returned unchecked for the caller's own error to
-// report, and one that exists inside root, confirmed contained and
-// returned.
 func TestRepositoryPath(t *testing.T) {
 	t.Parallel()
 
@@ -587,11 +504,6 @@ func TestRepositoryPath(t *testing.T) {
 	})
 }
 
-// TestRepositoryPathFailsOnPathEscapingRoot is the function's negative
-// control: a rel that exists but resolves outside root, through a
-// symlink, must fail t rather than return the escaping path. The
-// failing call runs in a subprocess for the same reason the controls
-// above do.
 func TestRepositoryPathFailsOnPathEscapingRoot(t *testing.T) {
 	t.Parallel()
 
@@ -620,12 +532,6 @@ func TestRepositoryPathFailsOnPathEscapingRoot(t *testing.T) {
 	}
 }
 
-// TestAwaitMinuteBoundaryReturnsImmediatelyOutsideTheCurrentMinute
-// covers the loop-not-entered path: a createdAt whose own UTC minute
-// already differs from the current one needs no wait at all. The
-// waiting path itself is not exercised here - it would need the real
-// wall clock to cross a minute boundary mid-test, which is not a bound
-// a unit test should depend on.
 func TestAwaitMinuteBoundaryReturnsImmediatelyOutsideTheCurrentMinute(t *testing.T) {
 	t.Parallel()
 

@@ -10,11 +10,10 @@ import (
 	"testing"
 )
 
-// importManifest maps each github.com/sortie-ai/sortie/internal import
-// the harness's non-test files may carry to the reason it is required.
-// It freezes the harness's dependency set so the package cannot grow
-// into a general-purpose bridge: an import this map does not name, or
-// an entry no non-test file imports, is a guard failure.
+// importManifest freezes the harness's github.com/sortie-ai/sortie/internal
+// dependency set, mapping each permitted import to why it is required. An
+// import absent from this map, or an entry no non-test file imports, is a
+// guard failure.
 var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/qualification":  "the promoted shutdown bound and process-group primitives",
 	"github.com/sortie-ai/sortie/internal/workspace":      "computing the isolated git workspace root the fixture tracker uses",
@@ -28,28 +27,17 @@ var importManifest = map[string]string{
 	"github.com/sortie-ai/sortie/internal/tracker/file":   "the file tracker adapter the harness's fixture drives",
 }
 
-// sortieImportPrefix marks the import-path namespace direction 1 and
-// direction 2 police. A standard-library or third-party import is out
-// of scope for both.
 const sortieImportPrefix = "github.com/sortie-ai/sortie/internal/"
 
-// harnessImportsReporter is the subset of *testing.T the checks below
-// call, factored out so the meta-test can drive them against a fake
-// that records failures instead of reddening its own run.
 type harnessImportsReporter interface {
 	Errorf(format string, args ...any)
 }
 
-// harnessParsedFile pairs a parsed file's name with its AST, decoupled
-// from disk so the checks below can be driven by a real directory read
-// or by synthetic in-memory source alike.
 type harnessParsedFile struct {
 	name string
 	file *ast.File
 }
 
-// harnessFileImports returns every import path pf.file declares,
-// unquoted.
 func harnessFileImports(pf harnessParsedFile) []string {
 	paths := make([]string, 0, len(pf.file.Imports))
 	for _, imp := range pf.file.Imports {
@@ -62,8 +50,6 @@ func harnessFileImports(pf harnessParsedFile) []string {
 	return paths
 }
 
-// checkHarnessImportsNamed reports direction 1: an import under
-// sortieImportPrefix that manifest does not name.
 func checkHarnessImportsNamed(r harnessImportsReporter, fset *token.FileSet, files []harnessParsedFile, manifest map[string]string) {
 	for _, pf := range files {
 		for _, imp := range pf.file.Imports {
@@ -81,11 +67,6 @@ func checkHarnessImportsNamed(r harnessImportsReporter, fset *token.FileSet, fil
 	}
 }
 
-// checkHarnessManifestCurrent reports direction 2: a manifest entry no
-// parsed file imports. This is the staleness direction, and it is the
-// exact failure mode of the contract-suite allowlist mechanism this
-// guard replaces: an entry covering nothing MUST fail rather than pass
-// silently.
 func checkHarnessManifestCurrent(r harnessImportsReporter, files []harnessParsedFile, manifest map[string]string) {
 	imported := map[string]bool{}
 	for _, pf := range files {
@@ -100,9 +81,6 @@ func checkHarnessManifestCurrent(r harnessImportsReporter, files []harnessParsed
 	}
 }
 
-// fileHasBuildConstraint reports whether file carries a comment group
-// positioned before its package clause holding a line beginning
-// "//go:build".
 func fileHasBuildConstraint(file *ast.File) bool {
 	for _, group := range file.Comments {
 		if group.Pos() >= file.Package {
@@ -117,19 +95,6 @@ func fileHasBuildConstraint(file *ast.File) bool {
 	return false
 }
 
-// checkHarnessAtLeastOneUntagged reports direction 3: a count of zero
-// parsed non-test files carrying no build constraint. This makes the
-// package's loadability requirement executable on every platform in
-// `go test ./...`, instead of a one-time manual check a later edit can
-// silently undo: a package whose every file is constrained out builds
-// under a ./... pattern, which skips it, and fails the moment it is
-// named directly.
-//
-// The threshold is zero, not one. Loadability is a zero-versus-nonzero
-// condition, so a second unconstrained file -- a portable helper, a
-// types file -- preserves it. Pinning "exactly one" would redden a
-// correct tree, and its only repair under time pressure is to edit the
-// threshold, after which the check has taught nothing.
 func checkHarnessAtLeastOneUntagged(r harnessImportsReporter, files []harnessParsedFile) {
 	untagged := 0
 	for _, pf := range files {
@@ -142,22 +107,10 @@ func checkHarnessAtLeastOneUntagged(r harnessImportsReporter, files []harnessPar
 	}
 }
 
-// harnessParseMode is the parser.ParseFile mode every check in this
-// file relies on. ParseComments is load-bearing: without it
-// ast.File.Comments is empty, a //go:build line is invisible, and
-// fileHasBuildConstraint reports every file as unconstrained.
-// Measured on go1.26.1: SkipObjectResolution|ImportsOnly alone yields
-// zero comment groups for a //go:build unix file;
-// adding ParseComments yields one and still captures the imports. Do
-// not drop this flag to match internal/adaptertest/contract_test.go or
-// internal/config/extensions_contract_test.go, which parse test files
-// only and have no build-constraint direction to protect.
+// harnessParseMode must keep ParseComments: without it ast.File.Comments is
+// empty and every //go:build line is invisible to fileHasBuildConstraint.
 const harnessParseMode = parser.SkipObjectResolution | parser.ImportsOnly | parser.ParseComments
 
-// parseHarnessDirNonTestFiles reads "." (the package directory go test
-// sets as the working directory) and parses every entry ending in .go
-// and not in _test.go, so a build-tagged file is parsed for its
-// imports and its build comment on every host regardless of GOOS.
 func parseHarnessDirNonTestFiles(t *testing.T, fset *token.FileSet) []harnessParsedFile {
 	t.Helper()
 
@@ -184,9 +137,6 @@ func parseHarnessDirNonTestFiles(t *testing.T, fset *token.FileSet) []harnessPar
 	return files
 }
 
-// TestHarnessImportsMatchTheManifest proves internal/qualification/e2e
-// imports exactly its declared manifest, in both directions, and that
-// at least one of its non-test files carries no build constraint.
 func TestHarnessImportsMatchTheManifest(t *testing.T) {
 	t.Parallel()
 
@@ -198,11 +148,6 @@ func TestHarnessImportsMatchTheManifest(t *testing.T) {
 	checkHarnessAtLeastOneUntagged(t, files)
 }
 
-// harnessImportsFakeReporter records Errorf calls instead of failing
-// the enclosing test, so TestHarnessImportManifestGuardCatchesRealBreaks
-// can drive TestHarnessImportsMatchTheManifest's own checks against
-// deliberately-broken synthetic input without reddening this test
-// file's own run.
 type harnessImportsFakeReporter struct {
 	errors []string
 }
@@ -211,8 +156,6 @@ func (f *harnessImportsFakeReporter) Errorf(format string, _ ...any) {
 	f.errors = append(f.errors, format)
 }
 
-// mustParseHarnessSrc parses src as a single fixture file under fset,
-// using the same mode the real checks run under.
 func mustParseHarnessSrc(t *testing.T, fset *token.FileSet, name, src string) harnessParsedFile {
 	t.Helper()
 	file, err := parser.ParseFile(fset, name, src, harnessParseMode)
@@ -222,12 +165,6 @@ func mustParseHarnessSrc(t *testing.T, fset *token.FileSet, name, src string) ha
 	return harnessParsedFile{name: name, file: file}
 }
 
-// TestHarnessImportManifestGuardCatchesRealBreaks proves each of the
-// three directions TestHarnessImportsMatchTheManifest checks is itself
-// capable of failing, not merely capable of passing against the
-// current tree, following the shape of
-// TestContractIdentityRule_StalenessGuardCatchesRealBreaks and its
-// contractStalenessFakeReporter (internal/adaptertest/contract_test.go).
 func TestHarnessImportManifestGuardCatchesRealBreaks(t *testing.T) {
 	t.Parallel()
 
@@ -273,11 +210,6 @@ var _ = domain.Issue{}
 		}
 	})
 
-	// This subtest, not the threshold check, is what pins ParseComments.
-	// Under a fail-on-zero threshold a mode without ParseComments makes
-	// every file look unconstrained, which passes; only asking whether a
-	// build-constrained file is recognized as one catches the dropped
-	// flag.
 	t.Run("a build-constrained synthetic file is recognized as constrained, pinning ParseComments", func(t *testing.T) {
 		t.Parallel()
 
@@ -318,8 +250,6 @@ package e2e
 		}
 	})
 
-	// The threshold is at least one, not exactly one: a second
-	// unconstrained file preserves loadability and must not report.
 	t.Run("two untagged synthetic files pass", func(t *testing.T) {
 		t.Parallel()
 

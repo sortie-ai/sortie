@@ -11,7 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// loadSummaryGolden reads a golden rendered summary from testdata/summary.
 func loadSummaryGolden(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "summary", name))
@@ -21,9 +20,6 @@ func loadSummaryGolden(t *testing.T, name string) string {
 	return string(data)
 }
 
-// threeSurfaceProfile is a profile launching all three measurable
-// surfaces with no declared gaps and no declared-absent surfaces,
-// matching the shape sampleProfileJSON also describes.
 func threeSurfaceProfile() qualification.RuntimeProfile {
 	return qualification.RuntimeProfile{
 		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
@@ -34,8 +30,6 @@ func threeSurfaceProfile() qualification.RuntimeProfile {
 	}
 }
 
-// bothNativeSurfacesAbsentProfile is a profile launching only the
-// protocol surface, declaring both native surfaces absent.
 func bothNativeSurfacesAbsentProfile() qualification.RuntimeProfile {
 	return qualification.RuntimeProfile{
 		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
@@ -48,10 +42,6 @@ func bothNativeSurfacesAbsentProfile() qualification.RuntimeProfile {
 	}
 }
 
-// firstDiffLine returns the 1-based line number of the first line at
-// which got and want diverge, or 0 if one is a prefix of the other at
-// EOF with no divergent line, so a failure message can point at the
-// exact line instead of dumping the whole rendered summary.
 func firstDiffLine(got, want string) int {
 	gotLines := strings.Split(got, "\n")
 	wantLines := strings.Split(want, "\n")
@@ -63,9 +53,6 @@ func firstDiffLine(got, want string) int {
 	return 0
 }
 
-// TestFormatSummary renders the bounded summary for two fixture
-// variants against tracked golden output: a runtime measuring all
-// three surfaces, and a runtime declaring both native surfaces absent.
 func TestFormatSummary(t *testing.T) {
 	t.Parallel()
 
@@ -110,9 +97,6 @@ func TestFormatSummary(t *testing.T) {
 	}
 }
 
-// TestConclusionsFromRecordsErrors covers ConclusionsFromRecords'
-// validation of a classification failure and each of the four count
-// or presence invariants it enforces over a validated record set.
 func TestConclusionsFromRecordsErrors(t *testing.T) {
 	t.Parallel()
 
@@ -184,10 +168,6 @@ func TestConclusionsFromRecordsErrors(t *testing.T) {
 	})
 }
 
-// TestExpectationFrom proves the mapping from Conclusions to
-// qualification.NotesExpectation carries the verdict, grades,
-// excluded cases, and unobserved cases through unchanged, and nothing
-// else.
 func TestExpectationFrom(t *testing.T) {
 	t.Parallel()
 
@@ -226,12 +206,6 @@ func TestExpectationFrom(t *testing.T) {
 	}
 }
 
-// TestConclusionsFromRecordsExclusionAndBlockingBranches covers the
-// four grade-driven branches ConclusionsFromRecords and FormatSummary
-// share no golden fixture with: a not-observed case reported as
-// unobserved and unmeasured, a declared-gap case reported as excluded,
-// a not-inducible case reported as excluded, and a conflated
-// disposition below its native reference reported as blocking.
 func TestConclusionsFromRecordsExclusionAndBlockingBranches(t *testing.T) {
 	t.Parallel()
 

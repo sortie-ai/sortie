@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// writeLines writes raw JSONL bodies to a temporary file and returns
-// its path, for controls that need malformed lines.
+// writeLines writes raw JSONL bodies to a temp file so a control can supply
+// malformed lines, and returns its path.
 func writeLines(T *testing.T, lines ...string) string {
 	T.Helper()
 	dir := filepath.Join(T.TempDir(), "qualification")
@@ -24,10 +24,6 @@ func writeLines(T *testing.T, lines ...string) string {
 	return path
 }
 
-// TestValidateObservations confirms the first pass
-// accepts both complete variants with their computed verdicts and the
-// closed cardinality, and rejects zero-line, invalid-enum, wrong-schema,
-// and non-contiguous input.
 func TestValidateObservations(T *testing.T) {
 	T.Parallel()
 
@@ -141,9 +137,6 @@ func TestValidateObservations(T *testing.T) {
 	})
 }
 
-// TestValidateEvidence confirms the final pass accepts
-// both complete variants, and rejects aggregate records with a wrong
-// evidence path, a non-pass Verdict, or session fields that must be null.
 func TestValidateEvidence(T *testing.T) {
 	T.Parallel()
 
@@ -255,12 +248,6 @@ func TestValidateEvidence(T *testing.T) {
 	})
 }
 
-// TestValidateObservationsWithDeclarations confirms the
-// declaration-aware first-pass entry point: a declared_gap fixture
-// validates qualified when handed the exact declaration set its
-// records assume, backward compatibility holds for a pre-change-shaped
-// file with no declared_gap or not_inducible rows, and the existing
-// empty-set entry point keeps rejecting every declared_gap record.
 func TestValidateObservationsWithDeclarations(T *testing.T) {
 	T.Parallel()
 
@@ -316,12 +303,6 @@ func TestValidateObservationsWithDeclarations(T *testing.T) {
 	})
 }
 
-// TestExplainEligibilityNoStructuredNativeSurface confirms a runtime
-// with no structured native surface measured reaches a verdict that is
-// not unmeasured on any comparison row. Every row's native
-// reference resolves to the "no reference" state, so
-// explainComparisonRow's new arm reports it satisfied rather than
-// unmeasured, and NativeReferenceAbsent is set.
 func TestExplainEligibilityNoStructuredNativeSurface(T *testing.T) {
 	T.Parallel()
 
@@ -351,11 +332,6 @@ func TestExplainEligibilityNoStructuredNativeSurface(T *testing.T) {
 	}
 }
 
-// TestExplainEligibilityOneStructuredNativeSurfaceAbsent confirms a
-// single declared-absent structured native surface still yields a
-// native reference from the one remaining structured surface, so the
-// comparison rows are measured against it rather than treated as
-// absent.
 func TestExplainEligibilityOneStructuredNativeSurfaceAbsent(T *testing.T) {
 	T.Parallel()
 
@@ -374,16 +350,6 @@ func TestExplainEligibilityOneStructuredNativeSurfaceAbsent(T *testing.T) {
 	}
 }
 
-// TestValidateEvidenceWithDeclarationsAbsentSurface confirms the second
-// half of the absent-surface acceptance criterion, at the builder
-// level rather than through the pure eligibility functions alone: a
-// declared-absent evidence set survives the strict decoder,
-// checkDeclaredAbsentSurfaces, the derived cardinality formula, and the
-// aggregate recomputation, and the verdict ValidateEvidenceWithDeclarations
-// returns agrees exactly with an independent recomputation over the
-// same records. It also confirms, by driving the builder rather than by
-// searching its source, that a surface named absent contributes zero
-// token-inventory records.
 func TestValidateEvidenceWithDeclarationsAbsentSurface(T *testing.T) {
 	T.Parallel()
 
@@ -437,11 +403,6 @@ func TestValidateEvidenceWithDeclarationsAbsentSurface(T *testing.T) {
 	}
 }
 
-// TestValidateEvidenceWithDeclarationsAbsentSurfaceMalformed confirms
-// the malformed side of the same acceptance criterion: a record on a
-// declared-absent surface is still rejected by name, and a perturbed
-// record count is still caught by the derived cardinality formula,
-// naming the row and the count it expected.
 func TestValidateEvidenceWithDeclarationsAbsentSurfaceMalformed(T *testing.T) {
 	T.Parallel()
 
@@ -493,9 +454,6 @@ func TestValidateEvidenceWithDeclarationsAbsentSurfaceMalformed(T *testing.T) {
 	})
 }
 
-// TestAggregateGradeFor confirms the verdict-to-grade mapping is total
-// over Verdicts, proved by iterating the closed set rather than
-// listing its members, and returns the zero value outside it.
 func TestAggregateGradeFor(T *testing.T) {
 	T.Parallel()
 
@@ -518,9 +476,6 @@ func TestAggregateGradeFor(T *testing.T) {
 	}
 }
 
-// TestVerdictRationale confirms the rationale mapping is total over
-// Verdicts, proved by iterating the closed set, and returns the zero
-// value outside it.
 func TestVerdictRationale(T *testing.T) {
 	T.Parallel()
 
@@ -534,11 +489,6 @@ func TestVerdictRationale(T *testing.T) {
 	}
 }
 
-// TestValidateEvidenceWithDeclarations confirms the declaration-aware
-// final-pass entry point: a declared_gap fixture validates qualified
-// when handed the exact declaration set its records assume, and the
-// existing empty-set entry point keeps rejecting every declared_gap
-// record.
 func TestValidateEvidenceWithDeclarations(T *testing.T) {
 	T.Parallel()
 

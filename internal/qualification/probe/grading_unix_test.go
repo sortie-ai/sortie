@@ -8,8 +8,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// inducedGrades is the closed set of grades gradedEvidence's three
-// inducedRow arguments can carry.
 var inducedGrades = []qualification.Grade{qualification.GradeUsable, qualification.GradeGap, qualification.GradeNotObserved}
 
 // wantInducedGrade returns the grade a gradedEvidence output's row for
@@ -32,13 +30,6 @@ func wantInducedGrade(surface qualification.Surface, capability qualification.Ca
 	}
 }
 
-// TestGradedEvidenceValidatesAgainstEveryProfile confirms that against
-// every tracked profile and each of the 27 combinations of usable,
-// gap, and not_observed across the three inducedRow arguments, the
-// finalized gradedEvidence output validates with a nil error, every
-// Grades row outside the three collector-driven ones reads
-// not_observed with its StatusLabel, and those three read the
-// induced grade passed in with its own StatusLabel.
 func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 	t.Parallel()
 

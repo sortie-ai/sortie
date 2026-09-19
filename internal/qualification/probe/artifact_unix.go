@@ -10,9 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// writeEvidenceRecords renders records as newline-delimited JSON and
-// writes them to path, the durable copy Run leaves under
-// Coordinates.OutputDir.
+// writeEvidenceRecords writes records as newline-delimited JSON to path.
 func writeEvidenceRecords(path string, records []qualification.Record) error {
 	var b strings.Builder
 	for _, rec := range records {
@@ -37,24 +35,18 @@ func writeMeasurement(path string, measurement qualification.Measurement) error 
 }
 
 // notesConsistencyReporter is the subset of *testing.T
-// checkNotesConsistency calls, factored out so a meta-test can drive it
-// against a fake that records failures instead of reddening its own
-// run.
+// checkNotesConsistency uses, so a meta-test can drive it against a
+// fake that records failures instead of failing its own run.
 type notesConsistencyReporter interface {
 	Fatalf(format string, args ...any)
 }
 
-// checkNotesConsistency implements the notes-binding decision table
-// over the tracked document's four possible states: absent, unreadable,
-// agreeing, and disagreeing. A verdict that does not require a notes
-// document tolerates one that does not exist yet, so a runtime being
-// onboarded can reach its first measurement before its notes exist. Any
-// other read failure always fails, and a readable document is always
-// compared with qualification.ValidateNotes regardless of verdict, so
-// notes claiming a verdict a run did not reach are rejected on the
-// eligibility line. summary is carried into every failure message so
-// the operator can transcribe the run's own printed summary without a
-// second paid measurement.
+// checkNotesConsistency compares the tracked notes document against
+// want. A verdict that does not require notes tolerates an absent
+// document, so a runtime being onboarded can reach its first
+// measurement before its notes exist; any other read failure fails.
+// summary is carried into every failure so the operator can transcribe
+// the run's printed summary without a second paid measurement.
 func checkNotesConsistency(r notesConsistencyReporter, readNotes func(string) ([]byte, error), notesPath string, want qualification.NotesExpectation, summary string) {
 	document, readErr := readNotes(notesPath)
 	switch {
@@ -74,16 +66,14 @@ func checkNotesConsistency(r notesConsistencyReporter, readNotes func(string) ([
 }
 
 // enforceNotesConsistency reads notesPath and fails t when it disagrees
-// with want, the expectation derived from a validated run, per the
-// decision table checkNotesConsistency implements. It never mutates
-// notesPath.
+// with want. It never mutates notesPath.
 func enforceNotesConsistency(t testingT, notesPath string, want qualification.NotesExpectation, summary string) {
 	t.Helper()
 	checkNotesConsistency(t, os.ReadFile, notesPath, want, summary)
 }
 
 // testingT is the subset of *testing.T enforceNotesConsistency needs,
-// so it can be driven by a fake reporter in a meta-test.
+// so a fake reporter can drive it in a meta-test.
 type testingT interface {
 	notesConsistencyReporter
 	Helper()

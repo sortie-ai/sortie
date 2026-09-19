@@ -4,10 +4,6 @@ import (
 	"testing"
 )
 
-// TestSemanticGradeDerivation confirms the per-Capability baseline
-// derivation: each of the five disposition Cases and each of the four
-// retry Cases is independent, an unobserved Case lowers only its owning
-// Capability, and observed-but-conflated Cases Grade gap.
 func TestSemanticGradeDerivation(T *testing.T) {
 	T.Parallel()
 
@@ -135,10 +131,9 @@ func TestSemanticGradeDerivation(T *testing.T) {
 	T.Run("the written variants carry the derived Grades end to end", func(T *testing.T) {
 		T.Parallel()
 
-		// The redefined not_qualified variant conflates only the protocol
-		// runtime_refusal disposition record; the retry classification
-		// capability is untouched, so its protocol baseline stays usable
-		// rather than moving with the disposition baseline.
+		// The not_qualified variant conflates only the protocol
+		// runtime_refusal disposition record; retry_classification is
+		// untouched, so its baseline stays usable.
 		notQualified := NewFixture(FixtureNotQualified)
 		notQualified.Finalize()
 		protocolDisposition := notQualified.FindFirst(MatchBaseline(SurfaceProtocol, CapabilityTurnDisposition))
@@ -155,23 +150,17 @@ func TestSemanticGradeDerivation(T *testing.T) {
 	})
 }
 
-// TestRichestNativeReference confirms the reference derivation:
-// the higher observed Grade of native JSON and native stream-JSON per
-// Capability, with any not_observed Surface forcing the reference to
-// not_observed.
 func TestRichestNativeReference(T *testing.T) {
 	T.Parallel()
 
 	T.Run("Grade combination", func(T *testing.T) {
 		T.Parallel()
 
-		// nativeReferenceStanding, not richestNativeReference directly, is
-		// the reference derivation ExplainEligibility actually consults:
-		// it checks each structured native Surface's own presence and rank
-		// before ever calling richestNativeReference, so a not_observed
-		// Surface is reported as an unmeasured standing naming the Surface
-		// at fault, never as a bare not_observed Grade reaching the
-		// comparison.
+		// nativeReferenceStanding, not richestNativeReference, is what
+		// ExplainEligibility consults: it checks each structured native
+		// surface's presence and rank first, so a not_observed surface
+		// reports an unmeasured standing naming the surface rather than a
+		// bare not_observed grade reaching the comparison.
 		tests := []struct {
 			name           string
 			jsonGrade      Grade
@@ -254,11 +243,6 @@ func TestRichestNativeReference(T *testing.T) {
 
 }
 
-// TestEligibilityPredicates confirms the exact Verdict outcomes: the
-// complete set of predicates yields qualified, a measured failure on a
-// load-bearing row yields not_qualified, and a row the run never
-// measured yields unmeasured rather than being collapsed into
-// not_qualified.
 func TestEligibilityPredicates(T *testing.T) {
 	T.Parallel()
 
@@ -288,9 +272,7 @@ func TestEligibilityPredicates(T *testing.T) {
 			want: VerdictNotQualified,
 		},
 		{
-			// The adapter never answers the permission request, so the
-			// row was never measured, and it now reports the unmeasured
-			// verdict its own not_observed grade produces.
+			// Never answered, so the row is unmeasured, not a failure.
 			name: "permission request the adapter leaves unanswered",
 			mutate: func(f *Fixture) {
 				rec := f.FindFirst(matchRowClass(RowPermission))
@@ -300,8 +282,7 @@ func TestEligibilityPredicates(T *testing.T) {
 			want: VerdictUnmeasured,
 		},
 		{
-			// The policy precondition's own fixture induction failed
-			// before the row could be measured at all.
+			// Induction failed before the row could be measured.
 			name: "policy precondition induction failure",
 			mutate: func(f *Fixture) {
 				rec := f.FindFirst(matchRowClass(RowPolicyPrecondition))
@@ -311,8 +292,8 @@ func TestEligibilityPredicates(T *testing.T) {
 			want: VerdictUnmeasured,
 		},
 		{
-			// The end-to-end run never reached its terminal condition, so
-			// the row carries no measurement to grade a failure from.
+			// Never reached its terminal condition, so there is no
+			// measurement to grade a failure from.
 			name: "end-to-end run short of its terminal condition",
 			mutate: func(f *Fixture) {
 				rec := f.FindFirst(matchRowClass(RowEndToEnd))
@@ -364,12 +345,6 @@ func TestEligibilityPredicates(T *testing.T) {
 	}
 }
 
-// TestExplainEligibility confirms the three-way verdict derivation:
-// ComputeEligibility agrees with ExplainEligibility on every input,
-// each of the three verdicts is reachable from a constructed record
-// set, a below standing takes precedence over an unmeasured standing
-// in the same report, and a below standing survives a different Case
-// of the same Capability being excluded.
 func TestExplainEligibility(T *testing.T) {
 	T.Parallel()
 

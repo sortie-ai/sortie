@@ -14,12 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// TestHarnessContract confirms the isolated end-to-end harness's
-// contract: tracker.kind file with a temporary issue file, a
-// controlled git workspace under the same temporary root, no hooks,
-// notifications, server, or network tracker, max_turns 1, an active
-// and a non-active handoff state, and only the permitted effective
-// sample fields.
 func TestHarnessContract(t *testing.T) {
 	t.Parallel()
 
@@ -115,11 +109,6 @@ func TestHarnessContract(t *testing.T) {
 	})
 }
 
-// TestTerminalOracle drives the isolated file-tracker harness with the
-// fake protocol agent and temporary file tracker only: it reaches the
-// terminal condition, cancels and drains within the shared shutdown
-// bound, and then applies the exact PGID postcondition with the
-// signal-zero oracle.
 func TestTerminalOracle(t *testing.T) {
 	harness := NewHarness(t)
 
@@ -130,9 +119,6 @@ func TestTerminalOracle(t *testing.T) {
 		close(runDone)
 	}()
 
-	// A bounded wait for the terminal condition: one succeeded history
-	// row, the file-tracker issue in its handoff state, no running or
-	// retry snapshot entry, and a completed StopSession.
 	deadline := time.Now().Add(qualification.ShutdownDeadline)
 	var condition TerminalCondition
 	for {
@@ -148,9 +134,6 @@ func TestTerminalOracle(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// Reaching the condition triggers cleanup: cancel the orchestrator
-	// and allow at most the shared 30-second shutdown bound for the
-	// drain.
 	cancel()
 	select {
 	case <-runDone:
@@ -158,7 +141,6 @@ func TestTerminalOracle(t *testing.T) {
 		t.Fatal("the orchestrator did not drain within the shared shutdown bound")
 	}
 
-	// The exact PGID postcondition: every captured group is gone.
 	if len(harness.Agent().PGIDs()) != 1 {
 		t.Fatalf("captured group count = %d, want 1 for the single fixture session", len(harness.Agent().PGIDs()))
 	}
@@ -166,8 +148,6 @@ func TestTerminalOracle(t *testing.T) {
 		qualification.AwaitProcessGroupAbsence(t, pgid)
 	}
 
-	// The terminal record from the observed condition is pass and
-	// decodes cleanly.
 	rec := TerminalRecord(condition, true, qualification.FixtureSession(qualification.SurfaceProtocol, "e2e"), qualification.FixtureAgentName, qualification.FixtureAgentVer)
 	if rec.Outcome != qualification.OutcomePass || rec.Grade != qualification.GradeUsable {
 		t.Errorf("end-to-end record = %s/%s, want pass/usable at the terminal condition", rec.Outcome, rec.Grade)
@@ -180,8 +160,6 @@ func TestTerminalOracle(t *testing.T) {
 		t.Errorf("qualification.DecodeRecord() error = %v, want the end-to-end record to decode cleanly", err)
 	}
 
-	// The run-history assertion: exactly one row, succeeded, for this
-	// issue's single attempt.
 	rows, err := harness.store.QueryRunHistoryByIssue(context.Background(), issueID)
 	if err != nil {
 		t.Fatalf("query run history: %v", err)
@@ -191,8 +169,6 @@ func TestTerminalOracle(t *testing.T) {
 	}
 }
 
-// terminalConditionReached is the fully satisfied condition every case
-// below starts from, so each case states only the field it withholds.
 func terminalConditionReached() TerminalCondition {
 	return TerminalCondition{
 		SucceededRow:    true,
@@ -203,12 +179,6 @@ func terminalConditionReached() TerminalCondition {
 	}
 }
 
-// TestTerminalConditionReached pins the oracle's verdict across the
-// whole field set. Reached is one conjunction, so a field dropped from
-// it stays invisible to a happy-path run and to statement coverage
-// alike: the run still passes and the field is still executed. Only
-// withholding each field in turn shows that every one of them is load
-// bearing.
 func TestTerminalConditionReached(t *testing.T) {
 	t.Parallel()
 
@@ -244,10 +214,6 @@ func TestTerminalConditionReached(t *testing.T) {
 	}
 }
 
-// TestTerminalRecordGrades pins the three verdicts the end-to-end
-// record can carry. The grade is what the qualification evidence
-// reports, so a run that reached its terminal condition but left a
-// process group behind must not be graded the same as a clean one.
 func TestTerminalRecordGrades(t *testing.T) {
 	t.Parallel()
 
@@ -305,10 +271,6 @@ func TestTerminalRecordGrades(t *testing.T) {
 	}
 }
 
-// TestHarnessWorkflowPathIsAbsolute pins the workflow path the
-// orchestrator hands each worker. Settings and MCP configuration
-// resolve against its directory, so a relative value would resolve them
-// against whichever directory the test binary ran in.
 func TestHarnessWorkflowPathIsAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -322,13 +284,6 @@ func TestHarnessWorkflowPathIsAbsolute(t *testing.T) {
 	}
 }
 
-// TestStartWorkflowDrivesTheRunToItsTerminalCondition exercises the
-// exported starter and the session accessor the gated live collector
-// uses. TestTerminalOracle drives the orchestrator inline, so without
-// this the only call shape the collector actually takes would never run
-// outside the gate, and a break in it would surface first on a
-// maintainer's machine with the qualification gate set rather than on a
-// pull request.
 func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
 	harness := NewHarness(t)
 
@@ -365,11 +320,6 @@ func TestStartWorkflowDrivesTheRunToItsTerminalCondition(t *testing.T) {
 	}
 }
 
-// TestPromptTemplateByIDRefusesAnUndeclaredID pins the fixture's
-// template resolution against the contract a real workflow keeps. The
-// harness declares one template under the default id; answering some
-// other id with it would let a dispatch for a template this fixture
-// never declared proceed as though it had resolved.
 func TestPromptTemplateByIDRefusesAnUndeclaredID(t *testing.T) {
 	t.Parallel()
 

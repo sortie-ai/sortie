@@ -19,30 +19,27 @@ var errNativeLaunchFailed = errors.New("native probe failed to launch")
 var errNativeBoundExceeded = errors.New("the native probe exceeded its bounded wait")
 
 // lineBoundedWriter accumulates newline-delimited lines up to limit
-// bytes each, dropping any single line that exceeds it instead of
-// retaining it, and counting the lines it dropped.
+// bytes each, dropping and counting any single line that exceeds it.
 type lineBoundedWriter struct {
 	limit      int
 	pending    []byte
 	built      strings.Builder
 	dropped    int
 	discarding bool
-	// peak is the high-water mark of the pending buffer. The bound is
-	// a claim about memory held mid-write, which no assertion made
-	// after Write returns can observe, so the writer records it.
+	// peak is the high-water mark of the pending buffer. The bound is a
+	// claim about memory held mid-write, which no assertion made after
+	// Write returns can observe, so the writer records it.
 	peak int
 }
 
-// buffer appends b to the pending line and records the high-water mark.
 func (w *lineBoundedWriter) buffer(b []byte) {
 	w.pending = append(w.pending, b...)
 	w.peak = max(w.peak, len(w.pending))
 }
 
-// Write implements io.Writer, emitting every complete line p now
-// closes. A line is counted and abandoned before any byte of it is
-// buffered once it cannot fit, so the buffer never exceeds limit
-// whatever a single write carries.
+// Write implements io.Writer. A line that cannot fit is counted and
+// abandoned before any byte of it is buffered, so the buffer never
+// exceeds limit whatever a single write carries.
 func (w *lineBoundedWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	for len(p) > 0 {
@@ -77,8 +74,6 @@ func (w *lineBoundedWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// emit retains line if it is within limit, and otherwise drops it and
-// counts the drop.
 func (w *lineBoundedWriter) emit(line []byte) {
 	if len(line) > w.limit {
 		w.dropped++
@@ -87,8 +82,8 @@ func (w *lineBoundedWriter) emit(line []byte) {
 	w.built.Write(line)
 }
 
-// Flush emits any trailing partial line that never received a
-// newline. Call it once the writer will receive no further data.
+// Flush emits any trailing partial line. Call it once no further data
+// will arrive.
 func (w *lineBoundedWriter) Flush() {
 	if len(w.pending) == 0 {
 		return
@@ -97,20 +92,21 @@ func (w *lineBoundedWriter) Flush() {
 	w.pending = nil
 }
 
-// String returns the writer's retained content.
 func (w *lineBoundedWriter) String() string {
 	return w.built.String()
 }
 
 // nativeTerminal recognizes one native surface's terminal outcome from
-// its output, dispatching generically off the profile's own
-// [qualification.Recognizer] for that surface in place of a
-// per-runtime switch. It returns the recognized terminal, whether the
-// probe suffered transport loss (a bounded exit or timeout with no
-// recognized terminal member), and whether a terminal was recognized
-// at all. A launch failure carries no terminal signal and is not
-// transport loss: the binary never ran, so nothing about its protocol
-// behavior was observed.
+// its output via the profile's [qualification.Recognizer]. It reports
+// the terminal, whether the probe suffered transport loss (a bounded
+// exit or timeout with no recognized terminal), and whether a terminal
+// was recognized. A launch failure is not transport loss: the binary
+// never ran.
+//
+// Output is parsed before launchErr is consulted, and a recognized
+// terminal is authoritative whatever the exit status, since a non-zero
+// exit is several runtimes' documented error terminal. launchErr
+// decides only once recognition fails.
 func nativeTerminal(profile qualification.RuntimeProfile, surface qualification.Surface, output string, launchErr error) (terminal qualification.Terminal, transportLoss bool, found bool) {
 	if launchErr != nil {
 		if errors.Is(launchErr, errNativeLaunchFailed) {

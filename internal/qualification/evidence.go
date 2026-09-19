@@ -9,10 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-// Verdict is the final qualification outcome computed by both
-// validators. The three values are the only permitted results, and a
-// row that was never measured is reported apart from one that was
-// measured and came out below; there is no manual override.
+// Verdict is the final qualification outcome. An unmeasured row is reported
+// apart from one measured and below; there is no manual override.
 type Verdict string
 
 const (
@@ -21,8 +19,7 @@ const (
 	VerdictUnmeasured   Verdict = "unmeasured"
 )
 
-// Verdicts is the closed verdict set. Every consumer that switches on a
-// verdict is proved total against it.
+// Verdicts is the closed verdict set.
 var Verdicts = []Verdict{VerdictQualified, VerdictNotQualified, VerdictUnmeasured}
 
 // Scenario names the kind of observation one evidence line carries.
@@ -98,20 +95,18 @@ const (
 	GradeNotApplicable     Grade = "not_applicable"
 	GradeQualified         Grade = "qualified"
 	GradeNotQualified      Grade = "not_qualified"
-	// GradeDeclaredGap is valid only on a semantic case row: the runtime
-	// cannot produce the case and the operator declared the gap.
+	// GradeDeclaredGap is valid only on a semantic case row: the runtime cannot
+	// produce the case and the operator declared the gap.
 	GradeDeclaredGap Grade = "declared_gap"
-	// GradeNotInducible is valid only on a semantic case row: the input
-	// catalog has no deterministic inducer for the case, on any runtime.
+	// GradeNotInducible is valid only on a semantic case row: the catalog has
+	// no deterministic inducer for the case, on any runtime.
 	GradeNotInducible Grade = "not_inducible"
 	// GradeUnmeasured is valid only on the final aggregate row.
 	GradeUnmeasured Grade = "unmeasured"
 )
 
-// RowGrades is the closed set of grades a non-final row may carry. It
-// excludes the three eligibility-only grades (GradeQualified,
-// GradeNotQualified, GradeUnmeasured), which are valid only on the
-// final aggregate row.
+// RowGrades is the closed set of grades a non-final row may carry, excluding
+// the three eligibility-only grades valid only on the final aggregate row.
 var RowGrades = []Grade{
 	GradeUsable, GradeGap, GradeDeclaredGap, GradeNotInducible,
 	GradeCorroborationOnly, GradeNotObserved, GradeNotApplicable,
@@ -134,8 +129,8 @@ const (
 	OutcomeNotInducible Outcome = "not_inducible"
 )
 
-// Case names one required disposition or retry class. A record carries
-// it only for semantic probes; every other record stores null.
+// Case names one required disposition or retry class. A record carries it only
+// for semantic probes; every other record stores null.
 type Case string
 
 const (
@@ -284,23 +279,20 @@ var CaseInputs = map[Case]InputID{
 	CaseUnknownOutcome:      InputRetryUnknownOutcome,
 }
 
-// CatalogNotInducibleCases is the closed set of cases the input
-// catalog has no deterministic inducer for, on any runtime.
-// CaseUnknownOutcome's inducer would ask the model for a stop reason
-// outside the protocol's closed enum, which no conforming runtime can
-// produce, so a run grades it not_inducible at catalog level instead
-// of launching for it.
+// CatalogNotInducibleCases is the closed set of cases the input catalog has no
+// deterministic inducer for, on any runtime. CaseUnknownOutcome's inducer would
+// ask the model for a stop reason outside the protocol's closed enum, which no
+// conforming runtime can produce.
 var CatalogNotInducibleCases = []Case{CaseUnknownOutcome}
 
-// The excluded-case detail constants. They occupy the record's
-// existing detail member; no new record field is introduced.
+// The excluded-case detail constants occupy the record's existing detail
+// member; no new record field is introduced.
 const (
-	// DeclaredGapNeverProduced states that the runtime has no code path
-	// that emits this outcome.
+	// DeclaredGapNeverProduced states that the runtime has no code path that
+	// emits this outcome.
 	DeclaredGapNeverProduced = "outcome_never_produced"
-	// DeclaredGapFolded states that the runtime detects the condition
-	// but reports it under another case's outcome, so no observation of
-	// this case is produced.
+	// DeclaredGapFolded states that the runtime detects the condition but
+	// reports it under another case's outcome.
 	DeclaredGapFolded = "outcome_folded_into_another"
 	// NotInducibleDetail is the one detail a not_inducible row carries.
 	NotInducibleDetail = "no_deterministic_inducer"
@@ -323,21 +315,19 @@ const (
 	RecallPreconditionUnmet = "recall_precondition_unmet"
 )
 
-// DeclaredGapPeers pairs the two semantic cases whose outcomes derive
-// from one physical run, so a declaration of one without the other is
-// incoherent.
+// DeclaredGapPeers pairs the two semantic cases whose outcomes derive from one
+// physical run, so a declaration of one without the other is incoherent.
 var DeclaredGapPeers = map[Case]Case{
 	CaseRuntimeRefusal:      CaseNonRetryableRefusal,
 	CaseNonRetryableRefusal: CaseRuntimeRefusal,
 }
 
-// EvidencePathQualificationVerdict is the evidence_path the single
-// final aggregate record carries.
+// EvidencePathQualificationVerdict is the evidence_path the single final
+// aggregate record carries.
 const EvidencePathQualificationVerdict = "qualification.verdict"
 
-// Record is one strict evidence line. The field set is closed: unknown
-// or missing fields are invalid, and every field's nullability is
-// fixed.
+// Record is one strict evidence line. The field set is closed: unknown or
+// missing fields are invalid, and every field's nullability is fixed.
 type Record struct {
 	SchemaVersion   int        `json:"schema_version"`
 	Sequence        int        `json:"sequence"`
@@ -359,8 +349,6 @@ type Record struct {
 	Detail          string     `json:"detail"`
 }
 
-// recordFields is the exact set of member names a record line may
-// carry.
 var recordFields = map[string]bool{
 	"schema_version": true, "sequence": true, "observed_at": true,
 	"scenario": true, "surface": true, "capability": true, "source": true,
@@ -370,15 +358,15 @@ var recordFields = map[string]bool{
 	"protocol_version": true, "detail": true,
 }
 
-// DetailBound is the maximum number of Unicode code points a detail
-// string may carry.
+// DetailBound is the maximum number of Unicode code points a detail string may
+// carry.
 const DetailBound = 256
 
-// DecodeRecord strictly decodes one evidence line. It rejects unknown
-// and missing fields, wrong types, null where a value is required,
-// values outside the closed enum sets, a schema version other than 1,
-// a non-UTC or unparseable timestamp, an empty or over-bound detail,
-// and an empty string in any nullable string field.
+// DecodeRecord strictly decodes one evidence line. It rejects unknown and
+// missing fields, wrong types, null where a value is required, values outside
+// the closed enum sets, a schema version other than 1, a non-UTC or
+// unparseable timestamp, an empty or over-bound detail, and an empty string in
+// any nullable string field.
 func DecodeRecord(line []byte) (Record, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(line, &fields); err != nil {
@@ -482,10 +470,10 @@ func decodeString(raw json.RawMessage) (string, error) {
 	return v, nil
 }
 
-// decodeNullableString decodes a JSON string or null, rejecting an
-// empty non-null string: a nullable string field attests to a value
-// that was observed, and an empty string satisfies a session-relation
-// or identity check while attesting to nothing.
+// decodeNullableString decodes a JSON string or null, rejecting an empty
+// non-null string: a nullable string field attests to an observed value, and
+// an empty string would satisfy a session-relation or identity check while
+// attesting to nothing.
 func decodeNullableString(raw json.RawMessage) (*string, error) {
 	if string(raw) == "null" {
 		return nil, nil
@@ -500,8 +488,6 @@ func decodeNullableString(raw json.RawMessage) (*string, error) {
 	return &v, nil
 }
 
-// decodeInt decodes a JSON integer, rejecting null and any
-// non-integral value.
 func decodeInt(raw json.RawMessage) (int, error) {
 	if string(raw) == "null" {
 		return 0, errors.New("got null, want an integer")
@@ -513,7 +499,6 @@ func decodeInt(raw json.RawMessage) (int, error) {
 	return v, nil
 }
 
-// decodeNullableInt decodes a JSON integer or null.
 func decodeNullableInt(raw json.RawMessage) (*int, error) {
 	if string(raw) == "null" {
 		return nil, nil
@@ -525,7 +510,6 @@ func decodeNullableInt(raw json.RawMessage) (*int, error) {
 	return &v, nil
 }
 
-// decodeEnum decodes a closed-set string enum.
 func decodeEnum[T ~string](raw json.RawMessage, allowed []T) (T, error) {
 	v, err := decodeString(raw)
 	if err != nil {
@@ -538,7 +522,6 @@ func decodeEnum[T ~string](raw json.RawMessage, allowed []T) (T, error) {
 	return value, nil
 }
 
-// decodeNullableEnum decodes a closed-set string enum or null.
 func decodeNullableEnum[T ~string](raw json.RawMessage, allowed []T) (*T, error) {
 	if string(raw) == "null" {
 		return nil, nil
@@ -550,15 +533,14 @@ func decodeNullableEnum[T ~string](raw json.RawMessage, allowed []T) (*T, error)
 	return &v, nil
 }
 
-// MarshalRecord renders one record as an evidence line body. The
-// struct's members are all emitted, so a marshaled record always
-// carries the exact closed field set.
+// MarshalRecord renders one record as an evidence line body, always carrying
+// the exact closed field set.
 func MarshalRecord(rec Record) ([]byte, error) {
 	return json.Marshal(rec)
 }
 
-// ValidRecord returns a fully populated, schema-valid record for
-// decode tests to mutate.
+// ValidRecord returns a fully populated, schema-valid record for decode tests
+// to mutate.
 func ValidRecord() Record {
 	return Record{
 		SchemaVersion:   1,
@@ -581,8 +563,8 @@ func ValidRecord() Record {
 	}
 }
 
-// NullableEqual compares two nullable values by pointee, treating two
-// nils as equal.
+// NullableEqual compares two nullable values by pointee, treating two nils as
+// equal.
 func NullableEqual[T comparable](a, b *T) bool {
 	switch {
 	case a == nil && b == nil:
@@ -593,8 +575,8 @@ func NullableEqual[T comparable](a, b *T) bool {
 	return *a == *b
 }
 
-// RecordsEqual reports whether two records carry equal values,
-// dereferencing the nullable fields rather than comparing pointers.
+// RecordsEqual reports whether two records carry equal values, dereferencing
+// the nullable fields rather than comparing pointers.
 func RecordsEqual(a, b Record) bool {
 	if a.SchemaVersion != b.SchemaVersion || a.Sequence != b.Sequence || a.ObservedAt != b.ObservedAt ||
 		a.Scenario != b.Scenario || a.Surface != b.Surface || a.Capability != b.Capability ||

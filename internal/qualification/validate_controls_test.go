@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// matchRowClass matches records of one row class.
 func matchRowClass(class RowClass) func(*Record) bool {
 	return func(rec *Record) bool {
 		got, err := ClassifyRecord(rec)
@@ -15,7 +14,6 @@ func matchRowClass(class RowClass) func(*Record) bool {
 	}
 }
 
-// tokenRecordCount counts the token-inventory records of a set.
 func tokenRecordCount(records []Record) int {
 	count := 0
 	for i := range records {
@@ -26,8 +24,6 @@ func tokenRecordCount(records []Record) int {
 	return count
 }
 
-// protocolSessionCount counts the distinct non-null actual protocol
-// session ids a Record set references.
 func protocolSessionCount(records []Record) int {
 	ids := map[string]bool{}
 	for i := range records {
@@ -121,8 +117,6 @@ func TestValidatorMissingAndDuplicateControls(T *testing.T) {
 	}
 }
 
-// TestValidatorSemanticControls covers the missing-Case, ordering,
-// cross-class, and baseline-derivation controls for the semantic rows.
 func TestValidatorSemanticControls(T *testing.T) {
 	T.Parallel()
 
@@ -282,10 +276,8 @@ func TestValidatorSemanticControls(T *testing.T) {
 	T.Run("unobserved retry Case lowers only retry classification, to an unmeasured verdict", func(T *testing.T) {
 		T.Parallel()
 
-		// The retry classification row was never measured on the
-		// protocol surface, so it now reports the unmeasured verdict
-		// its own not_observed baseline produces, rather than the
-		// not_qualified a measured failure would produce.
+		// Never measured on the protocol surface, so the row reports
+		// unmeasured rather than the not_qualified a measured failure gives.
 		fixture := NewFixture(FixtureQualified)
 		fixture.SetSemanticNotObserved(SurfaceProtocol, CapabilityRetryClassification, CaseUnknownOutcome)
 		fixture.Finalize()
@@ -306,8 +298,6 @@ func TestValidatorSemanticControls(T *testing.T) {
 	})
 }
 
-// swapRecords exchanges the slice positions of two records pointed
-// to inside the fixture and renumbers.
 func swapRecords(fixture *Fixture, a, b *Record) {
 	indexA, indexB := -1, -1
 	for i := range fixture.Records {
@@ -325,9 +315,6 @@ func swapRecords(fixture *Fixture, a, b *Record) {
 	fixture.Renumber()
 }
 
-// TestValidatorTokenControls covers the token inventory controls:
-// valid sentinels, missing inventories, duplicate paths, doubled
-// sentinels, mixed sentinel shapes, and baseline disagreement.
 func TestValidatorTokenControls(T *testing.T) {
 	T.Parallel()
 
@@ -344,9 +331,8 @@ func TestValidatorTokenControls(T *testing.T) {
 	T.Run("failed inventory sentinel is valid and unmeasured", func(T *testing.T) {
 		T.Parallel()
 
-		// A failed token inventory means the protocol token_ceiling
-		// baseline was never measured, so the row is unmeasured rather
-		// than a measured failure.
+		// A failed token inventory leaves the protocol token_ceiling
+		// baseline unmeasured, so the row is unmeasured, not a failure.
 		fixture := NewFixture(FixtureQualified)
 		fixture.SetTokenSentinel(SurfaceProtocol, true)
 		fixture.Finalize()
@@ -446,8 +432,6 @@ func TestValidatorTokenControls(T *testing.T) {
 	})
 }
 
-// sentinelFixtureRecord builds a valid zero-Source sentinel Record for one
-// Surface, for controls that append it to a completed inventory.
 func sentinelFixtureRecord(fixture *Fixture, Surface Surface) Record {
 	sentinel := fixture.base()
 	sentinel.Scenario = ScenarioTokenSource
@@ -461,8 +445,6 @@ func sentinelFixtureRecord(fixture *Fixture, Surface Surface) Record {
 	return sentinel
 }
 
-// TestValidatorContinuationControls covers the continuation
-// session-relation controls and both positive shapes.
 func TestValidatorContinuationControls(T *testing.T) {
 	T.Parallel()
 
@@ -676,9 +658,6 @@ func TestValidatorContinuationControls(T *testing.T) {
 	})
 }
 
-// TestValidatorCrossSurfacePriorSessionControl pins the separate
-// rejection of a recall whose prior_session_id resolves to a seed on
-// another Surface.
 func TestValidatorCrossSurfacePriorSessionControl(T *testing.T) {
 	T.Parallel()
 
@@ -702,9 +681,6 @@ func TestValidatorCrossSurfacePriorSessionControl(T *testing.T) {
 	}
 }
 
-// TestValidatorFinalTupleControls covers the two-pass aggregate
-// rules: no qualification Record in the first pass, exactly one in the
-// final pass, nothing after it, and exact equality with recomputation.
 func TestValidatorFinalTupleControls(T *testing.T) {
 	T.Parallel()
 
@@ -825,10 +801,6 @@ func TestValidatorFinalTupleControls(T *testing.T) {
 	})
 }
 
-// declareSemanticGap rewrites one semantic record in place to a
-// declared_gap grade with the given reason, leaving its session_id and
-// evidence_path as the fixture originally built them, matching the
-// rule that a declared_gap row's session follows the observation.
 func declareSemanticGap(f *Fixture, surface Surface, caseID Case, reason string) {
 	rec := f.FindFirst(MatchSemantic(surface, CapabilityTurnDisposition, caseID))
 	rec.Grade = GradeDeclaredGap
@@ -836,9 +808,6 @@ func declareSemanticGap(f *Fixture, surface Surface, caseID Case, reason string)
 	rec.Detail = reason
 }
 
-// declareNotInducible rewrites one semantic record in place to a
-// not_inducible grade, nulling its session_id and evidence_path per
-// the closed rule for that grade.
 func declareNotInducible(f *Fixture, surface Surface, capability Capability, caseID Case) {
 	rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
 	rec.Grade = GradeNotInducible
@@ -848,9 +817,6 @@ func declareNotInducible(f *Fixture, surface Surface, capability Capability, cas
 	rec.SessionID = nil
 }
 
-// TestValidatorExcludedCaseControls covers checkExcludedCases: one
-// rejection control per clause, built from a qualified fixture mutated
-// with declareSemanticGap and declareNotInducible.
 func TestValidatorExcludedCaseControls(T *testing.T) {
 	T.Parallel()
 
@@ -878,8 +844,7 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture.Finalize()
 		declareSemanticGap(fixture, SurfaceProtocol, CaseRuntimeRefusal, DeclaredGapNeverProduced)
 		declareSemanticGap(fixture, SurfaceNativeJSON, CaseRuntimeRefusal, DeclaredGapNeverProduced)
-		// native_stream_json intentionally left observed, so the
-		// declared set is incomplete.
+		// native_stream_json left observed, so the declared set is incomplete.
 		fixture.UpdateSemanticBaseline(SurfaceProtocol, CapabilityTurnDisposition)
 		fixture.UpdateSemanticBaseline(SurfaceNativeJSON, CapabilityTurnDisposition)
 		path := WriteEvidenceFile(T, fixture.Records)
@@ -971,8 +936,8 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture := NewFixture(FixtureDeclaredGap)
 		fixture.Finalize()
 		declarations := fixture.Declarations()
-		// Revert the peer's native_stream_json record back to observed,
-		// leaving CaseRuntimeRefusal itself fully and uniformly declared.
+		// Reverting one surface leaves the peer's declared set incomplete
+		// while the case itself stays uniformly declared.
 		peer := fixture.FindFirst(MatchSemantic(SurfaceNativeStreamJSON, CapabilityRetryClassification, CaseNonRetryableRefusal))
 		peer.Grade = GradeUsable
 		peer.Outcome = OutcomePass
@@ -1031,9 +996,6 @@ func TestValidatorAllExcludedBaselineControl(T *testing.T) {
 	}
 }
 
-// TestValidatorClassifyRecordsExcludedRowControls covers the per-record
-// rejections ClassifyRecords, CheckOutcomeGradePairing, and
-// checkSessionRelation enforce for the two excluded grades.
 func TestValidatorClassifyRecordsExcludedRowControls(T *testing.T) {
 	T.Parallel()
 
@@ -1061,10 +1023,8 @@ func TestValidatorClassifyRecordsExcludedRowControls(T *testing.T) {
 			wantSub: "is valid only on a semantic probe record",
 		},
 		{
-			// The declared_gap check runs ahead of the generic
-			// semantic-probe path check, so the operator who authored the
-			// declaration reads which rule his record broke rather than a
-			// message about semantic probes in general.
+			// The declared_gap check runs ahead of the generic semantic-probe
+			// path check, so the operator reads which declaration rule broke.
 			name: "declared_gap record with a null evidence_path",
 			mutate: func(f *Fixture) {
 				rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseCancellation))
@@ -1158,15 +1118,6 @@ func TestValidatorClassifyRecordsExcludedRowControls(T *testing.T) {
 	}
 }
 
-// TestValidatorSemanticSessionRelationExemption covers the refusal/retry
-// session-reuse rule: it still rejects a session mismatch whenever both
-// peer records carry a session, and it exempts the comparison only when
-// one side carries none, whatever that side's grade. The exemption must
-// not silently widen beyond that one condition: a declared_gap peer
-// pair still carries a session on both sides (checkSessionRelation
-// requires it) and so is never exempt, and a not_observed peer that
-// still carries a session is likewise never exempt, proving the skip
-// keys on the absent session rather than on either grade.
 func TestValidatorSemanticSessionRelationExemption(T *testing.T) {
 	T.Parallel()
 
@@ -1253,11 +1204,6 @@ func TestValidatorSemanticSessionRelationExemption(T *testing.T) {
 	})
 }
 
-// TestCheckSessionRelationSessionlessSurfacePartition confirms
-// checkSessionRelation's RowSemantic rule: the passing-record
-// session_id requirement binds SurfaceProtocol alone, and a structured
-// native passing record is accepted whether its session_id is null or
-// non-null.
 func TestCheckSessionRelationSessionlessSurfacePartition(T *testing.T) {
 	T.Parallel()
 
@@ -1303,9 +1249,8 @@ func TestCheckSessionRelationSessionlessSurfacePartition(T *testing.T) {
 		fixture := NewFixture(FixtureQualified)
 		fixture.Finalize()
 		path := WriteEvidenceFile(T, fixture.Records)
-		// The unmodified qualified fixture already carries a non-null
-		// session_id on every structured native surface's records; this
-		// asserts the shape that arm accepts without a mutation.
+		// The qualified fixture already carries a non-null session_id on
+		// every structured native record, so this arm needs no mutation.
 		rec := fixture.FindFirst(MatchSemantic(SurfaceNativeStreamJSON, CapabilityTurnDisposition, CaseSuccess))
 		if rec == nil || rec.SessionID == nil {
 			T.Fatal("fixture carries no native_stream_json disposition success record with a non-null session_id")

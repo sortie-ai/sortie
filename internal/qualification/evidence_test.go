@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestEvidenceRecordStrictDecode confirms a schema-valid record decodes
-// to its exact field values, that every nullable field accepts null,
-// and that the decode round trip preserves the record.
 func TestEvidenceRecordStrictDecode(t *testing.T) {
 	t.Parallel()
 
@@ -78,9 +75,6 @@ func TestEvidenceRecordStrictDecode(t *testing.T) {
 	})
 }
 
-// TestEvidenceRecordRejectsUnknownAndMissingFields confirms the decoder
-// rejects any field outside the closed set and any missing member, one
-// control per field.
 func TestEvidenceRecordRejectsUnknownAndMissingFields(t *testing.T) {
 	t.Parallel()
 
@@ -272,8 +266,6 @@ func TestEvidenceRecordRejectsUnknownAndMissingFields(t *testing.T) {
 	})
 }
 
-// marshalRecordFields renders a record through its wire member names so
-// a test can doctor individual fields while keeping the field set exact.
 func marshalRecordFields(t *testing.T, rec Record) map[string]json.RawMessage {
 	t.Helper()
 	line, err := MarshalRecord(rec)
@@ -287,10 +279,6 @@ func marshalRecordFields(t *testing.T, rec Record) map[string]json.RawMessage {
 	return fields
 }
 
-// TestDecodeRecordWidenedVocabulary confirms DecodeRecord accepts a
-// record carrying each grade and outcome this change adds, as long as
-// the value is a member of the widened closed sets, and still rejects
-// a value outside them.
 func TestDecodeRecordWidenedVocabulary(t *testing.T) {
 	t.Parallel()
 
@@ -357,10 +345,6 @@ func TestDecodeRecordWidenedVocabulary(t *testing.T) {
 	})
 }
 
-// TestDecodeRecordRejectsEmptyNullableString confirms decodeNullableString's
-// rejection reaches all five nullable string fields DecodeRecord decodes
-// through it, that null still decodes to a nil pointer on each, and that
-// a non-empty value still round trips.
 func TestDecodeRecordRejectsEmptyNullableString(t *testing.T) {
 	t.Parallel()
 
@@ -424,9 +408,6 @@ func TestDecodeRecordRejectsEmptyNullableString(t *testing.T) {
 	}
 }
 
-// nullableStringField reads one of Record's five nullable string
-// fields by its wire name, so the table above can assert on any of
-// them without a per-field switch at each call site.
 func nullableStringField(t *testing.T, rec Record, name string) *string {
 	t.Helper()
 	switch name {
@@ -445,8 +426,6 @@ func nullableStringField(t *testing.T, rec Record, name string) *string {
 	return nil
 }
 
-// TestRowGradesClosedSetTotality confirms RowGrades is a subset of
-// Grades and excludes exactly the three eligibility-only grades.
 func TestRowGradesClosedSetTotality(t *testing.T) {
 	t.Parallel()
 
@@ -467,9 +446,6 @@ func TestRowGradesClosedSetTotality(t *testing.T) {
 	}
 }
 
-// TestEvidenceRecordDetailBound confirms the detail field accepts
-// exactly 256 Unicode code points regardless of byte width and rejects
-// an empty detail or one past the bound.
 func TestEvidenceRecordDetailBound(t *testing.T) {
 	t.Parallel()
 
