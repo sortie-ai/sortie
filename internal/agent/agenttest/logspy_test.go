@@ -38,7 +38,7 @@ func TestLogSpy_Handle_MissingLineAttr(t *testing.T) {
 	spy := &agenttest.LogSpy{}
 	logger := slog.New(spy)
 
-	logger.Warn("agent stderr") // no "line" attr
+	logger.Warn("agent stderr")
 
 	entries := spy.Entries()
 	if len(entries) != 1 {
@@ -216,5 +216,77 @@ func TestRequireWarnLines_ReturnsLines(t *testing.T) {
 	}
 	if lines[0] != "startup rejected: no license" {
 		t.Errorf("lines[0] = %q, want \"startup rejected: no license\"", lines[0])
+	}
+}
+
+func TestLogSpy_Handle_AttrsCapturesNonGroupAttr(t *testing.T) {
+	t.Parallel()
+
+	spy := &agenttest.LogSpy{}
+	logger := slog.New(spy)
+
+	logger.Info("agent implementation", slog.String("name", "gemini"))
+
+	entries := spy.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("Entries() = %d entries, want 1", len(entries))
+	}
+	if got, want := entries[0].Attrs["name"], "gemini"; got != want {
+		t.Errorf("Attrs[%q] = %q, want %q", "name", got, want)
+	}
+}
+
+func TestLogSpy_Handle_AttrsExcludesGroupKey(t *testing.T) {
+	t.Parallel()
+
+	spy := &agenttest.LogSpy{}
+	logger := slog.New(spy)
+
+	logger.Info("agent implementation",
+		slog.String("name", "gemini"),
+		slog.Group("session", slog.String("id", "abc123")))
+
+	entries := spy.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("Entries() = %d entries, want 1", len(entries))
+	}
+	if _, ok := entries[0].Attrs["session"]; ok {
+		t.Errorf("Attrs[%q] present, want the group's own key excluded", "session")
+	}
+	if got, want := entries[0].Attrs["name"], "gemini"; got != want {
+		t.Errorf("Attrs[%q] = %q, want %q", "name", got, want)
+	}
+}
+
+func TestLogSpy_Handle_AttrsNilWhenNoAttrs(t *testing.T) {
+	t.Parallel()
+
+	spy := &agenttest.LogSpy{}
+	logger := slog.New(spy)
+
+	logger.Info("agent implementation")
+
+	entries := spy.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("Entries() = %d entries, want 1", len(entries))
+	}
+	if entries[0].Attrs != nil {
+		t.Errorf("Attrs = %v, want nil when the record carries no attribute", entries[0].Attrs)
+	}
+}
+
+func TestLogSpy_Entries_AttrsSnapshotIsIndependent(t *testing.T) {
+	t.Parallel()
+
+	spy := &agenttest.LogSpy{}
+	logger := slog.New(spy)
+
+	logger.Info("agent implementation", slog.String("name", "gemini"))
+	snap := spy.Entries()
+
+	logger.Info("agent implementation", slog.String("name", "kiro"))
+
+	if got, want := snap[0].Attrs["name"], "gemini"; got != want {
+		t.Errorf("Attrs[%q] = %q on prior snapshot, want %q (mutated by a later log call)", "name", got, want)
 	}
 }

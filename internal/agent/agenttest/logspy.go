@@ -14,6 +14,10 @@ type LogSpyEntry struct {
 	Level slog.Level
 	Msg   string
 	Line  string // value of the "line" slog.Attr, if present
+
+	// Attrs holds every non-group slog.Attr, keyed by name and rendered through
+	// [slog.Value.String]. A group's own key is not an entry.
+	Attrs map[string]string
 }
 
 // LogSpy is a [slog.Handler] that records every log record. It returns itself
@@ -32,6 +36,12 @@ func (s *LogSpy) Handle(_ context.Context, r slog.Record) error {
 	r.Attrs(func(a slog.Attr) bool {
 		if a.Key == "line" {
 			e.Line = a.Value.String()
+		}
+		if a.Value.Kind() != slog.KindGroup {
+			if e.Attrs == nil {
+				e.Attrs = map[string]string{}
+			}
+			e.Attrs[a.Key] = a.Value.String()
 		}
 		return true
 	})

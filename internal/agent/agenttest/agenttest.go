@@ -35,3 +35,18 @@ func WriteScript(t *testing.T, dir, name, content string) string {
 	}
 	return path
 }
+
+// WriteRecordingScript writes an executable shell script as [WriteScript] does
+// and has it append its background jobs' process ids to its [DescendantReceipt]
+// as it exits. Only the shell can name those jobs once it is gone, so a script
+// killed outright records nothing.
+func WriteRecordingScript(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	record := "__agenttest_record_descendants() { jobs -p >> " + shellWord(DescendantReceipt(filepath.Join(dir, name))) + "; }\n" +
+		"trap __agenttest_record_descendants EXIT\n"
+	return WriteScript(t, dir, name, record+content)
+}
+
+func shellWord(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
