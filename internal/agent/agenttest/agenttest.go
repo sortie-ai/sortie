@@ -20,7 +20,7 @@ func RequireSetsid(t *testing.T) {
 }
 
 // WriteScript writes an executable shell script with content to dir/name and
-// returns the absolute path.
+// returns the path.
 //
 // The write is delegated to a child process so the parent never opens a write
 // FD on the executable: an inherited write FD surviving a fork by another
