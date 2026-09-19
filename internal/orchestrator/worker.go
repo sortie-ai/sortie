@@ -92,7 +92,7 @@ type WorkerResult struct {
 	ExitKind WorkerExitKind
 
 	// Error is the cause of an abnormal exit. Nil for normal exits and
-	// context cancellations.
+	// for a cancellation that interrupted no failing operation.
 	Error error
 
 	// TurnsCompleted is the number of turns that received a TurnResult
