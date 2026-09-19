@@ -90,7 +90,7 @@ that manages your session, retries failures, and monitors progress.
 
 Before making changes, read:
 
-- `CLAUDE.md` or `CONTRIBUTING.md` for build commands and project conventions
+- `AGENTS.md` or `CONTRIBUTING.md` for build commands and project conventions
 - Any existing tests in the area you are modifying
 - Related source files to understand current patterns
 

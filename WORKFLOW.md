@@ -22,7 +22,6 @@ hooks:
     git fetch origin main
     git checkout -B "sortie/${SORTIE_ISSUE_IDENTIFIER}" origin/main
   after_run: |
-    rm -f CLAUDE.md
     make fmt 2>/dev/null || true
     git add -A
     git diff --cached --quiet || git commit -m "sortie(${SORTIE_ISSUE_IDENTIFIER}): automated changes"
@@ -85,7 +84,7 @@ If it touches workspace, read Section [9](docs/architecture/09-workspace-managem
 If it touches persistence, read Section [19](docs/architecture/24-persistence-schema.md).
 If it touches observability, read Section [13](docs/architecture/18-logging-status-and-observability.md).
 
-Also read `CLAUDE.md` for build commands and project boundaries.
+Also read `AGENTS.md` for build commands and project boundaries.
 
 ### Step 2 - Identify the minimal change
 
