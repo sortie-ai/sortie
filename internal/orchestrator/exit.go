@@ -16,20 +16,19 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-// defaultMaxRetryBackoffMS is the fallback cap for exponential backoff when
-// the configured value is zero or negative (5 minutes).
+// defaultMaxRetryBackoffMS is the fallback exponential-backoff cap when the
+// configured value is non-positive (5 minutes).
 const defaultMaxRetryBackoffMS = 300_000
 
 // backoffBaseMS is the base delay for exponential backoff (10 seconds).
 const backoffBaseMS = 10_000
 
 // continuationDelayMS is the fixed delay for continuation retries after a
-// normal worker exit (1 second).
+// normal exit (1 second).
 const continuationDelayMS int64 = 1_000
 
 // WorkerExitStore is the persistence interface required by
-// [HandleWorkerExit]. It is satisfied by [persistence.Store] in production
-// and by test doubles in unit tests.
+// [HandleWorkerExit].
 type WorkerExitStore interface {
 	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
@@ -44,138 +43,97 @@ type WorkerExitStore interface {
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
-// are not part of the core [State]. This separates pure state mutation from
-// I/O side effects (SQLite persistence).
+// are not part of the core [State], separating pure state mutation from I/O.
 type HandleWorkerExitParams struct {
-	// Store is the SQLite persistence layer. Used to persist the run
-	// attempt to run_history, update aggregate_metrics, and save the
-	// retry entry.
 	Store WorkerExitStore
 
-	// MaxRetryBackoffMS is the configured cap for exponential backoff
-	// delay (from config.Agent.MaxRetryBackoffMS).
 	MaxRetryBackoffMS int
 
-	// MaxConsecutiveAbsences is the configured consecutive
-	// handoff-absence ceiling (from
-	// config.Agent.MaxConsecutiveAbsences).
 	MaxConsecutiveAbsences int
 
-	// HandoffParkingLabel is the review-comments escalation label captured
-	// at orchestrator construction. Empty falls back to "needs-human".
+	// HandoffParkingLabel is the review-comments escalation label. Empty
+	// falls back to "needs-human".
 	HandoffParkingLabel string
 
-	// OnRetryFire is the callback invoked when the scheduled retry
-	// timer expires. The orchestrator provides this; it routes the
-	// retry timer event back into the event loop.
+	// OnRetryFire routes an expired retry timer back into the event loop.
 	OnRetryFire func(issueID string)
 
-	// NowFunc returns the current UTC time. Injected for testability.
-	// If nil, time.Now().UTC() is used.
+	// NowFunc returns the current UTC time; nil uses time.Now().UTC().
+	// Injected for testability.
 	NowFunc func() time.Time
 
-	// Ctx is the context for persistence operations. The event loop
-	// passes its own context so graceful shutdown can deadline-cancel
-	// in-flight SQLite writes. If nil, context.Background() is used.
+	// Ctx is the context for persistence, passed by the event loop so
+	// shutdown can deadline-cancel in-flight writes. Nil uses
+	// context.Background().
 	Ctx context.Context
 
-	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
 
-	// BeforeRemoveHook is the before_remove hook script (from config).
-	// Empty means no hook.
+	// BeforeRemoveHook is the before_remove hook script. Empty means none.
 	BeforeRemoveHook string
 
-	// HookTimeoutMS is the timeout for hook invocations (from config).
 	HookTimeoutMS int
 
-	// TrackerAdapter is the tracker integration used to perform handoff
-	// transitions. Required when HandoffState is non-empty. Nil is safe
-	// when HandoffState is empty.
+	// TrackerAdapter performs handoff transitions. Required when
+	// HandoffState is non-empty; nil is safe when it is empty.
 	TrackerAdapter domain.TrackerAdapter
 
-	// HandoffState is the target tracker state for orchestrator-initiated
-	// handoff transitions (from config.Tracker.HandoffState). Empty string
-	// means no handoff transition; the existing continuation retry fires.
+	// HandoffState is the target state for orchestrator-initiated handoff
+	// transitions. Empty means no handoff; the continuation retry fires.
 	HandoffState string
 
-	// NoChangeState is the target tracker state for a run that declared
-	// no change was needed. Empty falls back to HandoffState.
+	// NoChangeState is the target for a run that declared no change was
+	// needed. Empty falls back to HandoffState.
 	NoChangeState string
 
-	// ActiveStates is the current list of configured active issue states
-	// (from config.Tracker.ActiveStates). Used to determine whether the
-	// issue is still in an active state at worker exit time. The check is
-	// case-insensitive.
+	// ActiveStates determines whether the issue is still active at exit
+	// (case-insensitive).
 	ActiveStates []string
 
-	// TerminalStates is the current list of configured terminal issue
-	// states (from config.Tracker.TerminalStates). Used to suppress the
-	// handoff transition when the issue has already reached a terminal
-	// state. The check is case-insensitive. An empty list classifies no
-	// state as terminal, matching ReconcileParams.TerminalStates.
+	// TerminalStates suppresses the handoff when the issue already reached a
+	// terminal state (case-insensitive). An empty list classifies no state
+	// as terminal.
 	TerminalStates []string
 
-	// Metrics records instrumentation counters for worker exit events.
-	// If nil, defaults to [domain.NoopMetrics].
+	// Metrics records worker-exit counters. If nil, defaults to
+	// [domain.NoopMetrics].
 	Metrics domain.Metrics
 
-	// CommentsConfig holds the boolean flags for tracker comments on
-	// completion and failure. Read from config.Tracker.Comments by the
-	// event loop caller.
+	// CommentsConfig holds the completion/failure comment flags.
 	CommentsConfig config.TrackerCommentsConfig
 
-	// HostPool is the SSH host pool for releasing hosts on worker exit.
-	// If nil, no host pool release occurs (local-mode or tests).
+	// HostPool releases hosts on exit. Nil means no release (local or tests).
 	HostPool *HostPool
 
-	// CIProvider is the CI status provider. When non-nil, HandleWorkerExit
-	// populates state.PendingReactions on normal exits so the reconcile
-	// loop can poll CI status.
+	// CIProvider, when non-nil, lets HandleWorkerExit seed a pending CI
+	// reaction on normal exits.
 	CIProvider domain.CIStatusProvider
 
-	// SCMAdapter is the SCM adapter for review comment features. When
-	// non-nil and workspace SCM metadata includes a PR number with
-	// Owner and Repo, a pending review reaction is created on normal
-	// worker exit.
+	// SCMAdapter, when non-nil and the workspace SCM metadata carries PR
+	// identity, lets HandleWorkerExit seed pending SCM reactions on normal
+	// exits.
 	SCMAdapter domain.SCMAdapter
 
-	// AutoMergeReactionConfigured marks whether the auto-merge feature
-	// is active for the current process. The enqueue path gates on
-	// this flag and the SCMAdapter being non-nil.
+	// The *ReactionConfigured flags mark whether each feature is active for
+	// the process; each enqueue path gates on its flag and a non-nil
+	// SCMAdapter.
 	AutoMergeReactionConfigured bool
 
-	// BotReviewReactionConfigured marks whether the bot-review feature
-	// is active for the current process. The enqueue path gates on
-	// this flag and the SCMAdapter being non-nil.
 	BotReviewReactionConfigured bool
 
-	// MergeConflictReactionConfigured marks whether the merge-conflict
-	// feature is active for the current process. The enqueue path gates
-	// on this flag and the SCMAdapter being non-nil.
 	MergeConflictReactionConfigured bool
 
-	// LabelReviewReactionConfigured marks whether the label-review
-	// feature is active for the current process. The enqueue path gates
-	// on this flag and the SCMAdapter being non-nil.
 	LabelReviewReactionConfigured bool
 
-	// LabelFixReactionConfigured marks whether the label-fix feature is
-	// active for the current process. The enqueue path gates on this flag
-	// and the SCMAdapter being non-nil.
 	LabelFixReactionConfigured bool
 
-	// MergeCompletionReactionConfigured marks whether the
-	// merge-completion feature is active for the current process. The
-	// enqueue path gates on this flag and the SCMAdapter being non-nil.
 	MergeCompletionReactionConfigured bool
 }
 
 // resolveTerminalObservation returns the freshest tracker state observation
-// available for this exit and a stable source label for logging:
-// "reconcile", "worker", or "snapshot". The result feeds the terminal test
-// only; the active-state classification keeps reading entry.Issue.State.
-// Never returns an empty state when entry.Issue.State is non-empty.
+// for this exit and a source label ("reconcile", "worker", or "snapshot").
+// It feeds the terminal test only; active-state classification keeps reading
+// entry.Issue.State. Never empty when entry.Issue.State is non-empty.
 func resolveTerminalObservation(entry *RunningEntry, result WorkerResult) (state string, source string) {
 	if entry.ObservedTerminalState != "" {
 		return entry.ObservedTerminalState, "reconcile"
@@ -186,12 +144,10 @@ func resolveTerminalObservation(entry *RunningEntry, result WorkerResult) (state
 	return entry.Issue.State, "snapshot"
 }
 
-// resolveExitTarget returns the tracker state the handoff arm transitions
-// the issue to, and whether the run declared no change was needed. A
-// declared run moves to params.NoChangeState when that field is set;
-// every other run, and a declared run whose NoChangeState is empty, moves
-// to params.HandoffState. The resolution reads no workspace state and
-// leaves the handoffPath predicate untouched.
+// resolveExitTarget returns the tracker state the handoff arm transitions to
+// and whether the run declared no change. A declared run moves to
+// params.NoChangeState when set; every other run, and a declared run with
+// empty NoChangeState, moves to params.HandoffState.
 func resolveExitTarget(params HandleWorkerExitParams, workerResult WorkerResult) (target string, declared bool) {
 	declared = workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusNoChangeNeeded)
 	if declared && params.NoChangeState != "" {
@@ -200,10 +156,9 @@ func resolveExitTarget(params HandleWorkerExitParams, workerResult WorkerResult)
 	return params.HandoffState, declared
 }
 
-// HandleWorkerExit processes a worker's terminal outcome. It removes the
-// running entry, updates runtime totals, persists the run to SQLite, and
-// schedules the appropriate retry. Must be called from the orchestrator's
-// single-writer event loop.
+// HandleWorkerExit processes a worker's terminal outcome: removes the running
+// entry, updates totals, persists to SQLite, and schedules the appropriate
+// retry. Must be called from the single-writer event loop.
 func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWorkerExitParams) {
 	log := params.Logger
 	if log == nil {
@@ -228,43 +183,35 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 	delete(state.Running, workerResult.IssueID)
 
-	// Reconcile the entry's token totals from the worker's own figure
-	// before run_history, session_metadata, and aggregate_metrics are
-	// built below, so a trailing usage event dropped by a full
-	// agentEventCh cannot leave the recorded total lower than what the
-	// worker actually spent. applyUsageDelta's monotone-delta rule
-	// applies a zero delta when workerResult.Usage is already fully
-	// accounted for.
+	// Reconcile the entry's token totals from the worker's own figure before
+	// the run_history/session_metadata/aggregate writes below, so a trailing
+	// usage event a full agentEventCh dropped cannot leave the recorded
+	// total below what the worker spent. The monotone-delta rule applies a
+	// zero delta when Usage is already fully accounted for.
 	applyUsageDelta(state, entry, workerResult.Usage, metrics)
 
-	// Reconcile the entry's model name and request count from the
-	// worker's own figure the same way the token totals above are
-	// reconciled: the worker's mirror folded every event the entry
-	// applied, in the same order, plus any event a full agentEventCh
-	// dropped, so its non-empty model name and its request count are
-	// never behind the entry's own.
+	// Reconcile model name and request count the same way: the worker's
+	// mirror folded every event the entry applied, plus any a full
+	// agentEventCh dropped, so they are never behind the entry's own.
 	if workerResult.ModelName != "" {
 		entry.ModelName = workerResult.ModelName
 	}
 	entry.APIRequestCount = max(entry.APIRequestCount, workerResult.APIRequestCount)
 
-	// measured is the OR of the entry's own measurement flag and the
-	// worker's mirror, computed after the usage reconciliation above so
-	// a measurement that arrived only on the worker result still
-	// counts.
+	// measured ORs the entry's flag with the worker's mirror, after the
+	// reconciliation above so a measurement that arrived only on the worker
+	// result still counts.
 	measured := entry.UsageMeasured || workerResult.UsageMeasured
 
-	// Release the SSH host slot so it becomes available for other issues.
-	// ReleaseHost is a no-op when issueID has no assignment, so calling
-	// it unconditionally is safe and more robust than gating on SSHHost.
+	// ReleaseHost is a no-op when issueID has no assignment, so calling it
+	// unconditionally is safe.
 	if params.HostPool != nil {
 		params.HostPool.ReleaseHost(workerResult.IssueID)
 	}
 
-	// Enrich with session context now that both sources are available.
 	// Prefer workerResult.SessionID (authoritative from the adapter) over
-	// entry.SessionID, whose EventSessionStarted event a full
-	// agentEventCh may have dropped.
+	// entry.SessionID, whose EventSessionStarted a full agentEventCh may
+	// have dropped.
 	if sid := workerResult.SessionID; sid != "" {
 		log = logging.WithSession(log, sid)
 	} else if entry.SessionID != "" {
@@ -278,10 +225,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		entry.WorkspacePath = workerResult.WorkspacePath
 	}
 
-	// Deferred workspace cleanup: reconciliation marks terminal issues with
-	// PendingCleanup so cleanup runs only after the worker has fully exited.
-	// Guarded on WorkspacePath being non-empty; if the worker exited before
-	// workspace preparation, there is no directory to clean.
+	// Deferred workspace cleanup for terminal issues, run only after the
+	// worker has fully exited. Guarded on WorkspacePath being non-empty.
 	if entry.PendingCleanup && entry.WorkspacePath != "" {
 		if err := workspace.CleanupByPath(ctx, workspace.CleanupByPathParams{
 			Path:          entry.WorkspacePath,
@@ -321,10 +266,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	metrics.AddAgentRuntime(elapsed)
 
 	// Resolve the normal-exit disposition far enough to know whether the
-	// handoff-evidence policy changes this run's persisted status. Evidence is
-	// only consulted where the pre-existing handoff conditions already hold,
-	// and only after the higher-priority blocked and terminal dispositions have
-	// been ruled out.
+	// evidence policy changes this run's persisted status. Evidence is
+	// consulted only where the handoff conditions already hold, and only
+	// after the blocked and terminal dispositions are ruled out.
 	var issueIsActive bool
 	var blockedSoftStop bool
 	var drivesIssue bool
@@ -357,13 +301,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 			evidenceWithheld = handoffEvidenceWithholds(policy, evidenceResult)
 
-			// Before recording an absence failure, re-read the issue's
-			// tracker state once: the resolved observation above may
-			// already be stale by the time the worker's teardown has
-			// completed. With no terminal states configured no value
-			// can classify as terminal, so the read would spend a
-			// tracker call and up to one request timeout on the event
-			// loop without ever changing the disposition.
+			// Before recording an absence failure, re-read the tracker state
+			// once: the resolved observation may be stale by the time
+			// teardown completed. With no terminal states configured the
+			// read cannot change the disposition, so skip it.
 			if evidenceWithheld && len(params.TerminalStates) > 0 && params.TrackerAdapter != nil {
 				if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
 					log.Warn("withheld handoff verification read failed, recording withheld handoff",
@@ -391,9 +332,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				evidenceErr = handoffEvidenceFailure(policy, evidenceResult)
 				metrics.IncHandoffTransitions(handoffWithheld)
 			} else if evidenceResult.Verdict == handoffWorkObserved {
-				// A positive verdict releases a park immediately. The durable
-				// reset recorded after the run_history write below holds even
-				// when the later tracker handoff write fails.
+				// A positive verdict releases a park. The durable reset
+				// recorded after the run_history write below holds even if
+				// the later tracker handoff write fails.
 				evidenceWorkObserved = true
 				if _, parked := state.Parked[workerResult.IssueID]; parked {
 					unparkIssue(ctx, state, workerResult.IssueID, unparkTriggerEvidenceObserved, params.Store, log)
@@ -405,22 +346,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	status := mapExitKindToStatus(workerResult.ExitKind)
 	runError := workerResult.Error
 
-	// The token ceiling's own cancel is reported as its own status,
-	// distinct from a stall, terminal-state, or shutdown cancel, so the
-	// durable record attributes the stop to the budget rather than to
-	// an ordinary cancellation.
+	// The token ceiling's own cancel gets its own status, distinct from a
+	// stall, terminal-state, or shutdown cancel, so the record attributes
+	// the stop to the budget.
 	if workerResult.ExitKind == WorkerExitCancelled && entry.TokenCeilingStopped {
 		status = "budget_stopped"
 		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, entry.TokenCeilingAtStop)
 	}
 
-	// A needs-a-person ending is reported as its own status only when the
-	// worker's own error, not a shutdown racing it, is what stopped the
-	// run. mapExitKindToStatus already reports a live-context cancel as
-	// "cancelled" rather than "failed", so this guard alone keeps a
-	// shutdown from being relabelled. The error is always wrapped by the
-	// worker, never held directly, so it MUST be unwrapped rather than
-	// asserted or switched on.
+	// A needs-a-person ending gets its own status only when the worker's own
+	// error, not a shutdown racing it, stopped the run. mapExitKindToStatus
+	// already reports a live-context cancel as "cancelled", so this guard
+	// alone keeps a shutdown from being relabelled. The error is always
+	// wrapped, so it MUST be unwrapped rather than asserted.
 	if status == "failed" {
 		if agentErr, ok := errors.AsType[*domain.AgentError](runError); ok && agentErr.Kind == domain.ErrTurnInputRequired {
 			status = "needs_person"
@@ -432,9 +370,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		runError = evidenceErr
 	}
 
-	// RunHistory.Attempt is 1-based for display: first dispatch = 1,
-	// first retry = 2, etc. normalizeAttempt returns the 0-based retry
-	// counter (nil → 0), so add 1 for the overall run attempt number.
+	// RunHistory.Attempt is 1-based for display; normalizeAttempt returns the
+	// 0-based retry counter, so add 1.
 	runHistory := persistence.RunHistory{
 		IssueID:         workerResult.IssueID,
 		Identifier:      workerResult.Identifier,
@@ -457,9 +394,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TokensMeasured:  measured,
 	}
 	// A row recording no measurement must carry zero in all four token
-	// columns. The reconciliation above populates them from the worker's
-	// own figure, which an adapter can report without also asserting
-	// that it measured the run, so the zeroing cannot be left implicit.
+	// columns. The reconciliation above can populate them from a worker
+	// figure that never asserted a measurement, so zero explicitly.
 	if !measured {
 		runHistory.InputTokens = 0
 		runHistory.OutputTokens = 0
@@ -475,21 +411,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 	}
 
-	// Persist session metadata so per-session token data survives restarts.
-	// Prefer workerResult.SessionID: the worker carries the authoritative value
-	// directly from the adapter, while entry.SessionID depends on
-	// EventSessionStarted having been processed before exit.
+	// Prefer workerResult.SessionID (authoritative from the adapter) over
+	// entry.SessionID, which depends on EventSessionStarted having been
+	// processed before exit.
 	sessionID := workerResult.SessionID
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
-	// The entry lags the worker's tally when the worker context ends
-	// before a turn-started message is delivered, and a turn that
-	// errored or was cancelled still means the session ran.
+	// The entry lags the worker's tally when the context ended before a
+	// turn-started message was delivered; a turn that errored still ran.
 	turnsSeen := max(entry.TurnCount, workerResult.TurnsStarted)
 
-	// An unmeasured count is stored as zero so a reader of the database
-	// cannot find a figure contradicting the qualifier beside it.
+	// An unmeasured count is stored as zero so a reader cannot find a figure
+	// contradicting the qualifier beside it.
 	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, turnsSeen, entry.APIRequestCount)
 	requestCount := 0
 	if requestsMeasured {
@@ -498,12 +432,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	sessionMeta := persistence.SessionMetadata{
 		IssueID:   workerResult.IssueID,
 		SessionID: sessionID,
-		// The dispatch's row is cleared here, ahead of the run_history
-		// write below: once that row exists, a session_metadata row still
-		// keyed to this dispatch would add the run's spend a second time.
-		// These are separate writes; a clear that fails while the append
-		// below still succeeds leaves that double count as an accepted
-		// risk rather than one this path corrects.
+		// The dispatch's row is cleared here, ahead of the run_history write
+		// below: once that row exists, a session_metadata row still keyed to
+		// this dispatch would add the run's spend a second time. These are
+		// separate writes; a clear that fails while the append succeeds
+		// leaves that double count as an accepted risk.
 		DispatchID:          "",
 		InputTokens:         entry.AgentInputTokens,
 		OutputTokens:        entry.AgentOutputTokens,
@@ -545,9 +478,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if evidenceWithheld {
 		counts, countErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{workerResult.IssueID})
 		if countErr != nil {
-			// The retry attempt is a conservative fallback when SQLite cannot
-			// answer. It may include other failure attempts, which can only stop
-			// sooner; it cannot reopen an otherwise exhausted loop.
+			// Conservative fallback when SQLite cannot answer. It may
+			// include other failure attempts, which can only stop sooner;
+			// it cannot reopen an otherwise exhausted loop.
 			consecutiveAbsences = NextAttempt(entry.RetryAttempt)
 			log.Warn("handoff absence count query failed, using retry attempt fallback",
 				slog.Int("consecutive_absences", consecutiveAbsences),
@@ -608,18 +541,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	retryScheduled := false
-	// retryDeferred is true whenever this exit found the retry slot
-	// occupied by a foreign incumbent and left it untouched instead of
-	// scheduling its own retry. Distinct from retryScheduled: the two
-	// share the "work remains queued for this issue" outcome the
-	// completion and failure comments report, but only retryScheduled
-	// means this exit itself created or replaced the retry entry.
+	// retryDeferred is true when this exit found the retry slot held by a
+	// foreign incumbent and left it untouched. Distinct from retryScheduled:
+	// both mean work remains queued, but only retryScheduled means this exit
+	// created or replaced the retry entry.
 	retryDeferred := false
-	// claimRetainedForIncumbent is true on the two arms where the claim
-	// is kept solely to protect a foreign incumbent (the non-active
-	// default branch and the successful-handoff arm). The
-	// reaction-enqueue gate below treats the claim as released on those
-	// two arms specifically, so a deferral changes only the retry slot.
+	// claimRetainedForIncumbent is true on the two arms that keep the claim
+	// solely to protect a foreign incumbent (non-active default and
+	// successful-handoff). The reaction-enqueue gate treats the claim as
+	// released on those arms, so a deferral changes only the retry slot.
 	claimRetainedForIncumbent := false
 	nextAttempt := 0
 
@@ -632,8 +562,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 		switch {
 		case blockedSoftStop:
-			// Blocked agents have no further work; suppress continuation
-			// retry and release the claim immediately.
+			// Blocked agents have no further work; suppress continuation and
+			// release the claim.
 			log.Info("continuation retry suppressed",
 				slog.String("reason", workerResult.SoftStopReason),
 			)
@@ -657,9 +587,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 
 		case terminal:
-			// The tracker already reports a terminal state for this issue,
-			// observed by reconciliation, by the worker's own per-turn
-			// refresh, or from the dispatch-time snapshot. Overwriting it
+			// The tracker already reports a terminal state; overwriting it
 			// with the handoff state would undo the operator's own action.
 			log.Info("handoff suppressed for terminal issue",
 				slog.String("state", observation),
@@ -678,10 +606,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			// retry, released the claim, and installed the durable runtime gate.
 
 		case handoffPath && evidenceWithheld:
-			// A withheld handoff is an unsuccessful run disposition even though
-			// the agent process exited normally. Keep the issue claimed and use
-			// the ordinary exponential-backoff failure lane, not the short
-			// continuation lane.
+			// A withheld handoff is an unsuccessful disposition even though
+			// the process exited normally: keep the claim and use the
+			// exponential-backoff failure lane, not the continuation lane.
 			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
 				logRetrySlotDeferral(log, "evidence-backoff", incumbent)
 				nextAttempt = incumbent.Attempt
@@ -714,15 +641,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 
 		case handoffPath:
-			// Handoff: issue is active and handoff_state is configured.
-			// The target is resolved once, ahead of every record and the
-			// transition call this arm makes, so a declared run's target
-			// state and its provenance are visible without reading
-			// workspace state or changing the handoffPath predicate above.
+			// Handoff: issue active and handoff_state configured. The target
+			// is resolved once, ahead of every record and the transition, so
+			// a declared run's target and provenance are visible without
+			// reading workspace state.
 			resolvedTarget, noChangeDeclared := resolveExitTarget(params, workerResult)
 
-			// Guard against nil TrackerAdapter (misconfiguration or test
-			// that sets HandoffState without providing an adapter).
+			// Guard against nil TrackerAdapter (misconfiguration or a test
+			// that sets HandoffState without an adapter).
 			if params.TrackerAdapter == nil {
 				metrics.IncHandoffTransitions(handoffError)
 				if workerResult.SoftStop {
@@ -761,12 +687,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				}
 			} else {
 				// Verify the tracker state immediately before the write: the
-				// resolved observation above may already be stale by the
-				// time the worker's teardown has completed. With no
-				// terminal states configured no value can classify as
-				// terminal, so the read would spend a tracker call and up
-				// to one request timeout on the event loop without ever
-				// suppressing the write.
+				// resolved observation may be stale by the time teardown
+				// completed. With no terminal states configured the read
+				// cannot suppress the write, so skip it.
 				verifiedTerminal := false
 				if len(params.TerminalStates) > 0 {
 					if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
@@ -834,10 +757,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						retryScheduled = true
 					}
 				} else if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
-					// A successful handoff transition is not a stop signal:
-					// work queued for this issue during the session is
-					// still valid, so the incumbent is kept rather than
-					// cancelled.
+					// A successful handoff is not a stop signal: work queued
+					// during the session is still valid, so the incumbent is
+					// kept rather than cancelled.
 					logRetrySlotDeferral(log, triggerContinuation, incumbent)
 					metrics.IncHandoffTransitions(handoffSuccess)
 					log.Info("handoff transition succeeded, incumbent preserved",
@@ -860,9 +782,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 
 		case workerResult.SoftStop:
-			// Catch-all for soft-stop reasons not handled above (e.g.,
-			// needs-human-review without handoff configured, or any
-			// future/unrecognized reason). Release the claim without retry.
+			// Catch-all for soft-stop reasons not handled above. Release the
+			// claim without retry.
 			if workerResult.SoftStopReason != string(workspace.StatusBlocked) &&
 				workerResult.SoftStopReason != string(workspace.StatusNeedsHumanReview) &&
 				workerResult.SoftStopReason != string(workspace.StatusNoChangeNeeded) {
@@ -877,8 +798,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			delete(state.Claimed, workerResult.IssueID)
 
 		case issueIsActive && drivesIssue:
-			// No handoff configured but issue is still active: schedule
-			// continuation retry, unless the slot is already occupied.
+			// No handoff configured but issue still active: schedule
+			// continuation retry unless the slot is occupied.
 			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
 				logRetrySlotDeferral(log, triggerContinuation, incumbent)
 				retryDeferred = true
@@ -902,10 +823,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 
 		default:
-			// Issue is not in an active state: cancel any pending retry
-			// and release claim, unless the slot is occupied by a
-			// foreign incumbent, which is exactly the population this
-			// disposition would otherwise strand.
+			// Issue not active: cancel any pending retry and release the
+			// claim, unless a foreign incumbent holds the slot, which is
+			// exactly the population this arm would otherwise strand.
 			if params.HandoffState != "" {
 				metrics.IncHandoffTransitions(handoffSkipped)
 			}
@@ -921,19 +841,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 		_, stillClaimed := state.Claimed[workerResult.IssueID]
 		// A claim retained solely to protect an incumbent must not widen
-		// reaction seeding, so the predicate is evaluated as if that
-		// claim had been released.
+		// reaction seeding, so evaluate as if it had been released.
 		if claimRetainedForIncumbent {
 			stillClaimed = false
 		}
 		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed
 
-		// Record a pending CI check when the CI provider and the SCM
-		// adapter are both configured and the worker produced workspace
-		// SCM metadata carrying pull request identity: the reaction
-		// cannot resolve a head, and therefore cannot answer whether it
-		// is current, for a branch with no pull request. Handoff paths
-		// remain eligible even after the claim is released.
+		// Seed a pending CI check when CI provider and SCM adapter are both
+		// configured and the workspace carries PR identity: the reaction
+		// cannot resolve a head for a branch with no PR. Handoff paths stay
+		// eligible even after the claim is released.
 		if params.CIProvider != nil && params.SCMAdapter != nil && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -972,8 +889,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending review check when the SCM adapter is configured
-		// and the workspace has PR metadata with SCM repository identity.
+		// Seed a pending review check when the SCM adapter is configured and
+		// the workspace has PR metadata with repository identity.
 		if params.SCMAdapter != nil && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -983,8 +900,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						nowReview = params.NowFunc().UTC()
 					}
 					rkey := ReactionKey(workerResult.IssueID, ReactionKindReview)
-					// Only create if not already present to preserve
-					// in-progress debounce state.
+					// Skip if already present to preserve in-progress debounce.
 					if _, exists := state.PendingReactions[rkey]; !exists {
 						state.PendingReactions[rkey] = &PendingReaction{
 							IssueID:     workerResult.IssueID,
@@ -1010,11 +926,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending bot-review check when the SCM adapter is
-		// configured, bot-review is enabled, and the workspace has PR
-		// metadata with SCM repository identity. The bot-review enqueue
-		// is independent of the review-kind enqueue: both fire from the
-		// same worker exit.
+		// Seed a pending bot-review check when the SCM adapter is configured,
+		// bot-review is enabled, and the workspace has PR metadata.
+		// Independent of the review-kind enqueue: both fire from the same exit.
 		if params.SCMAdapter != nil && params.BotReviewReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -1049,10 +963,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending auto-merge entry when the SCM adapter is
-		// configured, auto-merge is enabled, and the workspace has PR
-		// metadata. The merge-kind enqueue is independent of the
-		// review-kind enqueue: both fire from the same worker exit.
+		// Seed a pending auto-merge entry when the SCM adapter is configured,
+		// auto-merge is enabled, and the workspace has PR metadata.
 		if params.SCMAdapter != nil && params.AutoMergeReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -1087,10 +999,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending merge-conflict entry when the SCM adapter
-		// is configured, merge-conflict is enabled, and the workspace
-		// has PR metadata. The merge-conflict enqueue is independent
-		// of the other kinds: all fire from the same worker exit.
+		// Seed a pending merge-conflict entry when the SCM adapter is
+		// configured, merge-conflict is enabled, and the workspace has PR
+		// metadata.
 		if params.SCMAdapter != nil && params.MergeConflictReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -1125,15 +1036,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending label-review entry when the SCM adapter is
+		// Seed a pending label-review entry when the SCM adapter is
 		// configured, label-review is enabled, and the workspace has PR
-		// metadata. Unlike the sibling kinds this requires no branch:
-		// the read-only review has no checkout. A read-only session's
-		// own exit never seeds, but not for lack of metadata: the
-		// reused per-issue directory may still hold the scm.json a
-		// prior full session wrote. The operative gate is
-		// reactionEnqueueAllowed, which is always false for a read-only
-		// exit because that exit is excluded from the handoff path and
+		// metadata. No branch is needed (read-only has no checkout). A
+		// read-only session's own exit never seeds: reactionEnqueueAllowed is
+		// always false for it, since it is excluded from the handoff path and
 		// releases the claim.
 		if params.SCMAdapter != nil && params.LabelReviewReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
@@ -1167,15 +1074,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending label-fix entry when the SCM adapter is
-		// configured, label-fix is enabled, and the workspace has PR
-		// metadata with a recorded head branch. Unlike label-review this
-		// requires a branch: the fix session checks out that branch, so a
-		// PR record without one cannot drive a fix. A fix session's own
-		// exit never seeds because reactionEnqueueAllowed is false for it
-		// (it is excluded from the handoff path and releases the claim);
-		// repeatability after a completed fix comes from the reconcile
-		// re-enqueue on dispatch.
+		// Seed a pending label-fix entry when the SCM adapter is configured,
+		// label-fix is enabled, and the workspace has PR metadata with a head
+		// branch (the fix session checks it out). A fix session's own exit
+		// never seeds (reactionEnqueueAllowed is false); repeatability comes
+		// from the reconcile re-enqueue on dispatch.
 		if params.SCMAdapter != nil && params.LabelFixReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -1209,11 +1112,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 		}
 
-		// Record a pending merge-completion entry when the SCM adapter
-		// is configured, merge-completion is enabled, and the workspace
-		// has PR metadata. Unlike the checkout-bearing kinds this
-		// requires no branch: the pass performs no checkout and reads
-		// no branch.
+		// Seed a pending merge-completion entry when the SCM adapter is
+		// configured, merge-completion is enabled, and the workspace has PR
+		// metadata. No branch is needed (the pass performs no checkout).
 		if params.SCMAdapter != nil && params.MergeCompletionReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
@@ -1247,9 +1148,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 
 	case WorkerExitCancelled:
-		// Only release the claim if no retry has been pre-scheduled by
-		// reconciliation stall detection. A pre-scheduled retry needs the
-		// claim to prevent duplicate dispatch.
+		// Release the claim only if reconciliation stall detection has not
+		// pre-scheduled a retry, which needs the claim to prevent duplicate
+		// dispatch.
 		if _, hasRetry := state.RetryAttempts[workerResult.IssueID]; !hasRetry {
 			delete(state.Claimed, workerResult.IssueID)
 		}
@@ -1325,9 +1226,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 	}
 
-	// Build comment text synchronously (to capture all exit-time data),
-	// then fire the CommentIssue API call in a detached goroutine so
-	// the event loop is never blocked.
+	// Build the comment text synchronously to capture exit-time data, then
+	// fire CommentIssue in a detached goroutine so the event loop never
+	// blocks.
 	var commentText string
 	var lifecycle string
 
@@ -1337,9 +1238,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 	runDuration := max(now.Sub(entry.StartedAt), 0)
 
-	// A deferral leaves work queued for the issue exactly as a scheduled
-	// retry does, so the completion and failure comments report
-	// re-queuing for either outcome.
+	// A deferral leaves work queued exactly as a scheduled retry does, so the
+	// comments report re-queuing for either outcome.
 	retryPending := retryScheduled || retryDeferred
 
 	switch workerResult.ExitKind {
@@ -1395,13 +1295,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 }
 
-// computeBackoffDelay returns the exponential backoff delay in milliseconds
-// for the given attempt number, capped by maxRetryBackoffMS.
+// computeBackoffDelay returns the exponential backoff delay in ms for the
+// given attempt, capped by maxRetryBackoffMS:
 //
 //	delay = min(10000 * 2^(attempt-1), maxRetryBackoffMS)
 //
-// If maxRetryBackoffMS is <= 0, the default cap of 300000 (5 minutes) is
-// used. Attempt values <= 0 are treated as attempt 1.
+// A non-positive maxRetryBackoffMS uses the 5-minute default; attempt <= 0
+// is treated as 1.
 func computeBackoffDelay(attempt int, maxRetryBackoffMS int) int64 {
 	if attempt <= 0 {
 		attempt = 1
@@ -1442,10 +1342,9 @@ func mapExitKindToExitType(kind WorkerExitKind) string {
 	}
 }
 
-// classifyWorkerError extracts the retry classification from a worker error.
-// It unwraps the error chain looking for [domain.AgentError] or
-// [domain.TrackerError]. Returns retryable-with-exponential-backoff when the
-// error is nil or does not wrap a classified domain error.
+// classifyWorkerError extracts the retry classification from a worker error,
+// unwrapping for [domain.AgentError] or [domain.TrackerError]. Returns
+// retryable-with-exponential-backoff when err is nil or unclassified.
 func classifyWorkerError(err error) domain.RetryClassification {
 	if err == nil {
 		return domain.RetryClassification{Retryable: true, Backoff: domain.BackoffExponential}
@@ -1476,9 +1375,8 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// buildCompletionComment returns the tracker comment text for a normal
-// session exit. retryScheduled distinguishes "completed (re-queuing)"
-// from "completed".
+// buildCompletionComment returns the tracker comment for a normal exit.
+// retryScheduled distinguishes "completed (re-queuing)" from "completed".
 func buildCompletionComment(sessionID string, elapsed time.Duration, turnsCompleted int, retryScheduled bool) string {
 	if sessionID == "" {
 		sessionID = "unknown"
@@ -1491,8 +1389,7 @@ func buildCompletionComment(sessionID string, elapsed time.Duration, turnsComple
 		headline, sessionID, elapsed.Truncate(time.Second).String(), turnsCompleted)
 }
 
-// buildFailureComment returns the tracker comment text for an error
-// session exit.
+// buildFailureComment returns the tracker comment for an error exit.
 func buildFailureComment(sessionID string, elapsed time.Duration, exitErr error, retryScheduled bool, nextAttempt int) string {
 	if sessionID == "" {
 		sessionID = "unknown"
@@ -1512,8 +1409,8 @@ func buildFailureComment(sessionID string, elapsed time.Duration, exitErr error,
 		sessionID, elapsed.Truncate(time.Second).String(), errStr, retryLine)
 }
 
-// buildSoftStopComment returns the tracker comment text for a worker
-// exit triggered by a recognized A2O status signal.
+// buildSoftStopComment returns the tracker comment for an exit triggered by
+// a recognized A2O status signal.
 func buildSoftStopComment(sessionID string, elapsed time.Duration, turnsCompleted int, reason string) string {
 	if sessionID == "" {
 		sessionID = "unknown"

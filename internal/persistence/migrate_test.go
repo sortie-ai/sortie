@@ -300,7 +300,6 @@ func TestMigrate_DefaultValues(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert minimal rows to exercise defaults.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO session_metadata (issue_id, session_id, updated_at)
 		 VALUES ('test-1', 'sess-1', '2026-01-01T00:00:00Z')`); err != nil {
@@ -333,8 +332,6 @@ func TestMigrate_DefaultValues(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration018_UnmeasuredSessionsDefault verifies the column
-// defaults to 0 when omitted from an insert.
 func TestMigrate_Migration018_UnmeasuredSessionsDefault(t *testing.T) {
 	t.Parallel()
 
@@ -367,28 +364,24 @@ func TestMigrate_NullConstraints(t *testing.T) {
 
 	ctx := context.Background()
 
-	// retry_entries.error is nullable.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error)
 		 VALUES ('re-1', 'MT-1', 1, 1000, NULL)`); err != nil {
 		t.Errorf("retry_entries.error should accept NULL: %v", err)
 	}
 
-	// run_history.error is nullable.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error)
 		 VALUES ('rh-1', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded', NULL)`); err != nil {
 		t.Errorf("run_history.error should accept NULL: %v", err)
 	}
 
-	// session_metadata.agent_pid is nullable.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO session_metadata (issue_id, session_id, agent_pid, updated_at)
 		 VALUES ('sm-1', 'sess-1', NULL, '2026-01-01T00:00:00Z')`); err != nil {
 		t.Errorf("session_metadata.agent_pid should accept NULL: %v", err)
 	}
 
-	// retry_entries.identifier is NOT NULL; insertion without it must fail.
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
 		 VALUES ('re-2', NULL, 1, 1000)`)
@@ -405,14 +398,12 @@ func TestMigrate_PrimaryKeyConstraints(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Insert first row.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
 		 VALUES ('pk-1', 'MT-1', 1, 1000)`); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
 
-	// Duplicate PK must fail.
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
 		 VALUES ('pk-1', 'MT-2', 2, 2000)`)
@@ -421,7 +412,6 @@ func TestMigrate_PrimaryKeyConstraints(t *testing.T) {
 	}
 }
 
-// Verify the migrations slice is correctly ordered and non-empty.
 func TestMigrations_Registry(t *testing.T) {
 	t.Parallel()
 
@@ -470,11 +460,9 @@ func migrateToVersion(t *testing.T, s *Store, version int) {
 	}
 }
 
-// TestMigrate_Migration012_TokensMeasuredDefault verifies that a
-// run_history row written before migration 012 reads tokens_measured = 1
-// (the column default) once the database is migrated to the current
-// schema, so an upgraded deployment's pre-existing rows keep behaving as
-// measured runs.
+// TestMigrate_Migration012_TokensMeasuredDefault verifies a pre-012 row
+// reads tokens_measured = 1 after migration, so an upgraded deployment's
+// existing rows keep behaving as measured runs.
 func TestMigrate_Migration012_TokensMeasuredDefault(t *testing.T) {
 	t.Parallel()
 
@@ -502,13 +490,10 @@ func TestMigrate_Migration012_TokensMeasuredDefault(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration016_APIRequestsMeasuredDefault verifies that a
-// session_metadata row written before migration 016 stays readable
-// once the database is migrated to the current schema, with its
-// pre-existing api_request_count intact and api_requests_measured
-// reading 0, the column's default: a row written by the unconditional
-// rule this change removes has no recorded measurement state, and 0
-// states that honestly rather than presuming it was a measurement.
+// TestMigrate_Migration016_APIRequestsMeasuredDefault verifies a pre-016
+// row keeps its api_request_count and reads api_requests_measured = 0: a row
+// with no recorded measurement state states that honestly rather than
+// presuming it was measured.
 func TestMigrate_Migration016_APIRequestsMeasuredDefault(t *testing.T) {
 	t.Parallel()
 
@@ -539,11 +524,9 @@ func TestMigrate_Migration016_APIRequestsMeasuredDefault(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration017_DispatchIDDefault verifies that a
-// session_metadata row written before migration 017 reads dispatch_id
-// as the empty string once the database is migrated to the current
-// schema: a row predating the column belongs to no running dispatch and
-// must never match one.
+// TestMigrate_Migration017_DispatchIDDefault verifies a pre-017 row reads
+// dispatch_id as empty: a row predating the column belongs to no running
+// dispatch and must never match one.
 func TestMigrate_Migration017_DispatchIDDefault(t *testing.T) {
 	t.Parallel()
 
@@ -571,9 +554,6 @@ func TestMigrate_Migration017_DispatchIDDefault(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration002_Defaults verifies that migration 002 adds the
-// extended token metric columns with correct defaults. Rows inserted after
-// migration 002 that omit these columns receive zero/empty defaults.
 func TestMigrate_Migration002_Defaults(t *testing.T) {
 	t.Parallel()
 
@@ -581,7 +561,6 @@ func TestMigrate_Migration002_Defaults(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	// Insert minimal rows exercising only the original columns.
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO session_metadata (issue_id, session_id, updated_at)
 		 VALUES ('m2-1', 'sess-1', '2026-01-01T00:00:00Z')`); err != nil {
@@ -593,7 +572,6 @@ func TestMigrate_Migration002_Defaults(t *testing.T) {
 		t.Fatalf("insert aggregate_metrics: %v", err)
 	}
 
-	// Verify session_metadata new column defaults.
 	var cacheRead int64
 	var modelName string
 	var apiReqCount int
@@ -613,7 +591,6 @@ func TestMigrate_Migration002_Defaults(t *testing.T) {
 		t.Errorf("session_metadata.api_request_count default = %d, want 0", apiReqCount)
 	}
 
-	// Verify aggregate_metrics new column default.
 	var aggCacheRead int64
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT cache_read_tokens FROM aggregate_metrics WHERE key='agent_totals'`,
@@ -625,8 +602,6 @@ func TestMigrate_Migration002_Defaults(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration002_SchemaMigrationsTracking verifies that
-// migration 002 is tracked in the schema_migrations table.
 func TestMigrate_Migration002_SchemaMigrationsTracking(t *testing.T) {
 	t.Parallel()
 
@@ -651,7 +626,8 @@ func TestMigrate_Migration002_SchemaMigrationsTracking(t *testing.T) {
 	}
 }
 
-// insertPreMigration018AggregateMetrics inserts a row using the pre-018 column set (no unmeasured_sessions).
+// insertPreMigration018AggregateMetrics inserts a row using the pre-018
+// column set (no unmeasured_sessions).
 func insertPreMigration018AggregateMetrics(t *testing.T, s *Store, key string, inputTokens int64) {
 	t.Helper()
 	if _, err := s.db.ExecContext(context.Background(),
@@ -662,7 +638,6 @@ func insertPreMigration018AggregateMetrics(t *testing.T, s *Store, key string, i
 	}
 }
 
-// insertRunHistoryRow inserts a minimal run_history row with the given status and tokens_measured verdict.
 func insertRunHistoryRow(t *testing.T, s *Store, issueID, status string, tokensMeasured bool) {
 	t.Helper()
 	if _, err := s.db.ExecContext(context.Background(),
@@ -674,8 +649,6 @@ func insertRunHistoryRow(t *testing.T, s *Store, issueID, status string, tokensM
 	}
 }
 
-// TestMigrate_Migration018_BackfillsUnmeasuredSessionCount verifies the
-// backfill counts only the tokens_measured = 0 run_history rows.
 func TestMigrate_Migration018_BackfillsUnmeasuredSessionCount(t *testing.T) {
 	t.Parallel()
 
@@ -713,8 +686,6 @@ func TestMigrate_Migration018_BackfillsUnmeasuredSessionCount(t *testing.T) {
 	}
 }
 
-// TestMigrate_Migration018_NoAgentTotalsRow verifies the backfill inserts
-// no row when no agent_totals row exists to update.
 func TestMigrate_Migration018_NoAgentTotalsRow(t *testing.T) {
 	t.Parallel()
 

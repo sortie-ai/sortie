@@ -37,10 +37,9 @@ func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, want
 	}
 }
 
-// TestRunHistoryTokenColumns_RoundTrip writes one row with non-zero token
-// counters and reads it back through every reader. A token column missed
-// in one reader's SELECT or Scan list compiles cleanly and fails only at
-// runtime, so each reader is asserted explicitly.
+// TestRunHistoryTokenColumns_RoundTrip reads one row back through every
+// reader, because a token column missed in one reader's SELECT or Scan
+// compiles cleanly and fails only at runtime.
 func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -76,8 +75,8 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	}
 	assertTokenFields(t, "QueryRecentRunHistory", recent[0], 1100, 2200, 3300, 440, true)
 
-	// The paginated branch of QueryRecentRunHistory uses a separate SELECT;
-	// exercise it with a cursor past the inserted row.
+	// The paginated branch uses a separate SELECT; exercise it with a
+	// cursor past the inserted row.
 	paginated, err := s.QueryRecentRunHistory(ctx, 1, inserted.ID+1)
 	if err != nil {
 		t.Fatalf("QueryRecentRunHistory(afterID): %v", err)
@@ -97,10 +96,6 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 1100, 2200, 3300, 440, true)
 }
 
-// TestRunHistoryTokenColumns_UnmeasuredRoundTrip verifies that a row
-// written with TokensMeasured false round-trips that value, alongside its
-// zero token columns, through every reader that projects the token
-// columns.
 func TestRunHistoryTokenColumns_UnmeasuredRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -142,10 +137,6 @@ func TestRunHistoryTokenColumns_UnmeasuredRoundTrip(t *testing.T) {
 	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 0, 0, 0, 0, false)
 }
 
-// TestRunHistoryErrorAndReviewMetadata_RoundTrip verifies that a non-null
-// error and review_metadata column round-trip through QueryRecentRunHistory
-// and LoadLatestSuccessfulRunsForReactionRecovery, not just through
-// QueryRunHistoryByIssue.
 func TestRunHistoryErrorAndReviewMetadata_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -188,9 +179,9 @@ func TestRunHistoryErrorAndReviewMetadata_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestRunHistoryTokenColumns_LegacyRowsReadZero verifies that rows written
-// without token values (matching pre-migration rows, which rely on the
-// NOT NULL DEFAULT 0 column definition) scan as zero.
+// TestRunHistoryTokenColumns_LegacyRowsReadZero verifies rows written
+// without token values scan as zero, relying on the NOT NULL DEFAULT 0
+// column definition.
 func TestRunHistoryTokenColumns_LegacyRowsReadZero(t *testing.T) {
 	t.Parallel()
 
@@ -358,7 +349,6 @@ func TestQueryTokenBudgetUsage(t *testing.T) {
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
 
-		// ISS-HOT: 1200 tokens, ISS-COLD: 300, ISS-NONE: no rows.
 		appendOrFatal(t, s, tokenRun(1, "ISS-HOT", 700))
 		appendOrFatal(t, s, tokenRun(2, "ISS-HOT", 500))
 		appendOrFatal(t, s, tokenRun(3, "ISS-COLD", 300))
@@ -425,11 +415,10 @@ func TestQueryTokenBudgetUsage(t *testing.T) {
 	})
 }
 
-// TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity seeds
-// one issue with a mix of statuses, including one status the
-// StoppedInFlight count must ignore (a plain "cancelled" row, distinct
-// from a ceiling-stopped one), and asserts that TokenUsageByIssue and
-// QueryTokenBudgetUsage report the identical IssueTokenUsage for it.
+// TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity seeds a
+// mix of statuses, including a plain "cancelled" row the StoppedInFlight
+// count must ignore, and asserts both queries report the identical
+// IssueTokenUsage.
 func TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity(t *testing.T) {
 	t.Parallel()
 	s := openTestStore(t)
@@ -448,8 +437,7 @@ func TestTokenUsageByIssue_QueryTokenBudgetUsage_StoppedInFlightParity(t *testin
 	stopped2.TokensMeasured = true
 	appendOrFatal(t, s, stopped2)
 
-	// A plain cancellation, not a ceiling stop: the StoppedInFlight count
-	// must not mistake this for one.
+	// A plain cancellation, not a ceiling stop.
 	cancelled := tokenRun(3, issueID, 200)
 	cancelled.Status = "cancelled"
 	cancelled.TokensMeasured = true
@@ -608,11 +596,6 @@ func mustParseRFC3339(t *testing.T, s string) time.Time {
 	return parsed
 }
 
-// TestCountWorkerRunsCompletedSince covers the exclusion filter and the
-// inclusive lower bound: succeeded, failed, and cancelled rows count as
-// worker sessions, a ci_failed row does not even when its completed_at
-// falls inside the interval, a row before the bound does not count, and
-// an issue with no rows returns (0, nil).
 func TestCountWorkerRunsCompletedSince(t *testing.T) {
 	t.Parallel()
 
@@ -672,8 +655,7 @@ func TestCountWorkerRunsCompletedSince(t *testing.T) {
 }
 
 // TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson pins
-// that a needs_person row, like a failed or cancelled row, is not a
-// success and is therefore excluded from reaction recovery.
+// that a needs_person row is not a success and is excluded from recovery.
 func TestLoadLatestSuccessfulRunsForReactionRecovery_ExcludesNeedsPerson(t *testing.T) {
 	t.Parallel()
 

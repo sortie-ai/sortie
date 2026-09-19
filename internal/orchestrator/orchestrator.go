@@ -20,8 +20,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// WorkflowManager provides access to the current workflow config and
-// prompt template. Satisfied by [workflow.Manager] in production.
+// WorkflowManager provides the current workflow config and prompt template.
+// Satisfied by [workflow.Manager] in production.
 type WorkflowManager interface {
 	Config() config.ServiceConfig
 	PromptTemplate() *prompt.Template
@@ -30,8 +30,8 @@ type WorkflowManager interface {
 	WorkflowAbsPath() string
 }
 
-// OrchestratorStore is the persistence interface required by the
-// orchestrator event loop. Satisfied by [persistence.Store].
+// OrchestratorStore is the persistence interface required by the event
+// loop. Satisfied by [persistence.Store].
 type OrchestratorStore interface {
 	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
@@ -71,21 +71,19 @@ var _ OrchestratorStore = (*persistence.Store)(nil)
 // Observer receives notifications when orchestrator state changes.
 // Implementations must not block and must not mutate state.
 type Observer interface {
-	// OnStateChange is called after each event loop iteration that
-	// modifies state (tick completion, worker exit, retry fire).
+	// OnStateChange is called after each event loop iteration that modifies
+	// state (tick completion, worker exit, retry fire).
 	OnStateChange()
 }
 
-// snapshotRequest is a request for a point-in-time runtime snapshot.
-// Created and sent to the event loop by [Orchestrator.SnapshotFunc].
-// The orchestrator's event loop processes it and sends the result on
-// ReplyCh.
+// snapshotRequest is a request for a point-in-time snapshot, processed by
+// the event loop, which replies on ReplyCh.
 type snapshotRequest struct {
 	ReplyCh chan<- RuntimeSnapshotResult
 }
 
-// agentEventMsg pairs an issue ID with the agent event for delivery
-// through the agentEventCh channel.
+// agentEventMsg pairs an issue ID with an agent event for delivery through
+// agentEventCh.
 type agentEventMsg struct {
 	IssueID string
 	Event   domain.AgentEvent
@@ -113,137 +111,99 @@ type OrchestratorParams struct {
 	ToolRegistry    *domain.ToolRegistry // may be nil
 	HostPool        *HostPool            // may be nil; defaults to local-mode pool
 
-	// SessionToolRegistryFunc builds the per-session tool registry for
-	// the first-turn advertisement so it matches the set the MCP sidecar
-	// serves. Threaded into WorkerDeps. May be nil, in which case the
-	// worker advertises from ToolRegistry instead.
+	// SessionToolRegistryFunc builds the per-session tool registry so the
+	// first-turn advertisement matches the MCP sidecar's set. May be nil,
+	// in which case the worker advertises from ToolRegistry.
 	SessionToolRegistryFunc SessionToolRegistryFunc
 
-	// WorkflowFileFunc returns the base filename of the active workflow
-	// file (e.g. "WORKFLOW.md"). Used for observability: recorded on
-	// RunningEntry and persisted in run_history. If nil, defaults to
-	// empty string.
+	// WorkflowFileFunc returns the base filename of the active workflow file
+	// (e.g. "WORKFLOW.md"), recorded on RunningEntry and in run_history. If
+	// nil, defaults to empty.
 	WorkflowFileFunc func() string
 
-	// DBPath is the absolute path to the SQLite database file. Passed
-	// to the MCP server via the config env field. If empty,
-	// SORTIE_DB_PATH is set to the empty string in the MCP config.
+	// DBPath is the absolute SQLite database path, passed to the MCP server.
 	DBPath string
 
-	// MCPServerBinary is the absolute path to the sortie binary the
-	// agent runtime spawns as the tool server. Empty resolves to the
-	// running executable, which is the right answer whenever the
-	// runtime runs on the same host and deployment as the
-	// orchestrator. A caller that runs the orchestrator inside another
-	// program must supply the real binary, because the running
-	// executable is then not a sortie.
+	// MCPServerBinary is the absolute path to the sortie binary the runtime
+	// spawns as the tool server. Empty resolves to the running executable,
+	// correct when the runtime shares the orchestrator's host and
+	// deployment. A caller running the orchestrator inside another program
+	// must supply the real binary.
 	MCPServerBinary string
 
-	// CIProvider is the CI status provider for CI failure detection.
-	// Nil when CI feedback is not configured.
+	// CIProvider is the CI status provider for CI failure detection. Nil
+	// when CI feedback is not configured.
 	CIProvider domain.CIStatusProvider
 
-	// SCMAdapter is the SCM adapter for review comment routing.
-	// Nil when review comment routing is not configured.
+	// SCMAdapter is the SCM adapter for review comment routing. Nil when
+	// review comment routing is not configured.
 	SCMAdapter domain.SCMAdapter
 
-	// ReviewConfig holds validated review reaction configuration.
-	// Zero value when SCMAdapter is nil.
+	// ReviewConfig holds validated review reaction configuration. Zero when
+	// SCMAdapter is nil.
 	ReviewConfig ReviewReactionConfig
 
-	// AutoMergeConfig holds validated auto-merge reaction
-	// configuration. Zero value when AutoMergeReactionConfigured is
-	// false.
+	// AutoMergeConfig holds validated auto-merge configuration. Zero when
+	// AutoMergeReactionConfigured is false.
 	AutoMergeConfig AutoMergeReactionConfig
 
-	// AutoMergeReactionConfigured marks whether the auto-merge feature
-	// is active for this process. Threaded into ReconcileParams,
-	// HandleWorkerExitParams, and the recovery params.
 	AutoMergeReactionConfigured bool
 
-	// BotReviewConfig holds validated bot-review reaction
-	// configuration. Zero value when BotReviewConfigured is false.
+	// BotReviewConfig holds validated bot-review configuration. Zero when
+	// BotReviewConfigured is false.
 	BotReviewConfig BotReviewReactionConfig
 
-	// BotReviewConfigured marks whether the bot-review feature is
-	// active for this process. Threaded into ReconcileParams,
-	// HandleWorkerExitParams, and the recovery params.
 	BotReviewConfigured bool
 
-	// MergeConflictConfig holds validated merge-conflict reaction
-	// configuration. Zero value when MergeConflictReactionConfigured is
-	// false.
+	// MergeConflictConfig holds validated merge-conflict configuration. Zero
+	// when MergeConflictReactionConfigured is false.
 	MergeConflictConfig MergeConflictReactionConfig
 
-	// MergeConflictReactionConfigured marks whether the merge-conflict
-	// feature is active for this process. Threaded into ReconcileParams,
-	// HandleWorkerExitParams, and the recovery params.
 	MergeConflictReactionConfigured bool
 
-	// LabelReviewConfig holds validated label-review reaction
-	// configuration. Zero value when LabelReviewReactionConfigured is
-	// false.
+	// LabelReviewConfig holds validated label-review configuration. Zero
+	// when LabelReviewReactionConfigured is false.
 	LabelReviewConfig LabelReviewReactionConfig
 
-	// LabelReviewReactionConfigured marks whether the label-review feature
-	// is active for this process. Threaded into ReconcileParams,
-	// HandleWorkerExitParams, and the recovery params.
 	LabelReviewReactionConfigured bool
 
-	// LabelFixConfig holds validated label-fix reaction
-	// configuration. Zero value when LabelFixReactionConfigured is
-	// false.
+	// LabelFixConfig holds validated label-fix configuration. Zero when
+	// LabelFixReactionConfigured is false.
 	LabelFixConfig LabelFixReactionConfig
 
-	// LabelFixReactionConfigured marks whether the label-fix feature
-	// is active for this process. Threaded into ReconcileParams,
-	// HandleWorkerExitParams, and the recovery params.
 	LabelFixReactionConfigured bool
 
-	// MergeCompletionConfig holds validated merge-completion reaction
-	// configuration. Zero value when MergeCompletionReactionConfigured
-	// is false.
+	// MergeCompletionConfig holds validated merge-completion configuration.
+	// Zero when MergeCompletionReactionConfigured is false.
 	MergeCompletionConfig MergeCompletionReactionConfig
 
-	// MergeCompletionReactionConfigured marks whether the
-	// merge-completion feature is active for this process. Threaded
-	// into ReconcileParams and HandleWorkerExitParams.
 	MergeCompletionReactionConfigured bool
 
-	// AgentAdapterByKind resolves the agent adapter for the given
-	// kind. Constructed once at startup from the eagerly-built
-	// per-kind adapter cache. When nil, the orchestrator falls back
-	// to its single-adapter behavior using the AgentAdapter field
-	// for every kind that matches the workflow default and rejects
-	// every other kind. This fallback exists for legacy callers
-	// during the migration window; the production binary always
-	// populates this field.
+	// AgentAdapterByKind resolves the agent adapter for the given kind,
+	// built at startup from the per-kind adapter cache. When nil, the
+	// orchestrator falls back to single-adapter behavior for the workflow
+	// default kind and rejects every other kind; this fallback exists for
+	// legacy callers during migration. The production binary always
+	// populates this.
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 
-	// BlockerResolver completes a candidate's blocker list according
-	// to its tracker adapter's declared blocker source. Optional, and
-	// nil means no blocker read happens. That is equivalent to the
-	// behavior before this collaborator existed only for an adapter
-	// whose candidates already carry every blocker; for an adapter
-	// that resolves blockers per issue, candidates stay marked
-	// unresolved and the gate holds every one of them, because an
-	// unread list is never read as an empty one. The production
-	// binary always populates this field.
+	// BlockerResolver completes a candidate's blocker list per its tracker
+	// adapter's declared blocker source. Nil means no blocker read; for an
+	// adapter that resolves blockers per issue, candidates then stay marked
+	// unresolved and the gate holds them, since an unread list is never read
+	// as empty. The production binary always populates this.
 	BlockerResolver BlockerResolver
 
-	// AbandonCh, once closed, ends every in-flight shutdown wait at
-	// once: the worker drain, the triage drain, and the tracker-ops
-	// drain each return immediately instead of waiting out their
-	// bound. A nil channel means no abort is wired; a receive on a
-	// nil channel blocks forever, which is exactly the behavior an
-	// unwired abort needs. Read only during shutdown.
+	// AbandonCh, once closed, ends every in-flight shutdown wait at once. A
+	// nil channel means no abort is wired; a receive on nil blocks forever,
+	// which is what an unwired abort needs. Read only during shutdown.
 	AbandonCh <-chan struct{}
 }
 
-// Orchestrator owns the poll-and-dispatch event loop and all runtime
-// state. Construct via [NewOrchestrator] and run with [Orchestrator.Run].
-// Not safe for concurrent use - [Run] must be called from a single
-// goroutine. External events are delivered via channels.
+// Orchestrator owns the poll-and-dispatch event loop and all runtime state.
+// Construct via [NewOrchestrator] and run with [Orchestrator.Run]. [Run]
+// must be called from a single goroutine; external events arrive via
+// channels.
 type Orchestrator struct {
 	state  *State
 	logger *slog.Logger
@@ -268,10 +228,9 @@ type Orchestrator struct {
 	preflightParams PreflightParams
 	observers       []Observer
 
-	// drainTimeout overrides the worker-drain wait when positive. A
-	// non-positive value, its zero value, resolves to the ceiling
-	// [Orchestrator.drainRunningWorkers] derives from the current
-	// configuration.
+	// drainTimeout overrides the worker-drain wait when positive. Zero
+	// resolves to the ceiling [Orchestrator.drainRunningWorkers] derives
+	// from the current configuration.
 	drainTimeout                      time.Duration
 	toolRegistry                      *domain.ToolRegistry
 	sessionToolRegistryFunc           SessionToolRegistryFunc
@@ -298,25 +257,20 @@ type Orchestrator struct {
 	mergeCompletionReactionConfigured bool
 	handoffParkingLabel               string
 
-	// ciTriage is the frozen ci_failure triage configuration.
-	// NewOrchestrator captures it once from the workflow configuration.
-	// Every other CI feedback field reaches the reconcile pass from the
-	// reloaded configuration on each tick; this one does not, so a
-	// script or timeout changed mid-run takes effect only on restart.
+	// ciTriage is the frozen ci_failure triage configuration, captured once
+	// at construction. Unlike every other CI feedback field, it does not
+	// reach the reconcile pass from the reloaded config, so a script or
+	// timeout changed mid-run takes effect only on restart.
 	ciTriage config.ReactionTriageConfig
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
-	// StrictHostKeyChecking value. Written by applyWorkerConfig, which
-	// Run calls before activating recovered retries and handleTick
-	// calls on every tick/reload; read by makeWorkerFn at dispatch
-	// time.
+	// StrictHostKeyChecking value. Written by applyWorkerConfig, read by
+	// makeWorkerFn at dispatch.
 	sshStrictHostKeyChecking string
 
 	// sshPassEnv and sshDisallowPassEnv are the current effective
-	// worker.ssh_pass_env and worker.ssh_disallow_pass_env lists.
-	// Written by applyWorkerConfig, which Run calls before activating
-	// recovered retries and handleTick calls on every tick/reload;
-	// read by makeWorkerFn at dispatch time.
+	// worker.ssh_pass_env and worker.ssh_disallow_pass_env lists. Written by
+	// applyWorkerConfig, read by makeWorkerFn at dispatch.
 	sshPassEnv         []string
 	sshDisallowPassEnv []string
 
@@ -358,11 +312,10 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 			slog.Int("max_per_host", hostPool.maxPerHost),
 		)
 	} else {
-		// The pool above comes from OrchestratorParams.HostPool, which
-		// the running binary leaves unset: Run parses the worker block
-		// and applies its hosts before its first tick. A workflow that
-		// configures SSH therefore still looks local here, so these
-		// warnings read the block rather than the pool.
+		// The pool here comes from OrchestratorParams.HostPool, which the
+		// running binary leaves unset until Run applies the worker block
+		// before its first tick, so a workflow that configures SSH still
+		// looks local here; read the block rather than the pool.
 		cfg := params.WorkflowManager.Config()
 		if worker := cfg.ExtensionSection("worker"); worker != nil && len(ParseWorkerConfig(worker, cfg.ExtensionEnvRefPaths("worker")).SSHHosts) == 0 {
 			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
@@ -379,13 +332,10 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 
 	agentAdapterByKind := params.AgentAdapterByKind
 	if agentAdapterByKind == nil {
-		// Migration fallback for legacy callers (tests, dryrun) that
-		// have not wired the closure yet. The production binary
-		// always populates AgentAdapterByKind via the per-kind
-		// adapter cache constructed in cmd/sortie. Resolves the
-		// workflow default kind to the single AgentAdapter field;
-		// every other kind returns an error so the dispatch path
-		// gracefully skips the issue rather than panicking.
+		// Migration fallback for legacy callers (tests, dryrun): resolve the
+		// workflow default kind to the single AgentAdapter field; every other
+		// kind returns an error so dispatch skips the issue rather than
+		// panicking. The production binary always wires AgentAdapterByKind.
 		defaultAdapter := params.AgentAdapter
 		defaultKind := ""
 		if params.WorkflowManager != nil {
@@ -451,15 +401,13 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		blockerResolver:                   params.BlockerResolver,
 		abandonCh:                         params.AbandonCh,
 	}
-	// Startup preflight must have passed for the orchestrator to be
-	// constructed, so the initial value is true.
+	// Startup preflight must have passed for construction to reach here.
 	o.preflightOK.Store(true)
 	return o
 }
 
-// applyQueued calls apply for each message ch holds, in queue order,
-// without blocking, stopping at an empty receive or after cap(ch)
-// messages.
+// applyQueued calls apply for each message ch holds, in order, without
+// blocking, stopping at an empty receive or after cap(ch) messages.
 func applyQueued[T any](ch <-chan T, apply func(T)) {
 	for range cap(ch) {
 		select {
@@ -471,9 +419,8 @@ func applyQueued[T any](ch <-chan T, apply func(T)) {
 	}
 }
 
-// applyAgentEvent applies one agent event message to the running entry
-// of its issue and, only when enforceCeiling is true, evaluates the
-// in-flight token ceiling for it.
+// applyAgentEvent applies one agent event to its issue's running entry and,
+// only when enforceCeiling is true, evaluates the in-flight token ceiling.
 func (o *Orchestrator) applyAgentEvent(ctx context.Context, msg agentEventMsg, enforceCeiling bool) {
 	HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
 	o.maybeWriteIncrementalMetadata(ctx, msg.IssueID, msg.Event)
@@ -482,9 +429,8 @@ func (o *Orchestrator) applyAgentEvent(ctx context.Context, msg agentEventMsg, e
 	}
 }
 
-// applySelfReviewProgress applies one self-review progress message to
-// the running entry of its issue; it does nothing when the issue has
-// none.
+// applySelfReviewProgress applies one self-review progress message to its
+// issue's running entry; a no-op when the issue has none.
 func (o *Orchestrator) applySelfReviewProgress(msg selfReviewProgressMsg) {
 	entry, ok := o.state.Running[msg.IssueID]
 	if !ok {
@@ -508,10 +454,9 @@ func (o *Orchestrator) applyTurnStarted(msg turnStartedMsg) {
 }
 
 // applyQueuedAheadOfExit applies the messages queued ahead of the
-// WorkerResults of exitingIssueIDs, evaluating the in-flight token
-// ceiling for every applied event except those of an exiting issue:
-// that run has already ended, so a figure it delivered can no longer be
-// stopped in flight.
+// WorkerResults of exitingIssueIDs, evaluating the token ceiling for every
+// applied event except those of an exiting issue: that run has ended, so a
+// figure it delivered can no longer be stopped in flight.
 func (o *Orchestrator) applyQueuedAheadOfExit(ctx context.Context, exitingIssueIDs map[string]struct{}) {
 	applyQueued(o.agentEventCh, func(msg agentEventMsg) {
 		_, exiting := exitingIssueIDs[msg.IssueID]
@@ -521,11 +466,10 @@ func (o *Orchestrator) applyQueuedAheadOfExit(ctx context.Context, exitingIssueI
 	applyQueued(o.turnStartedCh, o.applyTurnStarted)
 }
 
-// handleWorkerExit takes workerExit together with every WorkerResult
-// already waiting behind it, applies the messages queued ahead of all of
-// them, so each lands on the run that queued it and no finished run is
-// stopped by the token ceiling, then hands each result to
-// HandleWorkerExit in arrival order.
+// handleWorkerExit takes workerExit and every WorkerResult already waiting
+// behind it, applies the messages queued ahead of all of them so each lands
+// on its own run and no finished run is stopped by the ceiling, then hands
+// each result to HandleWorkerExit in arrival order.
 func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerResult) {
 	exits := []WorkerResult{workerExit}
 	applyQueued(o.workerExitCh, func(pending WorkerResult) {
@@ -572,17 +516,14 @@ func (o *Orchestrator) handleWorkerExit(ctx context.Context, workerExit WorkerRe
 }
 
 // Run enters the event loop, blocks until ctx is cancelled, and returns.
-// Must be called from a single goroutine. On context cancellation the
-// tick timer is stopped and a draining shutdown begins: all running
-// worker contexts are cancelled, the loop waits up to the drain
-// timeout (30 seconds by default) for workers to exit (processing
-// results through [HandleWorkerExit] and agent events through
-// [HandleAgentEvent]), pending retry timers are stopped, and the
-// function returns.
+// Must be called from a single goroutine. On cancellation it cancels all
+// running worker contexts, drains workers (up to the drain timeout, 30s by
+// default) processing their results and agent events, stops pending retry
+// timers, and returns.
 func (o *Orchestrator) Run(ctx context.Context) {
-	// A past-due recovered retry can dispatch on the loop's first pass,
-	// ahead of the first tick, so the worker settings it launches under
-	// have to be in force before it is activated.
+	// A past-due recovered retry can dispatch on the first pass, ahead of
+	// the first tick, so the worker settings it launches under must be in
+	// force before it is activated.
 	o.applyWorkerConfig(o.workflowManager.Config())
 	o.activateReconstructedRetries()
 
@@ -654,26 +595,24 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	}
 }
 
-// updateGauges recomputes all point-in-time gauges from current state
-// and publishes them via the Metrics interface. It is called from the
-// event loop after tick handling, worker exits, and retry timer events.
+// updateGauges recomputes point-in-time gauges from current state and
+// publishes them. Called from the event loop after tick handling, worker
+// exits, and retry timer events.
 func (o *Orchestrator) updateGauges(now time.Time) {
 	o.metrics.SetRunningSessions(len(o.state.Running))
 	o.metrics.SetRetryingSessions(len(o.state.RetryAttempts))
 	o.metrics.SetAvailableSlots(GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)))
 	o.metrics.SetActiveSessionsElapsed(ActiveElapsedSeconds(o.state, now))
 
-	// Always emit host-usage gauges from the full usage map. This covers
-	// hosts removed by config reload that still have in-flight workers,
-	// ensuring their gauges decrement to zero when workers exit rather
-	// than freezing at the last published value.
+	// Emit from the full usage map so hosts removed by reload but still
+	// holding in-flight workers decrement to zero on exit rather than
+	// freezing at their last value.
 	for host, count := range o.hostPool.Snapshot() {
 		o.metrics.SetSSHHostUsage(host, count)
 	}
 
-	// Always emit a value for every declared budget reason, not only
-	// those currently held, so a reason that clears reports zero rather
-	// than freezing at its last published value.
+	// Emit every declared budget reason, so a reason that clears reports
+	// zero rather than freezing at its last value.
 	budgetCounts := make(map[string]int, len(knownBudgetReasons))
 	for _, entry := range o.state.BudgetExhausted {
 		budgetCounts[entry.Reason]++
@@ -683,11 +622,10 @@ func (o *Orchestrator) updateGauges(now time.Time) {
 	}
 }
 
-// applyWorkerConfig parses the worker extension section and applies it
-// to the host pool and to the SSH launch fields makeWorkerFn reads at
-// dispatch time, returning the parsing diagnostics for the caller to
-// report. Run applies it once before activating recovered retries, and
-// handleTick applies it on every tick so a reload takes effect.
+// applyWorkerConfig parses the worker extension section and applies it to
+// the host pool and the SSH launch fields makeWorkerFn reads, returning the
+// parsing diagnostics. Run applies it once before activating recovered
+// retries; handleTick applies it every tick so a reload takes effect.
 func (o *Orchestrator) applyWorkerConfig(cfg config.ServiceConfig) []WorkerWarning {
 	wc := ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker"))
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
@@ -697,15 +635,13 @@ func (o *Orchestrator) applyWorkerConfig(cfg config.ServiceConfig) []WorkerWarni
 	return wc.Warnings
 }
 
-// handleTick executes a single poll-and-dispatch cycle: preflight,
-// config read, reconcile, fetch, sort, dispatch. Called from the event
-// loop on each tick timer fire.
+// handleTick executes a single poll-and-dispatch cycle: preflight, config
+// read, reconcile, fetch, sort, dispatch.
 //
-// Preflight runs first so the config reload (if any) is visible to all
-// subsequent steps. Reconciliation and state-field updates always run,
-// even when preflight fails, to keep orchestrator state aligned with
-// the tracker using the last-known-good config, which remains valid for
-// those purposes. Dispatch is the only step gated on preflight success.
+// Preflight runs first so a config reload is visible downstream.
+// Reconciliation and state-field updates always run, even when preflight
+// fails, keeping state aligned with the tracker using last-known-good
+// config. Dispatch is the only step gated on preflight success.
 func (o *Orchestrator) handleTick(ctx context.Context) {
 	tickStart := time.Now()
 	pollResult := outcomeSuccess
@@ -715,17 +651,15 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.updateGauges(time.Now())
 	}()
 
-	// Preflight triggers a defensive Reload() so the config snapshot
-	// below reflects the latest disk state.
+	// Preflight triggers a defensive Reload() so the config snapshot below
+	// reflects the latest disk state.
 	validation := ValidateDispatchConfig(o.preflightParams)
 	o.preflightOK.Store(validation.OK())
 
-	// On reload failure the workflow manager retains last-known-good
-	// config, so Config() always returns a usable snapshot.
+	// On reload failure the workflow manager retains last-known-good config.
 	cfg := o.workflowManager.Config()
 
-	// Apply config to state unconditionally, not gated on preflight
-	// success.
+	// Applied unconditionally, not gated on preflight success.
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
 	o.state.MaxTokens = cfg.Agent.MaxTokens
@@ -740,8 +674,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.prevWorkerWarnings = warnings
 	}
 
-	// Reconcile running issues unconditionally so in-flight workers
-	// are monitored even when dispatch is skipped.
+	// Reconcile unconditionally so in-flight workers are monitored even when
+	// dispatch is skipped.
 	ReconcileRunningIssues(o.state, ReconcileParams{
 		TrackerAdapter:                    o.trackerAdapter,
 		ActiveStates:                      cfg.Tracker.ActiveStates,
@@ -779,9 +713,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		CITriage:                          o.ciTriage,
 	})
 
-	// Sweep workspaces periodically to catch issues that transitioned
-	// after their worker exited, or whose activity has aged past the
-	// configured retention window.
+	// Sweep workspaces periodically to catch issues that transitioned after
+	// their worker exited, or aged past the retention window.
 	o.state.SweepTickCounter++
 	if o.state.SweepTickCounter >= sweepEveryNTicks {
 		o.state.SweepTickCounter = 0
@@ -799,8 +732,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		})
 	}
 
-	// On preflight failure, skip dispatch but still notify observers
-	// so the UI reflects the reconciliation outcome.
+	// On preflight failure, skip dispatch but still notify observers.
 	if !validation.OK() {
 		pollResult = outcomeError
 		o.logger.Error("dispatch preflight failed",
@@ -810,7 +742,6 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 
-	// Fetch candidate issues from the tracker.
 	issues, err := o.trackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {
 		pollResult = outcomeError
@@ -827,13 +758,11 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.refreshParkedIssues(ctx, sorted)
 	o.parkExhaustedAbsences(ctx, cfg, sorted)
 
-	// Pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
 	terminalSet := stateSet(cfg.Tracker.TerminalStates)
 
-	// Break only when global capacity is exhausted; skip individual
-	// issues whose per-state limit is full so issues in other states
-	// can still be dispatched.
+	// Break only on exhausted global capacity; skip individual issues whose
+	// per-state limit is full so other states can still dispatch.
 	pass := &TickResolution{offset: o.state.BlockerReadOffset}
 
 	var dispatched, dispatchedByRule, dispatchedByDefault, dispatchedByFallback int
@@ -954,11 +883,9 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.notifyObservers()
 }
 
-// recordCandidateHold logs the per-issue observability record for one
-// candidate the dispatch gate held, and increments [IncCandidateHolds]
-// for every reason except [SkipIneligible], which produces no record
-// and no counter increment (it predates the blocker gate and carries
-// its own silence forward).
+// recordCandidateHold logs the per-issue record for a held candidate and
+// increments [IncCandidateHolds] for every reason except [SkipIneligible],
+// which produces neither record nor counter.
 func (o *Orchestrator) recordCandidateHold(decision CandidateDecision, pass *TickResolution, terminalSet map[string]struct{}) {
 	if decision.Reason == SkipIneligible {
 		return
@@ -995,17 +922,12 @@ func (o *Orchestrator) recordCandidateHold(decision CandidateDecision, pass *Tic
 	o.metrics.IncCandidateHolds(string(decision.Reason))
 }
 
-// makeWorkerFn returns a [WorkerFunc] closure that runs
-// [RunWorkerAttempt] with the orchestrator's shared dependencies.
-// The closure captures channel references for OnEvent and OnExit
-// delivery. agentKind, templateID, and adapter carry the rule-resolved
-// selection from the caller (handleTick for initial dispatches,
-// HandleRetryTimer for retries). usageArrival must be the value the
-// caller freezes onto the running entry. reactionKind selects the
-// worker posture via [dispatchPostureForReactionKind]. The
-// resumeSessionID must be read by the caller (on the event loop
-// goroutine) before the goroutine starts, to avoid a data race on the
-// Running map.
+// makeWorkerFn returns a [WorkerFunc] closure running [RunWorkerAttempt]
+// with the orchestrator's shared dependencies. agentKind, templateID, and
+// adapter carry the rule-resolved selection from the caller; usageArrival
+// must be the value the caller freezes onto the running entry; reactionKind
+// selects the worker posture. resumeSessionID must be read by the caller on
+// the event loop before the goroutine starts, to avoid a Running-map race.
 func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, usageArrival registry.UsageArrival) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
 	sshPassEnv := o.sshPassEnv
@@ -1082,8 +1004,8 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 	}
 }
 
-// workflowFile returns the base filename of the active workflow file.
-// Returns empty string when no callback is configured.
+// workflowFile returns the base filename of the active workflow file, or
+// empty when no callback is configured.
 func (o *Orchestrator) workflowFile() string {
 	if o.workflowFileFunc != nil {
 		return o.workflowFileFunc()
@@ -1091,11 +1013,10 @@ func (o *Orchestrator) workflowFile() string {
 	return ""
 }
 
-// resolveUsageDisposition resolves the usage-reporting disposition
-// for a session of the given agent kind and SSH host (empty for a
-// local launch), reading the registered kind's declaration and the
-// passthrough config in force at the moment of the call. An unknown
-// kind returns the undeclared pair.
+// resolveUsageDisposition resolves the usage-reporting disposition for a
+// session of the given kind and SSH host (empty for local), reading the
+// registered kind's declaration and the passthrough config in force. An
+// unknown kind returns the undeclared pair.
 func (o *Orchestrator) resolveUsageDisposition(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution) {
 	meta, registered := o.preflightParams.AgentRegistry.Meta(kind)
 	if !registered {
@@ -1105,8 +1026,8 @@ func (o *Orchestrator) resolveUsageDisposition(kind, sshHost string) (registry.U
 	return meta.UsageDisposition(settings.Passthrough, sshHost != "")
 }
 
-// onRetryFire delivers a retry timer event to the event loop channel.
-// Uses a non-blocking send to prevent deadlock when the buffer is full.
+// onRetryFire delivers a retry timer event to the event loop channel, using
+// a non-blocking send to avoid deadlock when the buffer is full.
 func (o *Orchestrator) onRetryFire(issueID string) {
 	select {
 	case o.retryTimerCh <- issueID:
@@ -1119,14 +1040,11 @@ func (o *Orchestrator) onRetryFire(issueID string) {
 	}
 }
 
-// activateReconstructedRetries starts timers for retry entries that
-// were populated by [PopulateRetries] during startup recovery. Entries
-// with TimerHandle == nil are pending activation. Entries with
-// scheduledDelayMS > 0 get a [time.AfterFunc] timer; entries with
-// scheduledDelayMS == 0 (past-due) are written directly to
-// retryTimerCh. Called at the top of [Run] before entering the select
-// loop, relying on the channel buffer sizing to tolerate immediate-fire
-// entries written before the loop begins draining the channel.
+// activateReconstructedRetries starts timers for retry entries populated by
+// [PopulateRetries] during startup recovery (TimerHandle == nil).
+// scheduledDelayMS > 0 gets a [time.AfterFunc]; past-due entries are written
+// directly to retryTimerCh, relying on the channel buffer sizing to tolerate
+// immediate-fire entries written before the loop drains it.
 func (o *Orchestrator) activateReconstructedRetries() {
 	for issueID, entry := range o.state.RetryAttempts {
 		if entry.TimerHandle != nil {
@@ -1144,30 +1062,23 @@ func (o *Orchestrator) activateReconstructedRetries() {
 }
 
 // drainExitMargin is the budget for the post-stop teardown bookkeeping
-// that runs after [domain.AgentAdapter.StopSession] returns: persisting
-// the run history, releasing the workspace, and the other steps
-// [HandleWorkerExit] performs for one worker.
+// [HandleWorkerExit] performs after StopSession returns (run-history write,
+// workspace release, and the rest).
 const drainExitMargin = 30 * time.Second
 
 // sessionMetadataWriteInterval bounds how often the event loop writes an
-// in-flight session's token totals to session_metadata. At most one
-// incremental write per issue per interval, so the advisory cost reading
-// trails live spend by at most one interval plus whatever accrued since
-// the last token_usage event.
+// in-flight session's token totals: at most one incremental write per issue
+// per interval, so the advisory cost reading trails live spend by at most
+// one interval plus whatever accrued since the last token_usage event.
 const sessionMetadataWriteInterval = 2 * time.Second
 
-// maybeWriteIncrementalMetadata persists the running session's current
-// token totals to session_metadata when an event carrying non-zero
-// usage arrives, or a token_usage event carrying a measurement of zero
-// arrives, and the per-issue throttle interval has elapsed. Widening
-// the gate to the token_usage event type, not only a non-zero usage
-// component, makes a session_metadata row exist exactly when the
-// session has reported a measurement, including one that reports zero.
-// It is a no-op for an event carrying neither signal, for unknown
-// issues, for a session whose usage arrival is none, and while
-// throttled. Must be called from the orchestrator's
-// single-writer event loop so it shares the one SQLite writer and the
-// running entry it mutates.
+// maybeWriteIncrementalMetadata persists a running session's token totals
+// when an event carries non-zero usage, or a token_usage event carries a
+// measurement of zero, and the per-issue throttle has elapsed. Widening the
+// gate to the token_usage type makes a row exist exactly when the session
+// has reported a measurement, including a zero. A no-op for an event with
+// neither signal, an unknown issue, an arrival of none, or while throttled.
+// Must run on the single-writer event loop.
 func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueID string, event domain.AgentEvent) {
 	if !hasUsage(event.Usage) && event.Type != domain.EventTokenUsage {
 		return
@@ -1184,8 +1095,8 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 		return
 	}
 
-	// An unmeasured count is stored as zero so a reader of the database
-	// cannot find a figure contradicting the qualifier beside it.
+	// An unmeasured count is stored as zero so a reader cannot find a figure
+	// contradicting the qualifier beside it.
 	requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
 	requestCount := 0
 	if requestsMeasured {
@@ -1217,10 +1128,9 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 }
 
 // refreshParkedIssues evaluates the release rule against this tick's
-// candidates, then against the state of every parked issue the candidate
-// slice does not carry, read through one batched, comment-free tracker
-// call. Must be called from the event loop goroutine, after the budget
-// rebuild and before the dispatch loop.
+// candidates, then against every parked issue the candidate slice omits,
+// read through one batched, comment-free tracker call. Must run on the
+// event loop after the budget rebuild and before the dispatch loop.
 func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []domain.Issue) {
 	if len(o.state.Parked) == 0 {
 		return
@@ -1272,10 +1182,10 @@ func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []dom
 }
 
 // parkExhaustedAbsences parks each candidate whose consecutive
-// handoff-absence count has just reached the ceiling. Skipped entirely
-// under the off evidence policy, which records no absence. Must be called
-// from the event loop goroutine, after [Orchestrator.refreshParkedIssues]
-// so a release on this tick is not immediately re-parked.
+// handoff-absence count has just reached the ceiling. Skipped under the off
+// policy, which records no absence. Must run on the event loop after
+// [Orchestrator.refreshParkedIssues] so a release this tick is not
+// immediately re-parked.
 func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.ServiceConfig, candidates []domain.Issue) {
 	if cfg.Tracker.HandoffEvidence.Effective() == config.HandoffEvidenceOff {
 		return
@@ -1322,27 +1232,22 @@ func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.Ser
 	}
 }
 
-// ceilingSettingByBudgetReason maps a machine-readable budget-hold
-// reason to the dotted configuration path of the setting that governs
-// it, for the "candidate held by budget ceiling" log record. A reason
-// absent from this map emits no ceiling_setting attribute rather than
-// an empty or invented one.
+// ceilingSettingByBudgetReason maps a budget-hold reason to the dotted
+// config path of its governing setting, for the hold log record. A reason
+// absent from this map emits no ceiling_setting attribute.
 var ceilingSettingByBudgetReason = map[string]string{
 	budgetReasonSession: "agent.max_sessions",
 	budgetReasonToken:   "agent.max_tokens",
 }
 
-// rebuildBudgetExhausted replaces the BudgetExhausted set once per tick
-// from run_history, as the union of the session-count and token-sum
-// gates scoped to the candidate set. Token budget takes precedence over
-// the ordinary session budget. On a query error for one axis, the prior
-// entries attributed to that axis are folded back in so a transient
-// error never drops an issue mid-tick, while the other axis keeps its
-// fresh results. An issue entering the set for the first time under a
-// given reason, since restart or since its last hold, produces one
-// per-issue log record and one counter increment; a hold the memory
-// already knows about produces neither. Must be called from the event
-// loop goroutine.
+// rebuildBudgetExhausted replaces the BudgetExhausted set once per tick from
+// run_history, as the union of the session-count and token-sum gates scoped
+// to the candidate set. Token budget takes precedence. On a query error for
+// one axis, the prior entries for that axis are folded back in so a
+// transient error never drops an issue mid-tick. An issue entering the set
+// for the first time under a given reason produces one log record and one
+// counter increment; a hold the memory already knows produces neither. Must
+// run on the event loop.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
 	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
 		o.state.BudgetExhausted = make(map[string]*BudgetExhaustedEntry)
@@ -1364,18 +1269,17 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	fresh := make(map[string]*BudgetExhaustedEntry)
 	now := time.Now().UTC()
 
-	// foldedForward tracks issue IDs carried forward from the prior set by
-	// either axis's query-error branch below, so the notice pass can skip
-	// them: a hold whose evidence was not read this tick may already have
-	// cleared, and a comment is not retractable.
+	// foldedForward tracks IDs carried forward from the prior set by an
+	// axis's query-error branch, so the notice pass can skip them: a hold
+	// whose evidence was not read this tick may already have cleared, and a
+	// comment is not retractable.
 	foldedForward := make(map[string]struct{})
 
 	// budgetEvidenceComplete records that every configured axis was read
-	// successfully this tick. When an axis query fails, absence from the
-	// fresh set is not evidence that a hold cleared, so the notice release
-	// below is withheld: releasing it would drop the durable dedup record
-	// and let a later successful read post a second comment for a hold
-	// that never ended.
+	// this tick. When an axis query fails, absence from the fresh set is not
+	// evidence that a hold cleared, so the notice release below is withheld:
+	// releasing it would drop the durable dedup record and let a later read
+	// post a second comment for a hold that never ended.
 	budgetEvidenceComplete := true
 
 	if cfg.Agent.MaxSessions > 0 {
@@ -1535,11 +1439,9 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 }
 
 // drainRunningWorkers cancels all running worker contexts and waits for
-// them to exit, processing each [WorkerResult] through [HandleWorkerExit]
-// for clean persistence. Agent events are processed through
-// [HandleAgentEvent] to capture final token usage. Observer notifications
-// fire after each worker exit for dashboard visibility. Returns when all
-// workers have exited or the drain timeout expires.
+// them to exit, processing each result and agent event so token usage and
+// persistence are captured, and notifying observers after each exit.
+// Returns when all workers have exited or the drain timeout expires.
 func (o *Orchestrator) drainRunningWorkers() {
 	remaining := len(o.state.Running)
 	if remaining == 0 {
@@ -1565,8 +1467,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 	deadline := time.NewTimer(waitFor)
 	defer deadline.Stop()
 
-	// The parent ctx is already cancelled; SQLite writes in
-	// HandleWorkerExit need a live context.
+	// The parent ctx is already cancelled; SQLite writes need a live one.
 	drainCtx := context.Background()
 
 	for len(o.state.Running) > 0 {
@@ -1641,14 +1542,12 @@ func (o *Orchestrator) drainRunningWorkers() {
 }
 
 // trackerOpsDrainTimeout bounds how long shutdown waits for in-flight
-// tracker API goroutines. Set slightly above the 30-second context
-// timeout used by the goroutines themselves.
+// tracker API goroutines, set slightly above their own 30-second context
+// timeout.
 const trackerOpsDrainTimeout = 35 * time.Second
 
-// drainTrackerOps waits for all in-flight fire-and-forget tracker API
-// goroutines (comments, labels) to complete. The wait is bounded so a
-// stuck adapter cannot block process exit indefinitely. Called from
-// Run after drainRunningWorkers regardless of whether workers existed.
+// drainTrackerOps waits, bounded, for all in-flight fire-and-forget tracker
+// API goroutines to complete so a stuck adapter cannot block process exit.
 func (o *Orchestrator) drainTrackerOps() {
 	done := make(chan struct{})
 	go func() {
@@ -1665,12 +1564,10 @@ func (o *Orchestrator) drainTrackerOps() {
 	}
 }
 
-// drainTriageRuns waits for all in-flight reaction triage goroutines to
-// complete. Context cancellation has already reached the subprocesses
-// through the hook runner, which kills each process group, so the wait
-// terminates promptly in practice. The wait is bounded so an operator
-// script that ignores its kill cannot block process exit indefinitely.
-// Called from Run after drainRunningWorkers and before drainTrackerOps.
+// drainTriageRuns waits, bounded, for all in-flight triage goroutines.
+// Context cancellation already reached the subprocesses through the hook
+// runner (which kills each process group), so the wait terminates promptly;
+// the bound guards against a script that ignores its kill.
 func (o *Orchestrator) drainTriageRuns() {
 	done := make(chan struct{})
 	go func() {
@@ -1697,32 +1594,29 @@ func (o *Orchestrator) cancelRetryTimers() {
 	}
 }
 
-// notifyObservers calls [Observer.OnStateChange] on each registered
-// observer. Called after tick completion, worker exit handling, and
-// retry timer handling. Not called after agent events (high frequency).
+// notifyObservers calls [Observer.OnStateChange] on each observer. Called
+// after tick, worker exit, and retry timer handling, not after agent events.
 func (o *Orchestrator) notifyObservers() {
 	for _, obs := range o.observers {
 		obs.OnStateChange()
 	}
 }
 
-// AddObserver appends an observer to the notification list. Must be
-// called before [Orchestrator.Run] or between event loop iterations
-// (i.e., never concurrently with the event loop).
+// AddObserver appends an observer. Must be called before [Orchestrator.Run]
+// or between event loop iterations, never concurrently with the loop.
 func (o *Orchestrator) AddObserver(obs Observer) {
 	o.observers = append(o.observers, obs)
 }
 
-// PreflightOK returns whether the most recent dispatch preflight
-// validation passed. Safe to call from any goroutine.
+// PreflightOK reports whether the most recent dispatch preflight passed.
+// Safe to call from any goroutine.
 func (o *Orchestrator) PreflightOK() bool {
 	return o.preflightOK.Load()
 }
 
-// SnapshotFunc returns a function that retrieves a point-in-time
-// runtime snapshot via the event loop channel. The returned function
-// is safe to call from any goroutine. It blocks until the event loop
-// produces the snapshot or a 5-second timeout expires.
+// SnapshotFunc returns a function that retrieves a point-in-time runtime
+// snapshot via the event loop channel. Safe to call from any goroutine; it
+// blocks until the snapshot arrives or a 5-second timeout expires.
 func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
 	return func() (RuntimeSnapshotResult, error) {
 		replyCh := make(chan RuntimeSnapshotResult, 1)
@@ -1743,11 +1637,10 @@ func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
 	}
 }
 
-// RefreshFunc returns a function that signals the orchestrator to
-// perform an immediate poll+reconciliation cycle. Returns true if the
-// signal was accepted, false if it was coalesced (a refresh was
-// already pending) or if the orchestrator is draining. The returned
-// function is safe to call from any goroutine.
+// RefreshFunc returns a function that signals an immediate
+// poll+reconciliation cycle. Returns true if accepted, false if coalesced
+// (a refresh was already pending) or draining. Safe to call from any
+// goroutine.
 func (o *Orchestrator) RefreshFunc() func() bool {
 	return func() bool {
 		if o.draining.Load() {

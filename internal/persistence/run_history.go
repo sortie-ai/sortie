@@ -10,16 +10,15 @@ import (
 
 const reactionRecoveryMaxCandidates = 200
 
-// HandoffAbsenceErrorPrefix is the reserved prefix used when a handoff is
-// withheld because the orchestrator observed no work (or treats an
-// undeterminable verdict as absence under the strict policy). Keeping the
-// marker stable lets the retry and polling paths reconstruct the consecutive
-// absence sequence from run_history without adding a verdict column.
+// HandoffAbsenceErrorPrefix marks a run_history error where a handoff was
+// withheld because no work was observed. Keeping it stable lets the retry
+// and polling paths reconstruct the consecutive-absence sequence without a
+// verdict column.
 const HandoffAbsenceErrorPrefix = "handoff withheld: "
 
-// RunHistory represents a single completed run attempt persisted in the
-// run_history table. The ID field is assigned by the database on insert and
-// should be left zero when calling [Store.AppendRunHistory].
+// RunHistory is a single completed run attempt in the run_history table.
+// ID is assigned by the database on insert; leave it zero when calling
+// [Store.AppendRunHistory].
 type RunHistory struct {
 	ID             int64   // Auto-increment primary key; zero on insert, set on read.
 	IssueID        string  // Tracker-internal issue ID.
@@ -53,9 +52,8 @@ type RunHistory struct {
 	TokensMeasured bool
 }
 
-// AppendRunHistory inserts a completed run attempt into run_history. The ID
-// field of the input is ignored; the database assigns an auto-increment key.
-// Returns the inserted record with ID populated.
+// AppendRunHistory inserts a completed run attempt. The input ID is
+// ignored; the returned record has the database-assigned ID.
 func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistory, error) {
 	errVal := sql.NullString{}
 	if run.Error != nil {
@@ -98,9 +96,8 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 	return run, nil
 }
 
-// QueryRunHistoryByIssue returns all run history entries for the given issue
-// ID, ordered by id descending (most recent first). Returns an empty non-nil
-// slice when no entries exist.
+// QueryRunHistoryByIssue returns all entries for the issue, ordered by id
+// descending. Returns an empty non-nil slice when none exist.
 func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
@@ -147,10 +144,10 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 }
 
 // LoadLatestSuccessfulRunsForReactionRecovery returns at most limit latest
-// successful run_history rows, one per issue, for rows with non-empty
-// workspace paths and completed_at >= completedAfter. Results are ordered by
-// descending run_history id. The limit is clamped to the recovery maximum
-// before querying. Returns an empty non-nil slice when no rows qualify.
+// successful rows, one per issue, for rows with non-empty workspace and
+// completed_at >= completedAfter, ordered by descending id. limit is
+// clamped to the recovery maximum. Returns an empty non-nil slice when
+// none qualify.
 func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context, completedAfter time.Time, limit int) ([]RunHistory, error) {
 	if limit <= 0 {
 		limit = 1
@@ -217,11 +214,10 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 	return entries, nil
 }
 
-// QueryRecentRunHistory returns the most recent run history entries across all
-// issues, ordered by id descending. The limit parameter caps the number of
-// returned rows (clamped to a minimum of 1). For cursor-based pagination, pass
-// the smallest id from the previous page as afterID; pass 0 to start from the
-// most recent entry. Returns an empty non-nil slice when no entries exist.
+// QueryRecentRunHistory returns the most recent entries across all issues,
+// ordered by id descending, capped by limit (min 1). For pagination pass
+// the smallest id from the previous page as afterID, or 0 to start from the
+// most recent. Returns an empty non-nil slice when none exist.
 func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID int64) ([]RunHistory, error) {
 	if limit <= 0 {
 		limit = 1
@@ -284,8 +280,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	return entries, nil
 }
 
-// CountRunHistoryByIssue returns the number of run_history entries for the
-// given issue ID. Returns (0, nil) when no entries exist.
+// CountRunHistoryByIssue returns the number of entries for the issue, or
+// (0, nil) when none exist.
 func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx,
@@ -297,13 +293,11 @@ func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int
 	return count, nil
 }
 
-// CountWorkerRunsCompletedSince returns the number of worker-session
-// run_history rows for the given issue whose completed_at is at or
-// after since. Rows whose status is "ci_failed" are excluded by name
-// rather than by an inclusion list of qualifying statuses, because that
-// status records a CI verdict the reconcile pass observed rather than a
-// worker session, and a status added later must count as a worker
-// session by default. Returns (0, nil) when no row qualifies.
+// CountWorkerRunsCompletedSince returns the number of worker-session rows
+// for the issue with completed_at at or after since, or (0, nil) when none
+// qualify. "ci_failed" rows are excluded by name rather than by an
+// inclusion list, so a status added later counts as a worker session by
+// default.
 func (s *Store) CountWorkerRunsCompletedSince(ctx context.Context, issueID string, since time.Time) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx,
@@ -319,17 +313,15 @@ func (s *Store) CountWorkerRunsCompletedSince(ctx context.Context, issueID strin
 	return count, nil
 }
 
-// QueryConsecutiveHandoffAbsenceCounts returns the number of handoff-absence
-// failures for each requested issue since the run at which
-// [Store.ResetHandoffAbsenceSequence] last ended that issue's sequence. Issues
-// with no qualifying rows are omitted from the returned map.
+// QueryConsecutiveHandoffAbsenceCounts returns the handoff-absence failure
+// count per requested issue since [Store.ResetHandoffAbsenceSequence] last
+// ended that issue's sequence. Issues with no qualifying rows are omitted.
 //
-// Only a work-observed verdict resets the sequence. A terminal status of
-// "succeeded" does not, because it is also recorded for outcomes that carry no
-// verdict at all: a blocked soft stop, a run that does not drive issue state, a
-// run whose evidence was not determinable, and every run under the off policy.
-// Counting those as a reset would let an absence sequence alternate below the
-// ceiling indefinitely.
+// Only a work-observed verdict resets the sequence; "succeeded" does not,
+// because it is also recorded for outcomes carrying no verdict (a blocked
+// soft stop, a run that does not drive issue state, an undeterminable run,
+// every run under the off policy). Counting those as a reset would let an
+// absence sequence alternate below the ceiling indefinitely.
 func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error) {
 	counts := make(map[string]int)
 	if len(issueIDs) == 0 {
@@ -380,14 +372,13 @@ func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueI
 	return counts, nil
 }
 
-// ResetHandoffAbsenceSequence ends the issue's consecutive handoff-absence
-// sequence at its most recently recorded run, so
-// [Store.QueryConsecutiveHandoffAbsenceCounts] reports zero until a further
-// absence is recorded.
+// ResetHandoffAbsenceSequence ends the issue's consecutive absence sequence
+// at its most recent run, so [Store.QueryConsecutiveHandoffAbsenceCounts]
+// reports zero until a further absence is recorded.
 //
 // The reset point is read from run_history inside the statement rather than
 // supplied by the caller, so a work-observed run whose own history row could
-// not be persisted still clears the absences recorded before it.
+// not be persisted still clears the absences before it.
 func (s *Store) ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.ExecContext(ctx, `
@@ -404,10 +395,9 @@ func (s *Store) ResetHandoffAbsenceSequence(ctx context.Context, issueID string)
 	return nil
 }
 
-// QueryBudgetExhaustedIssues returns, for each candidate in candidateIDs
-// whose run_history entry count meets or exceeds maxSessions, that count
-// keyed by issue ID. Returns an empty non-nil map when no issues qualify
-// or candidateIDs is empty.
+// QueryBudgetExhaustedIssues returns, for each candidate whose entry count
+// meets or exceeds maxSessions, that count keyed by issue ID. Returns an
+// empty non-nil map when none qualify or candidateIDs is empty.
 func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) (map[string]int, error) {
 	if len(candidateIDs) == 0 {
 		return map[string]int{}, nil
@@ -448,18 +438,15 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	return exhausted, nil
 }
 
-// IssueTokenUsage is the per-issue token spend read by the token
-// ceiling and by the cost_budget tool: a summed total, a row count, a
-// count of rows whose spend is unknown rather than zero, and a count
-// of rows recording a session the in-flight token ceiling stopped
-// while it was running.
+// IssueTokenUsage is the per-issue token spend read by the token ceiling
+// and the cost_budget tool.
 type IssueTokenUsage struct {
 	TotalTokens        int64
 	Sessions           int
 	UnmeasuredSessions int
 
-	// StoppedInFlight counts the issue's rows recording a session the
-	// token ceiling stopped while it was running.
+	// StoppedInFlight counts rows recording a session the token ceiling
+	// stopped while running.
 	StoppedInFlight int
 }
 
@@ -486,19 +473,16 @@ func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTok
 	return usage, nil
 }
 
-// latestRunCompletionChunkSize is the maximum number of identifiers
-// batched into a single IN (...) query. The on-disk workspace directory
-// count that feeds this lookup is unbounded by construction, unlike the
-// tracker-page-bounded inputs of the other IN (...) queries in this file.
+// latestRunCompletionChunkSize caps identifiers per IN (...) query. The
+// on-disk workspace directory count feeding this lookup is unbounded,
+// unlike the tracker-page-bounded inputs of the other IN (...) queries
+// here.
 const latestRunCompletionChunkSize = 500
 
-// LatestRunCompletionByIdentifier returns the most recent completed_at
-// value for each of the given identifiers.
-//
-// Identifiers with no run_history rows are omitted from the result. An
-// empty input returns an empty non-nil map without querying. Identifiers
-// are queried in batches of at most [latestRunCompletionChunkSize] and
-// the per-batch results are merged.
+// LatestRunCompletionByIdentifier returns the most recent completed_at per
+// identifier. Identifiers with no rows are omitted; an empty input returns
+// an empty non-nil map without querying. Identifiers are queried in batches
+// of at most [latestRunCompletionChunkSize] and merged.
 func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error) {
 	result := make(map[string]string, len(identifiers))
 	if len(identifiers) == 0 {
@@ -546,12 +530,10 @@ func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers
 	return result, nil
 }
 
-// QueryTokenBudgetUsage returns one [IssueTokenUsage] per candidate in
-// candidateIDs that has at least one run_history row. A candidate with
-// no rows is absent from the returned map; the caller reads that as
-// zero on every count the shape carries. An empty candidateIDs
-// returns an empty non-nil map without querying. The threshold
-// comparison against a token ceiling is the caller's responsibility.
+// QueryTokenBudgetUsage returns one [IssueTokenUsage] per candidate with at
+// least one row; a candidate with no rows is absent, which the caller reads
+// as zero on every count. An empty candidateIDs returns an empty non-nil map
+// without querying. Comparing against a ceiling is the caller's job.
 func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]IssueTokenUsage, error) {
 	usage := map[string]IssueTokenUsage{}
 	if len(candidateIDs) == 0 {

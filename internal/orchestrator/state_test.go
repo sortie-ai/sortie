@@ -215,8 +215,6 @@ func TestRunningCountByState(t *testing.T) {
 	}
 }
 
-// runningSnapshotMap builds a lookup map from a Running snapshot slice
-// keyed by IssueID. Handles non-deterministic map iteration order.
 func runningSnapshotMap(t *testing.T, entries []SnapshotRunningEntry) map[string]SnapshotRunningEntry {
 	t.Helper()
 	m := make(map[string]SnapshotRunningEntry, len(entries))
@@ -229,8 +227,6 @@ func runningSnapshotMap(t *testing.T, entries []SnapshotRunningEntry) map[string
 	return m
 }
 
-// retrySnapshotMap builds a lookup map from a Retrying snapshot slice
-// keyed by IssueID.
 func retrySnapshotMap(t *testing.T, entries []SnapshotRetryEntry) map[string]SnapshotRetryEntry {
 	t.Helper()
 	m := make(map[string]SnapshotRetryEntry, len(entries))
@@ -462,7 +458,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("RateLimits[reset_at] = %v, want %q", got, "2026-03-24T13:00:00Z")
 		}
 
-		// Mutate original after snapshot; snapshot must be unaffected.
 		origData["injected_key"] = "should not appear"
 		if _, leaked := result.RateLimits["injected_key"]; leaked {
 			t.Error("RateLimits contains injected_key after original mutation — shallow copy isolation failed")
@@ -492,7 +487,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		// The future entry must contribute 0, not a negative value.
 		if result.AgentTotals.SecondsRunning != 50.0 {
 			t.Errorf("AgentTotals.SecondsRunning = %f, want 50.0 (future StartedAt should contribute 0)", result.AgentTotals.SecondsRunning)
 		}
@@ -510,7 +504,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		// Zero timestamp must contribute 0, not decades of elapsed.
 		if result.AgentTotals.SecondsRunning != 50.0 {
 			t.Errorf("AgentTotals.SecondsRunning = %f, want 50.0 (zero StartedAt should contribute 0)", result.AgentTotals.SecondsRunning)
 		}
@@ -570,9 +563,8 @@ func TestRuntimeSnapshot(t *testing.T) {
 			APIRequestCount: 7,
 			RequestsByModel: map[string]int{"claude-sonnet-4-20250514": 5, "claude-opus-4-20250514": 2},
 
-			// The breakdown reaches the snapshot only for a session
-			// whose request count is a measurement and whose
-			// attribution names a model.
+			// The breakdown reaches the snapshot only when the request
+			// count is a measurement and attribution names a model.
 			UsageArrival:     registry.UsageArrivalIncremental,
 			UsageAttribution: registry.UsageAttributionPerModel,
 		}
@@ -599,7 +591,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("RequestsByModel[sonnet] = %d, want 5", snap.RequestsByModel["claude-sonnet-4-20250514"])
 		}
 
-		// AgentTotals.CacheReadTokens must come from state.AgentTotals.
 		if result.AgentTotals.CacheReadTokens != 999 {
 			t.Errorf("AgentTotals.CacheReadTokens = %d, want 999", result.AgentTotals.CacheReadTokens)
 		}
@@ -622,7 +613,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		// Mutate the source map after snapshot.
 		rbm["model-a"] = 999
 		rbm["model-b"] = 1
 
@@ -654,10 +644,9 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 
-	// The breakdown is gated in RuntimeSnapshot itself, the one
-	// site that resolves the request verdict, so these two cases must
-	// run through RuntimeSnapshot rather than assert on a hand-built
-	// SnapshotRunningEntry, which would bypass the gate entirely.
+	// RuntimeSnapshot is the only site that resolves the request verdict,
+	// so these cases must run through it rather than a hand-built
+	// SnapshotRunningEntry, which would bypass the gate.
 	t.Run("RequestsByModel absent when the request verdict is false", func(t *testing.T) {
 		t.Parallel()
 
@@ -775,8 +764,8 @@ func TestRuntimeSnapshot(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 10, 0, nil, AgentTotals{})
-		// Insert out-of-order to verify sorting; empty Identifier on every
-		// entry means the sort falls through to the IssueID tiebreaker.
+		// Out of order, with empty Identifiers, so the sort falls through
+		// to the IssueID tiebreaker.
 		state.BudgetExhausted["ISS-C"] = &BudgetExhaustedEntry{}
 		state.BudgetExhausted["ISS-A"] = &BudgetExhaustedEntry{}
 		state.BudgetExhausted["ISS-B"] = &BudgetExhaustedEntry{}
@@ -805,7 +794,6 @@ func TestRuntimeSnapshot(t *testing.T) {
 
 		result := RuntimeSnapshot(state, fixedNow)
 
-		// Mutate source after snapshot.
 		state.BudgetExhausted["ISS-Y"] = &BudgetExhaustedEntry{}
 
 		if result.BudgetExhaustedCount != 1 {
@@ -881,9 +869,8 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 		snapshotted := result.BudgetExhausted[0]
 
-		// Mutate the pointee after the snapshot was taken. A snapshot that
-		// merely copied the pointer would observe this change; a
-		// value-copied snapshot must not.
+		// Mutate the pointee after the snapshot: a pointer-copying
+		// snapshot would observe this; a value-copied one must not.
 		entry.Reason = budgetReasonToken
 		entry.UsedSessions = 99
 
@@ -1056,11 +1043,6 @@ func TestIsKnownReactionKind_AcceptsAutoMerge(t *testing.T) {
 	}
 }
 
-// TestWatchWindowMS covers the shared watch_window_ms parsing helper used by
-// the review, bot-review, auto-merge, and merge-conflict reaction builders:
-// an absent key defaults, 0 is a valid "no time limit" value, negative and
-// above-ceiling values are rejected with their exact operator-facing
-// messages, and non-numeric/fractional values are rejected.
 func TestWatchWindowMS(t *testing.T) {
 	t.Parallel()
 
@@ -1669,9 +1651,8 @@ func TestBuildMergeConflictReactionConfig(t *testing.T) {
 	}
 }
 
-// TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel verifies
-// that an empty escalation defaults to "label" (the direct-call safety net,
-// independent of the config-layer default).
+// TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel checks
+// the direct-call safety net, independent of the config-layer default.
 func TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel(t *testing.T) {
 	t.Parallel()
 
@@ -1714,10 +1695,9 @@ func TestIsKnownReactionKind_AcceptsLabelReview(t *testing.T) {
 	}
 }
 
-// TestReactionKindPins verifies that isKnownReactionKind and
-// reactionKindPinsWorkspace both derive from the single reactionKindPins
-// map, so the set of known kinds is asserted by iterating the map itself
-// rather than by a second hand-written list that could diverge from it.
+// TestReactionKindPins asserts the known-kind set by iterating
+// reactionKindPins itself, so a second hand-written list cannot diverge
+// from it.
 func TestReactionKindPins(t *testing.T) {
 	t.Parallel()
 
@@ -1808,10 +1788,6 @@ func TestIsKnownReactionKind_AcceptsLabelFix(t *testing.T) {
 	}
 }
 
-// TestIsKnownReactionKind_AcceptsMergeCompletion verifies that the kind is
-// registered in reactionKindPins, and that reactionKindPinsWorkspace reports
-// false for it so a pending entry of this kind does not exclude its
-// workspace from sweep candidacy.
 func TestIsKnownReactionKind_AcceptsMergeCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -1841,10 +1817,6 @@ func TestIsKnownReactionKind_AcceptsMergeCompletion(t *testing.T) {
 	}
 }
 
-// TestBuildMergeCompletionReactionConfig covers the nine validation
-// failures of the stated evaluation order, the ADR-default success case,
-// and the two escalation edge cases asserted against a hand-built
-// config.ReactionConfig only.
 func TestBuildMergeCompletionReactionConfig(t *testing.T) {
 	t.Parallel()
 
@@ -1946,9 +1918,8 @@ func TestBuildMergeCompletionReactionConfig(t *testing.T) {
 		{
 			name: "invalid escalation errors against a hand-built config with no tracker set",
 			rc:   config.ReactionConfig{Escalation: "webhook"},
-			// tracker is the zero value: the escalation check runs before
-			// any tracker prerequisite, so this is a unit-level assertion
-			// only, not an end-to-end one.
+			// The escalation check runs before any tracker prerequisite,
+			// so the zero-value tracker still reaches it.
 			wantErr:     true,
 			wantErrText: "invalid escalation",
 		},
@@ -1978,10 +1949,10 @@ func TestBuildMergeCompletionReactionConfig(t *testing.T) {
 	}
 }
 
-// TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry
-// verifies that the terminal list never falls back to registry.TrackerMeta
-// defaults, while the active list does, and the fallback only ever makes
-// the active check stricter.
+// TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry pins
+// the asymmetry: the terminal list never falls back to TrackerMeta
+// defaults, the active list does, and the fallback only tightens the
+// active check.
 func TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry(t *testing.T) {
 	t.Parallel()
 
@@ -2056,10 +2027,6 @@ func TestBuildLabelFixReactionConfig(t *testing.T) {
 	}
 }
 
-// TestPopulateParked verifies that PopulateParked loads persisted rows into
-// state.Parked, skips a row with an empty issue_id while logging a
-// warning, loads a row with an empty parked_state rather than skipping it,
-// and that the resulting state.Parked is honored by ShouldDispatch's gate.
 func TestPopulateParked(t *testing.T) {
 	t.Parallel()
 
@@ -2107,8 +2074,8 @@ func TestPopulateParked(t *testing.T) {
 			t.Errorf("state.Parked[id-1].ParkedAt = %v, want 2026-08-17T00:00:00Z", entry1.ParkedAt)
 		}
 
-		// A row loaded with an empty parked_state is loaded, not skipped:
-		// only an empty issue_id is a malformed row.
+		// Only an empty issue_id makes a row malformed; an empty
+		// parked_state is loaded, not skipped.
 		entry2, ok := state.Parked["id-2"]
 		if !ok {
 			t.Fatal("state.Parked missing id-2")
@@ -2156,9 +2123,6 @@ func TestPopulateParked(t *testing.T) {
 	})
 }
 
-// TestRuntimeSnapshot_ParkedFields verifies that RuntimeSnapshot reports
-// ParkedCount always, including zero, and Parked/ParkedReason only when
-// state.Parked is non-empty, mirroring the BudgetExhausted* projection.
 func TestRuntimeSnapshot_ParkedFields(t *testing.T) {
 	t.Parallel()
 
@@ -2213,11 +2177,6 @@ func TestRuntimeSnapshot_ParkedFields(t *testing.T) {
 	})
 }
 
-// TestRuntimeSnapshot_UsageDispositionFields proves RuntimeSnapshot
-// copies the frozen UsageArrival and UsageAttribution pair verbatim,
-// and that TokensPending is true only when the frozen arrival is
-// turn_end, the session is measured, and the last processed agent
-// event is not one of the five turn-terminal types.
 func TestRuntimeSnapshot_UsageDispositionFields(t *testing.T) {
 	t.Parallel()
 
@@ -2339,9 +2298,6 @@ func TestRuntimeSnapshot_UsageDispositionFields(t *testing.T) {
 	}
 }
 
-// TestRuntimeSnapshot_AgentTotalsExclusionCounts verifies RunningUnreported
-// and RunningNonReporting partition the running set by mutually exclusive
-// reasons, leaving a measured session in neither.
 func TestRuntimeSnapshot_AgentTotalsExclusionCounts(t *testing.T) {
 	t.Parallel()
 
@@ -2393,11 +2349,6 @@ func TestRuntimeSnapshot_AgentTotalsExclusionCounts(t *testing.T) {
 	}
 }
 
-// TestApiRequestsMeasured walks the arrival/attribution rule table: an
-// arrival that does not report during the turn is always unmeasured,
-// and for incremental a positive raw count is always measured while a
-// zero count depends only on whether a turn began. The last two cases
-// prove totality over a value outside the declared UsageArrival set.
 func TestApiRequestsMeasured(t *testing.T) {
 	t.Parallel()
 
@@ -2434,22 +2385,12 @@ func TestApiRequestsMeasured(t *testing.T) {
 	}
 }
 
-// TestApiRequestsMeasuredSingleDerivationSite proves that
-// apiRequestsMeasured is the only site that derives the request
-// verdict. It walks every non-test source file under cmd and internal
-// for a call to UsageArrival's ReportsDuringTurn, the frozen
-// declaration-only predicate the rule composes with the two session
-// counters, and requires exactly one call site, inside state.go. A
-// reimplementation that reuses the predicate needs that same call, so
-// a second call site is evidence the rule was reproduced rather than
-// reused.
-//
-// What this does not catch: a reimplementation that spells the
-// predicate out as a direct comparison against UsageArrivalIncremental
-// rather than calling it. That spelling is live in the tree for
-// presentation wording, so it cannot be banned outright, and no
-// syntactic rule separates the two uses. The scanned-file count below
-// is the negative control, so a walk that reaches nothing fails here
+// TestApiRequestsMeasuredSingleDerivationSite requires exactly one call to
+// ReportsDuringTurn, in state.go: a second call site is evidence the rule
+// was reproduced rather than reused. It cannot catch a reimplementation
+// that spells the predicate out as a direct comparison, since that
+// spelling is live elsewhere for presentation wording. The scanned-file
+// count is a negative control, so a walk that reaches nothing fails here
 // rather than passing in silence.
 func TestApiRequestsMeasuredSingleDerivationSite(t *testing.T) {
 	t.Parallel()
@@ -2486,8 +2427,7 @@ func TestApiRequestsMeasuredSingleDerivationSite(t *testing.T) {
 			scanned++
 			count := 0
 			for line := range strings.SplitSeq(string(data), "\n") {
-				// The method's own declaration carries the needle
-				// and is not a call site.
+				// Skip the method's own declaration, not a call site.
 				if strings.Contains(line, ") "+needle) {
 					continue
 				}

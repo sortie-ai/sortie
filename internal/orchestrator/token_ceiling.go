@@ -11,24 +11,15 @@ import (
 )
 
 // issueTokenStore is the persistence contract [freezeIssueTokenBaseline]
-// and [enforceInFlightTokenCeiling] need. Satisfied by
-// [OrchestratorStore] and by [RetryTimerStore].
+// and [enforceInFlightTokenCeiling] need.
 type issueTokenStore interface {
 	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 }
 
 // freezeIssueTokenBaseline reads the issue's completed-session token sum
-// onto the running entry, so [enforceInFlightTokenCeiling]'s pre-filter
-// has a baseline from the first usage event onward. It reports the two
-// conditions under which the ceiling cannot bound the run: an arrival
-// disposition that reports no figure at all, and a baseline read that
-// fails.
-//
-// Called from both dispatch lanes, after entry.UsageArrival has been
-// assigned. Must run on the orchestrator's single-writer event loop.
-// Takes the unscoped logger and derives the issue-scoped one itself, as
-// [HandleAgentEvent] does, so a record's shape does not depend on which
-// lane dispatched the run.
+// onto the running entry so [enforceInFlightTokenCeiling]'s pre-filter has
+// a baseline from the first usage event onward. Must run on the
+// single-writer event loop, after entry.UsageArrival has been assigned.
 func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string, store issueTokenStore, logger *slog.Logger) {
 	if state.MaxTokens <= 0 {
 		return
@@ -40,10 +31,9 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 	log := issueTokenCeilingLogger(logger, issueID, entry)
 	usage, err := store.TokenUsageByIssue(ctx, issueID)
 
-	// One record per dispatch. A run whose arrival reports no figure is
-	// unbounded whatever the baseline read did, so a failed read rides
-	// on that record instead of claiming, one line later, that the
-	// ceiling bounds this session.
+	// A run whose arrival reports no figure is unbounded whatever the
+	// baseline read did, so a failed read rides on that record rather than
+	// claiming the ceiling bounds this session.
 	switch {
 	case !entry.UsageArrival.ReportsAnyFigure():
 		attrs := []any{
@@ -68,20 +58,15 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 	entry.IssueTokensCompleted = usage.TotalTokens
 }
 
-// enforceInFlightTokenCeiling evaluates the per-issue token ceiling
-// against the issue's completed-session sum plus this session's
-// cumulative spend, and stops the run when the sum reaches the ceiling.
-// An integer pre-filter against the baseline frozen by
-// [freezeIssueTokenBaseline] keeps every event free of I/O; only an
-// event that crosses the pre-filter triggers a confirming read, which
-// makes the kill decision exact. A confirming read that fails leaves
-// the run going, except where this session's own spend has reached the
-// ceiling on its own, which needs no read to be certain.
+// enforceInFlightTokenCeiling stops the run when the issue's
+// completed-session sum plus this session's cumulative spend reaches the
+// ceiling. An integer pre-filter against the frozen baseline keeps every
+// event free of I/O; only an event crossing the pre-filter triggers a
+// confirming read. A failed read leaves the run going unless this
+// session's own spend has reached the ceiling, which needs no read.
 //
-// Must be called from the orchestrator's single-writer event loop,
-// after [HandleAgentEvent] has applied the event's usage delta. Takes
-// the unscoped logger and derives the issue-scoped one itself, as
-// [HandleAgentEvent] does.
+// Must run on the single-writer event loop, after [HandleAgentEvent] has
+// applied the event's usage delta.
 func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store issueTokenStore, metrics domain.Metrics, logger *slog.Logger) {
 	ceiling := state.MaxTokens
 	if ceiling <= 0 {
@@ -104,11 +89,9 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 
 	usage, err := store.TokenUsageByIssue(ctx, issueID)
 	if err != nil {
-		// A completed-session sum is never negative, so a session whose
-		// own spend already reaches the ceiling proves the breach
-		// without the read that just failed. Stopping here is what
-		// keeps a persistence outage from suspending the ceiling for
-		// as long as it lasts.
+		// A completed sum is never negative, so a session whose own spend
+		// already reaches the ceiling proves the breach without the failed
+		// read, keeping a persistence outage from suspending the ceiling.
 		if entry.AgentTotalTokens >= int64(ceiling) {
 			stopRunAtTokenCeiling(entry, metrics, log, ceiling, nil, tokenSumSessionSpendAlone)
 			return
@@ -130,11 +113,10 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 	stopRunAtTokenCeiling(entry, metrics, log, ceiling, &usage.UnmeasuredSessions, tokenSumConfirmedRead)
 }
 
-// How the sum behind a stop was established, reported as sum_source on
-// the stop record. A confirmed read carries an exact completed sum; a
-// session-spend-alone stop carries whatever baseline the entry held,
-// which makes used_tokens a lower bound and leaves the unmeasured count
-// unknown.
+// sum_source values for the stop record. A confirmed read carries an exact
+// completed sum; a session-spend-alone stop carries only the entry's
+// baseline, which makes used_tokens a lower bound and leaves the counts
+// behind an incomplete sum unknown.
 const (
 	tokenSumConfirmedRead     = "confirmed_read"
 	tokenSumSessionSpendAlone = "session_spend_alone"
@@ -184,8 +166,7 @@ func issueTokenCeilingLogger(logger *slog.Logger, issueID string, entry *Running
 }
 
 // tokenCeilingStopError builds the run_history error text for a run the
-// token ceiling stopped in flight, naming the used and budgeted token
-// figures.
+// token ceiling stopped in flight.
 func tokenCeilingStopError(usedTokens int64, budgetTokens int) error {
 	return fmt.Errorf("token ceiling reached: used %d of %d tokens", usedTokens, budgetTokens)
 }

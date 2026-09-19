@@ -1,7 +1,6 @@
-// Package budget implements [domain.AgentTool] for the cost_budget tool.
-// It reports cumulative per-issue token spend and the remaining token
-// budget so agents can self-regulate before the ceiling stops the run
-// in flight or blocks a re-dispatch.
+// Package budget implements [domain.AgentTool] for the cost_budget tool,
+// reporting cumulative per-issue token spend and the remaining budget so
+// agents can self-regulate before the ceiling stops the run.
 package budget
 
 import (
@@ -20,11 +19,10 @@ var inputSchema = json.RawMessage(`{
   "additionalProperties": false
 }`)
 
-// BudgetQueryFunc returns the per-issue completed-session token sum, the
-// completed-session count, and the running session's recorded token total.
-// The running-session total is taken from session_metadata only when its
-// stored dispatch ID matches runningDispatchID; otherwise it is 0.
-// Implementations make no external calls.
+// BudgetQueryFunc returns per-issue token accounting. The running-session
+// total is taken from session_metadata only when its stored dispatch ID
+// matches runningDispatchID; otherwise it is 0. Implementations make no
+// external calls.
 type BudgetQueryFunc func(ctx context.Context, issueID string, runningDispatchID string) (BudgetUsage, error)
 
 // BudgetUsage is the per-issue token accounting returned by a
@@ -34,8 +32,6 @@ type BudgetUsage struct {
 	CompletedSessions    int   // COUNT(*) of run_history rows for the issue.
 	RunningTotalTokens   int64 // session_metadata.total_tokens when dispatch_id matches; else 0.
 
-	// UnmeasuredSessions is the count of the issue's run_history rows
-	// with tokens_measured = 0.
 	UnmeasuredSessions int
 
 	// RunningMeasured is true when a session_metadata row was found
@@ -67,13 +63,10 @@ type costBudgetResponse struct {
 }
 
 // New returns a [BudgetTool] for the given issue and running dispatch.
-//
-// budgetTokens and budgetSessions are the configured agent ceilings,
-// where 0 means unlimited. runningDispatchID is the live dispatch ID
-// delivered to the sidecar out of band; an empty runningDispatchID
-// contributes no running-session spend and makes used_tokens_complete
-// false. New panics if query is nil or issueID is empty (programming
-// errors).
+// budgetTokens and budgetSessions are the configured ceilings, where 0
+// means unlimited. An empty runningDispatchID contributes no
+// running-session spend and makes used_tokens_complete false. New panics
+// if query is nil or issueID is empty.
 func New(query BudgetQueryFunc, issueID string, runningDispatchID string, budgetTokens int, budgetSessions int) *BudgetTool {
 	if query == nil {
 		panic("budget.New: query must not be nil")
@@ -90,10 +83,8 @@ func New(query BudgetQueryFunc, issueID string, runningDispatchID string, budget
 	}
 }
 
-// Name returns "cost_budget".
 func (t *BudgetTool) Name() string { return "cost_budget" }
 
-// Description returns a human-readable summary of the tool.
 func (t *BudgetTool) Description() string {
 	return "Returns cumulative token spend for the current issue and the remaining token " +
 		"budget. Use this to decide whether to skip an expensive step, return partial work, " +
@@ -102,19 +93,17 @@ func (t *BudgetTool) Description() string {
 		"the running session's spend is not included yet, so used_tokens is a lower bound."
 }
 
-// InputSchema returns the JSON Schema for cost_budget input.
-// The tool accepts no parameters; the schema is an empty object.
-// The returned slice is a defensive copy.
+// InputSchema returns the JSON Schema for cost_budget input; the tool
+// accepts no parameters. The returned slice is a defensive copy.
 func (t *BudgetTool) InputSchema() json.RawMessage {
 	out := make(json.RawMessage, len(inputSchema))
 	copy(out, inputSchema)
 	return out
 }
 
-// Execute computes the budget result for the current issue.
-//
-// Query failures are returned as a JSON error response with a nil Go
-// error. Only internal marshal failures produce a non-nil Go error.
+// Execute computes the budget result for the current issue. Query
+// failures return a JSON error response with a nil Go error; only marshal
+// failures produce a non-nil Go error.
 func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	usage, err := t.query(ctx, t.issueID, t.runningDispatchID)
 	if err != nil {

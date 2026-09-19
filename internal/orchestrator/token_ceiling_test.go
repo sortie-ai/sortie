@@ -12,16 +12,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// tokenStoreResponse is one scripted reply for [fakeTokenStore].
 type tokenStoreResponse struct {
 	usage persistence.IssueTokenUsage
 	err   error
 }
 
-// fakeTokenStore is a scriptable [issueTokenStore] double. Each call to
-// TokenUsageByIssue consumes the next response in the script; the final
-// response repeats once the script is exhausted. calls records every
-// issueID the double was invoked with, in order.
+// fakeTokenStore replays responses in order; the last response repeats
+// once the script is exhausted.
 type fakeTokenStore struct {
 	responses []tokenStoreResponse
 	calls     []string
@@ -39,8 +36,8 @@ func (f *fakeTokenStore) TokenUsageByIssue(_ context.Context, issueID string) (p
 	return f.responses[idx].usage, f.responses[idx].err
 }
 
-// failingIssueTokenStore fails the test the instant TokenUsageByIssue is
-// called, so a test asserting "no store read" cannot pass by accident.
+// failingIssueTokenStore fails the test if read, so a "no store read"
+// assertion cannot pass by accident.
 type failingIssueTokenStore struct {
 	t *testing.T
 }
@@ -51,9 +48,6 @@ func (f *failingIssueTokenStore) TokenUsageByIssue(_ context.Context, issueID st
 	return persistence.IssueTokenUsage{}, nil
 }
 
-// textLogger returns a *slog.Logger that renders to a [lockedBuf] in
-// text format, so a test can assert on rendered message text and
-// attributes.
 func textLogger() (*lockedBuf, *slog.Logger) {
 	lb := &lockedBuf{}
 	return lb, slog.New(slog.NewTextHandler(lb, nil))
@@ -144,10 +138,6 @@ func TestFreezeIssueTokenBaseline(t *testing.T) {
 			{usage: persistence.IssueTokenUsage{TotalTokens: 777}},
 		}}
 
-		// The poll-lane dispatch and the retry-lane dispatch both call
-		// freezeIssueTokenBaseline directly, with no lane-specific
-		// branch inside it; calling it twice with equivalent inputs
-		// must produce equivalent baselines.
 		freezeIssueTokenBaseline(context.Background(), state, "ISS-POLL", store, logger)
 		freezeIssueTokenBaseline(context.Background(), state, "ISS-RETRY", store, logger)
 
@@ -162,10 +152,9 @@ func TestFreezeIssueTokenBaseline(t *testing.T) {
 func TestFreezeIssueTokenBaselineRecordsOnePerDispatch(t *testing.T) {
 	t.Parallel()
 
-	// A run whose arrival reports no figure is unbounded whatever the
-	// baseline read did, so the two records must never both fire: the
-	// second one would tell the operator the ceiling bounds a session
-	// the first one just said it cannot bound.
+	// The two records must never both fire: a run whose arrival reports
+	// no figure is unbounded regardless of the baseline read, so the
+	// session-bounded record would contradict the cannot-bound one.
 	lb, logger := textLogger()
 	state := NewState(5000, 4, 100, nil, AgentTotals{})
 	state.Running["ISS-BOTH"] = &RunningEntry{
@@ -193,10 +182,8 @@ func TestFreezeIssueTokenBaselineRecordsOnePerDispatch(t *testing.T) {
 func TestEnforceInFlightTokenCeiling(t *testing.T) {
 	t.Parallel()
 
-	// driveEvent mirrors the orchestrator's own agentEventCh case:
-	// HandleAgentEvent applies the usage delta before
-	// enforceInFlightTokenCeiling evaluates it, and the latter must
-	// never be exercised out of that order.
+	// Mirrors the agentEventCh case: HandleAgentEvent must apply the
+	// usage delta before enforceInFlightTokenCeiling evaluates it.
 	driveEvent := func(state *State, issueID string, usage domain.TokenUsage, store issueTokenStore, metrics domain.Metrics, log *slog.Logger) {
 		event := domain.AgentEvent{Type: domain.EventTokenUsage, Usage: usage}
 		HandleAgentEvent(state, issueID, event, log, metrics)
@@ -317,9 +304,9 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		state.Running["ISS-FAILREAD"] = &RunningEntry{
 			Identifier: "ISS-FAILREAD-ident",
 			CancelFunc: func() { cancelCalls++ },
-			// The frozen baseline is what carries this issue over the
-			// ceiling; the session's own spend stays under it, so the
-			// failed read is genuinely the only evidence available.
+			// The frozen baseline, not this session's own spend, carries
+			// the issue over the ceiling, so the failed read is the only
+			// evidence available.
 			IssueTokensCompleted: 80,
 		}
 		queryErr := errors.New("db unavailable")
@@ -403,9 +390,8 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 			IssueTokensCompleted: 900, // a stale, overestimated frozen baseline
 			CancelFunc:           func() { cancelCalls++ },
 		}
-		// The pre-filter (stale 900 + this session's 150 = 1050) crosses
-		// the ceiling, but the confirming read reports the issue's true
-		// completed sum is only 800, so 800 + 150 = 950 stays under it.
+		// Pre-filter (stale 900 + 150 = 1050) crosses the ceiling, but
+		// the confirming read's true 800 + 150 = 950 stays under it.
 		store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 800}}}}
 
 		driveEvent(state, "ISS-BELOW", domain.TokenUsage{TotalTokens: 150}, store, spy, logger)
@@ -498,17 +484,13 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		if !state.Running["ISS-MATH"].TokenCeilingStopped {
 			t.Fatal("setup failed: run did not stop")
 		}
-		// entry.AgentTotalTokens is 80 (this session's cumulative
-		// figure); the confirming read reports a completed sum of 20;
-		// used_tokens on the log record must be their sum, 100.
+		// used_tokens = confirming read 20 + AgentTotalTokens 80 = 100.
 		if !strings.Contains(lb.String(), "used_tokens=100") {
 			t.Errorf("log = %q, want it to contain used_tokens=100 (confirming sum 20 + AgentTotalTokens 80)", lb.String())
 		}
 	})
 }
 
-// lineWith returns the single rendered log line carrying msg, failing
-// the test when the record is absent or repeated.
 func lineWith(t *testing.T, rendered, msg string) string {
 	t.Helper()
 	var found []string
@@ -523,12 +505,6 @@ func lineWith(t *testing.T, rendered, msg string) string {
 	return found[0]
 }
 
-// TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop drives a
-// turn_end-shaped pair on one issue: the token_usage event carrying S1
-// and the terminal event that follows it, both carrying the same
-// snapshot. With agent.max_tokens set below S1.TotalTokens, it asserts
-// enforceInFlightTokenCeiling stops the run on the token_usage event,
-// and the terminal event that follows produces no second stop record.
 func TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop(t *testing.T) {
 	t.Parallel()
 
@@ -537,7 +513,6 @@ func TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop(t *testing.T) {
 	var cancelCalls int
 	s1 := domain.TokenUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CacheReadTokens: 5}
 
-	// agent.max_tokens (state.MaxTokens) is set below S1.TotalTokens.
 	state := NewState(5000, 4, 100, nil, AgentTotals{})
 	state.Running["ISS-TE"] = &RunningEntry{
 		Identifier: "ISS-TE-ident",
@@ -573,12 +548,9 @@ func TestEnforceInFlightTokenCeiling_TurnEndPairSingleStop(t *testing.T) {
 }
 
 // TestTokenCeilingRecordsCarryIssueContext pins the identifying
-// attributes on every record this file emits. Both entry points take an
-// unscoped logger and derive the issue-scoped one themselves, so a
-// record's shape cannot depend on the caller: the poll lane and the
-// event loop hand over the orchestrator's base logger, and the retry
-// lane hands over its own. A record naming neither the issue nor the
-// session cannot be acted on in a deployment running several agents.
+// attributes on every record: both entry points take an unscoped logger
+// and scope it themselves, and a record naming neither issue nor session
+// cannot be acted on when several agents run at once.
 func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 	t.Parallel()
 

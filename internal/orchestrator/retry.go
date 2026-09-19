@@ -15,17 +15,13 @@ import (
 )
 
 // pausedRetryMaxDwell bounds how long a known-reaction retry may be
-// rescheduled consecutively because the issue's own state does not permit
-// a dispatch, before [HandleRetryTimer] drops it instead of holding the
-// retry slot for the process lifetime. Matches the 30-minute pending-entry
-// TTLs the reaction reconcile passes already use, because a paused retry
-// is the retry-slot analogue of a pending reaction that never becomes
-// actionable.
+// rescheduled consecutively because the issue's own state does not permit a
+// dispatch, before [HandleRetryTimer] drops it rather than holding the
+// retry slot for the process lifetime.
 const pausedRetryMaxDwell = 30 * time.Minute
 
 // RetryTimerStore is the persistence interface required by
-// [HandleRetryTimer]. It is satisfied by [persistence.Store] in production
-// and by test doubles in unit tests.
+// [HandleRetryTimer].
 type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
@@ -40,125 +36,86 @@ type RetryTimerStore interface {
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
-// that are not part of the core [State]. This separates pure state mutation
-// from I/O side effects (tracker API calls and SQLite persistence).
+// that are not part of the core [State], separating pure state mutation
+// from I/O side effects.
 type HandleRetryTimerParams struct {
-	// Store is the SQLite persistence layer. Used to persist re-scheduled
-	// retry entries and to delete entries when the claim is released or
-	// dispatch succeeds.
 	Store RetryTimerStore
 
-	// TrackerAdapter fetches candidate issues used to validate the retried
-	// issue is still active and eligible.
 	TrackerAdapter domain.TrackerAdapter
 
-	// ActiveStates is the current list of configured active issue states.
-	// Used by HandleRetryTimer to validate that the retried issue's current
-	// state is still active after the single-issue fetch.
 	ActiveStates []string
 
-	// TerminalStates is the current list of configured terminal issue
-	// states. Used to evaluate the blocker rule via
-	// [IsBlockedByNonTerminal] before dispatch.
 	TerminalStates []string
 
-	// HandoffState is the configured tracker handoff state. Known
-	// reaction retries (ReactionKindCI, ReactionKindReview) may dispatch
-	// while the fetched issue equals this state. Empty means no
-	// handoff-state retry eligibility applies.
+	// HandoffState is the configured tracker handoff state. Known reaction
+	// retries may dispatch while the fetched issue equals it. Empty means
+	// no handoff-state retry eligibility applies.
 	HandoffState string
 
-	// MaxRetryBackoffMS is the configured cap for exponential backoff
-	// delay (from config.Agent.MaxRetryBackoffMS). Used when re-scheduling
-	// a retry after fetch failure or slot exhaustion.
 	MaxRetryBackoffMS int
 
-	// MakeWorkerFn constructs a [WorkerFunc] for the given resume
-	// session ID, SSH host, dispatch-frozen agent kind and template
-	// ID, dispatch reaction kind, resolved adapter, and usage arrival.
-	// The retry handler resolves the adapter through AgentAdapterByKind
-	// before invoking this constructor; the closure no longer performs
-	// adapter lookup itself. The reaction kind selects the read-only
-	// worker posture for label-review dispatches.
+	// MakeWorkerFn constructs a [WorkerFunc]. The retry handler resolves
+	// the adapter through AgentAdapterByKind before invoking it; the
+	// reaction kind selects the read-only worker posture for label-review
+	// dispatches.
 	MakeWorkerFn func(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, usageArrival registry.UsageArrival) WorkerFunc
 
-	// AgentAdapterByKind resolves the agent adapter for the given
-	// kind. Required when MakeWorkerFn is set. Returns a wrapped
-	// *registry.RegistryError when the kind is unknown; the retry
-	// handler logs the error, releases the claim, and deletes the
-	// persisted retry row.
+	// AgentAdapterByKind resolves the agent adapter for the given kind.
+	// Required when MakeWorkerFn is set. On an unknown kind the retry
+	// handler logs, releases the claim, and deletes the persisted row.
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 
-	// DefaultAgentKind is the workflow-wide default agent kind used
-	// when a popped retry entry carries an empty AgentKind (legacy
-	// rows persisted before dispatch rule routing was added). The
-	// retry handler coalesces the empty value to this default before
-	// adapter resolution, worker construction, and running-entry
-	// assignment so downstream state reflects the actual kind used.
+	// DefaultAgentKind is the workflow-wide default coalesced onto a
+	// popped retry entry whose AgentKind is empty (legacy rows persisted
+	// before dispatch rule routing).
 	DefaultAgentKind string
 
-	// OnRetryFire is the callback for re-scheduled retry timers.
-	// Routes back into the event loop.
 	OnRetryFire func(issueID string)
 
-	// Ctx is the context for tracker API calls and persistence operations.
 	Ctx context.Context
 
-	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
 
-	// MaxSessions is the configured per-issue effort budget (from
-	// config.Agent.MaxSessions). When > 0, HandleRetryTimer counts
-	// completed sessions for the issue from run_history and releases
-	// the claim instead of dispatching if the count has reached the
-	// budget. When 0, no budget is enforced.
+	// MaxSessions is the per-issue effort budget. When > 0, the claim is
+	// released instead of dispatching once completed sessions reach it.
 	MaxSessions int
 
-	// MaxConsecutiveAbsences is the configured consecutive
-	// handoff-absence ceiling (from
-	// config.Agent.MaxConsecutiveAbsences).
 	MaxConsecutiveAbsences int
 
-	// HandoffParkingLabel is the review-comments escalation label captured
-	// at orchestrator construction. Empty falls back to "needs-human".
+	// HandoffParkingLabel is the review-comments escalation label. Empty
+	// falls back to "needs-human".
 	HandoffParkingLabel string
 
 	// HandoffEvidencePolicy is the configured evidence policy. Under the
-	// off policy no absence is ever recorded, so the absence gate is not
-	// consulted. The zero value applies the default policy.
+	// off policy no absence is recorded, so the absence gate is not
+	// consulted.
 	HandoffEvidencePolicy config.HandoffEvidencePolicy
 
-	// MaxTokens is the configured per-issue token budget (from
-	// config.Agent.MaxTokens). When > 0, HandleRetryTimer sums
-	// run_history total_tokens for the issue and releases the claim
-	// instead of dispatching if the sum has reached the budget. When 0,
-	// no token budget is enforced.
+	// MaxTokens is the per-issue token budget. When > 0, the claim is
+	// released instead of dispatching once summed tokens reach it.
 	MaxTokens int
 
-	// Metrics records instrumentation counters for retry timer events.
-	// If nil, defaults to [domain.NoopMetrics].
+	// Metrics records retry timer instrumentation. If nil, defaults to
+	// [domain.NoopMetrics].
 	Metrics domain.Metrics
 
-	// HostPool is the SSH host pool for host acquisition on retry.
-	// May be nil (local mode).
+	// HostPool is the SSH host pool. May be nil (local mode).
 	HostPool *HostPool
 
 	// WorkflowFile is the base filename of the active WORKFLOW.md file.
-	// Recorded on the RunningEntry for observability.
 	WorkflowFile string
 
-	// ResolveUsageDisposition resolves the usage-reporting disposition
-	// for the given agent kind and SSH host (empty for a local
-	// launch). Required; HandleRetryTimer freezes the resolved pair
-	// onto the running entry alongside AgentKind.
+	// ResolveUsageDisposition resolves the usage-reporting disposition for
+	// the agent kind and SSH host (empty for a local launch). Required;
+	// the resolved pair is frozen onto the running entry alongside
+	// AgentKind.
 	ResolveUsageDisposition func(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution)
 }
 
-// HandleRetryTimer processes a retry timer event for the given issue.
-// It removes the retry entry, re-fetches candidate issues, locates and
-// validates the issue, checks worker slot availability, and either
-// dispatches the issue, reschedules the retry, or releases the claim.
-// It must be called from the orchestrator's single-writer event loop.
+// HandleRetryTimer processes a retry timer event for the given issue: it
+// removes the retry entry, re-fetches and validates the issue, checks slot
+// availability, and either dispatches, reschedules, or releases the claim.
+// Must be called from the single-writer event loop.
 func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParams) {
 	log := params.Logger
 	if log == nil {
@@ -175,10 +132,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		ctx = context.Background()
 	}
 
-	// Pop the retry entry. If missing, the timer raced with a cancellation
-	// or a subsequent ScheduleRetry — no-op. If the entry was replaced by
-	// a newer ScheduleRetry after this timer's goroutine was already
-	// enqueued, skip to let the replacement timer fire at the correct time.
+	// A missing entry means the timer raced a cancellation or a newer
+	// ScheduleRetry; a stale one means a replacement timer will fire at the
+	// correct time. Either way, skip.
 	popped, exists := state.RetryAttempts[issueID]
 	if !exists {
 		log.Debug("retry timer for unknown entry",
@@ -229,11 +185,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		metrics.IncRetries(triggerTimer)
 	}
 
-	// Guard: if the cancelled worker has not yet exited, the issue is
-	// still in the Running map. Re-scheduling a dispatch would overwrite
-	// the running entry and spawn a duplicate worker. Reschedule the
-	// retry with the same attempt so it fires again after the exit is
-	// processed.
+	// The cancelled worker may not yet have exited, leaving the issue in
+	// Running; re-dispatching would overwrite the entry and spawn a
+	// duplicate. Reschedule at the same attempt to fire after the exit.
 	if _, running := state.Running[issueID]; running {
 		delayMS := computeBackoffDelay(popped.Attempt, params.MaxRetryBackoffMS)
 		log.Debug("worker still running, rescheduling retry",
@@ -243,12 +197,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// The retry lane carries two decisions ahead of any tracker fetch or
-	// worker dispatch, both exempt for a known reaction continuation: an
-	// already-parked issue is refused regardless of evidence policy (the
-	// park gate is policy-independent), and an issue whose absence count
-	// has just reached the ceiling is parked, skipped under the off policy
-	// because that policy records no absence at all.
+	// Two gates precede any fetch or dispatch, both exempt for a known
+	// reaction continuation: an already-parked issue is refused regardless
+	// of policy, and an issue whose absence count just reached the ceiling
+	// is parked (skipped under the off policy, which records no absence).
 	if !isKnownReactionKind(popped.ReactionKind) {
 		if parked := state.Parked[issueID]; parked != nil {
 			log.Info("issue parked, releasing claim",
@@ -296,14 +248,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// blockBudget releases the claim and drops the retry entry for an issue
-	// whose budget is exhausted, recording the firing ceiling's reason and
-	// numbers. The block is identical whichever ceiling triggers it; only
-	// the recorded entry differs. The token gate may call this after the
-	// session gate already did, overwriting the entry with the token
-	// budget so an issue exhausted on both axes reports the token budget.
-	// ExhaustedAt is sourced from the announcement memory when it already
-	// knows this issue under the same reason, so a hold that survives a
-	// gap in candidacy keeps reporting when it began.
+	// whose budget is exhausted. The token gate may call this after the
+	// session gate did, overwriting the entry so an issue exhausted on both
+	// axes reports the token budget. ExhaustedAt is taken from the
+	// announcement memory when it already knows this issue under the same
+	// reason, so a hold surviving a gap in candidacy keeps its onset time.
 	blocked := false
 	blockBudget := func(reason string, usedSessions int, usedTokens *int64, unmeasuredSessions *int, stoppedInFlight *int) {
 		at := time.Now().UTC()
@@ -333,9 +282,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		blocked = true
 	}
 
-	// Effort budget gate: when max_sessions > 0, count completed sessions
-	// for this issue and release the claim if the budget is exhausted.
-	// Runs before the tracker fetch to avoid a wasted network call.
+	// Effort budget gate: release the claim if completed sessions have
+	// reached max_sessions. Runs before the tracker fetch.
 	if params.MaxSessions > 0 {
 		count, countErr := params.Store.CountRunHistoryByIssue(ctx, issueID)
 		if countErr != nil {
@@ -352,12 +300,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}
 	}
 
-	// Token budget gate: when max_tokens > 0, sum completed-session tokens
-	// for this issue and release the claim if the budget is exhausted.
-	// Evaluated after the session gate so that an issue exhausted on both
-	// axes reports the token budget. A token-query error fails open on the
-	// token axis only: a session block already recorded above still holds.
-	// Runs before the tracker fetch.
+	// Token budget gate: release the claim if summed tokens have reached
+	// max_tokens. Evaluated after the session gate so an issue exhausted on
+	// both axes reports the token budget; a query error fails open on the
+	// token axis only, leaving any session block above intact.
 	if params.MaxTokens > 0 {
 		usage, usageErr := params.Store.TokenUsageByIssue(ctx, issueID)
 		if usageErr != nil {
@@ -375,10 +321,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			blockBudget(budgetReasonToken, usage.Sessions, &usage.TotalTokens, &usage.UnmeasuredSessions, &usage.StoppedInFlight)
 		} else {
 			if blocked {
-				// The session gate already blocked; the token axis was
-				// evaluated for this issue on this pass, so enrich the
-				// entry with both token fields, mirroring the rebuild's
-				// own enrichment.
+				// Session gate already blocked; enrich the entry with both
+				// token fields, mirroring the rebuild's enrichment.
 				state.BudgetExhausted[issueID].UsedTokens = &usage.TotalTokens
 				state.BudgetExhausted[issueID].UnmeasuredSessions = &usage.UnmeasuredSessions
 				state.BudgetExhausted[issueID].StoppedInFlight = &usage.StoppedInFlight
@@ -417,9 +361,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Re-validate the issue with a single tracker API call instead of a
-	// full candidate sweep. FetchIssueByID costs one API request regardless
-	// of how many active issues the tracker holds.
+	// Re-validate with a single-issue fetch rather than a full candidate
+	// sweep: one API request regardless of the tracker's active count.
 	issue, err := params.TrackerAdapter.FetchIssueByID(ctx, issueID)
 	if err != nil {
 		var trackerErr *domain.TrackerError
@@ -465,12 +408,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// pausedReschedule bounds the two arms below that reschedule a known
-	// reaction retry because the issue's current state does not permit a
-	// dispatch. Left unbounded, either arm re-occupies the slot on every
-	// fire and holds it for the process lifetime; pausedSince tracks how
-	// long the entry has taken one of these arms consecutively, and the
-	// entry is dropped rather than rescheduled once that dwell reaches
-	// pausedRetryMaxDwell.
+	// reaction retry because the issue's state does not permit dispatch.
+	// Unbounded, either arm would re-occupy the slot on every fire for the
+	// process lifetime; the entry is dropped once its consecutive paused
+	// dwell reaches pausedRetryMaxDwell.
 	pausedReschedule := func(nextAttempt int, delayMS int64, logReschedule func()) {
 		now := time.Now()
 		pausedSince := now
@@ -583,7 +524,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Check slot availability for the issue's state.
 	if !HasAvailableSlots(state, issue.State) {
 		nextAttempt := popped.Attempt + 1
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
@@ -598,7 +538,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Acquire SSH host with preference from the previous attempt.
 	var host string
 	if params.HostPool != nil && params.HostPool.IsSSHEnabled() {
 		var ok bool
@@ -629,11 +568,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil ResolveUsageDisposition")
 	}
 
-	// Legacy retry rows persisted before dispatch rule routing was
-	// added carry an empty AgentKind. Coalesce to the workflow-wide
-	// default so adapter resolution, worker construction, and the
-	// running-entry record below all observe a concrete kind. The
-	// one-shot audit log is emitted at recovery time by PopulateRetries.
+	// Legacy retry rows persisted before dispatch rule routing carry an
+	// empty AgentKind; coalesce to the workflow-wide default.
 	agentKind := popped.AgentKind
 	if agentKind == "" {
 		agentKind = params.DefaultAgentKind
@@ -659,9 +595,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Dispatch the issue with the popped entry's attempt number.
-	// Pass the popped attempt as-is; NextAttempt increments only on the
-	// next worker exit, not at dispatch time.
+	// NextAttempt increments only on the next worker exit, not at dispatch,
+	// so pass the popped attempt as-is.
 	attempt := popped.Attempt
 	dispatchCtx := ctx
 	if popped.ContinuationContext != nil {
@@ -681,9 +616,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 	metrics.IncDispatches(outcomeSuccess)
 
-	// Mark the reaction fingerprint dispatched only after actual dispatch
-	// succeeds. Scoped to reaction-triggered retries; non-reaction retries
-	// have no fingerprint row to update.
+	// Mark the reaction fingerprint dispatched only after dispatch
+	// succeeds. Non-reaction retries have no fingerprint row.
 	if isKnownReaction {
 		if err := params.Store.MarkReactionDispatched(ctx, issueID, popped.ReactionKind); err != nil {
 			log.Warn("failed to mark reaction dispatched after retry dispatch",
@@ -697,9 +631,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		slog.Int("attempt", attempt),
 	)
 
-	// Defense-in-depth: delete the SQLite row persisted by worker exit.
-	// DispatchIssue calls CancelRetry which clears the in-memory entry,
-	// but the persisted row must also be cleaned up.
+	// DispatchIssue's CancelRetry clears the in-memory entry, but the
+	// SQLite row persisted by worker exit must be cleaned up too.
 	if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 		log.Error("failed to delete retry entry from store after dispatch",
 			slog.Any("error", err),
@@ -708,12 +641,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 }
 
 // isStaleRetryTimer reports whether the entry belongs to a newer
-// ScheduleRetry call than the timer that just fired. When scheduledAt is
-// set (entries created by [ScheduleRetry]), the check uses Go's monotonic
-// clock via time.Since, making it immune to wall-clock adjustments (NTP,
-// suspend/resume). When scheduledAt is zero (entries reconstructed from
-// SQLite at startup), the timer is always treated as non-stale because
-// startup-reconstructed entries have no stale predecessor to race with.
+// ScheduleRetry than the timer that just fired. The monotonic-clock check
+// via time.Since is immune to wall-clock adjustments. A zero scheduledAt
+// (startup-reconstructed entry) is never stale: it has no predecessor to
+// race with.
 func isStaleRetryTimer(entry *RetryEntry) bool {
 	if !entry.scheduledAt.IsZero() {
 		return time.Since(entry.scheduledAt) < time.Duration(entry.scheduledDelayMS)*time.Millisecond
@@ -721,8 +652,8 @@ func isStaleRetryTimer(entry *RetryEntry) bool {
 	return false
 }
 
-// persistRetryEntry saves the current in-memory retry entry for issueID to
-// SQLite. Errors are logged but do not prevent in-memory state transitions.
+// persistRetryEntry saves the in-memory retry entry for issueID to SQLite.
+// Errors are logged but do not block in-memory state transitions.
 func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerStore, state *State, issueID string) {
 	retryEntry, ok := state.RetryAttempts[issueID]
 	if !ok {
