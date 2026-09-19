@@ -671,3 +671,103 @@ func TestTokenCeilingRecordsCarryIssueContext(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
+	t.Parallel()
+
+	const message = "run reported no token usage, token ceiling could not bound it"
+
+	tests := []struct {
+		name             string
+		maxTokens        int
+		arrival          registry.UsageArrival
+		entryMeasured    bool
+		resultMeasured   bool
+		wantRecord       bool
+		wantUsageArrival string
+	}{
+		{
+			name:             "declared arrival, ceiling set, nothing recorded",
+			maxTokens:        500_000,
+			arrival:          registry.UsageArrivalTurnEnd,
+			wantRecord:       true,
+			wantUsageArrival: "turn_end",
+		},
+		{
+			name:       "no ceiling configured",
+			maxTokens:  0,
+			arrival:    registry.UsageArrivalTurnEnd,
+			wantRecord: false,
+		},
+		{
+			name:          "figures recorded on the entry",
+			maxTokens:     500_000,
+			arrival:       registry.UsageArrivalTurnEnd,
+			entryMeasured: true,
+			wantRecord:    false,
+		},
+		{
+			name:           "figures recorded only on the worker result",
+			maxTokens:      500_000,
+			arrival:        registry.UsageArrivalTurnEnd,
+			resultMeasured: true,
+			wantRecord:     false,
+		},
+		{
+			name:       "arrival reports no figure, already reported at dispatch",
+			maxTokens:  500_000,
+			arrival:    registry.UsageArrivalNone,
+			wantRecord: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "CEIL-EXIT"
+			lb, logger := textLogger()
+			state := exitState(t, issueID, nil)
+			state.MaxTokens = tt.maxTokens
+			entry := state.Running[issueID]
+			entry.AgentKind = "transport"
+			entry.SessionID = "sess-ceil"
+			entry.UsageArrival = tt.arrival
+			entry.UsageMeasured = tt.entryMeasured
+
+			params := defaultExitParams(t, &mockExitStore{})
+			params.Logger = logger
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:       issueID,
+				Identifier:    issueID + "-ident",
+				ExitKind:      WorkerExitNormal,
+				AgentAdapter:  "transport",
+				UsageMeasured: tt.resultMeasured,
+			}, params)
+
+			rendered := lb.String()
+			if !tt.wantRecord {
+				if strings.Contains(rendered, message) {
+					t.Errorf("log contains %q, want no such record:\n%s", message, rendered)
+				}
+				return
+			}
+
+			line := lineWith(t, rendered, message)
+			for _, want := range []string{
+				"issue_id=" + issueID,
+				"issue_identifier=" + issueID + "-ident",
+				"session_id=sess-ceil",
+				"agent_kind=transport",
+				"usage_arrival=" + tt.wantUsageArrival,
+				"budget_tokens=500000",
+				"level=WARN",
+			} {
+				if !strings.Contains(line, want) {
+					t.Errorf("record %q is missing %s:\n%s", message, want, line)
+				}
+			}
+		})
+	}
+}

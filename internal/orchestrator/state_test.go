@@ -2452,3 +2452,103 @@ func TestApiRequestsMeasuredSingleDerivationSite(t *testing.T) {
 		t.Errorf("ReportsDuringTurn call sites = %+v, want exactly one call, in %s", sites, want)
 	}
 }
+
+func TestRuntimeSnapshot_TokensAwaited(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		arrival          registry.UsageArrival
+		turnCount        int
+		lastEvent        domain.AgentEventType
+		usageMeasured    bool
+		wantAwaited      bool
+		wantUnreported   int
+		wantNonReporting int
+	}{
+		{
+			name:           "turn_end before any turn begins",
+			arrival:        registry.UsageArrivalTurnEnd,
+			wantAwaited:    true,
+			wantUnreported: 1,
+		},
+		{
+			name:           "turn_end inside its first turn",
+			arrival:        registry.UsageArrivalTurnEnd,
+			turnCount:      1,
+			lastEvent:      domain.EventOtherMessage,
+			wantAwaited:    true,
+			wantUnreported: 1,
+		},
+		{
+			name:             "turn_end after a turn ended with nothing recorded",
+			arrival:          registry.UsageArrivalTurnEnd,
+			turnCount:        1,
+			lastEvent:        domain.EventTurnCompleted,
+			wantNonReporting: 1,
+		},
+		{
+			name:             "turn_end once a second turn has begun",
+			arrival:          registry.UsageArrivalTurnEnd,
+			turnCount:        2,
+			lastEvent:        domain.EventOtherMessage,
+			wantNonReporting: 1,
+		},
+		{
+			name:           "incremental before any turn begins",
+			arrival:        registry.UsageArrivalIncremental,
+			wantAwaited:    true,
+			wantUnreported: 1,
+		},
+		{
+			name:             "incremental once a turn has begun with nothing recorded",
+			arrival:          registry.UsageArrivalIncremental,
+			turnCount:        1,
+			lastEvent:        domain.EventOtherMessage,
+			wantNonReporting: 1,
+		},
+		{
+			name:          "measured session is neither awaited nor excluded",
+			arrival:       registry.UsageArrivalTurnEnd,
+			turnCount:     1,
+			lastEvent:     domain.EventTurnCompleted,
+			usageMeasured: true,
+		},
+		{
+			name:             "arrival none is non-reporting whatever the turn",
+			arrival:          registry.UsageArrivalNone,
+			wantNonReporting: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
+			state.Running["iss"] = &RunningEntry{
+				Identifier:     "PROJ-1",
+				Issue:          domain.Issue{ID: "iss", State: "In Progress"},
+				StartedAt:      fixedNow.Add(-time.Minute),
+				TurnCount:      tt.turnCount,
+				LastAgentEvent: tt.lastEvent,
+				UsageArrival:   tt.arrival,
+				UsageMeasured:  tt.usageMeasured,
+			}
+
+			result := RuntimeSnapshot(state, fixedNow)
+
+			if got := result.Running[0].TokensAwaited; got != tt.wantAwaited {
+				t.Errorf("TokensAwaited = %v, want %v", got, tt.wantAwaited)
+			}
+			if got := result.AgentTotals.RunningUnreported; got != tt.wantUnreported {
+				t.Errorf("AgentTotals.RunningUnreported = %d, want %d", got, tt.wantUnreported)
+			}
+			if got := result.AgentTotals.RunningNonReporting; got != tt.wantNonReporting {
+				t.Errorf("AgentTotals.RunningNonReporting = %d, want %d", got, tt.wantNonReporting)
+			}
+		})
+	}
+}
