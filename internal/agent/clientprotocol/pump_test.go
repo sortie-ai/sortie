@@ -69,12 +69,6 @@ func TestRefusalNoticesUseSharedNotificationEmitter(t *testing.T) {
 	}
 }
 
-// startTurnAwaitingPrompt starts a turn on state and waits for the
-// resulting session/prompt request to appear on out, returning its raw
-// id and the turn's outcome channel. The caller drives the stream-end
-// condition next; it must not answer the prompt itself for these
-// tests, because the assertion is about what happens when no answer
-// ever arrives.
 func startTurnAwaitingPrompt(t *testing.T, state *sessionState, out *outboundReader) <-chan turnOutcome {
 	t.Helper()
 	markSessionKnown(state)
@@ -83,10 +77,6 @@ func startTurnAwaitingPrompt(t *testing.T, state *sessionState, out *outboundRea
 	return outcomeCh
 }
 
-// TestPumpStreamEndCleanExit covers a clean end of stream mid-turn: it
-// delivers no message into the inbox, closes jsonrpc.Conn.Done() alone,
-// and the turn must finalize on the process-exit row from that arm
-// rather than being left to the orchestrator's wall-clock ceiling.
 func TestPumpStreamEndCleanExit(t *testing.T) {
 	t.Parallel()
 
@@ -106,10 +96,6 @@ func TestPumpStreamEndCleanExit(t *testing.T) {
 	}, outcome.result, outcome.err)
 }
 
-// TestPumpStreamEndReadFailure covers a read failure mid-turn: it
-// delivers exactly one KindStreamEnd message and then closes Done(),
-// and the turn must finalize once, not twice, on the same process-
-// exit row a lost subprocess reports.
 func TestPumpStreamEndReadFailure(t *testing.T) {
 	t.Parallel()
 
@@ -129,12 +115,6 @@ func TestPumpStreamEndReadFailure(t *testing.T) {
 	}, outcome.result, outcome.err)
 }
 
-// TestFinalizeStreamEndLineBound covers the drain's own classification:
-// a KindStreamEnd carrying bufio.ErrTooLong, already queued ahead of
-// Done() firing, must settle the turn as turn_outcome_unknown and not
-// retryable, never as the retryable port_exit the Done() arm alone
-// would report. The connection here uses a small line bound so an
-// ordinary-sized fixture line trips it without a synthetic error.
 func TestFinalizeStreamEndLineBound(t *testing.T) {
 	t.Parallel()
 
@@ -149,12 +129,9 @@ func TestFinalizeStreamEndLineBound(t *testing.T) {
 		oversized[i] = 'a'
 	}
 	oversized = append(oversized, '\n')
-	// The scanner abandons the read once it exceeds the bound, without
-	// draining the rest of this write, so a synchronous Write here
-	// would block forever waiting for a reader that has already given
-	// up. Writing from a goroutine lets the too-long condition end the
-	// stream on its own; t.Cleanup closes inPw regardless of how far
-	// this write got.
+	// The scanner abandons the read once it exceeds the bound without
+	// draining the rest, so a synchronous Write here would block forever;
+	// writing from a goroutine lets the too-long condition end the stream.
 	go func() { _, _ = inPw.Write(oversized) }()
 
 	outcome := awaitOutcome(t, outcomeCh)
@@ -173,12 +150,6 @@ func TestFinalizeStreamEndLineBound(t *testing.T) {
 	}
 }
 
-// TestPumpDispatchNullID confirms a session/update notification
-// carrying a null id is normalized and left unanswered, so no
-// response line is written for it. The sentinel request sent right
-// behind it proves the absence: if the update had produced a
-// response, it would occupy the next line instead of the sentinel's
-// own answer.
 func TestPumpDispatchNullID(t *testing.T) {
 	t.Parallel()
 
@@ -197,10 +168,6 @@ func TestPumpDispatchNullID(t *testing.T) {
 	}
 }
 
-// TestSessionUpdateBeforeAnyPromptNotLost confirms a message arriving
-// before any prompt is not lost. It is queued and flushed into the
-// next turn's sink after that turn's own session_started event and the
-// once-per-session capability notice.
 func TestSessionUpdateBeforeAnyPromptNotLost(t *testing.T) {
 	t.Parallel()
 
@@ -238,8 +205,6 @@ func TestSessionUpdateBeforeAnyPromptNotLost(t *testing.T) {
 	}
 }
 
-// waitEvent returns the next event from ch, failing t if none arrives
-// within awaitTimeout.
 func waitEvent(t *testing.T, ch <-chan domain.AgentEvent) domain.AgentEvent {
 	t.Helper()
 	select {
@@ -251,11 +216,6 @@ func waitEvent(t *testing.T, ch <-chan domain.AgentEvent) domain.AgentEvent {
 	}
 }
 
-// TestAnsweredIDEcho confirms a session/request_permission request,
-// and a request naming a method this client does not implement, are
-// each answered on one response line whose id member matches the
-// request's id byte for byte, for each of a JSON string, the number
-// zero, and JSON null.
 func TestAnsweredIDEcho(t *testing.T) {
 	t.Parallel()
 
@@ -306,11 +266,6 @@ func TestAnsweredIDEcho(t *testing.T) {
 	}
 }
 
-// TestToolDeliveryReportSkippedDuringWindDownAndTeardown confirms the
-// uncallable-tool report never fires for a permission request answered
-// by a path other than handlePermissionRequest's own non-winding-down
-// branch: neither a request a winding-down turn cancels immediately,
-// nor one teardown's handleAnswerOpen answers directly.
 func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 	t.Parallel()
 
@@ -352,18 +307,11 @@ func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 		}
 	})
 
-	// openRequests holds an entry only for the duration of the
-	// handlePermissionRequest (or answerMethodNotFound) call that
-	// created it: both delete their own entry via defer before
-	// returning, and the pump processes one item from its input
-	// channel to completion before the next, so a live pump driven
-	// only through that channel can never observe handleAnswerOpen's
-	// defensive walk find anything but an empty map (see pump.go's own
-	// "ordinary case" comment on handleAnswerOpen). Proving
-	// handleAnswerOpen's own cancellation path never reports therefore
-	// needs a pumpState with a still-open entry constructed directly,
-	// the same way newPumpForCapabilityTests in capability_test.go
-	// exercises a pump method in isolation from a live pump goroutine.
+	// handlePermissionRequest and answerMethodNotFound each delete their own
+	// openRequests entry via defer, and the pump handles one inbox item to
+	// completion before the next, so a live pump can never observe
+	// handleAnswerOpen's defensive walk find a still-open entry. Exercising
+	// that path needs a pumpState with an open entry constructed directly.
 	t.Run("handleAnswerOpen answers a still-open permission request without reporting", func(t *testing.T) {
 		t.Parallel()
 
@@ -405,12 +353,6 @@ func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 	})
 }
 
-// TestHandshakeToolServersDeliveredReachesPump confirms
-// toolServersDelivered reaches pumpState only through the handshake
-// control message handleControl applies, not from a value set on the
-// struct some other way: publishing that control message directly is
-// enough, on its own, for a later permission request to trigger the
-// uncallable-tool report.
 func TestHandshakeToolServersDeliveredReachesPump(t *testing.T) {
 	t.Parallel()
 
@@ -443,19 +385,11 @@ func TestHandshakeToolServersDeliveredReachesPump(t *testing.T) {
 	}
 }
 
-// stalledConsumerBurstCount is the number of session/update
-// notifications TestRunTurn_StalledConsumerDoesNotParkPump writes one
-// at a time while the turn's consumer never returns from OnEvent, well
-// past the capacity a bounded hand-off would once have held, so the
-// write that would have parked such a reader is reached long before
-// the burst ends.
+// stalledConsumerBurstCount is well past the capacity a bounded hand-off would
+// have held, so the write that would have parked such a reader is reached long
+// before the burst ends.
 const stalledConsumerBurstCount = 4096
 
-// TestRunTurn_StalledConsumerDoesNotParkPump covers a turn whose
-// consumer never returns from OnEvent: the peer keeps writing
-// session/update notifications, and every one of those writes must
-// still return while the gate is held, because the connection's reader
-// must never park behind the pump's own stalled delivery.
 func TestRunTurn_StalledConsumerDoesNotParkPump(t *testing.T) {
 	t.Parallel()
 
@@ -472,12 +406,9 @@ func TestRunTurn_StalledConsumerDoesNotParkPump(t *testing.T) {
 			mu.Lock()
 			events = append(events, e)
 			mu.Unlock()
-			// Only a burst chunk's own event, a notification whose
-			// message is one of the texts the burst below writes, holds
-			// the gate: the turn's own session-started event and its
-			// once-per-session capability notice must reach the caller
-			// before the prompt request is even sent, or this test could
-			// never observe it being sent.
+			// Only a burst chunk's own event holds the gate; the turn's
+			// session-started event and capability notice must reach the caller
+			// before the prompt request is even sent.
 			if _, err := strconv.Atoi(e.Message); err == nil {
 				<-gate
 			}
@@ -529,13 +460,10 @@ func TestRunTurn_StalledConsumerDoesNotParkPump(t *testing.T) {
 	}
 }
 
-// buildTestOwnedPipes returns a *procutil.OwnedPipes backed by real
-// pipe files, closed in cleanup. The release tests below need a valid
-// Pipes value to satisfy StartOutputRelease's nil check, but these
-// files are never wired to the connection under test: the release's
-// own CloseStdout call must never reach the connection's real reader,
-// which is what proves the pump reacts to abandonment on its own
-// rather than because closing this file happened to unpark anything.
+// buildTestOwnedPipes returns pipes that satisfy StartOutputRelease's nil
+// check but are never wired to the connection under test, so the release's
+// CloseStdout cannot unpark the connection's reader; that is what proves the
+// pump reacts to abandonment on its own.
 func buildTestOwnedPipes(t *testing.T) *procutil.OwnedPipes {
 	t.Helper()
 	outRead, outWrite, err := os.Pipe()
@@ -555,12 +483,6 @@ func buildTestOwnedPipes(t *testing.T) *procutil.OwnedPipes {
 	return &procutil.OwnedPipes{Stdout: outRead, Stderr: errRead}
 }
 
-// newTestSessionWithRelease behaves like newTestSession, except
-// state.release is a real *procutil.OutputRelease, constructed with
-// ReaderDone tied to the connection's own Done channel exactly as
-// startSession wires it in production, and Reaped left to the
-// caller so each test controls when the release's post-reap wait
-// begins.
 func newTestSessionWithRelease(t *testing.T, grace time.Duration, reaped <-chan struct{}) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
 
@@ -600,11 +522,6 @@ func newTestSessionWithRelease(t *testing.T, grace time.Duration, reaped <-chan 
 	return state, outPr, inPw
 }
 
-// TestPumpAbandonmentFinalizesActiveTurnWithoutWaitingOnConnDone asserts
-// that, with the connection's reader left parked for the whole test
-// (inPw is never closed, so state.conn.Done() never fires on its own),
-// an active turn still finalizes once the release gives up, inside a
-// bound derived from the injected grace, naming the runtime's exit.
 func TestPumpAbandonmentFinalizesActiveTurnWithoutWaitingOnConnDone(t *testing.T) {
 	t.Parallel()
 
@@ -628,10 +545,6 @@ func TestPumpAbandonmentFinalizesActiveTurnWithoutWaitingOnConnDone(t *testing.T
 	}, outcome.result, outcome.err)
 }
 
-// TestPumpReaderDoneInsideGraceLeavesStreamEndOutcomeUntouched asserts
-// that a reader ending inside the grace leaves the release's latch
-// unset and the turn's outcome exactly what the ordinary stream-end
-// path decides, with no abandonment message substituted.
 func TestPumpReaderDoneInsideGraceLeavesStreamEndOutcomeUntouched(t *testing.T) {
 	t.Parallel()
 
@@ -653,12 +566,9 @@ func TestPumpReaderDoneInsideGraceLeavesStreamEndOutcomeUntouched(t *testing.T) 
 		TerminalMessage:   streamEndedMessage,
 	}, outcome.result, outcome.err)
 
-	// The outcome above finalizes within milliseconds of the reader
-	// ending, well before grace could have elapsed on its own; waiting
-	// out grace here, rather than checking right away, is what proves
-	// the release's own ReaderDone arm caught the close rather than the
-	// assertion simply running before an unattended timer could have
-	// fired.
+	// Waiting out grace, rather than checking right away, proves the release's
+	// ReaderDone arm caught the close rather than the assertion simply running
+	// before an unattended timer could have fired.
 	select {
 	case <-state.release.Abandoned():
 		t.Error("the release abandoned though the reader ended inside its grace, want the latch to stay unset")
@@ -666,9 +576,6 @@ func TestPumpReaderDoneInsideGraceLeavesStreamEndOutcomeUntouched(t *testing.T) 
 	}
 }
 
-// TestPumpStartTurnAfterAbandonmentRefusedWithReleaseMessage asserts
-// that a turn started after the release has abandoned is refused through
-// handleStartTurn's streamEnded path, with the release's own message.
 func TestPumpStartTurnAfterAbandonmentRefusedWithReleaseMessage(t *testing.T) {
 	t.Parallel()
 
@@ -699,11 +606,6 @@ func TestPumpStartTurnAfterAbandonmentRefusedWithReleaseMessage(t *testing.T) {
 	}
 }
 
-// TestHandleStartTurnRefusedOnceReleaseAbandonedBeforePumpHandlesIt
-// asserts that a start the pump handles after the release has given up,
-// but before the pump's own abandonment arm has run, is refused with the
-// release's message rather than accepted and sent on a connection the
-// release is closing.
 func TestHandleStartTurnRefusedOnceReleaseAbandonedBeforePumpHandlesIt(t *testing.T) {
 	t.Parallel()
 
@@ -757,9 +659,6 @@ func TestHandleStartTurnRefusedOnceReleaseAbandonedBeforePumpHandlesIt(t *testin
 	}
 }
 
-// TestPumpAbandonmentKeepsPendingCancelledOutcome asserts that a turn
-// already winding down toward cancellation when the release abandons
-// keeps that pending outcome rather than the abandonment message.
 func TestPumpAbandonmentKeepsPendingCancelledOutcome(t *testing.T) {
 	t.Parallel()
 
@@ -785,10 +684,6 @@ func TestPumpAbandonmentKeepsPendingCancelledOutcome(t *testing.T) {
 	}, outcome.result, outcome.err)
 }
 
-// TestPumpReturnsOnStopChAfterAbandonmentWithReaderDoneNeverClosing
-// asserts that once the release has abandoned, runPump also returns on
-// state.stopCh, even though the connection's reader (inPw) is never
-// closed and so never ends on its own.
 func TestPumpReturnsOnStopChAfterAbandonmentWithReaderDoneNeverClosing(t *testing.T) {
 	t.Parallel()
 
@@ -812,10 +707,6 @@ func TestPumpReturnsOnStopChAfterAbandonmentWithReaderDoneNeverClosing(t *testin
 	}
 }
 
-// buildAbandonedRelease returns a *procutil.OutputRelease that has
-// already given up, for a pumpState test that needs
-// release.TurnEndMessage to report the abandonment message without
-// driving a live pump or a real subprocess.
 func buildAbandonedRelease(t *testing.T) *procutil.OutputRelease {
 	t.Helper()
 	reaped := make(chan struct{})
@@ -835,9 +726,6 @@ func buildAbandonedRelease(t *testing.T) *procutil.OutputRelease {
 	return r
 }
 
-// newActiveTurnForDirectDispatch returns an *activeTurn suitable for
-// calling a pumpState method directly, bypassing runPump's own select
-// loop and the turnStart handshake that ordinarily builds one.
 func newActiveTurnForDirectDispatch() *activeTurn {
 	return &activeTurn{
 		sink:     make(chan domain.AgentEvent, 4),
@@ -847,14 +735,6 @@ func newActiveTurnForDirectDispatch() *activeTurn {
 	}
 }
 
-// TestStreamEndSitesReportAbandonmentMessageOnceReleaseHasGivenUp
-// covers both sites that finalize an active turn on a stream end while
-// the release has already abandoned: handleStreamEnd (the Done() arm)
-// and handleStreamEndMessage's non-ErrTooLong arm (the ordinary
-// KindStreamEnd message arm). Each must report
-// procutil.OutputAbandonedMessage, matching what the release's own
-// TurnEndMessage resolves to, rather than the connection's generic
-// streamEndedMessage.
 func TestStreamEndSitesReportAbandonmentMessageOnceReleaseHasGivenUp(t *testing.T) {
 	t.Parallel()
 
@@ -908,14 +788,6 @@ func TestStreamEndSitesReportAbandonmentMessageOnceReleaseHasGivenUp(t *testing.
 	})
 }
 
-// TestHandleAbandonmentDrainsQueuedResponseBeforeFinalizing asserts
-// that a prompt response already queued when abandonment is observed
-// decides the turn, rather than being discarded while the turn is
-// reported abandoned. Calling handleAbandonment
-// directly, rather than driving it through runPump's own select,
-// keeps this deterministic: the assertion does not depend on which of
-// two simultaneously ready channels a live pump's select would have
-// picked.
 func TestHandleAbandonmentDrainsQueuedResponseBeforeFinalizing(t *testing.T) {
 	t.Parallel()
 

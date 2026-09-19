@@ -15,8 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// TestRunTurnFinalize carries the stop-reason cases and the
-// concurrent-RunTurn rejection case in one test.
 func TestRunTurnFinalize(t *testing.T) {
 	t.Parallel()
 
@@ -115,11 +113,6 @@ func TestRunTurnFinalize(t *testing.T) {
 	})
 }
 
-// TestRunTurnPreTurnWaits covers the missing-pump-verdict wait: with no
-// pump running, runTurn's publish always succeeds (the inbox never
-// waits), so runTurn returns only through its verdict wait, either on
-// its own bound or on context cancellation, leaving the startTurn
-// control it published still queued.
 func TestRunTurnPreTurnWaits(t *testing.T) {
 	t.Parallel()
 
@@ -189,9 +182,6 @@ func TestRunTurnPreTurnWaits(t *testing.T) {
 	}
 }
 
-// takeQueuedItem takes the item runTurn left queued in state's inbox.
-// It fails t within awaitTimeout when nothing was queued, so a missing
-// startTurn control fails the test instead of blocking it.
 func takeQueuedItem(t *testing.T, state *sessionState) pumpItem {
 	t.Helper()
 	select {
@@ -244,12 +234,6 @@ func TestDelayedTurnVerdictCannotBlockPump(t *testing.T) {
 	}
 }
 
-// TestAbandonedTurnIsNotStarted pins that a turn whose caller stopped
-// waiting is never started. runTurn returns on its own bound while the
-// startTurn control message is still queued, so the pump can reach that
-// message with nothing left to read the turn: starting it would prompt
-// the agent for work no one collects, and would leave activeTurn set so
-// that every later turn is rejected as already in flight.
 func TestAbandonedTurnIsNotStarted(t *testing.T) {
 	t.Parallel()
 
@@ -280,11 +264,8 @@ func TestAbandonedTurnIsNotStarted(t *testing.T) {
 	}
 }
 
-// TestNoCounterSessionReportsUnmeasured confirms a session with no
-// counters emits no token_usage event and reports the run unmeasured.
-// This kind's normalization table never emits domain.EventTokenUsage,
-// so a usage_update observed mid-turn must still leave the turn's
-// measurement contract empty.
+// This kind's normalization table never emits domain.EventTokenUsage, so a
+// usage_update observed mid-turn must still leave the measurement contract empty.
 func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 	t.Parallel()
 
@@ -308,10 +289,6 @@ func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 	agenttest.AssertMeasurementAbsent(t, events, outcome.result)
 }
 
-// TestAssertUsageReporting proves agent-client-protocol's registered
-// usage-reporting declaration (none, none) against its own real event
-// stream: a usage_update mid-turn is a debug-log-only normalization
-// arm, so the turn's measurement contract stays empty.
 func TestAssertUsageReporting(t *testing.T) {
 	t.Parallel()
 
@@ -336,8 +313,6 @@ func TestAssertUsageReporting(t *testing.T) {
 	})
 }
 
-// indexOfStepName returns the index of name in names, failing t if it
-// is not present.
 func indexOfStepName(t *testing.T, names []string, name string) int {
 	t.Helper()
 	for i, n := range names {
@@ -349,11 +324,6 @@ func indexOfStepName(t *testing.T, names []string, name string) int {
 	return -1
 }
 
-// TestDefaultTeardownOrderIncludesCloseSession confirms the fixed step
-// order places close_session immediately after answer_open and before
-// both signal_graceful and kill_process_group, asserted on the
-// returned step names rather than on timing: a reversal of the order
-// fails this assertion structurally.
 func TestDefaultTeardownOrderIncludesCloseSession(t *testing.T) {
 	t.Parallel()
 
@@ -381,10 +351,8 @@ func TestDefaultTeardownOrderIncludesCloseSession(t *testing.T) {
 	}
 }
 
-// TestCloseSessionSkipsWhenIdentifierEmpty confirms the step returns
-// immediately, writing nothing and logging nothing, when
-// closeSessionID is left at its zero value: the handshake never
-// advertised session/close, so there is nothing to close.
+// A zero-value closeSessionID means the handshake never advertised
+// session/close, so the step writes and logs nothing.
 func TestCloseSessionSkipsWhenIdentifierEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -406,10 +374,6 @@ func TestCloseSessionSkipsWhenIdentifierEmpty(t *testing.T) {
 	}
 }
 
-// TestCloseSessionBoundedWhenAgentNeverAnswers confirms an agent that
-// reads the session/close request and never answers it cannot hold
-// the step past closeCallBound(grace): grace is configured well below
-// the default so the property costs no default-length wait.
 func TestCloseSessionBoundedWhenAgentNeverAnswers(t *testing.T) {
 	t.Parallel()
 
@@ -432,10 +396,6 @@ func TestCloseSessionBoundedWhenAgentNeverAnswers(t *testing.T) {
 	}
 }
 
-// TestDoInitializeVersionPin confirms the version pin: a response
-// carrying a version other than 1 ends the session. This exercises
-// the enforcement point startSession relies on to tear the session
-// down on a mismatched handshake.
 func TestDoInitializeVersionPin(t *testing.T) {
 	t.Parallel()
 

@@ -14,19 +14,17 @@ import (
 	"time"
 )
 
-// Scenario is the body of a fake runtime. It runs inside a re-executed
-// copy of the test binary, receives the arguments the runtime was
-// launched with and the parameters passed to [FakeRuntime], and returns
-// the process exit code.
+// Scenario is the body of a fake runtime. It runs inside a re-executed copy of
+// the test binary, receives the launch arguments and the [FakeRuntime]
+// parameters, and returns the process exit code.
 type Scenario func(args []string, params json.RawMessage) int
 
-// OutputScenario names the built-in [Scenario] that every package can
-// launch without registering it. Its parameters are an [Output].
+// OutputScenario names the built-in [Scenario] every package can launch without
+// registering it. Its parameters are an [Output].
 const OutputScenario = "agenttest.output"
 
 // Output parameterizes [OutputScenario]: the runtime writes Stdout, then
-// Stderr, and exits with ExitCode, or stays alive until killed when Hang
-// is set.
+// Stderr, and exits with ExitCode, or stays alive until killed when Hang is set.
 type Output struct {
 	Stdout   string
 	Stderr   string
@@ -43,10 +41,9 @@ type fakeConfig struct {
 // created by [Main] before the package's tests run.
 var staged string
 
-// Main is the whole TestMain body of a package whose tests call
-// [FakeRuntime]. A process started from a fake runtime executable runs
-// its scenario from scenarios and exits; any other process runs the
-// package's tests.
+// Main is the whole TestMain body of a package whose tests call [FakeRuntime].
+// A process started from a fake runtime executable runs its scenario from
+// scenarios and exits; any other process runs the package's tests.
 func Main(m *testing.M, scenarios map[string]Scenario) {
 	exe, err := os.Executable()
 	if err == nil {
@@ -55,12 +52,11 @@ func Main(m *testing.M, scenarios map[string]Scenario) {
 		}
 	}
 
-	// Every fake runtime is a link to this staged copy rather than to the
-	// test binary itself: Windows refuses to delete any name of a running
-	// image, so a link to the test binary would survive t.TempDir cleanup
-	// and fail the test that made it. Copying here, before m.Run starts a
-	// goroutine that can fork, also keeps the copy clear of the ETXTBSY
-	// race a freshly written executable meets on Linux (golang/go#22315).
+	// Fake runtimes link to this staged copy rather than to the test binary:
+	// Windows refuses to delete any name of a running image, so a link to the
+	// test binary would survive t.TempDir cleanup. Copying before m.Run starts
+	// a goroutine that can fork also keeps the copy clear of the ETXTBSY race
+	// (golang/go#22315).
 	var stagedDir string
 	if err == nil {
 		if dir, mkErr := os.MkdirTemp("", "agenttest-fakeruntime"); mkErr == nil {
@@ -94,12 +90,9 @@ func Typed[P any](run func(args []string, params P) int) Scenario {
 	}
 }
 
-// Run writes Stdout and Stderr, blocks when Hang is set, and reports the
-// status the fake runtime exits with. A scenario of its own calls it for
-// the output half of its behavior.
-//
-// A failed write ends the runtime with status 2 instead of ExitCode, so a
-// fixture never reports the success of output the test never received.
+// Run writes Stdout and Stderr, blocks when Hang is set, and reports the exit
+// status. A failed write ends the runtime with status 2 instead of ExitCode, so
+// a fixture never reports the success of output the test never received.
 func (o Output) Run() int {
 	if _, err := io.WriteString(os.Stdout, o.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "fake runtime: write stdout: %v\n", err)
@@ -114,19 +107,19 @@ func (o Output) Run() int {
 	return o.ExitCode
 }
 
-// Hang blocks until the process is killed. It sleeps rather than
-// blocking on a channel because a pending timer keeps the Go runtime's
-// deadlock detector from ending the process on its own.
+// Hang blocks until the process is killed. It sleeps rather than blocking on a
+// channel because a pending timer keeps the runtime's deadlock detector from
+// ending the process on its own.
 func Hang() {
 	for {
 		time.Sleep(time.Hour)
 	}
 }
 
-// FakeRuntime creates an executable named name in dir that runs scenario
-// with params, and returns its path. On Windows the name gains the .exe
-// suffix. The executable is the test binary itself under a new name, so
-// the calling package's TestMain must call [Main].
+// FakeRuntime creates an executable named name in dir that runs scenario with
+// params, and returns its path (with a .exe suffix on Windows). The executable
+// is the test binary itself under a new name, so the calling package's TestMain
+// must call [Main].
 func FakeRuntime(t testing.TB, dir, name, scenario string, params any) string {
 	t.Helper()
 
@@ -150,21 +143,20 @@ func FakeRuntime(t testing.TB, dir, name, scenario string, params any) string {
 		t.Fatalf("FakeRuntime: %v", err)
 	}
 
-	// A hard link never opens the executable for writing, so it cannot
-	// hit the ETXTBSY race a freshly written executable meets when another
-	// goroutine forks (golang/go#22315). The copy covers a staged binary
-	// that sits on another file system than dir.
+	// A hard link never opens the executable for writing, so it avoids the
+	// ETXTBSY race a freshly written executable meets when another goroutine
+	// forks (golang/go#22315). The copy covers a staged binary on another file
+	// system than dir.
 	if err := os.Link(staged, path); err != nil {
 		if err := copyExecutable(staged, path); err != nil {
 			t.Fatalf("FakeRuntime: %v", err)
 		}
 	}
 
-	// Windows holds the image of a process for a short while after it exits,
-	// so `t.TempDir()`'s own cleanup can meet "Access is denied" on this file
-	// and fail a test that has already passed. Cleanups run in reverse order
-	// of registration, so this one runs before the directory is removed and
-	// can wait the handle out.
+	// Windows holds a process image briefly after exit, so t.TempDir cleanup
+	// can meet "Access is denied" on this file. Cleanups run in reverse order,
+	// so this one runs before the directory is removed and can wait the handle
+	// out.
 	t.Cleanup(func() {
 		removeEventually(t, path)
 		removeEventually(t, configPath(path))
@@ -173,10 +165,9 @@ func FakeRuntime(t testing.TB, dir, name, scenario string, params any) string {
 	return path
 }
 
-// removeEventually deletes path, retrying while the file system says it is
-// still in use. It never fails the test: a removal that does not succeed is
-// reported by whoever owns the directory, and turning a slow handle into a
-// hard failure here would trade one flake for another.
+// removeEventually deletes path, retrying while the file system says it is still
+// in use. It never fails the test: turning a slow handle into a hard failure
+// here would trade one flake for another.
 func removeEventually(t testing.TB, path string) {
 	t.Helper()
 
