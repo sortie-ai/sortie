@@ -110,8 +110,6 @@ func TestLogSpy_WithGroup_ReturnsSelf(t *testing.T) {
 	}
 }
 
-// TestLogSpy_WarnLines checks the dual-condition filter: level==WARN AND
-// msg=="agent stderr". Entries that differ on either condition must be excluded.
 func TestLogSpy_WarnLines(t *testing.T) {
 	t.Parallel()
 

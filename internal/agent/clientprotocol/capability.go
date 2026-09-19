@@ -2,9 +2,8 @@ package clientprotocol
 
 import "strings"
 
-// capabilityState is the state of one entry in a session's capability
-// record. It holds exactly two values: a capability this transport
-// trusts a runtime to honor, and one known or observed not to be
+// capabilityState is the state of one capability record entry: trusted to the
+// runtime via protocol, supplied by this transport, or known not to be
 // delivered.
 type capabilityState string
 
@@ -13,8 +12,6 @@ const (
 	capabilityGap      capabilityState = "gap"
 )
 
-// Operator labels for the capability record's four entries, reported
-// in this fixed order by the once-per-session gap notice.
 const (
 	capabilityLabelToolServers         = "tool servers"
 	capabilityLabelTokenCounts         = "token counts"
@@ -22,19 +19,16 @@ const (
 	capabilityLabelAgentVersion        = "agent version"
 )
 
-// Compile-time fragments the once-per-session gap notice is assembled
-// from. Nothing about a specific runtime, configuration, or error is
-// ever interpolated into it.
+// The gap notice is assembled only from these compile-time fragments; nothing
+// about a runtime, configuration, or error is interpolated into it.
 const (
 	capabilityGapNoticeStem      = "this session started with a declared capability gap in: "
 	capabilityGapNoticeSeparator = ", "
 )
 
-// capabilityRecord is a session's own record of which of this
-// transport's capabilities its runtime actually delivers. Every entry
-// starts at protocol or gap, resolved from structural knowledge and
-// the initialize handshake, and a lowering to gap holds for the rest
-// of the session: an entry never rises back to protocol once lowered.
+// capabilityRecord is a session's record of which of this transport's
+// capabilities its runtime actually delivers. An entry never rises back to
+// protocol once lowered to gap.
 type capabilityRecord struct {
 	toolServers         capabilityState
 	tokenCounts         capabilityState
@@ -42,10 +36,9 @@ type capabilityRecord struct {
 	agentVersion        capabilityState
 }
 
-// newCapabilityRecord builds a session's capability record with its
-// stage-one states, resolved from structural knowledge available
-// before the handshake. remote reports whether the session's launch
-// target runs the agent on a remote host.
+// newCapabilityRecord builds a session's capability record with its stage-one
+// states. remote reports whether the launch target is remote; measured reports
+// whether a measurement source claimed the launch.
 //
 // sessionContinuation starts at protocol: the handshake lowers it when
 // the agent advertises neither continuation method, and a continuation
@@ -66,15 +59,13 @@ func newCapabilityRecord(remote bool) *capabilityRecord {
 	}
 }
 
-// capabilityEntry pairs one capability record field with the operator
-// label it is reported under.
 type capabilityEntry struct {
 	label string
 	state capabilityState
 }
 
-// entries returns the record's four entries with their operator
-// labels, in the fixed order the once-per-session notice reports them.
+// entries returns the record's four entries with their operator labels, in the
+// fixed order the once-per-session notice reports them.
 func (r capabilityRecord) entries() [4]capabilityEntry {
 	return [4]capabilityEntry{
 		{label: capabilityLabelToolServers, state: r.toolServers},
@@ -84,10 +75,8 @@ func (r capabilityRecord) entries() [4]capabilityEntry {
 	}
 }
 
-// gapNotice returns the once-per-session notice text listing every
-// entry of r in the gap state, in the record's own field order, and
-// reports whether there is at least one such entry. The text is
-// assembled only from compile-time constant fragments.
+// gapNotice returns the once-per-session notice listing every gap entry of r in
+// field order, and whether there is at least one.
 func (r capabilityRecord) gapNotice() (string, bool) {
 	var labels []string
 	for _, entry := range r.entries() {
@@ -101,25 +90,21 @@ func (r capabilityRecord) gapNotice() (string, bool) {
 	return capabilityGapNoticeStem + strings.Join(labels, capabilityGapNoticeSeparator), true
 }
 
-// advertisesSessionContinuation reports whether caps advertises support
-// for continuing a prior session through session/load or
-// session/resume. It defers to [chooseContinuationMethod] so the
-// handshake's lowering decision and resolveSession's routing decision
-// can never disagree about what caps advertises.
+// advertisesSessionContinuation reports whether caps advertises session/load or
+// session/resume. It defers to [chooseContinuationMethod] so the handshake's
+// lowering decision and resolveSession's routing decision cannot disagree.
 func advertisesSessionContinuation(caps agentCapabilities) bool {
 	return chooseContinuationMethod(caps) != continuationNone
 }
 
-// advertisesSessionClose reports whether caps advertises support for
-// closing a session through session/close. It reads no other
-// capability state.
+// advertisesSessionClose reports whether caps advertises session/close.
 func advertisesSessionClose(caps agentCapabilities) bool {
 	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Close != nil
 }
 
-// lower moves *entry to the gap state and reports whether it actually
-// changed. Lowering an entry already at gap is idempotent: an entry
-// never rises back to protocol within a session.
+// lower moves *entry to the gap state and reports whether it changed. An entry
+// never rises back to protocol within a session, so lowering one already at gap
+// is idempotent.
 func lower(entry *capabilityState) bool {
 	if *entry == capabilityGap {
 		return false

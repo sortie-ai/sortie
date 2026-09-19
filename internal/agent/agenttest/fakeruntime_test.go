@@ -111,10 +111,6 @@ func TestFakeRuntime_Hang(t *testing.T) {
 	<-done
 }
 
-// TestFakeRuntimeRemovesItsBinaryBeforeTheDirectoryGoes pins the ordering the
-// Windows cleanup depends on: the fake runtime and its config are gone by the
-// time the directory that holds them is removed, so `t.TempDir()`'s own
-// cleanup never meets a file another process is still holding.
 func TestFakeRuntimeRemovesItsBinaryBeforeTheDirectoryGoes(t *testing.T) {
 	t.Parallel()
 
@@ -128,7 +124,6 @@ func TestFakeRuntimeRemovesItsBinaryBeforeTheDirectoryGoes(t *testing.T) {
 		}
 	})
 
-	// The subtest has finished, so its cleanups have run.
 	if _, err := os.Stat(exe); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("fake runtime still present after cleanup: %v", err)
 	}
@@ -138,9 +133,6 @@ func TestFakeRuntimeRemovesItsBinaryBeforeTheDirectoryGoes(t *testing.T) {
 	}
 }
 
-// TestFakeRuntimeCleanupSurvivesAnUnremovableFile keeps the cleanup from
-// turning a slow handle into a hard failure: the directory owner reports a
-// removal that never succeeds, this helper does not.
 func TestFakeRuntimeCleanupSurvivesAnUnremovableFile(t *testing.T) {
 	t.Parallel()
 

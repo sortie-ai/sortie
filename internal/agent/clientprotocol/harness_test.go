@@ -15,28 +15,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// awaitTimeout bounds every wait a test performs on a channel the pump
-// or the connection's reader goroutine feeds. It is generous enough to
-// absorb scheduler noise without masking a genuine hang: a test that
-// needs longer than this to observe an expected line has a defect this
-// bound is meant to surface, not paper over.
 const awaitTimeout = 5 * time.Second
 
-// discardLogger returns a logger that writes nowhere, for a session
-// under test that only cares about wire behavior, not diagnostics.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// newTestSession builds a *sessionState wired to an in-memory
-// jsonrpc.Conn with no subprocess involved: outPr lets a test observe,
-// as newline-delimited lines, what the pump writes toward the agent;
-// inPw lets a test deliver a line as if the agent had sent it, or
-// close (or CloseWithError) to end the simulated stream. The pump
-// goroutine is already running when this returns.
-//
-// t.Cleanup always drives the pump to exit, whether or not the test
-// itself already ended the stream, so no test leaks the goroutine.
 func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
 	return newTestSessionWithLogger(t, agentConfig, maxLineBytes, discardLogger())
@@ -77,22 +61,14 @@ func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxL
 	return state, outPr, inPw
 }
 
-// fakeSession wraps state in a domain.Session suitable for runTurn.
 func fakeSession(state *sessionState) domain.Session {
 	return domain.Session{ID: "sess-test", Internal: state}
 }
 
-// markSessionKnown publishes the sessionID control message a real
-// StartSession would have sent, so pump-level checks that key on
-// p.sessionIDKnown behave as they would in production. Every test in
-// this package that needs a known session ID uses the same one.
 func markSessionKnown(state *sessionState) {
 	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: "sess-test"}})
 }
 
-// collectEvents is an OnEvent callback that appends to a slice under a
-// mutex, safe for the pump's own goroutine to call concurrently with
-// the test goroutine reading the slice after the turn ends.
 func collectEvents(events *[]domain.AgentEvent) func(domain.AgentEvent) {
 	var mu sync.Mutex
 	return func(e domain.AgentEvent) {
@@ -102,22 +78,15 @@ func collectEvents(events *[]domain.AgentEvent) func(domain.AgentEvent) {
 	}
 }
 
-// turnOutcome bundles a runTurn call's return values so a test can
-// hand them across a goroutine boundary on one channel.
 type turnOutcome struct {
 	result domain.TurnResult
 	err    error
 }
 
-// runTurnAsync starts runTurn on its own goroutine and returns the
-// channel its outcome arrives on, so the calling test can drive the
-// simulated peer while the turn is in flight.
 func runTurnAsync(state *sessionState, params domain.RunTurnParams) <-chan turnOutcome {
 	return runTurnAsyncCtx(context.Background(), state, params)
 }
 
-// runTurnAsyncCtx behaves like runTurnAsync, but lets a test supply
-// its own context, for exercising orchestrator cancellation.
 func runTurnAsyncCtx(ctx context.Context, state *sessionState, params domain.RunTurnParams) <-chan turnOutcome {
 	ch := make(chan turnOutcome, 1)
 	go func() {
@@ -127,8 +96,6 @@ func runTurnAsyncCtx(ctx context.Context, state *sessionState, params domain.Run
 	return ch
 }
 
-// awaitOutcome waits for outcome on ch, failing t if it does not
-// arrive within awaitTimeout.
 func awaitOutcome(t *testing.T, ch <-chan turnOutcome) turnOutcome {
 	t.Helper()
 	select {
@@ -140,16 +107,11 @@ func awaitOutcome(t *testing.T, ch <-chan turnOutcome) turnOutcome {
 	}
 }
 
-// wireHeader decodes the two fields of a JSON-RPC line that classify
-// it without committing to a params or result shape.
 type wireHeader struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
 }
 
-// wireResponse decodes a response line whose result is a permission
-// reply, the only response shape these tests write assertions
-// against.
 type wireResponse struct {
 	ID     json.RawMessage `json:"id"`
 	Error  *jsonrpc.Error  `json:"error"`
@@ -161,19 +123,11 @@ type wireResponse struct {
 	} `json:"result"`
 }
 
-// outboundReader scans lines the pump writes to outPr (what the
-// production adapter would write toward the agent's standard input)
-// and republishes each on a channel, so a test can wait for a specific
-// line without racing the scanner's own buffering.
 type outboundReader struct {
 	ch chan []byte
 }
 
-// newOutboundReader starts scanning r in the background. Lines larger
-// than the buffer below fail the scan silently from the reader's
-// perspective; every fixture in this package's tests stays well under
-// it except the dedicated line-bound case, which builds its own
-// connection with a small bound instead of using this reader.
+// newOutboundReader starts scanning r in the background.
 func newOutboundReader(r io.Reader) *outboundReader {
 	rec := &outboundReader{ch: make(chan []byte, 64)}
 	go func() {
@@ -188,8 +142,6 @@ func newOutboundReader(r io.Reader) *outboundReader {
 	return rec
 }
 
-// next returns the next line the pump wrote, failing t if none
-// arrives within awaitTimeout or the stream ends first.
 func (r *outboundReader) next(t *testing.T) []byte {
 	t.Helper()
 	select {
@@ -204,11 +156,6 @@ func (r *outboundReader) next(t *testing.T) []byte {
 	}
 }
 
-// awaitMethod scans forward until it finds a line naming method,
-// returning its raw id bytes, failing t if the stream ends or
-// awaitTimeout elapses first. Lines for a different method are
-// consumed and discarded, matching how a real peer would ignore
-// traffic it does not care about while waiting for one specific call.
 func (r *outboundReader) awaitMethod(t *testing.T, method string) (id json.RawMessage) {
 	t.Helper()
 	deadline := time.After(awaitTimeout)
@@ -232,8 +179,6 @@ func (r *outboundReader) awaitMethod(t *testing.T, method string) (id json.RawMe
 	}
 }
 
-// sendLine writes line, followed by a newline, to w, failing t on
-// error.
 func sendLine(t *testing.T, w io.Writer, line string) {
 	t.Helper()
 	if _, err := fmt.Fprintln(w, line); err != nil {
@@ -241,9 +186,8 @@ func sendLine(t *testing.T, w io.Writer, line string) {
 	}
 }
 
-// respondLine writes a JSON-RPC success response answering id with
-// result, splicing id in verbatim so it carries whatever wire form the
-// caller captured from a request line.
+// respondLine splices id in verbatim so the response carries whatever wire form
+// the caller captured from the request line.
 func respondLine(t *testing.T, w io.Writer, id json.RawMessage, result any) {
 	t.Helper()
 	body, err := json.Marshal(result)
@@ -253,9 +197,8 @@ func respondLine(t *testing.T, w io.Writer, id json.RawMessage, result any) {
 	sendLine(t, w, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%s}`, string(id), string(body)))
 }
 
-// respondErrorLine writes a JSON-RPC error response answering id with
-// code and message, splicing id in verbatim so it carries whatever
-// wire form the caller captured from a request line.
+// respondErrorLine splices id in verbatim so the response carries whatever wire
+// form the caller captured from the request line.
 func respondErrorLine(t *testing.T, w io.Writer, id json.RawMessage, code int, message string) {
 	t.Helper()
 	body, err := json.Marshal(struct {
@@ -268,8 +211,6 @@ func respondErrorLine(t *testing.T, w io.Writer, id json.RawMessage, code int, m
 	sendLine(t, w, fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"error":%s}`, string(id), string(body)))
 }
 
-// decodeResponse decodes line as a wireResponse, failing t on a
-// decode error.
 func decodeResponse(t *testing.T, line []byte) wireResponse {
 	t.Helper()
 	var resp wireResponse
@@ -279,9 +220,6 @@ func decodeResponse(t *testing.T, line []byte) wireResponse {
 	return resp
 }
 
-// assertRawID fails t unless line's top-level "id" member is exactly
-// wantRaw, byte for byte: an id echoed in another form is one the
-// agent cannot correlate.
 func assertRawID(t *testing.T, line []byte, wantRaw string) {
 	t.Helper()
 	var h wireHeader

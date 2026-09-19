@@ -29,54 +29,32 @@ import (
 // return must allow for it rather than asserting the ceiling exactly.
 const teardownReturnOverhead = 2 * time.Second
 
-// teardownParkedOptionSize is the selected permission option's
-// identifier length: at least four mebibytes, so no pipe buffer can
+// teardownParkedOptionSize is at least four mebibytes, so no pipe buffer can
 // hold the reply that echoes it back.
 const teardownParkedOptionSize = 4*1024*1024 + 4096
 
-// teardownReaderBufSize bounds the parked-teardown fixture's reader
-// helper to a single read well under teardownParkedOptionSize, so a
-// reply built from that option still cannot drain through it.
+// teardownReaderBufSize is a single read well under teardownParkedOptionSize,
+// so a reply built from that option still cannot drain through it.
 const teardownReaderBufSize = 65536
 
-// parkedTeardownFixture bundles a session backed by a real subprocess
-// and real OS pipes, already parked mid-write on a permission reply
-// no pipe buffer can hold, with release cleanly ending the two
-// detached helper processes that hold the pipe ends open.
 type parkedTeardownFixture struct {
 	state   *sessionState
 	release func()
 }
 
-// newParkedTeardownSession launches the fake agent scenario as a real
-// subprocess, wires a session to it exactly as startSession would
-// (skipping the handshake calls, which this scenario has no use for),
-// and waits for genuine evidence that the reply write is parked: the
-// reader helper's own completion marker, written only once it has
-// consumed its one bounded read. That evidence, combined with the
-// reply being many times larger than any pipe buffer, is what makes
-// the park a property of the setup rather than a timing assumption;
-// the wait loop itself is bounded polling for that marker, not a
-// sleep standing in for the park.
 func newParkedTeardownSession(t *testing.T) *parkedTeardownFixture {
 	t.Helper()
 	return newParkedTeardownFixture(t, false)
 }
 
-// newParkedTeardownSessionWithStderrHolder behaves like
-// newParkedTeardownSession, except its fake agent also detaches a
-// third helper that holds the standard-error write end open, so
-// drain_stderr_and_reap can only abandon the collector and close_pipes
-// is the only remaining step able to release it. Used only by property
-// P13's own tests.
+// newParkedTeardownSessionWithStderrHolder detaches a third helper that holds
+// the standard-error write end open, so drain_stderr_and_reap can only abandon
+// the collector and close_pipes is the only step able to release it.
 func newParkedTeardownSessionWithStderrHolder(t *testing.T) *parkedTeardownFixture {
 	t.Helper()
 	return newParkedTeardownFixture(t, true)
 }
 
-// newParkedTeardownFixture builds the fixture newParkedTeardownSession
-// and newParkedTeardownSessionWithStderrHolder share, differing only
-// in whether a third detached helper parks the standard-error drain.
 func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardownFixture {
 	t.Helper()
 
@@ -144,10 +122,9 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	waitForFile(t, readerDonePath)
 
 	release := sync.OnceFunc(func() {
-		// Each helper is its own session and process group leader, so
-		// killing only the recorded pid leaves its own idle process
-		// (a separate process in the same group) holding the pipe end
-		// open; the negative pid signals the whole group.
+		// Each helper leads its own process group, so killing only the
+		// recorded pid leaves its idle process holding the pipe end open;
+		// the negative pid signals the whole group.
 		killHelperGroup(readerPIDPath)
 		killHelperGroup(writerPIDPath)
 		if stderrPIDPath != "" {
@@ -159,10 +136,7 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 	return &parkedTeardownFixture{state: state, release: release}
 }
 
-// waitForFile polls for path to exist, failing t if awaitTimeout elapses
-// first. This is a bounded wait for a concrete condition the fake
-// agent script itself establishes, not a sleep standing in for the
-// park it evidences.
+// waitForFile polls for path to exist, failing t if awaitTimeout elapses first.
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(awaitTimeout)
@@ -175,8 +149,7 @@ func waitForFile(t *testing.T, path string) {
 	t.Fatalf("timed out waiting for %s to appear", path)
 }
 
-// killHelperGroup reads a pid from pidFile and signals its whole
-// process group, tolerating a missing or already-gone file.
+// killHelperGroup reads a pid from pidFile and signals its whole process group.
 func killHelperGroup(pidFile string) {
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -189,22 +162,13 @@ func killHelperGroup(pidFile string) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
-// assertSessionGoroutinesExited fails t unless the session's pump,
-// its connection's reader, its subprocess reaper, and its standard-
-// error collector have all exited: the leak check that fails when a
-// session's goroutines outlive StopSession.
+// assertSessionGoroutinesExited fails t unless the pump, the connection's
+// reader, the reaper, and the stderr collector have all exited.
 //
-// The collector's check is a bounded wait, procutil.DefaultDrainGrace,
-// rather than the non-blocking receive the other three use. Each of
-// those three reads a channel teardown itself joins (stop_pump joins
-// the pump, drain_stderr_and_reap waits on the reaper's channel, and
-// the connection's reader is behind both), but the collector is the one
-// session goroutine teardown never joins: drain_stderr_and_reap
-// abandons it and close_pipes only unparks its read without waiting, so
-// it is scheduled after stopSession has already returned. A non-
-// blocking check there would report a leak that is not one on every
-// fixture that leaves a descendant holding the standard-error write
-// end, which is exactly property P13's own fixture.
+// The collector's check is a bounded wait, not the non-blocking receive the
+// other three use, because teardown never joins the collector:
+// drain_stderr_and_reap abandons it and close_pipes only unparks its read
+// without waiting, so it is scheduled after stopSession has already returned.
 func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 	t.Helper()
 
@@ -228,13 +192,6 @@ func assertSessionGoroutinesExited(t *testing.T, state *sessionState) {
 	}
 }
 
-// TestStopSessionTeardownOrder pins teardown's step order by its
-// bound: under the three parking conditions this package's scenario
-// establishes, plus an agent-initiated request left unanswered,
-// StopSession must still return within teardown's specified ceiling,
-// procutil.DefaultStopGrace plus three times procutil.DefaultDrainGrace,
-// plus the overhead its non-blocking steps cost, and leave no
-// goroutine of the session running afterward.
 func TestStopSessionTeardownOrder(t *testing.T) {
 	t.Parallel()
 
@@ -254,14 +211,6 @@ func TestStopSessionTeardownOrder(t *testing.T) {
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownOrder_ClosePipesReleasesStderrCollector covers
-// property P13: with the escaped stderr holder alongside the reader and
-// writer, drain_stderr_and_reap can only abandon the standard-error
-// collector, so assertSessionGoroutinesExited's bounded fourth check
-// passes only because close_pipes, the order's last step, unparks that
-// collector's read. teardown's ceiling is the same one
-// TestStopSessionTeardownOrder pins; this run exercises the same order
-// against a fixture that also parks the standard-error drain.
 func TestStopSessionTeardownOrder_ClosePipesReleasesStderrCollector(t *testing.T) {
 	t.Parallel()
 
@@ -281,18 +230,6 @@ func TestStopSessionTeardownOrder_ClosePipesReleasesStderrCollector(t *testing.T
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownOrder_ClosePipesPresenceControl is property
-// P14's presence control for close_pipes: with the escaped stderr
-// holder fixture, defaultTeardownOrder's steps minus close_pipes still
-// return (drain_stderr_and_reap abandons the collector rather than
-// waiting on it forever), but the collector itself is left parked,
-// proven by a non-blocking WaitDone(0) reporting false. Calling
-// closePipes directly afterward is what releases it. The non-blocking
-// probe is correct on the first half, where the collector's read cannot
-// return at all, and would be wrong on the second, where the collector
-// is only waiting to be scheduled; the second half therefore uses the
-// same bounded WaitDone(procutil.DefaultDrainGrace) every other drain
-// bound in this file is already expressed in.
 func TestStopSessionTeardownOrder_ClosePipesPresenceControl(t *testing.T) {
 	t.Parallel()
 
@@ -329,16 +266,6 @@ func TestStopSessionTeardownOrder_ClosePipesPresenceControl(t *testing.T) {
 	fx.release()
 }
 
-// TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr is the
-// clientprotocol half of property P9: moving close_pipes ahead of
-// drain_stderr_and_reap, reproduced locally by calling the two step
-// functions directly in the wrong order rather than through
-// defaultTeardownOrder, loses a line written to standard error just
-// before the write end closes. This wiring needs no real subprocess:
-// closePipes and drainStderrAndReap operate on state.pipes and
-// state.stderrCollector alone, so the ordering claim is verified
-// against a plain os.Pipe, matching procutil's own P9 negative
-// control.
 func TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr(t *testing.T) {
 	t.Parallel()
 
@@ -365,10 +292,8 @@ func TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr(t *testing.T) 
 		}
 		stderrW.Close() //nolint:errcheck // best-effort
 
-		// Reproduces the defect this property guards against: closing
-		// both read ends before the collector ever gets a chance to
-		// drain the buffered line, rather than after
-		// drain_stderr_and_reap has run.
+		// The defect: closing both read ends before the collector drains
+		// the buffered line, rather than after drain_stderr_and_reap.
 		closePipes(state)
 		state.stderrCollector = procutil.NewStderrCollector(state.pipes.Stderr, state.logger)
 
@@ -412,13 +337,11 @@ func TestStopSessionTeardown_ClosePipesBeforeDrainLosesLateStderr(t *testing.T) 
 	})
 }
 
-// runTeardownControl runs steps (a deliberately wrong variant of
-// defaultTeardownOrder's slice) against fx, asserts it has not
-// returned when a one-second observation window expires, releases
-// the park, and asserts it returns afterward and leaves no goroutine
-// running. No sleep stands in for the park: the wait before release
-// is a fixed observation window whose whole point is that nothing
-// should have happened yet, not a wait for a condition.
+// runTeardownControl runs a deliberately wrong step order, asserts it has not
+// returned when a one-second observation window expires, releases the park, and
+// asserts it returns afterward with no goroutine left. The wait before release
+// is a fixed observation window whose point is that nothing should have
+// happened yet, not a wait for a condition.
 func runTeardownControl(t *testing.T, fx *parkedTeardownFixture, steps []teardownStep) {
 	t.Helper()
 
@@ -445,11 +368,6 @@ func runTeardownControl(t *testing.T, fx *parkedTeardownFixture, steps []teardow
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownReturnsWithConnectionClosedFirst checks a
-// step order that closes the connection before the process group is
-// terminated. Closing the connection no longer waits on a parked
-// write, so this order returns inside the bound below instead of
-// parking until the write is released from outside.
 func TestStopSessionTeardownReturnsWithConnectionClosedFirst(t *testing.T) {
 	t.Parallel()
 
@@ -479,11 +397,6 @@ func TestStopSessionTeardownReturnsWithConnectionClosedFirst(t *testing.T) {
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownControlNoStdoutClose is the second negative
-// control: omitting the standard-output close leaves the connection's
-// reader scanning a stream nothing further will ever close on its
-// own, so stop_pump's wait for the pump to exit must not return until
-// the park is released from outside.
 func TestStopSessionTeardownControlNoStdoutClose(t *testing.T) {
 	t.Parallel()
 
@@ -498,16 +411,10 @@ func TestStopSessionTeardownControlNoStdoutClose(t *testing.T) {
 	})
 }
 
-// teardownGracefulExitScript is a fake agent that installs a handler
-// for the graceful signal: on TERM it waits delaySeconds, writes
-// evidencePath, and exits. It writes readyPath immediately after the
-// trap is installed, which newGracefulTeardownSession waits for before
-// returning: sending the signal any earlier risks the shell's own
-// default disposition running instead of the handler, on whichever of
-// the two wins the race with the interpreter reaching the trap
-// statement. The handler waits on nothing but the fixed interval, so
-// the only timing in a fixture built from it is the one this scenario
-// bounds on both sides.
+// teardownGracefulExitScript is a fake agent whose TERM handler waits
+// delaySeconds, writes evidencePath, and exits. It writes readyPath once the
+// trap is installed; a caller must wait for readyPath before signalling, or the
+// shell's default disposition may win the race with the trap statement.
 func teardownGracefulExitScript(evidencePath, readyPath, delaySeconds string) string {
 	return `trap 'sleep ` + delaySeconds + `; touch "` + evidencePath + `"; exit 0' TERM
 touch "` + readyPath + `"
@@ -515,8 +422,7 @@ while :; do sleep 1; done
 `
 }
 
-// teardownExitsImmediatelyScript is a fake agent that exits from the
-// graceful signal at once, with no interval of its own. See
+// teardownExitsImmediatelyScript exits from the graceful signal at once. See
 // teardownGracefulExitScript for why readyPath exists.
 func teardownExitsImmediatelyScript(readyPath string) string {
 	return `trap 'exit 0' TERM
@@ -525,9 +431,8 @@ while :; do sleep 1; done
 `
 }
 
-// teardownIgnoresGracefulScript is a fake agent that ignores the
-// graceful signal entirely, so only the unconditional kill ends it.
-// See teardownGracefulExitScript for why readyPath exists.
+// teardownIgnoresGracefulScript ignores the graceful signal entirely, so only
+// the unconditional kill ends it. See teardownGracefulExitScript for readyPath.
 func teardownIgnoresGracefulScript(readyPath string) string {
 	return `trap '' TERM
 touch "` + readyPath + `"
@@ -535,20 +440,15 @@ while :; do sleep 1; done
 `
 }
 
-// teardownExitsOnItsOwnScript is a fake agent that exits the moment it
-// starts, without any signal from the caller, so it has no trap to
+// teardownExitsOnItsOwnScript exits the moment it starts, so it has no trap to
 // race and needs no readiness marker.
 func teardownExitsOnItsOwnScript() string {
 	return "exit 0\n"
 }
 
-// newGracefulTeardownSession launches script as a real subprocess and
-// wires a session to it exactly as newParkedTeardownSession does,
-// skipping the handshake calls this scenario has no use for. logger is
-// used as the session's logger; a nil logger falls back to
-// discardLogger. A non-empty readyPath is awaited before this returns,
-// so a caller that signals the process right away does not race the
-// script's own startup.
+// newGracefulTeardownSession launches script as a real subprocess and wires a
+// session to it. A nil logger falls back to discardLogger; a non-empty
+// readyPath is awaited before returning.
 func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *slog.Logger) *sessionState {
 	t.Helper()
 
@@ -601,11 +501,9 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 	return state
 }
 
-// waitForPIDFile polls path until it holds a parseable positive PID,
-// failing t if timeout elapses first. A shell's own "> file" redirect
-// creates and truncates the file before the write that follows it
-// lands, so a single read can observe it as present but empty; polling
-// for content rather than mere existence closes that window.
+// waitForPIDFile polls path until it holds a parseable positive PID. A shell's
+// "> file" redirect creates the file before the write lands, so polling for
+// content rather than existence closes that window.
 func waitForPIDFile(t *testing.T, path string, timeout time.Duration) int {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -622,11 +520,6 @@ func waitForPIDFile(t *testing.T, path string, timeout time.Duration) int {
 	}
 }
 
-// TestStopSessionTeardownGracefulHandler: against a fake agent that
-// installs a handler for the graceful signal and exits from it,
-// teardown produces the handler's durable evidence, and the property
-// fails if signal_graceful and kill_process_group are exchanged, or if
-// await_exit is removed.
 func TestStopSessionTeardownGracefulHandler(t *testing.T) {
 	t.Parallel()
 
@@ -701,10 +594,6 @@ func TestStopSessionTeardownGracefulHandler(t *testing.T) {
 	})
 }
 
-// TestStopSessionTeardownIgnoredSignal: against a fake agent that
-// ignores the graceful signal, stopSession still returns within
-// teardown's specified ceiling, and no member of the agent's process
-// group survives the return.
 func TestStopSessionTeardownIgnoredSignal(t *testing.T) {
 	t.Parallel()
 
@@ -733,13 +622,9 @@ while :; do sleep 1; done
 	assertProcessGone(t, childPID, awaitTimeout)
 }
 
-// assertProcessGone polls until pid no longer answers a signal-0
-// probe, failing t if it still does after timeout. A descendant
-// orphaned by the group kill is reparented before it is reaped, and a
-// signal-0 probe against a zombie still succeeds during that window,
-// so a single check would be flaky; polling absorbs the reparenting
-// delay while still failing on a process that is genuinely still
-// running.
+// assertProcessGone polls until pid no longer answers a signal-0 probe. A
+// signal-0 probe against a zombie still succeeds until it is reaped, so polling
+// absorbs the reparenting delay while still failing on a live process.
 func assertProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -755,10 +640,6 @@ func assertProcessGone(t *testing.T, pid int, timeout time.Duration) {
 	}
 }
 
-// TestStopSessionTeardownEscalationLogging: an escalation to the
-// force kill is logged at Warn carrying the outcome, an ordinary stop
-// is not, and neither is a stop whose agent had already exited when
-// the grace ran out.
 func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 	t.Parallel()
 
@@ -789,10 +670,8 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 		state := newGracefulTeardownSession(t, teardownIgnoresGracefulScript(readyPath), readyPath, logger)
 
-		// A short caller deadline is the lever that shortens the wait:
-		// going through the real procutil.DefaultStopGrace here would
-		// spend the full five-second grace in wall clock for a property
-		// that is not the ceiling itself.
+		// A short caller deadline shortens the wait; the real grace would spend
+		// its full five seconds for a property that is not the ceiling itself.
 		callerCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
 		if err := stopSession(callerCtx, fakeSession(state)); err != nil {
@@ -806,13 +685,11 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 		if !strings.Contains(output, `outcome="caller deadline"`) {
 			t.Errorf("teardown's Warn record did not carry outcome=\"caller deadline\": %s", output)
 		}
-		// The record carries both the configured ceiling and the wait
-		// that actually elapsed. A caller deadline shorter than the
-		// grace ends the wait early, so elapsed must not be the whole
-		// ceiling: reporting only the ceiling would tell an operator
-		// the adapter waited five seconds when it waited a fraction of
-		// one, and reporting only the elapsed time would hide what the
-		// operator configured.
+		// The record carries both the configured ceiling and the elapsed wait.
+		// A caller deadline shorter than the grace ends the wait early, so
+		// elapsed must not be the whole ceiling: reporting only the ceiling
+		// would misstate how long the adapter waited, reporting only elapsed
+		// would hide what the operator configured.
 		if strings.Contains(output, "elapsed="+procutil.DefaultStopGrace.String()) {
 			t.Errorf("teardown's Warn record reported the full grace ceiling as elapsed for a wait cut short by the caller's deadline: %s", output)
 		}
@@ -846,14 +723,6 @@ func TestStopSessionTeardownEscalationLogging(t *testing.T) {
 	})
 }
 
-// TestStopSessionTeardownParkedWriteBoundsCloseSession confirms
-// close_session against a real parked write: the pump has a
-// permission reply parked on a full standard-input pipe, so the close
-// call can never reach the wire, yet the step still returns inside
-// its own bound, the process group is signalled no later than that
-// bound after teardown starts, teardown itself still returns inside
-// the existing parked-teardown ceiling, and no session goroutine
-// outlives the return.
 func TestStopSessionTeardownParkedWriteBoundsCloseSession(t *testing.T) {
 	t.Parallel()
 
@@ -888,12 +757,6 @@ func TestStopSessionTeardownParkedWriteBoundsCloseSession(t *testing.T) {
 	assertSessionGoroutinesExited(t, fx.state)
 }
 
-// TestStopSessionTeardownCloseAndAwaitExitShareGrace confirms
-// close_session and await_exit spend no more than the resolved grace
-// combined: both are bounded by the same graceCtx, so an agent that
-// answers neither the close call nor the graceful signal cannot push
-// their sum past grace, only up to it. teardown's stated total is
-// therefore unchanged by adding the close_session step.
 func TestStopSessionTeardownCloseAndAwaitExitShareGrace(t *testing.T) {
 	t.Parallel()
 
@@ -930,12 +793,6 @@ func TestStopSessionTeardownCloseAndAwaitExitShareGrace(t *testing.T) {
 	}
 }
 
-// TestStopSessionTeardownCloseHalvesTheCallerWindow asserts that the
-// session/close bound follows whatever remains on the graceful context
-// rather than the configured grace. With a caller deadline nearer than
-// that grace, a runtime that never answers must not cost the whole
-// remaining window: the graceful signal behind the call needs its
-// share of it.
 func TestStopSessionTeardownCloseHalvesTheCallerWindow(t *testing.T) {
 	t.Parallel()
 
@@ -975,11 +832,6 @@ func TestStopSessionTeardownCloseHalvesTheCallerWindow(t *testing.T) {
 	}
 }
 
-// TestStopSessionGrace_ConfiguredValueBoundsTheWait asserts that
-// stopSession's graceCtx expires at a configured agent.stop_grace_ms,
-// not at the built-in five-second default: a small configured grace
-// against an agent that ignores the graceful signal entirely must force
-// the process well short of the default's ceiling.
 func TestStopSessionGrace_ConfiguredValueBoundsTheWait(t *testing.T) {
 	t.Parallel()
 

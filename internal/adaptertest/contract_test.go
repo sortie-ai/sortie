@@ -20,30 +20,24 @@ import (
 )
 
 // contractRegistryImportPath is the import path the checker resolves the
-// "registry" package qualifier from, per file, rather than assuming the
-// literal identifier "registry".
+// "registry" qualifier from per file, so an aliased import cannot evade
+// the check.
 const contractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registry"
 
-// contractTrackermetricsImportPath is the import path the checker
-// resolves the "trackermetrics" package qualifier from, so a call to
-// Track is caught regardless of the local import alias.
+// contractTrackermetricsImportPath is resolved per file so a Track call is
+// caught regardless of the local import alias.
 const contractTrackermetricsImportPath = "github.com/sortie-ai/sortie/internal/trackermetrics"
 
-// contractProcutilImportPath is the import path the checker resolves
-// the "procutil" package qualifier from, per file, so an aliased
-// import cannot evade rule STOPGRACE.
+// contractProcutilImportPath is resolved per file so an aliased import
+// cannot evade rule STOPGRACE.
 const contractProcutilImportPath = "github.com/sortie-ai/sortie/internal/agent/procutil"
 
-// contractBanTable maps a name this work extracted into a shared package
-// to the owner that received it. A top-level function re-declaring one of
-// these names is a violation; the banned name is the rule. The owner
-// records where the extraction landed rather than naming a universal
-// requirement: most entries came from a tracker or source-control
-// package, so a package in another family may satisfy the rule by
-// choosing a different name instead of calling an owner whose contract
-// does not fit. The agent-family entries are narrower: an agent kind
-// that needs persistent JSON-RPC framing has one owner rather than a
-// choice of names.
+// contractBanTable maps a name extracted into a shared package to its
+// owner; a top-level function re-declaring one is a violation. The owner
+// records where the extraction landed rather than a universal
+// requirement, so a package in another family may satisfy the rule with a
+// different name instead. The agent-family entries name a single owner
+// because persistent JSON-RPC framing has no alternative.
 var contractBanTable = map[string]string{
 	"classifyTransportError": "httpkit.ClassifyTransport",
 	"withRetry":              "httpkit.RetryWithBackoff",
@@ -85,11 +79,10 @@ var contractBanTable = map[string]string{
 	"buildSSHRemoteCommand":  "agentcore.LaunchTarget.SSHOptions",
 }
 
-// contractTrackerAdapterMethods are the tracker operation method names
-// rule METRICS requires a trackermetrics.Track call inside, when the
-// enclosing package registers a tracker kind. Most are
-// domain.TrackerAdapter methods; FetchIssueBlockers is a
-// domain.BlockerReader method instead.
+// contractTrackerAdapterMethods are the tracker operation methods rule
+// METRICS requires a trackermetrics.Track call inside when the package
+// registers a tracker kind. FetchIssueBlockers is a domain.BlockerReader
+// method; the rest are domain.TrackerAdapter methods.
 var contractTrackerAdapterMethods = map[string]bool{
 	"FetchCandidateIssues":          true,
 	"FetchIssueByID":                true,
@@ -120,17 +113,12 @@ const (
 	ruleREAPER    contractRule = "REAPER"
 )
 
-// Family roots and the orchestrator path rule IMPORT matches an import
-// path against.
 const (
 	contractTrackerFamilyPath = "github.com/sortie-ai/sortie/internal/tracker"
 	contractSCMFamilyPath     = "github.com/sortie-ai/sortie/internal/scm"
 	contractOrchestratorPath  = "github.com/sortie-ai/sortie/internal/orchestrator"
 )
 
-// The agent and notify family roots that hold kind packages, and the
-// module-internal prefix the permit-map guard strips to reach a
-// directory.
 const (
 	contractAgentFamilyPath  = "github.com/sortie-ai/sortie/internal/agent"
 	contractNotifyFamilyPath = "github.com/sortie-ai/sortie/internal/notify"
@@ -138,8 +126,7 @@ const (
 )
 
 // contractFamilyRoots is the ban surface both the adapter-to-adapter arm
-// of contractImportBanReason and the core-import rule match an import
-// path against.
+// of contractImportBanReason and the core-import rule match against.
 var contractFamilyRoots = []string{
 	contractTrackerFamilyPath,
 	contractSCMFamilyPath,
@@ -147,24 +134,21 @@ var contractFamilyRoots = []string{
 	contractNotifyFamilyPath,
 }
 
-// contractSharedPackage records why a package under a family root holds
-// no adapter, and whether the orchestrator's production code may import
-// it. Rule IMPORT consults presence alone; the core-import rule consults
-// coreImportable as well.
+// contractSharedPackage records why a package under a family root holds no
+// adapter and whether the orchestrator's production code may import it.
+// Rule IMPORT consults presence alone; the core-import rule also consults
+// coreImportable.
 type contractSharedPackage struct {
 	reason         string
 	coreImportable bool
 }
 
-// contractSharedFamilyPackages names each package under a family root that
-// holds no adapter, so it may be imported by a package under a family
-// root, and states why. Keys are matched exactly, so a subpackage of a
-// permitted package needs its own entry. A package under a family root
-// that is absent from this map may be imported only by itself and by
-// packages under its own path. Whether the orchestrator may import an
-// entry too is a per-entry property: an entry whose coreImportable is
-// false stays importable by packages under a family root but not by the
-// orchestrator's production code.
+// contractSharedFamilyPackages names each adapter-less package under a
+// family root, so it may be imported by a package under a family root,
+// and states why. Keys match exactly, so a subpackage needs its own
+// entry. A package absent here may be imported only by itself and
+// packages under its own path. An entry whose coreImportable is false
+// stays importable across family roots but not by the orchestrator.
 var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/scm/scmcore":                     {reason: "shared forge decision core; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/procutil":                  {reason: "shared subprocess group handling, Windows process containment, and bounded output capture; registers no kind and holds no adapter", coreImportable: true},
@@ -185,13 +169,8 @@ var contractPackageBannedImports = map[string]map[string]string{
 	},
 }
 
-// contractAllowlist exempts a package, named by its directory's base
-// name, from one specific rule and states why; the package stays subject
-// to every rule not named here. The file adapter performs no HTTP, has
-// no credential and no remote project, and registers no validation hook
-// because it has no config to validate; it declares none of the banned
-// names and already records every operation through trackermetrics.Track,
-// so it is not exempt from BAN or METRICS.
+// contractAllowlist exempts a package (by its directory base name) from
+// one rule and states why; it stays subject to every other rule.
 var contractAllowlist = map[string]map[contractRule]string{
 	"file": {
 		ruleHOOK: "no HTTP, no credential, no remote project, and no config to validate",
@@ -212,7 +191,7 @@ var contractAllowlist = map[string]map[contractRule]string{
 	},
 }
 
-// The three outcomes checkContractCoreImports renders as
+// The outcomes checkContractCoreImports renders as
 // "imports " + path + "; " + reason.
 const (
 	contractCoreRegistryReason     = "the orchestrator resolves an adapter kind through the registry rather than importing its package"
@@ -220,24 +199,22 @@ const (
 	contractCoreTestSupportReason  = "the orchestrator's production code must not import a test-support package"
 )
 
-// contractViolation describes one place a file or package breaks the
-// adapter contract.
 type contractViolation struct {
 	pos  token.Position
 	text string
 }
 
-// contractWalkedPackage pairs a package the walk found with the directory
-// path it was found at. contractPackage carries only the directory's
-// base name, which cannot order packages across roots.
+// contractWalkedPackage pairs a package with the directory it was found
+// at, because contractPackage's base name cannot order packages across
+// roots.
 type contractWalkedPackage struct {
 	dir string
 	pkg contractPackage
 }
 
-// contractPackage carries one package's identity and its parsed files.
-// Non-test files are fully parsed and feed rules BAN, METRICS, and HOOK;
-// test files are parsed imports-only and feed rule IMPORT alone.
+// contractPackage carries one package's identity and parsed files.
+// Non-test files feed rules BAN, METRICS, and HOOK; test files are parsed
+// imports-only and feed rule IMPORT alone.
 type contractPackage struct {
 	dirName    string
 	importPath string
@@ -246,9 +223,8 @@ type contractPackage struct {
 }
 
 // resolveContractImportName returns the local identifier a file binds to
-// importPath, or "" when the file does not import it. It reads only the
-// file's own import declarations, never assumes a literal package name,
-// so an aliased import cannot evade the check.
+// importPath, or "" when absent. It reads the file's own import
+// declarations, so an aliased import cannot evade the check.
 func resolveContractImportName(file *ast.File, importPath string) string {
 	for _, imp := range file.Imports {
 		path, err := strconv.Unquote(imp.Path.Value)
@@ -265,8 +241,8 @@ func resolveContractImportName(file *ast.File, importPath string) string {
 }
 
 // unwrapCompositeLit returns the composite literal expr denotes, looking
-// through a leading address-of operator so both a value literal and a
-// pointer literal are recognized.
+// through a leading address-of so both value and pointer literals are
+// recognized.
 func unwrapCompositeLit(expr ast.Expr) (*ast.CompositeLit, bool) {
 	switch e := expr.(type) {
 	case *ast.CompositeLit:
@@ -279,9 +255,8 @@ func unwrapCompositeLit(expr ast.Expr) (*ast.CompositeLit, bool) {
 	return nil, false
 }
 
-// compositeLitKeyValue returns the value expression of the field keyed
-// by the given identifier name in the composite literal expr denotes,
-// or nil when expr is not such a literal or carries no such key.
+// compositeLitKeyValue returns the value of the field keyed by key in the
+// composite literal expr denotes, or nil when absent.
 func compositeLitKeyValue(expr ast.Expr, key string) ast.Expr {
 	lit, ok := unwrapCompositeLit(expr)
 	if !ok {
@@ -299,16 +274,13 @@ func compositeLitKeyValue(expr ast.Expr, key string) ast.Expr {
 	return nil
 }
 
-// compositeLitHasKey reports whether expr is a composite literal
-// carrying a field keyed by the given identifier name.
 func compositeLitHasKey(expr ast.Expr, key string) bool {
 	return compositeLitKeyValue(expr, key) != nil
 }
 
-// packageReferencesIdentifier reports whether any file in files
-// contains the bare identifier name anywhere in its syntax tree,
-// which catches both a plain reference and a selector's trailing
-// field name (e.g. issue.BlockersUnresolved).
+// packageReferencesIdentifier reports whether any file references the bare
+// identifier name, catching both a plain reference and a selector's
+// trailing field name (e.g. issue.BlockersUnresolved).
 func packageReferencesIdentifier(files []*ast.File, name string) bool {
 	for _, file := range files {
 		found := false
@@ -388,12 +360,10 @@ func contractRegistrationFacts(fset *token.FileSet, files []*ast.File) (register
 	return registers, usedMeta, hasHook, hasBlockerSource, blockerSourceIsPerIssue, pos
 }
 
-// contractPackageRegistersKind reports whether any file in files calls
-// Register or RegisterWithMeta on any selector of the registry package
-// qualifier, resolving the qualifier per file through
-// resolveContractImportName so an aliased import cannot evade it. It
-// generalizes contractRegistrationFacts by dropping that function's
-// constraint that the middle selector be literally Trackers.
+// contractPackageRegistersKind reports whether any file calls Register or
+// RegisterWithMeta on any selector of the registry qualifier, resolved per
+// file so an aliased import cannot evade it. Unlike contractRegistrationFacts
+// it does not require the middle selector to be Trackers.
 func contractPackageRegistersKind(files []*ast.File) bool {
 	for _, file := range files {
 		registryIdent := resolveContractImportName(file, contractRegistryImportPath)
@@ -435,16 +405,13 @@ func contractPackageRegistersKind(files []*ast.File) bool {
 	return false
 }
 
-// contractSharedPackageDirError explains why contractSharedPackageDir
-// could not resolve a permit-map key to a directory.
 type contractSharedPackageDirError string
 
 func (e contractSharedPackageDirError) Error() string { return string(e) }
 
-// contractSharedPackageDir maps a contractSharedFamilyPackages key to the
-// directory it names, relative to this package, joining path segments
-// exclusively with filepath.Join so the result carries the platform
-// separator throughout.
+// contractSharedPackageDir maps a contractSharedFamilyPackages key to its
+// directory relative to this package, joining with filepath.Join so the
+// result carries the platform separator.
 func contractSharedPackageDir(importPath string) (string, error) {
 	if !strings.HasPrefix(importPath, contractInternalPrefix) {
 		return "", contractSharedPackageDirError("permit-map key " + importPath + " does not start with " + contractInternalPrefix)
@@ -453,8 +420,8 @@ func contractSharedPackageDir(importPath string) (string, error) {
 	return filepath.Join(append([]string{".."}, segments...)...), nil
 }
 
-// checkContractBan reports a violation for every top-level function
-// declaration in file whose name is a contractBanTable entry.
+// checkContractBan reports a violation for every top-level function whose
+// name is a contractBanTable entry.
 func checkContractBan(fset *token.FileSet, file *ast.File) []contractViolation {
 	var violations []contractViolation
 	for _, decl := range file.Decls {
@@ -475,23 +442,20 @@ func checkContractBan(fset *token.FileSet, file *ast.File) []contractViolation {
 }
 
 // contractTeardownFields names the exec.Cmd fields a launcher must not
-// wire by hand. Assigning either one rebuilds, at a new call site, the
-// process-group teardown contractTeardownOwner already owns. The two
-// fields have to agree, and a launcher that sets one and forgets the
-// other silently keeps the os/exec default for it: a cancelled context
-// then force-kills the direct child alone and every descendant it
-// started outlives the cancellation.
+// wire by hand; either one rebuilds the process-group teardown
+// contractTeardownOwner owns. Setting one and forgetting the other keeps
+// the os/exec default, so a cancelled context force-kills the direct child
+// alone and its descendants outlive the cancellation.
 var contractTeardownFields = map[string]bool{
 	"Cancel":    true,
 	"WaitDelay": true,
 }
 
-// contractTeardownOwner is the helper rule TEARDOWN directs a launcher to.
 const contractTeardownOwner = "procutil.SetGroupCancel or procutil.SetGroupKill"
 
 // checkContractTeardown reports a violation for every assignment to an
-// exec.Cmd teardown field in file. It reads file only when file imports
-// os/exec, so a same-named field on an unrelated type is never matched.
+// exec.Cmd teardown field, only when file imports os/exec so a same-named
+// field on an unrelated type is never matched.
 func checkContractTeardown(fset *token.FileSet, file *ast.File) []contractViolation {
 	if resolveContractImportName(file, "os/exec") == "" {
 		return nil
@@ -517,30 +481,20 @@ func checkContractTeardown(fset *token.FileSet, file *ast.File) []contractViolat
 	return violations
 }
 
-// contractCaptureOwner is the helper rule CAPTURE directs a caller to.
 const contractCaptureOwner = "procutil.RunCapture or procutil.StartCapture"
 
-// contractCaptureDotImportReason is the text checkContractCaptureFile
-// gives for any dot-imported package, regardless of which one: a dot
-// import binds no name contractFileImportAliases or
-// resolveContractImportName can key a qualifier to, so a call, a
-// constant reference, or a sink type reached through it resolves
-// against nothing rather than against the dot-imported package. Rules
-// CAPTURE and SINK have no way to tell an innocuous dot import from one
-// hiding a process launch or an unbounded sink, so every one is
-// unresolvable and this text says so rather than trusting the house
-// style ban on dot imports to hold.
+// contractCaptureDotImportReason is the text rules CAPTURE and SINK give
+// for any dot import: it binds no name a qualifier can key to, so a call,
+// constant, or sink type reached through it is unresolvable and cannot be
+// told apart from one hiding a process launch or an unbounded sink.
 const contractCaptureDotImportReason = "which this rule cannot resolve a bound identifier, capture sink, or command constructor through; import it by name"
 
-// contractBoundedSinkTypes names the sink types [procutil.CaptureParams]'s
-// own contract admits for Stdout and Stderr: [procutil.Capture.Wait]
-// copies into them and [sinkWriter.seal] takes the same lock a Write
-// holds, so a Write that blocks holds Wait open past every bound it
-// otherwise honours. Each entry here returns from Write immediately
-// rather than pushing bytes to a slow consumer - it discards, caps, or
-// simply grows in memory - which is what makes it safe. A sink type
-// absent from this map is presumed capable of blocking until rule SINK
-// is deliberately extended to admit it.
+// contractBoundedSinkTypes names the sink types [procutil.CaptureParams]
+// admits for Stdout and Stderr. [procutil.Capture.Wait] copies into them
+// and [sinkWriter.seal] shares a Write's lock, so a blocking Write holds
+// Wait open past every bound. Each entry returns from Write immediately
+// (discards, caps, or grows in memory); a type absent here is presumed to
+// block until rule SINK is extended to admit it.
 var contractBoundedSinkTypes = map[string]string{
 	"bytes.Buffer":  "grows in memory and never blocks on Write",
 	"limitedBuffer": "drops the earliest bytes once its cap is exceeded",
@@ -551,27 +505,24 @@ var contractBoundedSinkTypes = map[string]string{
 // when a new bounded sink type needs admitting.
 const contractSinkTypeOwner = "contractBoundedSinkTypes"
 
-// contractCmdIndex records, for one package's non-test files, every
-// top-level function and method whose result list includes *exec.Cmd
-// or exec.Cmd: a function is keyed by "importPath.Name", a method by
-// its bare name alone, since a call site names a method with no
-// receiver-type qualifier. producerPaths holds the import path of
-// every indexed function, letting a caller recognize a file as able to
-// reach a command through a constructor it never names by declaration,
-// only by import.
+// contractCmdIndex records every top-level function and method returning
+// *exec.Cmd or exec.Cmd in a package's non-test files: a function keyed by
+// "importPath.Name", a method by its bare name (a call site names a method
+// without a receiver qualifier). producerPaths holds each indexed
+// function's import path, letting a caller recognize a file that reaches a
+// command through a constructor it names only by import.
 type contractCmdIndex struct {
 	funcs         map[string]bool
 	methods       map[string]bool
 	producerPaths map[string]bool
 }
 
-// contractCmdFields records, for one package's non-test files, every
-// struct field name declared with type *exec.Cmd or exec.Cmd.
+// contractCmdFields records every struct field typed *exec.Cmd or exec.Cmd
+// in a package's non-test files.
 type contractCmdFields map[string]bool
 
-// contractTypeIsExecCmd reports whether expr, a field or result type
-// expression, names exec.Cmd or *exec.Cmd under file's own import name
-// for os/exec.
+// contractTypeIsExecCmd reports whether expr names exec.Cmd or *exec.Cmd
+// under file's own import name for os/exec.
 func contractTypeIsExecCmd(execName string, expr ast.Expr) bool {
 	if execName == "" {
 		return false
@@ -605,9 +556,8 @@ func contractTypeIsOSProcess(osName string, expr ast.Expr) bool {
 	return ok && ident.Name == osName && sel.Sel.Name == "Process"
 }
 
-// contractBuildCmdIndex adds every exec.Cmd-returning top-level
-// function and method declared in file to idx, and every exec.Cmd-typed
-// struct field to fields.
+// contractBuildCmdIndex adds every exec.Cmd-returning function and method
+// in file to idx, and every exec.Cmd-typed struct field to fields.
 func contractBuildCmdIndex(file *ast.File, importPath string, idx *contractCmdIndex, fields contractCmdFields) {
 	execName := resolveContractImportName(file, "os/exec")
 	if execName == "" {
@@ -661,15 +611,12 @@ func contractBuildCmdIndex(file *ast.File, importPath string, idx *contractCmdIn
 	}
 }
 
-// contractFileImportAliases maps each import file binds to the local
-// identifier a selector qualifies it with: the explicit alias when one
-// is given, or the path's last segment otherwise. contractCmdBoundCall
-// uses it to resolve a package-qualified call, such as
-// workspace.GitCommand(...), to the import path contractBuildCmdIndex
-// keyed that function's idx.funcs entry under, so a call bound to a
-// constructor declared in another walked package is recognized exactly
-// as a same-package call is. Blank and dot imports are omitted: neither
-// binds a name a selector could qualify.
+// contractFileImportAliases maps each import to the identifier a selector
+// qualifies it with (explicit alias, else last path segment), so a
+// package-qualified call like workspace.GitCommand(...) resolves to the
+// import path contractBuildCmdIndex keyed its funcs entry under, treating
+// a call into another walked package like a same-package call. Blank and
+// dot imports are omitted: neither binds a name a selector could qualify.
 func contractFileImportAliases(file *ast.File) map[string]string {
 	aliases := make(map[string]string, len(file.Imports))
 	for _, imp := range file.Imports {
@@ -721,8 +668,8 @@ func contractCmdBoundCall(execName string, idx *contractCmdIndex, importPath str
 	return false
 }
 
-// contractProcessBoundExpr reports whether expr is a selector naming
-// field Process, or a call to os.StartProcess or os.FindProcess.
+// contractProcessBoundExpr reports whether expr is a selector naming field
+// Process, or a call to os.StartProcess or os.FindProcess.
 func contractProcessBoundExpr(osName string, expr ast.Expr) bool {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
@@ -738,11 +685,9 @@ func contractProcessBoundExpr(osName string, expr ast.Expr) bool {
 	return false
 }
 
-// contractCollectBoundNames walks fn once and returns the set of local
-// identifiers (parameters, var declarations, and assignment targets)
-// bound to an exec.Cmd and the set bound to an *os.Process, per the
-// rules contractCmdBoundCall and contractProcessBoundExpr apply to
-// their declaration or the value they were last assigned from.
+// contractCollectBoundNames walks fn once and returns the local
+// identifiers (parameters, var declarations, assignment targets) bound to
+// an exec.Cmd and those bound to an *os.Process.
 func contractCollectBoundNames(execName, osName string, idx *contractCmdIndex, importPath string, aliasPaths map[string]string, fn *ast.FuncDecl) (cmdNames, procNames map[string]bool) {
 	cmdNames = map[string]bool{}
 	procNames = map[string]bool{}
@@ -830,11 +775,10 @@ func contractCollectBoundNames(execName, osName string, idx *contractCmdIndex, i
 	return cmdNames, procNames
 }
 
-// contractExprIsCmdBound reports whether expr, a Start/Run/Wait call's
-// receiver, is bound to an exec.Cmd: a direct exec.Command or
-// exec.CommandContext call, a call to an indexed function or method, a
-// local identifier contractCollectBoundNames marked, or a selector
-// whose field fields declares as an exec.Cmd.
+// contractExprIsCmdBound reports whether expr, a Start/Run/Wait receiver,
+// is bound to an exec.Cmd: a direct exec.Command(Context) call, a call to
+// an indexed function or method, a local name contractCollectBoundNames
+// marked, or a selector whose field fields declares as exec.Cmd.
 func contractExprIsCmdBound(execName string, idx *contractCmdIndex, importPath string, aliasPaths map[string]string, cmdNames map[string]bool, fields contractCmdFields, expr ast.Expr) bool {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -848,11 +792,9 @@ func contractExprIsCmdBound(execName string, idx *contractCmdIndex, importPath s
 }
 
 // contractSinkTypeName returns the contractBoundedSinkTypes key a type
-// expression names: "bytes.Buffer" for a selector resolving to the
-// file's own import of "bytes", or the bare identifier for a
-// package-local type such as limitedBuffer or cappedWriter. It returns
-// "" for any type this rule does not recognize, so an unrecognized
-// type is treated as unbounded rather than silently accepted.
+// expression names ("bytes.Buffer" for the file's bytes import, else the
+// bare identifier), or "" for an unrecognized type, which is then treated
+// as unbounded.
 func contractSinkTypeName(bytesName string, expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -865,11 +807,10 @@ func contractSinkTypeName(bytesName string, expr ast.Expr) string {
 	return ""
 }
 
-// contractSinkTypeFromValue returns the contractBoundedSinkTypes key
-// for a value expression that constructs a sink directly, looking
-// through a leading address-of the way unwrapCompositeLit does, so
-// both "T{}" and "&T{}" resolve to T's name. It returns "" when expr is
-// not a composite literal.
+// contractSinkTypeFromValue returns the contractBoundedSinkTypes key for a
+// value that constructs a sink directly, looking through a leading
+// address-of so both "T{}" and "&T{}" resolve to T. It returns "" when
+// expr is not a composite literal.
 func contractSinkTypeFromValue(bytesName string, expr ast.Expr) string {
 	lit, ok := unwrapCompositeLit(expr)
 	if !ok {
@@ -878,11 +819,9 @@ func contractSinkTypeFromValue(bytesName string, expr ast.Expr) string {
 	return contractSinkTypeName(bytesName, lit.Type)
 }
 
-// contractCollectSinkVarTypes maps every local variable fn's body binds
-// to a recognized sink type - by "var x T" or "var x T = ..." and by
-// "x := T{...}" or "x := &T{...}" - to that type's
-// contractBoundedSinkTypes key, the same way contractCollectBoundNames
-// tracks exec.Cmd- and os.Process-bound names for rule CAPTURE.
+// contractCollectSinkVarTypes maps every local variable fn binds to a
+// recognized sink type (by "var x T", "var x T = ...", "x := T{...}", or
+// "x := &T{...}") to that type's contractBoundedSinkTypes key.
 func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]string {
 	sinkTypes := map[string]string{}
 	if fn.Body == nil {
@@ -936,12 +875,9 @@ func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]
 }
 
 // contractResolveSinkType reports the contractBoundedSinkTypes key expr
-// resolves to via sinkTypes, and whether expr is the literal nil, which
-// [procutil.CaptureParams] accepts unconditionally in place of a
-// writer. An expression this function cannot resolve - a call, a
-// selector into an unrecognized value such as os.Stdout, or an
-// identifier sinkTypes never bound - reports "", false: unresolved is
-// treated as unbounded rather than accepted.
+// resolves to via sinkTypes, and whether expr is the literal nil (which
+// [procutil.CaptureParams] accepts). An expression it cannot resolve
+// reports "", false and is treated as unbounded.
 func contractResolveSinkType(bytesName string, sinkTypes map[string]string, expr ast.Expr) (typeName string, isNil bool) {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -967,8 +903,7 @@ func contractResolveSinkType(bytesName string, sinkTypes map[string]string, expr
 }
 
 // contractIsCaptureParamsLit reports whether lit's type is
-// procName.CaptureParams, procName being the local identifier the file
-// binds to [procutil]'s import path.
+// procName.CaptureParams.
 func contractIsCaptureParamsLit(procName string, lit *ast.CompositeLit) bool {
 	if procName == "" {
 		return false
@@ -981,9 +916,9 @@ func contractIsCaptureParamsLit(procName string, lit *ast.CompositeLit) bool {
 	return ok && ident.Name == procName && sel.Sel.Name == "CaptureParams"
 }
 
-// checkContractCaptureSinkFields reports a rule SINK violation for each
-// of lit's Stdout and Stderr fields that is set and does not resolve,
-// via sinkTypes, to nil or a type contractBoundedSinkTypes admits.
+// checkContractCaptureSinkFields reports a rule SINK violation for each of
+// lit's Stdout and Stderr fields that is set and resolves, via sinkTypes,
+// to neither nil nor a contractBoundedSinkTypes type.
 func checkContractCaptureSinkFields(fset *token.FileSet, lit *ast.CompositeLit, bytesName string, sinkTypes map[string]string) []contractViolation {
 	var violations []contractViolation
 	for _, field := range [2]string{"Stdout", "Stderr"} {
@@ -1007,28 +942,18 @@ func checkContractCaptureSinkFields(fset *token.FileSet, lit *ast.CompositeLit, 
 }
 
 // checkContractCaptureFile reports every rule CAPTURE and rule SINK
-// violation in file, using idx and fields already built across the
-// whole package file belongs to. Rule SINK is skipped when dirName is
-// exempt from it.
+// violation in file, using idx and fields built across the whole package.
+// Rule SINK is skipped when dirName is exempt.
 //
-// Any dot import in file is itself a rule CAPTURE violation, regardless
-// of which package it names: a call, constant reference, or sink type
-// reached through a dot import binds no local identifier, so the rest
-// of this function - which resolves every one of those against file's
-// own named and aliased imports - cannot see through it. Reporting the
-// import outright, once, keeps a file that hides a command constructor
-// or a sink type behind a dot import from silently passing this rule
-// the way naming the four import paths this used to check did not.
+// Any dot import is itself a rule CAPTURE violation: a call, constant, or
+// sink type reached through it binds no local identifier, so the rest of
+// this function cannot see through it. Reporting it once keeps a file
+// hiding a constructor or sink behind a dot import from passing.
 //
-// A file that imports none of os/exec, os, syscall, windows, or
-// procutil can still reach an exec.Cmd by calling a constructor
-// declared in another walked package - workspace.GitCommand called
-// from a file that imports only "workspace", never "os/exec" - so the
-// early return below also stays open when idx.producerPaths names one
-// of file's own imports. A file naming none of the five imports and no
-// producer's import path plainly cannot violate rule CAPTURE or rule
-// SINK, since it can neither construct nor receive a command, and is
-// skipped at the cost this rule was built to avoid paying.
+// The early return below stays open when idx.producerPaths names one of
+// file's own imports, because a file importing none of os/exec, os,
+// syscall, windows, or procutil can still reach an exec.Cmd through
+// another walked package's constructor.
 func checkContractCaptureFile(fset *token.FileSet, file *ast.File, importPath, dirName string, idx *contractCmdIndex, fields contractCmdFields) []contractViolation {
 	var violations []contractViolation
 
@@ -1177,13 +1102,10 @@ func checkContractCaptureFile(fset *token.FileSet, file *ast.File, importPath, d
 }
 
 // contractBuildModuleCmdIndex builds one function, method, and
-// struct-field index from every non-test file across every package in
-// walked, so a caller in one package that binds a *exec.Cmd from a
-// constructor declared in another - workspace.GitCommand called from
-// internal/orchestrator, for instance - is indexed the same as a
-// same-package call site. The cost stays linear in the file count
-// contractWalkRoot already parsed: this is one more pass over files
-// already held in memory, not a second walk of the tree.
+// struct-field index from every non-test file across walked, so a caller
+// binding an exec.Cmd from a constructor declared in another package is
+// indexed like a same-package call site. It is one more pass over files
+// already in memory, not a second tree walk.
 func contractBuildModuleCmdIndex(walked []contractWalkedPackage) (*contractCmdIndex, contractCmdFields) {
 	idx := &contractCmdIndex{funcs: map[string]bool{}, methods: map[string]bool{}, producerPaths: map[string]bool{}}
 	fields := contractCmdFields{}
@@ -1195,17 +1117,11 @@ func contractBuildModuleCmdIndex(walked []contractWalkedPackage) (*contractCmdIn
 	return idx, fields
 }
 
-// checkContractCapture applies rule CAPTURE and rule SINK to every
-// non-test file in pkg, using idx and fields the caller built ahead of
-// time with contractBuildModuleCmdIndex. A caller checking one package
-// in isolation - a fixture test's single-file package, for instance -
-// may build idx and fields from that same package alone; a caller
-// checking a real tree builds them from every package the walk found,
-// so a cross-package call site resolves against the same index a
-// same-package one does. Rule SINK honors its own contractAllowlist
-// entry rather than reusing rule CAPTURE's; a caller that skips this
-// function entirely for a rule-CAPTURE-exempt package skips rule SINK
-// for it too, since nothing here runs for that package at all.
+// checkContractCapture applies rules CAPTURE and SINK to every non-test
+// file in pkg, using idx and fields the caller built with
+// contractBuildModuleCmdIndex (from pkg alone for an isolated check, or
+// from the whole tree so cross-package call sites resolve). A caller that
+// skips a CAPTURE-exempt package skips SINK for it too.
 func checkContractCapture(fset *token.FileSet, pkg contractPackage, idx *contractCmdIndex, fields contractCmdFields) []contractViolation {
 	var violations []contractViolation
 	for _, file := range pkg.files {
@@ -1214,14 +1130,13 @@ func checkContractCapture(fset *token.FileSet, pkg contractPackage, idx *contrac
 	return violations
 }
 
-// contractStopGraceOwner is the helper rule STOPGRACE directs a family
-// to resolve a stop-grace duration through, instead of reading
-// [procutil.DefaultStopGrace] directly.
+// contractStopGraceOwner is the helper rule STOPGRACE directs a family to,
+// instead of reading [procutil.DefaultStopGrace] directly.
 const contractStopGraceOwner = "procutil.StopGrace"
 
-// importPos returns the position of file's import of importPath, or
-// the file's own start when the import is absent, so a violation always
-// carries a position a reader can open.
+// importPos returns the position of file's import of importPath, or the
+// file start when absent, so a violation always carries an openable
+// position.
 func importPos(file *ast.File, importPath string) token.Pos {
 	for _, imp := range file.Imports {
 		if path, err := strconv.Unquote(imp.Path.Value); err == nil && path == importPath {
@@ -1232,24 +1147,19 @@ func importPos(file *ast.File, importPath string) token.Pos {
 }
 
 // checkContractStopGrace reports a violation for every reference to
-// procutil.DefaultStopGrace in file, with the procutil qualifier
-// resolved from file's own imports so an aliased import cannot evade
-// it.
+// procutil.DefaultStopGrace in file, the qualifier resolved from file's
+// own imports so an aliased import cannot evade it.
 func checkContractStopGrace(fset *token.FileSet, file *ast.File) []contractViolation {
 	procutilIdent := resolveContractImportName(file, contractProcutilImportPath)
 	if procutilIdent == "" {
 		return nil
 	}
 	var violations []contractViolation
-	// A dot import binds the constant to a bare identifier, so no
-	// selector node exists for the qualifier check below to match and
-	// the rule would silently pass. Reporting the import itself is the
-	// precise answer: chasing bare identifiers instead would also flag
-	// a local that shadows the name and the selector half of an
-	// unrelated other.DefaultStopGrace, and telling those apart needs
-	// type information this check does not have. Nothing here
-	// dot-imports a non-test package and no linter forbids it, so the
-	// rule states the prohibition rather than resting on a convention.
+	// A dot import binds the constant to a bare identifier with no
+	// selector node to match, so the rule reports the import itself:
+	// chasing bare identifiers would also flag a shadowing local and an
+	// unrelated other.DefaultStopGrace, which need type information to
+	// tell apart.
 	if procutilIdent == "." {
 		return []contractViolation{{
 			pos:  fset.Position(importPos(file, contractProcutilImportPath)),
@@ -1274,14 +1184,13 @@ func checkContractStopGrace(fset *token.FileSet, file *ast.File) []contractViola
 	return violations
 }
 
-// contractReaperLoggerHint is what checkContractReaperLogger's message
-// tells a caller to pass instead of the two forbidden shapes.
+// contractReaperLoggerHint is what checkContractReaperLogger tells a
+// caller to pass instead of the two forbidden shapes.
 const contractReaperLoggerHint = "a logger the call site already holds, in a local variable or a struct field"
 
 // contractCallsSlogDefault reports whether expr is a call to
 // slogIdent.Default, or a call chained onto one (e.g.
-// slog.Default().With(...)), by recursing into the receiver of each
-// chained call.
+// slog.Default().With(...)).
 func contractCallsSlogDefault(expr ast.Expr, slogIdent string) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -1298,16 +1207,10 @@ func contractCallsSlogDefault(expr ast.Expr, slogIdent string) bool {
 }
 
 // checkContractReaperLogger reports a violation for every
-// procutil.StartReaper call in file whose second argument is the nil
-// literal or a call to slog.Default() (with or without a chained
-// With), rather than a logger the call site already holds. StartReaper
-// logs the one CaptureCleanupWarning record for a reap whose group
-// termination cannot prove the process tree gone, and either forbidden
-// shape routes that record away from the logger the caller was built
-// with: nil falls back to StartReaper's own package-level default, and
-// a fresh slog.Default() call reaches the same default directly,
-// bypassing whatever component-scoped or session-scoped logger the
-// call site actually owns.
+// procutil.StartReaper call whose second argument is nil or slog.Default()
+// rather than a logger the call site holds. Either shape routes the one
+// CaptureCleanupWarning record away from the caller's own logger to
+// StartReaper's package-level default.
 func checkContractReaperLogger(fset *token.FileSet, file *ast.File) []contractViolation {
 	procutilIdent := resolveContractImportName(file, contractProcutilImportPath)
 	if procutilIdent == "" {
@@ -1429,9 +1332,9 @@ func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker 
 	return violations
 }
 
-// contractPathIsUnder reports whether importPath is prefix itself or
-// denotes a path below it. It matches on path segments, never on a bare
-// substring, so a vanity path that merely embeds prefix does not match.
+// contractPathIsUnder reports whether importPath is prefix or a path
+// below it, matching on segments not a bare substring so a vanity path
+// embedding prefix does not match.
 func contractPathIsUnder(importPath, prefix string) bool {
 	if importPath == prefix {
 		return true
@@ -1439,10 +1342,8 @@ func contractPathIsUnder(importPath, prefix string) bool {
 	return strings.HasPrefix(importPath, prefix+"/")
 }
 
-// contractPackageImportPath maps dir, a directory found while walking
-// root, to its full import path, given the import path root itself
-// resolves to. It normalizes path separators so the result is identical
-// on every platform the project's CI runs.
+// contractPackageImportPath maps dir to its full import path, given the
+// path root resolves to, normalizing separators for cross-platform CI.
 func contractPackageImportPath(root, rootImportPath, dir string) string {
 	rel, err := filepath.Rel(root, dir)
 	if err != nil || rel == "." {
@@ -1451,10 +1352,8 @@ func contractPackageImportPath(root, rootImportPath, dir string) string {
 	return rootImportPath + "/" + filepath.ToSlash(rel)
 }
 
-// contractImportBanReason returns the reason importPath is banned for
-// pkg, or the empty string when it is allowed. Conditions are evaluated
-// in order and the function returns on the first match, so one import
-// yields at most one reason.
+// contractImportBanReason returns the reason importPath is banned for pkg,
+// or "" when allowed. First match wins, so one import yields one reason.
 func contractImportBanReason(importPath string, pkg contractPackage) string {
 	if contractPathIsUnder(importPath, contractOrchestratorPath) {
 		return "an adapter package must not import the orchestrator"
@@ -1485,9 +1384,7 @@ func contractImportBanReason(importPath string, pkg contractPackage) string {
 }
 
 // contractCoreImportBanReason returns the reason importPath is banned for
-// a core file, or the empty string when it is allowed. Conditions are
-// evaluated in order and the function returns on the first match, so one
-// import yields at most one reason.
+// a core file, or "" when allowed. First match wins.
 func contractCoreImportBanReason(importPath string, blankImport, inTestFile bool) string {
 	underFamilyRoot := false
 	for _, root := range contractFamilyRoots {
@@ -1541,11 +1438,10 @@ func checkContractCoreImports(fset *token.FileSet, file *ast.File, inTestFile bo
 	return violations
 }
 
-// checkCoreContractPackage applies the core-import rule to pkg.files with
-// inTestFile false and to pkg.testFiles with inTestFile true. It applies
-// no other rule and consults contractAllowlist for nothing, because the
-// orchestrator root holds exactly one package and any exemption would
-// disable the rule outright.
+// checkCoreContractPackage applies the core-import rule to pkg.files
+// (inTestFile false) and pkg.testFiles (inTestFile true). It consults no
+// allowlist: the orchestrator root holds one package, so any exemption
+// would disable the rule.
 func checkCoreContractPackage(fset *token.FileSet, pkg contractPackage) []contractViolation {
 	var violations []contractViolation
 	for _, file := range pkg.files {
@@ -1578,24 +1474,19 @@ func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPacka
 	return violations
 }
 
-// contractAgentIdentityFloorTable states the vendor and coding-agent
-// runtime names the identity rule always treats as identity tokens, in
-// addition to whatever kind strings contractAgentIdentitySnapshotData
-// extracts from the tree. The table is a floor, not a closed world: a
-// name absent here is still caught once some package registers it as
-// a kind.
+// contractAgentIdentityFloorTable names the vendor and runtime names the
+// identity rule always treats as identity tokens, in addition to the kind
+// strings extracted from the tree. It is a floor, not a closed world.
 var contractAgentIdentityFloorTable = []string{
 	"claude", "codex", "copilot", "kiro", "opencode", "mock",
 	"gemini", "amp", "goose", "zed", "cursor", "aider", "qwen", "crush",
 }
 
-// contractAgentIdentitySnapshot is the identity rule's token set,
-// gathered once from the files under internal/agent and every runtime
-// profile under internal/qualification/profiles: every floor and
-// extracted token, and, for each package that registered a kind, the
-// kinds it registered, keyed by that package's import path.
-// profileDeclaredTokens marks a token as sourced from a profile's
-// identity_tokens, which is what makes an unanchored one wide-scoped.
+// contractAgentIdentitySnapshot is the identity rule's token set, gathered
+// once from internal/agent and the runtime profiles: every floor and
+// extracted token, and each registering package's kinds keyed by its
+// import path. profileDeclaredTokens marks a token sourced from a
+// profile's identity_tokens, which makes an unanchored one wide-scoped.
 type contractAgentIdentitySnapshot struct {
 	tokens                []string
 	kindImportPaths       map[string][]string
@@ -1608,11 +1499,9 @@ var (
 	contractAgentIdentityData contractAgentIdentitySnapshot
 )
 
-// contractAgentIdentitySnapshotData returns the identity rule's token
-// set, building it from disk on first use and caching it for the rest
-// of the process. Every checked package shares one snapshot, which is
-// what lets a package be caught for naming a kind some other package
-// registers.
+// contractAgentIdentitySnapshotData returns the identity rule's token set,
+// built from disk on first use and cached. One shared snapshot is what
+// lets a package be caught for naming a kind another package registers.
 func contractAgentIdentitySnapshotData() contractAgentIdentitySnapshot {
 	contractAgentIdentityOnce.Do(func() {
 		contractAgentIdentityData = buildContractAgentIdentitySnapshot()
@@ -1620,13 +1509,12 @@ func contractAgentIdentitySnapshotData() contractAgentIdentitySnapshot {
 	return contractAgentIdentityData
 }
 
-// buildContractAgentIdentitySnapshot walks internal/agent fresh from
-// disk, collecting the first argument of every
-// registry.Agents.Register and registry.Agents.RegisterWithMeta call
-// in a non-test file, resolving the registry qualifier from each
-// file's own imports. A call whose kind argument is not a string
-// literal contributes an extraction error rather than being skipped,
-// so a kind the checker cannot read cannot go unreported.
+// buildContractAgentIdentitySnapshot walks internal/agent from disk,
+// collecting the first argument of every registry.Agents.Register and
+// RegisterWithMeta call in non-test files, resolving the registry
+// qualifier per file. A non-string-literal kind argument contributes an
+// extraction error rather than being skipped, so a kind the checker
+// cannot read cannot go unreported.
 func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 	fset := token.NewFileSet()
 	tokenSet := map[string]bool{}
@@ -1732,21 +1620,16 @@ func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 	}
 }
 
-// contractRuntimeProfilesGlob is the glob pattern
-// buildContractAgentIdentitySnapshot reads every runtime profile
-// document from. It is a package variable, rather than an inline
-// literal, so a staleness-guard test can point it at a scratch
-// fixture directory without a live profile under
-// internal/qualification/profiles.
+// contractRuntimeProfilesGlob matches every runtime profile document. A
+// package variable, not an inline literal, so a staleness-guard test can
+// point it at a scratch fixture directory.
 var contractRuntimeProfilesGlob = filepath.Join("..", "qualification", "profiles", "*.json")
 
-// contractProfileDeclaredTokens reads every runtime profile document
-// matching pattern through qualification.ReadRuntimeProfileFile,
-// unioning each profile's identity_tokens into tokenSet and returning
-// the lowercased subset marked profile-declared. A profile that fails
-// to decode contributes an extraction error rather than being
-// skipped, matching how buildContractAgentIdentitySnapshot already
-// handles a kind argument it cannot read.
+// contractProfileDeclaredTokens reads every profile matching pattern via
+// qualification.ReadRuntimeProfileFile, unioning each profile's
+// identity_tokens into tokenSet and returning the lowercased
+// profile-declared subset. A profile that fails to decode contributes an
+// extraction error rather than being skipped.
 func contractProfileDeclaredTokens(pattern string, tokenSet map[string]bool) (profileDeclaredTokens map[string]bool, extractionErrors []contractViolation) {
 	profileDeclaredTokens = map[string]bool{}
 	profilePaths, globErr := filepath.Glob(pattern)
@@ -1768,9 +1651,8 @@ func contractProfileDeclaredTokens(pattern string, tokenSet map[string]bool) (pr
 	return profileDeclaredTokens, extractionErrors
 }
 
-// contractIdentityWordsFromIdent splits name into lowercase words on
-// every case transition and every underscore, which is the identity
-// rule's word-splitting rule for an identifier.
+// contractIdentityWordsFromIdent splits name into lowercase words on every
+// case transition and underscore.
 func contractIdentityWordsFromIdent(name string) []string {
 	var words []string
 	var current []rune
@@ -1805,9 +1687,7 @@ func contractIdentityWordsFromIdent(name string) []string {
 }
 
 // contractIdentityWordsFromLiteral splits value into lowercase words on
-// every character that is neither a letter nor a digit, which is the
-// identity rule's word-splitting rule for a string literal and for a
-// token.
+// every non-letter, non-digit character.
 func contractIdentityWordsFromLiteral(value string) []string {
 	var words []string
 	var current []rune
@@ -1829,9 +1709,7 @@ func contractIdentityWordsFromLiteral(value string) []string {
 }
 
 // contractIdentityTokenMatches reports whether tokenWords appears as a
-// consecutive run inside valueWords, compared word for word. Both
-// slices are already lowercased by the splitting functions, so the
-// comparison is case-insensitive.
+// consecutive run inside valueWords. Both are already lowercased.
 func contractIdentityTokenMatches(valueWords, tokenWords []string) bool {
 	if len(tokenWords) == 0 || len(tokenWords) > len(valueWords) {
 		return false
@@ -1852,21 +1730,17 @@ func contractIdentityTokenMatches(valueWords, tokenWords []string) bool {
 }
 
 // contractPackageUnderKindPackage reports whether checkedImportPath is
-// kindPackageImportPath itself or sits under it, comparing on import
-// path segments. It backs the identity rule's subtree exclusion: a
-// package nested under a kind package's own path may still name the
-// kind that package registers.
+// kindPackageImportPath or under it, backing the identity rule's subtree
+// exclusion: a package under a kind package's path may name that kind.
 func contractPackageUnderKindPackage(checkedImportPath, kindPackageImportPath string) bool {
 	return contractPathIsUnder(checkedImportPath, kindPackageImportPath)
 }
 
-// contractIdentityExcludedTokens returns the tokens the identity rule
-// does not enforce against pkg: its own directory name, and the
-// directory name and every registered kind of any kind package whose
-// import path is pkg.importPath itself or an ancestor of it. The
-// ancestor case is what lets a package nested under a kind package,
-// such as a code generator that shares its path, name the kind that
-// package exists to serve.
+// contractIdentityExcludedTokens returns the tokens the identity rule does
+// not enforce against pkg: its own directory name, and the directory name
+// and registered kinds of any kind package that is pkg's import path or an
+// ancestor. The ancestor case lets a package nested under a kind package
+// name that kind.
 func contractIdentityExcludedTokens(pkg contractPackage, kindImportPaths map[string][]string) map[string]bool {
 	excluded := map[string]bool{strings.ToLower(pkg.dirName): true}
 	for kindImportPath, kinds := range kindImportPaths {
@@ -1882,11 +1756,10 @@ func contractIdentityExcludedTokens(pkg contractPackage, kindImportPaths map[str
 }
 
 // contractIdentityArm1Violations reports every string literal or
-// identifier in file, outside an import declaration, whose word
-// sequence carries a token from tokens that excluded does not exempt.
-// Import declarations are excluded because rule IMPORT already governs
-// which packages one adapter may name; this arm targets identity
-// branching in prose and identifiers, not import paths.
+// identifier outside an import declaration whose words carry a token from
+// tokens that excluded does not exempt. Import declarations are skipped
+// because rule IMPORT governs import paths; this arm targets identity
+// branching in prose and identifiers.
 func contractIdentityArm1Violations(fset *token.FileSet, file *ast.File, tokens []string, excluded map[string]bool) []contractViolation {
 	type activeToken struct {
 		token string
@@ -1934,9 +1807,8 @@ func contractIdentityArm1Violations(fset *token.FileSet, file *ast.File, tokens 
 	return violations
 }
 
-// exprContainsAgentInfo reports whether expr's syntax tree contains an
-// identifier spelled exactly agentInfo, case-sensitively, whether bare
-// or as part of a selector chain.
+// exprContainsAgentInfo reports whether expr's tree contains an identifier
+// spelled exactly agentInfo, bare or in a selector chain.
 func exprContainsAgentInfo(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(n ast.Node) bool {
@@ -1952,11 +1824,10 @@ func exprContainsAgentInfo(expr ast.Expr) bool {
 	return found
 }
 
-// contractIdentityArm2Violations reports every equality or inequality
-// comparison, switch tag, case expression, and map index in file whose
-// operand contains agentInfo: the recorded agent identity may be
-// logged, but nothing may compare it, switch on it, or use it as a map
-// key to decide behavior.
+// contractIdentityArm2Violations reports every equality/inequality
+// comparison, switch tag, case expression, and map index whose operand
+// contains agentInfo: the recorded identity may be logged, but nothing
+// may compare, switch on, or key a map by it to decide behavior.
 func contractIdentityArm2Violations(fset *token.FileSet, file *ast.File) []contractViolation {
 	var violations []contractViolation
 
@@ -1999,12 +1870,9 @@ func contractIdentityArm2Violations(fset *token.FileSet, file *ast.File) []contr
 	return violations
 }
 
-// checkContractIdentity evaluates both arms of the identity rule
-// against pkg.files: the token arm (contractIdentityArm1Violations),
-// using the shared identity snapshot minus the tokens pkg excludes for
-// itself, and the agentInfo branch arm
-// (contractIdentityArm2Violations). Test files are exempt from both
-// arms.
+// checkContractIdentity evaluates both arms of the identity rule against
+// pkg.files: the token arm (using the shared snapshot minus pkg's own
+// exclusions) and the agentInfo branch arm. Test files are exempt.
 func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractViolation {
 	snapshot := contractAgentIdentitySnapshotData()
 	excluded := contractIdentityExcludedTokens(pkg, snapshot.kindImportPaths)
@@ -2017,12 +1885,10 @@ func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractV
 	return violations
 }
 
-// contractTokenIsKindAnchored reports whether some entry of
-// kindImportPaths anchors token: token equals, case-insensitively, that
-// kind package's base directory name or one of the kinds it registers.
-// That is exactly the set contractIdentityExcludedTokens can ever
-// exempt for a package under that kind's own subtree, so an unanchored
-// token has no directory anywhere in the tree where its name is legal.
+// contractTokenIsKindAnchored reports whether some kindImportPaths entry
+// anchors token (its base directory name or a registered kind). That is
+// the set contractIdentityExcludedTokens can exempt, so an unanchored
+// token has no directory where its name is legal.
 func contractTokenIsKindAnchored(token string, kindImportPaths map[string][]string) bool {
 	lower := strings.ToLower(token)
 	for kindImportPath, kinds := range kindImportPaths {
@@ -2038,10 +1904,9 @@ func contractTokenIsKindAnchored(token string, kindImportPaths map[string][]stri
 	return false
 }
 
-// contractWideScopedTokens returns the members of snapshot.tokens that
-// are profile-declared and that no kind package anchors: the set the
-// wide scope applies to. Every other token keeps today's narrow scope,
-// internal/agent alone.
+// contractWideScopedTokens returns the profile-declared tokens no kind
+// package anchors, the set the wide scope applies to. Every other token
+// keeps the narrow scope of internal/agent alone.
 func contractWideScopedTokens(snapshot contractAgentIdentitySnapshot) []string {
 	var wide []string
 	for _, tok := range snapshot.tokens {
@@ -2052,18 +1917,15 @@ func contractWideScopedTokens(snapshot contractAgentIdentitySnapshot) []string {
 	return wide
 }
 
-// contractWideIdentityRoots are the two roots the wide scope walks,
-// relative to this package's own directory, beyond the per-family
-// walks TestCheckAdapterContract and TestCheckOrchestratorContract
-// already cover.
+// contractWideIdentityRoots are the roots the wide scope walks beyond the
+// per-family walks the two contract tests already cover.
 var contractWideIdentityRoots = []string{filepath.Join("..", "..", "cmd"), filepath.Join("..", "..", "internal")}
 
 // contractWideIdentityNonTestViolations walks every non-test .go file
-// under root, excluding testdata, and applies contractIdentityArm1Violations
-// for the wide-scoped tokens with no exclusion: an unanchored
-// profile-declared token has no directory anywhere that exempts it.
-// It returns the violations and the number of files scanned, so the
-// caller can confirm the walk covered something.
+// under root (excluding testdata) and applies contractIdentityArm1Violations
+// for the wide-scoped tokens with no exclusion. It returns the violations
+// and the files scanned, so the caller can confirm the walk covered
+// something.
 func contractWideIdentityNonTestViolations(t *testing.T, fset *token.FileSet, root string, tokens []string) (violations []contractViolation, scanned []string) {
 	t.Helper()
 
@@ -2124,11 +1986,10 @@ func contractIdentityTestFileIdentViolations(fset *token.FileSet, file *ast.File
 	return violations
 }
 
-// contractWideIdentityTestViolations walks every _test.go file under
-// root, excluding testdata, parses it in full (unlike contractWalkRoot's
-// imports-only test-file handling, which the identifier-only arm here
-// needs to see past), and applies contractIdentityTestFileIdentViolations
-// for the wide-scoped tokens.
+// contractWideIdentityTestViolations walks every _test.go file under root
+// (excluding testdata), parsing in full because the identifier-only arm
+// needs to see past imports, and applies
+// contractIdentityTestFileIdentViolations for the wide-scoped tokens.
 func contractWideIdentityTestViolations(t *testing.T, fset *token.FileSet, root string, tokens []string) (violations []contractViolation, scanned []string) {
 	t.Helper()
 
@@ -2266,16 +2127,12 @@ const cmd = "gemini --acp"
 	})
 }
 
-// TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks proves
-// the three mechanisms TestContractIdentityWideScope depends on are
-// themselves capable of failing, not merely capable of passing against
-// the current tree: a profile that fails to decode must be reported
-// rather than silently skipped, and dropping either the anchoring
-// clause or the profile-source clause of rule IDENTITY's wide scope
-// must redden against a real collision already present in the tree,
-// using the kiro and cursor examples below. The last two subtests
-// confirm today's real snapshot keeps both collisions green, for the
-// two different reasons the clauses exist.
+// TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks proves the
+// mechanisms TestContractIdentityWideScope relies on can fail, not just
+// pass against the current tree: a profile that fails to decode is
+// reported, and dropping either the anchoring clause or the
+// profile-source clause reddens against a real collision (kiro, cursor).
+// The last two subtests confirm today's snapshot keeps both green.
 func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	snapshot := contractAgentIdentitySnapshotData()
 
@@ -2371,8 +2228,6 @@ func TestContractIdentityWideScope_StalenessGuardCatchesRealBreaks(t *testing.T)
 	})
 }
 
-// contractExempt reports whether the package named dirName is
-// allowlisted for rule.
 func contractExempt(dirName string, rule contractRule) bool {
 	reasons, ok := contractAllowlist[dirName]
 	if !ok {
@@ -2382,18 +2237,14 @@ func contractExempt(dirName string, rule contractRule) bool {
 	return ok
 }
 
-// checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK,
-// IMPORT, and, for a package under the agent family root, IDENTITY and
-// STOPGRACE, against pkg, honoring the allowlist entries for
-// pkg.dirName. Rules BAN, METRICS, HOOK, IDENTITY, and STOPGRACE read
-// pkg.files only; rule IMPORT reads pkg.files and pkg.testFiles.
+// checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK, IMPORT,
+// and (for an agent-family package) IDENTITY and STOPGRACE against pkg,
+// honoring pkg.dirName's allowlist entries. Only IMPORT reads test files.
 //
-// A ruleIMPORT entry in contractAllowlist is all-or-nothing: it lifts the
+// A ruleIMPORT allowlist entry is all-or-nothing: it lifts the
 // orchestrator ban, the sibling-adapter ban, and the package's own
-// contractPackageBannedImports prefixes together, in that package's
-// non-test and test files alike. There is no narrower exemption; a case
-// that needs only one of the three lifted requires a new mechanism,
-// decided when it appears rather than pre-built here.
+// contractPackageBannedImports together, in non-test and test files
+// alike. A case needing only one lifted requires a new mechanism.
 func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []contractViolation {
 	var violations []contractViolation
 
@@ -2457,12 +2308,10 @@ func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []con
 	return violations
 }
 
-// contractWalkRoot walks the Go files under dir, excluding testdata,
-// grouping them into packages keyed by directory, and returns those
-// packages ordered ascending by directory path, plus whether any parsed
-// file under dir imports the registry package. Both returns are scoped to
-// this one root; a caller that walks more than one root merges them
-// itself.
+// contractWalkRoot walks the Go files under dir (excluding testdata),
+// groups them into packages keyed by directory ordered ascending, and
+// reports whether any parsed file imports the registry package. Both
+// returns are scoped to this one root.
 func contractWalkRoot(t *testing.T, fset *token.FileSet, dir, importPath string) ([]contractWalkedPackage, bool) {
 	t.Helper()
 
@@ -2535,14 +2384,9 @@ func contractWalkRoot(t *testing.T, fset *token.FileSet, dir, importPath string)
 	return walked, registryImported
 }
 
-// TestCheckAdapterContract walks the Go files under internal/tracker,
-// internal/scm, internal/agent, and internal/notify, excluding testdata,
-// and fails when any package breaks the shared-decision invariant this
-// work establishes: a re-declared reimplementation of a name the ban
-// table names, a domain.TrackerAdapter method that does not record
-// through trackermetrics.Track, a direct call to IncTrackerRequests, a
-// tracker-registering package supplying no config validation hook, or an
-// import rule IMPORT rejects.
+// TestCheckAdapterContract walks internal/tracker, internal/scm,
+// internal/agent, and internal/notify and fails when any package breaks
+// rules BAN, METRICS, HOOK, IMPORT, IDENTITY, or STOPGRACE.
 func TestCheckAdapterContract(t *testing.T) {
 	fset := token.NewFileSet()
 
@@ -2573,11 +2417,8 @@ func TestCheckAdapterContract(t *testing.T) {
 	}
 }
 
-// TestCheckOrchestratorContract walks the Go files under internal/orchestrator,
-// excluding testdata, and fails when a file imports a package under an
-// adapter family root that the core-import rule rejects: an ordinary
-// import must resolve the adapter kind through the registry instead, and
-// a blank import outside a test file belongs in cmd/sortie, not here.
+// TestCheckOrchestratorContract walks internal/orchestrator and fails when
+// a file imports an adapter-family package the core-import rule rejects.
 func TestCheckOrchestratorContract(t *testing.T) {
 	fset := token.NewFileSet()
 
@@ -2607,11 +2448,9 @@ func TestCheckOrchestratorContract(t *testing.T) {
 	}
 }
 
-// contractCaptureTeardownRoots names the two roots rules CAPTURE and
-// TEARDOWN walk, the same module-wide scope contractWideIdentityRoots
-// names for rule IDENTITY: every launch site has to reach
-// procutil.RunCapture, procutil.StartCapture, procutil.SetGroupCancel,
-// or procutil.SetGroupKill, whichever family or layer it lives in.
+// contractCaptureTeardownRoots names the roots rules CAPTURE and TEARDOWN
+// walk: every launch site, whatever family or layer, must reach
+// procutil.RunCapture/StartCapture/SetGroupCancel/SetGroupKill.
 var contractCaptureTeardownRoots = []struct {
 	dir        string
 	importPath string
@@ -2620,12 +2459,9 @@ var contractCaptureTeardownRoots = []struct {
 	{filepath.Join("..", "..", "internal"), "github.com/sortie-ai/sortie/internal"},
 }
 
-// contractWalkCaptureAndTeardown walks both contractCaptureTeardownRoots
-// through contractWalkRoot, grouping files by directory, and merges the
-// two roots' packages into one dir-ordered slice. The caller builds rule
-// CAPTURE's index from the merged slice via contractBuildModuleCmdIndex,
-// so a constructor call spanning two of the walked packages resolves the
-// same way a same-package call does.
+// contractWalkCaptureAndTeardown walks both roots through contractWalkRoot
+// and merges their packages into one dir-ordered slice, so a constructor
+// call spanning two walked packages resolves like a same-package call.
 func contractWalkCaptureAndTeardown(t *testing.T, fset *token.FileSet) []contractWalkedPackage {
 	t.Helper()
 	var walked []contractWalkedPackage
@@ -2637,17 +2473,8 @@ func contractWalkCaptureAndTeardown(t *testing.T, fset *token.FileSet) []contrac
 	return walked
 }
 
-// TestContractCaptureAndTeardown walks every non-test Go file under
-// cmd/ and internal/, excluding testdata, and fails when a file starts
-// a process, waits on one, or wires an exec.Cmd's output or
-// cancellation directly, outside procutil and the named test-support
-// packages (rule CAPTURE); passes a CaptureParams.Stdout or
-// CaptureParams.Stderr that does not resolve to nil or a type
-// contractBoundedSinkTypes admits (rule SINK); assigns an exec.Cmd
-// teardown field by hand (rule TEARDOWN); or calls
-// procutil.StartReaper with a nil logger or a fresh slog.Default()
-// call rather than a logger the call site already holds (rule
-// REAPER).
+// TestContractCaptureAndTeardown walks every non-test Go file under cmd/
+// and internal/ and fails on rules CAPTURE, SINK, TEARDOWN, and REAPER.
 func TestContractCaptureAndTeardown(t *testing.T) {
 	fset := token.NewFileSet()
 	walked := contractWalkCaptureAndTeardown(t, fset)
@@ -2676,16 +2503,10 @@ func TestContractCaptureAndTeardown(t *testing.T) {
 	}
 }
 
-// TestCheckAdapterContract_DetectsViolations pins the checker's own logic
-// against inline source fixtures, independent of the current state of
-// any adapter package, so a regression in a rule is caught even when
-// every real adapter happens to comply. Each fixture is parsed as the
-// single file of a one-file package named by dirName.
 // TestCheckAdapterContract_DetectsSSHRemoteCommandHelpers pins the two
-// ban-table entries for the retired per-adapter SSH prefix helpers,
-// against an inline fixture rather than the current state of any real
-// package, so a regression is caught even when every real adapter
-// happens to comply.
+// ban-table entries for the retired SSH prefix helpers against an inline
+// fixture, so a regression is caught even when every real adapter
+// complies.
 func TestCheckAdapterContract_DetectsSSHRemoteCommandHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -2748,10 +2569,8 @@ func TestCheckAdapterContract_DetectsViolations(t *testing.T) {
 		inTestFile bool
 		wantCount  int
 
-		// wantSubstr, when non-empty, must appear in the text of at
-		// least one returned violation, pinning the violation to the
-		// expected rule rather than accepting any violation of the
-		// right count.
+		// wantSubstr, when non-empty, must appear in a returned violation,
+		// pinning it to the expected rule rather than any violation.
 		wantSubstr string
 	}{
 		{
@@ -2919,8 +2738,8 @@ func record(metrics Metrics) {
 			wantCount: 1,
 		},
 		{
-			// No meta literal at all means no declared blocker source
-			// either, so this fixture is caught by both HOOK and BLOCKER.
+			// No meta literal means no declared blocker source either, so
+			// both HOOK and BLOCKER fire.
 			name:       "a tracker kind registered through plain Register is rejected",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
@@ -2978,11 +2797,9 @@ func (a *fixtureAdapter) FetchIssueByID(ctx int, id string) (int, error) {
 			wantCount: 0,
 		},
 		{
-			// The fixture registers through the plain Register form, which
-			// carries no meta literal at all, so it is also caught by rule
-			// BLOCKER (no package can declare a blocker source without a
-			// meta literal to carry it); dirName "file" is allowlisted for
-			// HOOK only, so both BAN and BLOCKER fire here.
+			// Plain Register carries no meta literal, so BLOCKER also
+			// fires; "file" is allowlisted for HOOK only, so BAN and
+			// BLOCKER both fire.
 			name:       "a package allowlisted for HOOK stays subject to BAN",
 			dirName:    "file",
 			importPath: "github.com/sortie-ai/sortie/internal/tracker/file",
@@ -3215,11 +3032,9 @@ const backend = "gemini"
 			wantSubstr: `names agent identity token "gemini"`,
 		},
 		{
-			// "claude-code" also carries the single-word floor token
-			// "claude" as a prefix run, so this fixture reports two
-			// violations; wantSubstr pins that one of them names the
-			// multi-word token itself, which is the case plain word
-			// equality (matching only "claude") would miss.
+			// "claude-code" also carries the floor token "claude", so two
+			// violations; wantSubstr pins the multi-word one plain word
+			// equality would miss.
 			name:       "a package naming a foreign multi-word kind string is rejected",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
@@ -3248,11 +3063,9 @@ func check(agentInfo Info) bool {
 			wantSubstr: "switch tag is agentInfo",
 		},
 		{
-			// AgentInfo, capitalized, is the wire type's own field
-			// name; the recorded session field is a different
-			// identifier from the lowercase agentInfo the second arm
-			// bans, so deciding presence from it once is not a
-			// violation.
+			// Capitalized AgentInfo is the wire type's field, a different
+			// identifier from the banned lowercase agentInfo, so deciding
+			// presence from it once is legal.
 			name:       "a package deciding presence once from the wire type's own AgentInfo field is accepted",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
@@ -3275,10 +3088,8 @@ const kind = "claude-code"
 			wantCount: 0,
 		},
 		{
-			// subpkg sits under the real claude kind package's own
-			// import path, so the subtree exclusion covers every
-			// package nested under a kind package's import path,
-			// excluding both "claude" and "claude-code" for it too.
+			// subpkg sits under the real claude kind package's path, so the
+			// subtree exclusion covers it too.
 			name:       "a package under a kind package's own path naming that kind's registered string is accepted",
 			dirName:    "subpkg",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/claude/subpkg",
@@ -3319,18 +3130,14 @@ const kind = "claude-code"
 	}
 }
 
-// TestCheckContractCapture_DetectsViolations pins rule CAPTURE's, rule
-// SINK's, and rule TEARDOWN's own logic against inline source
-// fixtures, independent of the current state of any package under
-// cmd/ or internal/, so a regression is caught even when every real
-// launch site happens to comply. Each fixture is parsed as the single
-// non-test file of a one-file package named by dirName; every case
-// runs through both checkContractCapture and checkContractTeardown.
-// Rule CAPTURE's own Stdout/Stderr check targets a direct assignment
-// to exec.Cmd.Stdout or exec.Cmd.Stderr; rule SINK's targets a field of
-// that name inside a procutil.CaptureParams composite literal instead,
-// so the two never match the same syntax, and TEARDOWN's Cancel and
-// WaitDelay checks overlap with neither.
+// TestCheckContractCapture_DetectsViolations pins rules CAPTURE, SINK, and
+// TEARDOWN against inline fixtures, so a regression is caught even when
+// every real launch site complies. Each fixture is the single non-test
+// file of a one-file package run through both checkContractCapture and
+// checkContractTeardown. CAPTURE targets a direct exec.Cmd.Stdout/Stderr
+// assignment, SINK targets those fields inside a procutil.CaptureParams
+// literal, and TEARDOWN targets Cancel and WaitDelay, so no two match the
+// same syntax.
 func TestCheckContractCapture_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
@@ -3546,12 +3353,10 @@ func run() string {
 			wantSubstr: "dot-imports os",
 		},
 		{
-			// A dot-imported procutil turns "CaptureParams{...}" into a
-			// bare composite literal contractIsCaptureParamsLit cannot
-			// recognize (it looks for a "procutil." selector), so
-			// without the general dot-import ban this Stdout field,
-			// resolving to os.Stdout rather than a bounded sink, would
-			// evade rule SINK entirely instead of being reported.
+			// A dot-imported procutil makes "CaptureParams{...}" a bare
+			// literal contractIsCaptureParamsLit cannot recognize, so
+			// without the dot-import ban this os.Stdout sink would evade
+			// rule SINK.
 			name:       "a dot-import of procutil hiding an unbounded sink is rejected once, on the import",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
@@ -3723,11 +3528,9 @@ func launch(cmd *exec.Cmd) {
 			wantSubstr: "call procutil.SetGroupCancel or procutil.SetGroupKill",
 		},
 		{
-			// The negative control: an os.Pipe write end is exactly the
-			// sink [CaptureParams] warns against, since a reader that
-			// stops draining it blocks Write and holds seal, and so
-			// Wait, open indefinitely. Reproduces StartCapture's real
-			// call shape rather than a synthetic type.
+			// An os.Pipe write end is exactly the sink CaptureParams warns
+			// against: a reader that stops draining it blocks Write and
+			// holds Wait open indefinitely.
 			name:       "an os.Pipe write end passed as a capture sink is rejected",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
@@ -3797,10 +3600,8 @@ func run(cmd *exec.Cmd) error {
 			wantCount: 0,
 		},
 		{
-			// Reproduces workspace.RunHook's real shape: a package-local
-			// bounded writer built with "&T{...}" and shared by both
-			// streams, admitted through contractBoundedSinkTypes by name
-			// rather than by structural inspection of its Write method.
+			// A bounded writer is admitted through contractBoundedSinkTypes
+			// by name, not by structural inspection of its Write method.
 			name:       "a locally-declared bounded writer capture sink is accepted",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
@@ -3891,15 +3692,11 @@ func run(cmd *exec.Cmd) error {
 	}
 }
 
-// TestCheckContractReaperLogger_DetectsViolations pins rule REAPER's
-// own logic against inline source fixtures, independent of the current
-// state of any package under cmd/ or internal/, so a regression is
-// caught even when every real launch site happens to comply. The
-// clean fixtures are the negative control: a call that already passes
-// a logger the call site holds, whether in a local variable or a
-// struct field, or through a chained slog.Default().With(...) already
-// bound to a local before the call, must report no violation, so the
-// rule is proven not to fire on the shape every real call site uses.
+// TestCheckContractReaperLogger_DetectsViolations pins rule REAPER against
+// inline fixtures, so a regression is caught even when every real launch
+// site complies. The clean fixtures are the negative control: a call
+// passing a logger the site holds (local, struct field, or a chained
+// slog.Default().With bound to a local first) must not fire.
 func TestCheckContractReaperLogger_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
@@ -4087,18 +3884,9 @@ func run() int { return 1 }
 
 // TestCheckContractCapture_DetectsCrossPackageConstructorViolations pins
 // that rule CAPTURE binds a call to a constructor declared in another
-// walked package, not only one declared in the caller's own package.
-// The producer fixture reproduces workspace.GitCommand's real shape - a
-// context- and dir-taking function returning *exec.Cmd, built on
-// exec.CommandContext - and the consumer fixture reproduces
-// internal/orchestrator's real call shape, assigning its result to a
-// local and hand-wiring Wait directly instead of going through
-// procutil.RunCapture or procutil.StartCapture. idx and fields are
-// built module-wide via contractBuildModuleCmdIndex across both fixture
-// packages, the way TestContractCaptureAndTeardown builds them across
-// the real walk; an idx built from the consumer package alone - the
-// defect this test guards against - indexes no function under
-// GitCommand's own import path and misses the call.
+// walked package, not only the caller's own. idx and fields are built
+// module-wide across both fixture packages; an idx built from the consumer
+// alone (the defect this guards against) would miss the call.
 func TestCheckContractCapture_DetectsCrossPackageConstructorViolations(t *testing.T) {
 	t.Parallel()
 
@@ -4174,17 +3962,11 @@ func runGitDiff(ctx context.Context, workspacePath string, args ...string) error
 	}
 }
 
-// TestCheckContractCapture_DetectsDotImportedConstructorViolations is the
-// negative control for the hole an audit of
-// TestCheckContractCapture_DetectsCrossPackageConstructorViolations
-// found: contractFileImportAliases omits a dot import, since a dot
-// import binds no name a selector could qualify, so a call reached
-// through one - GitCommand written bare instead of workspace.GitCommand
-// - resolved against nothing and the hand-wired Wait beneath it passed
-// uncaught. The consumer here is the same shape as that test's, a dot
-// import substituted for the named one; before the general dot-import
-// ban in checkContractCaptureFile this returned zero violations, which
-// an overlay probe against a pre-fix copy confirmed.
+// TestCheckContractCapture_DetectsDotImportedConstructorViolations guards
+// the hole where a constructor reached through a dot import bound no name
+// a selector could qualify, so the hand-wired Wait beneath it passed
+// uncaught. Before the general dot-import ban this returned zero
+// violations.
 func TestCheckContractCapture_DetectsDotImportedConstructorViolations(t *testing.T) {
 	t.Parallel()
 
@@ -4250,19 +4032,13 @@ func runGitDiff(ctx context.Context, workspacePath string, args ...string) error
 	}
 }
 
-// TestCheckContractCapture_ResolvesRenamedImportConstructorCalls pins
-// that a renamed import - unlike a dot import - does not share the hole
-// TestCheckContractCapture_DetectsDotImportedConstructorViolations
-// closes: contractFileImportAliases keys aliasPaths from each import's
-// own local identifier, alias or not, so ws.GitCommand resolves exactly
-// as the unaliased workspace.GitCommand does and the hand-wired Wait
-// stays caught. The consumer keeps runVerification and its direct
-// os/exec import from TestCheckContractCapture_DetectsCrossPackageConstructorViolations's
-// fixture: every real caller of a workspace constructor, such as
-// internal/orchestrator/self_review.go, imports os/exec directly in
-// the same file, and dropping that import here would exercise this
-// function's early-return guard instead of the alias resolution this
-// test targets.
+// TestCheckContractCapture_ResolvesRenamedImportConstructorCalls pins that
+// a renamed import, unlike a dot import, does not share the hole the
+// previous test closes: contractFileImportAliases keys off each import's
+// local identifier, so ws.GitCommand resolves like workspace.GitCommand
+// and the hand-wired Wait stays caught. The consumer keeps a direct
+// os/exec import so the alias resolution, not the early-return guard, is
+// exercised.
 func TestCheckContractCapture_ResolvesRenamedImportConstructorCalls(t *testing.T) {
 	t.Parallel()
 
@@ -4333,18 +4109,12 @@ func runGitDiff(ctx context.Context, workspacePath string, args ...string) error
 	}
 }
 
-// TestCheckContractCapture_DetectsProducerOnlyImportViolations is the
-// negative control for the hole checkContractCaptureFile's early return
-// left open: a file that reaches a command through a cross-package
-// constructor never has to import os/exec, os, syscall, windows, or
-// procutil itself, so naming none of those five was wrongly treated as
-// proof the file could not violate rule CAPTURE. The consumer here
-// drops every import the sibling constructor tests keep around it -
-// os/exec included - leaving only the producer's own import, and waits
-// on the result directly the same way those tests' consumers do.
-// Before the producer-path check joined the early return's condition,
-// an overlay run against a pre-fix copy of this file confirmed this
-// case reported zero violations.
+// TestCheckContractCapture_DetectsProducerOnlyImportViolations guards the
+// hole in checkContractCaptureFile's early return: a file reaching a
+// command through a cross-package constructor need not import os/exec
+// itself, so naming none of the five imports was wrongly treated as proof
+// it could not violate rule CAPTURE. Before the producer-path check joined
+// the early-return condition this reported zero violations.
 func TestCheckContractCapture_DetectsProducerOnlyImportViolations(t *testing.T) {
 	t.Parallel()
 
@@ -4428,10 +4198,9 @@ func TestContractAllowlist_BlockerRuleHasNoExemptions(t *testing.T) {
 	}
 }
 
-// contractIdentityReporter is the reporting surface the two identity-rule
-// staleness checks below need. *testing.T satisfies it, and so does the
-// fake the guard test drives them with, so both tests exercise one
-// implementation of each check rather than a copy of it.
+// contractIdentityReporter is the reporting surface the identity-rule
+// staleness checks need. Both *testing.T and the guard test's fake satisfy
+// it, so each check runs one implementation rather than a copy.
 type contractIdentityReporter interface {
 	Errorf(format string, args ...any)
 }
@@ -4531,10 +4300,9 @@ func contractCheckWideRuleAllowlist(r contractIdentityReporter, rule contractRul
 }
 
 // TestContractIdentityRule_AppliesAndStaysCurrent guards rule IDENTITY
-// against going stale: it fails when the rule was evaluated for no
-// package under the agent family root, when the rule's own token
-// extraction reported an error, or when a contractAllowlist entry
-// naming ruleIDENTITY names a directory the walk did not find.
+// against going stale: it fails when the rule was evaluated for no agent
+// package, when token extraction reported an error, or when a ruleIDENTITY
+// allowlist entry names a directory the walk did not find.
 func TestContractIdentityRule_AppliesAndStaysCurrent(t *testing.T) {
 	fset := token.NewFileSet()
 	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "agent"), contractAgentFamilyPath)
@@ -4553,11 +4321,9 @@ func TestContractIdentityRule_AppliesAndStaysCurrent(t *testing.T) {
 	contractCheckIdentityAllowlist(t, found)
 }
 
-// contractStalenessFakeReporter records Errorf calls instead of failing
-// the enclosing test, so TestContractIdentityRule_StalenessGuardCatchesRealBreaks
-// can drive TestContractIdentityRule_AppliesAndStaysCurrent's own checks
-// against deliberately-broken synthetic input without reddening this
-// test file's own run.
+// contractStalenessFakeReporter records Errorf calls instead of failing,
+// so the guard test can drive the real checks against broken synthetic
+// input without reddening this file's run.
 type contractStalenessFakeReporter struct {
 	errors []string
 }
@@ -4566,15 +4332,11 @@ func (f *contractStalenessFakeReporter) Errorf(format string, _ ...any) {
 	f.errors = append(f.errors, format)
 }
 
-// TestContractIdentityRule_StalenessGuardCatchesRealBreaks proves the two
-// checks TestContractIdentityRule_AppliesAndStaysCurrent performs are
-// themselves capable of failing, not merely capable of passing against
-// the current tree: fed a walk that evaluated rule IDENTITY for no
-// package under the agent family root, or an allowlist naming a
-// directory that walk did not find, each check must record a failure.
-// Neither subtest runs in parallel: the second temporarily replaces the
-// package-level contractAllowlist, which a concurrently-running fixture
-// test also reads.
+// TestContractIdentityRule_StalenessGuardCatchesRealBreaks proves the
+// checks TestContractIdentityRule_AppliesAndStaysCurrent performs can
+// fail, not just pass against the current tree. Neither subtest runs in
+// parallel: the second replaces the package-level contractAllowlist a
+// concurrent fixture test also reads.
 func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	t.Run("zero packages evaluated under the agent family root", func(t *testing.T) {
 		walked := []contractWalkedPackage{
@@ -4607,10 +4369,9 @@ func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	})
 }
 
-// TestContractStopGraceRule_AppliesAndStaysCurrent guards rule
-// STOPGRACE against going stale: it fails when the rule was evaluated
-// for no package under the agent family root, or when a
-// contractAllowlist entry naming ruleSTOPGRACE names a directory the
+// TestContractStopGraceRule_AppliesAndStaysCurrent guards rule STOPGRACE
+// against going stale: it fails when the rule was evaluated for no agent
+// package, or when a ruleSTOPGRACE allowlist entry names a directory the
 // walk did not find.
 func TestContractStopGraceRule_AppliesAndStaysCurrent(t *testing.T) {
 	fset := token.NewFileSet()
@@ -4626,14 +4387,10 @@ func TestContractStopGraceRule_AppliesAndStaysCurrent(t *testing.T) {
 }
 
 // TestContractStopGraceRule_StalenessGuardCatchesRealBreaks proves the
-// two checks TestContractStopGraceRule_AppliesAndStaysCurrent performs
-// are themselves capable of failing, not merely capable of passing
-// against the current tree: fed a walk that evaluated rule STOPGRACE
-// for no package under the agent family root, or an allowlist naming a
-// directory that walk did not find, each check must record a failure.
-// The second subtest temporarily replaces the package-level
-// contractAllowlist, which a concurrently-running fixture test also
-// reads, so neither subtest runs in parallel.
+// checks TestContractStopGraceRule_AppliesAndStaysCurrent performs can
+// fail, not just pass. The second subtest replaces the package-level
+// contractAllowlist a concurrent fixture test reads, so neither runs in
+// parallel.
 func TestContractStopGraceRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	t.Run("zero packages evaluated under the agent family root", func(t *testing.T) {
 		walked := []contractWalkedPackage{
@@ -4666,12 +4423,11 @@ func TestContractStopGraceRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	})
 }
 
-// TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent guards
-// rules CAPTURE, SINK, TEARDOWN, and REAPER against going stale: each
-// fails when it was evaluated for no non-exempt file under
-// internal/agent, internal/orchestrator, or internal/workspace, or
-// when a contractAllowlist entry naming it names a directory the walk
-// did not find.
+// TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent guards rules
+// CAPTURE, SINK, TEARDOWN, and REAPER against going stale: each fails when
+// evaluated for no non-exempt file under internal/agent,
+// internal/orchestrator, or internal/workspace, or when an allowlist entry
+// names a directory the walk did not find.
 func TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent(t *testing.T) {
 	fset := token.NewFileSet()
 	walked := contractWalkCaptureAndTeardown(t, fset)
@@ -4693,13 +4449,9 @@ func TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent(t *testing.T) {
 
 // TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks
 // proves the checks TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent
-// performs are themselves capable of failing, not merely capable of
-// passing against the current tree: fed a walk that evaluated the rule
-// for no file under any of the three required roots, or an allowlist
-// naming a directory that walk did not find, each check must record a
-// failure. The second subtest temporarily replaces the package-level
-// contractAllowlist, which a concurrently-running fixture test also
-// reads, so neither subtest runs in parallel.
+// performs can fail, not just pass. The second subtest replaces the
+// package-level contractAllowlist a concurrent fixture test reads, so
+// neither runs in parallel.
 func TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 	for _, rule := range []contractRule{ruleCAPTURE, ruleSINK, ruleTEARDOWN, ruleREAPER} {
 		t.Run(string(rule)+": zero files evaluated under a required root", func(t *testing.T) {
@@ -4735,8 +4487,7 @@ func TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks(t *testi
 }
 
 // TestResolveContractImportName pins that the qualifier is read from the
-// file's own import declaration, including an aliased import, rather
-// than assumed to be the literal identifier "registry".
+// file's own import declaration, including an aliased import.
 func TestResolveContractImportName(t *testing.T) {
 	t.Parallel()
 
@@ -4764,14 +4515,12 @@ var _ = r.Trackers
 }
 
 // TestContractSharedFamilyPackages_RegisterNoKind guards
-// contractSharedFamilyPackages against going stale: it fails when an
-// entry carries an empty reason, names a key contractSharedPackageDir
-// cannot resolve, names a directory with no parsable non-test Go file,
-// names a package that contractPackageRegistersKind now reports true
-// for, or carries coreImportable true for a directory whose non-test
-// files import testing. It enumerates each named directory with
-// os.ReadDir alone, never descending into a subdirectory, so a permitted
-// package's verdict never depends on a subpackage the map does not name.
+// contractSharedFamilyPackages against going stale: it fails on an empty
+// reason, a key contractSharedPackageDir cannot resolve, a directory with
+// no parsable non-test Go file, a package contractPackageRegistersKind now
+// reports true for, or coreImportable true for a directory whose non-test
+// files import testing. It enumerates each named directory alone, never
+// descending, so a verdict never depends on an unnamed subpackage.
 func TestContractSharedFamilyPackages_RegisterNoKind(t *testing.T) {
 	t.Parallel()
 
@@ -4829,10 +4578,8 @@ func TestContractSharedFamilyPackages_RegisterNoKind(t *testing.T) {
 }
 
 // TestCheckOrchestratorContract_DetectsViolations pins the core-import
-// decision table against inline source fixtures, independent of the
-// current state of internal/orchestrator, so a regression in the rule is
-// caught even when every real file happens to comply. Each fixture is
-// parsed as the single file of a one-file package.
+// decision table against inline fixtures, so a regression is caught even
+// when every real file complies. Each fixture is a one-file package.
 func TestCheckOrchestratorContract_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
@@ -5074,9 +4821,8 @@ import "github.com/sortie-ai/sortie/internal/agent/agentcore"
 }
 
 // TestContractPackageRegistersKind pins the generalized registration
-// predicate against inline fixtures, so it stays true for every registry
-// namespace and for a qualifier resolved through an import alias, not
-// only the literal identifier "registry".
+// predicate against inline fixtures, covering every registry namespace and
+// a qualifier resolved through an import alias.
 func TestContractPackageRegistersKind(t *testing.T) {
 	t.Parallel()
 

@@ -8,22 +8,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// newPumpForCapabilityTests builds a *sessionState with a local
-// launch's stage-one capability record and a *pumpState pointing at
-// it, with no connection or subprocess involved: everything below
-// exercises the record's mutation path directly, never a decision that
-// needs a live wire.
 func newPumpForCapabilityTests(t *testing.T) (*sessionState, *pumpState) {
 	t.Helper()
 	state := &sessionState{caps: newCapabilityRecord(false), logger: discardLogger()}
 	return state, &pumpState{state: state}
 }
 
-// TestNewCapabilityRecordToolServersStageOne confirms the stage-one
-// toolServers state is decided by the remote flag alone: a remote
-// launch starts at gap because a remote runtime cannot be trusted to
-// deliver a locally-generated tool-server configuration, while a local
-// launch starts at protocol.
 func TestNewCapabilityRecordToolServersStageOne(t *testing.T) {
 	t.Parallel()
 
@@ -49,14 +39,6 @@ func TestNewCapabilityRecordToolServersStageOne(t *testing.T) {
 	}
 }
 
-// TestNewCapabilityRecordStageOneEntries confirms all four stage-one
-// entries independently of any handshake, for both launch arms. The
-// sessionContinuation case is the load-bearing one: it must start at
-// protocol whichever way the launch resolves, because nothing is known
-// yet about whether the agent advertises a continuation method. Only a
-// handshake-free assertion can prove it, because the handshake lowers
-// that entry when neither method is advertised and would mask a wrong
-// default.
 func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 	t.Parallel()
 
@@ -94,10 +76,6 @@ func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 	}
 }
 
-// TestCapabilityLoweringNeverRises confirms an entry the handshake
-// lowers to gap stays there for the rest of the session: a later
-// application reporting the same capability as present must not move
-// the entry back to protocol.
 func TestCapabilityLoweringNeverRises(t *testing.T) {
 	t.Parallel()
 
@@ -111,10 +89,6 @@ func TestCapabilityLoweringNeverRises(t *testing.T) {
 		t.Fatalf("toolServers after the first lowering = %q, want %q", state.caps.toolServers, capabilityGap)
 	}
 
-	// A later application reporting the capability as present must not
-	// raise either entry back to protocol; nothing in this record's
-	// mutation path offers a rise, and this proves that rather than
-	// merely assuming it.
 	p.applyHandshakeCapabilityLowering(&handshakeFacts{agentInfoPresent: true, toolServersWithheld: false})
 	if state.caps.agentVersion != capabilityGap {
 		t.Errorf("agentVersion after a later report of presence = %q, want %q: an entry must never rise once lowered", state.caps.agentVersion, capabilityGap)
@@ -124,15 +98,6 @@ func TestCapabilityLoweringNeverRises(t *testing.T) {
 	}
 }
 
-// TestHandshakeLoweringPersistsAcrossTurns confirms the same invariant
-// end to end, through the running pump and two successive turns of the
-// same session, rather than through a direct call alone. It reads the
-// invariant through the event stream rather than through state.caps: the
-// pump goroutine is that record's sole owner, and reading its fields
-// from the test goroutine is race-free only by accident of this piece
-// having a single lowering trigger. A later piece that schedules
-// lowering from the pump mid-turn would turn that direct read into a
-// genuine data race.
 func TestHandshakeLoweringPersistsAcrossTurns(t *testing.T) {
 	t.Parallel()
 
@@ -156,9 +121,6 @@ func TestHandshakeLoweringPersistsAcrossTurns(t *testing.T) {
 		t.Fatalf("first turn gap notice = %q, want it to list %q: the handshake lowered agentVersion", notice.Message, capabilityLabelAgentVersion)
 	}
 
-	// A second turn must not repeat the notice: the once-per-session gate
-	// already proves the first turn's lowering was not undone and
-	// reapplied, without this goroutine touching the pump-owned record.
 	var secondTurnEvents []domain.AgentEvent
 	outcomeCh2 := runTurnAsync(state, domain.RunTurnParams{Prompt: "go again", OnEvent: collectEvents(&secondTurnEvents)})
 	promptID2 := out.awaitMethod(t, methodSessionPrompt)
@@ -174,8 +136,6 @@ func TestHandshakeLoweringPersistsAcrossTurns(t *testing.T) {
 	}
 }
 
-// firstNotification returns the first domain.EventNotification event in
-// events, failing t if none is present.
 func firstNotification(t *testing.T, events []domain.AgentEvent) domain.AgentEvent {
 	t.Helper()
 	for _, ev := range events {
@@ -187,15 +147,6 @@ func firstNotification(t *testing.T, events []domain.AgentEvent) domain.AgentEve
 	return domain.AgentEvent{}
 }
 
-// TestTurnSnapshotIsolatesMidTurnLowering confirms a turn reads the
-// capability record as it stood when the turn began: capsSnapshot is a
-// value copy taken at turn start, so a lowering the pump applies while
-// that turn is still in flight does not retroactively change what the
-// turn already read. The lowering that takes effect from the next turn
-// onward is exercised here directly, because this piece's own
-// handshake is the only lowering trigger this transport has landed so
-// far; the observation-based trigger of a later piece lands on the
-// same lowerCapability path this test drives.
 func TestTurnSnapshotIsolatesMidTurnLowering(t *testing.T) {
 	t.Parallel()
 
@@ -215,21 +166,12 @@ func TestTurnSnapshotIsolatesMidTurnLowering(t *testing.T) {
 		t.Errorf("turn snapshot agentVersion after a mid-turn lowering = %q, want %q: a lowering observed mid-turn must not change decisions the turn already made", turn.capsSnapshot.agentVersion, capabilityProtocol)
 	}
 
-	// The next turn's own snapshot, taken after the lowering, does see it.
 	nextTurn := &activeTurn{capsSnapshot: *state.caps}
 	if nextTurn.capsSnapshot.agentVersion != capabilityGap {
 		t.Errorf("next turn's snapshot agentVersion = %q, want %q: the lowering takes effect from the following turn", nextTurn.capsSnapshot.agentVersion, capabilityGap)
 	}
 }
 
-// TestEmitCapabilityGapNoticeOnceReadsTurnSnapshot confirms the notice
-// is assembled from the turn's own capsSnapshot, not from the pump's
-// live record. The two tables below diverge the snapshot from the live
-// record in opposite directions: a snapshot that already carries a gap
-// the live record lacks, and a live record that carries a gap the
-// snapshot lacks. Reading the live record instead of the snapshot
-// would report the wrong outcome in both directions, even though a
-// production turn always builds the two equal in the same call.
 func TestEmitCapabilityGapNoticeOnceReadsTurnSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -293,12 +235,9 @@ func TestEmitCapabilityGapNoticeOnceReadsTurnSnapshot(t *testing.T) {
 	}
 }
 
-// TestAgentVersionLoweredByPresenceBoolean confirms an absent agentInfo
-// lowers the version entry through the agentInfoPresent boolean alone.
-// The zero-value case is the load-bearing one: if the lowering were
-// driven by comparing the recorded implementation value instead, a
-// present-but-zero-value agentInfo would be indistinguishable from an
-// absent one and would wrongly lower the entry.
+// A present-but-zero-value agentInfo must be distinguishable from an absent
+// one, so the lowering keys on the agentInfoPresent boolean rather than on the
+// recorded implementation value.
 func TestAgentVersionLoweredByPresenceBoolean(t *testing.T) {
 	t.Parallel()
 
@@ -343,10 +282,6 @@ func TestAgentVersionLoweredByPresenceBoolean(t *testing.T) {
 	}
 }
 
-// TestToolServersLoweredWhenWithheld confirms an HTTP tool server the
-// generated configuration declared, but the handshake's advertised MCP
-// capabilities do not support, lowers toolServers; a handshake that
-// withholds nothing leaves it at its stage-one state.
 func TestToolServersLoweredWhenWithheld(t *testing.T) {
 	t.Parallel()
 
@@ -373,13 +308,6 @@ func TestToolServersLoweredWhenWithheld(t *testing.T) {
 	}
 }
 
-// TestSessionContinuationLoweredWhenHandshakeAdvertisesNeither confirms
-// the handshake-based half of sessionContinuation's lowering: a
-// handshake advertising neither continuation method lowers the entry
-// from its now-protocol stage-one default, while advertising either
-// one leaves it there. This branch was inert before this piece flipped
-// newCapabilityRecord's stage-one default to protocol, so no earlier
-// test observed it doing anything.
 func TestSessionContinuationLoweredWhenHandshakeAdvertisesNeither(t *testing.T) {
 	t.Parallel()
 
@@ -407,12 +335,9 @@ func TestSessionContinuationLoweredWhenHandshakeAdvertisesNeither(t *testing.T) 
 	}
 }
 
-// TestAdvertisesSessionContinuation confirms the predicate over the
-// four shapes that matter. The asymmetry between the two branches is
-// schema-driven, not a testing inconsistency: LoadSession is a *bool,
-// so only a present and true value advertises continuation, while
-// Resume is a struct pointer with no boolean payload, so its mere
-// presence is the advertisement.
+// LoadSession is a *bool, so only a present true value advertises
+// continuation; Resume is a struct pointer with no boolean payload, so its
+// mere presence is the advertisement.
 func TestAdvertisesSessionContinuation(t *testing.T) {
 	t.Parallel()
 
@@ -464,12 +389,6 @@ func TestAdvertisesSessionContinuation(t *testing.T) {
 	}
 }
 
-// TestAdvertisesSessionClose confirms the predicate over the shapes
-// that matter: a handshake carrying close as {} advertises it, an
-// absent sessionCapabilities object does not, a sessionCapabilities
-// object present with no close member does not, and a close member
-// decoded from an explicit JSON null does not either, leaving the
-// pointer nil exactly as an absent member would.
 func TestAdvertisesSessionClose(t *testing.T) {
 	t.Parallel()
 
@@ -521,13 +440,6 @@ func TestAdvertisesSessionClose(t *testing.T) {
 	})
 }
 
-// TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod
-// confirms the handshake's lowering predicate and resolveSession's own
-// routing decision can never disagree about what caps advertises,
-// across a matrix wider than either function's own dedicated test: an
-// agent that advertised both, or that advertised one falsely, would
-// otherwise risk one predicate reporting a capability the other never
-// attempts, or an attempt the other reports as a gap.
 func TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod(t *testing.T) {
 	t.Parallel()
 
@@ -562,9 +474,6 @@ func TestAdvertisesSessionContinuationAgreesWithChooseContinuationMethod(t *test
 	}
 }
 
-// TestCapabilityRecordGapNotice confirms the notice text lists only the
-// entries in the gap state, in the record's own fixed field order,
-// assembled from nothing but the compile-time constant fragments.
 func TestCapabilityRecordGapNotice(t *testing.T) {
 	t.Parallel()
 
@@ -631,19 +540,12 @@ func TestCapabilityRecordGapNotice(t *testing.T) {
 	}
 }
 
-// TestCapabilityGapNoticeOncePerSession confirms the once-per-session
-// notice is the first notification of the session's first turn, is
-// never repeated by a later turn, and lists the entries the handshake
-// left in the gap state in the record's fixed order.
 func TestCapabilityGapNoticeOncePerSession(t *testing.T) {
 	t.Parallel()
 
 	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
 	out := newOutboundReader(outPr)
 
-	// A local launch's stage-one record already carries tokenCounts and
-	// sessionContinuation at gap; this handshake lowers the two
-	// remaining entries so the notice lists all four labels.
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: &handshakeFacts{
 		agentInfoPresent:    false,
 		toolServersWithheld: true,
@@ -684,8 +586,6 @@ func TestCapabilityGapNoticeOncePerSession(t *testing.T) {
 		}
 	}
 
-	// A second turn in the same session must not repeat the notice, even
-	// though the record still carries the same gap entries.
 	var secondTurnEvents []domain.AgentEvent
 	outcomeCh2 := runTurnAsync(state, domain.RunTurnParams{Prompt: "go again", OnEvent: collectEvents(&secondTurnEvents)})
 	promptID2 := out.awaitMethod(t, methodSessionPrompt)
@@ -701,9 +601,6 @@ func TestCapabilityGapNoticeOncePerSession(t *testing.T) {
 	}
 }
 
-// runOneTurnAndCaptureNotice starts a session carrying the given
-// handshake facts and session identifier, runs one turn to completion,
-// and returns the message of the notification event it observed.
 func runOneTurnAndCaptureNotice(t *testing.T, sessionID string, facts *handshakeFacts) string {
 	t.Helper()
 
@@ -731,11 +628,6 @@ func runOneTurnAndCaptureNotice(t *testing.T, sessionID string, facts *handshake
 	return ""
 }
 
-// TestCapabilityGapNoticeInterpolatesNoRuntimeValue confirms the notice
-// is byte-identical across two sessions that carry different runtime
-// details (session identifier, agent name and version) but land on the
-// same set of gap entries: it is assembled only from compile-time
-// constant fragments and never from a wire-derived value.
 func TestCapabilityGapNoticeInterpolatesNoRuntimeValue(t *testing.T) {
 	t.Parallel()
 
