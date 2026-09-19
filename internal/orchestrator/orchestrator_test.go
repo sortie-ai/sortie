@@ -26,8 +26,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
-// stubWorkflowManager implements [WorkflowManager] with configurable returns.
-// All methods are safe for concurrent use.
 type stubWorkflowManager struct {
 	mu            sync.RWMutex
 	config        config.ServiceConfig
@@ -91,12 +89,10 @@ func (s *stubWorkflowManager) setTemplate(tmpl *prompt.Template) {
 	s.template = tmpl
 }
 
-// observerFunc adapts a plain function to the [Observer] interface.
 type observerFunc func()
 
 func (f observerFunc) OnStateChange() { f() }
 
-// stubStore implements [OrchestratorStore] with call tracking.
 type stubStore struct {
 	unsupportedReactionObservationStore
 
@@ -106,8 +102,7 @@ type stubStore struct {
 	sessions        []persistence.SessionMetadata
 	savedRetries    []persistence.RetryEntry
 	deletedRetryIDs []string
-	// Budget exhaustion query configuration (per-tick rebuild). The map
-	// value is the run-history session count for that issue.
+	// budgetExhaustedIDs maps an issue to its run-history session count.
 	budgetExhaustedIDs map[string]int
 	budgetExhaustedErr error
 	absenceCounts      map[string]int
@@ -122,16 +117,12 @@ type stubStore struct {
 	tokenSessionCount int
 	tokenUnmeasured   int
 
-	// tokenIncompleteIDs reports a candidate below the token ceiling with
-	// one unmeasured session, for the per-tick token budget rebuild's
-	// "cannot be fully evaluated" outcome. Distinct from tokenExhaustedIDs,
-	// which reports a candidate at the ceiling.
+	// tokenIncompleteIDs reports a candidate below the ceiling with one
+	// unmeasured session (the "cannot be fully evaluated" outcome).
 	tokenIncompleteIDs []string
 
 	// tokenExhaustedUsage overrides the fixed {TotalTokens: 1000} usage
-	// QueryTokenBudgetUsage otherwise reports for an ID in
-	// tokenExhaustedIDs, for a test that needs to control every field of
-	// the reported usage (e.g. StoppedInFlight).
+	// for a tokenExhaustedIDs member, for a test controlling every field.
 	tokenExhaustedUsage map[string]persistence.IssueTokenUsage
 
 	upsertSessionMetadataErr error
@@ -152,10 +143,8 @@ type stubStore struct {
 	listBudgetHoldNoticesErr  error
 
 	// onAppendRunHistory and onUpsertSessionMetadata, when set, run
-	// synchronously on the caller's goroutine after the write is
-	// recorded, so a test observing the orchestrator's single-writer
-	// event loop can capture state at the moment a record is persisted
-	// instead of polling for it from the test goroutine.
+	// synchronously after the write so a test can capture single-writer
+	// state at the moment a record is persisted rather than by polling.
 	onAppendRunHistory      func(persistence.RunHistory)
 	onUpsertSessionMetadata func(persistence.SessionMetadata)
 }
@@ -193,7 +182,6 @@ func (s *stubStore) UpsertSessionMetadata(_ context.Context, m persistence.Sessi
 	return err
 }
 
-// sessionWrites returns a copy of the captured session metadata writes.
 func (s *stubStore) sessionWrites() []persistence.SessionMetadata {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -263,10 +251,8 @@ func (s *stubStore) ResetHandoffAbsenceSequence(_ context.Context, issueID strin
 	return nil
 }
 
-// QueryTokenBudgetUsage reports a candidate named in tokenExhaustedIDs as
-// carrying a total at the fixed threshold every test in this file
-// configures (1000), so the caller's threshold comparison marks it
-// exhausted; every other candidate is absent, which the caller reads as
+// QueryTokenBudgetUsage reports a tokenExhaustedIDs member at the fixed
+// 1000 threshold every test here configures; absent candidates read as
 // zero spend.
 func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error) {
 	s.mu.Lock()
@@ -377,7 +363,6 @@ func (s *stubStore) ListBudgetHoldNotices(_ context.Context) ([]persistence.Budg
 	return out, nil
 }
 
-// stubObserver implements [Observer] with an atomic call counter.
 type stubObserver struct {
 	calls atomic.Int64
 }
@@ -572,7 +557,6 @@ func TestShouldDispatchWithSets(t *testing.T) {
 func TestShouldDispatchWithSets_parity(t *testing.T) {
 	t.Parallel()
 
-	// Verify ShouldDispatchWithSets produces identical results to ShouldDispatch.
 	active := []string{"To Do", "In Progress"}
 	terminal := []string{"Done", "Closed"}
 	aSet := stateSet(active)
@@ -689,13 +673,10 @@ func TestNewOrchestrator(t *testing.T) {
 	})
 }
 
-// TestNewOrchestrator_SSHPassEnvNoHostsWarnings asserts that
-// NewOrchestrator logs the "has no effect without worker.ssh_hosts"
-// warning for each of ssh_pass_env and ssh_disallow_pass_env, exactly
-// once, when SSH is not enabled and the worker block names that key,
-// logs neither when the worker block names neither key, and logs
-// neither when the worker block names a host, which the pool it holds
-// at this point does not yet reflect.
+// TestNewOrchestrator_SSHPassEnvNoHostsWarnings covers the no-hosts
+// warning for ssh_pass_env and ssh_disallow_pass_env: once per named
+// key when no hosts are configured, none when the key is absent or a
+// host is named.
 func TestNewOrchestrator_SSHPassEnvNoHostsWarnings(t *testing.T) {
 	t.Parallel()
 
@@ -788,10 +769,9 @@ func TestNewOrchestrator_SSHPassEnvNoHostsWarnings(t *testing.T) {
 	})
 }
 
-// TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload asserts that the
-// tick that parses the worker block updates
-// Orchestrator.sshPassEnv and Orchestrator.sshDisallowPassEnv, and
-// that a reload removing both keys clears them on the next tick.
+// TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload asserts a tick
+// updates sshPassEnv and sshDisallowPassEnv from the worker block, and
+// a reload removing both keys clears them on the next tick.
 func TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload(t *testing.T) {
 	t.Parallel()
 
@@ -851,16 +831,10 @@ func TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload(t *testing.T) {
 	}
 }
 
-// TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists asserts
-// that the SSHEnvNamesFunc closure makeWorkerFn builds around
-// carriedEnvNames joins a kind's registry-declared credential names
-// with the operator's listed and disallowed names, live from
-// Orchestrator.sshPassEnv and Orchestrator.sshDisallowPassEnv at
-// dispatch time: with listed names [L, K1, D], disallowed names
-// [K2, D], and a registered kind declaring [K1, K2], a remote session
-// of that kind receives SSHEnvNames [K1, L] on StartSessionParams,
-// with K2 and D withheld even though each is both named and
-// disallowed.
+// TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists asserts the
+// SSHEnvNamesFunc closure joins a kind's registry-declared names with
+// the operator's listed names minus the disallowed set: listed [L, K1, D],
+// disallowed [K2, D], kind declaring [K1, K2] yields [K1, L].
 func TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists(t *testing.T) {
 	t.Parallel()
 
@@ -951,10 +925,6 @@ func TestPreflightOK_InitialValue(t *testing.T) {
 func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 	t.Parallel()
 
-	// A tick with a failing preflight sets PreflightOK to false.
-	// We create an orchestrator whose ReloadWorkflow returns an error,
-	// which causes ValidateDispatchConfig to fail immediately.
-
 	failReload := func() error { return fmt.Errorf("workflow file missing") }
 
 	cfg := config.ServiceConfig{
@@ -994,8 +964,6 @@ func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 		t.Fatal("PreflightOK() = false before tick, want true")
 	}
 
-	// Run a single tick. The preflight should fail because
-	// ReloadWorkflow returns an error.
 	ctx := context.Background()
 	o.handleTick(ctx)
 
@@ -1003,7 +971,6 @@ func TestPreflightOK_ReflectsTickResult(t *testing.T) {
 		t.Error("PreflightOK() = true after tick with failing preflight, want false")
 	}
 
-	// Fix the reload and run another tick, should pass again.
 	o.preflightParams.ReloadWorkflow = func() error { return nil }
 	o.handleTick(ctx)
 
@@ -1037,7 +1004,6 @@ func TestOrchestratorShutdown(t *testing.T) {
 		close(done)
 	}()
 
-	// Cancel immediately and verify Run returns promptly.
 	cancel()
 
 	select {
@@ -1047,10 +1013,9 @@ func TestOrchestratorShutdown(t *testing.T) {
 	}
 }
 
-// TestApplyQueued pins applyQueued's bound: it drains every message a
-// channel holds, in receive order, stops the instant a receive finds
-// the channel empty, and never runs more than cap(ch) iterations even
-// when apply keeps refilling the channel it drains.
+// TestApplyQueued pins applyQueued's bound: it drains in receive order,
+// stops on the first empty receive, and never runs more than cap(ch)
+// iterations even when apply refills the channel.
 func TestApplyQueued(t *testing.T) {
 	t.Parallel()
 
@@ -1147,13 +1112,11 @@ func queuedOrderingCrossingEvent(issueID, model string) agentEventMsg {
 	}
 }
 
-// TestOrchestrator_QueuedMessagesApplyAheadOfExit pins the ordering
-// property: a message a worker delivered before its WorkerResult is
-// applied to its own run's entry before that WorkerResult is handled,
-// in both Orchestrator.Run and Orchestrator.drainRunningWorkers. Each
-// leg runs 64 independent trials so a loop that instead picked at
-// random between the queued WorkerResult and the queued messages would
-// fail with overwhelming probability rather than by chance.
+// TestOrchestrator_QueuedMessagesApplyAheadOfExit pins that a message a
+// worker delivered before its WorkerResult is applied to that run's
+// entry before the WorkerResult is handled, in both Run and
+// drainRunningWorkers. 64 trials per leg, since a random select between
+// the two would otherwise pass by chance.
 func TestOrchestrator_QueuedMessagesApplyAheadOfExit(t *testing.T) {
 	t.Parallel()
 
@@ -1337,11 +1300,9 @@ func budgetCeilingCrossingEvent(issueID string) agentEventMsg {
 }
 
 // TestHandleWorkerExit_NoBudgetStopForExitingRun pins the ceiling
-// exemption: a crossing usage figure applied ahead of the WorkerResult
-// of the run it belongs to is never evaluated against the in-flight
-// token ceiling, so that run's own exit is recorded on its own terms,
-// whether it ended normally or was cancelled by something else
-// entirely.
+// exemption: a crossing figure applied ahead of its own run's
+// WorkerResult is never evaluated against the in-flight ceiling, so
+// that run's exit is recorded on its own terms.
 func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 	t.Parallel()
 
@@ -1620,7 +1581,6 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 	})
 }
 
-// TestApplyTurnStarted verifies that applyTurnStarted sets TurnCount only for a running issue.
 func TestApplyTurnStarted(t *testing.T) {
 	t.Parallel()
 
@@ -1652,9 +1612,9 @@ func TestApplyTurnStarted(t *testing.T) {
 	})
 }
 
-// TestOrchestrator_TurnStartedAppliesAheadOfExit verifies that a
-// turn-started message queued before a worker's exit reaches that run's
-// entry, and never a later run of the same issue.
+// TestOrchestrator_TurnStartedAppliesAheadOfExit pins that a turn-started
+// message queued before a worker's exit reaches that run's entry, never
+// a later run of the same issue.
 func TestOrchestrator_TurnStartedAppliesAheadOfExit(t *testing.T) {
 	t.Parallel()
 
@@ -1766,9 +1726,9 @@ func waitForTurnCount(t *testing.T, snapshot func() (RuntimeSnapshotResult, erro
 	}
 }
 
-// TestOrchestrator_TurnCountTracksWorkerTally verifies that a live
-// snapshot reports TurnCount k while turn k runs, whatever the adapter's
-// session_started pattern.
+// TestOrchestrator_TurnCountTracksWorkerTally pins that a live snapshot
+// reports TurnCount k while turn k runs, whatever the session_started
+// pattern.
 func TestOrchestrator_TurnCountTracksWorkerTally(t *testing.T) {
 	t.Parallel()
 
@@ -1916,7 +1876,6 @@ func TestMakeWorkerFn(t *testing.T) {
 			close(exitDone)
 		}()
 
-		// Drain the exit channel to unblock the worker goroutine.
 		var exitResult WorkerResult
 		select {
 		case exitResult = <-o.workerExitCh:
@@ -2161,14 +2120,6 @@ func TestMakeWorkerFn(t *testing.T) {
 	})
 }
 
-// TestMakeWorkerFn_DerivesPostureFromReactionKind verifies that
-// makeWorkerFn derives WorkerDeps.Posture from the reactionKind argument
-// via dispatchPostureForReactionKind: ReactionKindLabelReview selects
-// PostureReview, ReactionKindLabelFix selects PostureFix, and every other
-// kind (including empty) selects PostureNormal. Each case asserts
-// the pure mapping output directly, then asserts the derived
-// WorkerDeps.Posture indirectly via the dispatch-time in-progress
-// transition, which only a DrivesIssueState-true posture performs.
 func TestMakeWorkerFn_DerivesPostureFromReactionKind(t *testing.T) {
 	t.Parallel()
 
@@ -2232,13 +2183,11 @@ func TestMakeWorkerFn_DerivesPostureFromReactionKind(t *testing.T) {
 	}
 }
 
-// TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit verifies that
-// HandleWorkerExit derives its drivesIssue gate from the same
-// dispatchPostureForReactionKind mapping makeWorkerFn uses, so the
-// dispatch builder and the exit handler can never disagree on a reaction
-// kind's posture. Observed via the continuation-retry branch, which fires
-// on a normal exit with an active issue and no handoff configured only
-// when DrivesIssueState is true.
+// TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit pins that
+// HandleWorkerExit and makeWorkerFn derive posture from the same
+// dispatchPostureForReactionKind mapping, so they can never disagree.
+// Observed via the continuation-retry branch, which fires only when
+// DrivesIssueState is true.
 func TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit(t *testing.T) {
 	t.Parallel()
 
@@ -2331,13 +2280,11 @@ func TestOnRetryFire(t *testing.T) {
 			Store:           &stubStore{},
 		})
 
-		// Fill the channel to capacity.
 		bufSize := cap(o.retryTimerCh)
 		for i := range bufSize {
 			o.retryTimerCh <- "fill-" + string(rune('A'+i))
 		}
 
-		// This should drop (non-blocking) and log.
 		o.onRetryFire("OVERFLOW")
 
 		logOutput := buf.String()
@@ -2345,7 +2292,6 @@ func TestOnRetryFire(t *testing.T) {
 			t.Error("expected log output when channel full, got empty")
 		}
 
-		// Channel should still be at capacity (OVERFLOW was dropped).
 		if len(o.retryTimerCh) != bufSize {
 			t.Errorf("retryTimerCh length = %d, want %d", len(o.retryTimerCh), bufSize)
 		}
@@ -2383,8 +2329,6 @@ func TestNotifyObservers(t *testing.T) {
 func TestOrchestratorDynamicConfig(t *testing.T) {
 	t.Parallel()
 
-	// Verify that handleTick applies config changes from WorkflowManager.
-
 	tracker := &mockTrackerAdapter{
 		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
 			result := make(map[string]string, len(ids))
@@ -2395,7 +2339,6 @@ func TestOrchestratorDynamicConfig(t *testing.T) {
 		},
 	}
 
-	// Override FetchCandidateIssues via a custom type that embeds mockTrackerAdapter.
 	candidateTracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: tracker,
 		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
@@ -2450,7 +2393,6 @@ func TestOrchestratorDynamicConfig(t *testing.T) {
 		t.Errorf("after first tick MaxConcurrentAgents = %d, want 2", state.MaxConcurrentAgents)
 	}
 
-	// Change config and tick again.
 	cfg.Agent.MaxConcurrentAgents = 5
 	cfg.Polling.IntervalMS = 2000
 	wm.setConfig(cfg)
@@ -2463,14 +2405,11 @@ func TestOrchestratorDynamicConfig(t *testing.T) {
 		t.Errorf("after second tick PollIntervalMS = %d, want 2000", state.PollIntervalMS)
 	}
 
-	// Observers should have been notified twice.
 	if got := obs.calls.Load(); got != 2 {
 		t.Errorf("observer calls = %d, want 2", got)
 	}
 }
 
-// candidateTrackerAdapter extends mockTrackerAdapter with a configurable
-// FetchCandidateIssues.
 type candidateTrackerAdapter struct {
 	*mockTrackerAdapter
 	fetchCandidatesFn func(ctx context.Context) ([]domain.Issue, error)
@@ -2485,8 +2424,6 @@ func (c *candidateTrackerAdapter) FetchCandidateIssues(ctx context.Context) ([]d
 
 func TestOrchestratorPreflightFailure(t *testing.T) {
 	t.Parallel()
-
-	// When preflight fails, handleTick should skip dispatch entirely.
 
 	var fetchCalled atomic.Bool
 	tracker := &candidateTrackerAdapter{
@@ -2537,17 +2474,14 @@ func TestOrchestratorPreflightFailure(t *testing.T) {
 
 	o.handleTick(context.Background())
 
-	// Preflight failed, so FetchCandidateIssues should NOT be called.
 	if fetchCalled.Load() {
 		t.Error("FetchCandidateIssues was called despite preflight failure")
 	}
 
-	// No workers should be running.
 	if len(state.Running) != 0 {
 		t.Errorf("Running count = %d, want 0", len(state.Running))
 	}
 
-	// Observer still notified (on preflight failure path).
 	if got := obs.calls.Load(); got != 1 {
 		t.Errorf("observer calls = %d, want 1", got)
 	}
@@ -2674,10 +2608,6 @@ func TestTickLogging_WithDispatches(t *testing.T) {
 	}
 }
 
-// TestHandleTick_PassesEmptyReactionKind verifies that the poll-tick
-// candidate-dispatch call site invokes makeWorkerFn with an empty
-// reactionKind: a freshly dispatched candidate issue is never
-// read-only, so its dispatch-time in-progress transition still fires.
 func TestHandleTick_PassesEmptyReactionKind(t *testing.T) {
 	t.Parallel()
 
@@ -2744,7 +2674,6 @@ func (lb *lockedBuf) String() string {
 func TestTickLogging_PreflightFailure_NoTickLog(t *testing.T) {
 	t.Parallel()
 
-	// When preflight fails, "tick completed" must NOT be logged.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -2786,8 +2715,6 @@ func TestTickLogging_PreflightFailure_NoTickLog(t *testing.T) {
 	}
 }
 
-// passingPreflightRegistries returns a PreflightParams with stub registries
-// that pass all validation checks.
 func passingPreflightRegistries() PreflightParams {
 	return PreflightParams{
 		TrackerRegistry: &stubTrackerRegistry{
@@ -2801,8 +2728,6 @@ func passingPreflightRegistries() PreflightParams {
 	}
 }
 
-// lifecycleConfig returns a config suitable for full lifecycle tests.
-// Workspace root must be a t.TempDir().
 func lifecycleConfig(workspaceRoot string) config.ServiceConfig {
 	return config.ServiceConfig{
 		Tracker: config.TrackerConfig{
@@ -2824,7 +2749,6 @@ func lifecycleConfig(workspaceRoot string) config.ServiceConfig {
 	}
 }
 
-// lifecycleIssues returns 3 dispatch-eligible issues.
 func lifecycleIssues() []domain.Issue {
 	return []domain.Issue{
 		{ID: "id-1", Identifier: "TEST-1", Title: "First", State: "To Do"},
@@ -2845,8 +2769,7 @@ func TestOrchestratorLifecycle(t *testing.T) {
 			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
 				result := make(map[string]string, len(ids))
 				for _, id := range ids {
-					// Return "Done" so the worker exits after 1 turn
-					// (state is no longer active → loop breaks).
+					// "Done" is non-active, so the turn loop breaks after one.
 					result[id] = "Done"
 				}
 				return result, nil
@@ -2895,8 +2818,8 @@ func TestOrchestratorLifecycle(t *testing.T) {
 		close(done)
 	}()
 
-	// Poll the store (mutex-protected) for run history entries instead
-	// of reading state directly, to avoid data races with the event loop.
+	// state belongs to the event loop, so progress is read from the
+	// mutex-protected store rather than from state directly.
 	deadline := time.After(15 * time.Second)
 	for {
 		select {
@@ -2921,8 +2844,6 @@ func TestOrchestratorLifecycle(t *testing.T) {
 	cancel()
 	<-done
 
-	// After Run returns, the event loop is stopped and state is safe to read.
-
 	for _, issue := range lifecycleIssues() {
 		if _, ok := state.Completed[issue.ID]; !ok {
 			t.Errorf("issue %s not in Completed set", issue.Identifier)
@@ -2940,17 +2861,14 @@ func TestOrchestratorLifecycle(t *testing.T) {
 		t.Errorf("run history count = %d, want 3", historyCount)
 	}
 
-	// Observer should have been notified (at least once per tick + per exit).
 	if got := obs.calls.Load(); got < 1 {
 		t.Errorf("observer calls = %d, want >= 1", got)
 	}
 }
 
-// TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn drives a real
-// dispatch through the full event loop and asserts the in-flight token
-// ceiling stops the run mid-turn, before the fake adapter's configured
-// max_turns is ever reached: the ceiling stops the run during the run
-// rather than after it, independent of the max-turns bound.
+// TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn asserts the
+// in-flight ceiling stops a real dispatched run mid-turn, before the
+// adapter's max_turns is reached.
 func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -3149,9 +3067,6 @@ func TestOrchestratorLifecycleRetry(t *testing.T) {
 		close(done)
 	}()
 
-	// Poll the store (mutex-protected) for evidence of completion and retry
-	// scheduling. The OK issue produces a run_history entry; the failed
-	// issue produces a saved retry entry.
 	deadline := time.After(15 * time.Second)
 	for {
 		select {
@@ -3191,13 +3106,10 @@ func TestOrchestratorLifecycleRetry(t *testing.T) {
 	cancel()
 	<-done
 
-	// After Run returns, state is safe to read.
-
 	if _, ok := state.Completed["id-ok"]; !ok {
 		t.Error("issue id-ok not in Completed set")
 	}
 
-	// The failed issue should have a retry entry persisted.
 	store.mu.Lock()
 	retriesSaved := len(store.savedRetries)
 	store.mu.Unlock()
@@ -3205,7 +3117,6 @@ func TestOrchestratorLifecycleRetry(t *testing.T) {
 		t.Errorf("saved retries = %d, want >= 1", retriesSaved)
 	}
 
-	// The failed issue should still be claimed (retry pending).
 	if _, claimed := state.Claimed["id-fail"]; !claimed {
 		t.Error("issue id-fail not in Claimed set after retry scheduling")
 	}
@@ -3229,9 +3140,6 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	}
 	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
 
-	// 2 "In Progress" + 1 "To Do" issue. Per-state limit for "In Progress" is 2.
-	// After dispatching the 2 "In Progress" issues, the "To Do" issue must
-	// still be dispatched.
 	issues := []domain.Issue{
 		{ID: "ip-1", Identifier: "IP-1", Title: "A", State: "In Progress", Priority: new(1)},
 		{ID: "ip-2", Identifier: "IP-2", Title: "B", State: "In Progress", Priority: new(1)},
@@ -3290,8 +3198,6 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 		close(done)
 	}()
 
-	// Poll the store for run history entries. We expect at least 3 dispatched
-	// (2 IP + 1 TD), with IP-3 skipped on the first tick due to per-state limit.
 	deadline := time.After(15 * time.Second)
 	for {
 		select {
@@ -3328,14 +3234,10 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	cancel()
 	<-done
 
-	// After Run returns, state is safe to read.
-
-	// Verify the "To Do" issue was dispatched despite "In Progress" being full.
 	if _, ok := state.Completed["td-1"]; !ok {
 		t.Error("issue TD-1 not in Completed set — per-state exhaustion blocked cross-state dispatch")
 	}
 
-	// Verify ip-3 was NOT dispatched on the first tick (per-state limit of 2).
 	store.mu.Lock()
 	firstThreeIDs := make(map[string]bool)
 	for i := range min(3, len(store.runHistories)) {
@@ -3348,9 +3250,6 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	}
 }
 
-// TestOrchestratorDynamicConfigReload verifies that handleTick propagates
-// config changes from the WorkflowManager to observable orchestrator state
-// and behavior, covering the seven scenarios exercised by cases A–G.
 func TestOrchestratorDynamicConfigReload(t *testing.T) {
 	t.Parallel()
 
@@ -3416,8 +3315,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		cfg.Agent.MaxTurns = 1
 		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
 
-		// newTestState allocated below; deferred WaitGroup ensures all
-		// dispatched goroutines finish before t.TempDir() cleanup.
 		var stateRef *State
 		t.Cleanup(func() {
 			if stateRef != nil {
@@ -3475,7 +3372,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Fatalf("after first tick Running = %d, want 1", len(state.Running))
 		}
 
-		// Cancel first worker and wait for its exit.
 		for _, entry := range state.Running {
 			if entry.CancelFunc != nil {
 				entry.CancelFunc()
@@ -3491,7 +3387,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			delete(state.Claimed, id)
 		}
 
-		// Increase concurrency and tick again.
 		cfg.Agent.MaxConcurrentAgents = 3
 		wm.setConfig(cfg)
 
@@ -3504,7 +3399,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Errorf("after second tick Running = %d, want 3", len(state.Running))
 		}
 
-		// Cancel all workers and drain exits before test cleanup.
 		cancel()
 		for i := 0; i < len(state.Running); i++ {
 			select {
@@ -3515,8 +3409,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		}
 	})
 
-	// Active state change makes previously-ineligible issues
-	// dispatchable.
 	t.Run("active_states_change", func(t *testing.T) {
 		t.Parallel()
 
@@ -3574,14 +3466,12 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			},
 		})
 
-		// First tick: "QA Review" not in ActiveStates → no dispatch.
 		o.handleTick(ctx)
 
 		if len(state.Running) != 0 {
 			t.Fatalf("after first tick Running = %d, want 0", len(state.Running))
 		}
 
-		// Add "QA Review" to active states and tick again.
 		cfg.Tracker.ActiveStates = []string{"To Do", "QA Review"}
 		wm.setConfig(cfg)
 
@@ -3594,7 +3484,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Error("issue qa-1 not in Running map after active state change")
 		}
 
-		// Cancel workers and drain exits before test cleanup.
 		cancel()
 		for range state.Running {
 			select {
@@ -3613,7 +3502,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		cfg.Tracker.ActiveStates = []string{"To Do"}
 		cfg.Tracker.TerminalStates = []string{"Done"}
 
-		// The tracker will report "Archived" for the running issue.
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{
 				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
@@ -3649,7 +3537,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			},
 		})
 
-		// Manually place an issue into the running map.
 		var cancelCalled atomic.Bool
 		state.Running["arch-1"] = &RunningEntry{
 			Identifier: "ARCH-1",
@@ -3680,8 +3567,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Fatal("CancelFunc not called for non-active non-terminal issue")
 		}
 
-		// Add "Archived" to terminal states and tick again.
-		// Reset the cancel tracker since the entry was already cancelled.
 		cancelCalled.Store(false)
 		entry.CancelFunc = func() { cancelCalled.Store(true) }
 		cfg.Tracker.TerminalStates = []string{"Done", "Archived"}
@@ -3699,7 +3584,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		}
 	})
 
-	// Prompt template change applies to new workers.
 	t.Run("prompt_template_change", func(t *testing.T) {
 		t.Parallel()
 
@@ -3767,7 +3651,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			},
 		})
 
-		// Start orchestrator so workers actually run.
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
@@ -3775,7 +3658,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			close(done)
 		}()
 
-		// Wait for first issue to be dispatched and complete.
 		deadline := time.After(10 * time.Second)
 		for {
 			store.mu.Lock()
@@ -3794,12 +3676,10 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 
-		// Swap template and issue set for the next tick.
 		tmpl2 := mustParseTemplate(t, "review {{ .issue.identifier }}")
 		wm.setTemplate(tmpl2)
 		issueSet.Store(1)
 
-		// Wait for second issue to complete.
 		deadline = time.After(10 * time.Second)
 		for {
 			store.mu.Lock()
@@ -3841,7 +3721,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		cfg := lifecycleConfig(tmpDir)
 		cfg.Agent.MaxConcurrentAgents = 2
 
-		// Worker blocks until context is cancelled.
 		agent := &mockAgentAdapter{
 			runTurnFn: func(ctx context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
 				<-ctx.Done()
@@ -3893,7 +3772,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			},
 		})
 
-		// First tick dispatches the issue.
 		o.handleTick(context.Background())
 
 		if len(state.Running) != 1 {
@@ -3907,7 +3785,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		}
 		originalCancel := entry.CancelFunc
 
-		// Swap config (change concurrency limit) and tick again.
 		cfg.Agent.MaxConcurrentAgents = 10
 		wm.setConfig(cfg)
 
@@ -3917,23 +3794,18 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Errorf("MaxConcurrentAgents = %d, want 10", state.MaxConcurrentAgents)
 		}
 
-		// The in-flight entry must still be in the Running map.
 		entry = state.Running["f-1"]
 		if entry == nil {
 			t.Fatal("issue f-1 removed from Running after config change")
 			return
 		}
 
-		// The CancelFunc must be the same original (not replaced).
 		if entry.CancelFunc == nil {
 			t.Fatal("CancelFunc is nil after config change")
 		}
 
-		// Verify the worker is still actually running by confirming
-		// we can cancel it and it responds.
 		originalCancel()
 
-		// Drain the worker exit to clean up goroutines.
 		select {
 		case <-o.workerExitCh:
 		case <-time.After(5 * time.Second):
@@ -3941,7 +3813,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		}
 	})
 
-	// Dispatch is skipped but reconciliation remains active.
 	t.Run("state_updates_on_preflight_failure", func(t *testing.T) {
 		t.Parallel()
 
@@ -3954,7 +3825,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		state := NewState(1000, 1, 0, nil, AgentTotals{})
 		obs := &stubObserver{}
 
-		// Place a running entry whose tracker state will be terminal.
 		var cancelCalled atomic.Bool
 		state.Running["g-1"] = &RunningEntry{
 			Identifier: "G-1",
@@ -3998,7 +3868,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		o.handleTick(context.Background())
 
-		// State fields must have been updated despite preflight failure.
 		if state.PollIntervalMS != 5000 {
 			t.Errorf("PollIntervalMS = %d, want 5000", state.PollIntervalMS)
 		}
@@ -4006,8 +3875,6 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 			t.Errorf("MaxConcurrentAgents = %d, want 3", state.MaxConcurrentAgents)
 		}
 
-		// Reconciliation must have run: the terminal running entry
-		// should be marked PendingCleanup and cancelled.
 		entry := state.Running["g-1"]
 		if entry == nil {
 			t.Fatal("entry g-1 removed from Running — reconciliation should not remove entries")
@@ -4343,9 +4210,6 @@ do {{ .issue.identifier }}
 	})
 }
 
-// TestOrchestratorDynamicConfigReloadWithFileWatcher exercises the full
-// reload pipeline: WORKFLOW.md change → fsnotify → workflow.Manager →
-// Config() → handleTick → state update.
 func TestOrchestratorDynamicConfigReloadWithFileWatcher(t *testing.T) {
 	t.Parallel()
 
@@ -4391,8 +4255,6 @@ do {{ .issue.identifier }}
 		t.Fatalf("Start watcher: %v", err)
 	}
 
-	// Give the watcher time to register with the filesystem so that
-	// subsequent WORKFLOW.md updates are reliably observed.
 	time.Sleep(50 * time.Millisecond)
 
 	tracker := &candidateTrackerAdapter{
@@ -4438,7 +4300,6 @@ do {{ .issue.identifier }}
 		close(done)
 	}()
 
-	// Overwrite WORKFLOW.md with changed values.
 	updatedContent := `---
 tracker:
   kind: mock
@@ -4494,16 +4355,11 @@ do {{ .issue.identifier }}
 	<-done
 }
 
-// TestReconciliationGuardOnInvalidReload verifies that when config
-// promotion is rejected (both state lists empty), handleTick retains
-// the last-known-good config and reconciliation does not cancel running
-// workers.
 func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 
-	// Initial config: "In Progress" is active, "Done" is terminal.
 	goodCfg := config.ServiceConfig{
 		Tracker: config.TrackerConfig{
 			Kind:           "mock",
@@ -4530,7 +4386,6 @@ func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 		reloadFn: func() error { return reloadErr },
 	}
 
-	// Tracker returns "In Progress" for the running issue.
 	tracker := &mockTrackerAdapter{
 		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
 			result := make(map[string]string, len(ids))
@@ -4576,35 +4431,26 @@ func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 
 	o.handleTick(context.Background())
 
-	// Config() must still return the last-known-good config.
 	cfg := wm.Config()
 	if len(cfg.Tracker.ActiveStates) != 1 || cfg.Tracker.ActiveStates[0] != "In Progress" {
 		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", cfg.Tracker.ActiveStates)
 	}
 
-	// The running worker must NOT have been cancelled.
 	if cancelCalled.Load() {
 		t.Error("running worker was cancelled; expected it to be preserved")
 	}
 
-	// The running entry must still exist.
 	if _, ok := state.Running["issue-1"]; !ok {
 		t.Error("running entry removed; expected it to remain")
 	}
 }
 
-// TestReconciliationGuardEndToEnd exercises the full validation guard
-// path with a real workflow.Manager backed by a file on disk, wired
-// with WithValidateFunc(ValidateConfigForPromotion). This ensures that
-// removing the WithValidateFunc wiring from main.go would cause test
-// breakage.
 func TestReconciliationGuardEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
 
-	// Valid initial workflow: populated state lists.
 	initialContent := `---
 tracker:
   kind: mock
@@ -4631,20 +4477,17 @@ do {{ .issue.identifier }}
 		t.Fatalf("writing initial WORKFLOW.md: %v", err)
 	}
 
-	// Real Manager with the production validator.
 	wm, err := workflow.NewManager(workflowPath, discardLogger(),
 		workflow.WithValidateFunc(ValidateConfigForPromotion))
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	// Sanity-check initial config.
 	cfg := wm.Config()
 	if len(cfg.Tracker.ActiveStates) == 0 {
 		t.Fatal("initial ActiveStates is empty; expected [In Progress]")
 	}
 
-	// Tracker returns "In Progress" for the running issue.
 	tracker := &mockTrackerAdapter{
 		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
 			result := make(map[string]string, len(ids))
@@ -4713,11 +4556,8 @@ do {{ .issue.identifier }}
 		t.Fatalf("writing broken WORKFLOW.md: %v", err)
 	}
 
-	// handleTick triggers Reload() via preflight, which should reject
-	// the new config and retain the last-known-good.
 	o.handleTick(context.Background())
 
-	// (1) Config() must retain the original state lists.
 	cfg = wm.Config()
 	if len(cfg.Tracker.ActiveStates) != 1 || cfg.Tracker.ActiveStates[0] != "In Progress" {
 		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", cfg.Tracker.ActiveStates)
@@ -4726,29 +4566,23 @@ do {{ .issue.identifier }}
 		t.Errorf("Config().Tracker.TerminalStates = %v, want [Done]", cfg.Tracker.TerminalStates)
 	}
 
-	// (2) The running worker must NOT have been cancelled.
 	if cancelCalled.Load() {
 		t.Error("running worker was cancelled; expected it to be preserved by validation guard")
 	}
 
-	// The running entry must still exist.
 	if _, ok := state.Running["issue-1"]; !ok {
 		t.Error("running entry removed; expected it to remain")
 	}
 
-	// LastLoadError should report the validation rejection.
 	if wm.LastLoadError() == nil {
 		t.Error("LastLoadError() = nil, want validation error")
 	}
 }
 
-// TestReloadPromotesConfigWithMissingBlockFault asserts that a workflow
-// whose only fault is a dispatch-routed kind with no settings block
-// still loads and promotes through Manager.Reload() without error, and
-// that ValidateDispatchConfig over the promoted config reports the
-// dispatch.agent.missing_block error. This pins the fail-safe reload
-// invariant: the fault surfaces at tick preflight, never at reload, so
-// Reload() itself must never fail on it.
+// TestReloadPromotesConfigWithMissingBlockFault pins the fail-safe
+// invariant: a dispatch-routed kind with no settings block still
+// promotes through Reload without error and surfaces the
+// dispatch.agent.missing_block fault only at tick preflight.
 func TestReloadPromotesConfigWithMissingBlockFault(t *testing.T) {
 	t.Parallel()
 
@@ -4872,7 +4706,6 @@ func TestGracefulShutdown(t *testing.T) {
 			},
 		}
 
-		// Agent blocks until context is cancelled.
 		var workersStarted sync.WaitGroup
 		workersStarted.Add(2)
 		agent := &mockAgentAdapter{
@@ -4912,7 +4745,6 @@ func TestGracefulShutdown(t *testing.T) {
 			close(done)
 		}()
 
-		// Wait for both workers to be inside RunTurn.
 		waitCh := make(chan struct{})
 		go func() {
 			workersStarted.Wait()
@@ -4926,7 +4758,6 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Fatal("timed out waiting for workers to start")
 		}
 
-		// Cancel the parent context to trigger graceful shutdown.
 		cancel()
 
 		select {
@@ -4935,7 +4766,6 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Fatal("Run did not return within 10 seconds of cancellation")
 		}
 
-		// After Run returns, state is safe to read.
 		if len(state.Running) != 0 {
 			t.Errorf("Running = %d after drain, want 0", len(state.Running))
 		}
@@ -4965,7 +4795,6 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Run("drain_timeout", func(t *testing.T) {
 		t.Parallel()
 
-		// Use an injected short drain timeout to avoid a 30s test runtime.
 		state := NewState(60000, 1, 0, nil, AgentTotals{})
 
 		var buf bytes.Buffer
@@ -4985,8 +4814,6 @@ func TestGracefulShutdown(t *testing.T) {
 		})
 		o.drainTimeout = 200 * time.Millisecond
 
-		// Manually inject a running entry whose worker will never send
-		// a result to workerExitCh, simulating a hung worker.
 		workerCtx, workerCancel := context.WithCancel(context.Background())
 		defer workerCancel()
 		state.Running["hang-1"] = &RunningEntry{
@@ -4997,8 +4824,6 @@ func TestGracefulShutdown(t *testing.T) {
 		}
 		state.Claimed["hang-1"] = struct{}{}
 
-		// Launch a goroutine that pretends to be the worker but never
-		// calls OnExit (simulating a hung process).
 		go func() {
 			<-workerCtx.Done()
 			// Worker context cancelled but no result sent, hung.
@@ -5011,7 +4836,6 @@ func TestGracefulShutdown(t *testing.T) {
 			close(done)
 		}()
 
-		// Cancel immediately to trigger shutdown.
 		cancel()
 
 		select {
@@ -5067,7 +4891,6 @@ func TestGracefulShutdown(t *testing.T) {
 			close(done)
 		}()
 
-		// Cancel immediately.
 		cancel()
 
 		select {
@@ -5076,8 +4899,6 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Fatal("Run did not return within 3 seconds")
 		}
 
-		// Wait longer than the 50ms timer duration. If Stop() was not
-		// called, the timer fires and writes to retryTimerCh.
 		time.Sleep(200 * time.Millisecond)
 
 		select {
@@ -5122,9 +4943,6 @@ func TestGracefulShutdown(t *testing.T) {
 			close(runReturned)
 		}()
 
-		// Let Run enter its steady-state select before cancelling, so the
-		// cancellation is observed on the ctx.Done() arm rather than
-		// racing the initial immediate tick.
 		time.Sleep(10 * time.Millisecond)
 		cancel()
 
@@ -5174,7 +4992,6 @@ func TestSnapshotFunc(t *testing.T) {
 			close(done)
 		}()
 
-		// Wait for the initial tick so the event loop is ready.
 		time.Sleep(100 * time.Millisecond)
 
 		snapFn := o.SnapshotFunc()
@@ -5237,12 +5054,10 @@ func TestRefreshFunc(t *testing.T) {
 
 		refreshFn := o.RefreshFunc()
 
-		// Fill the buffer (capacity 1).
 		if !refreshFn() {
 			t.Fatal("first RefreshFunc() = false, want true")
 		}
 
-		// Second call should be coalesced.
 		got := refreshFn()
 		if got {
 			t.Error("RefreshFunc() = true, want false (channel full, should coalesce)")
@@ -5273,20 +5088,16 @@ func TestRefreshFunc(t *testing.T) {
 			close(done)
 		}()
 
-		// Let the event loop start.
 		time.Sleep(100 * time.Millisecond)
 
-		// Cancel ctx to trigger drain.
 		cancel()
 
-		// Wait for Run to return (drain completes immediately with no workers).
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Fatal("Run did not return within 5 seconds")
 		}
 
-		// After drain, RefreshFunc must return false.
 		refreshFn := o.RefreshFunc()
 		if refreshFn() {
 			t.Error("RefreshFunc() = true after drain, want false")
@@ -5348,20 +5159,14 @@ func TestSnapshotDuringDrain(t *testing.T) {
 		close(done)
 	}()
 
-	// Let the event loop start.
 	time.Sleep(100 * time.Millisecond)
 
-	// Cancel ctx to trigger drain.
 	cancel()
 
-	// Give drain time to enter the select loop.
 	time.Sleep(50 * time.Millisecond)
 
-	// Send the snapshot request. The drain loop services snapshotCh.
 	snapFn := o.SnapshotFunc()
 
-	// The worker will never exit on its own, so simulate exit
-	// after a small delay to let the snapshot be processed first.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		o.workerExitCh <- WorkerResult{IssueID: "id-1"}
@@ -5413,7 +5218,6 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 		t.Fatal("RefreshFunc() = false before drain, want true")
 	}
 
-	// Drain the channel so the next call tests drain rejection, not coalescing.
 	select {
 	case <-o.refreshCh:
 	default:
@@ -5426,13 +5230,10 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 		close(done)
 	}()
 
-	// Let the event loop start.
 	time.Sleep(100 * time.Millisecond)
 
-	// Cancel ctx to trigger drain.
 	cancel()
 
-	// Let the worker exit so drain completes.
 	o.workerExitCh <- WorkerResult{IssueID: "id-1"}
 
 	select {
@@ -5446,8 +5247,6 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 	}
 }
 
-// budgetTickConfig returns a workflow manager configured for per-tick
-// budget exhaustion tests.
 func budgetTickConfig(maxSessions int) *stubWorkflowManager {
 	cfg := config.ServiceConfig{
 		Tracker: config.TrackerConfig{
@@ -5466,7 +5265,6 @@ func budgetTickConfig(maxSessions int) *stubWorkflowManager {
 	return &stubWorkflowManager{config: cfg}
 }
 
-// budgetOrchestrator builds an orchestrator wired for budget-exhaustion tick tests.
 func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter) *Orchestrator {
 	regs := passingPreflightRegistries()
 	regs.ReloadWorkflow = func() error { return nil }
@@ -5482,9 +5280,6 @@ func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore,
 	})
 }
 
-// budgetOrchestratorWithLogger mirrors budgetOrchestrator but accepts an
-// explicit logger, for tests asserting on the token-budget-incomplete
-// warning's log output.
 func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger) *Orchestrator {
 	regs := passingPreflightRegistries()
 	regs.ReloadWorkflow = func() error { return nil }
@@ -5500,9 +5295,6 @@ func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *
 	})
 }
 
-// budgetOrchestratorWithMetrics mirrors budgetOrchestrator but accepts an
-// explicit logger and metrics implementation, for tests asserting on the
-// per-issue budget-ceiling log record and the counter together.
 func budgetOrchestratorWithMetrics(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger, metrics domain.Metrics) *Orchestrator {
 	regs := passingPreflightRegistries()
 	regs.ReloadWorkflow = func() error { return nil }
@@ -5574,7 +5366,6 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 
 		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
 
-		// Store error → retains the previous set without clearing.
 		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
 			t.Errorf("BudgetExhausted[%s] cleared on store error, want retained", issue.ID)
 		}
@@ -5624,18 +5415,12 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 	})
 }
 
-// budgetTickConfigTokens returns a workflow manager configured with both
-// per-issue ceilings for per-tick rebuild tests.
 func budgetTickConfigTokens(maxSessions, maxTokens int) *stubWorkflowManager {
 	wm := budgetTickConfig(maxSessions)
 	wm.config.Agent.MaxTokens = maxTokens
 	return wm
 }
 
-// TestHandleTick_TokenBudgetRebuild covers the per-tick union rebuild of
-// BudgetExhausted across the session and token ceilings, with per-issue
-// reason attribution, token precedence, lockstep pruning, and the
-// per-axis fail-open that folds the prior set in on a query error.
 func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 	t.Parallel()
 
@@ -5969,8 +5754,6 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetLogRecord fails if the polling lane stops
-// announcing a session-ceiling hold on the tick it enters the set.
 func TestHandleTick_BudgetLogRecord(t *testing.T) {
 	t.Parallel()
 
@@ -6005,8 +5788,6 @@ func TestHandleTick_BudgetLogRecord(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetLogRecordOnce fails if the per-issue record or the
-// counter starts repeating on a tick that re-observes the same hold.
 func TestHandleTick_BudgetLogRecordOnce(t *testing.T) {
 	t.Parallel()
 
@@ -6035,9 +5816,6 @@ func TestHandleTick_BudgetLogRecordOnce(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetLogRecordCeilingSetting covers the ceiling_setting
-// attribute the budget-hold record gains, across the two known reasons
-// and the closed reason vocabulary's absent third arm.
 func TestHandleTick_BudgetLogRecordCeilingSetting(t *testing.T) {
 	t.Parallel()
 
@@ -6094,8 +5872,6 @@ func TestHandleTick_BudgetLogRecordCeilingSetting(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetLogRecordTokenAxis covers the token ceiling on the
-// polling lane and the both-axes-in-one-pass precedence case.
 func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
 	t.Parallel()
 
@@ -6160,9 +5936,6 @@ func TestHandleTick_BudgetLogRecordTokenAxis(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetLogRecordQueryError fails if a transient query
-// error on either axis re-announces a hold that was already told, which
-// would reproduce the repeating-log defect this unit fixes.
 func TestHandleTick_BudgetLogRecordQueryError(t *testing.T) {
 	t.Parallel()
 
@@ -6232,10 +6005,6 @@ func TestHandleTick_BudgetLogRecordQueryError(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetAnnouncementLifecycle covers the announcement
-// decision table's remaining reachable rows: a reason change re-announces,
-// a candidacy gap does not re-announce a still-held reason, and a genuine
-// clearance under the ceiling lets a later hold announce again.
 func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -6369,9 +6138,6 @@ func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetCrossLaneAnnouncement fails if the polling lane
-// re-announces a hold the retry lane already discovered and reported,
-// or if it disagrees with the retry lane about when the hold began.
 func TestHandleTick_BudgetCrossLaneAnnouncement(t *testing.T) {
 	t.Parallel()
 
@@ -6424,8 +6190,6 @@ func TestHandleTick_BudgetCrossLaneAnnouncement(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetTickSummary fails if the "tick completed" record
-// stops carrying the held-candidate count the poll summary depends on.
 func TestHandleTick_BudgetTickSummary(t *testing.T) {
 	t.Parallel()
 
@@ -6460,7 +6224,6 @@ func TestHandleTick_BudgetTickSummary(t *testing.T) {
 	}
 }
 
-// tokenUsageEvent returns a token_usage agent event with cumulative counters.
 func tokenUsageEvent(input, output, total, cacheRead int64) domain.AgentEvent {
 	return domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
@@ -6474,9 +6237,6 @@ func tokenUsageEvent(input, output, total, cacheRead int64) domain.AgentEvent {
 	}
 }
 
-// incrementalWriteOrchestrator builds an orchestrator with a running entry
-// whose accumulated token counters are pre-set, for driving
-// maybeWriteIncrementalMetadata directly.
 func incrementalWriteOrchestrator(t *testing.T, store *stubStore) (*Orchestrator, *RunningEntry) {
 	t.Helper()
 	state := NewState(60000, 10, 0, nil, AgentTotals{})
@@ -6634,8 +6394,6 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		}
 	})
 
-	// This site's persisted row must carry the same
-	// measured-implies-count discipline HandleWorkerExit applies.
 	t.Run("unmeasured entry persists a zero count despite a non-zero raw count", func(t *testing.T) {
 		t.Parallel()
 
@@ -6751,10 +6509,6 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 	})
 }
 
-// TestDrainRunningWorkers_SelfReviewProgressUpdatesRunningEntry delivers a
-// self-review progress message on the drain-loop selfReviewCh site while
-// the worker is still running and asserts the runtime snapshot reports
-// that progress before the worker exits.
 func TestDrainRunningWorkers_SelfReviewProgressUpdatesRunningEntry(t *testing.T) {
 	t.Parallel()
 
@@ -6798,10 +6552,6 @@ func TestDrainRunningWorkers_SelfReviewProgressUpdatesRunningEntry(t *testing.T)
 	}
 }
 
-// TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite delivers a
-// token_usage event on the drain-loop agentEventCh site and asserts an
-// incremental session_metadata write occurs before the worker exits, so the
-// advisory staleness bound holds during graceful drain.
 func TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite(t *testing.T) {
 	t.Parallel()
 
@@ -6849,7 +6599,6 @@ func TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite(t *testing.
 		t.Errorf("SessionMetadata.TotalTokens = %d, want 30", meta.TotalTokens)
 	}
 
-	// Let the drain complete.
 	o.workerExitCh <- WorkerResult{IssueID: "id-1", Identifier: "MT-1"}
 	select {
 	case <-done:
@@ -6858,11 +6607,6 @@ func TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite(t *testing.
 	}
 }
 
-// TestDrainRunningWorkers_AbsenceCeiling verifies that the shutdown-drain
-// lane's own HandleWorkerExitParams construction site reads the
-// configured consecutive-absence ceiling rather than silently resolving
-// the built-in fallback of three, on both a park decision at a value
-// below the fallback and a recorded ceiling at a value above it.
 func TestDrainRunningWorkers_AbsenceCeiling(t *testing.T) {
 	t.Parallel()
 
@@ -6972,14 +6716,10 @@ func TestDrainRunningWorkers_AbsenceCeiling(t *testing.T) {
 	})
 }
 
-// TestDrainRunningWorkers_CeilingFormula pins the exact ceiling value
-// drainRunningWorkers derives when o.drainTimeout carries no override:
-// 50s at the default configuration, and the configured grace plus
-// drainExitMargin for any other grace. Asserted against the formula
-// directly rather than by letting drainRunningWorkers actually run to
-// that bound, which the derived ceiling's own floor (agent.stop_grace_ms's
-// smallest admissible value plus three fixed drain periods) puts at
-// no less than 45s of real wait.
+// TestDrainRunningWorkers_CeilingFormula pins the ceiling with no
+// o.drainTimeout override: 50s at defaults, else the grace plus
+// drainExitMargin. Asserted against the formula directly, since running
+// to that bound would spend at least 45s of real wait.
 func TestDrainRunningWorkers_CeilingFormula(t *testing.T) {
 	t.Parallel()
 
@@ -7005,11 +6745,9 @@ func TestDrainRunningWorkers_CeilingFormula(t *testing.T) {
 	}
 }
 
-// TestDrainRunningWorkers_AbandonChannel covers each of the three
-// shutdown drains: a closed AbandonCh ends the wait promptly and logs
-// its own abandon warning, distinguishable from the timeout arm's
-// message; a nil AbandonCh (the zero value) leaves the existing bound
-// in force, asserted without spending it in wall clock.
+// TestDrainRunningWorkers_AbandonChannel: a closed AbandonCh ends the
+// wait promptly with its own warning; a nil AbandonCh leaves the
+// existing bound in force, asserted without spending it in wall clock.
 func TestDrainRunningWorkers_AbandonChannel(t *testing.T) {
 	t.Parallel()
 
@@ -7088,13 +6826,9 @@ func TestDrainRunningWorkers_AbandonChannel(t *testing.T) {
 }
 
 // TestDrainTrackerOps_AbandonChannel and TestDrainTriageRuns_AbandonChannel
-// cover the two remaining shutdown drains the same way
-// TestDrainRunningWorkers_AbandonChannel covers the worker drain: a
-// closed AbandonCh ends the wait promptly with its own warning, and a
-// nil AbandonCh leaves the existing bound in force. Both drains wait on
-// their own WaitGroup rather than o.state.Running, so in-flight work is
-// simulated by holding that WaitGroup open rather than by populating
-// Running.
+// mirror the worker-drain abandon test. Both wait on their own WaitGroup,
+// so in-flight work is simulated by holding that group open rather than
+// by populating Running.
 func TestDrainTrackerOps_AbandonChannel(t *testing.T) {
 	t.Parallel()
 
@@ -7223,8 +6957,6 @@ func TestDrainTriageRuns_AbandonChannel(t *testing.T) {
 	})
 }
 
-// drainTestOrchestrator mirrors budgetOrchestrator but wires an
-// explicit logger and AbandonCh, for the shutdown-drain abort tests.
 func drainTestOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger, abandonCh <-chan struct{}) *Orchestrator {
 	regs := passingPreflightRegistries()
 	regs.ReloadWorkflow = func() error { return nil }
@@ -7241,9 +6973,6 @@ func drainTestOrchestrator(state *State, wm *stubWorkflowManager, store *stubSto
 	})
 }
 
-// TestBudgetExhaustionPreventsRedispatch verifies that an issue whose budget is
-// exhausted in the persistence store is not dispatched on a fresh-state tick,
-// simulating an orchestrator restart where in-memory state was reset.
 func TestBudgetExhaustionPreventsRedispatch(t *testing.T) {
 	t.Parallel()
 
@@ -7266,9 +6995,6 @@ func TestBudgetExhaustionPreventsRedispatch(t *testing.T) {
 	}
 }
 
-// TestBudgetExhaustionClearsWhenMaxSessionsZero verifies that setting
-// max_sessions=0 on a tick clears the BudgetExhausted set, unblocking issues
-// that were previously blocked.
 func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 	t.Parallel()
 
@@ -7289,9 +7015,6 @@ func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 	}
 }
 
-// TestOrchestratorScenarios covers dispatch-to-exit edge cases through the
-// real event loop: soft-stop signals, handoff transitions, handoff failures,
-// reconciliation cancellation, and re-dispatch prevention after handoff.
 func TestOrchestratorScenarios(t *testing.T) {
 	t.Parallel()
 
@@ -7514,7 +7237,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 		cancel()
 		<-done
 
-		// "blocked" takes the first switch case: suppresses retry, skips handoff.
 		if got := len(mockTracker.transitionCalls); got != 0 {
 			t.Errorf("transitionCalls = %d, want 0 (blocked skips handoff transition)", got)
 		}
@@ -7555,7 +7277,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			},
 		}
 
-		// Normal exit: no soft-stop signal written to .sortie/status.
 		agent := &mockAgentAdapter{
 			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
 				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
@@ -7599,7 +7320,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			close(done)
 		}()
 
-		// Poll for the retry entry: handoff failure schedules a continuation retry.
 		pollStore(t, store, func(s *stubStore) bool { return len(s.savedRetries) >= 1 })
 
 		cancel()
@@ -7616,7 +7336,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			t.Error("savedRetries empty, want >= 1 (handoff failure schedules continuation retry)")
 		}
 
-		// Claim retained: retry pending keeps the issue as claimed.
 		if _, ok := state.Claimed[issue.ID]; !ok {
 			t.Error("issue not in Claimed after handoff failure retry, want present")
 		}
@@ -7698,12 +7417,10 @@ func TestOrchestratorScenarios(t *testing.T) {
 		cancel()
 		<-done
 
-		// Handoff was attempted (one transition call).
 		if got := len(mockTracker.transitionCalls); got != 1 {
 			t.Errorf("transitionCalls = %d, want 1", got)
 		}
 
-		// Soft-stop + handoff failure: claim released WITHOUT scheduling retry.
 		store.mu.Lock()
 		retries := len(store.savedRetries)
 		store.mu.Unlock()
@@ -7737,7 +7454,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			},
 		}
 
-		// Worker blocks until its context is cancelled by reconciliation.
 		agent := &mockAgentAdapter{
 			runTurnFn: func(ctx context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
 				<-ctx.Done()
@@ -7782,8 +7498,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			close(done)
 		}()
 
-		// Poll for a "cancelled" run history entry: evidence that reconciliation
-		// cancelled the worker and HandleWorkerExit ran.
 		pollStore(t, store, func(s *stubStore) bool {
 			for _, rh := range s.runHistories {
 				if rh.IssueID == issue.ID && rh.Status == "cancelled" {
@@ -7800,7 +7514,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			t.Error("issue still in Running after reconciliation cancel, want absent")
 		}
 
-		// PendingCleanup=true in HandleWorkerExit triggers workspace removal.
 		wsPath := filepath.Join(tmpDir, "RC-1")
 		if _, statErr := os.Stat(wsPath); !os.IsNotExist(statErr) {
 			t.Errorf("workspace dir %q still exists after PendingCleanup cleanup", wsPath)
@@ -7860,7 +7573,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			},
 		}
 
-		// After handoff, return the issue in "In Review" so ShouldDispatch filters it out.
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: mockTracker,
 			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
@@ -7903,7 +7615,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			close(done)
 		}()
 
-		// Wait for the handoff transition to complete.
 		deadline := time.After(15 * time.Second)
 		for !handoffDone.Load() {
 			select {
@@ -7916,7 +7627,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 		}
 
-		// Allow several more ticks (≥5 at 100ms interval) to confirm no re-dispatch.
 		time.Sleep(500 * time.Millisecond)
 
 		cancel()
@@ -7939,10 +7649,9 @@ func TestOrchestratorScenarios(t *testing.T) {
 	})
 }
 
-// sweepThrottleTracker is a test double for [TestHandleTickSweepThrottle].
-// It records invocations of FetchIssueStatesByIdentifiers and returns
-// configurable state data. All other methods return safe zero values so
-// that tick-loop side effects (reconcile, dispatch) do not panic.
+// sweepThrottleTracker records FetchIssueStatesByIdentifiers calls; its
+// other methods return zero values so tick-loop side effects do not
+// panic.
 type sweepThrottleTracker struct {
 	mu          sync.Mutex
 	calls       int
@@ -8040,7 +7749,6 @@ func TestHandleTickSweepThrottle(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Ticks 1 through sweepEveryNTicks-1: sweep must not fire.
 	for range sweepEveryNTicks - 1 {
 		o.handleTick(ctx)
 	}
@@ -8049,7 +7757,6 @@ func TestHandleTickSweepThrottle(t *testing.T) {
 			got, sweepEveryNTicks)
 	}
 
-	// Tick sweepEveryNTicks: sweep fires exactly once.
 	o.handleTick(ctx)
 	if got := tracker.callCount(); got != 1 {
 		t.Errorf("FetchIssueStatesByIdentifiers called %d times at tick %d, want 1",
@@ -8108,7 +7815,6 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 
 	const warnMsg = "rejected unrecognized ssh_strict_host_key_checking value"
 
-	// First tick: warning for "ask" must be logged.
 	o.handleTick(ctx)
 	// Second tick: same config, warning must be suppressed.
 	o.handleTick(ctx)
@@ -8116,7 +7822,6 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 		t.Errorf("warning count after two identical ticks = %d, want 1\nlog:\n%s", got, buf.String())
 	}
 
-	// Change to a different invalid value, a new warning must appear.
 	cfg.SetExtensionSection("worker", map[string]any{
 		"ssh_strict_host_key_checking": "strict",
 	})
@@ -8126,7 +7831,6 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 		t.Errorf("warning count after changing value to 'strict' = %d, want 2\nlog:\n%s", got, buf.String())
 	}
 
-	// Change SSHHosts while keeping the same invalid value, warning must be suppressed.
 	cfg.SetExtensionSection("worker", map[string]any{
 		"ssh_strict_host_key_checking": "strict",
 		"ssh_hosts":                    []any{"host-a"},
@@ -8138,19 +7842,12 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	}
 }
 
-// TestTickLogging_DispatchBreakdown verifies that the "tick completed" log
-// entry carries the dispatched_by_rule, dispatched_by_default, and
-// dispatched_by_fallback counters reflecting the actual resolution layers
-// used for each dispatched issue.
 func TestTickLogging_DispatchBreakdown(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 	cfg := lifecycleConfig(tmpDir)
 
-	// Wire a dispatch config with one named rule that matches label "bug".
-	// Issue A-1 carries the label → resolved from rule.
-	// Issue A-2 carries no label → falls through to fallback (no default configured).
 	cfg.Dispatch = config.DispatchConfig{
 		Rules: []config.DispatchRule{
 			{
@@ -8216,24 +7913,15 @@ func TestTickLogging_DispatchBreakdown(t *testing.T) {
 	}
 }
 
-// TestDispatch_RuleResolvedKindPersistsToRunHistory is a regression test for
-// the freeze-on-dispatch wiring through
-// ResolveRule → RunningEntry.AgentKind → WorkerDeps.AgentKind →
-// WorkerResult.AgentAdapter → RunHistory.AgentAdapter.
-//
-// Before the fix, RunWorkerAttempt always populated WorkerResult.AgentAdapter
-// from cfg.Agent.Kind (the workflow default) instead of deps.AgentKind, so
-// a rule that routed an issue to a non-default agent kind caused run_history
-// to record the wrong adapter name.
+// TestDispatch_RuleResolvedKindPersistsToRunHistory pins the
+// freeze-on-dispatch wiring: a rule-routed non-default agent kind must
+// reach RunHistory.AgentAdapter, not cfg.Agent.Kind.
 func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
 	cfg := lifecycleConfig(tmpDir)
 
-	// Workflow default is "claude-code". One rule routes issues labelled "bug"
-	// to "codex". The second issue carries no "bug" label and falls through to
-	// the workflow-wide fallback ("claude-code").
 	cfg.Agent.Kind = "claude-code"
 	cfg.Dispatch = config.DispatchConfig{
 		Rules: []config.DispatchRule{
@@ -8348,7 +8036,6 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait until both issues have produced a RunHistory row.
 	deadline := time.After(15 * time.Second)
 	for {
 		select {
@@ -8373,7 +8060,6 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	cancel()
 	<-done
 
-	// Index rows by IssueID so assertion order is independent of dispatch order.
 	store.mu.Lock()
 	rows := make(map[string]persistence.RunHistory, len(store.runHistories))
 	for _, rh := range store.runHistories {
@@ -8385,7 +8071,6 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		t.Fatalf("len(runHistories) = %d, want 2", len(rows))
 	}
 
-	// Rule-routed issue: must record the rule-resolved kind, not the workflow default.
 	bugRow, ok := rows[bugIssue.ID]
 	if !ok {
 		t.Fatalf("no RunHistory row for bug issue %q", bugIssue.ID)
@@ -8397,7 +8082,6 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 		t.Errorf("RunHistory(%q).RuleName = %q, want %q", bugIssue.Identifier, bugRow.RuleName, "bug-router")
 	}
 
-	// Fallback issue: must record the workflow-wide default kind.
 	docsRow, ok := rows[docsIssue.ID]
 	if !ok {
 		t.Fatalf("no RunHistory row for docs issue %q", docsIssue.ID)
@@ -8426,14 +8110,6 @@ func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
 	}
 }
 
-// TestHandleTick_DispatchFreezesUsageDisposition dispatches two issues
-// through the normal poll-tick path in one handleTick call: one
-// routed to the workflow default kind, whose registered meta carries
-// no UsageSessionRules, and one routed by a dispatch rule to a second
-// kind whose one rule always matches. It asserts the resulting
-// RunningEntry for each carries the pair its kind resolves to: the
-// declared pair for the unrouted kind, the rule's narrowed pair for
-// the routed one.
 func TestHandleTick_DispatchFreezesUsageDisposition(t *testing.T) {
 	t.Parallel()
 
@@ -8594,8 +8270,6 @@ func writeMarkerMCPConfig(t *testing.T, path, marker string) {
 	}
 }
 
-// readMCPServers reads and parses the mcpServers object out of the
-// generated MCP config file at path.
 func readMCPServers(t *testing.T, path string) map[string]any {
 	t.Helper()
 
@@ -8614,11 +8288,9 @@ func readMCPServers(t *testing.T, path string) map[string]any {
 	return servers
 }
 
-// newBlockerGateOrchestrator builds an Orchestrator wired with a "mock"
-// tracker returning issues as its candidates and resolver as the
-// blocker resolver, logging at Debug so per-issue records are
-// captured. metrics may be nil, in which case NewOrchestrator's own
-// default applies.
+// newBlockerGateOrchestrator wires a mock tracker whose candidates are
+// issues, resolver as the blocker resolver, logging at Debug. metrics
+// may be nil.
 func newBlockerGateOrchestrator(t *testing.T, issues []domain.Issue, resolver BlockerResolver, metrics domain.Metrics) (*Orchestrator, *lockedBuf) {
 	t.Helper()
 
@@ -8670,9 +8342,6 @@ func newBlockerGateOrchestrator(t *testing.T, issues []domain.Issue, resolver Bl
 	return o, lb
 }
 
-// TestHandleTick_DispatchUsesResolvedIssue pins that a dispatched
-// candidate's running entry carries the resolver's returned issue, not
-// the raw candidate the tracker produced.
 func TestHandleTick_DispatchUsesResolvedIssue(t *testing.T) {
 	t.Parallel()
 
@@ -8705,10 +8374,6 @@ func TestHandleTick_DispatchUsesResolvedIssue(t *testing.T) {
 	}
 }
 
-// TestHandleTick_CandidateHoldReasons pins that IncCandidateHolds
-// increments once per hold with the matching reason, across all four
-// blocker-related reasons, never for an ineligible candidate, and
-// never for the pass-level halt record.
 func TestHandleTick_CandidateHoldReasons(t *testing.T) {
 	t.Parallel()
 
@@ -8768,11 +8433,9 @@ func TestHandleTick_CandidateHoldReasons(t *testing.T) {
 	}
 }
 
-// TestHandleTick_EveryAttemptedReadFailedWarning pins the four
-// distinguishing cases the "every attempted read failed" WARN
-// depends on: it fires only when every read the pass attempted
-// failed transiently and the tick dispatched nothing, and it carries
-// reads_failed as the count of reads attempted, not the count of
+// TestHandleTick_EveryAttemptedReadFailedWarning pins that the WARN
+// fires only when every attempted read failed transiently and the tick
+// dispatched nothing, and carries reads_failed as reads attempted, not
 // candidates held.
 func TestHandleTick_EveryAttemptedReadFailedWarning(t *testing.T) {
 	t.Parallel()
@@ -8915,10 +8578,6 @@ func TestHandleTick_EveryAttemptedReadFailedWarning(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer pins that a
-// budget-skipped candidate and a halt-skipped candidate emit distinct
-// DEBUG messages, even though both share the blockers_unresolved and
-// blockers_not_read reason vocabulary respectively.
 func TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer(t *testing.T) {
 	t.Parallel()
 
@@ -8977,9 +8636,6 @@ func TestHandleTick_BudgetSkipAndHaltSkipLogRecordsDiffer(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetHoldNoticeOnce fails if the notice repeats on a
-// second tick that re-observes the same hold, rather than posting exactly
-// once across both ticks.
 func TestHandleTick_BudgetHoldNoticeOnce(t *testing.T) {
 	t.Parallel()
 
@@ -9018,12 +8674,10 @@ func TestHandleTick_BudgetHoldNoticeOnce(t *testing.T) {
 	}
 }
 
-// TestBudgetHoldNoticeSurvivesRestart fails if the notice repeats after a
-// simulated restart. It drives one tick against a real, file-backed store,
-// closes it to simulate process exit, reopens the same file, loads
-// [State.BudgetHoldNoticed] from the durable rows, and drives a second
-// tick over the same candidate: the row, not the in-memory latch, is the
-// mechanism proven durable here.
+// TestBudgetHoldNoticeSurvivesRestart pins that the durable row, not the
+// in-memory latch, suppresses a repeat notice across a restart: it
+// reopens a file-backed store, reloads State.BudgetHoldNoticed, and
+// drives a second tick over the same candidate.
 func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 	t.Parallel()
 
@@ -9137,10 +8791,6 @@ func TestBudgetHoldNoticeSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeTrackerFailureIsolated fails if an
-// always-failing CommentIssue reaches the poll tick's outputs, or if the
-// failed write is retried on a following tick that observes the same,
-// still-unresolved hold.
 func TestHandleTick_BudgetHoldNoticeTrackerFailureIsolated(t *testing.T) {
 	t.Parallel()
 
@@ -9191,9 +8841,6 @@ func TestHandleTick_BudgetHoldNoticeTrackerFailureIsolated(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeReasonChange fails if a governing-ceiling
-// change from session to token does not post a second comment naming the
-// new ceiling's setting.
 func TestHandleTick_BudgetHoldNoticeReasonChange(t *testing.T) {
 	t.Parallel()
 
@@ -9233,10 +8880,6 @@ func TestHandleTick_BudgetHoldNoticeReasonChange(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeReleaseOnClear fails if a genuine
-// clearance (the issue is still a candidate this tick but no longer
-// held) does not release both the memory entry and the durable row, or if
-// a later re-hold under the same reason does not post a second comment.
 func TestHandleTick_BudgetHoldNoticeReleaseOnClear(t *testing.T) {
 	t.Parallel()
 
@@ -9279,11 +8922,6 @@ func TestHandleTick_BudgetHoldNoticeReleaseOnClear(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeAbsenceThenReturn fails if a hold that
-// leaves the tracker's candidate set for one or more ticks (as opposed to
-// being observed and found cleared) is treated as released: absence alone
-// must not delete the memory or the row, so a later return under the same
-// reason posts nothing.
 func TestHandleTick_BudgetHoldNoticeAbsenceThenReturn(t *testing.T) {
 	t.Parallel()
 
@@ -9332,10 +8970,6 @@ func TestHandleTick_BudgetHoldNoticeAbsenceThenReturn(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeFoldedForward fails if a query error that
-// folds the prior hold forward posts a comment for an entry that is last
-// tick's evidence, not this tick's, or if the following successful tick
-// re-announces a hold the memory already knows about.
 func TestHandleTick_BudgetHoldNoticeFoldedForward(t *testing.T) {
 	t.Parallel()
 
@@ -9370,11 +9004,6 @@ func TestHandleTick_BudgetHoldNoticeFoldedForward(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeDisableReenable fails if disabling both
-// budgets does not clear the memory in one DeleteAllBudgetHoldNotices
-// call, if an idle disabled tick issues a redundant call, or if
-// re-enabling a ceiling does not post a fresh notice for the hold that
-// re-forms.
 func TestHandleTick_BudgetHoldNoticeDisableReenable(t *testing.T) {
 	t.Parallel()
 
@@ -9420,11 +9049,9 @@ func TestHandleTick_BudgetHoldNoticeDisableReenable(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticePacingWindow fails if a rebuild with more
-// newly held candidates than the pacing window allows posts more or fewer
-// than maxBudgetHoldNoticesPerWindow per window, drops or duplicates a
-// candidate across windows, or ignores a short polling.interval_ms and
-// derives its bound per tick instead of per wall-clock window.
+// TestHandleTick_BudgetHoldNoticePacingWindow pins the per-wall-clock-window
+// bound: maxBudgetHoldNoticesPerWindow notices per window, no drops or
+// duplicates across windows, derived per window rather than per tick.
 func TestHandleTick_BudgetHoldNoticePacingWindow(t *testing.T) {
 	t.Parallel()
 
@@ -9520,9 +9147,6 @@ func TestHandleTick_BudgetHoldNoticePacingWindow(t *testing.T) {
 	})
 }
 
-// TestHandleTick_BudgetHoldNoticeParkedIssue fails if a held issue that is
-// also parked in the same tick has its notice suppressed, or if the two
-// mechanisms do not both fire.
 func TestHandleTick_BudgetHoldNoticeParkedIssue(t *testing.T) {
 	t.Parallel()
 
@@ -9555,10 +9179,6 @@ func TestHandleTick_BudgetHoldNoticeParkedIssue(t *testing.T) {
 	}
 }
 
-// TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow fails if
-// [postBudgetHoldNotice] persists a row or records the memory entry when
-// the caller's tracker adapter is nil, its safety net for the case both
-// call sites already guard against before calling.
 func TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow(t *testing.T) {
 	t.Parallel()
 
@@ -9587,10 +9207,6 @@ func TestPostBudgetHoldNotice_NilTrackerAdapterWritesNoRow(t *testing.T) {
 	}
 }
 
-// TestPostBudgetHoldNotice_UpsertFails fails if a failing
-// UpsertBudgetHoldNotice still posts a comment or records the memory
-// entry: the comment must not be re-posted every tick for as long as the
-// store keeps failing.
 func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
 	t.Parallel()
 
@@ -9625,12 +9241,10 @@ func TestPostBudgetHoldNotice_UpsertFails(t *testing.T) {
 	}
 }
 
-// TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease fails if a
-// failed budget query lets the release pass drop a notice. After a
-// restart the prior set is empty, so nothing folds forward and every
-// candidate looks unheld; releasing on that evidence deletes the durable
-// record and lets the next successful tick post a second comment for a
-// hold that never ended.
+// TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease pins that a
+// failed budget query withholds release: after a restart the prior set
+// is empty, so releasing on that evidence would drop a durable record
+// and re-post a notice for a hold that never ended.
 func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
 	t.Parallel()
 
@@ -9659,7 +9273,6 @@ func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
 		t.Fatalf("BudgetHoldNoticed lost %q on a tick whose budget evidence was never read", issue.ID)
 	}
 
-	// The query recovers and the hold is confirmed still in force.
 	store.budgetExhaustedErr = nil
 	store.budgetExhaustedIDs = map[string]int{issue.ID: 5}
 	orch.handleTick(context.Background())
@@ -9670,13 +9283,10 @@ func TestHandleTick_BudgetHoldNoticeQueryErrorWithholdsRelease(t *testing.T) {
 	}
 }
 
-// TestReconcilePasses_DoNotBlockOnInFlightTriage seeds each of the four
-// triage-gated reconcile passes with a pending entry carrying an
-// in-flight (not-done) triage run and asserts that a full pass over
-// state.PendingReactions returns without waiting for the subprocess.
-// Each pass's own provider double would block forever if called, so a
-// pass that returns promptly and never calls it proves the early
-// short-circuit runs ahead of every provider call.
+// TestReconcilePasses_DoNotBlockOnInFlightTriage pins that each
+// triage-gated reconcile pass short-circuits ahead of its provider on an
+// in-flight triage run. Each provider double would block forever if
+// called, so a prompt return proves the short-circuit.
 func TestReconcilePasses_DoNotBlockOnInFlightTriage(t *testing.T) {
 	t.Parallel()
 

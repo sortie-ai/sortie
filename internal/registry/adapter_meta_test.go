@@ -111,8 +111,6 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 	t.Run("agent adapters", func(t *testing.T) {
 		t.Parallel()
 
-		// samplePassthrough and wantKey apply only when declaresResumeBlocker
-		// is true; a kind that declares nothing has no subject for them.
 		tests := []struct {
 			name                   string
 			kind                   string
@@ -304,9 +302,8 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 }
 
 // TestAgentConfigFields_ShapeUnchanged pins registry.AgentConfigFields to
-// exactly its two documented fields, Kind and Passthrough, by reflection,
-// so a silent widening of the struct fails here rather than only being
-// visible in a diff.
+// exactly Kind and Passthrough by reflection, so a silent widening fails
+// here rather than only in a diff.
 func TestAgentConfigFields_ShapeUnchanged(t *testing.T) {
 	t.Parallel()
 

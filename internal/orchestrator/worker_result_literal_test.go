@@ -11,9 +11,6 @@ import (
 	"testing"
 )
 
-// workerResultLiteralKeys pairs each of the four worker-mirror fields
-// every WorkerResult composite literal must set with the bare
-// identifier the literal must set it from.
 var workerResultLiteralKeys = map[string]string{
 	"Usage":           "localUsage",
 	"UsageMeasured":   "localMeasured",
@@ -21,18 +18,11 @@ var workerResultLiteralKeys = map[string]string{
 	"APIRequestCount": "localRequestCount",
 }
 
-// workerResultLiteralViolation names one WorkerResult composite literal
-// that omits one of the four worker-mirror keys or sets one to
-// something other than the bare identifier it pairs with.
 type workerResultLiteralViolation struct {
 	pos    token.Position
 	detail string
 }
 
-// checkWorkerResultLiterals walks files and returns one violation per
-// WorkerResult composite literal that omits a key workerResultLiteralKeys
-// names, or sets one to anything other than the paired bare identifier,
-// alongside the total number of WorkerResult literals it found.
 func checkWorkerResultLiterals(fset *token.FileSet, files []*ast.File) (violations []workerResultLiteralViolation, literalCount int) {
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -82,11 +72,6 @@ func checkWorkerResultLiterals(fset *token.FileSet, files []*ast.File) (violatio
 	return violations, literalCount
 }
 
-// TestWorkerResultLiteral_Fixtures pins the checker's detection logic
-// against inline single-literal fixtures: a literal missing all four
-// keys, one missing each key in turn, one setting ModelName to a
-// literal empty string instead of the paired identifier, and one
-// setting all four keys correctly.
 func TestWorkerResultLiteral_Fixtures(t *testing.T) {
 	t.Parallel()
 
@@ -162,10 +147,6 @@ func f() {
 	}
 }
 
-// parseOrchestratorNonTestFiles parses every non-test .go file directly
-// in internal/orchestrator, mirroring the walk
-// TestCheckOrchestratorContract_DetectsViolations in
-// internal/adaptertest/contract_test.go runs over a package's file set.
 func parseOrchestratorNonTestFiles(t *testing.T) (*token.FileSet, []*ast.File) {
 	t.Helper()
 
@@ -190,10 +171,6 @@ func parseOrchestratorNonTestFiles(t *testing.T) (*token.FileSet, []*ast.File) {
 	return fset, files
 }
 
-// TestWorkerResultLiteral_RealPackage runs the checker over every
-// non-test file in internal/orchestrator and asserts it finds at least
-// one WorkerResult literal and zero violations, proving every literal
-// in the shipped code sets all four worker-mirror keys correctly.
 func TestWorkerResultLiteral_RealPackage(t *testing.T) {
 	t.Parallel()
 
@@ -207,12 +184,6 @@ func TestWorkerResultLiteral_RealPackage(t *testing.T) {
 	}
 }
 
-// TestWorkerResultLiteral_ScratchMutationDetected proves the checker
-// catches a real-world instance of a missing key: a scratch copy of
-// worker.go, read from disk and mutated only in memory and in a
-// temporary file, with one WorkerResult literal's APIRequestCount key
-// deleted reports exactly one violation and leaves every other literal
-// unchanged.
 func TestWorkerResultLiteral_ScratchMutationDetected(t *testing.T) {
 	t.Parallel()
 

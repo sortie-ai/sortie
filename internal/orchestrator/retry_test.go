@@ -15,8 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// mockRetryStore records calls to RetryTimerStore methods and returns
-// configurable errors.
 type mockRetryStore struct {
 	unsupportedReactionObservationStore
 
@@ -137,9 +135,6 @@ func (m *mockRetryStore) UpsertBudgetHoldNotice(_ context.Context, notice persis
 	return m.upsertBudgetHoldNoticeErr
 }
 
-// mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
-// FetchIssueByID is the primary entry point; FetchCandidateIssues panics
-// if called; HandleRetryTimer must not invoke it.
 type mockRetryTracker struct {
 	fetchedIssue domain.Issue
 	fetchErr     error
@@ -152,8 +147,6 @@ type mockRetryTracker struct {
 	commentCalls    []mockRetryCommentCall
 }
 
-// mockRetryCommentCall records one CommentIssue invocation the budget hold
-// notice path made from the retry lane's detached goroutine.
 type mockRetryCommentCall struct {
 	IssueID string
 	Text    string
@@ -191,9 +184,8 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 	panic("TransitionIssue must not be called by HandleRetryTimer")
 }
 
-// CommentIssue records the call. It is reachable only from the budget hold
-// notice path's detached goroutine (state.TrackerOpsWg), never synchronously
-// from HandleRetryTimer itself.
+// CommentIssue is reachable only from the budget hold notice path's
+// detached goroutine, never synchronously from HandleRetryTimer.
 func (m *mockRetryTracker) CommentIssue(_ context.Context, issueID, text string) error {
 	m.commentCalls = append(m.commentCalls, mockRetryCommentCall{IssueID: issueID, Text: text})
 	return m.commentIssueErr
@@ -204,8 +196,6 @@ func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) e
 	return m.addLabelErr
 }
 
-// retryState creates a *State with a retry entry and claim for the given
-// issue. The retry entry has the specified attempt number.
 func retryState(t *testing.T, id, identifier string, attempt int) *State {
 	t.Helper()
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -218,7 +208,6 @@ func retryState(t *testing.T, id, identifier string, attempt int) *State {
 	return state
 }
 
-// candidateIssue returns a minimal domain.Issue suitable for retry tests.
 func candidateIssue(id, identifier, st string) domain.Issue {
 	return domain.Issue{
 		ID:         id,
@@ -228,8 +217,6 @@ func candidateIssue(id, identifier, st string) domain.Issue {
 	}
 }
 
-// defaultRetryParams returns HandleRetryTimerParams wired with the given
-// mocks and a discard logger.
 func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryTracker) HandleRetryTimerParams {
 	t.Helper()
 	return HandleRetryTimerParams{
@@ -340,9 +327,9 @@ func TestHandleRetryTimer(t *testing.T) {
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
 				state := NewState(5000, 4, 0, nil, AgentTotals{})
-				// Simulate startup recovery: zero scheduledAt, DueAtMS in
-				// the future. Old wall-clock code would have treated this as
-				// stale and returned early. New code proceeds normally.
+				// Startup recovery: zero scheduledAt with a future DueAtMS.
+				// The old wall-clock code treated this as stale and
+				// returned early; the current code proceeds.
 				state.RetryAttempts[id] = &RetryEntry{
 					IssueID:    id,
 					Identifier: id,
@@ -1156,8 +1143,8 @@ func TestHandleRetryTimer(t *testing.T) {
 				if !exhausted {
 					t.Fatalf("BudgetExhausted[%s] missing, want present after exhaustion", id)
 				}
-				// A single evaluation that finds both ceilings exhausted must
-				// report the token budget.
+				// One evaluation finding both ceilings exhausted reports
+				// the token budget.
 				if entry.Reason != budgetReasonToken {
 					t.Errorf("BudgetExhausted[%s].Reason = %q, want %q (token precedence)", id, entry.Reason, budgetReasonToken)
 				}
@@ -1445,8 +1432,6 @@ func TestHandleRetryTimer(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_TokenBudgetLogLine asserts the structured refusal
-// log line carries the typed attributes the token gate emits.
 func TestHandleRetryTimer_TokenBudgetLogLine(t *testing.T) {
 	t.Parallel()
 
@@ -1485,11 +1470,6 @@ func TestHandleRetryTimer_TokenBudgetLogLine(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_TokenBudgetIncomplete covers the fourth token
-// ceiling outcome on the retry path: a sum below the ceiling with at
-// least one unmeasured session permits the dispatch and logs the
-// incomplete-budget warning on every occurrence, unlike the per-tick
-// path's edge-triggered warning.
 func TestHandleRetryTimer_TokenBudgetIncomplete(t *testing.T) {
 	t.Parallel()
 
@@ -1617,17 +1597,14 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 
 	HandleRetryTimer(state, "ISS-1", params)
 
-	// Worker must NOT have been dispatched.
 	if workerCalled {
 		t.Error("worker dispatched while issue still in Running, want no dispatch")
 	}
 
-	// FetchIssueByID should not be called, guard returns early.
 	if tracker.fetchCount != 0 {
 		t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
 	}
 
-	// Retry entry rescheduled with same attempt number.
 	entry, ok := state.RetryAttempts["ISS-1"]
 	if !ok {
 		t.Fatal("RetryAttempts[ISS-1] missing, want rescheduled")
@@ -1645,7 +1622,6 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 		t.Error("Claimed[ISS-1] missing, want preserved")
 	}
 
-	// SaveRetryEntry called for the rescheduled entry.
 	if len(store.savedEntries) != 1 {
 		t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
 	}
@@ -1690,7 +1666,6 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 			t.Fatal("worker did not execute")
 		}
 
-		// Host-b was acquired (preferred).
 		if hp.HostFor("ISS-SSH") != "host-b" {
 			t.Errorf("HostFor(ISS-SSH) = %q, want \"host-b\"", hp.HostFor("ISS-SSH"))
 		}
@@ -1718,7 +1693,6 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 			t.Error("Running[ISS-FULL] present, want absent (no SSH capacity)")
 		}
 
-		// Rescheduled with backoff.
 		entry, ok := state.RetryAttempts["ISS-FULL"]
 		if !ok {
 			t.Fatal("RetryAttempts[ISS-FULL] missing, want rescheduled")
@@ -1774,8 +1748,7 @@ func TestIsStaleRetryTimer(t *testing.T) {
 		{
 			name: "startup-reconstructed: always non-stale regardless of DueAtMS",
 			entry: &RetryEntry{
-				// scheduledAt is zero, startup-reconstructed entry.
-				// No stale predecessor exists, so always non-stale.
+				// scheduledAt left zero, as startup reconstruction leaves it.
 				DueAtMS: time.Now().UnixMilli() + 3_600_000,
 			},
 			want: false,
@@ -1783,9 +1756,8 @@ func TestIsStaleRetryTimer(t *testing.T) {
 		{
 			name: "startup-reconstructed: past DueAtMS also non-stale",
 			entry: &RetryEntry{
-				// scheduledAt is zero, DueAtMS in the past.
-				// Old wall-clock code returned false here too, but this
-				// documents that DueAtMS is irrelevant for the decision.
+				// Zero scheduledAt with a past DueAtMS: DueAtMS is
+				// irrelevant to the decision, still non-stale.
 				DueAtMS: time.Now().UnixMilli() - 10_000,
 			},
 			want: false,
@@ -1807,8 +1779,6 @@ func TestIsStaleRetryTimer(t *testing.T) {
 func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	t.Parallel()
 
-	// WorkflowFile captured at dispatch should appear on the
-	// RunningEntry so it is persisted by HandleWorkerExit.
 	store := &mockRetryStore{}
 	tracker := &mockRetryTracker{
 		fetchedIssue: candidateIssue("ISS-WF", "ISS-WF", "To Do"),
@@ -1843,9 +1813,6 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_UsageDispositionFrozen proves the retry-dispatch
-// path freezes the pair ResolveUsageDisposition resolves onto the
-// RunningEntry, mirroring the initial-dispatch freeze.
 func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
 	t.Parallel()
 
@@ -1896,9 +1863,6 @@ func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch verifies the composed
-// behavior: after HandleRetryTimer marks an issue as budget-exhausted, ShouldDispatch
-// returns false for that issue and the IncDispatches metric is recorded.
 func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 	t.Parallel()
 
@@ -1916,26 +1880,19 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 
 	HandleRetryTimer(state, id, params)
 
-	// BudgetExhausted must be set after the budget-exhaustion path.
 	if _, exhausted := state.BudgetExhausted[id]; !exhausted {
 		t.Fatalf("BudgetExhausted[%s] missing after HandleRetryTimer budget exhaustion", id)
 	}
 
-	// Budget exhaustion must not emit a dispatch metric; no actual dispatch occurs.
 	if len(spy.dispatches) != 0 {
 		t.Errorf("dispatches = %v, want [] (budget exhaustion is not a dispatch)", spy.dispatches)
 	}
 
-	// ShouldDispatch must return false because BudgetExhausted is set.
 	if ShouldDispatch(candidateIssue(id, "PROJ-COMP", "To Do"), state, params.ActiveStates, params.TerminalStates) {
 		t.Error("ShouldDispatch() = true after budget exhaustion, want false")
 	}
 }
 
-// TestHandleRetryTimer_BudgetMetrics covers the counter's cross-gate
-// cadence on the retry lane: an enrichment of an already-blocked entry
-// must not fire a second increment, and a fire that blocks on both
-// ceilings at once must fire exactly one.
 func TestHandleRetryTimer_BudgetMetrics(t *testing.T) {
 	t.Parallel()
 
@@ -2000,10 +1957,6 @@ func TestHandleRetryTimer_BudgetMetrics(t *testing.T) {
 	})
 }
 
-// TestHandleRetryTimer_AbsenceCeilingIndependentOfMaxSessions verifies
-// that the consecutive-absence ceiling and the effort-budget session
-// ceiling are read from separate fields and fire independently of each
-// other's value, on the retry lane.
 func TestHandleRetryTimer_AbsenceCeilingIndependentOfMaxSessions(t *testing.T) {
 	t.Parallel()
 
@@ -2076,10 +2029,6 @@ func TestHandleRetryTimer_AbsenceCeilingIndependentOfMaxSessions(t *testing.T) {
 	})
 }
 
-// TestHandleRetryTimer_SessionBudgetLogLine covers the retry lane's
-// session-exhaustion warning's reason attribute, the counterpart to the
-// token-exhaustion warning [TestHandleRetryTimer_TokenBudgetLogLine]
-// already covers.
 func TestHandleRetryTimer_SessionBudgetLogLine(t *testing.T) {
 	t.Parallel()
 
@@ -2113,10 +2062,6 @@ func TestHandleRetryTimer_SessionBudgetLogLine(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_ExhaustedAtSourcedFromAnnouncement covers
-// blockBudget's ExhaustedAt sourcing rule: reused from the announcement
-// memory when its reason matches the reason now firing, and the current
-// time otherwise.
 func TestHandleRetryTimer_ExhaustedAtSourcedFromAnnouncement(t *testing.T) {
 	t.Parallel()
 
@@ -2171,8 +2116,6 @@ func TestHandleRetryTimer_ExhaustedAtSourcedFromAnnouncement(t *testing.T) {
 func TestHandleRetryTimer_ContinuationContextPropagated(t *testing.T) {
 	t.Parallel()
 
-	// Continuation context carried on the retry entry should be forwarded to
-	// the running entry so the worker can inject it into the turn prompt.
 	const id = "ISS-CI-RETRY"
 	contContext := map[string]any{
 		"ci_failure": map[string]any{
@@ -2223,8 +2166,6 @@ func TestHandleRetryTimer_ContinuationContextPropagated(t *testing.T) {
 func TestHandleRetryTimer_NilContinuationContext_NotPropagated(t *testing.T) {
 	t.Parallel()
 
-	// When the retry entry carries no continuation context, the running entry
-	// must not have one set either (field stays nil; no accidental injection).
 	const id = "ISS-NO-CI"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2258,8 +2199,6 @@ func TestHandleRetryTimer_NilContinuationContext_NotPropagated(t *testing.T) {
 func TestHandleRetryTimer_ContinuationDispatch_MarksReactionDispatched(t *testing.T) {
 	t.Parallel()
 
-	// A retry entry carrying ReactionKindCI must call MarkReactionDispatched
-	// after successful dispatch, recording the correct issue ID and kind.
 	const id = "ISS-CI-1"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2298,8 +2237,6 @@ func TestHandleRetryTimer_ContinuationDispatch_MarksReactionDispatched(t *testin
 func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
 	t.Parallel()
 
-	// A retry entry with empty ReactionKind (normal error retry) must not
-	// call MarkReactionDispatched even when dispatch succeeds.
 	const id = "ISS-ERR-1"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2308,7 +2245,6 @@ func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    2,
-		// ReactionKind is intentionally empty, normal error retry.
 	}
 
 	store := &mockRetryStore{}
@@ -2331,9 +2267,6 @@ func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
 func TestHandleRetryTimer_ReschedulePreservesReactionKind(t *testing.T) {
 	t.Parallel()
 
-	// When the running-guard triggers a reschedule (worker still active),
-	// ReactionKind must be preserved on the rescheduled entry so that the
-	// eventual dispatch can call MarkReactionDispatched.
 	const id = "ISS-CI-2"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2376,8 +2309,6 @@ func TestHandleRetryTimer_ReschedulePreservesReactionKind(t *testing.T) {
 func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 	t.Parallel()
 
-	// When MarkReactionDispatched returns an error, the dispatch is not
-	// rolled back; the issue remains in Running and the error is non-fatal.
 	const id = "ISS-CI-3"
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
@@ -2399,7 +2330,6 @@ func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 	HandleRetryTimer(state, id, params)
 	t.Cleanup(func() { state.WorkerWg.Wait() })
 
-	// Attempt was made despite the error.
 	if store.markDispatchedCalls != 1 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
 	}
@@ -2446,10 +2376,9 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn verifies that a
-// popped retry entry's ReactionKind reaches MakeWorkerFn's reactionKind
-// argument, which the worker builder uses to derive the read-only
-// posture for label-review dispatches.
+// TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn checks that a
+// popped entry's ReactionKind reaches MakeWorkerFn, which uses it to derive
+// the read-only posture for label-review dispatches.
 func TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn(t *testing.T) {
 	t.Parallel()
 
@@ -2528,7 +2457,6 @@ func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
 		"review_comments": map[string]any{"count": 3},
 	}
 
-	// No claim set, simulates post-handoff state.
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,
@@ -2641,7 +2569,6 @@ func TestHandleRetryTimer_NonReactionInHandoffStateReleasesClaim(t *testing.T) {
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    1,
-		// ReactionKind is empty, non-reaction retry.
 	}
 
 	store := &mockRetryStore{}
@@ -2747,7 +2674,6 @@ func TestHandleRetryTimer_NonReactionInUnrelatedStateReleasesClaim(t *testing.T)
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    1,
-		// ReactionKind empty.
 	}
 
 	store := &mockRetryStore{}
@@ -2825,7 +2751,6 @@ func TestHandleRetryTimer_ReactionHandoffNoSlotsPreservesContext(t *testing.T) {
 		"review_comments": map[string]any{"count": 2},
 	}
 
-	// MaxConcurrentAgents = 1, one other issue already running → slots exhausted.
 	state := NewState(5000, 1, 0, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.Running["OTHER-1"] = &RunningEntry{
@@ -2898,8 +2823,6 @@ func TestHandleRetryTimer_ReactionHandoffPerStateCapExhaustedPreservesContext(t 
 		"ci_failure": map[string]any{"status": "failing"},
 	}
 
-	// Per-state cap for "ready for review" = 1. One other issue running in that state.
-	// Global capacity = 5 (plenty available).
 	perStateMap := map[string]int{"ready for review": 1}
 	state := NewState(5000, 5, 0, perStateMap, AgentTotals{})
 	state.Running["OTHER-RFR"] = &RunningEntry{
@@ -3025,7 +2948,6 @@ func TestHandleRetryTimer_NonReactionActiveStateBlockerReleasesClaim(t *testing.
 		IssueID:    id,
 		Identifier: id,
 		Attempt:    1,
-		// Empty ReactionKind.
 	}
 
 	store := &mockRetryStore{}
@@ -3081,7 +3003,6 @@ func TestHandleRetryTimer_UnknownReactionKindInHandoffStateReleasesClaim(t *test
 
 	HandleRetryTimer(state, id, params)
 
-	// Treated as non-reaction: claim released, retry deleted.
 	if _, running := state.Running[id]; running {
 		t.Errorf("Running[%s] present, want absent (unknown reaction kind)", id)
 	}
@@ -3105,10 +3026,8 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 
 	const id = "HANDOFF-NO-CLAIM"
 
-	// state.Claimed is intentionally empty, no pre-existing claim for this
-	// issue. Guards against nil-map panics or early-return guards that
-	// incorrectly require a prior claim before dispatching a handoff-state
-	// reaction retry.
+	// No pre-existing claim: guards against a guard that wrongly requires
+	// a prior claim before dispatching a handoff-state reaction retry.
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:      id,
@@ -3124,7 +3043,6 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 	params := defaultRetryParams(t, store, tracker)
 	params.HandoffState = "Ready For Review"
 
-	// Must not panic.
 	HandleRetryTimer(state, id, params)
 	t.Cleanup(func() { state.WorkerWg.Wait() })
 
@@ -3136,9 +3054,6 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 	}
 }
 
-// TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry verifies that
-// AgentKind, RuleName, and TemplateID are copied from the retry entry into
-// the RunningEntry after dispatch so the fields are preserved across retries.
 func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
 	t.Parallel()
 
@@ -3202,9 +3117,6 @@ func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_ReschedulePreservesFrozenFields verifies that when a
-// retry is rescheduled (e.g., no available slots), the frozen AgentKind,
-// RuleName, and TemplateID are preserved in the new RetryEntry.
 func TestHandleRetryTimer_ReschedulePreservesFrozenFields(t *testing.T) {
 	t.Parallel()
 
@@ -3213,7 +3125,6 @@ func TestHandleRetryTimer_ReschedulePreservesFrozenFields(t *testing.T) {
 	const wantRuleName = "feature-rule"
 	const wantTemplateID = "/abs/prompts/feature.md"
 
-	// Fill all slots so dispatch is blocked and the retry is rescheduled.
 	state := NewState(1, 1, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -3253,9 +3164,6 @@ func TestHandleRetryTimer_ReschedulePreservesFrozenFields(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule verifies that when a
-// retry is rescheduled, the SQLite row captures the frozen AgentKind, RuleName,
-// and TemplateID so they survive a process restart.
 func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	t.Parallel()
 
@@ -3264,7 +3172,6 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	const wantRuleName = "docs-rule"
 	const wantTemplateID = "/abs/prompts/docs.md"
 
-	// Fill all slots to force reschedule.
 	state := NewState(1, 1, 0, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:    id,
@@ -3304,9 +3211,6 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	}
 }
 
-// TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind verifies that when
-// AgentAdapterByKind returns an error for the frozen agent kind, the claim is
-// released and no dispatch occurs.
 func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
 	t.Parallel()
 
@@ -3604,12 +3508,6 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 	})
 }
 
-// TestHandleRetryTimerParkGate exercises the retry lane's two independent
-// decisions ahead of any tracker fetch: an already-parked issue is refused
-// regardless of the evidence policy, and an issue whose absence count has
-// just reached the ceiling is parked under any policy other than off.
-// Neither decision replaces the other, and a known reaction kind is exempt
-// from both.
 func TestHandleRetryTimerParkGate(t *testing.T) {
 	t.Parallel()
 
@@ -3700,10 +3598,6 @@ func TestHandleRetryTimerParkGate(t *testing.T) {
 	})
 }
 
-// TestHandleRetryTimer_BudgetHoldNotice covers the retry lane's notice
-// posting site: it must post exactly one comment per hold, spend the same
-// wall-clock pacing window the rebuild spends, and stay silent on a repeat
-// fire for a hold already noticed under the same reason.
 func TestHandleRetryTimer_BudgetHoldNotice(t *testing.T) {
 	t.Parallel()
 
@@ -3808,8 +3702,6 @@ func TestHandleRetryTimer_BudgetHoldNotice(t *testing.T) {
 			t.Fatalf("commentCalls after the first fire = %+v, want exactly one", tracker.commentCalls)
 		}
 
-		// The first fire consumed the retry entry and the claim; re-seed both
-		// so the second fire reaches the budget gate again.
 		state.RetryAttempts[id] = &RetryEntry{IssueID: id, Identifier: "PROJ-REPEAT", Attempt: 2}
 		state.Claimed[id] = struct{}{}
 

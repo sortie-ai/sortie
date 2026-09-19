@@ -24,22 +24,19 @@ var dashboardHTML string
 //go:embed favicon.ico
 var faviconICO []byte
 
-// dashboardData is the template context for the HTML dashboard.
-// All duration and relative-time fields are pre-formatted in Go;
-// the template performs no computation.
+// dashboardData is the template context for the HTML dashboard. All
+// duration and relative-time fields are pre-formatted in Go; the template
+// performs no computation.
 type dashboardData struct {
-	// Header
 	Version     string
 	Uptime      string
 	GeneratedAt time.Time
 
-	// Summary cards
 	RunningCount   int
 	RetryingCount  int
 	AvailableSlots int
 	TotalTokens    int64
 
-	// Tables
 	Running              []dashboardRunningEntry
 	Retrying             []dashboardRetryEntry
 	RunHistory           []dashboardRunHistoryEntry
@@ -47,21 +44,18 @@ type dashboardData struct {
 	BudgetExhaustedCount int
 	BudgetExhausted      []dashboardBudgetEntry
 
-	// Footer
 	RuntimeDisplay  string
 	InputTokens     int64
 	OutputTokens    int64
 	CacheReadTokens int64
 
-	// Cost estimation (conditional on configured token rates).
 	HasTokenRates      bool
 	EstimatedCostUSD   *string
 	EstimatedCostLabel string
 
 	// RunningUnreportedNote, RunningNonReportingNote, EndedUnmeasuredNote,
-	// and CostUnpricedNote are singular/plural-correct sentences naming
-	// a count the footer totals exclude, or the empty string when that
-	// count is zero.
+	// and CostUnpricedNote name a count the footer totals exclude, or are
+	// empty when that count is zero.
 	RunningUnreportedNote   string
 	RunningNonReportingNote string
 	EndedUnmeasuredNote     string
@@ -86,8 +80,8 @@ type dashboardRunningEntry struct {
 	UsageMeasured    bool
 
 	// UsageReportingRow, ModelRow, APIRequestsRow, TokensRow, and
-	// EstCostRow are the pre-formatted usage-disposition panel rows;
-	// the template prints each verbatim and performs no computation.
+	// EstCostRow are pre-formatted usage-disposition panel rows the
+	// template prints verbatim.
 	UsageReportingRow string
 	ModelRow          string
 	APIRequestsRow    string
@@ -95,15 +89,12 @@ type dashboardRunningEntry struct {
 	EstCostRow        string
 }
 
-// dashPlaceholder is the panel's established idiom for a value that
-// is not available.
 const dashPlaceholder = "—"
 
-// usageReportingRow renders the Usage reporting row: the one place
-// the reason a session reports nothing is stated, per the panel-level
-// rule that a fact is stated once. arrival == undeclared is
-// unreachable in a shipped binary by the syntactic contract test's
-// own argument; the arm exists only to keep this function total.
+// usageReportingRow renders the Usage reporting row: the one place a
+// session's reason for reporting nothing is stated. The "not declared" arm
+// is unreachable in a shipped binary and exists only to keep the switch
+// total.
 func usageReportingRow(arrival registry.UsageArrival, attribution registry.UsageAttribution) string {
 	switch arrival {
 	case registry.UsageArrivalNone:
@@ -117,8 +108,8 @@ func usageReportingRow(arrival registry.UsageArrival, attribution registry.Usage
 	}
 }
 
-// usageAttributionClause names what a declared, non-none arrival's
-// figures attribute to, appended to the Usage reporting row.
+// usageAttributionClause names what a declared, non-none arrival's figures
+// attribute to, appended to the Usage reporting row.
 func usageAttributionClause(attribution registry.UsageAttribution) string {
 	switch attribution {
 	case registry.UsageAttributionPerModel:
@@ -130,9 +121,8 @@ func usageAttributionClause(attribution registry.UsageAttribution) string {
 	}
 }
 
-// usageModelRow renders the Model row. A none or undeclared
-// attribution reaches the panel's existing dash rather than
-// restating the Usage reporting row's reason.
+// usageModelRow renders the Model row. A none or undeclared attribution
+// reaches the dash rather than restating the Usage reporting row's reason.
 func usageModelRow(attribution registry.UsageAttribution, modelName string) string {
 	switch {
 	case attribution == registry.UsageAttributionNone:
@@ -149,16 +139,11 @@ func usageModelRow(attribution registry.UsageAttribution, modelName string) stri
 	}
 }
 
-// usageAPIRequestsRow renders the API Requests row. A count is shown
-// only when the session's measurement verdict is true; the arrival
-// decides only which unmeasured wording the row carries. A none
-// arrival reaches the panel's existing dash rather than restating the
-// Usage reporting row's reason, so its arm is evaluated first.
-//
-// An incremental session reads not reported yet rather than not
-// measured, because a figure that has not arrived yet and one that
-// never will are not separable from the event stream; the wording
-// matches what the Tokens row already uses for that same ambiguity.
+// usageAPIRequestsRow renders the API Requests row. A count shows only when
+// the measurement verdict is true; the none arm is evaluated first so it
+// reaches the dash rather than restating the Usage reporting row's reason.
+// An incremental session reads "not reported yet" because a figure not yet
+// arrived and one that never will are inseparable from the event stream.
 func usageAPIRequestsRow(
 	arrival registry.UsageArrival,
 	measured bool,
@@ -179,11 +164,8 @@ func usageAPIRequestsRow(
 	}
 }
 
-// formatRequestsByModel renders the per-model split as model: count
-// pairs joined by a comma, in ascending model-name order so the
-// rendered string is deterministic. It is called only where the
-// breakdown names more than one model, the one case in which the
-// split says something the Model row above does not.
+// formatRequestsByModel renders the per-model split as "model: count" pairs
+// joined by commas, in ascending model-name order for determinism.
 func formatRequestsByModel(requestsByModel map[string]int) string {
 	pairs := make([]string, 0, len(requestsByModel))
 	for _, model := range slices.Sorted(maps.Keys(requestsByModel)) {
@@ -212,11 +194,10 @@ func usageTokensRow(arrival registry.UsageArrival, usageMeasured, tokensPending 
 	}
 }
 
-// usageEstCostRow renders the Est. Cost row. costStr is the
-// pre-formatted cost figure, or the empty string when no cost was
-// computed. arrival == none is evaluated ahead of the
-// rates-unconfigured arm, per the fixed arm order that makes their
-// shared dash output unobservable rather than contradictory.
+// usageEstCostRow renders the Est. Cost row. costStr is the pre-formatted
+// cost, or empty when none was computed. The none arm precedes the
+// rates-unconfigured arm so their shared dash output is unobservable rather
+// than contradictory.
 func usageEstCostRow(arrival registry.UsageArrival, hasRates, tokensPending bool, costStr string) string {
 	display := costStr
 	if display == "" {
@@ -242,7 +223,7 @@ type dashboardRetryEntry struct {
 }
 
 // dashboardBudgetEntry is one pre-formatted row of the budget-blocked
-// table. All formatting happens in Go; the template computes nothing.
+// table.
 type dashboardBudgetEntry struct {
 	Identifier string
 	Reason     string
@@ -251,10 +232,9 @@ type dashboardBudgetEntry struct {
 	DetailURL  string
 }
 
-// budgetReasonLabels maps a machine-readable budget reason to the
-// human-readable label the dashboard renders. A reason absent from this
-// map renders as its raw value, keeping the mapping open to a later
-// reason this table has not yet been taught to humanize.
+// budgetReasonLabels maps a machine-readable budget reason to its display
+// label. A reason absent from the map renders as its raw value, keeping the
+// mapping open to a later reason.
 var budgetReasonLabels = map[string]string{
 	"session_budget": "Session budget",
 	"token_budget":   "Token budget",
@@ -288,7 +268,6 @@ func FormatInt(v int64) string {
 		return s
 	}
 
-	// Insert commas every 3 digits from the right.
 	commas := (n - 1) / 3
 	buf := make([]byte, n+commas)
 	j := len(buf) - 1
@@ -334,8 +313,8 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-// countedNote renders n as a singular or plural %d-format sentence,
-// or returns the empty string when n <= 0.
+// countedNote renders n as a singular or plural %d-format sentence, or
+// empty when n <= 0.
 func countedNote(n int64, singular, plural string) string {
 	switch {
 	case n <= 0:
@@ -347,9 +326,8 @@ func countedNote(n int64, singular, plural string) string {
 	}
 }
 
-// formatRelativeTime formats a due-at timestamp (milliseconds since
-// epoch) relative to now. Returns "overdue" if the time has passed,
-// "now" if within one second, or "in <duration>" for future times.
+// formatRelativeTime formats dueAtMS (epoch milliseconds) relative to now:
+// "overdue" if passed, "now" if within one second, else "in <duration>".
 func formatRelativeTime(dueAtMS int64, now time.Time) string {
 	dueAt := time.UnixMilli(dueAtMS)
 	diff := dueAt.Sub(now)
@@ -363,8 +341,8 @@ func formatRelativeTime(dueAtMS int64, now time.Time) string {
 	return "in " + FormatDuration(diff)
 }
 
-// buildDashboardData maps a [orchestrator.RuntimeSnapshotResult] into
-// the template-ready [dashboardData] struct.
+// buildDashboardData maps a [orchestrator.RuntimeSnapshotResult] into the
+// template-ready [dashboardData].
 func buildDashboardData(
 	snap orchestrator.RuntimeSnapshotResult,
 	version string,
@@ -403,7 +381,6 @@ func buildDashboardData(
 		CacheReadTokens: snap.AgentTotals.CacheReadTokens,
 	}
 
-	// Copy and sort running entries by StartedAt ascending before mapping.
 	sortedRunning := make([]orchestrator.SnapshotRunningEntry, len(snap.Running))
 	copy(sortedRunning, snap.Running)
 	slices.SortFunc(sortedRunning, func(a, b orchestrator.SnapshotRunningEntry) int {
@@ -497,7 +474,6 @@ func buildDashboardData(
 		data.EstimatedCostUSD = new(FormatCost(aggregateCost))
 	}
 
-	// Copy and sort retry entries by DueAtMS ascending before mapping.
 	sortedRetrying := make([]orchestrator.SnapshotRetryEntry, len(snap.Retrying))
 	copy(sortedRetrying, snap.Retrying)
 	slices.SortFunc(sortedRetrying, func(a, b orchestrator.SnapshotRetryEntry) int {
@@ -519,8 +495,8 @@ func buildDashboardData(
 	}
 	data.Retrying = retrying
 
-	// snap.BudgetExhausted is already sorted by Identifier; no re-sort
-	// needed here, unlike Running and Retrying above.
+	// snap.BudgetExhausted is already sorted by Identifier, unlike Running
+	// and Retrying above.
 	budgetExhausted := make([]dashboardBudgetEntry, len(snap.BudgetExhausted))
 	for i, e := range snap.BudgetExhausted {
 		budgetDisplayID := e.Identifier
@@ -564,10 +540,9 @@ func buildDashboardData(
 	return data
 }
 
-// mapRunHistoryEntries converts [RunHistoryEntry] values into the
-// dashboard-specific [dashboardRunHistoryEntry] with pre-formatted
-// fields. Duration is computed from StartedAt and CompletedAt when
-// both are valid RFC 3339 strings.
+// mapRunHistoryEntries converts [RunHistoryEntry] values into
+// [dashboardRunHistoryEntry] with pre-formatted fields. Duration is computed
+// when StartedAt and CompletedAt are both valid RFC 3339 strings.
 func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
 	out := make([]dashboardRunHistoryEntry, len(runs))
 	for i, r := range runs {

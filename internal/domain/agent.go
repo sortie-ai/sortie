@@ -6,13 +6,10 @@ import (
 )
 
 // AgentEventType enumerates the normalized event types that agent
-// adapters emit. The orchestrator uses these to update live session
-// fields and make control flow decisions.
+// adapters emit.
 type AgentEventType string
 
 const (
-	// EventSessionStarted indicates the agent session initialized
-	// successfully.
 	EventSessionStarted AgentEventType = "session_started"
 
 	// EventStartupFailed indicates the agent session could not be
@@ -32,9 +29,8 @@ const (
 	// error condition.
 	EventTurnEndedWithError AgentEventType = "turn_ended_with_error"
 
-	// EventTurnInputRequired indicates the agent asked for a decision
-	// only a person could give. It is a declared, non-retryable ending
-	// the shared agentcore layer produces, not a policy footnote.
+	// EventTurnInputRequired is a declared, non-retryable ending: the
+	// agent asked for a decision only a person could give.
 	EventTurnInputRequired AgentEventType = "turn_input_required"
 
 	// EventTokenUsage carries normalized token usage counters:
@@ -61,202 +57,160 @@ const (
 
 // TokenUsage holds normalized token counts emitted by agent adapters.
 // Every field is cumulative over the agent session an adapter opened
-// with StartSession, across every turn of that session, and excludes
-// any usage a resumed session accumulated before StartSession. The
-// orchestrator computes deltas relative to previously reported values
-// to avoid double-counting.
-//
-// TotalTokens always equals InputTokens plus OutputTokens; adapters
-// compute it rather than passing a vendor-reported total through.
-// CacheReadTokens is the subset of InputTokens served from a prompt
-// cache and is never added to any other counter.
+// with StartSession and excludes usage a resumed session accumulated
+// before StartSession, so re-reporting a figure is safe: the orchestrator
+// folds deltas against what it already recorded. Adapters compute
+// TotalTokens as InputTokens plus OutputTokens rather than passing a
+// vendor total through.
 type TokenUsage struct {
-	// InputTokens is the cumulative input token count, including
-	// prompt-cache reads and prompt-cache writes.
+	// InputTokens is cumulative, including prompt-cache reads and writes.
 	InputTokens int64
 
-	// OutputTokens is the cumulative output token count, including
-	// reasoning tokens.
+	// OutputTokens is cumulative, including reasoning tokens.
 	OutputTokens int64
 
-	// TotalTokens is the cumulative total token count: InputTokens
-	// plus OutputTokens.
+	// TotalTokens equals InputTokens plus OutputTokens.
 	TotalTokens int64
 
-	// CacheReadTokens is the cumulative cache-read token count, a
-	// subset of InputTokens. Zero when the adapter does not report
-	// cache data.
+	// CacheReadTokens is the cache-read subset of InputTokens, never
+	// added to any other counter. Zero when the adapter reports no cache
+	// data.
 	CacheReadTokens int64
 }
 
 // AgentEvent is a normalized event emitted by an agent adapter over the
 // lifetime of an agent session, including startup and individual turns.
-// The orchestrator uses these to update the live session fields in the
-// running map entry and accumulate token totals.
 type AgentEvent struct {
-	// Type is the normalized event category.
 	Type AgentEventType
 
 	// Timestamp is the UTC time the event was observed.
 	Timestamp time.Time
 
-	// AgentPID is the agent process ID, if available. Empty string
-	// when not applicable.
+	// AgentPID is the agent process ID, or empty when not applicable.
 	AgentPID string
 
-	// Usage carries the agent session's run-cumulative token counts as
-	// of this event, for any event type the adapter chooses to attach
-	// them to. The zero value means the event carries no usage
-	// information; it does not mean the session has consumed no
-	// tokens.
+	// Usage carries the session's run-cumulative token counts as of this
+	// event. The zero value means the event carries no usage information,
+	// not that the session has consumed no tokens.
 	Usage TokenUsage
 
-	// Message is an adapter-normalized summary of the event payload.
-	// Used for last_agent_message in the running map entry and for
-	// observability. May be empty.
+	// Message is an adapter-normalized summary of the event payload. May
+	// be empty.
 	Message string
 
-	// SessionID is the adapter-assigned session identifier, populated
-	// on EventSessionStarted events. Empty for all other event types.
-	// The orchestrator copies this into RunningEntry.SessionID when
-	// non-empty, enabling live session tracking before the worker exits.
+	// SessionID is the adapter-assigned session identifier, populated on
+	// EventSessionStarted and empty otherwise. The orchestrator copies a
+	// non-empty value into RunningEntry.SessionID.
 	SessionID string
 
-	// Model is the LLM model identifier reported by the agent adapter
-	// (e.g. "claude-sonnet-4-20250514"). Populated on token_usage events
-	// when the adapter can determine the model. Empty string when unknown.
+	// Model is the LLM model identifier reported on token_usage events,
+	// or empty when unknown.
 	Model string
 
-	// RateLimits is the latest rate-limit payload received from the agent
-	// adapter. The keys and values are adapter-defined and intentionally
-	// opaque to the orchestrator. Non-nil when rate-limit data is available
-	// on a given event; nil otherwise.
+	// RateLimits is the latest adapter-defined rate-limit payload, opaque
+	// to the orchestrator. Nil when unavailable.
 	RateLimits map[string]any
 
-	// APIDurationMS is the LLM API response wait time in milliseconds
-	// for this event. Zero when unavailable. Any event carrying
-	// APIDurationMS > 0 contributes to the session's cumulative API time.
+	// APIDurationMS is the LLM API wait time in milliseconds for this
+	// event; a value > 0 contributes to the session's cumulative API
+	// time. Zero when unavailable.
 	APIDurationMS int64
 
-	// ToolName is the name of the tool that completed, for tool_result
-	// events. Empty for non-tool events.
+	// ToolName is the tool that completed, for tool_result events.
 	ToolName string
 
-	// ToolDurationMS is the wall-clock execution time of the tool call
-	// in milliseconds, for tool_result events. Zero when unavailable.
+	// ToolDurationMS is the tool call's wall-clock time in milliseconds,
+	// for tool_result events. Zero when unavailable.
 	ToolDurationMS int64
 
-	// ToolError indicates whether the tool call completed with an error
-	// result. Relevant for tool_result events only. When false (the
-	// default), the tool call succeeded. When true, the tool returned
-	// an error response. Adapters populate this based on observed tool
-	// execution outcomes.
+	// ToolError reports whether a tool_result call returned an error.
 	ToolError bool
 }
 
 // AgentConfig is the subset of configuration relevant to agent
-// adapters. Passed into [StartSessionParams] so adapters do not
-// depend on the full config package.
+// adapters, passed into [StartSessionParams] so adapters do not depend
+// on the full config package.
 type AgentConfig struct {
 	// Kind identifies the agent adapter (e.g. "claude-code", "mock").
 	Kind string
 
-	// Command is the command used to launch the agent process. Locally it
-	// is split on whitespace into an argument vector that the adapter execs
-	// directly, with no shell; in SSH mode it is passed through unsplit to
-	// the remote shell.
+	// Command launches the agent process. Locally it is split on
+	// whitespace into an argv the adapter execs directly with no shell;
+	// in SSH mode it is passed through unsplit to the remote shell.
 	Command string
 
-	// TurnTimeoutMS is the maximum duration in milliseconds for a
-	// single agent turn. The value is always positive: the
-	// configuration layer rejects a non-positive one rather than
-	// treating it as a sentinel that disables the bound.
+	// TurnTimeoutMS bounds a single agent turn. Always positive: the
+	// config layer rejects a non-positive value rather than treating it
+	// as a disable sentinel.
 	TurnTimeoutMS int
 
-	// ReadTimeoutMS is the request/response timeout in milliseconds
-	// during startup and synchronous requests.
+	// ReadTimeoutMS is the request/response timeout during startup and
+	// synchronous requests.
 	ReadTimeoutMS int
 
-	// StallTimeoutMS is the maximum event inactivity duration in
-	// milliseconds before the orchestrator considers the session
-	// stalled. Non-positive values disable stall detection.
+	// StallTimeoutMS bounds event inactivity before the session is
+	// considered stalled. Non-positive disables stall detection.
 	StallTimeoutMS int
 
-	// StopGraceMS is the period an adapter waits, after sending a
-	// catchable termination signal, for the agent to exit on its own
-	// before it force-terminates the process group.
-	//
-	// A value built from workflow configuration is always positive,
-	// because that layer rejects a non-positive one rather than
-	// treating it as a sentinel. A value assembled in code carries
-	// whatever it was given, zero included, so an adapter resolves it
-	// through the shared helper that maps a non-positive count to the
-	// built-in grace rather than reading it as no limit.
+	// StopGraceMS is how long an adapter waits after a catchable
+	// termination signal before force-terminating the process group. A
+	// value from workflow config is always positive; a value assembled
+	// in code may be zero, so adapters resolve it through the shared
+	// helper that maps non-positive to the built-in grace rather than
+	// reading it as no limit.
 	StopGraceMS int
 }
 
 // Session is an opaque handle returned by [AgentAdapter.StartSession].
-// The orchestrator does not interpret or mutate the session; it passes
-// the handle back to [AgentAdapter.RunTurn] and [AgentAdapter.StopSession].
-// The orchestrator may copy [Session.ID] and [Session.AgentPID] into its
-// own state for observability, but must treat [Session.Internal] as
+// The orchestrator passes the handle back to RunTurn and StopSession and
+// may copy ID and AgentPID for observability, but must treat Internal as
 // adapter-owned and opaque.
 type Session struct {
-	// ID is the adapter-assigned session identifier. The orchestrator
-	// may copy this into an opaque session_id field in its own state
-	// for observability, but does not otherwise interpret it.
+	// ID is the adapter-assigned session identifier.
 	ID string
 
-	// AgentPID is the process ID of the agent subprocess, if
-	// applicable. Empty string for HTTP-based adapters.
+	// AgentPID is the agent subprocess PID, or empty for HTTP-based
+	// adapters.
 	AgentPID string
 
-	// Internal holds adapter-specific state. The orchestrator must
-	// not read or modify this field.
+	// Internal holds adapter-specific state the orchestrator must not
+	// read or modify.
 	Internal any
 }
 
 // StartSessionParams contains the inputs for
 // [AgentAdapter.StartSession].
 type StartSessionParams struct {
-	// WorkspacePath is the absolute path to the per-issue workspace
-	// directory. The adapter must launch the agent with this as cwd.
+	// WorkspacePath is the absolute per-issue workspace directory the
+	// adapter must launch the agent with as cwd.
 	WorkspacePath string
 
 	// AgentConfig is the typed agent configuration from WORKFLOW.md.
-	// Adapters read kind-specific fields (command, timeouts, etc.).
 	AgentConfig AgentConfig
 
-	// ResumeSessionID is the session ID from a previous worker
-	// attempt for the same issue. When non-empty, the adapter
-	// resumes the existing conversation instead of starting fresh.
-	// Used for continuation retries after normal worker exit.
-	// Adapters that do not support session continuity ignore this
-	// field.
+	// ResumeSessionID, when non-empty, resumes the existing conversation
+	// from a previous worker attempt instead of starting fresh. Adapters
+	// without session continuity ignore it.
 	ResumeSessionID string
 
-	// SSHHost is the SSH destination for remote agent execution.
-	// When non-empty, the adapter launches the agent on this host
-	// via SSH instead of as a local subprocess. When empty, existing
-	// local behavior is unchanged.
+	// SSHHost, when non-empty, launches the agent on that host via SSH
+	// instead of as a local subprocess.
 	SSHHost string
 
-	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
-	// value for remote sessions. When empty, adapters default to
-	// "accept-new". Only meaningful when SSHHost is non-empty.
+	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking value
+	// for remote sessions; adapters default to "accept-new" when empty.
+	// Only meaningful when SSHHost is non-empty.
 	SSHStrictHostKeyChecking string
 
-	// SSHEnvNames lists the environment variable names to carry from
-	// the orchestrator's own environment into a remote session. It
-	// carries names only, never values; adapters resolve each value
-	// at launch time. Only meaningful when SSHHost is non-empty.
+	// SSHEnvNames lists environment variable names to carry from the
+	// orchestrator's environment into a remote session. It carries names
+	// only; adapters resolve each value at launch. Only meaningful when
+	// SSHHost is non-empty.
 	SSHEnvNames []string
 
-	// MCPConfigPath is the absolute path to the merged MCP config
-	// file generated by the worker before agent launch. When
-	// non-empty, adapters inject this path via their MCP config CLI
-	// flag. When empty, adapters use the operator-configured
-	// mcp_config passthrough value (existing behavior).
+	// MCPConfigPath, when non-empty, is the absolute merged MCP config
+	// path adapters inject via their MCP config CLI flag. When empty,
+	// adapters use the operator-configured mcp_config passthrough.
 	MCPConfigPath string
 }
 
@@ -265,63 +219,51 @@ type RunTurnParams struct {
 	// Prompt is the fully rendered prompt for this turn.
 	Prompt string
 
-	// Issue is the normalized issue being worked on. Adapters may
-	// use it for context or tool scoping.
+	// Issue is the normalized issue being worked on.
 	Issue Issue
 
-	// OnEvent is the callback for delivering events during the turn.
-	// Called zero or more times before RunTurn returns. Must be
-	// non-nil. Implementations must not retain or call OnEvent after
-	// RunTurn returns.
+	// OnEvent delivers events during the turn. Must be non-nil.
+	// Implementations must not retain or call it after RunTurn returns.
 	OnEvent func(AgentEvent)
 }
 
 // TurnResult is the outcome of a single agent turn returned by
 // [AgentAdapter.RunTurn].
 type TurnResult struct {
-	// SessionID is the opaque session identifier assigned by the
-	// adapter. May change between turns for adapters that rotate
-	// identifiers.
+	// SessionID is the opaque session identifier, which may change
+	// between turns for adapters that rotate identifiers.
 	SessionID string
 
-	// ExitReason summarizes why the turn ended. Maps to the
-	// normalized event types (turn_completed, turn_failed, etc.).
+	// ExitReason summarizes why the turn ended, mapping to the
+	// normalized event types.
 	ExitReason AgentEventType
 
-	// Usage carries the agent session's run-cumulative token counts as
-	// of this turn's completion: total spend across every turn of the
-	// session so far, not just this turn's contribution. The
-	// orchestrator computes deltas relative to previous reports.
+	// Usage carries the session's run-cumulative token counts as of this
+	// turn's completion, not just this turn's contribution.
 	Usage TokenUsage
 
 	// UsageMeasured reports whether the adapter observed at least one
-	// usage figure for the session by the end of this turn. A false
-	// value paired with a zero Usage means the session's spend is
-	// unknown, not that it spent nothing. UsageMeasured is monotone:
-	// once an adapter has reported true for a session, it must not
-	// report false on a later turn of the same session.
+	// usage figure for the session. A false value with zero Usage means
+	// spend is unknown, not zero. Once true for a session it must not
+	// become false on a later turn.
 	UsageMeasured bool
 }
 
-// AgentAdapter defines the contract that all coding-agent integrations
-// must satisfy. Each adapter normalizes its native protocol events
-// into domain types. Implementations must be safe for concurrent use
-// when the orchestrator runs multiple workers.
+// AgentAdapter is the contract every coding-agent integration must
+// satisfy, normalizing native protocol events into domain types.
+// Implementations must be safe for concurrent use across workers.
 type AgentAdapter interface {
-	// StartSession launches or connects to an agent process/service
-	// in the given workspace. Returns an opaque session handle. The
-	// caller must eventually call [AgentAdapter.StopSession] to
-	// release resources.
+	// StartSession launches or connects to an agent in the given
+	// workspace and returns an opaque handle. The caller must eventually
+	// call StopSession.
 	StartSession(ctx context.Context, params StartSessionParams) (Session, error)
 
-	// RunTurn executes one agent turn with the given prompt. Events
-	// are delivered to the caller via params.OnEvent during
-	// execution. Returns when the turn completes (success, failure,
-	// or timeout). Continuation turns reuse the same [Session].
+	// RunTurn executes one turn, delivering events via params.OnEvent,
+	// and returns when the turn completes. Continuation turns reuse the
+	// same [Session].
 	RunTurn(ctx context.Context, session Session, params RunTurnParams) (TurnResult, error)
 
-	// StopSession terminates the agent process/service cleanly. Must
-	// be called exactly once per session. Safe to call after a failed
-	// [AgentAdapter.RunTurn].
+	// StopSession terminates the agent cleanly. Must be called exactly
+	// once per session, and is safe to call after a failed RunTurn.
 	StopSession(ctx context.Context, session Session) error
 }

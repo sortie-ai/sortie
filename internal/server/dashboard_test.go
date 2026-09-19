@@ -495,9 +495,6 @@ func TestBuildDashboardData(t *testing.T) {
 	})
 }
 
-// TestBuildDashboardData_Budget fails if the budget-blocked rows stop
-// carrying the identifier, the humanized reason, or the ceiling-relative
-// numbers an operator reads at a glance.
 func TestBuildDashboardData_Budget(t *testing.T) {
 	t.Parallel()
 
@@ -630,7 +627,7 @@ func TestBuildDashboardData_Budget(t *testing.T) {
 
 // TestHandleDashboard_Budget covers the HTML surface: the card and table
 // render only when something is blocked, and no rendered string names a
-// setting as a thing to change.
+// setting to change.
 func TestHandleDashboard_Budget(t *testing.T) {
 	t.Parallel()
 
@@ -851,8 +848,6 @@ func TestDashboard_HTMLEscaping(t *testing.T) {
 
 	dr := getDashboard(t, ts, "/")
 
-	// html/template must escape the script tag.
-	// Check for the XSS payload specifically; the legitimate accordion script block is also present.
 	if strings.Contains(dr.Body, "<script>alert") {
 		t.Error("body contains unescaped XSS payload — XSS vulnerability")
 	}
@@ -920,11 +915,9 @@ func TestHandleDashboard_NoSSHHostColumn(t *testing.T) {
 	}
 }
 
-// TestBuildDashboardData_ExtendedFields verifies that the
-// CacheReadTokens, ModelName, and API request-count fields are passed
-// through buildDashboardData to the template data structures. The
-// request count reaches the template only through its pre-formatted
-// row, which is the panel's one guarded reader of the raw figure.
+// TestBuildDashboardData_ExtendedFields verifies CacheReadTokens, ModelName,
+// and API request count pass through to the template data. The request count
+// reaches the template only through its pre-formatted row.
 func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 	t.Parallel()
 
@@ -976,8 +969,6 @@ func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_ExtendedFieldsRendered verifies that the extended
-// fields appear in the HTML output.
 func TestHandleDashboard_ExtendedFieldsRendered(t *testing.T) {
 	t.Parallel()
 
@@ -1180,7 +1171,6 @@ func TestHandleDashboard_NoRunHistoryFn(t *testing.T) {
 		GeneratedAt: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
 	}
 
-	// No RunHistoryFn → run history section must be omitted entirely.
 	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
 	dr := getDashboard(t, ts, "/")
 
@@ -1278,9 +1268,9 @@ func TestBuildDashboardData_FallsBackToIdentifier(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_FooterCacheReadLabel verifies that the dashboard footer uses
-// the "Cache Read:" label (not the ambiguous "Cache:") and includes a tooltip
-// explaining the metric for users unfamiliar with prompt caching.
+// TestHandleDashboard_FooterCacheReadLabel verifies the footer uses the
+// "Cache Read:" label (not the ambiguous "Cache:") with an explaining
+// tooltip.
 func TestHandleDashboard_FooterCacheReadLabel(t *testing.T) {
 	t.Parallel()
 
@@ -1300,26 +1290,20 @@ func TestHandleDashboard_FooterCacheReadLabel(t *testing.T) {
 		t.Fatalf("GET / status = %d, want %d", dr.StatusCode, http.StatusOK)
 	}
 
-	// The footer must use "Cache Read:" as the label.
 	if !strings.Contains(dr.Body, "Cache Read:") {
 		t.Error(`footer body missing "Cache Read:" label`)
 	}
 
-	// The span must carry the tooltip explaining the metric.
 	wantTitle := `title="Prompt cache read tokens`
 	if !strings.Contains(dr.Body, wantTitle) {
 		t.Errorf("footer body missing tooltip attribute %q", wantTitle)
 	}
 
-	// The cache read token value must appear formatted.
 	if !strings.Contains(dr.Body, "2,077,449") {
 		t.Error(`footer body missing formatted cache read token count "2,077,449"`)
 	}
 }
 
-// TestHandleDashboard_SessionsCachedTokensTooltip verifies that the
-// running-session detail panel's Tokens row renders the cached-token
-// annotation when CacheReadTokens is non-zero.
 func TestHandleDashboard_SessionsCachedTokensTooltip(t *testing.T) {
 	t.Parallel()
 
@@ -1372,9 +1356,6 @@ func TestHandleDashboard_SessionsCachedTokensTooltip(t *testing.T) {
 				t.Fatalf("GET / status = %d, want %d", dr.StatusCode, http.StatusOK)
 			}
 
-			// The Tokens row's cached-count annotation is plain text,
-			// pre-formatted in Go by usageTokensRow, and present only
-			// when cached tokens are non-zero.
 			wantAnnotation := "(" + FormatInt(tt.cacheReadTokens) + " cached)"
 			gotTooltip := strings.Contains(dr.Body, wantAnnotation)
 			if gotTooltip != tt.wantTooltip {
@@ -1649,9 +1630,6 @@ func TestDashboard_DetailRowColspan(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_AccordionToggleRefactor verifies that accordion rows use
-// a <button> in the first cell rather than role="button" on the <tr>. It covers
-// all three table sections (running, retrying, run history).
 func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 	t.Parallel()
 
@@ -1713,9 +1691,8 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 		if !strings.Contains(body, `aria-expanded="false"`) {
 			t.Error(`body missing aria-expanded="false"`)
 		}
-		// Negative: accordion header <tr> elements must not carry aria-expanded.
-		// The refactor moved that state onto the nested button, so any
-		// accordion-header row containing aria-expanded indicates a regression.
+		// The refactor moved aria-expanded onto the nested button, so an
+		// accordion-header row carrying it is a regression.
 		if strings.Contains(body, `class="accordion-header" aria-expanded="`) ||
 			strings.Contains(body, `aria-expanded="false" class="accordion-header"`) ||
 			strings.Contains(body, `aria-expanded="true" class="accordion-header"`) {
@@ -1744,8 +1721,7 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 
 	t.Run("no tabindex=0 on tr", func(t *testing.T) {
 		t.Parallel()
-		// tabindex="0" was only ever used on accordion <tr> rows; its absence
-		// confirms the attribute was removed from table rows.
+		// tabindex="0" was only ever on accordion <tr> rows.
 		if strings.Contains(body, `tabindex="0"`) {
 			t.Error(`body contains tabindex="0" — must not appear after accordion toggle refactor`)
 		}
@@ -2049,10 +2025,9 @@ func TestHandleDashboard_WithoutTokenRates(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_UnmeasuredRunningEntry verifies the rendered
-// markers for a running session that has reported no measurement: the
-// Tokens cell reads "not reported", the Est. Cost cell keeps its
-// existing missing-value marker, and the footer note names the count.
+// TestHandleDashboard_UnmeasuredRunningEntry verifies an unmeasured running
+// session renders "not reported" in the Tokens cell, keeps the missing-value
+// marker for Est. Cost, and gets a footer note naming the count.
 func TestHandleDashboard_UnmeasuredRunningEntry(t *testing.T) {
 	t.Parallel()
 
@@ -2088,8 +2063,6 @@ func TestHandleDashboard_UnmeasuredRunningEntry(t *testing.T) {
 	}
 }
 
-// TestCountedNote verifies the singular/plural selection and the
-// empty-string result for a non-positive count.
 func TestCountedNote(t *testing.T) {
 	t.Parallel()
 
@@ -2121,8 +2094,6 @@ func TestCountedNote(t *testing.T) {
 	}
 }
 
-// TestBuildDashboardData_ExclusionNotes verifies each footer note's text,
-// singular/plural form, and that none leaks an internal identifier.
 func TestBuildDashboardData_ExclusionNotes(t *testing.T) {
 	t.Parallel()
 
@@ -2371,9 +2342,6 @@ func TestHandleDashboard_NoUsageArrivalAndEndedUnmeasuredNotesRendered(t *testin
 	}
 }
 
-// TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote verifies that the
-// unmeasured-sessions footer note is absent when every running entry has
-// reported a measurement.
 func TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote(t *testing.T) {
 	t.Parallel()
 
@@ -2403,9 +2371,9 @@ func TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote(t *testing.T) {
 	}
 }
 
-// usageArrivalValues and usageAttributionValues enumerate every value
-// in each vocabulary, including its undeclared zero value, so a
-// totality test can cover the full combination space.
+// usageArrivalValues and usageAttributionValues enumerate every value,
+// including the undeclared zero value, so a totality test covers the full
+// combination space.
 var (
 	usageArrivalValues = []registry.UsageArrival{
 		registry.UsageArrivalUndeclared,
@@ -2421,10 +2389,6 @@ var (
 	}
 )
 
-// TestUsageRowFunctions_Totality proves each row function returns a
-// non-empty string for every combination of the four UsageArrival
-// values, the four UsageAttribution values, UsageMeasured, and
-// TokensPending.
 func TestUsageRowFunctions_Totality(t *testing.T) {
 	t.Parallel()
 
@@ -2473,8 +2437,6 @@ func TestUsageRowFunctions_Totality(t *testing.T) {
 	}
 }
 
-// TestUsageReportingRow_Golden pins the exact rendered string for
-// every declared arrival/attribution combination.
 func TestUsageReportingRow_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -2503,8 +2465,6 @@ func TestUsageReportingRow_Golden(t *testing.T) {
 	}
 }
 
-// TestUsageModelRow_Golden pins the exact rendered string for every
-// declared attribution.
 func TestUsageModelRow_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -2532,8 +2492,6 @@ func TestUsageModelRow_Golden(t *testing.T) {
 	}
 }
 
-// TestUsageAPIRequestsRow_Golden pins the exact rendered string for
-// every declared arrival.
 func TestUsageAPIRequestsRow_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -2561,8 +2519,9 @@ func TestUsageAPIRequestsRow_Golden(t *testing.T) {
 	}
 }
 
-// TestUsageTokensRow_Golden pins the exact rendered string for every
-// declared arrival and the not-reported-yet and pending arms.
+// TestUsageTokensRow_Golden pins the rendered string per arrival. The two
+// unmeasured arms differ by one word: only a session whose figure may still
+// arrive is offered as one the operator can wait for.
 func TestUsageTokensRow_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -2592,8 +2551,6 @@ func TestUsageTokensRow_Golden(t *testing.T) {
 	}
 }
 
-// TestUsageEstCostRow_Golden pins the exact rendered string for every
-// declared arrival, the rates-unconfigured arm, and the pending arm.
 func TestUsageEstCostRow_Golden(t *testing.T) {
 	t.Parallel()
 
@@ -2624,8 +2581,7 @@ func TestUsageEstCostRow_Golden(t *testing.T) {
 }
 
 // usageReportingKindStrings names every registered agent kind, so the
-// dashboard's absent-string test can confirm none of them leaks into
-// operator-facing copy.
+// absent-string test can confirm none leaks into operator-facing copy.
 var usageReportingKindStrings = []string{
 	"agent-client-protocol",
 	"claude-code",
@@ -2637,10 +2593,9 @@ var usageReportingKindStrings = []string{
 }
 
 // TestHandleDashboard_UsageReportingPanel_NoAdapterOrLaunchModeStrings
-// asserts that no rendered dashboard output names an agent kind or a
-// launch mode: a session narrowed by its launch mode reads as a
-// session that reports nothing, and the preflight diagnostic, not the
-// dashboard, is where the cause and the remedy are stated.
+// asserts no rendered output names an agent kind or launch mode: a session
+// narrowed by its launch mode reads as one that reports nothing, and the
+// preflight diagnostic, not the dashboard, states cause and remedy.
 func TestHandleDashboard_UsageReportingPanel_NoAdapterOrLaunchModeStrings(t *testing.T) {
 	t.Parallel()
 
@@ -2688,10 +2643,9 @@ func TestHandleDashboard_UsageReportingPanel_NoAdapterOrLaunchModeStrings(t *tes
 	}
 }
 
-// TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst asserts that
-// a rendered running-session panel states a usage-reporting fact
-// once, and the Usage reporting row precedes Model, API Requests,
-// Tokens, and Est. Cost in document order.
+// TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst asserts a
+// rendered panel states a usage-reporting fact once, and the Usage reporting
+// row precedes Model, API Requests, Tokens, and Est. Cost in document order.
 func TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst(t *testing.T) {
 	t.Parallel()
 
@@ -2734,10 +2688,9 @@ func TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst(t *testing.T) {
 	}
 }
 
-// extractDashboardRow returns the rendered text between the <dt>label</dt>
-// and its following <dd>...</dd>, or fails the test when the label is
-// absent. Used to read a specific detail row's own value out of the
-// rendered body rather than searching the whole page for a substring.
+// extractDashboardRow returns the text of the <dd> following <dt>label</dt>,
+// so a test can read one row's own value rather than searching the whole
+// page for a substring.
 func extractDashboardRow(t *testing.T, body, label string) string {
 	t.Helper()
 	re := regexp.MustCompile(`(?s)<dt>` + regexp.QuoteMeta(label) + `</dt>\s*<dd>(.*?)</dd>`)
@@ -2748,15 +2701,12 @@ func extractDashboardRow(t *testing.T, body, label string) string {
 	return strings.TrimSpace(m[1])
 }
 
-// TestRequestCountStateMatrix_RenderedRowAndWire walks the full state
-// matrix over a SnapshotRunningEntry, the struct both presenters consume,
-// and for each row marshals a
-// runningEntryResponse and renders the panel. The wire half checks that
-// api_request_count is null exactly when the verdict is false; the
-// rendered half extracts the API Requests row's own value from the body
-// and matches it against exactly one of the three admissible strings,
-// rather than searching the page for the absence of a numeral, which
-// can never fail because the page always carries other numbers.
+// TestRequestCountStateMatrix_RenderedRowAndWire walks the full state matrix
+// and checks both presenters. The wire half checks api_request_count is null
+// exactly when the verdict is false; the rendered half matches the API
+// Requests row's own value against the admissible strings, rather than
+// searching the page for an absent numeral, which the page's other numbers
+// would defeat.
 func TestRequestCountStateMatrix_RenderedRowAndWire(t *testing.T) {
 	t.Parallel()
 
@@ -2831,13 +2781,10 @@ func TestRequestCountStateMatrix_RenderedRowAndWire(t *testing.T) {
 	}
 }
 
-// TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests is a full
-// end-to-end reproduction, run rather than isolated at either row
-// function alone: a session whose runtime delivers usage on a
-// turn-final event
-// but never a token_usage event renders "not measured" in the API
-// Requests row and its real, non-zero token total in the Tokens row,
-// on the same card, with no zero standing in for either fact.
+// TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests is an
+// end-to-end check: a session that delivers usage on a turn-final event but
+// never a token_usage event renders "not measured" in API Requests and its
+// real non-zero total in Tokens, with no zero standing in for either fact.
 func TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests(t *testing.T) {
 	t.Parallel()
 

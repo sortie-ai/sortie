@@ -2,9 +2,9 @@ package persistence
 
 import _ "embed" // enables //go:embed directives for SQL migration files
 
-// Migration represents a single numbered schema migration. Migrations are
-// applied sequentially by [Store.Migrate]. The SQL field may contain multiple
-// statements separated by semicolons.
+// Migration is a single numbered schema migration applied sequentially
+// by [Store.Migrate]. SQL may contain multiple semicolon-separated
+// statements.
 type Migration struct {
 	Version     int
 	Description string

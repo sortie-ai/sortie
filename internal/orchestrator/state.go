@@ -17,8 +17,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// Label value constants for metric instrumentation. Unexported; used as
-// arguments to domain.Metrics methods throughout the orchestrator.
+// Metric label values passed to domain.Metrics methods.
 const (
 	outcomeSuccess = "success"
 	outcomeError   = "error"
@@ -47,26 +46,22 @@ const (
 	handoffWithheld = "withheld"
 )
 
-// Dispatch-gate reason values recorded in [BudgetExhaustedEntry.Reason]
-// and in the runtime snapshot. Token budget takes precedence over the
-// ordinary all-session budget.
+// Dispatch-gate reason values recorded in [BudgetExhaustedEntry.Reason].
+// Token budget takes precedence over the session budget.
 const (
 	budgetReasonToken   = "token_budget"
 	budgetReasonSession = "session_budget"
 )
 
-// knownBudgetReasons lists every declared dispatch-gate budget reason, in
-// the order the budget-exhausted gauge reports them. A reason added to
-// the constant block above must be added here too, so the gauge recompute
-// reports a value for it on every pass.
+// knownBudgetReasons lists every dispatch-gate budget reason in the order
+// the gauge reports them. A reason added above must be added here too, so
+// the gauge recompute reports a value for it on every pass.
 var knownBudgetReasons = []string{budgetReasonSession, budgetReasonToken}
 
 // AgentTotals holds cumulative token and runtime counters across all ended
-// agent sessions. These values are persisted to SQLite (aggregate_metrics
-// table, key "agent_totals") and restored on startup.
-//
-// SecondsRunning tracks only ended-session time. At snapshot time, the
-// caller adds elapsed time from active sessions in the Running map.
+// agent sessions, persisted to SQLite and restored on startup.
+// SecondsRunning tracks only ended-session time; the snapshot adds active
+// sessions' elapsed time.
 type AgentTotals struct {
 	InputTokens     int64
 	OutputTokens    int64
@@ -75,15 +70,13 @@ type AgentTotals struct {
 	SecondsRunning  float64
 
 	// UnmeasuredSessions counts ended sessions whose usage was never
-	// recorded, cumulatively across process restarts. The token
-	// counters above exclude these sessions; this is how many there
-	// were.
+	// recorded, cumulative across restarts. The counters above exclude
+	// these sessions.
 	UnmeasuredSessions int64
 }
 
-// RateLimitSnapshot holds the latest rate-limit information received from
-// an agent event. The structure is intentionally opaque since rate-limit
-// payload format is agent-adapter-defined.
+// RateLimitSnapshot holds the latest rate-limit payload from an agent
+// event. Opaque because the payload format is agent-adapter-defined.
 type RateLimitSnapshot struct {
 	// Data holds the raw rate-limit payload from the agent event.
 	Data map[string]any
@@ -98,232 +91,173 @@ type RunningEntry struct {
 	// Identifier is the human-readable ticket key (e.g. "MT-649").
 	Identifier string
 
-	// Issue is the last-known normalized issue snapshot. Updated by
-	// reconciliation when the tracker reports new state.
+	// Issue is the last-known normalized issue snapshot, updated by
+	// reconciliation.
 	Issue domain.Issue
 
-	// SessionID is the adapter-assigned session identifier. Initially
-	// empty; populated when the worker reports session_started.
+	// SessionID is the adapter-assigned session identifier, empty until
+	// the worker reports session_started.
 	SessionID string
 
-	// DispatchID is the dispatch ID minted by [DispatchIssue] for this
-	// running entry. Never reassigned for the lifetime of the entry.
+	// DispatchID is minted by [DispatchIssue] and never reassigned for
+	// the lifetime of the entry.
 	DispatchID string
 
-	// ThreadID is the adapter-assigned thread identifier. Populated by
-	// adapters that expose thread/turn granularity; empty otherwise.
 	ThreadID string
 
-	// TurnID is the adapter-assigned turn identifier. Populated by
-	// adapters that expose thread/turn granularity; empty otherwise.
 	TurnID string
 
-	// AgentPID is the agent subprocess PID. Initially empty; populated
-	// from agent events.
 	AgentPID string
 
-	// LastAgentEvent is the most recent agent event type. Zero value
-	// until the first event arrives.
 	LastAgentEvent domain.AgentEventType
 
-	// LastAgentTimestamp is the UTC time of the most recent agent event.
-	// Zero value until the first event arrives.
 	LastAgentTimestamp time.Time
 
-	// LastAgentMessage is a summary of the most recent agent event
-	// payload. Empty string until populated by an event.
 	LastAgentMessage string
 
-	// AgentInputTokens is the cumulative input token count for this session.
 	AgentInputTokens int64
 
-	// AgentOutputTokens is the cumulative output token count for this session.
 	AgentOutputTokens int64
 
-	// AgentTotalTokens is the cumulative total token count for this session.
 	AgentTotalTokens int64
 
-	// LastReportedInputTokens is the last absolute input token value
-	// reported by the agent. Used to compute deltas and avoid double-counting.
+	// LastReportedInputTokens is the last absolute input value reported by
+	// the agent, used to compute deltas and avoid double-counting.
 	LastReportedInputTokens int64
 
-	// LastReportedOutputTokens is the last absolute output token value
-	// reported by the agent.
 	LastReportedOutputTokens int64
 
-	// LastReportedTotalTokens is the last absolute total token value
-	// reported by the agent.
 	LastReportedTotalTokens int64
 
-	// CacheReadTokens is the cumulative cache-read token count for this session.
 	CacheReadTokens int64
 
-	// LastReportedCacheReadTokens is the last absolute cache-read value
-	// reported by the agent. Used to compute deltas.
 	LastReportedCacheReadTokens int64
 
-	// ModelName is the latest LLM model identifier reported by the agent.
-	// Empty when no model has been reported.
 	ModelName string
 
-	// APIRequestCount is the number of token_usage events received for
-	// this session. Whether that is a count of model API requests is a
-	// separate verdict, resolved by apiRequestsMeasured from the
-	// session's frozen arrival, its turn count, and this counter.
+	// APIRequestCount is the number of token_usage events received.
+	// Whether that counts as model API requests is resolved separately by
+	// apiRequestsMeasured.
 	APIRequestCount int
 
-	// RequestsByModel maps model name to the count of token_usage events
-	// attributed to that model. Nil until the first token_usage event
-	// carrying a model name arrives.
+	// RequestsByModel maps model name to token_usage event count. Nil
+	// until the first token_usage event carrying a model name arrives.
 	RequestsByModel map[string]int
 
-	// RetryAttempt is the retry attempt number. Nil for first dispatch,
-	// non-nil and >= 1 for retries and continuations.
+	// RetryAttempt is nil for first dispatch, non-nil and >= 1 for retries
+	// and continuations.
 	RetryAttempt *int
 
-	// StartedAt is the UTC time the worker was spawned.
 	StartedAt time.Time
 
-	// TurnCount is the number of coding-agent turns started within the
-	// current worker lifetime, self-review turns included.
+	// TurnCount is the number of coding-agent turns started this worker
+	// lifetime, self-review turns included.
 	TurnCount int
 
-	// CancelFunc cancels the per-worker context created by [DispatchIssue].
-	// Called by reconciliation to stop stalled or terminal-state workers,
-	// and by graceful shutdown to drain active sessions. Nil only in test
-	// fixtures that bypass [DispatchIssue].
+	// CancelFunc cancels the per-worker context. Nil only in test fixtures
+	// that bypass [DispatchIssue].
 	CancelFunc context.CancelFunc
 
-	// PendingCleanup is set by reconciliation when the tracker reports a
-	// terminal state for this issue. [HandleWorkerExit] checks this flag
-	// after the worker goroutine exits and performs the actual workspace
-	// cleanup. This defers cleanup until the agent process has fully
-	// terminated, avoiding races with active file writes or hooks.
+	// PendingCleanup is set by reconciliation on a terminal-state
+	// observation; [HandleWorkerExit] performs the cleanup after the
+	// worker goroutine exits, deferring it until the agent process has
+	// terminated to avoid races with active writes.
 	PendingCleanup bool
 
-	// ObservedTerminalState is the terminal tracker state name that
-	// reconciliation observed for this issue while the worker was still
-	// running. Empty when reconciliation observed no terminal state. Set
-	// beside PendingCleanup and never cleared: a terminal observation is
-	// final for the lifetime of the entry.
+	// ObservedTerminalState is the terminal state reconciliation observed
+	// while the worker ran. Set beside PendingCleanup and never cleared: a
+	// terminal observation is final for the entry's lifetime.
 	ObservedTerminalState string
 
-	// WorkspacePath is the absolute path to the workspace directory used
-	// by this worker. Populated from [WorkerResult.WorkspacePath] in
-	// [HandleWorkerExit] before cleanup runs. Empty if the worker exited
-	// before workspace preparation succeeded. Used by the PendingCleanup
-	// code path to clean the actual directory instead of reconstructing
-	// it from config (which may have changed via dynamic config reload).
+	// WorkspacePath is the absolute workspace directory, populated in
+	// [HandleWorkerExit] before cleanup. The PendingCleanup path cleans
+	// this actual directory rather than reconstructing it from config,
+	// which may have changed via reload.
 	WorkspacePath string
 
-	// WorkflowFile is the base filename of the WORKFLOW.md file that was
-	// active when this session was dispatched (e.g. "WORKFLOW.md").
-	// Recorded for observability and persisted in run_history.
+	// WorkflowFile is the base filename of the WORKFLOW.md active at
+	// dispatch, persisted in run_history.
 	WorkflowFile string
 
-	// SSHHost is the SSH host that this worker is executing on. Empty
-	// for local execution. Used by [HandleWorkerExit] for host pool
-	// release, [RuntimeSnapshot] for observability, and the retry
-	// timer for host preference.
+	// SSHHost is the SSH host this worker executes on, empty for local.
 	SSHHost string
 
-	// ToolTimeMs is the cumulative tool call execution time in
-	// milliseconds, accumulated from tool_result events.
+	// ToolTimeMs is cumulative tool-call execution time, from tool_result
+	// events.
 	ToolTimeMs int64
 
-	// APITimeMs is the cumulative LLM API response wait time in
-	// milliseconds, accumulated from any agent event carrying
+	// APITimeMs is cumulative LLM API wait time, from any event carrying
 	// APIDurationMS > 0.
 	APITimeMs int64
 
 	// ContinuationContext carries reaction continuation data from a retry
-	// into the worker session. Populated by HandleRetryTimer when the
-	// retry carries reaction context. Nil for normal dispatches.
+	// into the worker session. Nil for normal dispatches.
 	ContinuationContext map[string]any
 
-	// ReactionKind is the reaction type that caused this worker dispatch.
-	// Empty for first dispatches and non-reaction retries. Runtime-only;
-	// not stored in SQLite run history or session metadata.
+	// ReactionKind is the reaction type that caused this dispatch, empty
+	// for first dispatches and non-reaction retries. Runtime-only.
 	ReactionKind string
 
-	// SelfReviewActive is true when the worker is in the self-review phase.
-	// Mutated only by the event loop via selfReviewCh.
+	// SelfReviewActive is true during the self-review phase. Mutated only
+	// by the event loop via selfReviewCh.
 	SelfReviewActive bool
 
-	// SelfReviewIteration is the current review iteration (0 when not in review).
-	// Mutated only by the event loop via selfReviewCh.
 	SelfReviewIteration int
 
-	// AgentKind is the adapter kind string (e.g. "claude-code") from the
-	// workflow config active at dispatch time. Used for token cost
-	// estimation on the dashboard.
+	// AgentKind is the adapter kind (e.g. "claude-code") from the config
+	// active at dispatch.
 	AgentKind string
 
-	// RuleName is the dispatch rule name frozen at initial dispatch.
-	// Empty when no rule matched and the workflow-wide fallback fired,
-	// or "default" when the dispatch default block matched. Used in
-	// logs, metrics, and the passive dashboard display.
+	// RuleName is the dispatch rule frozen at initial dispatch. Empty when
+	// the workflow-wide fallback fired, "default" when the default block
+	// matched.
 	RuleName string
 
-	// TemplateID is the resolved template registry key frozen at
-	// initial dispatch. Empty selects the WORKFLOW.md body template.
-	// Used by the worker to look up the parsed template via the
-	// workflow manager's per-ID index.
+	// TemplateID is the resolved template registry key frozen at dispatch.
+	// Empty selects the WORKFLOW.md body template.
 	TemplateID string
 
-	// LastMetadataWrite is the UTC time of the most recent incremental
-	// session_metadata write for this issue. Owned by the single-writer
-	// event loop and used to throttle in-session metadata writes. Zero
-	// means no incremental write has occurred, so the first token_usage
-	// event writes immediately.
+	// LastMetadataWrite throttles in-session metadata writes. Zero means
+	// none yet, so the first token_usage event writes immediately.
 	LastMetadataWrite time.Time
 
-	// UsageMeasured is true once at least one usage measurement has been
-	// reported so far in this running session. Monotone: set true by
-	// [HandleAgentEvent] and never cleared. Never set when UsageArrival
-	// is none.
+	// UsageMeasured is true once a usage measurement has been reported this
+	// session. Monotone; never set when UsageArrival is none.
 	UsageMeasured bool
 
-	// UsageArrival and UsageAttribution are the usage-reporting
-	// disposition resolved for this session's kind, passthrough, and
-	// launch mode, frozen at dispatch alongside AgentKind. Owned
-	// exclusively by the single-writer event loop.
+	// UsageArrival and UsageAttribution are the usage-reporting disposition
+	// resolved for this session, frozen at dispatch. Owned exclusively by
+	// the single-writer event loop.
 	UsageArrival     registry.UsageArrival
 	UsageAttribution registry.UsageAttribution
 
-	// APIRequestCountAtLastTurnEnd is the value of APIRequestCount as
-	// of the most recent turn-terminal event. Zero until the first
-	// turn ends. Owned exclusively by the single-writer event loop.
+	// APIRequestCountAtLastTurnEnd is APIRequestCount as of the most recent
+	// turn-terminal event, zero until the first turn ends.
 	APIRequestCountAtLastTurnEnd int
 
 	// IssueTokensCompleted is the issue's summed run_history total_tokens
 	// across completed sessions, read at dispatch and replaced by a
-	// confirming read. 0 when the dispatch read failed. Owned
-	// exclusively by the single-writer event loop.
+	// confirming read. 0 when the dispatch read failed.
 	IssueTokensCompleted int64
 
-	// TokenCeilingStopped latches once the in-flight token ceiling has
-	// stopped this run. Owned exclusively by the single-writer event
-	// loop.
+	// TokenCeilingStopped latches once the in-flight ceiling has stopped
+	// this run.
 	TokenCeilingStopped bool
 
-	// TokenCeilingQueryWarned latches once the in-flight token ceiling's
-	// confirming read has failed for this run and been reported. Owned
-	// exclusively by the single-writer event loop.
+	// TokenCeilingQueryWarned latches once the ceiling's confirming read
+	// has failed and been reported for this run.
 	TokenCeilingQueryWarned bool
 
-	// TokenCeilingAtStop is the ceiling in force when this run was
-	// stopped. A reload can move the configured ceiling between the
-	// stop and the worker's exit, and the durable record must name the
-	// ceiling the run actually hit rather than whichever one is
-	// current. Meaningful only while TokenCeilingStopped is true.
+	// TokenCeilingAtStop is the ceiling in force when this run was stopped.
+	// A reload can move the configured ceiling between the stop and the
+	// exit, and the durable record must name the ceiling the run hit.
+	// Meaningful only while TokenCeilingStopped is true.
 	TokenCeilingAtStop int
 }
 
-// RetryEntry holds the runtime state for a pending retry. The persisted
-// fields (IssueID, Identifier, Attempt, DueAtMS, Error) map to
-// persistence.RetryEntry. TimerHandle, scheduledAt, and scheduledDelayMS
-// are runtime-only and are reconstructed on startup from persisted
+// RetryEntry holds the runtime state for a pending retry. IssueID,
+// Identifier, Attempt, DueAtMS, and Error map to persistence.RetryEntry;
+// the rest is runtime-only and reconstructed on startup from persisted
 // due_at timestamps.
 type RetryEntry struct {
 	IssueID     string
@@ -335,118 +269,92 @@ type RetryEntry struct {
 	Error       string
 	TimerHandle *time.Timer
 
-	// LastSSHHost is the SSH host from the previous worker attempt.
-	// Runtime-only (not persisted to SQLite). Used by
-	// [HandleRetryTimer] to pass as preferred host to [HostPool.AcquireHost].
+	// LastSSHHost is the SSH host from the previous attempt, passed as the
+	// preferred host to [HostPool.AcquireHost]. Runtime-only.
 	LastSSHHost string
 
-	// scheduledAt records time.Now() at the moment ScheduleRetry creates
-	// this entry. Because time.Time preserves the monotonic clock reading,
-	// staleness detection via time.Since is immune to wall-clock jumps.
-	// Zero when the entry was reconstructed from SQLite at startup.
+	// scheduledAt is time.Now() when ScheduleRetry created this entry. Its
+	// monotonic reading makes staleness detection immune to wall-clock
+	// jumps. Zero when reconstructed from SQLite at startup.
 	scheduledAt time.Time
 
-	// scheduledDelayMS is the delay (in milliseconds) passed to
-	// ScheduleRetry. Together with scheduledAt it enables a monotonic
-	// staleness check: if time.Since(scheduledAt) < scheduledDelayMS the
-	// timer fired before its intended moment, indicating a stale callback
-	// from a replaced timer.
+	// scheduledDelayMS is the delay passed to ScheduleRetry. With
+	// scheduledAt it enables the monotonic staleness check: a fire before
+	// its intended moment indicates a stale callback from a replaced timer.
 	scheduledDelayMS int64
 
-	// ContinuationContext carries reaction continuation data for template
-	// injection on the first turn of the retry worker. Populated by
-	// reconcile functions when scheduling a continuation retry. Nil for
-	// non-reaction retries.
+	// ContinuationContext carries reaction continuation data for
+	// first-turn template injection. Nil for non-reaction retries.
 	ContinuationContext map[string]any
 
-	// ReactionKind is the reaction type that triggered this retry (e.g.
-	// ReactionKindCI). Empty for non-reaction retries. Known non-empty
-	// values cause HandleRetryTimer to call MarkReactionDispatched after
-	// successful dispatch. Runtime-only (not persisted to SQLite).
+	// ReactionKind is the reaction type that triggered this retry. A known
+	// non-empty value causes MarkReactionDispatched after successful
+	// dispatch. Runtime-only.
 	ReactionKind string
 
-	// RuleName is the dispatch rule name frozen at initial dispatch.
-	// Propagated verbatim through every retry so the freeze-on-dispatch
-	// contract holds across reschedule, slot-exhaustion, and reaction
-	// continuation paths.
+	// RuleName is the dispatch rule frozen at initial dispatch, propagated
+	// verbatim through every retry.
 	RuleName string
 
-	// TemplateID is the resolved template registry key frozen at
-	// initial dispatch. Propagated verbatim through every retry.
+	// TemplateID is the resolved template registry key frozen at initial
+	// dispatch, propagated verbatim through every retry.
 	TemplateID string
 
-	// AgentKind is the adapter kind frozen at initial dispatch.
-	// Propagated through every retry so [HandleRetryTimer] can look up
-	// the adapter without re-running rule resolution.
+	// AgentKind is the adapter kind frozen at initial dispatch, propagated
+	// so [HandleRetryTimer] resolves the adapter without re-running rule
+	// resolution.
 	AgentKind string
 
-	// pausedSinceMS is the wall-clock millisecond at which this entry
-	// first took one of HandleRetryTimer's two paused-by-issue-state
-	// arms, because the issue's current state does not permit a
-	// dispatch. Zero means the entry is not paused. Runtime-only,
-	// alongside scheduledAt and scheduledDelayMS above: never persisted
-	// and never carried on ScheduleRetryParams.
+	// pausedSinceMS is the wall-clock ms at which this entry first took one
+	// of HandleRetryTimer's paused-by-issue-state arms. Zero means not
+	// paused. Runtime-only: never persisted, never on ScheduleRetryParams.
 	pausedSinceMS int64
 }
 
-// ReactionKindCI is the reaction kind constant for CI failure reactions.
+// ReactionKindCI is the reaction kind for CI failure reactions.
 const ReactionKindCI = "ci"
 
-// ReactionKindReview is the reaction kind constant for PR review comment
-// reactions.
+// ReactionKindReview is the reaction kind for PR review comment reactions.
 const ReactionKindReview = "review"
 
-// ReactionKindBotReview is the reaction kind constant for automated
-// review bot PR comment reactions. The user-facing YAML key is
-// reactions.bot_review; the short form lives here as the runtime and
-// persisted discriminator.
+// ReactionKindBotReview is the reaction kind for automated review-bot PR
+// comment reactions. The YAML key is reactions.bot_review.
 const ReactionKindBotReview = "bot-review"
 
-// ReactionKindAutoMerge is the reaction kind constant for auto-merge
-// reactions. The user-facing YAML key is reactions.auto_merge; the
-// short form lives here as the runtime and persisted discriminator.
+// ReactionKindAutoMerge is the reaction kind for auto-merge reactions. The
+// YAML key is reactions.auto_merge.
 const ReactionKindAutoMerge = "merge"
 
-// ReactionKindMergeConflict is the reaction kind constant for
-// merge-conflict reactions. The user-facing YAML key is
-// reactions.merge_conflicts; the short form lives here as the runtime
-// and persisted discriminator.
+// ReactionKindMergeConflict is the reaction kind for merge-conflict
+// reactions. The YAML key is reactions.merge_conflicts.
 const ReactionKindMergeConflict = "merge-conflict"
 
-// ReactionKindLabelReview is the reaction kind constant for the read-only
-// PR review command triggered by the review label. The user-facing YAML
-// block is reactions.label_commands; the short form lives here as the
-// runtime and persisted discriminator, matching the YAML-versus-runtime
-// asymmetry the sibling kinds document.
+// ReactionKindLabelReview is the reaction kind for the read-only PR review
+// command triggered by the review label. The YAML block is
+// reactions.label_commands.
 const ReactionKindLabelReview = "label-review"
 
-// ReactionKindLabelFix is the reaction kind constant for the read-write
-// PR fix command triggered by the fix label. The user-facing YAML block
-// is reactions.label_commands; the short form lives here as the runtime
-// and persisted discriminator, matching the YAML-versus-runtime
-// asymmetry the sibling kinds document.
+// ReactionKindLabelFix is the reaction kind for the read-write PR fix
+// command triggered by the fix label. The YAML block is
+// reactions.label_commands.
 const ReactionKindLabelFix = "label-fix"
 
-// ReactionKindMergeCompletion is the reaction kind constant for the
-// merge-completion reaction. The user-facing YAML key is
-// reactions.merge_completion; the short form lives here as the runtime
-// and persisted discriminator, matching the YAML-versus-runtime
-// asymmetry the sibling kinds document.
+// ReactionKindMergeCompletion is the reaction kind for the
+// merge-completion reaction. The YAML key is reactions.merge_completion.
 const ReactionKindMergeCompletion = "merge-completion"
 
-// AutoMergePreflightRetryDelay is the delay between the initial
-// auto-merge preflight failure (transport-class) and its single
-// scheduled retry. The retry runs at most once per orchestrator
-// lifetime.
+// AutoMergePreflightRetryDelay is the delay between the initial auto-merge
+// preflight failure and its single scheduled retry, which runs at most
+// once per orchestrator lifetime.
 const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
-// reactionWatchWindowDefaultMS is the default pending-entry watch window,
-// in milliseconds, for the four reaction kinds watchWindowMS serves.
+// reactionWatchWindowDefaultMS is the default pending-entry watch window
+// for the four reaction kinds watchWindowMS serves.
 const reactionWatchWindowDefaultMS = 1800000
 
 // watchWindowMS reads the optional watch_window_ms key shared by
 // review_comments, bot_review, auto_merge, and merge_conflicts, returning
-// def when the key is absent.
+// def when absent.
 func watchWindowMS(extra map[string]any, def int) (int, error) {
 	v, ok := extra["watch_window_ms"]
 	if !ok {
@@ -462,12 +370,11 @@ func watchWindowMS(extra map[string]any, def int) (int, error) {
 	return n, nil
 }
 
-// reactionKindPins is the single registry of reaction kinds. A kind
-// present in the map is a known kind; its value reports whether a
-// pending entry of that kind pins its workspace against sweep
-// candidacy. Both [isKnownReactionKind] and [reactionKindPinsWorkspace]
-// read this map, so a kind cannot be recognized without carrying an
-// explicit pin classification.
+// reactionKindPins is the single registry of reaction kinds. Presence in
+// the map means the kind is known; the value reports whether a pending
+// entry pins its workspace against sweep candidacy. Both
+// [isKnownReactionKind] and [reactionKindPinsWorkspace] read it, so a kind
+// cannot be recognized without an explicit pin classification.
 var reactionKindPins = map[string]bool{
 	ReactionKindCI:              true,
 	ReactionKindReview:          true,
@@ -485,11 +392,9 @@ func isKnownReactionKind(kind string) bool {
 }
 
 // reactionKindPinsWorkspace reports whether a pending reaction entry of
-// the given kind excludes its workspace from sweep candidacy.
-//
-// An unregistered kind returns true, the non-destructive default,
-// because retention rather than removal is the safe outcome for a kind
-// the rest of the system does not yet classify.
+// the given kind excludes its workspace from sweep candidacy. An
+// unregistered kind returns true, the non-destructive default: retention
+// is safe for a kind the rest of the system does not yet classify.
 func reactionKindPinsWorkspace(kind string) bool {
 	pins, known := reactionKindPins[kind]
 	if !known {
@@ -499,25 +404,21 @@ func reactionKindPinsWorkspace(kind string) bool {
 }
 
 // ReactionKey returns the composite map key for a pending reaction.
-// Callers must not pass IDs containing colons; the delimiter is a plain
-// colon between issueID and kind.
+// Callers must not pass IDs containing the colon delimiter.
 func ReactionKey(issueID, kind string) string {
 	return issueID + ":" + kind
 }
 
 // PendingReaction records that an issue needs external signal
 // reconciliation. Created by worker exit handlers or external event
-// receivers. Consumed by per-kind reconcile functions during the
-// reconcile tick. Runtime-only (not persisted to SQLite; cross-restart
-// deduplication uses reaction_fingerprints).
+// receivers, consumed by per-kind reconcile functions. Runtime-only;
+// cross-restart dedup uses reaction_fingerprints.
 type PendingReaction struct {
-	// IssueID is the domain issue ID.
 	IssueID string
 
 	// Identifier is the human-readable ticket key (e.g. "MT-649").
 	Identifier string
 
-	// DisplayID is the display identifier passed through to dispatch.
 	DisplayID string
 
 	// Attempt is the overall run attempt number from the completed worker.
@@ -526,77 +427,64 @@ type PendingReaction struct {
 	// Kind is the reaction type constant (e.g. ReactionKindCI).
 	Kind string
 
-	// LastSSHHost is the SSH host from the completed worker, used for
-	// host preference on fix redispatch.
+	// LastSSHHost is the SSH host from the completed worker, used for host
+	// preference on fix redispatch.
 	LastSSHHost string
 
-	// CreatedAt is the UTC time the entry was created.
 	CreatedAt time.Time
 
-	// PendingAttempts is the count of consecutive passes that reached no
-	// dispatch. Used to compute exponential backoff.
+	// PendingAttempts counts consecutive passes that reached no dispatch,
+	// used for exponential backoff.
 	PendingAttempts int
 
-	// PendingRetryAt is the earliest UTC time at which the reconcile
-	// function should poll again. Zero means ready immediately.
+	// PendingRetryAt is the earliest time to poll again. Zero means ready
+	// immediately.
 	PendingRetryAt time.Time
 
-	// HeadRecordedAt is the UTC time at which this process recorded the
-	// commit the entry is currently evaluated against. Zero until the
-	// first head is recorded, and zero again for an entry restored on
-	// startup, because a head recorded by a previous process cannot
-	// bound a query over this process's activity. Read only by kinds
-	// whose subject is the pull request head.
+	// HeadRecordedAt is when this process recorded the commit currently
+	// evaluated. Zero until first recorded, and zero for a startup-restored
+	// entry, because a head recorded by a previous process cannot bound a
+	// query over this process's activity. Read only by kinds whose subject
+	// is the pull request head.
 	HeadRecordedAt time.Time
 
-	// EscalatedForCurrentHead reports whether the configured escalation
-	// has already been applied for the commit currently recorded.
-	// Cleared whenever a different head is recorded, so an exhausted
-	// budget escalates at most once per commit rather than once per
-	// pass. Read only by kinds whose subject is the pull request head.
+	// EscalatedForCurrentHead reports whether escalation has been applied
+	// for the recorded commit. Cleared when a different head is recorded,
+	// so an exhausted budget escalates at most once per commit. Read only
+	// by kinds whose subject is the pull request head.
 	EscalatedForCurrentHead bool
 
-	// KindData holds kind-specific typed data. CI reactions use
-	// [*CIReactionData]; future reaction types define their own structs.
-	// The reconcile function for each kind is responsible for a single
-	// type assertion at the top of its loop body.
+	// KindData holds kind-specific typed data (CI uses [*CIReactionData]).
+	// Each kind's reconcile function asserts the type once.
 	KindData any
 
-	// AgentKind is the dispatch-frozen adapter kind captured from the
-	// completed worker. Propagated into the reaction continuation
-	// retry so the same adapter handles the follow-up turn.
+	// AgentKind is the dispatch-frozen adapter kind from the completed
+	// worker, propagated so the same adapter handles the follow-up turn.
 	AgentKind string
 
-	// RuleName is the dispatch-frozen rule name captured from the
-	// completed worker. Propagated for logs and metrics so the
-	// continuation appears under the same rule as the original
-	// dispatch.
+	// RuleName is the dispatch-frozen rule name from the completed worker,
+	// propagated so the continuation appears under the same rule.
 	RuleName string
 
-	// TemplateID is the dispatch-frozen template registry key
-	// captured from the completed worker. Propagated so the
-	// continuation renders the same template as the original
-	// dispatch.
+	// TemplateID is the dispatch-frozen template key from the completed
+	// worker, propagated so the continuation renders the same template.
 	TemplateID string
 
-	// Triage is the in-flight or finished triage run for the subject
-	// this entry currently describes. Nil when no run has started, and
-	// cleared whenever the subject's fingerprint moves. Runtime-only.
+	// Triage is the in-flight or finished triage run for the current
+	// subject. Nil when none started, cleared when the fingerprint moves.
+	// Runtime-only.
 	Triage *ReactionTriageRun
 }
 
-// CIReactionData holds CI-specific fields for a pending CI reaction.
-// Stored in [PendingReaction.KindData] for reactions with Kind ==
-// [ReactionKindCI]. PRNumber, Owner, and Repo are sourced from
-// [domain.SCMMetadata] (written by the agent to scm.json), never from
-// the tracker project configuration.
+// CIReactionData holds CI-specific fields for a pending CI reaction,
+// stored in [PendingReaction.KindData] for Kind == [ReactionKindCI].
+// PRNumber, Owner, and Repo come from [domain.SCMMetadata] (scm.json),
+// never from tracker project config.
 //
-// SHA is the head recorded at worker exit. It is not the ref the
-// reaction polls: the polled ref is the head read live from
-// [domain.PRMergeStatus.HeadSHA] on each due tick, so a commit pushed
-// after the agent handed off is the commit the verdict describes.
+// SHA is the head recorded at worker exit, not the polled ref: the reaction
+// reads the live head from [domain.PRMergeStatus.HeadSHA] each tick, so a
+// commit pushed after handoff is the one the verdict describes.
 type CIReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -614,12 +502,10 @@ type CIReactionData struct {
 }
 
 // ReviewReactionData holds review-specific fields for a pending review
-// reaction. Stored in [PendingReaction.KindData] for reactions with
-// Kind == [ReactionKindReview]. Owner and Repo are sourced from
-// [domain.SCMMetadata] (written by the agent to scm.json), never from
-// the tracker project configuration.
+// reaction, stored in [PendingReaction.KindData] for Kind ==
+// [ReactionKindReview]. Owner and Repo come from [domain.SCMMetadata]
+// (scm.json), never from tracker project config.
 type ReviewReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -639,8 +525,8 @@ type ReviewReactionData struct {
 	LastEventAt time.Time
 }
 
-// ReviewReactionConfig holds validated review-specific configuration
-// extracted from [config.ReactionConfig] at startup.
+// ReviewReactionConfig holds validated review-specific configuration from
+// [config.ReactionConfig].
 type ReviewReactionConfig struct {
 	Escalation           string
 	EscalationLabel      string
@@ -649,21 +535,17 @@ type ReviewReactionConfig struct {
 	MaxContinuationTurns int
 	WatchWindowMS        int
 
-	// Triage is the frozen triage configuration for this kind, copied
-	// verbatim from the parsed reaction block at construction.
+	// Triage is the frozen triage config, copied verbatim at construction.
 	Triage config.ReactionTriageConfig
 }
 
 // BotReviewReactionData holds bot-review-specific fields for a pending
-// bot-review reaction. Stored in [PendingReaction.KindData] for reactions
-// with Kind == [ReactionKindBotReview]. Owner, Repo, Branch, and SHA are
-// sourced from [domain.SCMMetadata] (written by the agent to scm.json),
-// never from the tracker project configuration.
-//
-// Unlike [ReviewReactionData], there is no debounce timestamp: bot-review
+// bot-review reaction, stored in [PendingReaction.KindData] for Kind ==
+// [ReactionKindBotReview]. Owner, Repo, Branch, and SHA come from
+// [domain.SCMMetadata] (scm.json), never from tracker project config.
+// Unlike [ReviewReactionData] there is no debounce timestamp: bot-review
 // dispatches immediately.
 type BotReviewReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -680,7 +562,7 @@ type BotReviewReactionData struct {
 }
 
 // BotReviewReactionConfig holds validated bot-review-specific
-// configuration extracted from [config.ReactionConfig] at startup.
+// configuration from [config.ReactionConfig].
 type BotReviewReactionConfig struct {
 	Escalation           string
 	EscalationLabel      string
@@ -689,18 +571,15 @@ type BotReviewReactionConfig struct {
 	BotUsernames         []string
 	WatchWindowMS        int
 
-	// Triage is the frozen triage configuration for this kind, copied
-	// verbatim from the parsed reaction block at construction.
+	// Triage is the frozen triage config, copied verbatim at construction.
 	Triage config.ReactionTriageConfig
 }
 
 // AutoMergeReactionData holds auto-merge-specific fields for a pending
-// auto-merge reaction. Stored in [PendingReaction.KindData] for
-// reactions with Kind == [ReactionKindAutoMerge]. Owner, Repo, Branch,
-// and SHA are sourced from [domain.SCMMetadata] (written by the agent
-// to scm.json), never from the tracker project configuration.
+// auto-merge reaction, stored in [PendingReaction.KindData] for Kind ==
+// [ReactionKindAutoMerge]. Owner, Repo, Branch, and SHA come from
+// [domain.SCMMetadata] (scm.json), never from tracker project config.
 type AutoMergeReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -717,7 +596,7 @@ type AutoMergeReactionData struct {
 }
 
 // AutoMergeReactionConfig holds validated auto-merge-specific
-// configuration extracted from [config.ReactionConfig] at startup.
+// configuration from [config.ReactionConfig].
 type AutoMergeReactionConfig struct {
 	Strategy        domain.MergeStrategy
 	RequireCI       bool
@@ -730,18 +609,15 @@ type AutoMergeReactionConfig struct {
 }
 
 // MergeConflictReactionData holds merge-conflict-specific fields for a
-// pending merge-conflict reaction. Stored in [PendingReaction.KindData]
-// for reactions with Kind == [ReactionKindMergeConflict]. PRNumber,
-// Owner, Repo, and Branch are sourced from [domain.SCMMetadata] (written
-// by the agent to scm.json), never from the tracker project
-// configuration.
+// pending merge-conflict reaction, stored in [PendingReaction.KindData]
+// for Kind == [ReactionKindMergeConflict]. PRNumber, Owner, Repo, and
+// Branch come from [domain.SCMMetadata] (scm.json), never from tracker
+// project config.
 //
-// The rebase base branch is not stored here. It is read live from
-// [domain.PRMergeStatus.BaseBranch] on each reconcile tick and threaded
-// into the continuation data, so the agent always rebases onto the PR's
-// current target rather than a value snapshotted at enqueue time.
+// The rebase base branch is not stored: it is read live from
+// [domain.PRMergeStatus.BaseBranch] each tick, so the agent rebases onto
+// the PR's current target rather than a value snapshotted at enqueue.
 type MergeConflictReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -759,7 +635,7 @@ type MergeConflictReactionData struct {
 }
 
 // MergeConflictReactionConfig holds validated merge-conflict-specific
-// configuration extracted from [config.ReactionConfig] at startup.
+// configuration from [config.ReactionConfig].
 type MergeConflictReactionConfig struct {
 	Escalation      string
 	EscalationLabel string
@@ -767,18 +643,15 @@ type MergeConflictReactionConfig struct {
 	MaxRetries      int
 	WatchWindowMS   int
 
-	// Triage is the frozen triage configuration for this kind, copied
-	// verbatim from the parsed reaction block at construction.
+	// Triage is the frozen triage config, copied verbatim at construction.
 	Triage config.ReactionTriageConfig
 }
 
 // LabelReviewReactionData holds the label-review command's per-PR
-// detection state. Stored in [PendingReaction.KindData] for reactions
-// with Kind == [ReactionKindLabelReview]. PRNumber, Owner, and Repo are
-// sourced from [domain.SCMMetadata] (written by the agent to scm.json),
-// never from the tracker project configuration.
+// detection state, stored in [PendingReaction.KindData] for Kind ==
+// [ReactionKindLabelReview]. PRNumber, Owner, and Repo come from
+// [domain.SCMMetadata] (scm.json), never from tracker project config.
 type LabelReviewReactionData struct {
-	// PRNumber is the pull request number whose journal is polled.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -792,16 +665,14 @@ type LabelReviewReactionData struct {
 	// source of truth is the reaction_fingerprints row.
 	HighWaterMark string
 
-	// LastActor is the login from the most recently confirmed command,
-	// carried into the dispatch context and logs.
+	// LastActor is the login from the most recently confirmed command.
 	LastActor string
 }
 
 // LabelFixReactionData holds the label-fix command's per-PR detection
-// state. Stored in [PendingReaction.KindData] for reactions with
-// Kind == [ReactionKindLabelFix]. PRNumber, Owner, Repo, and Branch are
-// sourced from [domain.SCMMetadata]; Branch is the PR head branch the
-// dispatched fix session checks out and pushes to.
+// state, stored in [PendingReaction.KindData] for Kind ==
+// [ReactionKindLabelFix]. Fields come from [domain.SCMMetadata]; Branch is
+// the PR head branch the fix session checks out and pushes to.
 type LabelFixReactionData struct {
 	PRNumber      int
 	Owner         string
@@ -812,10 +683,9 @@ type LabelFixReactionData struct {
 }
 
 // LabelReviewReactionConfig holds the validated label-review runtime
-// configuration resolved from [config.LabelCommandsConfig]. ReviewLabel is
-// the normalized label that triggers the command; empty disables the
-// review command even when the block is otherwise active. PollIntervalMS
-// is the detection poll interval, already clamped to the floor.
+// configuration from [config.LabelCommandsConfig]. An empty ReviewLabel
+// disables the review command. PollIntervalMS is already clamped to the
+// floor.
 type LabelReviewReactionConfig struct {
 	Provider       string
 	ReviewLabel    string
@@ -823,28 +693,22 @@ type LabelReviewReactionConfig struct {
 }
 
 // LabelFixReactionConfig holds the validated label-fix runtime
-// configuration resolved from [config.LabelCommandsConfig]. FixLabel is
-// the normalized label that triggers the command; empty disables the fix
-// command even when the block is otherwise active. PollIntervalMS is the
-// detection poll interval, already clamped to the floor.
+// configuration from [config.LabelCommandsConfig]. An empty FixLabel
+// disables the fix command. PollIntervalMS is already clamped to the
+// floor.
 type LabelFixReactionConfig struct {
 	Provider       string
 	FixLabel       string
 	PollIntervalMS int
 }
 
-// MergeCompletionReactionData holds merge-completion-specific fields for
-// a pending merge-completion reaction. Stored in [PendingReaction.KindData]
-// for reactions with Kind == [ReactionKindMergeCompletion]. PRNumber,
-// Owner, and Repo are sourced from [domain.SCMMetadata] (written by the
-// agent to scm.json), never from the tracker project configuration.
-//
-// Unlike the checkout-bearing sibling kinds, no branch or commit SHA is
-// carried: the pass performs no checkout and fingerprints on the merge
-// commit identifier observed live, not on a value snapshotted at
-// enqueue time.
+// MergeCompletionReactionData holds merge-completion-specific fields for a
+// pending merge-completion reaction, stored in [PendingReaction.KindData]
+// for Kind == [ReactionKindMergeCompletion]. Fields come from
+// [domain.SCMMetadata] (scm.json), never from tracker project config.
+// Unlike the checkout-bearing kinds no branch or SHA is carried: the pass
+// performs no checkout and fingerprints on the live merge commit.
 type MergeCompletionReactionData struct {
-	// PRNumber is the pull request number.
 	PRNumber int
 
 	// Owner is the repository owner.
@@ -855,7 +719,7 @@ type MergeCompletionReactionData struct {
 }
 
 // MergeCompletionReactionConfig holds validated merge-completion-specific
-// configuration extracted from [config.ReactionConfig] at startup.
+// configuration from [config.ReactionConfig].
 type MergeCompletionReactionConfig struct {
 	TargetState     string
 	PollIntervalMS  int
@@ -865,9 +729,9 @@ type MergeCompletionReactionConfig struct {
 }
 
 // BudgetExhaustedEntry is the runtime view of one issue held out of
-// dispatch by a per-issue budget ceiling. Owned by the single-writer
-// event loop; replaced wholesale by the per-tick rebuild, and updated
-// in place by the retry lane's own block.
+// dispatch by a per-issue budget ceiling. Owned by the single-writer event
+// loop; replaced wholesale by the per-tick rebuild, updated in place by the
+// retry lane's block.
 type BudgetExhaustedEntry struct {
 	Identifier         string // human-readable ticket key; empty when the candidate carried none
 	DisplayID          string // qualified form of Identifier; empty when Identifier is display-ready
@@ -881,16 +745,16 @@ type BudgetExhaustedEntry struct {
 	ExhaustedAt        time.Time
 }
 
-// BudgetAnnouncement remembers what the operator has already been told
-// about one issue held by a budget ceiling, so a hold that leaves and
-// re-enters the candidate set is not announced twice.
+// BudgetAnnouncement remembers what the operator was already told about a
+// budget hold, so a hold that leaves and re-enters the candidate set is not
+// announced twice.
 type BudgetAnnouncement struct {
 	Reason string
 	At     time.Time
 }
 
-// ParkedEntry is the runtime view of one issue held out of primary dispatch
-// until the orchestrator observes that a person acted on it.
+// ParkedEntry is the runtime view of one issue held out of primary
+// dispatch until the orchestrator observes that a person acted on it.
 type ParkedEntry struct {
 	Identifier   string
 	DisplayID    string
@@ -901,225 +765,169 @@ type ParkedEntry struct {
 	ParkedAt     time.Time
 }
 
-// State is the single authoritative runtime state owned by the orchestrator.
-// The running map and claimed set are in-memory for performance. The
-// agent_totals and completed set are backed by SQLite and survive restarts.
-//
-// State is not safe for concurrent access. All mutations are serialized
-// through the orchestrator's event loop goroutine. The exception is
-// WorkerWg, which is inherently goroutine-safe.
+// State is the single authoritative runtime state owned by the
+// orchestrator. Not safe for concurrent access: all mutations are
+// serialized through the event loop goroutine, except WorkerWg, which is
+// goroutine-safe. The agent_totals and completed set are backed by SQLite
+// and survive restarts.
 type State struct {
 	// WorkerWg tracks in-flight worker goroutines spawned by
-	// [DispatchIssue]. Callers that invoke dispatch outside the Run()
-	// event loop (e.g. direct handleTick calls) can Wait() on this
-	// group to ensure all goroutines have completed before cleanup.
+	// [DispatchIssue]. Callers dispatching outside the Run() loop can
+	// Wait() before cleanup.
 	WorkerWg sync.WaitGroup
 
-	// TrackerOpsWg tracks fire-and-forget goroutines that perform
-	// best-effort tracker API calls (comments, labels). Drained after
-	// worker shutdown completes so these goroutines are not orphaned
-	// on process exit.
+	// TrackerOpsWg tracks fire-and-forget tracker API goroutines, drained
+	// after worker shutdown so they are not orphaned on exit.
 	TrackerOpsWg sync.WaitGroup
 
-	// TriageWg tracks in-flight reaction triage goroutines so shutdown
-	// can drain them rather than orphan them.
+	// TriageWg tracks in-flight reaction triage goroutines so shutdown can
+	// drain them.
 	TriageWg sync.WaitGroup
 
-	// TriageInFlight counts triage subprocesses currently running. The
-	// event loop increments it when it starts a run; the runner
-	// goroutine decrements it on return, so the count stays true even
-	// when no pass ever consumes the outcome. Atomic because its two
-	// writers are different goroutines.
+	// TriageInFlight counts running triage subprocesses. The event loop
+	// increments on start; the runner goroutine decrements on return, so
+	// the count stays true even when no pass consumes the outcome. Atomic
+	// because its two writers are different goroutines.
 	TriageInFlight atomic.Int64
 
-	// PollIntervalMS is the current effective poll interval from config.
 	PollIntervalMS int
 
-	// MaxConcurrentAgents is the current effective global concurrency limit
-	// from config.
 	MaxConcurrentAgents int
 
-	// MaxConcurrentByState holds per-state concurrency caps. State keys are
-	// normalized to lowercase. An absent key means the state falls back to
-	// the global limit.
+	// MaxConcurrentByState holds per-state concurrency caps, keys
+	// lowercased. An absent key falls back to the global limit.
 	MaxConcurrentByState map[string]int
 
 	// MaxTokens mirrors config.Agent.MaxTokens for the in-flight token
-	// ceiling. Seeded by NewState and refreshed on every poll tick
-	// beside PollIntervalMS and MaxConcurrentAgents. 0 means unlimited.
-	// Written only on the single-writer event-loop goroutine.
+	// ceiling, refreshed on every poll tick. 0 means unlimited. Written
+	// only on the event-loop goroutine.
 	MaxTokens int
 
-	// Running maps issue ID to the live session entry for that issue.
-	// Only the orchestrator's event loop may mutate this map.
+	// Running maps issue ID to the live session entry. Only the event loop
+	// may mutate this map.
 	Running map[string]*RunningEntry
 
-	// Claimed is the set of issue IDs that are reserved by the orchestrator
-	// (running, retry-queued, or in the process of being dispatched).
-	// Prevents duplicate dispatch.
+	// Claimed is the set of issue IDs reserved by the orchestrator
+	// (running, retry-queued, or being dispatched), preventing duplicate
+	// dispatch.
 	Claimed map[string]struct{}
 
-	// RetryAttempts maps issue ID to the pending retry entry.
 	RetryAttempts map[string]*RetryEntry
 
-	// Completed is a set of issue IDs that have completed at least once.
+	// Completed is the set of issue IDs that have completed at least once.
 	// Bookkeeping only, not used for dispatch gating.
 	Completed map[string]struct{}
 
-	// BudgetExhausted maps issue ID to the runtime view of one issue
-	// blocked by a durable run_history-derived effort budget: the
-	// configured max_sessions budget or the max_tokens budget. Written
-	// from exactly two places, both on the single-writer event loop: the
-	// poll tick's rebuild, which replaces the map wholesale, and the
-	// retry lane's blockBudget, which writes and enriches one entry.
-	// Read by the three dispatch membership tests, which check only
-	// membership, and by [RuntimeSnapshot], which copies each entry by
-	// value. [ShouldDispatch] checks this map before dispatch.
+	// BudgetExhausted maps issue ID to the runtime view of an issue blocked
+	// by a durable run_history-derived budget. Written only on the event
+	// loop, from the poll tick's rebuild (which replaces the map wholesale)
+	// and the retry lane's blockBudget (which writes one entry). Read by
+	// the dispatch membership tests and by [RuntimeSnapshot].
 	BudgetExhausted map[string]*BudgetExhaustedEntry
 
-	// BudgetAnnounced maps issue ID to what the operator has already
-	// been told about a budget hold on that issue, so a hold that
-	// leaves and re-enters the candidate set under the same reason is
-	// not announced twice. It is written by the rebuild's announcement
-	// step, the rebuild's evidence-based prune, and the retry lane's
-	// post-gate announcement block. It is read by blockBudget, for
-	// ExhaustedAt only. No dispatch gate and no snapshot reads it. An
-	// entry survives at most until the issue's hold clears through a
-	// candidate observation under the current ceiling, or until the
-	// process restarts, whichever comes first; an issue that never
-	// returns as a candidate keeps its entry for the rest of the
-	// orchestrator's lifetime.
+	// BudgetAnnounced maps issue ID to what the operator was already told
+	// about a budget hold, so a hold that re-enters the candidate set under
+	// the same reason is not announced twice. Records a fact about this
+	// process's own log and dies with the process. An entry survives until
+	// the hold clears through a candidate observation under the current
+	// ceiling, or until restart.
 	BudgetAnnounced map[string]BudgetAnnouncement
 
 	// BudgetHoldNoticed maps issue ID to the budget-hold reason already
-	// announced on that issue's tracker item. Unlike BudgetAnnounced,
-	// which records what this process has written to its own log and
-	// dies with the process, BudgetHoldNoticed records what has been
-	// written to another system and outlives the process: it mirrors
-	// the budget_hold_notices table, loaded from it once at startup
-	// before the event loop starts. The two maps are keyed alike and
-	// pruned by the same evidence, but MUST NOT be collapsed into one,
-	// because one records a fact about this process and the other a
-	// fact about the tracker. An entry survives until the issue is next
-	// observed as a candidate that is not held, or until both budgets
-	// are disabled; an issue that never returns as a candidate keeps
-	// its entry for the rest of the orchestrator's lifetime.
+	// announced on the tracker item. It mirrors the budget_hold_notices
+	// table, loaded from it at startup. It MUST NOT be collapsed into
+	// BudgetAnnounced: one records a fact about this process, the other a
+	// fact about the tracker that outlives the process. An entry survives
+	// until the issue is next observed as an unheld candidate, or until
+	// both budgets are disabled.
 	BudgetHoldNoticed map[string]string
 
 	// BudgetHoldNoticeWindowStart and BudgetHoldNoticesInWindow pace the
-	// wall-clock notice-write bound shared by both the poll tick's
-	// rebuild and the retry lane: at most maxBudgetHoldNoticesPerWindow
-	// notices are posted in any budgetHoldNoticeWindow, counted across
-	// both lanes. A window opens afresh, with the count reset, on the
-	// first notice decision taken at or after budgetHoldNoticeWindow
-	// from the current window's start. A restart begins a fresh window.
-	// No dispatch gate and no snapshot reads either field.
+	// notice-write bound shared by the rebuild and the retry lane: at most
+	// maxBudgetHoldNoticesPerWindow notices per budgetHoldNoticeWindow,
+	// counted across both lanes. A restart begins a fresh window.
 	BudgetHoldNoticeWindowStart time.Time
 	BudgetHoldNoticesInWindow   int
 
-	// Parked maps issue ID to the runtime view of an issue held out of
-	// primary dispatch until the orchestrator observes that a person acted
-	// on it. The durable mirror is the parked_issues table. Owned by the
-	// single-writer event loop.
+	// Parked maps issue ID to an issue held out of primary dispatch until a
+	// person acts on it. The durable mirror is the parked_issues table.
 	Parked map[string]*ParkedEntry
 
-	// AgentTotals holds aggregate token counts and cumulative runtime seconds
-	// across all ended sessions. Active session elapsed time is computed at
-	// snapshot time, not maintained continuously.
+	// AgentTotals holds aggregate token counts and cumulative runtime
+	// seconds across all ended sessions. Active-session elapsed time is
+	// computed at snapshot time.
 	AgentTotals AgentTotals
 
-	// AgentRateLimits is the most recent rate-limit payload received from
-	// any agent event. Nil when no rate-limit data has been observed.
+	// AgentRateLimits is the most recent rate-limit payload from any agent
+	// event. Nil when none observed.
 	AgentRateLimits *RateLimitSnapshot
 
-	// ReactionAttempts maps composite key (issueID:kind) to the number of
-	// reaction-triggered continuations dispatched for that combination.
-	// Reset when the issue leaves the Running or RetryAttempts maps.
-	// Runtime-only (not persisted).
+	// ReactionAttempts maps composite key (issueID:kind) to the count of
+	// reaction-triggered continuations. Reset when the issue leaves Running
+	// or RetryAttempts. Runtime-only.
 	ReactionAttempts map[string]int
 
 	// PendingReactions maps composite key (issueID:kind) to a
-	// [PendingReaction]. Populated by [HandleWorkerExit] when a normal
-	// exit occurs and a reaction provider is configured. Consumed by
-	// per-kind reconcile functions during the reconcile tick. Runtime-only
-	// (not persisted).
+	// [PendingReaction]. Populated by [HandleWorkerExit], consumed by
+	// per-kind reconcile functions. Runtime-only.
 	PendingReactions map[string]*PendingReaction
 
-	// AutoMergePreflightFailed marks the auto-merge subsystem as
-	// disabled for the lifetime of the process when the startup
-	// preflight detects a missing token scope or a transport failure
-	// the bounded retry could not heal. Read by reconcileAutoMerge to
-	// drop pending merge entries with a single warn log per entry.
+	// AutoMergePreflightFailed disables the auto-merge subsystem for the
+	// process lifetime when startup preflight detects a missing token scope
+	// or an unrecoverable transport failure.
 	AutoMergePreflightFailed bool
 
-	// AutoMergePreflightRetryDueAt schedules a one-shot retry of the
-	// auto-merge preflight after a transport-class startup failure.
-	// Zero means no retry is scheduled. Cleared by the event-loop
-	// goroutine when the retry is consumed; never re-set after the
-	// consume runs.
+	// AutoMergePreflightRetryDueAt schedules a one-shot preflight retry
+	// after a transport-class startup failure. Zero means none scheduled;
+	// cleared by the event loop when consumed and never re-set.
 	AutoMergePreflightRetryDueAt time.Time
 
-	// AutoMergeAuthLogged tracks issues whose runtime ErrSCMAuth on
-	// MergePR has already produced a structured ERROR log, so the log
-	// fires at most once per issue per orchestrator lifetime.
+	// AutoMergeAuthLogged tracks issues whose runtime ErrSCMAuth on MergePR
+	// already logged, so the log fires at most once per issue per lifetime.
 	AutoMergeAuthLogged map[string]struct{}
 
-	// MergeCompletionTerminalDriftLogged suppresses the reload-drift
-	// warning emitted when the configured merge-completion target state
-	// is no longer a member of the runtime terminal-state list. Set on
-	// the onset of the condition and cleared once the target is present
-	// again, so a later onset produces a further warning. Runtime-only;
-	// mutated only by the reconcile pass on the event-loop goroutine.
+	// MergeCompletionTerminalDriftLogged suppresses the reload-drift warning
+	// while the merge-completion target state is no longer terminal. Cleared
+	// once the target is terminal again, so a later onset warns anew.
+	// Runtime-only; mutated only by the reconcile pass on the event loop.
 	MergeCompletionTerminalDriftLogged bool
 
-	// SweepTickCounter tracks poll ticks since the last workspace sweep.
-	// Incremented by handleTick; reset to zero when the sweep fires.
-	// Runtime-only (not persisted).
+	// SweepTickCounter tracks poll ticks since the last workspace sweep,
+	// reset when the sweep fires. Runtime-only.
 	SweepTickCounter int
 
-	// BlockerReadOffset is the position, among a tick's needy
-	// candidates, at which the per-pass blocker-read budget resumes.
-	// Mutated once per tick by the event loop that owns this struct:
-	// advanced by the reads spent when a pass exhausts its budget, and
-	// reset to zero on every other pass ending. Runtime-only (not
-	// persisted).
+	// BlockerReadOffset is the position, among a tick's needy candidates, at
+	// which the per-pass blocker-read budget resumes. Mutated once per tick
+	// by the event loop. Runtime-only.
 	BlockerReadOffset int
 
 	// TokenBudgetIncomplete is the set of issue IDs whose per-issue token
-	// spend, as evaluated on the most recent poll tick, is below the
-	// configured max_tokens budget but includes at least one unmeasured
-	// run, so the ceiling could not be fully evaluated for that issue.
-	// Rebuilt wholesale on every poll tick when the token budget is
-	// enabled, and cleared when it is not. Owned by the single-writer
-	// event loop.
+	// spend is below max_tokens but only a lower bound, so the ceiling could
+	// not be fully evaluated. Rebuilt wholesale each tick when the token
+	// budget is enabled, cleared when not. Owned by the event loop.
 	TokenBudgetIncomplete map[string]struct{}
 }
 
 // continuationCtxKey is the context key for reaction continuation data
-// passed from the dispatch site to the worker goroutine via
-// context.WithValue.
+// passed from dispatch to the worker goroutine.
 type continuationCtxKey struct{}
 
 // WithContinuationContext returns a child context carrying reaction
-// continuation data for prompt injection. The worker reads this with
-// [ContinuationFromContext].
+// continuation data, read by [ContinuationFromContext].
 func WithContinuationContext(ctx context.Context, data map[string]any) context.Context {
 	return context.WithValue(ctx, continuationCtxKey{}, data)
 }
 
 // ContinuationFromContext extracts the continuation map injected by
-// [WithContinuationContext]. Returns nil when no continuation data is
-// present.
+// [WithContinuationContext], or nil when absent.
 func ContinuationFromContext(ctx context.Context) map[string]any {
 	v, _ := ctx.Value(continuationCtxKey{}).(map[string]any)
 	return v
 }
 
 // NewState creates an initialized [State] with empty collections and the
-// provided config values. If persisted [AgentTotals] are available from
-// SQLite recovery, pass them in; otherwise pass a zero-value AgentTotals.
-// Keys in maxConcurrentByState must be pre-normalized to lowercase by the
-// caller; the config layer does this during parsing.
+// provided config values. maxConcurrentByState keys must be pre-normalized
+// to lowercase by the caller.
 func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentByState map[string]int, totals AgentTotals) *State {
 	if maxConcurrentByState == nil {
 		maxConcurrentByState = make(map[string]int)
@@ -1145,13 +953,12 @@ func NewState(pollIntervalMS, maxConcurrentAgents, maxTokens int, maxConcurrentB
 	}
 }
 
-// RunningCount returns the number of entries in the running map.
 func (s *State) RunningCount() int {
 	return len(s.Running)
 }
 
-// RunningCountByState returns the number of entries in the running map whose
-// Issue.State matches the given state (case-insensitive).
+// RunningCountByState counts running entries whose Issue.State matches
+// state (case-insensitive).
 func RunningCountByState(running map[string]*RunningEntry, state string) int {
 	count := 0
 	for _, entry := range running {
@@ -1162,8 +969,8 @@ func RunningCountByState(running map[string]*RunningEntry, state string) int {
 	return count
 }
 
-// SnapshotRunningEntry is a read-only view of a single running session
-// for observability consumers. Produced by [RuntimeSnapshot].
+// SnapshotRunningEntry is a read-only view of a running session, produced
+// by [RuntimeSnapshot].
 type SnapshotRunningEntry struct {
 	IssueID             string                    `json:"issue_id"`
 	Identifier          string                    `json:"issue_identifier"`
@@ -1198,8 +1005,8 @@ type SnapshotRunningEntry struct {
 	TokensPending       bool                      `json:"tokens_pending"`
 }
 
-// SnapshotRetryEntry is a read-only view of a pending retry for
-// observability consumers. Produced by [RuntimeSnapshot].
+// SnapshotRetryEntry is a read-only view of a pending retry, produced by
+// [RuntimeSnapshot].
 type SnapshotRetryEntry struct {
 	IssueID    string `json:"issue_id"`
 	Identifier string `json:"issue_identifier"`
@@ -1210,8 +1017,7 @@ type SnapshotRetryEntry struct {
 }
 
 // SnapshotBudgetEntry is a read-only, value-copied view of one issue held
-// out of dispatch by a budget ceiling, for observability consumers.
-// Produced by [RuntimeSnapshot].
+// out of dispatch by a budget ceiling, produced by [RuntimeSnapshot].
 type SnapshotBudgetEntry struct {
 	IssueID            string    `json:"issue_id"`
 	Identifier         string    `json:"issue_identifier"`
@@ -1225,15 +1031,14 @@ type SnapshotBudgetEntry struct {
 	ExhaustedAt        time.Time `json:"exhausted_at"`
 }
 
-// SnapshotAgentTotals holds aggregate token counts and runtime seconds
-// at a point in time. Unlike [AgentTotals], SecondsRunning includes
-// elapsed time from currently active sessions.
+// SnapshotAgentTotals holds aggregate token counts and runtime seconds at a
+// point in time. Unlike [AgentTotals], SecondsRunning includes active
+// sessions' elapsed time.
 //
-// UnmeasuredSessions, RunningUnreported, and RunningNonReporting
-// count, by reason, the sessions the four token counters leave out:
-// ended sessions with no recorded usage, running sessions whose kind
-// reports usage but none has arrived yet, and running sessions whose
-// kind reports none at all.
+// UnmeasuredSessions, RunningUnreported, and RunningNonReporting count, by
+// reason, the sessions the token counters leave out: ended sessions with no
+// recorded usage, running sessions whose figure has not arrived and may
+// still, and running sessions reporting no usage.
 type SnapshotAgentTotals struct {
 	InputTokens         int64   `json:"input_tokens"`
 	OutputTokens        int64   `json:"output_tokens"`
@@ -1246,7 +1051,7 @@ type SnapshotAgentTotals struct {
 }
 
 // RuntimeSnapshotResult is a point-in-time capture of the orchestrator's
-// runtime state for observability consumers. Produced by [RuntimeSnapshot].
+// runtime state, produced by [RuntimeSnapshot].
 type RuntimeSnapshotResult struct {
 	GeneratedAt          time.Time              `json:"generated_at"`
 	Running              []SnapshotRunningEntry `json:"running"`
@@ -1260,10 +1065,9 @@ type RuntimeSnapshotResult struct {
 	ParkedReason         map[string]string      `json:"parked_reason,omitempty"`
 }
 
-// ActiveElapsedSeconds returns the sum of wall-clock elapsed seconds
-// across all running sessions at the given point in time. Entries with
-// a zero StartedAt are skipped; negative elapsed values are clamped to
-// zero to guard against clock skew.
+// ActiveElapsedSeconds sums wall-clock elapsed seconds across all running
+// sessions at now. Zero-StartedAt entries are skipped; negative elapsed is
+// clamped to zero against clock skew.
 func ActiveElapsedSeconds(state *State, now time.Time) float64 {
 	var total float64
 	for _, entry := range state.Running {
@@ -1279,13 +1083,11 @@ func ActiveElapsedSeconds(state *State, now time.Time) float64 {
 	return total
 }
 
-// apiRequestsMeasured reports whether a session's API request count is
-// a measurement of model API requests.
-//
-// Only an arrival that reports during the turn can produce one, and
-// then only once a figure has arrived or while no turn has begun: a
-// session past its first turn with nothing counted measured nothing,
-// whatever its declaration promised.
+// apiRequestsMeasured reports whether a session's API request count is a
+// measurement of model API requests. Only an arrival reporting during the
+// turn can produce one, and only once a figure has arrived or while no turn
+// has begun: a session past its first turn with nothing counted measured
+// nothing.
 func apiRequestsMeasured(arrival registry.UsageArrival, turnCount, apiRequestCount int) bool {
 	if !arrival.ReportsDuringTurn() {
 		return false
@@ -1297,21 +1099,15 @@ func apiRequestsMeasured(arrival registry.UsageArrival, turnCount, apiRequestCou
 }
 
 // RuntimeSnapshot captures a point-in-time view of the orchestrator's
-// runtime state. The now parameter controls the snapshot timestamp and
-// the active-session elapsed time computation; it is normalized to UTC
-// internally. Callers on the event loop goroutine pass time.Now();
-// test callers pass a fixed time for deterministic assertions.
+// runtime state. now is normalized to UTC internally.
 //
-// The returned result contains copied-out data for Running, Retrying,
-// and AgentTotals; callers may serialize or retain those fields without
-// synchronization concerns.
+// Running, Retrying, and AgentTotals are copied out and may be retained
+// without synchronization. RateLimits is shallow-copied and may alias
+// nested mutable values; callers must treat it and its referents as
+// read-only.
 //
-// RateLimits is shallow-copied from State.AgentRateLimits.Data and may
-// alias nested mutable values. Callers must treat RateLimits and any
-// values it references as read-only and only perform concurrent reads.
-//
-// Must be called from the orchestrator's event loop goroutine. [State]
-// is not safe for concurrent access.
+// Must be called from the event loop goroutine; [State] is not safe for
+// concurrent access.
 func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	now = now.UTC()
 	snap := RuntimeSnapshotResult{
@@ -1332,9 +1128,8 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			runningUnreported++
 		}
 
-		// A map has no null on the wire, so absence is the only way to
-		// say the breakdown means nothing. Gating it here rather than
-		// in each presenter states the rule once.
+		// Absence is the only way to say the breakdown means nothing;
+		// gating it here states the rule once.
 		var modelRequests map[string]int
 		if requestsMeasured && entry.UsageAttribution.NamesModel() && entry.RequestsByModel != nil {
 			modelRequests = make(map[string]int, len(entry.RequestsByModel))
@@ -1451,8 +1246,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 }
 
 // BuildReviewReactionConfig extracts and validates review-specific
-// configuration from a [config.ReactionConfig]. Returns an error for
-// invalid values.
+// configuration from a [config.ReactionConfig].
 func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, error) {
 	cfg := ReviewReactionConfig{
 		Escalation:           rc.Escalation,
@@ -1518,13 +1312,11 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 }
 
 // BuildBotReviewReactionConfig extracts and validates bot-review-specific
-// configuration from a [config.ReactionConfig]. Returns an error for
-// invalid values.
+// configuration from a [config.ReactionConfig].
 //
-// The poll-interval and continuation-turn defaults differ from
-// [BuildReviewReactionConfig]: bot comments arrive in bulk on push and are
-// dispatched immediately, so the poll cadence is tighter and the retry
-// budget larger. No debounce field is read.
+// Defaults differ from [BuildReviewReactionConfig]: bot comments arrive in
+// bulk on push and dispatch immediately, so the poll cadence is tighter,
+// the retry budget larger, and no debounce is read.
 func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionConfig, error) {
 	cfg := BotReviewReactionConfig{
 		Escalation:           rc.Escalation,
@@ -1593,9 +1385,8 @@ func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionCo
 	return cfg, nil
 }
 
-// BuildAutoMergeReactionConfig extracts and validates auto-merge
-// specific configuration from a [config.ReactionConfig]. Returns an
-// error for invalid values.
+// BuildAutoMergeReactionConfig extracts and validates auto-merge-specific
+// configuration from a [config.ReactionConfig].
 func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionConfig, error) {
 	cfg := AutoMergeReactionConfig{
 		Strategy:        domain.StrategySquash,
@@ -1672,11 +1463,8 @@ func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionCo
 
 // BuildMergeConflictReactionConfig extracts and validates
 // merge-conflict-specific configuration from a [config.ReactionConfig].
-// Returns an error for invalid values.
-//
-// rc.MaxRetries is consumed verbatim; the per-kind default of 1 for
-// merge_conflicts is applied earlier in config parsing, so this builder
-// reads the already-coerced, non-negative value without re-applying it.
+// rc.MaxRetries is consumed verbatim; the per-kind default is applied
+// earlier in config parsing.
 func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictReactionConfig, error) {
 	cfg := MergeConflictReactionConfig{
 		Escalation:      rc.Escalation,
@@ -1719,10 +1507,8 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 }
 
 // BuildLabelReviewReactionConfig copies the validated label-review runtime
-// configuration out of the parsed label_commands block. Unlike the sibling
-// Build*ReactionConfig functions it returns no error: the input is already
-// fully validated and defaulted by config parsing, so there is nothing left
-// to validate here.
+// configuration out of the parsed label_commands block. It returns no
+// error: config parsing already validated and defaulted the input.
 func BuildLabelReviewReactionConfig(cfg config.LabelCommandsConfig) LabelReviewReactionConfig {
 	return LabelReviewReactionConfig{
 		Provider:       cfg.Provider,
@@ -1732,10 +1518,8 @@ func BuildLabelReviewReactionConfig(cfg config.LabelCommandsConfig) LabelReviewR
 }
 
 // BuildLabelFixReactionConfig copies the validated label-fix runtime
-// configuration out of the parsed label_commands block. Like
-// BuildLabelReviewReactionConfig it returns no error: the input is
-// already fully validated and defaulted by config parsing, so there is
-// nothing left to validate here.
+// configuration out of the parsed label_commands block. It returns no
+// error: config parsing already validated and defaulted the input.
 func BuildLabelFixReactionConfig(cfg config.LabelCommandsConfig) LabelFixReactionConfig {
 	return LabelFixReactionConfig{
 		Provider:       cfg.Provider,
@@ -1746,13 +1530,11 @@ func BuildLabelFixReactionConfig(cfg config.LabelCommandsConfig) LabelFixReactio
 
 // BuildMergeCompletionReactionConfig extracts and validates
 // merge-completion-specific configuration from a [config.ReactionConfig].
-// Returns an error naming the offending field for invalid values.
 //
 // meta resolves the default active-state list only; the terminal list is
 // read from tracker as written, with no fallback to
 // [registry.TrackerMeta.DefaultTerminalStates], so the offline validator
-// and the runtime terminal drop agree on what "terminal" means. The
-// function performs no I/O and no network call.
+// and the runtime terminal drop agree on what "terminal" means.
 func BuildMergeCompletionReactionConfig(rc config.ReactionConfig, tracker config.TrackerConfig, meta registry.TrackerMeta) (MergeCompletionReactionConfig, error) {
 	cfg := MergeCompletionReactionConfig{
 		PollIntervalMS:  60000,

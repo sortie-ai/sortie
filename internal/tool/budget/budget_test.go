@@ -12,8 +12,8 @@ var noopQuery BudgetQueryFunc = func(_ context.Context, _ string, _ string) (Bud
 	return BudgetUsage{}, nil
 }
 
-// executeOK calls Execute and fails on a non-nil Go error or unparseable JSON.
-// Returns the decoded data payload as a costBudgetResponse.
+// executeOK calls Execute, fails on a Go error or unparseable JSON, and
+// returns the decoded data payload.
 func executeOK(t *testing.T, tool *BudgetTool) costBudgetResponse {
 	t.Helper()
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -21,7 +21,6 @@ func executeOK(t *testing.T, tool *BudgetTool) costBudgetResponse {
 		t.Fatalf("Execute: unexpected Go error: %v", err)
 	}
 
-	// Unwrap the {success, data} envelope.
 	var envelope struct {
 		Success bool               `json:"success"`
 		Data    costBudgetResponse `json:"data"`
@@ -86,12 +85,10 @@ func TestBudgetTool_InputSchema_DefensiveCopy(t *testing.T) {
 	tool := New(noopQuery, "10042", "sess-1", 0, 0)
 	schema1 := tool.InputSchema()
 
-	// Overwrite every byte of the first copy.
 	for i := range schema1 {
 		schema1[i] = 'X'
 	}
 
-	// The second call must still return valid JSON.
 	schema2 := tool.InputSchema()
 	var m map[string]any
 	if err := json.Unmarshal(schema2, &m); err != nil {
@@ -206,10 +203,6 @@ func TestBudgetTool_Execute(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_UsedTokensComplete covers the used_tokens_complete
-// derivation: an unmeasured completed session, a fully measured reading
-// with a matching running session, and a running session that reported a
-// measurement of zero and nothing else.
 func TestBudgetTool_Execute_UsedTokensComplete(t *testing.T) {
 	t.Parallel()
 
@@ -343,9 +336,6 @@ func TestBudgetTool_Execute_UsedTokensComplete(t *testing.T) {
 	})
 }
 
-// TestBudgetTool_Execute_SuccessEnvelopeShape pins the success-envelope contract:
-// top-level keys are exactly {success, data}, data carries the seven fields,
-// and remaining_tokens is an explicit null when the budget is unlimited.
 func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
@@ -364,7 +354,6 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 		t.Fatalf("unmarshal response %q: %v", out, err)
 	}
 
-	// Top-level keys must be exactly {success, data}.
 	if len(top) != 2 {
 		t.Errorf("Execute success top-level keys = %v, want exactly {success, data}", top)
 	}
@@ -376,7 +365,6 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 		t.Fatalf("Execute success[\"data\"] = %T %v, want map", top["data"], top["data"])
 	}
 
-	// data must carry exactly the seven budget fields.
 	budgetKeys := []string{
 		"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions",
 		"unmeasured_sessions", "used_tokens_complete",
@@ -390,12 +378,10 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 		t.Errorf("data has %d keys, want 7: %s", len(data), out)
 	}
 
-	// remaining_tokens must be explicit null under unlimited budget.
 	if got, ok := data["remaining_tokens"]; !ok || got != nil {
 		t.Errorf("data.remaining_tokens = %v, want explicit null", got)
 	}
 
-	// Payload fields must NOT appear at the top level.
 	for _, payloadKey := range budgetKeys {
 		if _, exists := top[payloadKey]; exists {
 			t.Errorf("Execute success has payload key %q at top level, want it under data", payloadKey)
@@ -403,9 +389,6 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_QueryError asserts that a query failure returns
-// success==false, error.kind=="query_failed", error.message equal to the query
-// error string, and a nil Go error.
 func TestBudgetTool_Execute_QueryError(t *testing.T) {
 	t.Parallel()
 
@@ -444,9 +427,6 @@ func TestBudgetTool_Execute_QueryError(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_FailureEnvelopeShape pins the failure-envelope contract: the
-// failure response has top-level keys exactly {success, error} with error
-// carrying {kind, message}.
 func TestBudgetTool_Execute_FailureEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
@@ -479,8 +459,6 @@ func TestBudgetTool_Execute_FailureEnvelopeShape(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_PassesIdentity verifies the tool forwards its
-// construction-time issue ID and running session ID to the query.
 func TestBudgetTool_Execute_PassesIdentity(t *testing.T) {
 	t.Parallel()
 

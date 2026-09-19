@@ -71,7 +71,6 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		return 1
 	}
 
-	// Construct tracker adapter if the tracker section is present.
 	var trackerAdapter domain.TrackerAdapter
 	if cfg.Tracker.Kind != "" {
 		trackerCtor, trackerErr := registry.Trackers.Get(cfg.Tracker.Kind)
@@ -98,11 +97,8 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		trackerAdapter = adapter
 	}
 
-	// Build the per-session tool registry through the shared builder so
-	// the served tool set matches the set the worker advertises in the
-	// first-turn prompt. A notifier misconfiguration is fatal here, as
-	// before; a read-only DB-open failure is non-fatal and skips the two
-	// database-backed tools.
+	// A notifier misconfiguration is fatal; a read-only DB-open failure is
+	// non-fatal and skips the two database-backed tools.
 	sessionTools, err := BuildSessionToolRegistry(ctx, logger, sessionToolParamsFromEnv(os.Getenv, cfg, trackerAdapter))
 	if err != nil {
 		logger.Error("failed to build session tool registry", slog.Any("error", err))
@@ -122,9 +118,8 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 }
 
 // sessionToolParamsFromEnv builds the per-session tool registry inputs
-// from the sidecar's process environment, read only through getenv.
-// SORTIE_ATTEMPT maps to Attempt when it parses as an integer; a
-// non-integer or absent value leaves Attempt nil.
+// from the sidecar's process environment via getenv. SORTIE_ATTEMPT maps
+// to Attempt when it parses as an integer; otherwise Attempt stays nil.
 func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConfig, trackerAdapter domain.TrackerAdapter) SessionToolParams {
 	var attempt *int
 	if raw := getenv("SORTIE_ATTEMPT"); raw != "" {
@@ -148,14 +143,11 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 	}
 }
 
-// buildNotifyTool resolves the configured notifier backends and returns
-// the notify_operator tool. It returns (nil, nil) when no backend is
-// configured, so the caller skips registration. An unknown kind or a
-// constructor error (including a required secret that resolved to the
-// empty string) is fatal and returned as a non-nil error rather than a
-// partial registration. The caller supplies env and sessionID: the
-// function reads no process environment itself, so the gating decision
-// stays a pure function of explicit inputs.
+// buildNotifyTool resolves the configured notifier backends into the
+// notify_operator tool, returning (nil, nil) when none are configured. An
+// unknown kind or constructor error (including a required secret that
+// resolved empty) is fatal and returned as a non-nil error rather than a
+// partial registration.
 func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext, sessionID notify.SessionIDFunc) (domain.AgentTool, error) {
 	if len(configured) == 0 {
 		return nil, nil
@@ -177,11 +169,10 @@ func buildNotifyTool(configured []config.NotificationBackend, env notify.Notific
 	return notify.New(backends, env, sessionID, resolveNotificationCap(configured)), nil
 }
 
-// resolveNotificationCap selects the single cap for the tool from the
-// configured backends. It returns the maximum non-zero max_per_session
-// across entries and falls back to defaultMaxPerSession when every entry
-// is 0 or unset. The cap counts notify_operator calls, not per-backend
-// sends, so it is a tool-level property.
+// resolveNotificationCap returns the maximum non-zero max_per_session
+// across the backends, falling back to defaultMaxPerSession when every
+// entry is 0. The cap counts notify_operator calls, not per-backend
+// sends.
 func resolveNotificationCap(backends []config.NotificationBackend) int {
 	maxCap := 0
 	for _, b := range backends {
@@ -208,11 +199,9 @@ func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
 			UnmeasuredSessions:   completed.UnmeasuredSessions,
 		}
 
-		// The running session's recorded spend lives in session_metadata,
-		// which survives session exit. Add it only when the stored
-		// dispatch ID matches the live dispatch ID supplied out of band,
-		// so neither a stale earlier dispatch's row nor a session-exit
-		// write's cleared row is ever double counted.
+		// Add the running session's spend only when its stored dispatch ID
+		// matches the live one, so neither a stale dispatch's row nor a
+		// session-exit cleared row is double counted.
 		if runningDispatchID == "" {
 			return usage, nil
 		}
