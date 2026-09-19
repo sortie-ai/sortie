@@ -33,6 +33,7 @@ type mockRetryStore struct {
 	tokenSum                 int64
 	tokenSessionCount        int
 	tokenUnmeasured          int
+	tokenUnaccounted         int
 	tokenStoppedInFlight     int
 	sumTotalTokensByIssueErr error
 	summedTokenIssueIDs      []string
@@ -88,6 +89,7 @@ func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (p
 		TotalTokens:        m.tokenSum,
 		Sessions:           m.tokenSessionCount,
 		UnmeasuredSessions: m.tokenUnmeasured,
+		UnaccountedTurns:   m.tokenUnaccounted,
 		StoppedInFlight:    m.tokenStoppedInFlight,
 	}, m.sumTotalTokensByIssueErr
 }
@@ -1533,6 +1535,53 @@ func TestHandleRetryTimer_TokenBudgetIncomplete(t *testing.T) {
 
 // TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning asserts the fail-open
 // path logs a warning instead of stranding the issue silently.
+func TestHandleRetryTimer_TokenBudgetUnaccountedTurns(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := &mockRetryStore{tokenSum: 500, tokenSessionCount: 1, tokenUnaccounted: 1}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue("ISS-TOK-UNACC", "PROJ-TOK-UNACC", "To Do"),
+	}
+
+	dispatched := make(chan struct{}, 1)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxTokens = 1000
+	params.Logger = logger
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			dispatched <- struct{}{}
+		}
+	}
+
+	state := retryState(t, "ISS-TOK-UNACC", "PROJ-TOK-UNACC", 1)
+	HandleRetryTimer(state, "ISS-TOK-UNACC", params)
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("worker not dispatched within 1 second (an unaccounted turn must not block dispatch)")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "token budget cannot be fully evaluated, allowing dispatch") {
+		t.Fatalf("log output = %q, want to contain the incomplete-budget warning", output)
+	}
+	for _, attr := range []string{
+		"used_tokens=500",
+		"budget_tokens=1000",
+		"unmeasured_sessions=0",
+		"unaccounted_turns=1",
+		"issue_id=ISS-TOK-UNACC",
+	} {
+		if !strings.Contains(output, attr) {
+			t.Errorf("log output missing attribute %q: %q", attr, output)
+		}
+	}
+}
+
 func TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning(t *testing.T) {
 	t.Parallel()
 

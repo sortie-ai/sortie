@@ -1347,7 +1347,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 					entry.UnmeasuredSessions = &usage.UnmeasuredSessions
 					entry.StoppedInFlight = &usage.StoppedInFlight
 				}
-				if usage.UnmeasuredSessions == 0 {
+				if !usage.SpendIncomplete() {
 					continue
 				}
 				freshIncomplete[id] = struct{}{}
@@ -1355,11 +1355,7 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 					continue
 				}
 				issueLog := logging.WithIssue(o.logger, id, identifierByID[id])
-				issueLog.Warn("token budget cannot be fully evaluated, allowing dispatch",
-					slog.Int64("used_tokens", usage.TotalTokens),
-					slog.Int64("budget_tokens", int64(cfg.Agent.MaxTokens)),
-					slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
-				)
+				warnTokenBudgetIncomplete(issueLog, usage, cfg.Agent.MaxTokens)
 			}
 		}
 	}

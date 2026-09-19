@@ -197,6 +197,7 @@ func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
 			CompletedTotalTokens: completed.TotalTokens,
 			CompletedSessions:    completed.Sessions,
 			UnmeasuredSessions:   completed.UnmeasuredSessions,
+			UnaccountedTurns:     completed.UnaccountedTurns,
 		}
 
 		// Add the running session's spend only when its stored dispatch ID

@@ -166,13 +166,15 @@ type WorkerResult struct {
 	// returns. Excludes figures the run's arrival rejects.
 	Usage domain.TokenUsage
 
-	// UsageMeasured is true when the run's spend is known: either no
-	// agent turn was entered before exit, so a zero spend is exact, or
-	// at least one usage-bearing event, one token_usage event, or one
-	// TurnResult reporting UsageMeasured true was observed since the
-	// first turn began and admitted by the run's usage arrival. False
-	// means the run entered a turn and no admitted measurement ever
-	// arrived, so the spend is unknown rather than zero.
+	// UnaccountedTurns counts turns that spent tokens no figure was proven to
+	// cover, making Usage a lower bound when non-zero. Orthogonal to
+	// UsageMeasured, which reports only whether any figure exists.
+	UnaccountedTurns int
+
+	// UsageMeasured is true when the run's spend is known: either no turn was
+	// entered (a zero spend is exact) or an admitted measurement arrived
+	// since the first turn began. False means a turn ran and no admitted
+	// measurement arrived, so spend is unknown rather than zero.
 	UsageMeasured bool
 
 	// ModelName is the model from the last admitted token_usage event that
@@ -541,20 +543,16 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	// localMeasured mirrors the run's measurement state on the worker
-	// goroutine. It starts true because a run that never enters a turn
-	// spent exactly zero; it flips to false immediately before the
-	// worker's first RunTurn call, and back to true on the first
-	// usage-bearing event, the first token_usage event, or the first
-	// TurnResult reporting UsageMeasured true. localUsage is the
-	// worker's own mirror of the run-cumulative token counters, folded
-	// from any usage-bearing event on the worker goroutine;
-	// localLastUsage holds the matching last-reported watermarks.
-	// localModelName mirrors the last relayed token_usage event's model
-	// name, and localRequestCount counts relayed token_usage events.
-	// localUsage and localMeasured feed .sortie/state.json, and all four
-	// feed the matching WorkerResult fields; this mirror never touches
-	// orchestrator state and never calls applyUsageDelta.
+	// goroutine. It starts true (a run that never enters a turn spent
+	// exactly zero), flips false before the first RunTurn, and back true on
+	// the first admitted measurement. localUsage/localLastUsage mirror the
+	// run-cumulative counters and their watermarks; localModelName and
+	// localRequestCount mirror the last relayed token_usage event's model
+	// and count. This mirror never touches orchestrator state.
+	// localUnaccounted is summed, not latched: each turn carries its own
+	// spend-unaccounted verdict.
 	localMeasured := true
+	localUnaccounted := 0
 	discardWarned := false
 	var (
 		localUsage        domain.TokenUsage
@@ -607,17 +605,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			slog.String("template_id", deps.TemplateID),
 		)
 		deps.OnExit(issue.ID, WorkerResult{
-			IssueID:         issue.ID,
-			Identifier:      issue.Identifier,
-			ExitKind:        WorkerExitError,
-			Error:           fmt.Errorf("prompt template %q is not registered", deps.TemplateID),
-			AgentAdapter:    agentKind,
-			Attempt:         attempt,
-			SSHHost:         deps.SSHHost,
-			Usage:           localUsage,
-			UsageMeasured:   localMeasured,
-			ModelName:       localModelName,
-			APIRequestCount: localRequestCount,
+			IssueID:          issue.ID,
+			Identifier:       issue.Identifier,
+			ExitKind:         WorkerExitError,
+			Error:            fmt.Errorf("prompt template %q is not registered", deps.TemplateID),
+			AgentAdapter:     agentKind,
+			Attempt:          attempt,
+			SSHHost:          deps.SSHHost,
+			Usage:            localUsage,
+			UsageMeasured:    localMeasured,
+			UnaccountedTurns: localUnaccounted,
+			ModelName:        localModelName,
+			APIRequestCount:  localRequestCount,
 		})
 		return
 	}
@@ -714,6 +713,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ObservedIssueState: observedIssueState,
 					Usage:              localUsage,
 					UsageMeasured:      localMeasured,
+					UnaccountedTurns:   localUnaccounted,
 					ModelName:          localModelName,
 					APIRequestCount:    localRequestCount,
 				})
@@ -738,17 +738,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if prepErr != nil {
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:         issue.ID,
-				Identifier:      issue.Identifier,
-				ExitKind:        exitKindForErr(ctx),
-				Error:           fmt.Errorf("workspace preparation: %w", prepErr),
-				AgentAdapter:    agentKind,
-				Attempt:         attempt,
-				SSHHost:         deps.SSHHost,
-				Usage:           localUsage,
-				UsageMeasured:   localMeasured,
-				ModelName:       localModelName,
-				APIRequestCount: localRequestCount,
+				IssueID:          issue.ID,
+				Identifier:       issue.Identifier,
+				ExitKind:         exitKindForErr(ctx),
+				Error:            fmt.Errorf("workspace preparation: %w", prepErr),
+				AgentAdapter:     agentKind,
+				Attempt:          attempt,
+				SSHHost:          deps.SSHHost,
+				Usage:            localUsage,
+				UsageMeasured:    localMeasured,
+				UnaccountedTurns: localUnaccounted,
+				ModelName:        localModelName,
+				APIRequestCount:  localRequestCount,
 			})
 			return
 		}
@@ -775,17 +776,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if err != nil {
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:         issue.ID,
-				Identifier:      issue.Identifier,
-				ExitKind:        exitKindForErr(ctx),
-				Error:           fmt.Errorf("workspace preparation: %w", err),
-				AgentAdapter:    agentKind,
-				Attempt:         attempt,
-				SSHHost:         deps.SSHHost,
-				Usage:           localUsage,
-				UsageMeasured:   localMeasured,
-				ModelName:       localModelName,
-				APIRequestCount: localRequestCount,
+				IssueID:          issue.ID,
+				Identifier:       issue.Identifier,
+				ExitKind:         exitKindForErr(ctx),
+				Error:            fmt.Errorf("workspace preparation: %w", err),
+				AgentAdapter:     agentKind,
+				Attempt:          attempt,
+				SSHHost:          deps.SSHHost,
+				Usage:            localUsage,
+				UsageMeasured:    localMeasured,
+				UnaccountedTurns: localUnaccounted,
+				ModelName:        localModelName,
+				APIRequestCount:  localRequestCount,
 			})
 			return
 		}
@@ -821,18 +823,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:         issue.ID,
-				Identifier:      issue.Identifier,
-				ExitKind:        WorkerExitError,
-				Error:           fmt.Errorf("mcp config generation: %w", execErr),
-				WorkspacePath:   wsResult.Path,
-				AgentAdapter:    agentKind,
-				Attempt:         attempt,
-				SSHHost:         deps.SSHHost,
-				Usage:           localUsage,
-				UsageMeasured:   localMeasured,
-				ModelName:       localModelName,
-				APIRequestCount: localRequestCount,
+				IssueID:          issue.ID,
+				Identifier:       issue.Identifier,
+				ExitKind:         WorkerExitError,
+				Error:            fmt.Errorf("mcp config generation: %w", execErr),
+				WorkspacePath:    wsResult.Path,
+				AgentAdapter:     agentKind,
+				Attempt:          attempt,
+				SSHHost:          deps.SSHHost,
+				Usage:            localUsage,
+				UsageMeasured:    localMeasured,
+				UnaccountedTurns: localUnaccounted,
+				ModelName:        localModelName,
+				APIRequestCount:  localRequestCount,
 			})
 			return
 		}
@@ -856,18 +859,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:         issue.ID,
-				Identifier:      issue.Identifier,
-				ExitKind:        WorkerExitError,
-				Error:           fmt.Errorf("mcp config generation: %w", genErr),
-				WorkspacePath:   wsResult.Path,
-				AgentAdapter:    agentKind,
-				Attempt:         attempt,
-				SSHHost:         deps.SSHHost,
-				Usage:           localUsage,
-				UsageMeasured:   localMeasured,
-				ModelName:       localModelName,
-				APIRequestCount: localRequestCount,
+				IssueID:          issue.ID,
+				Identifier:       issue.Identifier,
+				ExitKind:         WorkerExitError,
+				Error:            fmt.Errorf("mcp config generation: %w", genErr),
+				WorkspacePath:    wsResult.Path,
+				AgentAdapter:     agentKind,
+				Attempt:          attempt,
+				SSHHost:          deps.SSHHost,
+				Usage:            localUsage,
+				UsageMeasured:    localMeasured,
+				UnaccountedTurns: localUnaccounted,
+				ModelName:        localModelName,
+				APIRequestCount:  localRequestCount,
 			})
 			return
 		}
@@ -896,17 +900,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		finishWorkspace()
 		reported = true
 		deps.OnExit(issue.ID, WorkerResult{
-			IssueID:         issue.ID,
-			Identifier:      issue.Identifier,
-			ExitKind:        WorkerExitCancelled,
-			WorkspacePath:   wsResult.Path,
-			AgentAdapter:    agentKind,
-			Attempt:         attempt,
-			SSHHost:         deps.SSHHost,
-			Usage:           localUsage,
-			UsageMeasured:   localMeasured,
-			ModelName:       localModelName,
-			APIRequestCount: localRequestCount,
+			IssueID:          issue.ID,
+			Identifier:       issue.Identifier,
+			ExitKind:         WorkerExitCancelled,
+			WorkspacePath:    wsResult.Path,
+			AgentAdapter:     agentKind,
+			Attempt:          attempt,
+			SSHHost:          deps.SSHHost,
+			Usage:            localUsage,
+			UsageMeasured:    localMeasured,
+			UnaccountedTurns: localUnaccounted,
+			ModelName:        localModelName,
+			APIRequestCount:  localRequestCount,
 		})
 		return
 	}
@@ -938,18 +943,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		finishWorkspace()
 		reported = true
 		deps.OnExit(issue.ID, WorkerResult{
-			IssueID:         issue.ID,
-			Identifier:      issue.Identifier,
-			ExitKind:        exitKindForErr(ctx),
-			Error:           fmt.Errorf("agent session start: %w", err),
-			WorkspacePath:   wsResult.Path,
-			AgentAdapter:    agentKind,
-			Attempt:         attempt,
-			SSHHost:         deps.SSHHost,
-			Usage:           localUsage,
-			UsageMeasured:   localMeasured,
-			ModelName:       localModelName,
-			APIRequestCount: localRequestCount,
+			IssueID:          issue.ID,
+			Identifier:       issue.Identifier,
+			ExitKind:         exitKindForErr(ctx),
+			Error:            fmt.Errorf("agent session start: %w", err),
+			WorkspacePath:    wsResult.Path,
+			AgentAdapter:     agentKind,
+			Attempt:          attempt,
+			SSHHost:          deps.SSHHost,
+			Usage:            localUsage,
+			UsageMeasured:    localMeasured,
+			UnaccountedTurns: localUnaccounted,
+			ModelName:        localModelName,
+			APIRequestCount:  localRequestCount,
 		})
 		return
 	}
@@ -1021,6 +1027,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
 				UsageMeasured:      localMeasured,
+				UnaccountedTurns:   localUnaccounted,
 				ModelName:          localModelName,
 				APIRequestCount:    localRequestCount,
 			})
@@ -1109,12 +1116,13 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			},
 		}, cfg.Agent.TurnTimeoutMS, logger, slog.Int("turn_number", turnNumber))
 
-		// Fold TurnResult.Usage into the local mirror on both the success
-		// and the error path, so a run-cumulative figure the adapter
-		// reported only on TurnResult (not through an event) is not lost.
-		// A figure the adapter reports here is a measurement whether or
-		// not it also sets the flag, which is how the event path above
-		// already reads a non-zero payload.
+		// Fold TurnResult.Usage on both success and error paths so a
+		// run-cumulative figure the adapter reported only on TurnResult (not
+		// through an event) is not lost. A figure here is a measurement
+		// whether or not it also sets the flag.
+		if turnResult.SpendUnaccounted {
+			localUnaccounted++
+		}
 		resultCarriesMeasurement := hasUsage(turnResult.Usage) || turnResult.UsageMeasured
 		if resultCarriesMeasurement && !admitMeasurement() {
 			resultCarriesMeasurement = false
@@ -1158,6 +1166,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
 				UsageMeasured:      localMeasured,
+				UnaccountedTurns:   localUnaccounted,
 				ModelName:          localModelName,
 				APIRequestCount:    localRequestCount,
 			})
@@ -1192,6 +1201,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
 				UsageMeasured:      localMeasured,
+				UnaccountedTurns:   localUnaccounted,
 				ModelName:          localModelName,
 				APIRequestCount:    localRequestCount,
 			})
@@ -1232,6 +1242,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					ObservedIssueState: observedIssueState,
 					Usage:              localUsage,
 					UsageMeasured:      localMeasured,
+					UnaccountedTurns:   localUnaccounted,
 					ModelName:          localModelName,
 					APIRequestCount:    localRequestCount,
 				})
@@ -1382,6 +1393,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			ObservedIssueState: observedIssueState,
 			Usage:              localUsage,
 			UsageMeasured:      localMeasured,
+			UnaccountedTurns:   localUnaccounted,
 			ModelName:          localModelName,
 			APIRequestCount:    localRequestCount,
 		})
@@ -1432,6 +1444,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		ModelName:                    localModelName,
 		APIRequestCount:              localRequestCount,
 		UsageMeasured:                localMeasured,
+		UnaccountedTurns:             localUnaccounted,
 	})
 }
 

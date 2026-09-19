@@ -206,6 +206,34 @@ func TestBudgetTool_Execute(t *testing.T) {
 func TestBudgetTool_Execute_UsedTokensComplete(t *testing.T) {
 	t.Parallel()
 
+	t.Run("a measured issue holding an unaccounted turn", func(t *testing.T) {
+		t.Parallel()
+
+		query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+			return BudgetUsage{
+				CompletedTotalTokens: 500,
+				CompletedSessions:    2,
+				RunningTotalTokens:   40,
+				RunningMeasured:      true,
+				UnaccountedTurns:     1,
+			}, nil
+		}
+		tool := New(query, "10042", "dispatch-1", 1000, 5)
+
+		resp := executeOK(t, tool)
+
+		if resp.UnmeasuredSessions != 0 {
+			t.Errorf("data.unmeasured_sessions = %d, want 0: every session here was measured", resp.UnmeasuredSessions)
+		}
+		if resp.UsedTokensComplete {
+			t.Error("data.used_tokens_complete = true, want false: a turn spent an unknown amount, " +
+				"so the total is a lower bound even with every session measured")
+		}
+		if resp.UsedTokens != 540 {
+			t.Errorf("data.used_tokens = %d, want 540: an unaccounted turn adds no number", resp.UsedTokens)
+		}
+	})
+
 	t.Run("one unmeasured completed session", func(t *testing.T) {
 		t.Parallel()
 
