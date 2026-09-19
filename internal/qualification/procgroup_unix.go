@@ -10,20 +10,13 @@ import (
 	"time"
 )
 
-// ProcessGroupPresent reports whether the kernel still has a process
-// group led by pgid, using the Unix signal-zero liveness primitive on
-// the exact negative PGID. A nil result with no error means a member
-// survives; a query error other than group absence is a runtime
-// failure, never a clean absence.
+// ProcessGroupPresent reports whether the kernel still has a process group led
+// by pgid, via the signal-zero liveness query on the negative PGID. A query
+// error other than group absence is a runtime failure, not a clean absence.
 //
-// pgid must be a positive group id. The negation this query relies on
-// gives every other value a different meaning that would answer a
-// question the caller did not ask: 0 negates to 0, which addresses the
-// caller's own process group and so reports present for as long as the
-// test process lives; 1 negates to -1, which addresses every process
-// the caller may signal; a negative value negates to a positive pid and
-// addresses one process rather than a group. Each would report a
-// liveness that is not the launched group's, so they are rejected
+// pgid must be greater than 1: 0, 1, and negative values negate to targets
+// (the caller's own group, every signalable process, a single pid) that would
+// report a liveness other than the launched group's, so they are rejected
 // rather than queried.
 func ProcessGroupPresent(pgid int) (bool, error) {
 	if pgid <= 1 {
@@ -40,11 +33,8 @@ func ProcessGroupPresent(pgid int) (bool, error) {
 	}
 }
 
-// AwaitProcessGroupAbsence polls the exact negative PGID with the
-// signal-zero primitive until the group is absent or the shared
-// ShutdownDeadline elapses. A survivor or a query error fails the
-// test; the caller records the outcome in the cleanup evidence without
-// ever naming the PGID.
+// AwaitProcessGroupAbsence polls the negative PGID until the group is absent or
+// ShutdownDeadline elapses. A survivor or a query error fails the test.
 func AwaitProcessGroupAbsence(t *testing.T, pgid int) {
 	t.Helper()
 

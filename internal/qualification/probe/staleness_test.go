@@ -13,24 +13,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// stalenessProfilesDir is the tracked profiles directory, relative to
-// this package. It is enumerated through a filesystem read rather than
-// through git grep, per the risk that a git grep-based enumeration
-// passes vacuously on an untracked new artifact.
+// Enumerated through a filesystem read rather than git grep, which would pass
+// vacuously on an untracked new artifact.
 const stalenessProfilesDir = "../profiles"
 
-// stalenessExamplesDir is where the published WORKFLOW.*.md samples
-// live, relative to this package.
 const stalenessExamplesDir = "../../../examples"
 
-// stalenessGradeSatisfies is the per-surface satisfying grade set: a
-// grade this transport can assign without an observation MUST NOT be a
-// member. not_inducible and declared_gap are excluded because they are
-// catalog- or operator-asserted, never observed.
+// stalenessGradeSatisfies is the per-surface satisfying grade set: a grade
+// this transport can assign without an observation MUST NOT be a member.
+// not_inducible and declared_gap are excluded as catalog- or
+// operator-asserted, never observed.
 var stalenessGradeSatisfies = []qualification.Grade{qualification.GradeUsable, qualification.GradeGap, qualification.GradeCorroborationOnly}
 
-// stalenessProfilePaths enumerates the tracked profiles directory
-// through a filesystem read, failing t when it yields none.
 func stalenessProfilePaths(t *testing.T) []string {
 	t.Helper()
 	entries, err := os.ReadDir(stalenessProfilesDir)
@@ -50,13 +44,12 @@ func stalenessProfilePaths(t *testing.T) []string {
 	return paths
 }
 
-// measuredSurfaceProblems reports every problem the offline gate finds
-// in measurement against profile: the protocol surface must carry at
-// least one grade row satisfying stalenessGradeSatisfies, since that
-// is the only surface this transport's own inducers grade, and every
-// other measured surface must carry at least one grade row at all. It
-// is pure, so a negative control can drive it without failing the
-// package run.
+// measuredSurfaceProblems reports every problem the offline gate finds in
+// measurement against profile: the protocol surface must carry a grade row
+// satisfying stalenessGradeSatisfies, since that is the only surface this
+// transport's inducers grade, and every other measured surface must carry at
+// least one grade row. Pure, so a negative control can drive it without
+// failing the package run.
 func measuredSurfaceProblems(profile qualification.RuntimeProfile, measurement qualification.Measurement) []string {
 	var problems []string
 	for _, surface := range profile.MeasuredSurfaces() {
@@ -86,10 +79,8 @@ func measuredSurfaceProblems(profile qualification.RuntimeProfile, measurement q
 	return problems
 }
 
-// measuredSurfaceProblemsProfile builds a RuntimeProfile whose
-// MeasuredSurfaces is exactly protocol, native_json, and
-// native_stream_json, so measuredSurfaceProblems' own surface walk
-// runs over a known, closed set.
+// measuredSurfaceProblemsProfile fixes MeasuredSurfaces to a known, closed
+// set so the surface walk under test has no other input.
 func measuredSurfaceProblemsProfile() qualification.RuntimeProfile {
 	return qualification.RuntimeProfile{
 		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
@@ -100,12 +91,6 @@ func measuredSurfaceProblemsProfile() qualification.RuntimeProfile {
 	}
 }
 
-// TestMeasuredSurfaceProblems confirms measuredSurfaceProblems' three
-// outcomes: a protocol row satisfying stalenessGradeSatisfies alongside
-// native rows that merely exist reports no problem, a protocol surface
-// with no satisfying row reports a problem naming it, and a measured
-// native surface carrying no grade row at all reports a problem naming
-// it.
 func TestMeasuredSurfaceProblems(t *testing.T) {
 	t.Parallel()
 
@@ -189,17 +174,12 @@ func checkPublishedSampleOwnership(t *testing.T, sampleRelPath string, profiles 
 	}
 }
 
-// workflowAgentFrontMatter is the subset of WORKFLOW.md front matter
-// the staleness gate needs to identify an agent-client-protocol
-// sample.
 type workflowAgentFrontMatter struct {
 	Agent struct {
 		Kind string `yaml:"kind"`
 	} `yaml:"agent"`
 }
 
-// isAgentClientProtocolSample reports whether the WORKFLOW.md at path
-// declares agent.kind: agent-client-protocol.
 func isAgentClientProtocolSample(t *testing.T, path string) bool {
 	t.Helper()
 	raw, err := os.ReadFile(path) //nolint:gosec // a tracked example under the repository's own examples directory
@@ -222,15 +202,8 @@ func isAgentClientProtocolSample(t *testing.T, path string) bool {
 	return parsed.Agent.Kind == "agent-client-protocol"
 }
 
-// TestStaleness implements the offline staleness gate: every tracked
-// runtime profile decodes cleanly, its notes and measurement artifact
-// are readable and agree with it, its verdict is not not_qualified,
-// every surface it measures satisfies measuredSurfaceProblems, and
-// every published agent-client-protocol WORKFLOW.*.md sample is named
-// by exactly one profile's published_sample. It runs in every ordinary
-// go test pass and costs nothing: editing a tracked profile,
-// measurement, notes document, or published route sample without a
-// fresh, digest-bound measurement keeps this test red.
+// TestStaleness is the offline staleness gate: editing any tracked artifact
+// without a fresh measurement keeps this test red.
 func TestStaleness(t *testing.T) {
 	profiles := map[string]qualification.RuntimeProfile{}
 

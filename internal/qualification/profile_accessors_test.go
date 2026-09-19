@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// trackedProfile decodes the repository's own tracked runtime profile,
-// so the accessors below are exercised against the document an operator
-// actually authors rather than against a fixture shaped to suit them.
 func trackedProfile(t *testing.T) (RuntimeProfile, string) {
 	t.Helper()
 
@@ -184,8 +181,6 @@ func TestRecognizerModelRequests(t *testing.T) {
 		t.Skipf("the tracked profile's %s recognizer reads no model-request path", SurfaceNativeJSON)
 	}
 
-	// nested wraps value in recognizer.ModelRequestPath, innermost key
-	// first, and attaches the chain to a terminal the locator accepts.
 	nested := func(value any) string {
 		path := recognizer.ModelRequestPath
 		cursor := value
@@ -248,8 +243,6 @@ func TestDecodeRuntimeProfileRejectsUnlaunchableDeclarations(t *testing.T) {
 	})
 }
 
-// validMeasurementDoc returns a decode-clean measurement document as a
-// generic JSON tree, so every field is reachable for targeted mutation.
 func validMeasurementDoc() map[string]any {
 	return map[string]any{
 		"schema_version": 1,

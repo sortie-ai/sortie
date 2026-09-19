@@ -9,20 +9,16 @@ import (
 	"os"
 )
 
-// jsonRPCEnvelope reads just enough of a JSON-RPC request line to route
-// it: the method name and the id to echo back unmodified.
 type jsonRPCEnvelope struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
 }
 
-// runMCPToolServer implements mcpToolServerScenario: a fake MCP stdio
-// server that records every tools/call it receives to
-// params.RecordPath, one line per call, and otherwise answers only
-// what a session/new declaring it needs: initialize, tools/list, and
-// tools/call. It follows internal/agent/clientprotocol's own
-// mcpHandshakeScript shape, adapted from the Agent Client Protocol's
-// own wire to the Model Context Protocol's.
+// runMCPToolServer is a fake MCP stdio server that records every tools/call
+// to params.RecordPath, one line per call, and otherwise answers only the
+// methods a session/new needs: initialize, tools/list, tools/call. Its wire
+// shape follows clientprotocol's mcpHandshakeScript, ported from the Agent
+// Client Protocol to the Model Context Protocol.
 func runMCPToolServer(_ []string, params mcpToolServerParams) int {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
@@ -52,13 +48,11 @@ func runMCPToolServer(_ []string, params mcpToolServerParams) int {
 	return 0
 }
 
-// respond writes one JSON-RPC response line to standard output.
 func respond(format string, args ...any) error {
 	_, err := fmt.Fprintf(os.Stdout, format+"\n", args...)
 	return err
 }
 
-// recordToolCall appends line, followed by a newline, to path.
 func recordToolCall(path string, line []byte) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // path is under the caller's own t.TempDir()
 	if err != nil {

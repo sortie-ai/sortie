@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// TestNotesBindingRequired confirms NotesBindingRequired is total over
-// the closed verdict set and returns true for VerdictQualified only.
 func TestNotesBindingRequired(t *testing.T) {
 	t.Parallel()
 
@@ -20,8 +18,6 @@ func TestNotesBindingRequired(t *testing.T) {
 	}
 }
 
-// compliantNotesExpectation returns the literal NotesExpectation the
-// notes_test.go fixture document below is built to satisfy exactly.
 func compliantNotesExpectation() NotesExpectation {
 	return NotesExpectation{
 		Verdict: VerdictQualified,
@@ -44,10 +40,8 @@ func compliantNotesExpectation() NotesExpectation {
 	}
 }
 
-// compliantNotesDocument renders the one notes document
-// compliantNotesExpectation() is built to satisfy exactly, so every
-// doctor below can mutate it and violate exactly one comparison-table
-// row.
+// compliantNotesDocument renders the document that satisfies want exactly, so
+// each doctor below can violate exactly one comparison-table row.
 func compliantNotesDocument(want NotesExpectation) string {
 	return "# Fixture runtime adapter notes\n\n" +
 		"Eligibility: " + string(want.Verdict) + "\n\n" +
@@ -65,9 +59,6 @@ func compliantNotesDocument(want NotesExpectation) string {
 		NotesScopeStatement + ".\n"
 }
 
-// TestValidateNotes confirms ValidateNotes accepts a document that
-// satisfies every row of the comparison table and rejects a document
-// that violates exactly one row, one row at a time.
 func TestValidateNotes(t *testing.T) {
 	t.Parallel()
 
@@ -219,9 +210,8 @@ func TestValidateNotes(t *testing.T) {
 	}
 }
 
-// TestNotesExpectationJSONRoundTrip confirms NotesExpectation and
-// NotesGrade round-trip through encoding/json with their declared
-// field names, the shape the tracked expectation artifact depends on.
+// TestNotesExpectationJSONRoundTrip pins the field names the tracked
+// expectation artifact depends on.
 func TestNotesExpectationJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -246,10 +236,9 @@ func TestNotesExpectationJSONRoundTrip(t *testing.T) {
 	}
 }
 
-// TestValidateNotesRejectsDriftTheShapeAlone covers the two ways a
-// document can disagree with its run without omitting anything: a grade
-// row outside the vocabulary, and an entry the run never recorded.
-// Requiring only that expected content is present would accept both.
+// TestValidateNotesRejectsDriftTheShapeAlone covers the two drift modes a
+// presence-only check would wrongly accept: a grade row outside the
+// vocabulary, and an entry the run never recorded.
 func TestValidateNotesRejectsDriftTheShapeAlone(t *testing.T) {
 	t.Parallel()
 

@@ -45,12 +45,9 @@ func gradingCallSiteCounts(file *ast.File, targets []string) map[string]int {
 	return callSiteCounts(file, targets, true)
 }
 
-// callSiteCounts is the shared walk bindingCallSiteCounts,
-// gradingCallSiteCounts, and gradingCallSiteFuncNames specialize:
-// matchSelectors controls whether a selector expression's own selector
-// name counts alongside a bare identifier, and node accepts any AST
-// node ast.Inspect can walk, so the same walk scopes to a whole file
-// or to a single function's body.
+// callSiteCounts is the shared walk: matchSelectors controls whether a
+// selector's own name counts alongside a bare identifier, and node may be a
+// whole file or a single function body.
 func callSiteCounts(node ast.Node, targets []string, matchSelectors bool) map[string]int {
 	counts := make(map[string]int, len(targets))
 	ast.Inspect(node, func(n ast.Node) bool {
@@ -77,8 +74,6 @@ func callSiteCounts(node ast.Node, targets []string, matchSelectors bool) map[st
 	return counts
 }
 
-// packageGoFiles lists the .go file names directly under this
-// package's own directory, optionally skipping test files.
 func packageGoFiles(t *testing.T, skipTestFiles bool) []string {
 	t.Helper()
 
@@ -109,11 +104,9 @@ func scanBindingCallSites(t *testing.T, targets []string) map[string]int {
 	return scanGoFiles(t, packageGoFiles(t, false), targets, bindingCallSiteCounts)
 }
 
-// gradingCallSiteFuncNames walks file's AST and returns, for every
-// name in targets, the name of the *ast.FuncDecl enclosing each call
-// site gradingCallSiteCounts would count, in source order, so a
-// regression that moves a call to a different function reddens even
-// though the call still exists exactly once.
+// gradingCallSiteFuncNames returns the enclosing function name for each
+// counted call site, in source order, so moving a call to a different function
+// reddens even though it still exists exactly once.
 func gradingCallSiteFuncNames(file *ast.File, targets []string) map[string][]string {
 	names := make(map[string][]string, len(targets))
 	for _, decl := range file.Decls {
@@ -131,10 +124,9 @@ func gradingCallSiteFuncNames(file *ast.File, targets []string) map[string][]str
 	return names
 }
 
-// scanGradingCallSiteFuncNames parses only the non-test .go files
-// directly under this package's own directory and merges
-// gradingCallSiteFuncNames across them, so a call site a test happens
-// to add cannot mask a missing production call site.
+// scanGradingCallSiteFuncNames merges gradingCallSiteFuncNames across the
+// non-test files only, so a call site a test adds cannot mask a missing
+// production call site.
 func scanGradingCallSiteFuncNames(t *testing.T, targets []string) map[string][]string {
 	t.Helper()
 
@@ -152,8 +144,6 @@ func scanGradingCallSiteFuncNames(t *testing.T, targets []string) map[string][]s
 	return total
 }
 
-// scanGoFiles parses each named file and totals count's own result
-// across them.
 func scanGoFiles(t *testing.T, names []string, targets []string, count func(*ast.File, []string) map[string]int) map[string]int {
 	t.Helper()
 
@@ -171,11 +161,6 @@ func scanGoFiles(t *testing.T, names []string, targets []string, count func(*ast
 	return total
 }
 
-// TestQualificationBindingHasExactlyOneCallSite confirms the live
-// profile calls Run, enforceNotesConsistency and runPublishedPostureProbe
-// exactly once each, and proves the scanner itself can fail by running
-// it against a synthetic fixture with the call site removed and against
-// one where it is present.
 func TestQualificationBindingHasExactlyOneCallSite(t *testing.T) {
 	t.Parallel()
 
@@ -236,10 +221,6 @@ func collect() {
 	})
 }
 
-// TestQualificationGradingHasExactlyOneCallSite confirms that, across
-// this package's non-test files, gradedEvidence has exactly one call
-// site, inside Run, and qualification.NewFixture has exactly one call
-// site, inside gradedEvidence.
 func TestQualificationGradingHasExactlyOneCallSite(t *testing.T) {
 	t.Parallel()
 

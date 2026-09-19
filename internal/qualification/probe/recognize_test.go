@@ -8,9 +8,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// recognizerShapedProfile returns a minimal RuntimeProfile carrying
-// recognizer for SurfaceNativeJSON only, sufficient for nativeTerminal
-// dispatch without any other profile member.
 func recognizerShapedProfile(recognizer qualification.Recognizer) qualification.RuntimeProfile {
 	return qualification.RuntimeProfile{
 		Recognizers: map[qualification.Surface]qualification.Recognizer{
@@ -19,10 +16,6 @@ func recognizerShapedProfile(recognizer qualification.Recognizer) qualification.
 	}
 }
 
-// TestNativeTerminal covers nativeTerminal's three dispatch branches:
-// a launch failure carries no terminal signal, a bounded exit or
-// timeout with no recognized terminal is transport loss, and a surface
-// the profile carries no recognizer for recognizes nothing.
 func TestNativeTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -60,16 +53,6 @@ func TestNativeTerminal(t *testing.T) {
 	})
 }
 
-// TestNativeTerminalDispatchIsProfileDriven proves the dispatch reads
-// its recognition rule from the profile argument rather than from a
-// hardcoded field name. Two profiles carry differently-shaped
-// native_json recognizers over the exact same raw output: one naming
-// the success member a tracked structured-native profile uses today,
-// and a second, kiro-shaped, control naming a different one. A driver
-// that special-cased one runtime's field name would recognize the
-// kiro-shaped output identically to the other one, or fail to
-// recognize either, collapsing this test's two branches into one; the
-// data-driven dispatch this package implements must not.
 func TestNativeTerminalDispatchIsProfileDriven(t *testing.T) {
 	t.Parallel()
 
@@ -111,11 +94,6 @@ func writeAll(t *testing.T, w *lineBoundedWriter, writes []string) {
 	}
 }
 
-// TestLineBoundedWriter covers the line-retention decision table: a
-// complete line within limit, a line reassembled across Write calls,
-// a line found to exceed limit within one Write, and a write that
-// itself exceeds limit before any newline arrives and so must discard
-// through a later Write until the next newline.
 func TestLineBoundedWriter(t *testing.T) {
 	t.Parallel()
 
@@ -207,10 +185,6 @@ func TestLineBoundedWriter(t *testing.T) {
 	}
 }
 
-// TestLineBoundedWriterPeak proves peak records the buffered line's
-// high-water mark, reached mid-write across a line split over two
-// Write calls, and left untouched by a write whose payload is dropped
-// before ever reaching the pending buffer.
 func TestLineBoundedWriterPeak(t *testing.T) {
 	t.Parallel()
 

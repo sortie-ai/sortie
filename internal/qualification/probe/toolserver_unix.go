@@ -18,11 +18,10 @@ import (
 )
 
 const (
-	// toolServerName is the declared MCP server's own name, used both
-	// in the generated configuration and reported in its handshake.
+	// toolServerName is the declared MCP server's name, used both in the
+	// generated configuration and reported in its handshake.
 	toolServerName = "sortie-probe-tools"
 
-	// probeToolName is the single tool the induced server declares.
 	probeToolName = "sortie_probe_tool"
 
 	// toolInductionTurnBound bounds one tool-server or
@@ -42,8 +41,8 @@ const (
 	permissionNoOptionNotice = "the agent needs a permission this unattended run cannot grant"
 )
 
-// mcpToolServerScenario names the Go fake runtime induceToolServerCall
-// and inducePermissionRequest launch as the declared stdio server.
+// mcpToolServerScenario names the Go fake runtime the tool-server and
+// permission inducers launch as the declared stdio server.
 const mcpToolServerScenario = "mcp-tool-server"
 
 // mcpToolServerParams parameterizes mcpToolServerScenario: every
@@ -53,9 +52,7 @@ type mcpToolServerParams struct {
 }
 
 // writeToolServerMCPConfig writes a generated MCP configuration
-// declaring one stdio server at scriptPath, in the shape
-// internal/agent/clientprotocol/mcp_test.go's writeMCPConfig builds,
-// and returns its path.
+// declaring one stdio server at scriptPath and returns its path.
 func writeToolServerMCPConfig(t *testing.T, dir, scriptPath string) string {
 	t.Helper()
 	path := filepath.Join(dir, "mcp.json")
@@ -67,8 +64,8 @@ func writeToolServerMCPConfig(t *testing.T, dir, scriptPath string) string {
 }
 
 // fileHasContent reports whether path exists and is non-empty. A
-// missing file is not an error: the induction's own server never
-// created it when no call reached it.
+// missing file is not an error: the server never created it when no
+// call reached it.
 func fileHasContent(path string) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {

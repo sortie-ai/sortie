@@ -8,10 +8,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification/probe"
 )
 
-// notObservedProfile builds a RuntimeProfile carrying an entry point
-// for every measurable surface and absent as its own absent-surface
-// declarations, so its MeasuredSurfaces matches the fixture's own
-// measured set built from the same declaration.
 func notObservedProfile(absent []qualification.AbsentSurface) qualification.RuntimeProfile {
 	return qualification.RuntimeProfile{
 		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
@@ -23,13 +19,6 @@ func notObservedProfile(absent []qualification.AbsentSurface) qualification.Runt
 	}
 }
 
-// TestFixtureNotObservedVariant confirms the not_observed variant
-// built by NewFixture: every record carries grade and outcome
-// not_observed, the finalized fixture validates as unmeasured against
-// its own declarations, and the bounded expectation it derives carries
-// every grade row at not_observed with its status label, no excluded
-// case, and one unobserved entry per semantic case per measured
-// surface.
 func TestFixtureNotObservedVariant(t *testing.T) {
 	t.Parallel()
 

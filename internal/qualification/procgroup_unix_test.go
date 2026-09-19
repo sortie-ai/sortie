@@ -14,12 +14,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
-// procgroupLeaderScenario names the Go fake runtime the surviving-
-// grandchild case launches as its own leader: it starts hangPath as a
-// background child, left in the same process group since it sets no
-// SysProcAttr of its own, and exits immediately - mirroring a shell
-// leader that backgrounds a job and returns before the job itself
-// exits.
+// procgroupLeaderScenario is a fake leader that backgrounds hangPath in its
+// own process group and exits immediately, mirroring a shell leader that
+// returns before the job it started.
 const procgroupLeaderScenario = "leader"
 
 func spawnDetachedGroupChild(_ []string, hangPath string) int {
@@ -37,10 +34,9 @@ func TestMain(m *testing.M) {
 	})
 }
 
-// startTrackedGroup starts cmd in its own process group through the
-// production launch contract and returns the started command and its
-// PGID. It registers a cleanup that signals the group and reaps its
-// leader, so an unreaped zombie never lingers past the test.
+// startTrackedGroup starts cmd in its own process group and returns it with
+// its PGID, registering a cleanup that kills the group and reaps its leader
+// so no zombie lingers past the test.
 func startTrackedGroup(t *testing.T, cmd *exec.Cmd) (*exec.Cmd, int) {
 	t.Helper()
 	procutil.SetProcessGroup(cmd)
@@ -55,11 +51,6 @@ func startTrackedGroup(t *testing.T, cmd *exec.Cmd) (*exec.Cmd, int) {
 	return cmd, pgid
 }
 
-// TestProcessGroupAbsenceOracle confirms the exact negative-PGID
-// oracle: a live group is present, a killed single-member group drains
-// to absence within the shared deadline, and a group whose leader dies
-// while a grandchild keeps the group alive still reports present until
-// the whole group is terminated.
 func TestProcessGroupAbsenceOracle(t *testing.T) {
 	t.Parallel()
 
@@ -93,15 +84,11 @@ func TestProcessGroupAbsenceOracle(t *testing.T) {
 	t.Run("a surviving grandchild keeps the group present", func(t *testing.T) {
 		t.Parallel()
 
-		// The leader forks a grandchild into the same group and exits;
-		// the group survives while the grandchild does.
 		dir := t.TempDir()
 		hangPath := agenttest.FakeRuntime(t, dir, "grandchild", agenttest.OutputScenario, agenttest.Output{Hang: true})
 		script := agenttest.FakeRuntime(t, dir, "leader", procgroupLeaderScenario, hangPath)
 		cmd, pgid := startTrackedGroup(t, exec.Command(script)) //nolint:gosec // script is a fake runtime this test built under its own temp directory
 
-		// A bounded settle lets the leader fork and exit before the
-		// first liveness check.
 		time.Sleep(50 * time.Millisecond)
 		if present, err := ProcessGroupPresent(pgid); err != nil || !present {
 			t.Fatalf("ProcessGroupPresent() = %v, %v, want the group alive while the grandchild survives", present, err)
@@ -114,14 +101,10 @@ func TestProcessGroupAbsenceOracle(t *testing.T) {
 	})
 }
 
-// TestProcessGroupPresentRejectsUnqueryableIDs pins the guard on the
-// exported query. The negation the liveness probe relies on gives every
-// id at or below 1 a different target, and each of those targets answers
-// present for a reason that has nothing to do with the launched group:
-// 0 addresses the caller's own group, 1 addresses every process the
-// caller may signal, and a negative id addresses a single process. A
-// caller that passed one of these would poll AwaitProcessGroupAbsence
-// until the deadline and then report a survivor that never existed.
+// TestProcessGroupPresentRejectsUnqueryableIDs pins the guard on ids at or
+// below 1: each addresses something other than the launched group and would
+// answer present, so an unguarded caller would poll to the deadline and then
+// report a survivor that never existed.
 func TestProcessGroupPresentRejectsUnqueryableIDs(t *testing.T) {
 	t.Parallel()
 

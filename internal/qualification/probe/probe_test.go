@@ -11,19 +11,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
-// probeScenarios collects every non-default fake-runtime scenario this
-// package's tests register. The unix build tag's own test file adds
-// its entries via init.
 var probeScenarios = map[string]agenttest.Scenario{}
 
 func TestMain(m *testing.M) {
 	agenttest.Main(m, probeScenarios)
 }
 
-// sampleProfileJSON is a fully valid runtime profile document,
-// independent of any tracked profile under
-// internal/qualification/profiles, so this package's own tests do not
-// couple to a production fixture's content.
 const sampleProfileJSON = `{
   "schema_version": 3,
   "runtime_id": "sample-runtime",
@@ -65,8 +58,6 @@ const sampleProfileJSON = `{
   "absent_surfaces": []
 }`
 
-// mustWriteFile creates path's parent directories as needed and writes
-// content, failing t on any error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -77,11 +68,6 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
-// writeValidProfileFixture builds a synthetic repository root under
-// t.TempDir(), sufficient for qualification.ReadRuntimeProfileFile to
-// accept sampleProfileJSON in full: a go.mod marker and the notes,
-// measurement, and published-sample files the document names. It
-// returns the profile file's own path.
 func writeValidProfileFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -94,20 +80,11 @@ func writeValidProfileFixture(t *testing.T) string {
 	return profilePath
 }
 
-// writeFixtureExecutable builds a fake runtime executable under dir,
-// returning its path. It is a cross-platform-shaped fixture: the
-// content never actually runs in these tests, only its path and
-// executable bit are read.
 func writeFixtureExecutable(t *testing.T, dir string) string {
 	t.Helper()
 	return agenttest.FakeRuntime(t, dir, "fixture-executable", agenttest.OutputScenario, agenttest.Output{})
 }
 
-// TestResolveCoordinates confirms the enabled gate fails, never
-// resolves, when a coordinate is missing or invalid, with a diagnostic
-// naming the prerequisite class and never a credential value, and that
-// a complete coordinate set resolves once including the required
-// runtime profile.
 func TestResolveCoordinates(t *testing.T) {
 	t.Parallel()
 
@@ -378,9 +355,6 @@ func TestResolveCoordinates(t *testing.T) {
 	})
 }
 
-// TestGated confirms the gate skips cleanly when unset, and resolves
-// coordinates without failing or launching anything when set with a
-// complete, valid coordinate set.
 func TestGated(t *testing.T) {
 	t.Run("gate unset skips cleanly", func(t *testing.T) {
 		t.Setenv(qualificationGateEnv, "0")
@@ -423,12 +397,6 @@ func TestGated(t *testing.T) {
 
 }
 
-// TestGatedFatalsOnInvalidCoordinate confirms Gated fails rather than
-// skips when the gate is enabled and a coordinate is invalid. It drives
-// this through a subprocess, matching the standard library's own
-// TestHelperProcess idiom: calling t.Fatalf directly against this
-// test's own *testing.T would mark this whole package's run failed,
-// which is not the behavior under test here.
 func TestGatedFatalsOnInvalidCoordinate(t *testing.T) {
 	t.Parallel()
 

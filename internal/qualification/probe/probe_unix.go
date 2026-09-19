@@ -44,11 +44,10 @@ func signalProcessGroup(pid int, sig syscall.Signal) error {
 	return err
 }
 
-// assertSessionGroupAbsent confirms the process group session's own
-// launch produced is gone, per the rule that a survivor is a leak
-// rather than a slow exit. Every live session Run starts calls this
-// after its own StopSession returns, never conditioned on which
-// runtime answered the session.
+// assertSessionGroupAbsent confirms the process group session's launch
+// produced is gone, per the rule that a survivor is a leak rather than
+// a slow exit. Every live session Run starts calls this after its own
+// StopSession returns.
 func assertSessionGroupAbsent(t *testing.T, session domain.Session) {
 	t.Helper()
 	pid, err := strconv.Atoi(session.AgentPID)
@@ -187,14 +186,12 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 	}
 }
 
-// continuationInductionTurnBound bounds one continuation induction
-// turn.
 const continuationInductionTurnBound = 3 * time.Minute
 
-// awaitMinuteBoundary blocks until the wall clock leaves the UTC
-// minute createdAt falls in, or a bounded deadline passes, per the
-// protection this runtime family gives a session/load issued inside
-// its own creation minute.
+// awaitMinuteBoundary blocks until the wall clock leaves the UTC minute
+// createdAt falls in, or a bounded deadline passes, per the protection
+// this runtime family gives a session/load issued inside its own
+// creation minute.
 func awaitMinuteBoundary(createdAt time.Time) {
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().UTC().Truncate(time.Minute).Equal(createdAt.Truncate(time.Minute)) {
@@ -302,9 +299,9 @@ func defaultOutputDir(t *testing.T) string {
 }
 
 // pathWithin reports whether path is root itself or sits beneath it,
-// comparing the two only after resolving both through their symlinks.
-// A prefix test is not a containment test, since it also matches a
-// sibling whose name merely begins with root's, and a textual check on
+// comparing the two only after resolving both through their symlinks. A
+// prefix test is not a containment test, since it matches a sibling
+// whose name merely begins with root's, and a textual check on
 // unresolved paths passes a symlink inside the checkout that points
 // outside it. A side that cannot be resolved is reported as not
 // contained rather than assumed safe.
@@ -332,8 +329,7 @@ func repositoryPath(t *testing.T, root, rel string) string {
 	t.Helper()
 	joined := filepath.Join(root, rel)
 	if _, err := os.Lstat(joined); err != nil {
-		// A path that does not exist is the reader's own error to
-		// report, with the name it failed on.
+		// A path that does not exist is the reader's own error to report.
 		return joined
 	}
 	if !pathWithin(joined, root) {
@@ -344,8 +340,8 @@ func repositoryPath(t *testing.T, root, rel string) string {
 
 // Run drives one live qualification collection against coords,
 // corroborating every declared absence and writing the validated
-// evidence, the bounded summary,
-// and a fresh measurement artifact to Coordinates.OutputDir.
+// evidence, the bounded summary, and a fresh measurement artifact to
+// Coordinates.OutputDir.
 //
 // The live tests built on Run MUST NOT call t.Parallel(): it launches
 // real processes and spends model quota, so its output stays readable
@@ -421,7 +417,6 @@ func Run(t *testing.T, coords Coordinates) Result {
 	}
 }
 
-// mustRepositoryRoot resolves the repository root or fails t.
 func mustRepositoryRoot(t *testing.T) string {
 	t.Helper()
 	root, err := qualification.RepositoryRootFromWD()

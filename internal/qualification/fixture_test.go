@@ -6,15 +6,6 @@ import (
 	"testing"
 )
 
-// TestFixtureDeclarationsRoundTrip confirms Fixture.Declarations
-// produces declarations and absent_surfaces the operator's own decode
-// path would accept: embedded in an otherwise-minimal valid profile
-// document, they marshal to JSON and back through DecodeRuntimeProfile
-// without error, and the decoded entries equal the fixture's own. A
-// fixture that authorized entries the decoder would refuse would let
-// every control that passes Declarations() straight to
-// ValidateObservationsWithDeclarations hide a decoder-rejected
-// document behind an in-memory struct.
 func TestFixtureDeclarationsRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -98,10 +89,6 @@ func requireDeclarationsRoundTrip(t *testing.T, declarations RuntimeProfile) {
 	}
 }
 
-// TestFixtureSetToolServerDelivery confirms SetToolServerDelivery
-// rewrites addToolServer's own seeded record to the given grade and
-// detail, deriving Outcome with BaselineVerdictFor's convention, for
-// each of the three grades an observed induction can produce.
 func TestFixtureSetToolServerDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -156,14 +143,6 @@ func TestFixtureSetToolServerDelivery(t *testing.T) {
 	})
 }
 
-// TestFixtureSetPermissionHandling confirms SetPermissionHandling
-// rewrites addPermission's own seeded record to the given grade and
-// detail for each of the three grades a permission-handling
-// observation can produce. It also confirms that
-// addPolicyPrecondition's record classifies as RowPolicyPrecondition,
-// which ConclusionsFromRecords never turns into a graded row, so
-// SetPermissionHandling leaves it untouched rather than rewriting it
-// too.
 func TestFixtureSetPermissionHandling(t *testing.T) {
 	t.Parallel()
 
@@ -227,13 +206,6 @@ func TestFixtureSetPermissionHandling(t *testing.T) {
 	}
 }
 
-// TestFixtureSetSessionContinuation confirms SetSessionContinuation
-// rewrites both the baseline and the recall record addContinuation
-// seeded for surface, for each of the three grades a continuation
-// replay observation can produce. The caller's free-text detail lands
-// on the baseline record, while the recall record's Detail is always
-// one of the closed-set constants checkRecallRecord validates
-// against, never the caller's text.
 func TestFixtureSetSessionContinuation(t *testing.T) {
 	t.Parallel()
 
@@ -288,12 +260,6 @@ func TestFixtureSetSessionContinuation(t *testing.T) {
 	}
 }
 
-// TestFixtureSetSessionContinuationUsableReadsRecallsOwnPriorSessionID
-// confirms the usable arm's SessionID comes from the recall record's
-// own current prior_session_id rather than a freshly recomputed
-// FixtureSession(surface, "seed") constant: after a caller rewrites
-// PriorSessionID away from that constant, a usable call must carry the
-// rewritten value forward.
 func TestFixtureSetSessionContinuationUsableReadsRecallsOwnPriorSessionID(t *testing.T) {
 	t.Parallel()
 
@@ -318,9 +284,6 @@ func TestFixtureSetSessionContinuationUsableReadsRecallsOwnPriorSessionID(t *tes
 	}
 }
 
-// matchPolicyPrecondition matches the single addPolicyPrecondition
-// record, mirroring matchPermission's and matchToolServer's shape for
-// a seeded record with no exported constructor of its own.
 func matchPolicyPrecondition() func(*Record) bool {
 	return func(rec *Record) bool {
 		return rec.Scenario == ScenarioPolicyPrecondition && rec.Surface == SurfaceAggregate &&
@@ -328,9 +291,6 @@ func matchPolicyPrecondition() func(*Record) bool {
 	}
 }
 
-// declaredGapAbsentSets is the four absent-surface combinations this
-// file's controls range over: none, each native surface alone, and
-// both.
 func declaredGapAbsentSets() []struct {
 	name   string
 	absent []AbsentSurface
@@ -349,15 +309,11 @@ func declaredGapAbsentSets() []struct {
 	}
 }
 
-// semanticTuple names one capability-case pair a declaration rewrites.
 type semanticTuple struct {
 	Capability Capability
 	Case       Case
 }
 
-// declaredGapRewrittenTuples returns the capability-case pair
-// SetSemanticDeclaredGap(capability, caseID, ...) rewrites directly,
-// plus its DeclaredGapPeers closure pair when one exists.
 func declaredGapRewrittenTuples(capability Capability, caseID Case) []semanticTuple {
 	tuples := []semanticTuple{{Capability: capability, Case: caseID}}
 	if peer, ok := DeclaredGapPeers[caseID]; ok {
@@ -366,15 +322,6 @@ func declaredGapRewrittenTuples(capability Capability, caseID Case) []semanticTu
 	return tuples
 }
 
-// TestFixtureSetSemanticDeclaredGapMatchesQualifiedFixture confirms
-// that for every capability and case, and every absent-surface set, a
-// FixtureNotObserved fixture and a FixtureQualified fixture built with
-// the same absent set rewrite equal records under RecordsEqual for the
-// same SetSemanticDeclaredGap call, and that the not-observed
-// fixture, finalized, still validates against its own declarations:
-// the declared_gap record it writes carries the same session_id and
-// evidence_path a qualified fixture's own record already carries,
-// whatever the record held before the rewrite.
 func TestFixtureSetSemanticDeclaredGapMatchesQualifiedFixture(t *testing.T) {
 	t.Parallel()
 
@@ -422,9 +369,6 @@ func TestFixtureSetSemanticDeclaredGapMatchesQualifiedFixture(t *testing.T) {
 	}
 }
 
-// continuationRecordDetail formats a pointer field for a failure
-// message, rendering a nil pointer as the literal text "nil" rather
-// than its address.
 func continuationRecordDetail(p *string) string {
 	if p == nil {
 		return "nil"
@@ -432,9 +376,6 @@ func continuationRecordDetail(p *string) string {
 	return *p
 }
 
-// assertContinuationRow fails t unless fixture's continuation baseline,
-// recall, and seed records for surface match SetSessionContinuation's
-// own closed per-grade table for grade and detail.
 func assertContinuationRow(t *testing.T, fixture *Fixture, surface Surface, grade Grade, detail string) {
 	t.Helper()
 
@@ -486,15 +427,6 @@ func assertContinuationRow(t *testing.T, fixture *Fixture, surface Surface, grad
 	}
 }
 
-// TestFixtureSetSessionContinuationIsOrderIndependent confirms that
-// for every variant, every measured surface, and every ordered pair of
-// grades drawn from usable, gap, and not_observed, calling
-// SetSessionContinuation twice in a row, once with the first grade and
-// once with the second, leaves the baseline, recall, and seed records
-// equal under RecordsEqual to a single call with the second grade on a
-// fresh fixture of the same variant: what one call writes depends only
-// on the surface, the grade, and the detail it was given, never on
-// what an earlier call to the same setter wrote.
 func TestFixtureSetSessionContinuationIsOrderIndependent(t *testing.T) {
 	t.Parallel()
 

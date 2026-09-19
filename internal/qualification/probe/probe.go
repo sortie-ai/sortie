@@ -2,9 +2,8 @@
 // runtime a [qualification.RuntimeProfile] describes: it resolves the
 // operator's coordinates, gates the live run behind
 // SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST, and collects, validates,
-// and persists the evidence a run produces. Start with [Gated] to
-// resolve the coordinates a live test needs, and [Run] to drive one
-// collection.
+// and persists the evidence. Use [Gated] to resolve coordinates and
+// [Run] to drive one collection.
 package probe
 
 import (
@@ -19,8 +18,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// The qualification profile's own coordinates. They are test
-// coordinates only: names are read and printed, values never are.
+// The qualification profile's coordinates: names are read and printed,
+// values never are.
 const (
 	qualificationGateEnv      = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST"
 	qualificationCommandEnv   = "SORTIE_CLIENTPROTOCOL_QUALIFICATION_COMMAND"
@@ -34,13 +33,12 @@ const (
 // with. It carries names and the decoded profile only: no credential
 // value ever travels through it.
 type Coordinates struct {
-	// CommandPath is the single resolved executable path with no
-	// arguments. Surface-specific flags are appended by the launchers,
-	// never stored here.
+	// CommandPath is the resolved executable path. Surface-specific
+	// flags are appended by the launchers, never stored here.
 	CommandPath string
 
-	// Model is the one operator-selected model identifier applied to
-	// every surface.
+	// Model is the operator-selected model identifier applied to every
+	// surface.
 	Model string
 
 	// AuthEnvNames are the authentication environment variable names,
@@ -50,12 +48,14 @@ type Coordinates struct {
 	// Profile is the decoded runtime profile the run measures against.
 	Profile qualification.RuntimeProfile
 
-	// OutputDir is where Run writes its three artifacts. It defaults to
-	// a run-scoped directory under the OS temporary root when empty.
+	// OutputDir is where Run writes its artifacts, defaulting to a
+	// run-scoped directory under the OS temporary root when empty.
 	OutputDir string
 }
 
-// Result is what one Run call produced.
+// Result is what one Run call produced, naming every artifact the run
+// wrote so a caller reads provenance from the result rather than the
+// run's log lines.
 type Result struct {
 	Verdict         qualification.Verdict
 	Measurement     qualification.Measurement
@@ -64,9 +64,9 @@ type Result struct {
 	MeasurementPath string
 }
 
-// isExecutableMode reports whether the file mode carries any execute
-// permission. Windows executability is decided by the loader rather
-// than a mode bit, so the check applies only where the bit exists.
+// isExecutableMode reports whether the file mode carries execute
+// permission. Windows executability is decided by the loader, not a
+// mode bit, so the check applies only where the bit exists.
 func isExecutableMode(mode os.FileMode) bool {
 	if runtime.GOOS == "windows" {
 		return true
@@ -106,12 +106,10 @@ func parseCommand(raw string) (string, error) {
 }
 
 // parseAuthEnvNames parses the comma-separated list of authentication
-// environment variable names. Entries are trimmed; an empty entry or a
-// duplicate name is rejected. An entirely empty list is the runtime
-// that authenticates from state already on the host, such as a stored
-// login, and forwards no credential through the environment; the
-// coordinate must still be set, so a forgotten one is still a failure
-// rather than that declaration.
+// environment variable names, rejecting an empty or duplicate entry. An
+// empty list is the runtime that authenticates from state already on
+// the host, such as a stored login; the coordinate must still be set,
+// so a forgotten one is a failure rather than that declaration.
 func parseAuthEnvNames(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
@@ -132,9 +130,8 @@ func parseAuthEnvNames(raw string) ([]string, error) {
 	return names, nil
 }
 
-// coordinateValue reads one coordinate. A coordinate absent from env
-// resolves to the empty string, which each coordinate's own rule
-// rejects with its named diagnostic.
+// coordinateValue reads one coordinate. An absent coordinate resolves
+// to the empty string, which each coordinate's own rule rejects.
 func coordinateValue(env func(string) (string, bool), name string) string {
 	value, _ := env(name)
 	return value
@@ -189,9 +186,10 @@ func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 }
 
 // Gated reports false and calls t.Skip naming the gate variable when
-// SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST is not "1". With the gate
-// set it resolves the coordinates and calls t.Fatalf on any missing or
-// invalid one.
+// SORTIE_CLIENTPROTOCOL_QUALIFICATION_TEST is not "1". With the gate set
+// it resolves the coordinates and calls t.Fatalf on any missing or
+// invalid one; an unsupplied authentication credential is then a clean
+// skip naming that variable, not a failure.
 func Gated(t *testing.T) (Coordinates, bool) {
 	t.Helper()
 	if os.Getenv(qualificationGateEnv) != "1" {

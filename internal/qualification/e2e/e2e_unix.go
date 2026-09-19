@@ -29,14 +29,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/tracker/file"
 )
 
-// fixtureAgentKind is the agent kind the deterministic harness
-// configures.
-// The orchestrator's dispatch preflight requires cfg.Agent.Kind to
-// resolve in the agent registry even though the harness always
-// supplies its adapter directly through AgentAdapterByKind, so this
-// package registers the kind itself instead of depending on a specific
-// adapter package's own registration being loaded into the same
-// binary.
+// fixtureAgentKind is the agent kind the deterministic harness configures. The
+// orchestrator's dispatch preflight requires cfg.Agent.Kind to resolve in the
+// agent registry even though the harness supplies its adapter directly, so this
+// package registers the kind itself rather than depending on an adapter
+// package's registration being loaded into the binary.
 const fixtureAgentKind = "qualification-e2e-fixture"
 
 func init() {
@@ -45,9 +42,8 @@ func init() {
 	}, registry.AgentMeta{RequiresCommand: true})
 }
 
-// The fixture's active and non-active handoff states: the issue starts
-// in the active state and, on success, reaches the non-active handoff
-// state. issueID and issueIdentifier name the fixture's single issue.
+// The fixture's active and non-active handoff states, and its single issue's
+// id and identifier. The issue starts active and on success reaches handoff.
 const (
 	activeState     = "todo"
 	handoffState    = "done"
@@ -72,11 +68,9 @@ type effectiveSample struct {
 	MCPConfigPath  string
 }
 
-// serviceConfig builds the harness's service configuration from the
-// effective sample fields alone, with shorter positive test bounds that
-// preserve the sample's semantics. The harness carries no hooks block,
-// no notification backend, no server listener, and no network-backed
-// tracker.
+// serviceConfig builds the harness's service configuration from the effective
+// sample fields alone, with shorter positive test bounds. The harness carries
+// no hooks block, notification backend, server listener, or network tracker.
 func serviceConfig(workspaceRoot string, sample effectiveSample) config.ServiceConfig {
 	return config.ServiceConfig{
 		Polling:   config.PollingConfig{IntervalMS: 20},
@@ -124,12 +118,10 @@ func (m *workflowManager) PromptTemplate() *prompt.Template {
 	return m.template
 }
 
-// PromptTemplateByID serves the fixture's only template, which is the
-// default one, and reports nil for any other id exactly as a real
-// workflow does for an id it does not define. Answering every id with
-// the default would let a dispatch that asked for a template this
-// fixture never declared run anyway, which is a resolution failure the
-// harness would then hide.
+// PromptTemplateByID serves the fixture's only template, the default one, and
+// reports nil for any other id as a real workflow does. Answering every id with
+// the default would let a dispatch asking for an undeclared template run
+// anyway, hiding a resolution failure.
 func (m *workflowManager) PromptTemplateByID(id string) *prompt.Template {
 	if id != "" {
 		return nil
@@ -139,17 +131,15 @@ func (m *workflowManager) PromptTemplateByID(id string) *prompt.Template {
 
 func (m *workflowManager) Reload() error { return nil }
 
-// WorkflowAbsPath reports the fixture's workflow path. The orchestrator
-// hands this to each worker as an absolute path and resolves settings
-// and MCP configuration against its directory, so a relative value
-// would make the harness resolve those against whatever working
-// directory the test binary happened to run in.
+// WorkflowAbsPath reports the fixture's workflow path. The orchestrator resolves
+// settings and MCP configuration against its directory, so a relative value
+// would resolve those against whatever working directory the test binary ran in.
 func (m *workflowManager) WorkflowAbsPath() string { return m.workflowPath }
 
-// fakeAgent is the fake protocol agent the deterministic E2E oracle
-// drives: it launches a real bounded child process in its own process
-// group so the exact PGID postcondition has a group to check, records
-// every session lifecycle call, and performs no model traffic.
+// fakeAgent is the fake protocol agent the deterministic oracle drives: it
+// launches a real bounded child process in its own process group so the exact
+// PGID postcondition has a group to check, records every session lifecycle
+// call, and performs no model traffic.
 type fakeAgent struct {
 	mu sync.Mutex
 
@@ -162,9 +152,9 @@ func newFakeAgent() *fakeAgent {
 	return &fakeAgent{}
 }
 
-// StartSession launches a bounded fake runtime process in its own
-// process group, so the run's teardown and the exact PGID postcondition
-// have an attributable group.
+// StartSession launches a bounded fake runtime process in its own process
+// group, so the run's teardown and the exact PGID postcondition have an
+// attributable group.
 func (a *fakeAgent) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	cmd := exec.CommandContext(context.Background(), "sleep", "120") //nolint:gosec // a bounded fake local process the fake agent's own teardown kills
 	cmd.Dir = params.WorkspacePath
@@ -226,13 +216,11 @@ func (a *fakeAgent) StopSession(_ context.Context, session domain.Session) error
 	return nil
 }
 
-// Harness is the isolated end-to-end harness: a file tracker over a
-// temporary issue file, a controlled git workspace under the same
-// temporary root, a real orchestrator over a temporary store, and the
-// fake protocol agent.
+// Harness is the isolated end-to-end harness: a file tracker over a temporary
+// issue file, a controlled git workspace under the same temporary root, a real
+// orchestrator over a temporary store, and the fake protocol agent.
 type Harness struct {
-	// observation bounds the wait for a terminal condition, from the
-	// budgets this harness was built with.
+	// observation bounds the wait for a terminal condition.
 	observation time.Duration
 
 	tempRoot      string
@@ -246,22 +234,20 @@ type Harness struct {
 	orchestrator  *orchestrator.Orchestrator
 }
 
-// Observation reports how long an observer may wait for a terminal
-// condition on this harness.
+// Observation reports how long an observer may wait for a terminal condition.
 func (h *Harness) Observation() time.Duration {
 	return h.observation
 }
 
-// Agent returns the harness's adapter observer, the only field exposed
-// outside the package.
+// Agent returns the harness's adapter observer, the only field exposed outside
+// the package.
 func (h *Harness) Agent() *AdapterObserver {
 	return h.agent
 }
 
-// AdapterObserver wraps the harness's agent adapter and records the two
-// lifecycle facts the terminal condition and the process-group
-// postcondition need: each session's captured process group and each
-// completed StopSession call.
+// AdapterObserver wraps the harness's agent adapter and records the lifecycle
+// facts the terminal condition and PGID postcondition need: each session's
+// captured process group and each completed StopSession call.
 type AdapterObserver struct {
 	inner domain.AgentAdapter
 
@@ -271,9 +257,8 @@ type AdapterObserver struct {
 	stops      int
 }
 
-// StartSession delegates and captures the session's process-group
-// leader PID, which procutil.SetProcessGroup makes the group's PGID,
-// and the actual protocol session identifier.
+// StartSession delegates and captures the session's process-group leader PID
+// (its PGID) and the actual protocol session identifier.
 func (o *AdapterObserver) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	session, err := o.inner.StartSession(ctx, params)
 	if err != nil {
@@ -294,7 +279,6 @@ func (o *AdapterObserver) StartSession(ctx context.Context, params domain.StartS
 	return session, nil
 }
 
-// RunTurn delegates unchanged.
 func (o *AdapterObserver) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	return o.inner.RunTurn(ctx, session, params)
 }
@@ -322,25 +306,21 @@ func (o *AdapterObserver) PGIDs() []int {
 	return append([]int(nil), o.pgids...)
 }
 
-// SessionIDs returns every actual protocol session identifier the
-// observed adapter StartSession calls returned.
+// SessionIDs returns every actual protocol session identifier the observed
+// StartSession calls returned.
 func (o *AdapterObserver) SessionIDs() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return append([]string(nil), o.sessionIDs...)
 }
 
-// toolServerBinary builds the sortie binary once per test process and
-// returns its path. The orchestrator writes the tool server's launch
-// command into the workspace's MCP config, and in production that
-// command is the running sortie. Inside a test the running executable
-// is the test binary, which speaks no MCP: a runtime handed that path
-// blocks on a stdio server that never answers, and its session
-// creation times out. Building the real binary is what keeps the
-// harness measuring the operator's path rather than a shape of it.
-//
-// The build directory outlives the test that triggered it, because the
-// binary is shared by every later harness in the same process.
+// toolServerBinary builds the sortie binary once per test process and returns
+// its path. In production the tool server's launch command is the running
+// sortie; inside a test the running executable is the test binary, which speaks
+// no MCP, so a runtime handed that path blocks on a stdio server that never
+// answers and its session creation times out. Building the real binary keeps
+// the harness measuring the operator's path. The build directory outlives the
+// triggering test, since the binary is shared by later harnesses in the process.
 var toolServerBinary = sync.OnceValues(func() (string, error) {
 	dir, err := os.MkdirTemp("", "sortie-e2e-toolserver")
 	if err != nil {
@@ -351,16 +331,15 @@ var toolServerBinary = sync.OnceValues(func() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve the repository root: %w", err)
 	}
-	// Looked up only to fail with the cause rather than with a bare
-	// exec error; the command itself stays a literal so no variable
-	// reaches the process launcher.
+	// Looked up only to fail with the cause rather than a bare exec error; the
+	// command itself stays a literal.
 	if _, err := exec.LookPath("go"); err != nil {
 		return "", fmt.Errorf("the Go toolchain is required to build the tool server binary: %w", err)
 	}
 	build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "./cmd/sortie") //nolint:gosec // every argument is a literal except the output path, which this function created under a temporary directory of its own
 	build.Dir = root
-	// The deployment model forbids a C toolchain, so the binary under
-	// test is built the way it ships.
+	// The deployment model forbids a C toolchain, so the binary is built the
+	// way it ships.
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, buildErr := build.CombinedOutput(); buildErr != nil {
 		return "", fmt.Errorf("build the tool server binary: %w\n%s", buildErr, out)
@@ -368,14 +347,12 @@ var toolServerBinary = sync.OnceValues(func() (string, error) {
 	return binary, nil
 })
 
-// Budgets are the per-run bounds one harness gives the agent it drives,
-// plus how long an observer may wait for a terminal condition. The
-// deterministic harness drives a fake agent that answers in
-// milliseconds and takes the zero value, which resolves to bounds sized
-// for it. A live runtime spends model time on every turn and must state
-// its own: the fake agent's bounds end a real turn before the model has
-// answered, and the run is then recorded as unobserved for a reason
-// that belongs to the harness rather than to the runtime.
+// Budgets are the per-run bounds one harness gives the agent it drives, plus
+// how long an observer may wait for a terminal condition. The deterministic
+// fake agent answers in milliseconds and takes the zero value; a live runtime
+// spends model time per turn and must state its own, since the fake agent's
+// bounds would end a real turn before the model answered and record the run
+// unobserved for a harness reason rather than a runtime one.
 type Budgets struct {
 	ReadTimeoutMS  int
 	TurnTimeoutMS  int
@@ -388,8 +365,8 @@ type Budgets struct {
 	Observation time.Duration
 }
 
-// withDefaults fills every unset bound with the value the deterministic
-// fake agent needs, so the zero value stays the fake agent's contract.
+// withDefaults fills every unset bound with the value the deterministic fake
+// agent needs, so the zero value stays the fake agent's contract.
 func (b Budgets) withDefaults() Budgets {
 	if b.ReadTimeoutMS == 0 {
 		b.ReadTimeoutMS = 5000
@@ -406,29 +383,26 @@ func (b Budgets) withDefaults() Budgets {
 	return b
 }
 
-// NewHarness assembles the deterministic harness: the fake protocol
-// agent behind the same builder the live collector uses, configured
-// under this package's own fixture kind.
+// NewHarness assembles the deterministic harness: the fake protocol agent
+// behind the same builder the live collector uses, under this package's fixture
+// kind.
 func NewHarness(t *testing.T) *Harness {
 	t.Helper()
 	return NewHarnessWithAgent(t, newFakeAgent(), "sortie-qualification-fake-agent --session-fixture", fixtureAgentKind, Budgets{})
 }
 
-// NewHarnessWithAgent assembles the harness under t.TempDir() with the
-// given agent adapter, agent.command coordinate and agent kind: a
-// temporary issue file, a controlled git workspace, a temporary store,
-// and the orchestrator wired to the file tracker and that agent.
+// NewHarnessWithAgent assembles the harness under t.TempDir() with the given
+// agent adapter, agent.command, and agent kind: a temporary issue file, a
+// controlled git workspace, a temporary store, and the orchestrator wired to
+// the file tracker and that agent.
 //
-// agentKind selects the registry entry the run resolves its metadata
-// through, and must name a kind registered in the calling test binary.
-// A caller qualifying a real adapter passes that adapter's own kind, so
-// the run reads the adapter's declared MCP injection mode and its
-// adapter-specific configuration validator exactly as production does;
-// passing this package's fixture kind instead would silently substitute
-// the zero-value metadata. A caller driving the fake agent passes
-// fixtureAgentKind, which this package registers itself so the harness
-// needs no adapter package loaded into the binary to satisfy dispatch
-// preflight.
+// agentKind selects the registry entry the run resolves its metadata through
+// and must name a kind registered in the calling test binary. A caller
+// qualifying a real adapter passes that adapter's own kind, so the run reads its
+// declared MCP injection mode and configuration validator as production does;
+// passing this package's fixture kind instead would substitute zero-value
+// metadata. A caller driving the fake agent passes fixtureAgentKind, which this
+// package registers itself.
 func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, agentKind string, budgets Budgets) *Harness {
 	budgets = budgets.withDefaults()
 	t.Helper()
@@ -445,10 +419,9 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	if err := os.MkdirAll(workspaceRoot, 0o750); err != nil {
 		t.Fatalf("create workspace root: %v", err)
 	}
-	// The controlled git workspace under the same temporary root, at
-	// the path the orchestrator's workspace manager computes for the
-	// fixture issue, so the agent's working directory is a git work
-	// tree before launch.
+	// The controlled git workspace at the path the orchestrator's workspace
+	// manager computes for the fixture issue, so the agent's working directory
+	// is a git work tree before launch.
 	pathResult, err := workspace.ComputePath(workspaceRoot, issueIdentifier)
 	if err != nil {
 		t.Fatalf("compute workspace path: %v", err)
@@ -535,9 +508,9 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	}
 }
 
-// TerminalCondition is the observed state of the harness's terminal
-// condition, evaluated through the tracker, the run-history store, the
-// runtime snapshot, and the fake agent's own StopSession observation.
+// TerminalCondition is the observed state of the harness's terminal condition,
+// evaluated through the tracker, run-history store, runtime snapshot, and the
+// fake agent's StopSession observation.
 type TerminalCondition struct {
 	SucceededRow    bool
 	HandoffReached  bool
@@ -581,11 +554,10 @@ func ObserveTerminalCondition(t *testing.T, harness *Harness) TerminalCondition 
 	return condition
 }
 
-// TerminalRecord builds the single end-to-end record from the observed
-// terminal condition. The session identifier is the actual protocol
-// session the harness's adapter session held, and the identity fields
-// are that session's handshake facts; only the deterministic harness
-// passes its fixture values.
+// TerminalRecord builds the single end-to-end record from the observed terminal
+// condition. The session identifier is the actual protocol session the adapter
+// held, and the identity fields are that session's handshake facts; only the
+// deterministic harness passes its fixture values.
 func TerminalRecord(condition TerminalCondition, groupClean bool, sessionID, agentName, agentVersion string) qualification.Record {
 	rec := qualification.Record{
 		SchemaVersion:   1,
@@ -616,9 +588,8 @@ func TerminalRecord(condition TerminalCondition, groupClean bool, sessionID, age
 	return rec
 }
 
-// StartWorkflow starts the orchestrator loop and returns the cancel
-// function and the loop-completion channel, for the live collector's
-// isolated end-to-end run.
+// StartWorkflow starts the orchestrator loop and returns the cancel function
+// and the loop-completion channel.
 func StartWorkflow(t *testing.T, harness *Harness) (context.CancelFunc, <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -632,11 +603,9 @@ func StartWorkflow(t *testing.T, harness *Harness) (context.CancelFunc, <-chan s
 		select {
 		case <-runDone:
 		case <-time.After(qualification.ShutdownDeadline):
-			// Reported rather than swallowed: a run still going after
-			// cancellation leaks its goroutine into the rest of the
-			// package's tests, and a silent branch here hides exactly
-			// the hang this bound exists to catch. Errorf, not Fatalf,
-			// so the remaining cleanups still run.
+			// A run still going after cancellation leaks its goroutine into the
+			// rest of the package's tests. Errorf, not Fatalf, so the remaining
+			// cleanups still run.
 			t.Errorf("orchestrator still running %s after cancellation; the harness leaked its run goroutine", qualification.ShutdownDeadline)
 		}
 	})

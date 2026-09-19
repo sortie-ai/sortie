@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// NotesGrade is one surface-capability grade a notes document reports,
-// with the exact status label the document's row must carry for it.
+// NotesGrade is one surface-capability grade a notes document reports, with the
+// status label the document's row must carry for it.
 type NotesGrade struct {
 	Surface    Surface
 	Capability Capability
@@ -16,10 +16,9 @@ type NotesGrade struct {
 	Label      string
 }
 
-// NotesExpectation is what a validated run expects a runtime's own
-// notes document to state: its eligibility verdict, every
-// surface-capability grade, every excluded capability case, and every
-// unobserved surface.
+// NotesExpectation is what a validated run expects a runtime's notes document to
+// state: both verdicts, every surface-capability grade, every excluded case, and
+// every unobserved surface.
 type NotesExpectation struct {
 	Verdict    Verdict
 	Grades     []NotesGrade
@@ -31,11 +30,10 @@ type NotesExpectation struct {
 // state the profile's Unix-only live scope.
 const NotesScopeStatement = "Windows live qualification is unobserved"
 
-// NotesSections returns the required section headings in order,
-// matched as an ordered subsequence of the document's headings. The
-// document's H1 is not constrained: it names the runtime, and the
-// runtime varies. Each call returns a fresh slice, so no caller can
-// edit the rule set a later comparison runs against.
+// NotesSections returns the required section headings in order, matched as an
+// ordered subsequence of the document's headings. The document's H1 is not
+// constrained: it names the runtime, which varies. Each call returns a fresh
+// slice so no caller can edit the rule set a later comparison runs against.
 func NotesSections() []string {
 	return []string{
 		"## Entry points",
@@ -48,8 +46,8 @@ func NotesSections() []string {
 	}
 }
 
-// StatusLabel maps a grade to the exact status label a notes grade row
-// MUST use. It returns the empty string for a grade no row can carry.
+// StatusLabel maps a grade to the status label a notes grade row MUST use, or
+// the empty string for a grade no row can carry.
 func StatusLabel(g Grade) string {
 	switch g {
 	case GradeUsable, GradeGap:
@@ -66,14 +64,12 @@ func StatusLabel(g Grade) string {
 	return ""
 }
 
-// NotesBindingRequired reports whether a run at this verdict MUST have
-// a readable notes document to compare against. True for
-// VerdictQualified only.
+// NotesBindingRequired reports whether a run at this verdict MUST have a
+// readable notes document to compare against; true for VerdictQualified only.
 func NotesBindingRequired(v Verdict) bool {
 	return v == VerdictQualified
 }
 
-// notesAlternation renders a closed value set as a regex alternation.
 func notesAlternation[T ~string](values []T) string {
 	quoted := make([]string, 0, len(values))
 	for _, value := range values {
@@ -82,10 +78,8 @@ func notesAlternation[T ~string](values []T) string {
 	return strings.Join(quoted, "|")
 }
 
-// notesStatusLabelAlternation renders the status labels StatusLabel
-// maps grades to as a regex alternation, one alternative per grade,
-// skipping a grade whose label is empty (the eligibility-only grades
-// no non-final row can carry).
+// notesStatusLabelAlternation renders the status labels as a regex alternation,
+// skipping the eligibility-only grades whose label is empty.
 func notesStatusLabelAlternation(grades []Grade) string {
 	var labels []string
 	for _, grade := range grades {
@@ -100,22 +94,19 @@ func notesStatusLabelAlternation(grades []Grade) string {
 
 var (
 	notesGradeRowPattern = regexp.MustCompile(`^- (` + notesAlternation(Surfaces) + `) ([a-z_]+): (` + notesStatusLabelAlternation(RowGrades) + `): (` + notesAlternation(RowGrades) + `)\b`)
-	// notesGradeRowCandidate matches the shape of a grade row - a known
-	// surface and capability, then a status label, then a grade -
-	// without constraining the label or the grade to the vocabulary. A
-	// row of this shape is held to the closed pattern rather than
-	// passing unexamined. A single-colon row is prose about a
-	// capability, not a grade, and does not match.
+	// notesGradeRowCandidate matches the shape of a grade row without
+	// constraining the label or grade to the vocabulary, so a row of this
+	// shape is held to the closed pattern rather than passing unexamined. A
+	// single-colon row is prose about a capability, not a grade.
 	notesGradeRowCandidate = regexp.MustCompile(`^- (` + notesAlternation(Surfaces) + `) ([a-z_]+): [^:]+: \S`)
 	notesVersionPattern    = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
 	notesDatePattern       = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 	notesEnvValuePattern   = regexp.MustCompile(`^[A-Z][A-Z0-9_]*=\S`)
 )
 
-// notesListEntries returns the list entries of one section: every line
-// opening with a list marker, with the marker stripped. Prose lines
-// carry no marker and are not entries, so a section may explain itself
-// without that explanation counting as a recorded case.
+// notesListEntries returns one section's list entries with the marker stripped.
+// Prose lines carry no marker and are not entries, so a section may explain
+// itself without that explanation counting as a recorded case.
 func notesListEntries(section []string) []string {
 	entries := make([]string, 0, len(section))
 	for _, line := range section {
@@ -126,12 +117,10 @@ func notesListEntries(section []string) []string {
 	return entries
 }
 
-// matchSectionEntries reports the first disagreement between a
-// section's own list entries and the entries the validated run
-// produced. The comparison runs both ways on purpose: requiring only
-// that every expected entry is present would let a document add a case
-// the run never recorded and still validate, which is the drift the
-// binding exists to catch.
+// matchSectionEntries reports the first disagreement between a section's list
+// entries and the entries the validated run produced. The comparison runs both
+// ways: requiring only that every expected entry is present would let a
+// document add a case the run never recorded and still validate.
 func matchSectionEntries(section string, got, want []string) error {
 	present := make(map[string]bool, len(got))
 	for _, entry := range got {
@@ -193,10 +182,9 @@ func ValidateNotes(document string, want NotesExpectation) error {
 	for i, line := range trimmed {
 		match := notesGradeRowPattern.FindStringSubmatch(line)
 		if match == nil {
-			// A row shaped like a grade but failing the closed pattern
-			// carries a label or grade outside the vocabulary. Skipping
-			// it would let a document state a contradictory grade and
-			// still validate, so the shape alone is enough to reject.
+			// A row shaped like a grade but failing the closed pattern carries a
+			// label or grade outside the vocabulary; skipping it would let a
+			// document state a contradictory grade and still validate.
 			if notesGradeRowCandidate.MatchString(line) {
 				return fmt.Errorf("notes line %d is shaped like a grade row but carries a status label or grade outside the vocabulary: %q", i+1, line)
 			}

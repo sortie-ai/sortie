@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// The synthetic identifiers every fixture uses. They are public test
-// values only: no credential, path, or captured runtime value.
+// The synthetic identifiers every fixture uses: public test values only, no
+// credential, path, or captured runtime value.
 const (
 	FixtureTime      = "2026-03-04T05:06:07Z"
 	FixtureAgentName = "fixture-agent"
@@ -24,49 +24,37 @@ const (
 	FixtureNotObserved  = "not_observed"
 )
 
-// FixtureSession builds the synthetic session identifier for one
-// named session on one Surface.
+// FixtureSession builds the synthetic session identifier for one named session
+// on one Surface.
 func FixtureSession(Surface Surface, name string) string {
 	return fmt.Sprintf("sess-%s-%s", Surface, name)
 }
 
-// Fixture is a complete, canonically ordered evidence set. The
-// qualified variant records every required observation; the
-// not_qualified variant records the protocol surface conflating the
-// runtime-refusal disposition and non-retryable-refusal retry Cases,
-// so it is measured and below rather than unmeasured; the unmeasured
-// variant leaves the protocol runtime-refusal disposition Case
-// unobserved; the declared_gap variant excludes that same Case and its
-// peer on every declarable Surface under an operator declaration; the
-// not_observed variant carries every record at grade and outcome
-// not_observed, so a collector can compose it with only the rows its
-// own inducers actually graded.
+// Fixture is a complete, canonically ordered evidence set. Each constructor
+// variant (qualified, not_qualified, unmeasured, declared_gap, not_observed)
+// records a different shape of the required observations.
 type Fixture struct {
 	Records []Record
 
-	// declared accumulates one DeclaredGap entry per distinct
-	// (capability, case) SetSemanticDeclaredGap rewrote, so
-	// Declarations can return the exact set the fixture's records
-	// assume.
+	// declared accumulates one DeclaredGap per distinct (capability, case)
+	// SetSemanticDeclaredGap rewrote, so Declarations can return the exact set
+	// the fixture's records assume.
 	declared []DeclaredGap
 
-	// absent is the set of surfaces this fixture was built to declare
-	// absent, so its records never cover them.
+	// absent is the set of surfaces this fixture declares absent, so its
+	// records never cover them.
 	absent []AbsentSurface
 
-	// variant is the constructor variant this fixture was built from,
-	// so Finalize and AppendIdentity can choose the not-observed
-	// runtime-identity record NewFixture(FixtureNotObserved, ...)
-	// requires over the qualified one every other variant adds.
+	// variant is the constructor variant, so Finalize and AppendIdentity choose
+	// the runtime-identity record the variant requires.
 	variant string
 }
 
-// NewFixture builds the non-final records of one variant in canonical
-// order, declaring every surface in absent as one the runtime does not
-// offer. An absent surface is not an unmeasured one: it carries no
-// records at all, and the comparison rows that would read it stand on
-// the protocol surface alone. The runtime-identity records are added
-// by Finalize.
+// NewFixture builds the non-final records of one variant in canonical order,
+// declaring every surface in absent as one the runtime does not offer. An
+// absent surface carries no records at all, and the comparison rows that would
+// read it stand on the protocol surface alone. Finalize adds the identity
+// records.
 func NewFixture(variant string, absent ...AbsentSurface) *Fixture {
 	f := &Fixture{absent: slices.Clone(absent), variant: variant}
 	if variant == FixtureNotObserved {
@@ -103,10 +91,9 @@ func NewFixture(variant string, absent ...AbsentSurface) *Fixture {
 	return f
 }
 
-// setProtocolRefusalGap rewrites the protocol surface's
-// runtime_refusal disposition record to a conflated gap while leaving
-// every other surface untouched, so the protocol disposition baseline
-// grades gap while the structured native reference stays usable.
+// setProtocolRefusalGap rewrites the protocol surface's runtime_refusal
+// disposition record to a conflated gap, so its baseline grades gap while the
+// structured native reference stays usable.
 func (f *Fixture) setProtocolRefusalGap() {
 	rec := f.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseRuntimeRefusal))
 	if rec == nil {
@@ -117,8 +104,8 @@ func (f *Fixture) setProtocolRefusalGap() {
 	f.UpdateSemanticBaseline(SurfaceProtocol, CapabilityTurnDisposition)
 }
 
-// base returns a Record stub with the fixed identity fields every
-// fixture Record shares.
+// base returns a Record stub with the fixed identity fields every fixture
+// Record shares.
 func (f *Fixture) base() Record {
 	return Record{
 		SchemaVersion: 1,
@@ -127,14 +114,13 @@ func (f *Fixture) base() Record {
 	}
 }
 
-// Add appends one Record.
 func (f *Fixture) Add(rec Record) {
 	f.Records = append(f.Records, rec)
 }
 
-// Finalize appends one runtime-identity record per distinct non-null
-// actual protocol session id referenced by the current records, sorts
-// the whole set into canonical order, and renumbers the sequences.
+// Finalize appends one runtime-identity record per distinct non-null actual
+// protocol session id the current records reference, sorts into canonical
+// order, and renumbers the sequences.
 func (f *Fixture) Finalize() {
 	referenced := map[string]bool{}
 	for i := range f.Records {
@@ -184,8 +170,8 @@ func (f *Fixture) FindFirst(match func(*Record) bool) *Record {
 	return nil
 }
 
-// Remove deletes the Record pointed to by target, which must be a
-// pointer into the fixture's own slice.
+// Remove deletes the Record pointed to by target, which must point into the
+// fixture's own slice.
 func (f *Fixture) Remove(target *Record) {
 	for i := range f.Records {
 		if &f.Records[i] == target {
@@ -203,7 +189,7 @@ func (f *Fixture) RemoveAll(match func(*Record) bool) {
 }
 
 // SetSemanticNotObserved rewrites one semantic Case as not observed and
-// rewrites the owning Capability's baseline to the newly derived Grade.
+// rewrites the owning Capability's baseline to the derived Grade.
 func (f *Fixture) SetSemanticNotObserved(Surface Surface, Capability Capability, caseID Case) {
 	rec := f.FindFirst(MatchSemantic(Surface, Capability, caseID))
 	if rec == nil {
@@ -217,8 +203,8 @@ func (f *Fixture) SetSemanticNotObserved(Surface Surface, Capability Capability,
 	f.UpdateSemanticBaseline(Surface, Capability)
 }
 
-// UpdateSemanticBaseline recomputes one Surface-Capability baseline from
-// that Capability's current Case records and writes the derived Grade.
+// UpdateSemanticBaseline recomputes one Surface-Capability baseline from that
+// Capability's current Case records and writes the derived Grade and outcome.
 func (f *Fixture) UpdateSemanticBaseline(Surface Surface, Capability Capability) {
 	var classes []Grade
 	for _, caseID := range CapabilityCases[Capability] {
@@ -236,11 +222,9 @@ func (f *Fixture) UpdateSemanticBaseline(Surface Surface, Capability Capability)
 }
 
 // SetSemanticDeclaredGap rewrites the named case's record on every
-// surface in DeclarableSurfaces to a declared gap with the given
-// reason, and rewrites each owning capability's baseline to the newly
-// derived grade. It applies the DeclaredGapPeers closure, so declaring
-// CaseRuntimeRefusal also rewrites CaseNonRetryableRefusal the same
-// way.
+// DeclarableSurfaces surface to a declared gap with reason, rewrites each
+// owning capability's baseline, and applies the DeclaredGapPeers closure so
+// declaring one case also rewrites its peer.
 func (f *Fixture) SetSemanticDeclaredGap(capability Capability, caseID Case, reason string) {
 	f.setSemanticDeclaredGapOne(capability, caseID, reason)
 	if peer, ok := DeclaredGapPeers[caseID]; ok {
@@ -248,11 +232,9 @@ func (f *Fixture) SetSemanticDeclaredGap(capability Capability, caseID Case, rea
 	}
 }
 
-// setSemanticDeclaredGapOne rewrites one case's declarable-surface
-// records and baselines, without applying the DeclaredGapPeers
-// closure. It never touches a surface this fixture also declares
-// absent, so a fixture cannot write a declared-gap record on a
-// surface it declared absent.
+// setSemanticDeclaredGapOne rewrites one case's declarable-surface records and
+// baselines, without the DeclaredGapPeers closure. It never touches a surface
+// this fixture also declares absent.
 func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, reason string) {
 	declarable := intersectSurfaces(DeclarableSurfaces, f.measured())
 	for _, surface := range declarable {
@@ -273,11 +255,10 @@ func (f *Fixture) setSemanticDeclaredGapOne(capability Capability, caseID Case, 
 	}
 }
 
-// recordDeclaration adds one declaration entry, or rewrites its reason
-// in place when the capability and case pair is already recorded. A
-// pair reaches here twice whenever the peer closure and a direct call
-// declare the same case, and DecodeRuntimeProfile rejects a duplicate
-// pair, so recording it twice would build a document the fixture's own
+// recordDeclaration adds one declaration entry, or rewrites its reason in place
+// when the pair is already recorded. A pair reaches here twice when the peer
+// closure and a direct call declare the same case; DecodeRuntimeProfile rejects
+// a duplicate pair, so recording it twice would build a document the fixture's
 // declared_gap records could never be authorized under.
 func (f *Fixture) recordDeclaration(capability Capability, caseID Case, reason string) {
 	for i := range f.declared {
@@ -289,22 +270,19 @@ func (f *Fixture) recordDeclaration(capability Capability, caseID Case, reason s
 	f.declared = append(f.declared, DeclaredGap{Capability: capability, Case: caseID, Reason: reason})
 }
 
-// Declarations returns the runtime profile the fixture's declared_gap
-// and absent-surface records were built from, so a control validates
-// against the exact profile the collector would have supplied. Every
-// other RuntimeProfile member stays at its zero value: no control in
-// this package reads them off a fixture-built profile.
+// Declarations returns the runtime profile the fixture's declared_gap and
+// absent-surface records were built from. Every other RuntimeProfile member
+// stays zero: no control in this package reads them off a fixture-built profile.
 func (f *Fixture) Declarations() RuntimeProfile {
 	return RuntimeProfile{Declarations: slices.Clone(f.declared), AbsentSurfaces: slices.Clone(f.absent)}
 }
 
-// measured returns the surfaces this fixture measures: the closed
-// measurable order minus every surface this fixture declares absent.
+// measured returns the surfaces this fixture measures: the closed measurable
+// order minus every surface it declares absent.
 func (f *Fixture) measured() []Surface {
 	return measuredSurfaces(f.Declarations())
 }
 
-// addWorkspaceSecurity adds the single aggregate workspace observation.
 func (f *Fixture) addWorkspaceSecurity() {
 	rec := f.base()
 	rec.Scenario = ScenarioWorkspaceSecurity
@@ -319,8 +297,6 @@ func (f *Fixture) addWorkspaceSecurity() {
 	f.Add(rec)
 }
 
-// addPolicyPrecondition adds the single policy-denial precondition
-// Record, referencing the protocol control session.
 func (f *Fixture) addPolicyPrecondition() {
 	rec := f.base()
 	rec.Scenario = ScenarioPolicyPrecondition
@@ -337,7 +313,6 @@ func (f *Fixture) addPolicyPrecondition() {
 	f.Add(rec)
 }
 
-// addSemanticProbes adds all 36 semantic records in canonical order.
 func (f *Fixture) addSemanticProbes() {
 	for _, Surface := range f.measured() {
 		for _, Capability := range []Capability{CapabilityTurnDisposition, CapabilityRetryClassification} {
@@ -348,10 +323,9 @@ func (f *Fixture) addSemanticProbes() {
 	}
 }
 
-// semanticRecord builds one semantic probe Record, Grading usable on
-// every Surface. Refusal retry records reuse the refusal disposition
-// session, and the protocol human-input Record reuses the permission
-// attempt session.
+// semanticRecord builds one semantic probe Record, Grading usable on every
+// Surface. Refusal retry records reuse the refusal disposition session, and the
+// protocol human-input Record reuses the permission attempt session.
 func (f *Fixture) semanticRecord(Surface Surface, Capability Capability, caseID Case) Record {
 	rec := f.base()
 	rec.Scenario = ScenarioSemanticProbe
@@ -378,11 +352,9 @@ func (f *Fixture) semanticRecord(Surface Surface, Capability Capability, caseID 
 	return rec
 }
 
-// semanticIdentity returns the session_id and evidence_path
-// semanticRecord assigns for one Surface-case tuple, factored into one
-// definition so SetSemanticDeclaredGap can restore exactly what
-// semanticRecord would have assigned, whatever a rewritten record
-// carried before.
+// semanticIdentity returns the session_id and evidence_path semanticRecord
+// assigns for one Surface-case tuple, factored out so SetSemanticDeclaredGap
+// can restore exactly what semanticRecord would have assigned.
 func semanticIdentity(Surface Surface, caseID Case) (sessionID, evidencePath string) {
 	switch {
 	case caseID == CaseRuntimeRefusal, caseID == CaseNonRetryableRefusal:
@@ -405,9 +377,8 @@ func semanticIdentity(Surface Surface, caseID Case) (sessionID, evidencePath str
 	return sessionID, evidencePath
 }
 
-// BaselineVerdictFor returns the Outcome a derived baseline Record
-// carries for its Grade: not_observed Grades are not_observed Outcomes,
-// every other Grade is a completed probe.
+// BaselineVerdictFor returns the Outcome a derived baseline Record carries for
+// its Grade: not_observed derives not_observed, every other Grade derives pass.
 func BaselineVerdictFor(classification Grade) Outcome {
 	if classification == GradeNotObserved {
 		return OutcomeNotObserved
@@ -445,9 +416,8 @@ func (f *Fixture) addBaselines() {
 	}
 }
 
-// addTokenInventories adds each measured Surface's token-bearing
-// paths. A Surface this fixture declares absent contributes no token
-// record, mirroring the other builders' measured-set iteration.
+// addTokenInventories adds each measured Surface's token-bearing paths. A
+// Surface declared absent contributes no token record.
 func (f *Fixture) addTokenInventories() {
 	for _, Surface := range f.measured() {
 		switch Surface {
@@ -474,7 +444,6 @@ func (f *Fixture) addTokenInventories() {
 	}
 }
 
-// tokenRecord builds one non-sentinel token inventory Record.
 func (f *Fixture) tokenRecord(Surface Surface, path string, Source Source, classification Grade, SessionID, Detail string) Record {
 	rec := f.base()
 	rec.Scenario = ScenarioTokenSource
@@ -497,7 +466,6 @@ func (f *Fixture) tokenRecord(Surface Surface, path string, Source Source, class
 	return rec
 }
 
-// addPermission adds the single protocol permission Record.
 func (f *Fixture) addPermission() {
 	rec := f.base()
 	rec.Scenario = ScenarioPermissionRequest
@@ -516,7 +484,6 @@ func (f *Fixture) addPermission() {
 	f.Add(rec)
 }
 
-// addToolServer adds the single protocol MCP delivery Record.
 func (f *Fixture) addToolServer() {
 	rec := f.base()
 	rec.Scenario = ScenarioToolServer
@@ -535,8 +502,6 @@ func (f *Fixture) addToolServer() {
 	f.Add(rec)
 }
 
-// addContinuation adds one seed and one confirmed same-session recall per
-// Surface.
 func (f *Fixture) addContinuation() {
 	for _, Surface := range f.measured() {
 		seedSession := FixtureSession(Surface, "seed")
@@ -585,7 +550,6 @@ func (f *Fixture) addContinuation() {
 	}
 }
 
-// addEndToEnd adds the single isolated end-to-end Record.
 func (f *Fixture) addEndToEnd() {
 	rec := f.base()
 	rec.Scenario = ScenarioEndToEnd
@@ -604,7 +568,6 @@ func (f *Fixture) addEndToEnd() {
 	f.Add(rec)
 }
 
-// addProcessCleanup adds the single aggregate cleanup Record.
 func (f *Fixture) addProcessCleanup() {
 	rec := f.base()
 	rec.Scenario = ScenarioProcessCleanup
@@ -619,15 +582,13 @@ func (f *Fixture) addProcessCleanup() {
 	f.Add(rec)
 }
 
-// notObservedDetail renders the label rule NewFixture(FixtureNotObserved,
-// ...) assigns every row outside the ones with their own closed detail
-// vocabulary (semantic probes and continuation recalls).
+// notObservedDetail renders the not-observed label for every row outside those
+// with their own closed detail vocabulary (semantic probes and continuation
+// recalls).
 func notObservedDetail(class RowClass) string {
 	return rowLabel(class) + " was not observed"
 }
 
-// addWorkspaceSecurityNotObserved adds the not-observed workspace
-// security Record.
 func (f *Fixture) addWorkspaceSecurityNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioWorkspaceSecurity
@@ -642,8 +603,6 @@ func (f *Fixture) addWorkspaceSecurityNotObserved() {
 	f.Add(rec)
 }
 
-// addPolicyPreconditionNotObserved adds the not-observed policy
-// precondition Record, referencing the protocol control session.
 func (f *Fixture) addPolicyPreconditionNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioPolicyPrecondition
@@ -660,10 +619,9 @@ func (f *Fixture) addPolicyPreconditionNotObserved() {
 	f.Add(rec)
 }
 
-// addSemanticProbesNotObserved adds all not-observed semantic records
-// in canonical order, built from semanticRecord so every field this
-// row class leaves unchanged (source, input_id, agent fields, protocol
-// version) tracks the qualified variant's own value.
+// addSemanticProbesNotObserved adds all not-observed semantic records, built
+// from semanticRecord so every field this row class leaves unchanged (source,
+// input_id, agent fields, protocol version) tracks the qualified variant.
 func (f *Fixture) addSemanticProbesNotObserved() {
 	for _, Surface := range f.measured() {
 		for _, Capability := range []Capability{CapabilityTurnDisposition, CapabilityRetryClassification} {
@@ -681,8 +639,8 @@ func (f *Fixture) addSemanticProbesNotObserved() {
 }
 
 // addBaselinesNotObserved adds the not-observed per-Surface Capability
-// summaries. The detail keeps the qualified variant's own wording: it
-// already describes the derivation, not an outcome.
+// summaries. The detail keeps the qualified variant's wording: it describes the
+// derivation, not an outcome.
 func (f *Fixture) addBaselinesNotObserved() {
 	for _, Surface := range f.measured() {
 		for _, Capability := range comparisonCapabilities {
@@ -701,9 +659,9 @@ func (f *Fixture) addBaselinesNotObserved() {
 	}
 }
 
-// addTokenInventoriesNotObserved adds one not-observed token sentinel
-// per measured Surface: a not-observed fixture never fabricates a
-// token-bearing path.
+// addTokenInventoriesNotObserved adds one not-observed token sentinel per
+// measured Surface: a not-observed fixture never fabricates a token-bearing
+// path.
 func (f *Fixture) addTokenInventoriesNotObserved() {
 	for _, Surface := range f.measured() {
 		rec := f.base()
@@ -719,8 +677,6 @@ func (f *Fixture) addTokenInventoriesNotObserved() {
 	}
 }
 
-// addPermissionNotObserved adds the not-observed protocol permission
-// Record.
 func (f *Fixture) addPermissionNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioPermissionRequest
@@ -739,8 +695,6 @@ func (f *Fixture) addPermissionNotObserved() {
 	f.Add(rec)
 }
 
-// addToolServerNotObserved adds the not-observed protocol MCP delivery
-// Record.
 func (f *Fixture) addToolServerNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioToolServer
@@ -759,10 +713,9 @@ func (f *Fixture) addToolServerNotObserved() {
 	f.Add(rec)
 }
 
-// addContinuationNotObserved adds one not-observed seed and one
-// not-observed recall per measured Surface, the recall's
-// prior_session_id resolving to that Surface's own seed session so
-// checkContinuationRelations is satisfied from construction.
+// addContinuationNotObserved adds one not-observed seed and recall per measured
+// Surface, the recall's prior_session_id resolving to that Surface's own seed
+// session so checkContinuationRelations is satisfied from construction.
 func (f *Fixture) addContinuationNotObserved() {
 	for _, Surface := range f.measured() {
 		seedSession := FixtureSession(Surface, "seed")
@@ -810,8 +763,6 @@ func (f *Fixture) addContinuationNotObserved() {
 	}
 }
 
-// addEndToEndNotObserved adds the not-observed isolated end-to-end
-// Record.
 func (f *Fixture) addEndToEndNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioEndToEnd
@@ -830,8 +781,6 @@ func (f *Fixture) addEndToEndNotObserved() {
 	f.Add(rec)
 }
 
-// addProcessCleanupNotObserved adds the not-observed aggregate cleanup
-// Record.
 func (f *Fixture) addProcessCleanupNotObserved() {
 	rec := f.base()
 	rec.Scenario = ScenarioProcessCleanup
@@ -872,8 +821,8 @@ func MatchContinuation(Surface Surface, InputID InputID) func(*Record) bool {
 	}
 }
 
-// WriteEvidenceFile serializes records as UTF-8 JSON Lines under
-// the test's temporary directory and returns the file path.
+// WriteEvidenceFile serializes records as UTF-8 JSON Lines under the test's
+// temporary directory and returns the file path.
 func WriteEvidenceFile(T *testing.T, records []Record) string {
 	T.Helper()
 	dir := filepath.Join(T.TempDir(), "qualification")
@@ -895,8 +844,8 @@ func WriteEvidenceFile(T *testing.T, records []Record) string {
 	return path
 }
 
-// WriteFinalEvidenceFile serializes a non-final set plus the single
-// terminal aggregate Record and returns the file path.
+// WriteFinalEvidenceFile serializes a non-final set plus the terminal aggregate
+// Record and returns the file path.
 func WriteFinalEvidenceFile(T *testing.T, records []Record, classification Grade) string {
 	T.Helper()
 	complete := append(slices.Clone(records), aggregateFixtureRecord(classification))
@@ -906,8 +855,8 @@ func WriteFinalEvidenceFile(T *testing.T, records []Record, classification Grade
 	return WriteEvidenceFile(T, complete)
 }
 
-// RequireObservationVerdict validates a first-pass file and fails T
-// unless it validates with the wanted Verdict.
+// RequireObservationVerdict validates a first-pass file and fails T unless it
+// validates with the wanted Verdict.
 func RequireObservationVerdict(T *testing.T, path string, wantVerdict Verdict) {
 	T.Helper()
 	v, err := ValidateObservations(path)
@@ -920,8 +869,8 @@ func RequireObservationVerdict(T *testing.T, path string, wantVerdict Verdict) {
 	}
 }
 
-// IdentityFixtureRecord builds one runtime-identity record for one
-// actual protocol session.
+// IdentityFixtureRecord builds one runtime-identity record for one actual
+// protocol session.
 func IdentityFixtureRecord(SessionID string) Record {
 	return Record{
 		SchemaVersion:   1,
@@ -943,9 +892,8 @@ func IdentityFixtureRecord(SessionID string) Record {
 	}
 }
 
-// identityFixtureRecordNotObserved builds one not-observed
-// runtime-identity record for one actual protocol session: the id is
-// inferred from another record's own reference, but the handshake
+// identityFixtureRecordNotObserved builds one not-observed runtime-identity
+// record: the id is inferred from another record's reference, but the handshake
 // that would confirm the agent's name and version was not observed.
 func identityFixtureRecordNotObserved(SessionID string) Record {
 	return Record{
@@ -968,8 +916,7 @@ func identityFixtureRecordNotObserved(SessionID string) Record {
 	}
 }
 
-// aggregateFixtureRecord builds the terminal qualification Record
-// with the given classification.
+// aggregateFixtureRecord builds the terminal qualification Record.
 func aggregateFixtureRecord(classification Grade) Record {
 	return Record{
 		SchemaVersion: 1,
@@ -1001,10 +948,9 @@ func RequireFinalVerdict(T *testing.T, path string, wantVerdict Verdict) {
 	}
 }
 
-// SetTokenSentinel replaces one Surface's token inventory with the single
-// sentinel Record: a zero-Source success when failed is false and a
-// failed inventory otherwise. The token baseline is rewritten to the
-// derived Grade.
+// SetTokenSentinel replaces one Surface's token inventory with the sentinel
+// Record: a zero-Source success when failed is false, a failed inventory
+// otherwise, rewriting the token baseline to the derived Grade.
 func (f *Fixture) SetTokenSentinel(Surface Surface, failed bool) {
 	f.RemoveAll(matchTokenSurface(Surface))
 	sentinel := f.base()
@@ -1034,15 +980,12 @@ func (f *Fixture) SetTokenSentinel(Surface Surface, failed bool) {
 	}
 }
 
-// matchTokenSurface matches one Surface's token inventory records.
 func matchTokenSurface(Surface Surface) func(*Record) bool {
 	return func(rec *Record) bool {
 		return rec.Scenario == ScenarioTokenSource && rec.Surface == Surface
 	}
 }
 
-// matchToolServer matches the single protocol MCP delivery Record
-// addToolServer seeded.
 func matchToolServer() func(*Record) bool {
 	return func(rec *Record) bool {
 		return rec.Scenario == ScenarioToolServer && rec.Surface == SurfaceProtocol &&
@@ -1050,11 +993,9 @@ func matchToolServer() func(*Record) bool {
 	}
 }
 
-// matchPermission matches the single protocol permission Record
-// addPermission seeded. It does not match addPolicyPrecondition's
-// record: that record classifies as a policy-precondition row rather
-// than a graded permission-handling row, so ConclusionsFromRecords
-// never reads it as one.
+// matchPermission matches the single protocol permission Record. It does not
+// match addPolicyPrecondition's record, which classifies as a
+// policy-precondition row rather than a graded permission-handling row.
 func matchPermission() func(*Record) bool {
 	return func(rec *Record) bool {
 		return rec.Scenario == ScenarioPermissionRequest && rec.Surface == SurfaceProtocol &&
@@ -1063,8 +1004,8 @@ func matchPermission() func(*Record) bool {
 }
 
 // boundDetail truncates detail to DetailBound Unicode code points, so a
-// caller-supplied observation description cannot make a rewritten
-// Record fail the decoder's own length check.
+// caller-supplied description cannot make a rewritten Record fail the decoder's
+// length check.
 func boundDetail(detail string) string {
 	runes := []rune(detail)
 	if len(runes) <= DetailBound {
@@ -1154,9 +1095,9 @@ func (f *Fixture) SetSessionContinuation(surface Surface, grade Grade, detail st
 	}
 }
 
-// SetTokenCorroborationOnly rewrites every non-sentinel token Record of
-// one Surface to corroboration_only and the token baseline to gap, so
-// the inventory completed but supplied no contract-usable Source.
+// SetTokenCorroborationOnly rewrites every non-sentinel token Record of one
+// Surface to corroboration_only and the token baseline to gap: the inventory
+// completed but supplied no contract-usable Source.
 func (f *Fixture) SetTokenCorroborationOnly(Surface Surface) {
 	for i := range f.Records {
 		rec := &f.Records[i]
@@ -1182,8 +1123,8 @@ func (f *Fixture) DuplicateAfter(target *Record) {
 }
 
 // AppendIdentity adds one runtime-identity record for SessionID at its
-// canonical position. Controls that introduce a new actual protocol
-// session id after Finalize call this to keep the identity set complete.
+// canonical position, for controls that introduce a new actual protocol session
+// id after Finalize.
 func (f *Fixture) AppendIdentity(SessionID string) {
 	f.Add(f.identityRecord(SessionID))
 	slices.SortStableFunc(f.Records, OrderCompare)
@@ -1201,8 +1142,8 @@ func TokenRecordCount(records []Record) int {
 	return count
 }
 
-// ProtocolSessionCount counts the distinct non-null actual protocol
-// session ids a record set references.
+// ProtocolSessionCount counts the distinct non-null actual protocol session ids
+// a record set references.
 func ProtocolSessionCount(records []Record) int {
 	ids := map[string]bool{}
 	for i := range records {
@@ -1214,22 +1155,19 @@ func ProtocolSessionCount(records []Record) int {
 	return len(ids)
 }
 
-// ComparisonCapabilities is the set of capabilities measured in
-// comparison scenarios. It is a copy of the list the validator itself
-// reads rather than a second declaration of the same members, so a
-// collector iterating this set cannot come to measure a set the
-// cardinality rules no longer enforce.
+// ComparisonCapabilities is the set of capabilities measured in comparison
+// scenarios. It is a copy of the list the validator reads, so a collector
+// iterating it cannot come to measure a set the cardinality rules no longer
+// enforce.
 var ComparisonCapabilities = slices.Clone(comparisonCapabilities)
 
-// measuredSurfaces returns the surfaces one offline evidence pass
-// measures: the closed measurable order minus every surface the
-// profile declares absent. It is total: the zero RuntimeProfile
-// returns all three.
+// measuredSurfaces returns the surfaces one offline evidence pass measures: the
+// closed measurable order minus every surface the profile declares absent. The
+// zero RuntimeProfile returns all three.
 //
-// This differs from RuntimeProfile.MeasuredSurfaces, which reads a
-// live profile's own entry_points: the offline evidence validator and
-// this package's fixtures work from a profile's declarations alone and
-// have no launched entry point to consult.
+// It differs from RuntimeProfile.MeasuredSurfaces, which reads a live profile's
+// entry_points: the offline validator and this package's fixtures work from a
+// profile's declarations alone.
 func measuredSurfaces(profile RuntimeProfile) []Surface {
 	surfaces := make([]Surface, 0, len(measurableSurfaces))
 	for _, surface := range measurableSurfaces {
@@ -1240,8 +1178,7 @@ func measuredSurfaces(profile RuntimeProfile) []Surface {
 	return surfaces
 }
 
-// ReadEvidenceFile reads a JSONL evidence file and strictly decodes
-// all records.
+// ReadEvidenceFile reads a JSONL evidence file and strictly decodes all records.
 func ReadEvidenceFile(path string) ([]Record, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // the caller supplies a path to a file it wrote under its own temp directory
 	if err != nil {

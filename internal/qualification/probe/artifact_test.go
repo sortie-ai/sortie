@@ -13,18 +13,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
-// Compile-time proof that the fakes below satisfy the interfaces
-// checkNotesConsistency and enforceNotesConsistency depend on, so a
-// signature drift on either interface fails this package's build
-// instead of silently narrowing what the fakes exercise.
 var (
 	_ notesConsistencyReporter = (*fakeNotesReporter)(nil)
 	_ testingT                 = (*fakeTestingT)(nil)
 )
 
-// TestWriteEvidenceRecords proves the written file decodes back to
-// the exact records handed in, and that a write to an unwritable path
-// reports its error.
 func TestWriteEvidenceRecords(t *testing.T) {
 	t.Parallel()
 
@@ -62,9 +55,6 @@ func TestWriteEvidenceRecords(t *testing.T) {
 	})
 }
 
-// TestWriteMeasurement proves the written file decodes back to the
-// exact measurement handed in, and that a write to an unwritable path
-// reports its error.
 func TestWriteMeasurement(t *testing.T) {
 	t.Parallel()
 
@@ -153,9 +143,6 @@ func (f *fakeNotesReporter) Fatalf(format string, args ...any) {
 	f.calls = append(f.calls, format)
 }
 
-// notesConsistencyExpectation is a small NotesExpectation exactly one
-// grade wide, paired with notesConsistencyDocument, which renders a
-// notes document satisfying it exactly.
 func notesConsistencyExpectation() qualification.NotesExpectation {
 	return qualification.NotesExpectation{
 		Verdict: qualification.VerdictQualified,
@@ -170,9 +157,6 @@ func notesConsistencyExpectation() qualification.NotesExpectation {
 	}
 }
 
-// notesConsistencyDocument renders a notes document satisfying
-// notesConsistencyExpectation() exactly, so a caller can mutate one
-// line to build a document that disagrees.
 func notesConsistencyDocument(verdict qualification.Verdict) string {
 	return "# Fixture runtime adapter notes\n\n" +
 		"Eligibility: " + string(verdict) + "\n\n" +
@@ -187,9 +171,6 @@ func notesConsistencyDocument(verdict qualification.Verdict) string {
 		qualification.NotesScopeStatement + ".\n"
 }
 
-// TestCheckNotesConsistency covers the four-state notes-binding
-// decision table: absent and required, absent and not required,
-// unreadable, and readable, split into agreeing and disagreeing.
 func TestCheckNotesConsistency(t *testing.T) {
 	t.Parallel()
 
@@ -249,9 +230,6 @@ func TestCheckNotesConsistency(t *testing.T) {
 	}
 }
 
-// fakeTestingT implements testingT over a fakeNotesReporter, so
-// enforceNotesConsistency's own binding onto os.ReadFile can be driven
-// without a *testing.T subject.
 type fakeTestingT struct {
 	fakeNotesReporter
 }

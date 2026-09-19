@@ -10,11 +10,6 @@ import (
 	"testing"
 )
 
-// validProfileDoc returns a fresh, decode-clean runtime profile
-// document as a generic JSON tree, so every field is reachable for
-// targeted mutation regardless of nesting depth. Every call allocates
-// its own maps and slices: callers mutate the result freely without
-// aliasing another subtest's fixture.
 func validProfileDoc() map[string]any {
 	return map[string]any{
 		"schema_version":        3,
@@ -58,9 +53,6 @@ func validProfileDoc() map[string]any {
 	}
 }
 
-// cloneProfileDoc round-trips doc through JSON so the clone carries
-// its own maps and slices at every depth, leaving doc itself
-// untouched for the next subtest.
 func cloneProfileDoc(t *testing.T, doc map[string]any) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(doc)
@@ -74,9 +66,6 @@ func cloneProfileDoc(t *testing.T, doc map[string]any) map[string]any {
 	return clone
 }
 
-// marshalProfileDoc fails t rather than returning an error a caller
-// must check, since every caller here treats a marshal failure of an
-// in-memory map as a test-fixture bug, not a case under test.
 func marshalProfileDoc(t *testing.T, doc map[string]any) []byte {
 	t.Helper()
 	data, err := json.Marshal(doc)
@@ -86,9 +75,6 @@ func marshalProfileDoc(t *testing.T, doc map[string]any) []byte {
 	return data
 }
 
-// TestDecodeRuntimeProfile covers DecodeRuntimeProfile's rejection
-// rules: one subtest per rejected case, plus a baseline confirming
-// the valid fixture itself decodes cleanly.
 func TestDecodeRuntimeProfile(t *testing.T) {
 	t.Parallel()
 
@@ -190,8 +176,8 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			},
 		},
 		{
-			// The recognizer goes with it, so the surface's absence
-			// from entry_points is the only rule left to reject it.
+			// The recognizer goes with it, so absence from entry_points is the
+			// only rule left to reject the surface.
 			name: "entry_points missing a measurable native surface is rejected",
 			mutate: func(doc map[string]any) {
 				delete(doc["entry_points"].(map[string]any), "native_stream_json")
@@ -373,9 +359,6 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 	}
 }
 
-// TestRuntimeProfileDigest confirms Digest is stable across a
-// reformatted encoding of the same decoded value and moves on a
-// one-field edit.
 func TestRuntimeProfileDigest(t *testing.T) {
 	t.Parallel()
 
@@ -411,8 +394,6 @@ func TestRuntimeProfileDigest(t *testing.T) {
 	}
 }
 
-// mustWriteFile creates path's parent directories as needed and writes
-// content, failing t on any error.
 func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -423,16 +404,11 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 }
 
-// validPublishedSample is a minimal workflow front-matter document
-// satisfying ReadRuntimeProfileFile's published_sample rule:
-// agent.kind is agent-client-protocol and agent.command carries an
+// validPublishedSample satisfies ReadRuntimeProfileFile's published_sample
+// rule: agent.kind is agent-client-protocol and agent.command carries an
 // element past element zero.
 const validPublishedSample = "---\nagent:\n  kind: agent-client-protocol\n  command: sample-runtime --acp\n---\nbody\n"
 
-// writeFakeRepo writes a synthetic repository root at root: a go.mod
-// marker and the three files sampleRuntimeProfileDoc's own paths name,
-// so ReadRuntimeProfileFile's file-existence and published sample
-// checks succeed against it.
 func writeFakeRepo(t *testing.T, root string) {
 	t.Helper()
 	mustWriteFile(t, filepath.Join(root, "go.mod"), "module fixture\n\ngo 1.24\n")
@@ -441,9 +417,6 @@ func writeFakeRepo(t *testing.T, root string) {
 	mustWriteFile(t, filepath.Join(root, "examples", "WORKFLOW.sample.md"), validPublishedSample)
 }
 
-// nestedPath joins depth synthetic path segments onto root, so a
-// caller can place a fixture file an arbitrary number of directories
-// below it.
 func nestedPath(root string, depth int, leaf string) string {
 	segments := []string{root}
 	for i := range depth {
@@ -453,9 +426,6 @@ func nestedPath(root string, depth int, leaf string) string {
 	return filepath.Join(segments...)
 }
 
-// TestReadRuntimeProfileFile covers ReadRuntimeProfileFile's own
-// rejection rules: repository-root resolution at two nesting depths,
-// and one subtest per rejected case.
 func TestReadRuntimeProfileFile(t *testing.T) {
 	t.Parallel()
 
@@ -581,10 +551,8 @@ func TestReadRuntimeProfileFile(t *testing.T) {
 	})
 }
 
-// firstValueRecognizer and discriminatedRecognizer are read-only
-// fixtures covering TerminalLocator's two modes. Neither Terminal call
-// mutates its receiver, so sharing them across parallel subtests is
-// safe.
+// firstValueRecognizer and discriminatedRecognizer are read-only fixtures;
+// Terminal never mutates its receiver, so parallel subtests may share them.
 var (
 	firstValueRecognizer = Recognizer{
 		Locator:       TerminalLocator{Mode: "first_value"},
@@ -603,9 +571,8 @@ var (
 		StatusEndTurn: []string{"end_turn", "success", "completed"},
 	}
 
-	// A runtime that discriminates on the outer value and carries the
-	// terminal members one level below it, which is the shape a flat
-	// locator cannot read at all.
+	// A runtime discriminating on the outer value and carrying the terminal
+	// members one level below it, a shape a flat locator cannot read.
 	envelopedRecognizer = Recognizer{
 		Locator: TerminalLocator{
 			Mode:               "discriminated",
@@ -618,10 +585,6 @@ var (
 	}
 )
 
-// TestRecognizerTerminal covers Recognizer.Terminal against both
-// TerminalLocator modes, reimplementing the two structured-surface
-// terminal-recognition arms this package's driver now expresses
-// generically as profile data.
 func TestRecognizerTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -774,10 +737,6 @@ func TestRecognizerModelRequestsEmptyPath(t *testing.T) {
 	}
 }
 
-// TestRuntimeProfileAskingArgs confirms the asking posture is read from
-// the profile rather than derived from the graded launch, and that a
-// profile stating none reports so instead of returning a launch the
-// caller would have to guess at.
 func TestRuntimeProfileAskingArgs(t *testing.T) {
 	t.Parallel()
 

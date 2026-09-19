@@ -15,12 +15,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The four capability-gap labels a profile's capability_gap_labels
-// member may name. They mirror internal/agent/clientprotocol's own
-// unexported capability-record labels; this package stays a leaf and
-// cannot import that package, so the four strings are pinned here as
-// their own source of truth and cross-checked against the adapter's
-// labels by the capability-record drift check.
+// The four capability-gap labels a profile's capability_gap_labels member may
+// name. They mirror internal/agent/clientprotocol's own unexported labels;
+// this package stays a leaf and cannot import that package, so the strings are
+// pinned here and cross-checked by the capability-record drift check.
 const (
 	capabilityGapLabelToolServers         = "tool servers"
 	capabilityGapLabelTokenCounts         = "token counts"
@@ -28,8 +26,6 @@ const (
 	capabilityGapLabelAgentVersion        = "agent version"
 )
 
-// capabilityGapLabels is the closed set capability_gap_labels draws
-// from.
 var capabilityGapLabels = []string{
 	capabilityGapLabelToolServers, capabilityGapLabelTokenCounts,
 	capabilityGapLabelSessionContinuation, capabilityGapLabelAgentVersion,
@@ -50,19 +46,14 @@ type AbsentSurface struct {
 	Reason  string  `json:"reason"`
 }
 
-// declaredGapFields is the exact set of member names one declaration
-// entry may carry.
 var declaredGapFields = map[string]bool{
 	"capability": true, "case": true, "reason": true,
 }
 
-// absentSurfaceFields is the exact set of member names one
-// absent-surface entry may carry.
 var absentSurfaceFields = map[string]bool{
 	"surface": true, "reason": true,
 }
 
-// decodeDeclaredGapEntry strictly decodes one declaration entry.
 func decodeDeclaredGapEntry(raw map[string]json.RawMessage) (DeclaredGap, error) {
 	for name := range raw {
 		if !declaredGapFields[name] {
@@ -103,7 +94,6 @@ func decodeDeclaredGapEntry(raw map[string]json.RawMessage) (DeclaredGap, error)
 	return DeclaredGap{Capability: capability, Case: caseID, Reason: reason}, nil
 }
 
-// decodeAbsentSurfaceEntry strictly decodes one absent-surface entry.
 func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, error) {
 	for name := range raw {
 		if !absentSurfaceFields[name] {
@@ -135,48 +125,39 @@ func decodeAbsentSurfaceEntry(raw map[string]json.RawMessage) (AbsentSurface, er
 	return AbsentSurface{Surface: surface, Reason: reason}, nil
 }
 
-// EntryPoint is one surface's argument vector for a graded launch,
-// appended to the resolved command path. Placeholders "{model}",
-// "{policy}", and "{prompt}" are substituted positionally; any other
-// brace-delimited token is rejected at decode time. The
-// published-posture probe is launched from a profile's PublishedSample
-// instead and carries none of these args.
+// EntryPoint is one surface's argument vector for a graded launch, appended to
+// the resolved command path. Placeholders "{model}", "{policy}", and "{prompt}"
+// are substituted positionally; any other brace-delimited token is rejected at
+// decode time.
 type EntryPoint struct {
 	Args []string `json:"args"`
 
-	// AskingArgs is the same launch under the posture that asks before
-	// running a tool, for the surface whose permission handling is
-	// induced. It is stated rather than derived from Args: which
-	// element is the posture switch is not recoverable from an argument
-	// vector, a runtime may spell it in several tokens or not last, and
-	// on one shipped profile the trailing element is the protocol
-	// switch itself. Empty means the runtime's asking posture is
-	// unknown, and permission handling is then unmeasured rather than
-	// induced against a launch nobody verified.
+	// AskingArgs is the same launch under the posture that asks before running
+	// a tool. It is stated rather than derived from Args: which element is the
+	// posture switch is not recoverable from an argument vector. Empty leaves
+	// permission handling unmeasured rather than induced against an unverified
+	// launch.
 	AskingArgs []string `json:"asking_args,omitempty"`
 }
 
-// TerminalLocator selects the terminal object out of a native
-// surface's decoded top-level JSON values.
+// TerminalLocator selects the terminal object out of a native surface's decoded
+// top-level JSON values.
 type TerminalLocator struct {
 	// Mode is "first_value" or "discriminated".
 	Mode               string `json:"mode"`
 	DiscriminatorKey   string `json:"discriminator_key"`
 	DiscriminatorValue string `json:"discriminator_value"`
 
-	// EnvelopePath descends from the located value to the object
-	// carrying the terminal members, for a runtime that wraps its
-	// payload one or more levels below the value the locator selects.
-	// Empty leaves the located value itself as the terminal object,
-	// which is what a runtime with a flat terminal needs, so it is
-	// omitted from the encoded form and never moves such a profile's
-	// digest.
+	// EnvelopePath descends from the located value to the object carrying the
+	// terminal members, for a runtime that wraps its payload below the located
+	// value. Empty leaves the located value as the terminal object, so it is
+	// omitted from the encoded form and never moves such a profile's digest.
 	EnvelopePath []string `json:"envelope_path,omitempty"`
 }
 
-// Recognizer maps one structured native surface's own output onto a
-// terminal outcome. A surface whose output carries no terminal member
-// carries no recognizer.
+// Recognizer maps one structured native surface's output onto a terminal
+// outcome. A surface whose output carries no terminal member carries no
+// recognizer.
 type Recognizer struct {
 	Locator       TerminalLocator `json:"locator"`
 	ErrorMembers  []string        `json:"error_members"`
@@ -185,11 +166,9 @@ type Recognizer struct {
 	StatusCases   map[string]Case `json:"status_cases"`
 	StatusEndTurn []string        `json:"status_end_turn"`
 
-	// ModelRequestPath is a nested key sequence into the terminal
-	// object, read for the model-request reading. It stays an explicit
-	// key sequence rather than a path-expression string, so no
-	// path-expression grammar enters the schema for what is otherwise a
-	// single flat lookup.
+	// ModelRequestPath is a nested key sequence into the terminal object, read
+	// for the model-request reading. It stays an explicit key sequence so no
+	// path-expression grammar enters the schema for a single flat lookup.
 	ModelRequestPath []string `json:"model_request_path"`
 }
 
@@ -203,10 +182,9 @@ type Terminal struct {
 	Case    Case
 }
 
-// RuntimeProfile is the operator's runtime profile document: everything
-// about one runtime the live probe needs, and nothing about the host it
-// runs on. It absorbs the declaration document it supersedes:
-// Declarations and AbsentSurfaces carry that document's own fields.
+// RuntimeProfile is the operator's runtime profile document: everything about
+// one runtime the live probe needs, and nothing about the host it runs on.
+// Declarations and AbsentSurfaces carry the declaration document it supersedes.
 type RuntimeProfile struct {
 	SchemaVersion   int      `json:"schema_version"` // exactly 3
 	RuntimeID       string   `json:"runtime_id"`     // e.g. "gemini-cli"
@@ -229,10 +207,9 @@ type RuntimeProfile struct {
 }
 
 // Measurement is the tracked artifact one live run produces: the notes
-// expectation, the digest of the profile the run used, and the run's
-// UTC measurement date. The date is machine-read data rather than
-// notes prose because qualification.ValidateNotes rejects a notes line
-// carrying a date.
+// expectation, the digest of the profile used, the run's UTC measurement date,
+// and a link to its provenance. The date is machine-read data rather than notes
+// prose because ValidateNotes rejects a notes line carrying a date.
 type Measurement struct {
 	SchemaVersion int              `json:"schema_version"` // exactly 1
 	ProfileDigest string           `json:"profile_digest"`
@@ -240,8 +217,6 @@ type Measurement struct {
 	Expectation   NotesExpectation `json:"expectation"`
 }
 
-// entryPointPlaceholders is the closed set of brace-delimited tokens
-// an EntryPoint.Args or PublishedSample model_args entry may carry.
 var entryPointPlaceholders = []string{"{model}", "{policy}", "{prompt}"}
 
 // runtimeProfileFields is the exact set of member names a runtime
@@ -284,13 +259,11 @@ var recognizerFields = func() map[string]bool {
 	return fields
 }()
 
-// DecodeRuntimeProfile strictly decodes a runtime profile document. It
-// rejects unknown and missing fields at every level, mirroring
-// its own strict discipline, and enforces every stage-D
-// validation rule: schema_version, identity_tokens, tool_name_format,
-// model_args, capability_gap_labels, entry_points, recognizers,
-// status_cases/status_end_turn, and the declarations/absent_surfaces
-// rules the declaration document already enforced.
+// DecodeRuntimeProfile strictly decodes a runtime profile document, rejecting
+// unknown and missing fields at every level and enforcing every validation
+// rule on schema_version, identity_tokens, tool_name_format, model_args,
+// capability_gap_labels, entry_points, recognizers, status_cases/status_end_turn,
+// and the declarations/absent_surfaces rules.
 func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
@@ -403,11 +376,10 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 		}
 	}
 
-	// The evidence fixture seeds a baseline row for every measurable
-	// surface a profile does not declare absent, while the summary
-	// sizes that same set out of entry_points. A surface left out of
-	// both is counted by one rule and not the other, which surfaces
-	// far downstream as a baseline-count mismatch naming no cause.
+	// The evidence fixture seeds a baseline row for every measurable surface a
+	// profile does not declare absent, while the summary sizes that set out of
+	// entry_points. A surface left out of both is counted by one rule and not
+	// the other, surfacing far downstream as a baseline-count mismatch.
 	for _, surface := range measurableSurfaces {
 		if _, ok := profile.EntryPoints[surface]; !ok {
 			return RuntimeProfile{}, fmt.Errorf("entry_points is missing %q: every measurable surface needs one, and a surface the runtime does not offer carries an entry point plus an absent_surfaces declaration rather than being left out", surface)
@@ -429,8 +401,6 @@ func validatePlaceholders(value string, required, allowed []string) error {
 	return rejectUnknownPlaceholders(value, allowed)
 }
 
-// rejectUnknownPlaceholders reports an error naming the first
-// brace-delimited token in value that is not a member of allowed.
 func rejectUnknownPlaceholders(value string, allowed []string) error {
 	rest := value
 	for {
@@ -450,9 +420,6 @@ func rejectUnknownPlaceholders(value string, allowed []string) error {
 	}
 }
 
-// validatePlaceholderArgs applies validatePlaceholders across every
-// element of an argument vector, so a single string need not carry
-// every required placeholder itself.
 func validatePlaceholderArgs(args, required, allowed []string) error {
 	joined := strings.Join(args, "\x00")
 	for _, token := range required {
@@ -468,9 +435,6 @@ func validatePlaceholderArgs(args, required, allowed []string) error {
 	return nil
 }
 
-// validateCapabilityGapLabels rejects a label list that is not sorted,
-// carries a duplicate, names a label outside capabilityGapLabels, or
-// omits capabilityGapLabelTokenCounts.
 func validateCapabilityGapLabels(labels []string) error {
 	if !slices.IsSorted(labels) {
 		return fmt.Errorf("%v must be sorted", labels)
@@ -541,10 +505,6 @@ func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 	return entries, nil
 }
 
-// validatePlaceholderArgsAllowed rejects an argument vector carrying a
-// brace-delimited token outside entryPointPlaceholders. Every
-// placeholder is optional here: a surface's own args need carry only
-// the ones its launch actually substitutes.
 func validatePlaceholderArgsAllowed(args []string) error {
 	for _, arg := range args {
 		if err := rejectUnknownPlaceholders(arg, entryPointPlaceholders); err != nil {
@@ -554,9 +514,6 @@ func validatePlaceholderArgsAllowed(args []string) error {
 	return nil
 }
 
-// structuredNativeSurfaces returns the members of entryPoints that are
-// neither the protocol surface nor the cross-surface aggregate: the
-// surfaces a recognizer may exist for.
 func structuredNativeSurfaces(entryPoints map[Surface]EntryPoint) []Surface {
 	var surfaces []Surface
 	for surface := range entryPoints {
@@ -600,7 +557,6 @@ func decodeRecognizers(raw json.RawMessage, entryPoints map[Surface]EntryPoint) 
 	return recognizers, nil
 }
 
-// decodeRecognizerEntry strictly decodes one recognizer entry.
 func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error) {
 	for name := range fields {
 		if !recognizerFields[name] {
@@ -679,12 +635,6 @@ func decodeStringOrEmpty(raw json.RawMessage, dst *string) error {
 	return json.Unmarshal(raw, dst)
 }
 
-// decodeDeclarationFields decodes the declarations and absent_surfaces
-// members with the rules the declaration document this type absorbed
-// used to enforce: capability and case membership, reason membership,
-// no duplicate capability-and-case pair, DeclaredGapPeers satisfied in
-// both directions, surface membership in DeclarableAbsentSurfaces, and
-// no surface declared absent twice.
 func decodeDeclarationFields(top map[string]json.RawMessage) ([]DeclaredGap, []AbsentSurface, error) {
 	var rawEntries []map[string]json.RawMessage
 	if err := json.Unmarshal(top["declarations"], &rawEntries); err != nil {
@@ -742,12 +692,8 @@ func decodeDeclarationFields(top map[string]json.RawMessage) ([]DeclaredGap, []A
 	return declarations, absentSurfaces, nil
 }
 
-// repositoryRootMarker is the file DecodeRuntimeProfile's location
-// resolver ascends toward.
 const repositoryRootMarker = "go.mod"
 
-// resolveRepositoryRoot ascends from the directory holding path to the
-// nearest ancestor carrying repositoryRootMarker.
 func resolveRepositoryRoot(path string) (string, error) {
 	dir, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
@@ -760,9 +706,9 @@ func resolveRepositoryRoot(path string) (string, error) {
 	return root, nil
 }
 
-// RepositoryRootFromWD ascends from the current working directory to
-// the nearest ancestor carrying go.mod, so a reader resolves the paths
-// a profile names independently of where the process was started.
+// RepositoryRootFromWD ascends from the current working directory to the
+// nearest ancestor carrying go.mod, so a reader resolves a profile's paths
+// independently of where the process started.
 func RepositoryRootFromWD() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -775,8 +721,6 @@ func RepositoryRootFromWD() (string, error) {
 	return root, nil
 }
 
-// ascendToRepositoryRoot walks dir and its ancestors, reporting the
-// first that carries repositoryRootMarker.
 func ascendToRepositoryRoot(dir string) (string, bool) {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, repositoryRootMarker)); err == nil {
@@ -790,14 +734,13 @@ func ascendToRepositoryRoot(dir string) (string, bool) {
 	}
 }
 
-// ReadRuntimeProfileFile reads path, decodes it with DecodeRuntimeProfile,
-// and enforces the stage-R rules: runtime_id equals the file's own base
-// name without extension, notes_path/measurement_path/published_sample
-// each resolve to an existing readable file relative to the repository
-// root ascended from path's own location, and published_sample decodes
-// as workflow front matter whose agent.kind is agent-client-protocol
-// and whose agent.command carries at least one element past element
-// zero.
+// ReadRuntimeProfileFile reads path, decodes it, and enforces the file-level
+// rules: runtime_id equals the file's base name without extension;
+// notes_path/measurement_path/published_sample each resolve to an existing
+// readable file relative to the repository root ascended from path; and
+// published_sample decodes as workflow front matter whose agent.kind is
+// agent-client-protocol and whose agent.command carries an element past
+// element zero.
 func ReadRuntimeProfileFile(path string) (RuntimeProfile, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // the caller supplies an operator-named or repository-tracked path
 	if err != nil {
@@ -840,11 +783,9 @@ func ReadRuntimeProfileFile(path string) (RuntimeProfile, error) {
 	return profile, nil
 }
 
-// workflowFrontMatter is the subset of WORKFLOW.md front matter
-// ReadRuntimeProfileFile and ReadPublishedSampleCommand need. It is
-// decoded directly through gopkg.in/yaml.v3 rather than through
-// internal/workflow, which internal/qualification's leaf property
-// forbids importing.
+// workflowFrontMatter is the subset of WORKFLOW.md front matter this package
+// needs. It is decoded through gopkg.in/yaml.v3 rather than internal/workflow,
+// which this package's leaf property forbids importing.
 type workflowFrontMatter struct {
 	Agent struct {
 		Kind    string `yaml:"kind"`
@@ -852,8 +793,6 @@ type workflowFrontMatter struct {
 	} `yaml:"agent"`
 }
 
-// extractFrontMatter returns the YAML front matter body between the
-// document's opening and closing "---" delimiters.
 func extractFrontMatter(raw []byte) (string, error) {
 	content := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	rest, found := strings.CutPrefix(content, "---\n")
@@ -867,15 +806,11 @@ func extractFrontMatter(raw []byte) (string, error) {
 	return frontMatter, nil
 }
 
-// validatePublishedSample enforces the published_sample stage-R rule
-// on the file at resolved.
 func validatePublishedSample(resolved string) error {
 	_, err := decodePublishedSample(resolved)
 	return err
 }
 
-// decodePublishedSample reads and decodes the workflow front matter at
-// resolved, enforcing the published_sample stage-R rule.
 func decodePublishedSample(resolved string) (workflowFrontMatter, error) {
 	raw, err := os.ReadFile(resolved) //nolint:gosec // a repository-relative path resolved from the tracked profile
 	if err != nil {
@@ -920,9 +855,9 @@ var measurementFields = func() map[string]bool {
 	return fields
 }()
 
-// DecodeMeasurement strictly decodes a Measurement document: unknown
-// or missing top-level fields are rejected, and schema_version MUST
-// equal 1.
+// DecodeMeasurement strictly decodes a Measurement document: unknown or missing
+// top-level fields are rejected, schema_version MUST equal 4, and every
+// nullable member is stated as null rather than omitted.
 func DecodeMeasurement(data []byte) (Measurement, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
@@ -973,8 +908,7 @@ func ReadMeasurementFile(path string) (Measurement, error) {
 	return DecodeMeasurement(data)
 }
 
-// Declared reports the declared reason for one capability and case,
-// performing a linear scan of p.Declarations, a small, bounded list.
+// Declared reports the declared reason for one capability and case.
 func (p RuntimeProfile) Declared(capability Capability, caseID Case) (string, bool) {
 	for _, entry := range p.Declarations {
 		if entry.Capability == capability && entry.Case == caseID {
@@ -995,14 +929,11 @@ func (p RuntimeProfile) AbsentSurfaceDeclared(surface Surface) (string, bool) {
 	return "", false
 }
 
-// MeasuredSurfaces returns the surfaces a run launches and grades, in
-// the closed vocabulary's own order: the key set of p.EntryPoints minus
-// every surface p declares absent. SurfaceAggregate carries no entry
-// point and so is never returned.
-//
-// A declared-absent surface keeps its entry point, because corroborating
-// the declaration launches it, but that launch writes no record. Callers
-// sizing an expected record set would over-count if it were returned.
+// MeasuredSurfaces returns the surfaces a run launches and grades, in the
+// closed vocabulary's order: the key set of p.EntryPoints minus every surface p
+// declares absent. A declared-absent surface keeps its entry point (launching
+// it corroborates the declaration) but writes no record, so returning it would
+// over-count a caller sizing an expected record set.
 func (p RuntimeProfile) MeasuredSurfaces() []Surface {
 	var surfaces []Surface
 	for _, surface := range Surfaces {
@@ -1017,8 +948,12 @@ func (p RuntimeProfile) MeasuredSurfaces() []Surface {
 	return surfaces
 }
 
-// substitutePlaceholders replaces the {model}, {policy}, and {prompt}
-// placeholders in args positionally.
+// substitutePlaceholders replaces {model}, {policy}, and {prompt} positionally.
+//
+// An empty policy drops the {policy} token together with the element before it
+// rather than substituting the empty string: some launch targets re-split argv
+// on whitespace, where a flag with an empty value lets the next token fill the
+// gap, so the flag and its value stay either both present or both absent.
 func substitutePlaceholders(args []string, model, policy, prompt string) []string {
 	replacer := strings.NewReplacer("{model}", model, "{policy}", policy, "{prompt}", prompt)
 	out := make([]string, len(args))
@@ -1028,10 +963,9 @@ func substitutePlaceholders(args []string, model, policy, prompt string) []strin
 	return out
 }
 
-// EntryArgs substitutes {model}, {policy}, and {prompt} positionally
-// into surface's own EntryPoint.Args. The caller appends the result to
-// its own resolved command path; EntryArgs carries no host coordinate.
-// It returns an error when surface carries no entry point.
+// EntryArgs substitutes {model}, {policy}, and {prompt} positionally into
+// surface's EntryPoint.Args. The caller appends the result to its resolved
+// command path. It returns an error when surface carries no entry point.
 func (p RuntimeProfile) EntryArgs(surface Surface, model, policy, prompt string) ([]string, error) {
 	entry, ok := p.EntryPoints[surface]
 	if !ok {
@@ -1052,9 +986,9 @@ func (p RuntimeProfile) AskingArgs(surface Surface, model, policy, prompt string
 	return substitutePlaceholders(entry.AskingArgs, model, policy, prompt), true
 }
 
-// PublishedPostureArgs builds the published-posture probe's argv: the
-// sample command with element zero replaced by commandPath, and
-// p.ModelArgs appended with {model} substituted.
+// PublishedPostureArgs builds the published-posture probe's argv: the sample
+// command with element zero replaced by commandPath, and p.ModelArgs appended
+// with {model} substituted.
 func (p RuntimeProfile) PublishedPostureArgs(sampleCommand []string, commandPath, model string) ([]string, error) {
 	if len(sampleCommand) == 0 {
 		return nil, fmt.Errorf("published sample %q carries an empty agent.command", p.PublishedSample)
@@ -1068,26 +1002,23 @@ func (p RuntimeProfile) PublishedPostureArgs(sampleCommand []string, commandPath
 }
 
 // Digest computes a hex SHA-256 over p re-encoded by encoding/json:
-// reformatting the tracked file does not move the digest, and a change
-// to any member does.
+// reformatting the tracked file does not move the digest, and a change to any
+// member does.
 func (p RuntimeProfile) Digest() string {
 	encoded, err := json.Marshal(p)
 	if err != nil {
-		// RuntimeProfile carries only JSON-safe member types; a
-		// marshal failure here would be a programming error, not an
-		// operator-recoverable condition.
+		// RuntimeProfile carries only JSON-safe member types, so a marshal
+		// failure would be a programming error, not operator-recoverable.
 		panic(fmt.Sprintf("digest: marshal runtime profile: %v", err))
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])
 }
 
-// decodeTopLevelJSONValues decodes output as a sequence of top-level
-// JSON values: one per newline-delimited line carrying a JSON object,
-// falling back to a streaming decode of the first "{" onward when no
-// line decodes on its own. A native surface's output is not
-// necessarily one JSON document; this mirrors how the shipped
-// recognizers already read it.
+// decodeTopLevelJSONValues decodes output as a sequence of top-level JSON
+// values: one per newline-delimited line carrying a JSON object, falling back
+// to a streaming decode of the first "{" onward when no line decodes on its
+// own. A native surface's output is not necessarily one JSON document.
 func decodeTopLevelJSONValues(output string) []any {
 	values := []any{}
 	for line := range strings.SplitSeq(output, "\n") {
@@ -1116,8 +1047,6 @@ func decodeTopLevelJSONValues(output string) []any {
 	return values
 }
 
-// locateTerminal applies r.Locator to values, returning the selected
-// terminal object and whether one was found.
 func (r Recognizer) locateTerminal(values []any) (map[string]any, bool) {
 	located, ok := r.locateEnvelope(values)
 	if !ok {
@@ -1204,28 +1133,22 @@ func (r Recognizer) Terminal(output string) (Terminal, bool) {
 type ModelRequestReading int
 
 const (
-	// ModelRequestUnreadable reports that the terminal's model-request
-	// object is absent or does not decode.
+	// ModelRequestUnreadable reports that the terminal's model-request object is
+	// absent or does not decode.
 	ModelRequestUnreadable ModelRequestReading = iota
-	// ModelRequestNone reports that the object decoded and holds no
-	// member.
+	// ModelRequestNone reports that the object decoded and holds no member.
 	ModelRequestNone
-	// ModelRequestAtLeastOne reports that the object decoded and holds
-	// at least one member.
+	// ModelRequestAtLeastOne reports that the object decoded and holds at least
+	// one member.
 	ModelRequestAtLeastOne
 )
 
-// ModelRequests reads r.ModelRequestPath as a nested key sequence into
-// the terminal object located out of output, without reading any
-// message text. An unreadable object is reported rather than defaulted
-// to ModelRequestNone: reading it as "no model request" would
-// manufacture a false positive out of a truncated terminal.
-//
-// An empty path spells a surface whose terminal carries no
-// model-request object at all, and reads unreadable for the same
-// reason: the terminal object's own members are not a model-request
-// object, and counting them as one would manufacture that same false
-// positive.
+// ModelRequests reads r.ModelRequestPath as a nested key sequence into the
+// terminal object located out of output, without reading message text. An
+// unreadable object is reported rather than defaulted to ModelRequestNone,
+// which would manufacture a false positive out of a truncated terminal. An
+// empty path spells a surface whose terminal carries no model-request object
+// and reads unreadable for the same reason.
 func (r Recognizer) ModelRequests(output string) ModelRequestReading {
 	if len(r.ModelRequestPath) == 0 {
 		return ModelRequestUnreadable

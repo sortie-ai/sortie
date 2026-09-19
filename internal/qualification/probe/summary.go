@@ -17,7 +17,6 @@ type summaryGrade struct {
 	Label      string
 }
 
-// summarySemantic is one of the semantic-case verdicts.
 type summarySemantic struct {
 	Surface    qualification.Surface
 	Capability qualification.Capability
@@ -27,23 +26,20 @@ type summarySemantic struct {
 	Detail     string
 }
 
-// summaryAbsentSurface is one declared-absent surface with its
-// declared reason, printed next to the verdict so the operator reads
-// it beside the eligibility line rather than inferring it from a
-// shrunken grade section.
+// summaryAbsentSurface is one declared-absent surface with its reason,
+// printed beside the eligibility line so the operator reads it there
+// rather than inferring it from a shrunken grade section.
 type summaryAbsentSurface struct {
 	Surface qualification.Surface
 	Reason  string
 }
 
-// summaryToken is one token-bearing path with its classification.
 type summaryToken struct {
 	Surface        qualification.Surface
 	EvidencePath   string
 	Classification qualification.Grade
 }
 
-// summaryContinuation is one surface's continuation outcome.
 type summaryContinuation struct {
 	Surface qualification.Surface
 	Outcome string
@@ -181,9 +177,8 @@ func ConclusionsFromRecords(records []qualification.Record, verdict qualificatio
 	slices.Sort(conclusions.Unobserved)
 
 	// A declared or catalog-owned exclusion carries its grade on every
-	// surface its kind requires, so the walk above appends one
-	// identical line per surface; collapse those down to the one line
-	// per excluded case the summary prints.
+	// surface, so the walk above appends one identical line per surface;
+	// collapse to the one line per excluded case the summary prints.
 	slices.Sort(conclusions.Excluded)
 	conclusions.Excluded = slices.Compact(conclusions.Excluded)
 
@@ -280,9 +275,9 @@ func FormatSummary(conclusions Conclusions) string {
 	return b.String()
 }
 
-// ExpectationFrom maps the bounded summary conclusions to the shared
-// runtime-neutral expectation qualification.ValidateNotes compares a
-// notes document against.
+// ExpectationFrom maps the bounded conclusions to the runtime-neutral
+// expectation qualification.ValidateNotes compares a notes document
+// against.
 func ExpectationFrom(conclusions Conclusions) qualification.NotesExpectation {
 	grades := make([]qualification.NotesGrade, 0, len(conclusions.Grades))
 	for _, grade := range conclusions.Grades {
