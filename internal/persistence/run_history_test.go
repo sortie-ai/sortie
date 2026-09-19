@@ -318,6 +318,45 @@ func TestQueryTokenBudgetUsage(t *testing.T) {
 		}
 	})
 
+	t.Run("sums unaccounted turns per candidate", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		measured := tokenRun(1, "ISS-PARTIAL", 250)
+		measured.TokensMeasured = true
+		measured.UnaccountedTurns = 2
+		appendOrFatal(t, s, measured)
+
+		clean := tokenRun(2, "ISS-PARTIAL", 100)
+		clean.TokensMeasured = true
+		appendOrFatal(t, s, clean)
+
+		batch, err := s.QueryTokenBudgetUsage(context.Background(), []string{"ISS-PARTIAL"})
+		if err != nil {
+			t.Fatalf("QueryTokenBudgetUsage() error = %v", err)
+		}
+		if got := batch["ISS-PARTIAL"].UnaccountedTurns; got != 2 {
+			t.Errorf("QueryTokenBudgetUsage()[ISS-PARTIAL].UnaccountedTurns = %d, want 2", got)
+		}
+		if got := batch["ISS-PARTIAL"].UnmeasuredSessions; got != 0 {
+			t.Errorf("QueryTokenBudgetUsage()[ISS-PARTIAL].UnmeasuredSessions = %d, want 0: "+
+				"an unaccounted turn is not an unmeasured session", got)
+		}
+
+		single, err := s.TokenUsageByIssue(context.Background(), "ISS-PARTIAL")
+		if err != nil {
+			t.Fatalf("TokenUsageByIssue() error = %v", err)
+		}
+		if single.UnaccountedTurns != 2 {
+			t.Errorf("TokenUsageByIssue().UnaccountedTurns = %d, want 2", single.UnaccountedTurns)
+		}
+		if single.TotalTokens != 350 {
+			t.Errorf("TokenUsageByIssue().TotalTokens = %d, want 350: an unaccounted turn adds no number",
+				single.TotalTokens)
+		}
+	})
+
 	t.Run("counts unmeasured sessions per candidate", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
