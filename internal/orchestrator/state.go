@@ -1003,6 +1003,7 @@ type SnapshotRunningEntry struct {
 	UsageArrival        registry.UsageArrival     `json:"usage_arrival"`
 	UsageAttribution    registry.UsageAttribution `json:"usage_attribution"`
 	TokensPending       bool                      `json:"tokens_pending"`
+	TokensAwaited       bool                      `json:"tokens_awaited"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry, produced by
@@ -1098,6 +1099,27 @@ func apiRequestsMeasured(arrival registry.UsageArrival, turnCount, apiRequestCou
 	return turnCount == 0
 }
 
+// usageStillArriving reports whether a session that has recorded no figure
+// may still record one. Past the arrival's own moment (turn start for
+// incremental, turn end for turn-end) it will not.
+func usageStillArriving(arrival registry.UsageArrival, turnCount int, lastEvent domain.AgentEventType) bool {
+	switch arrival {
+	case registry.UsageArrivalIncremental:
+		return turnCount == 0
+	case registry.UsageArrivalTurnEnd:
+		return !turnHasEnded(turnCount, lastEvent)
+	default:
+		return false
+	}
+}
+
+// turnHasEnded reports whether any turn reached a terminal event. A second
+// turn cannot begin before the first ends, so a count above one settles it
+// without the event.
+func turnHasEnded(turnCount int, lastEvent domain.AgentEventType) bool {
+	return turnCount > 1 || isTurnTerminalEvent(lastEvent)
+}
+
 // RuntimeSnapshot captures a point-in-time view of the orchestrator's
 // runtime state. now is normalized to UTC internally.
 //
@@ -1120,12 +1142,20 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	var runningUnreported, runningNonReporting int
 	for _, entry := range state.Running {
 		requestsMeasured := apiRequestsMeasured(entry.UsageArrival, entry.TurnCount, entry.APIRequestCount)
+		tokensAwaited := !entry.UsageMeasured &&
+			usageStillArriving(entry.UsageArrival, entry.TurnCount, entry.LastAgentEvent)
 
 		switch {
 		case entry.UsageArrival == registry.UsageArrivalNone:
 			runningNonReporting++
 		case entry.UsageArrival.ReportsAnyFigure() && !entry.UsageMeasured:
-			runningUnreported++
+			// A session whose figure is no longer coming is non-reporting,
+			// not still waiting.
+			if tokensAwaited {
+				runningUnreported++
+			} else {
+				runningNonReporting++
+			}
 		}
 
 		// Absence is the only way to say the breakdown means nothing;
@@ -1168,6 +1198,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			UsageAttribution:    entry.UsageAttribution,
 			TokensPending: entry.UsageArrival == registry.UsageArrivalTurnEnd &&
 				entry.UsageMeasured && !isTurnTerminalEvent(entry.LastAgentEvent),
+			TokensAwaited: tokensAwaited,
 		})
 
 		if !entry.StartedAt.IsZero() {

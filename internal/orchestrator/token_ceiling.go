@@ -169,6 +169,22 @@ func warnTokenBudgetIncomplete(log *slog.Logger, usage persistence.IssueTokenUsa
 	log.Warn("token budget cannot be fully evaluated, allowing dispatch", attrs...)
 }
 
+// warnCeilingMeasuredNothing records one ended run whose ceiling was set
+// and whose arrival declared that figures report, yet recorded none. Must
+// be called once per run from the exit path with the run's settled
+// verdict. A kind whose arrival reports no figure is announced at dispatch
+// instead and skipped here.
+func warnCeilingMeasuredNothing(log *slog.Logger, entry *RunningEntry, budgetTokens int, measured bool) {
+	if budgetTokens <= 0 || measured || !entry.UsageArrival.ReportsAnyFigure() {
+		return
+	}
+	log.Warn("run reported no token usage, token ceiling could not bound it",
+		slog.String("agent_kind", entry.AgentKind),
+		slog.String("usage_arrival", string(entry.UsageArrival)),
+		slog.Int("budget_tokens", budgetTokens),
+	)
+}
+
 // issueTokenCeilingLogger derives the logger every record in this file
 // is emitted through: issue context always, session context once the
 // entry carries a session. It mirrors the derivation [HandleAgentEvent]

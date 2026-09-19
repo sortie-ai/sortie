@@ -174,17 +174,19 @@ func formatRequestsByModel(requestsByModel map[string]int) string {
 	return strings.Join(pairs, ", ")
 }
 
-// usageTokensRow renders the Tokens row. tokensStr is the
-// pre-formatted figure (with its cached-tokens suffix already
-// applied, when present); arrival == none reaches the panel's
-// existing dash rather than restating the Usage reporting row's
-// reason.
-func usageTokensRow(arrival registry.UsageArrival, usageMeasured, tokensPending bool, tokensStr string) string {
+// usageTokensRow renders the Tokens row. tokensStr is the pre-formatted
+// figure with any cached-tokens suffix already applied. An unmeasured
+// session reads "not reported yet" only while tokensAwaited; once its figure
+// can no longer arrive the row drops that word rather than promise one that
+// is not coming.
+func usageTokensRow(arrival registry.UsageArrival, usageMeasured, tokensAwaited, tokensPending bool, tokensStr string) string {
 	switch {
 	case arrival == registry.UsageArrivalNone:
 		return dashPlaceholder
-	case !usageMeasured:
+	case !usageMeasured && tokensAwaited:
 		return "not reported yet"
+	case !usageMeasured:
+		return "not reported"
 	case tokensPending:
 		return tokensStr + ", excludes the turn in progress"
 	case arrival == registry.UsageArrivalIncremental || arrival == registry.UsageArrivalTurnEnd:
@@ -446,7 +448,7 @@ func buildDashboardData(
 			ModelRow:          usageModelRow(e.UsageAttribution, e.ModelName),
 			APIRequestsRow: usageAPIRequestsRow(
 				e.UsageArrival, e.APIRequestsMeasured, e.APIRequestCount, e.RequestsByModel),
-			TokensRow:  usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensPending, tokensStr),
+			TokensRow:  usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensAwaited, e.TokensPending, tokensStr),
 			EstCostRow: usageEstCostRow(e.UsageArrival, hasRates, e.TokensPending, entryCostStr),
 		}
 	}

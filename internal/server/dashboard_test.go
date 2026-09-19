@@ -2422,8 +2422,11 @@ func TestUsageRowFunctions_Totality(t *testing.T) {
 					if got := usageAPIRequestsRow(arrival, measured, 3, map[string]int{"a": 1, "b": 2}); got == "" {
 						t.Errorf("usageAPIRequestsRow(%q, %v, 3, breakdown) = empty, want non-empty (%s)", arrival, measured, name)
 					}
-					if got := usageTokensRow(arrival, measured, pending, "1,234"); got == "" {
-						t.Errorf("usageTokensRow(%q, %v, %v, \"1,234\") = empty, want non-empty (%s)", arrival, measured, pending, name)
+					if got := usageTokensRow(arrival, measured, true, pending, "1,234"); got == "" {
+						t.Errorf("usageTokensRow(%q, %v, true, %v, \"1,234\") = empty, want non-empty (%s)", arrival, measured, pending, name)
+					}
+					if got := usageTokensRow(arrival, measured, false, pending, "1,234"); got == "" {
+						t.Errorf("usageTokensRow(%q, %v, false, %v, \"1,234\") = empty, want non-empty (%s)", arrival, measured, pending, name)
 					}
 					if got := usageEstCostRow(arrival, true, pending, "$1.23"); got == "" {
 						t.Errorf("usageEstCostRow(%q, true, %v, \"$1.23\") = empty, want non-empty (%s)", arrival, pending, name)
@@ -2529,23 +2532,27 @@ func TestUsageTokensRow_Golden(t *testing.T) {
 		name          string
 		arrival       registry.UsageArrival
 		usageMeasured bool
+		tokensAwaited bool
 		tokensPending bool
 		want          string
 	}{
-		{"none arrival", registry.UsageArrivalNone, false, false, dashPlaceholder},
-		{"not measured yet", registry.UsageArrivalIncremental, false, false, "not reported yet"},
-		{"pending", registry.UsageArrivalTurnEnd, true, true, "1,234, excludes the turn in progress"},
-		{"incremental settled", registry.UsageArrivalIncremental, true, false, "1,234"},
-		{"turn_end settled", registry.UsageArrivalTurnEnd, true, false, "1,234"},
-		{"undeclared arrival", registry.UsageArrivalUndeclared, true, false, "1,234, usage reporting not declared"},
+		{name: "none arrival", arrival: registry.UsageArrivalNone, want: dashPlaceholder},
+		{name: "not measured, figure still to come", arrival: registry.UsageArrivalIncremental, tokensAwaited: true, want: "not reported yet"},
+		{name: "not measured, figure was due and never came", arrival: registry.UsageArrivalTurnEnd, want: "not reported"},
+		{name: "pending", arrival: registry.UsageArrivalTurnEnd, usageMeasured: true, tokensPending: true, want: "1,234, excludes the turn in progress"},
+		{name: "incremental settled", arrival: registry.UsageArrivalIncremental, usageMeasured: true, want: "1,234"},
+		{name: "turn_end settled", arrival: registry.UsageArrivalTurnEnd, usageMeasured: true, want: "1,234"},
+		{name: "undeclared arrival", arrival: registry.UsageArrivalUndeclared, usageMeasured: true, want: "1,234, usage reporting not declared"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := usageTokensRow(tt.arrival, tt.usageMeasured, tt.tokensPending, "1,234"); got != tt.want {
-				t.Errorf("usageTokensRow(%q, %v, %v, \"1,234\") = %q, want %q", tt.arrival, tt.usageMeasured, tt.tokensPending, got, tt.want)
+			got := usageTokensRow(tt.arrival, tt.usageMeasured, tt.tokensAwaited, tt.tokensPending, "1,234")
+			if got != tt.want {
+				t.Errorf("usageTokensRow(%q, %v, %v, %v, \"1,234\") = %q, want %q",
+					tt.arrival, tt.usageMeasured, tt.tokensAwaited, tt.tokensPending, got, tt.want)
 			}
 		})
 	}
@@ -2824,5 +2831,73 @@ func TestHandleDashboard_TurnEndMeasuredTokensUnmeasuredRequests(t *testing.T) {
 	}
 	if requestsRow == "0" || tokensRow == "0" {
 		t.Errorf("a row states a fabricated zero: API Requests=%q, Tokens=%q", requestsRow, tokensRow)
+	}
+}
+
+// TestDashboard_SessionPastItsArrivalPointReportsNothing: a turn-end kind
+// whose turn ended with no figure must not be offered as one still to come.
+func TestDashboard_SessionPastItsArrivalPointReportsNothing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	state := orchestrator.NewState(5000, 4, 500_000, nil, orchestrator.AgentTotals{})
+	state.Running["iss"] = &orchestrator.RunningEntry{
+		Identifier:     "MT-INERT",
+		Issue:          domain.Issue{ID: "iss", State: "In Progress"},
+		StartedAt:      now.Add(-time.Minute),
+		AgentKind:      "transport",
+		TurnCount:      1,
+		LastAgentEvent: domain.EventTurnCompleted,
+		UsageArrival:   registry.UsageArrivalTurnEnd,
+	}
+
+	data := buildDashboardData(orchestrator.RuntimeSnapshot(state, now), "test", now.Add(-time.Hour), nil, now, nil)
+
+	if len(data.Running) != 1 {
+		t.Fatalf("dashboard rendered %d running rows, want 1", len(data.Running))
+	}
+	if got := data.Running[0].TokensRow; got != "not reported" {
+		t.Errorf("Tokens row = %q, want %q", got, "not reported")
+	}
+	if got := data.RunningUnreportedNote; got != "" {
+		t.Errorf("RunningUnreportedNote = %q, want empty: this session's figures are not still to come", got)
+	}
+	want := "1 running session runs an agent that reports no token usage; the totals above exclude it."
+	if got := data.RunningNonReportingNote; got != want {
+		t.Errorf("RunningNonReportingNote = %q, want %q", got, want)
+	}
+}
+
+// TestDashboard_SessionInsideItsFirstTurnStillAwaitsFigures is the control:
+// the same absent figure, but the settling turn has not ended, so the panel
+// keeps saying the figure has not arrived yet.
+func TestDashboard_SessionInsideItsFirstTurnStillAwaitsFigures(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	state := orchestrator.NewState(5000, 4, 500_000, nil, orchestrator.AgentTotals{})
+	state.Running["iss"] = &orchestrator.RunningEntry{
+		Identifier:     "MT-PENDING",
+		Issue:          domain.Issue{ID: "iss", State: "In Progress"},
+		StartedAt:      now.Add(-time.Minute),
+		AgentKind:      "transport",
+		TurnCount:      1,
+		LastAgentEvent: domain.EventOtherMessage,
+		UsageArrival:   registry.UsageArrivalTurnEnd,
+	}
+
+	data := buildDashboardData(orchestrator.RuntimeSnapshot(state, now), "test", now.Add(-time.Hour), nil, now, nil)
+
+	if got := data.Running[0].TokensRow; got != "not reported yet" {
+		t.Errorf("Tokens row = %q, want %q", got, "not reported yet")
+	}
+	want := "1 running session has not reported token usage yet; the totals above exclude it."
+	if got := data.RunningUnreportedNote; got != want {
+		t.Errorf("RunningUnreportedNote = %q, want %q", got, want)
+	}
+	if got := data.RunningNonReportingNote; got != "" {
+		t.Errorf("RunningNonReportingNote = %q, want empty", got)
 	}
 }
