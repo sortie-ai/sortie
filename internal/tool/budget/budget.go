@@ -28,15 +28,21 @@ type BudgetQueryFunc func(ctx context.Context, issueID string, runningDispatchID
 // BudgetUsage is the per-issue token accounting returned by a
 // [BudgetQueryFunc].
 type BudgetUsage struct {
-	CompletedTotalTokens int64 // SUM(total_tokens) over run_history rows for the issue.
-	CompletedSessions    int   // COUNT(*) of run_history rows for the issue.
+	CompletedTotalTokens int64
+	CompletedSessions    int
 	RunningTotalTokens   int64 // session_metadata.total_tokens when dispatch_id matches; else 0.
 
 	UnmeasuredSessions int
 
-	// RunningMeasured is true when a session_metadata row was found
-	// whose dispatch ID matches the running dispatch ID, which is the
-	// same condition that gates RunningTotalTokens.
+	// UnaccountedTurns is the summed count of turns that spent tokens no
+	// figure was proven to cover, so a non-zero value makes
+	// CompletedTotalTokens a lower bound even when every session was
+	// measured.
+	UnaccountedTurns int
+
+	// RunningMeasured is true when a session_metadata row matched the
+	// running dispatch ID, the same condition that gates
+	// RunningTotalTokens.
 	RunningMeasured bool
 }
 
@@ -89,8 +95,9 @@ func (t *BudgetTool) Description() string {
 	return "Returns cumulative token spend for the current issue and the remaining token " +
 		"budget. Use this to decide whether to skip an expensive step, return partial work, " +
 		"or hand off before the token ceiling stops this run in flight or blocks a further " +
-		"session. A false used_tokens_complete means some sessions could not be measured or " +
-		"the running session's spend is not included yet, so used_tokens is a lower bound."
+		"session. A false used_tokens_complete means some sessions could not be measured, a " +
+		"turn spent an amount that was never fully reported, or the running session's spend " +
+		"is not included yet, so used_tokens is a lower bound."
 }
 
 // InputSchema returns the JSON Schema for cost_budget input; the tool
@@ -117,7 +124,7 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 		remaining = new(max(int64(t.budgetTokens)-usedTokens, 0))
 	}
 
-	usedTokensComplete := usage.UnmeasuredSessions == 0 &&
+	usedTokensComplete := usage.UnmeasuredSessions == 0 && usage.UnaccountedTurns == 0 &&
 		t.runningDispatchID != "" && usage.RunningMeasured
 
 	return toolresult.Success(costBudgetResponse{

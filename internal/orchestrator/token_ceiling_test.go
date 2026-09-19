@@ -232,6 +232,39 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		}
 	})
 
+	t.Run("a stop taken on a confirming read names every count behind an incomplete sum", func(t *testing.T) {
+		t.Parallel()
+
+		lb, logger := textLogger()
+		spy := &spyMetrics{}
+		state := NewState(5000, 4, 100, nil, AgentTotals{})
+		state.Running["ISS-UNACC"] = &RunningEntry{
+			Identifier: "ISS-UNACC-ident",
+			CancelFunc: func() {},
+		}
+		// Every completed session was measured, but the sum still omits
+		// two unaccounted turns.
+		store := &fakeTokenStore{responses: []tokenStoreResponse{
+			{usage: persistence.IssueTokenUsage{TotalTokens: 40, Sessions: 1, UnaccountedTurns: 2}},
+		}}
+
+		driveEvent(state, "ISS-UNACC", domain.TokenUsage{TotalTokens: 150}, store, spy, logger)
+
+		if !state.Running["ISS-UNACC"].TokenCeilingStopped {
+			t.Fatal("entry.TokenCeilingStopped = false, want true once the ceiling is reached")
+		}
+		line := lineWith(t, lb.String(), "run stopped by token ceiling")
+		for _, want := range []string{
+			"sum_source=" + tokenSumConfirmedRead,
+			"unmeasured_sessions=0",
+			"unaccounted_turns=2",
+		} {
+			if !strings.Contains(line, want) {
+				t.Errorf("stop record taken on a confirming read is missing %s:\n%s", want, line)
+			}
+		}
+	})
+
 	t.Run("events after the stop produce no additional record or counter increment", func(t *testing.T) {
 		t.Parallel()
 
@@ -373,8 +406,10 @@ func TestEnforceInFlightTokenCeiling(t *testing.T) {
 		if !strings.Contains(line, "sum_source="+tokenSumSessionSpendAlone) {
 			t.Errorf("stop record does not name how the sum was established:\n%s", line)
 		}
-		if strings.Contains(line, "unmeasured_sessions=") {
-			t.Errorf("stop record reports an unmeasured count no read supplied:\n%s", line)
+		for _, absent := range []string{"unmeasured_sessions=", "unaccounted_turns="} {
+			if strings.Contains(line, absent) {
+				t.Errorf("stop record reports %s, a count no read supplied:\n%s", absent, line)
+			}
 		}
 	})
 

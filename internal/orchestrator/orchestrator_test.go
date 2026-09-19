@@ -116,10 +116,16 @@ type stubStore struct {
 	tokenSum          int64
 	tokenSessionCount int
 	tokenUnmeasured   int
+	tokenUnaccounted  int
 
 	// tokenIncompleteIDs reports a candidate below the ceiling with one
 	// unmeasured session (the "cannot be fully evaluated" outcome).
 	tokenIncompleteIDs []string
+
+	// tokenUnaccountedIDs reports a candidate below the ceiling, all
+	// sessions measured but an unaccounted turn, so its unmeasured count
+	// is zero.
+	tokenUnaccountedIDs []string
 
 	// tokenExhaustedUsage overrides the fixed {TotalTokens: 1000} usage
 	// for a tokenExhaustedIDs member, for a test controlling every field.
@@ -215,6 +221,7 @@ func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (persistence.
 		TotalTokens:        s.tokenSum,
 		Sessions:           s.tokenSessionCount,
 		UnmeasuredSessions: s.tokenUnmeasured,
+		UnaccountedTurns:   s.tokenUnaccounted,
 	}, nil
 }
 
@@ -271,6 +278,8 @@ func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []stri
 			usage[id] = persistence.IssueTokenUsage{TotalTokens: 1000}
 		case slices.Contains(s.tokenIncompleteIDs, id):
 			usage[id] = persistence.IssueTokenUsage{TotalTokens: 0, UnmeasuredSessions: 1}
+		case slices.Contains(s.tokenUnaccountedIDs, id):
+			usage[id] = persistence.IssueTokenUsage{TotalTokens: 500, Sessions: 1, UnaccountedTurns: 1}
 		}
 	}
 	return usage, nil
@@ -5685,6 +5694,47 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 
 		// A second consecutive tick with the same condition must not log
 		// a further warning: edge-triggered against the prior set.
+		orch.handleTick(context.Background())
+		if got := strings.Count(buf.String(), "token budget cannot be fully evaluated, allowing dispatch"); got != 1 {
+			t.Errorf("warning count after second tick = %d, want 1 (edge-triggered)", got)
+		}
+	})
+
+	t.Run("a candidate below the ceiling whose measured session left a turn's spend unknown permits dispatch and warns once", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenUnaccountedIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, 0, nil, AgentTotals{})
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		orch := budgetOrchestratorWithLogger(state, wm, store, candidates(issueA), logger)
+		orch.handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] present, want absent (below the ceiling permits dispatch)", issueA.ID)
+		}
+		if _, ok := state.TokenBudgetIncomplete[issueA.ID]; !ok {
+			t.Errorf("TokenBudgetIncomplete[%s] missing, want present: the recorded total is a lower bound", issueA.ID)
+		}
+		output := buf.String()
+		if got := strings.Count(output, "token budget cannot be fully evaluated, allowing dispatch"); got != 1 {
+			t.Fatalf("warning count after first tick = %d, want 1; log:\n%s", got, output)
+		}
+		for _, want := range []string{
+			`issue_id=` + issueA.ID,
+			`issue_identifier=` + issueA.Identifier,
+			"used_tokens=500",
+			"budget_tokens=1000",
+			"unmeasured_sessions=0",
+			"unaccounted_turns=1",
+		} {
+			if !strings.Contains(output, want) {
+				t.Errorf("warning log missing %q; log:\n%s", want, output)
+			}
+		}
+
 		orch.handleTick(context.Background())
 		if got := strings.Count(buf.String(), "token budget cannot be fully evaluated, allowing dispatch"); got != 1 {
 			t.Errorf("warning count after second tick = %d, want 1 (edge-triggered)", got)

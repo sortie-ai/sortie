@@ -110,7 +110,7 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 		return
 	}
 
-	stopRunAtTokenCeiling(entry, metrics, log, ceiling, &usage.UnmeasuredSessions, tokenSumConfirmedRead)
+	stopRunAtTokenCeiling(entry, metrics, log, ceiling, &usage, tokenSumConfirmedRead)
 }
 
 // sum_source values for the stop record. A confirmed read carries an exact
@@ -123,9 +123,8 @@ const (
 )
 
 // stopRunAtTokenCeiling latches the stop, counts it, records it, and
-// cancels the run. unmeasuredSessions is nil when no read supplied it,
-// and the attribute is then absent rather than reported as zero.
-func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slog.Logger, ceiling int, unmeasuredSessions *int, sumSource string) {
+// cancels the run. usage is nil when no read supplied it.
+func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slog.Logger, ceiling int, usage *persistence.IssueTokenUsage, sumSource string) {
 	entry.TokenCeilingStopped = true
 	entry.TokenCeilingAtStop = ceiling
 	metrics.IncRunsStoppedByBudget(budgetReasonToken)
@@ -139,14 +138,35 @@ func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slo
 		slog.String("sum_source", sumSource),
 		slog.String("ceiling_setting", ceilingSettingByBudgetReason[budgetReasonToken]),
 	}
-	if unmeasuredSessions != nil {
-		attrs = append(attrs, slog.Int("unmeasured_sessions", *unmeasuredSessions))
+	if usage != nil {
+		attrs = append(attrs, incompleteSpendAttrs(*usage)...)
 	}
 	log.Warn("run stopped by token ceiling", attrs...)
 
 	if entry.CancelFunc != nil {
 		entry.CancelFunc()
 	}
+}
+
+// incompleteSpendAttrs names the two counts that keep a summed token total
+// from being an issue's whole spend: sessions whose usage was never
+// recorded and turns that spent an amount nothing reported. Both are
+// always emitted together.
+func incompleteSpendAttrs(usage persistence.IssueTokenUsage) []any {
+	return []any{
+		slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
+		slog.Int("unaccounted_turns", usage.UnaccountedTurns),
+	}
+}
+
+// warnTokenBudgetIncomplete records one issue whose summed spend is below
+// the ceiling but only a lower bound, so the dispatch proceeds anyway.
+func warnTokenBudgetIncomplete(log *slog.Logger, usage persistence.IssueTokenUsage, budgetTokens int) {
+	attrs := append([]any{
+		slog.Int64("used_tokens", usage.TotalTokens),
+		slog.Int64("budget_tokens", int64(budgetTokens)),
+	}, incompleteSpendAttrs(usage)...)
+	log.Warn("token budget cannot be fully evaluated, allowing dispatch", attrs...)
 }
 
 // issueTokenCeilingLogger derives the logger every record in this file

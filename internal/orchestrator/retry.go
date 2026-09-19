@@ -327,12 +327,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				state.BudgetExhausted[issueID].UnmeasuredSessions = &usage.UnmeasuredSessions
 				state.BudgetExhausted[issueID].StoppedInFlight = &usage.StoppedInFlight
 			}
-			if usage.UnmeasuredSessions > 0 {
-				log.Warn("token budget cannot be fully evaluated, allowing dispatch",
-					slog.Int64("used_tokens", usage.TotalTokens),
-					slog.Int64("budget_tokens", int64(params.MaxTokens)),
-					slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
-				)
+			if usage.SpendIncomplete() {
+				warnTokenBudgetIncomplete(log, usage, params.MaxTokens)
 			}
 		}
 	}

@@ -12,10 +12,11 @@ import (
 )
 
 var workerResultLiteralKeys = map[string]string{
-	"Usage":           "localUsage",
-	"UsageMeasured":   "localMeasured",
-	"ModelName":       "localModelName",
-	"APIRequestCount": "localRequestCount",
+	"Usage":            "localUsage",
+	"UsageMeasured":    "localMeasured",
+	"ModelName":        "localModelName",
+	"APIRequestCount":  "localRequestCount",
+	"UnaccountedTurns": "localUnaccounted",
 }
 
 type workerResultLiteralViolation struct {
@@ -89,38 +90,43 @@ func f() {
 		wantCount int
 	}{
 		{
-			name:      "none of the four keys set",
+			name:      "none of the mirror keys set",
 			elts:      `IssueID: "x"`,
-			wantCount: 4,
+			wantCount: 5,
 		},
 		{
 			name:      "missing Usage only",
-			elts:      `UsageMeasured: localMeasured, ModelName: localModelName, APIRequestCount: localRequestCount`,
+			elts:      `UsageMeasured: localMeasured, ModelName: localModelName, APIRequestCount: localRequestCount, UnaccountedTurns: localUnaccounted`,
 			wantCount: 1,
 		},
 		{
 			name:      "missing UsageMeasured only",
-			elts:      `Usage: localUsage, ModelName: localModelName, APIRequestCount: localRequestCount`,
+			elts:      `Usage: localUsage, ModelName: localModelName, APIRequestCount: localRequestCount, UnaccountedTurns: localUnaccounted`,
 			wantCount: 1,
 		},
 		{
 			name:      "missing ModelName only",
-			elts:      `Usage: localUsage, UsageMeasured: localMeasured, APIRequestCount: localRequestCount`,
+			elts:      `Usage: localUsage, UsageMeasured: localMeasured, APIRequestCount: localRequestCount, UnaccountedTurns: localUnaccounted`,
 			wantCount: 1,
 		},
 		{
 			name:      "missing APIRequestCount only",
-			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: localModelName`,
+			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: localModelName, UnaccountedTurns: localUnaccounted`,
+			wantCount: 1,
+		},
+		{
+			name:      "missing UnaccountedTurns only",
+			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: localModelName, APIRequestCount: localRequestCount`,
 			wantCount: 1,
 		},
 		{
 			name:      "ModelName set to a literal empty string instead of the identifier",
-			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: "", APIRequestCount: localRequestCount`,
+			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: "", APIRequestCount: localRequestCount, UnaccountedTurns: localUnaccounted`,
 			wantCount: 1,
 		},
 		{
-			name:      "all four keys set from their identifiers passes",
-			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: localModelName, APIRequestCount: localRequestCount`,
+			name:      "every key set from its identifier passes",
+			elts:      `Usage: localUsage, UsageMeasured: localMeasured, ModelName: localModelName, APIRequestCount: localRequestCount, UnaccountedTurns: localUnaccounted`,
 			wantCount: 0,
 		},
 	}
@@ -202,14 +208,18 @@ func TestWorkerResultLiteral_ScratchMutationDetected(t *testing.T) {
 		t.Fatalf("checkWorkerResultLiterals() found %d violations in the unmutated worker.go, want 0: %+v", len(violationsBefore), violationsBefore)
 	}
 
-	const victim = "APIRequestCount: localRequestCount,\n"
-	idx := strings.Index(string(original), victim)
+	// Remove the whole line, not a fixed spelling: gofmt re-aligns these
+	// keys, so the padding between key and value shifts as keys change.
+	const victimKey = "APIRequestCount:"
+	idx := strings.Index(string(original), victimKey)
 	if idx < 0 {
-		t.Fatal(`worker.go no longer contains an "APIRequestCount: localRequestCount," literal key to mutate`)
+		t.Fatalf("worker.go no longer contains an %q literal key to mutate", victimKey)
 	}
-	mutated := make([]byte, 0, len(original)-len(victim))
-	mutated = append(mutated, original[:idx]...)
-	mutated = append(mutated, original[idx+len(victim):]...)
+	lineStart := strings.LastIndexByte(string(original[:idx]), '\n') + 1
+	lineEnd := idx + strings.IndexByte(string(original[idx:]), '\n') + 1
+	mutated := make([]byte, 0, len(original))
+	mutated = append(mutated, original[:lineStart]...)
+	mutated = append(mutated, original[lineEnd:]...)
 
 	scratchPath := filepath.Join(t.TempDir(), "worker_mutated.go")
 	if err := os.WriteFile(scratchPath, mutated, 0o600); err != nil {

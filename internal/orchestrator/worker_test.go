@@ -883,6 +883,56 @@ func TestRunWorkerAttempt(t *testing.T) {
 		}
 	})
 
+	t.Run("unaccounted_turns_sum_from_turn_results", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 2
+		ec := newExitCapture()
+
+		var turns atomic.Int64
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					// One turn unknown, the next measured, so the count is a
+					// sum rather than a latch.
+					if turns.Add(1) == 1 {
+						return domain.TurnResult{
+							SessionID:        session.ID,
+							ExitReason:       domain.EventTurnCompleted,
+							SpendUnaccounted: true,
+						}, nil
+					}
+					return domain.TurnResult{
+						SessionID:     session.ID,
+						ExitReason:    domain.EventTurnCompleted,
+						Usage:         domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+						UsageMeasured: true,
+					}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.UnaccountedTurns != 1 {
+			t.Errorf("WorkerResult.UnaccountedTurns = %d, want 1: one turn reported spend of an unknown amount",
+				result.UnaccountedTurns)
+		}
+		if !result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = false, want true: an unaccounted turn does not deny a measurement " +
+				"another turn made")
+		}
+	})
+
 	t.Run("early_exit_on_tracker_state_change", func(t *testing.T) {
 		t.Parallel()
 

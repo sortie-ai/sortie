@@ -581,6 +581,34 @@ func TestHandleWorkerExit_TokensMeasured(t *testing.T) {
 		}
 	})
 
+	t.Run("a measured run carries its unaccounted-turn count onto the row", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-UNACC", nil)
+		state.Running["ISSUE-UNACC"].UsageMeasured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:          "ISSUE-UNACC",
+			Identifier:       "ISSUE-UNACC-ident",
+			ExitKind:         WorkerExitNormal,
+			AgentAdapter:     "mock",
+			UsageMeasured:    true,
+			UnaccountedTurns: 2,
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if run.UnaccountedTurns != 2 {
+			t.Errorf("RunHistory.UnaccountedTurns = %d, want 2", run.UnaccountedTurns)
+		}
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true: an unaccounted turn does not deny a measurement")
+		}
+	})
+
 	t.Run("measured-zero run writes tokens_measured 1 with four zero token columns", func(t *testing.T) {
 		t.Parallel()
 
