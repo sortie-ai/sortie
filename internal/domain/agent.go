@@ -247,6 +247,12 @@ type TurnResult struct {
 	// spend is unknown, not zero. Once true for a session it must not
 	// become false on a later turn.
 	UsageMeasured bool
+
+	// SpendUnaccounted reports that this turn issued a model request no
+	// figure was proven to cover in full, making the run's summed total a
+	// lower bound. Unlike UsageMeasured it is per turn and not monotone,
+	// and any partial figure is still reported in Usage.
+	SpendUnaccounted bool
 }
 
 // AgentAdapter is the contract every coding-agent integration must

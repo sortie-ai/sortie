@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Migrations
+
+- Add `unaccounted_turns INTEGER NOT NULL DEFAULT 0` to `run_history`, counting the run's turns that spent tokens no figure was proven to account for, whether no figure arrived at all or the one that did fell short of the turn. A pre-migration row reads back zero and so presents as fully accounted, but nothing measured it: before the upgrade a turn that spent tokens without reporting a figure was indistinguishable from one that cost nothing, and because `run_history` is an append-only record no later run can correct, that zero stays. A historical run's spend therefore reads as complete because nothing can now establish otherwise, not because it was verified.
+  ([#1057](https://github.com/sortie-ai/sortie/issues/1057))
+
 ## [1.24.1] - 2026-09-17
 
 ### Added

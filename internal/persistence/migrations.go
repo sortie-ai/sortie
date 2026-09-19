@@ -65,6 +65,9 @@ var migration017SQL string
 //go:embed sql/018_aggregate_metrics_unmeasured_sessions.sql
 var migration018SQL string
 
+//go:embed sql/019_run_history_unaccounted_turns.sql
+var migration019SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -84,4 +87,5 @@ var migrations = []Migration{
 	{Version: 16, Description: "api_requests_measured column on session_metadata", SQL: migration016SQL},
 	{Version: 17, Description: "dispatch_id column on session_metadata", SQL: migration017SQL},
 	{Version: 18, Description: "unmeasured_sessions column on aggregate_metrics", SQL: migration018SQL},
+	{Version: 19, Description: "unaccounted_turns column on run_history", SQL: migration019SQL},
 }

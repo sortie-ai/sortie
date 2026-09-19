@@ -209,6 +209,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"total_tokens", "INTEGER", true, 0},
 				{"cache_read_tokens", "INTEGER", true, 0},
 				{"tokens_measured", "INTEGER", true, 0},
+				{"unaccounted_turns", "INTEGER", true, 0},
 			},
 		},
 		{
