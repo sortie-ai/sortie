@@ -28,12 +28,6 @@ func startTestSession(ctx context.Context, a *ClientProtocolAdapter, params doma
 	return startSession(ctx, a, params, agentcore.NewTurnEndUsage())
 }
 
-// mcpHandshakeScript is a fake agent that answers exactly the two
-// calls startSession makes before returning: initialize (always id 1,
-// since it is the connection's first call) and session/new (always id
-// 2). It captures the raw session/new request line to captureFile
-// before answering it, so a test can inspect the exact bytes the
-// adapter wrote for its own tool-server delivery.
 func mcpHandshakeScript(captureFile string) string {
 	return `capture='` + captureFile + `'
 while IFS= read -r line; do

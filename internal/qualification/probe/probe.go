@@ -151,12 +151,11 @@ func firstUnsuppliedAuthName(names []string, env func(string) (string, bool)) (s
 	return "", false
 }
 
-// ResolveCoordinates resolves the five gate-enabled coordinates:
-// exactly one executable path, one model identifier, a valid list of
-// authentication environment names, and one readable runtime profile
-// document. An unsupplied authentication value is [Gated]'s clean skip,
-// not a failure. env reports a coordinate's value and whether it is
-// present.
+// ResolveCoordinates resolves the gate-enabled coordinates: one
+// executable path, one model identifier, a valid list of authentication
+// environment names, and one readable runtime profile. An unsupplied
+// authentication value is [Gated]'s clean skip, not a failure. env
+// reports a coordinate's value and whether it is present.
 func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 	command := coordinateValue(env, qualificationCommandEnv)
 	commandPath, err := parseCommand(command)
@@ -177,6 +176,7 @@ func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 	if err != nil {
 		return Coordinates{}, err
 	}
+
 	profilePath, present := env(qualificationProfileEnv)
 	if !present || strings.TrimSpace(profilePath) == "" {
 		return Coordinates{}, fmt.Errorf("%s must name one readable runtime profile document", qualificationProfileEnv)

@@ -189,8 +189,6 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 	return adapter, session, nil
 }
 
-// containsNotification reports whether events carries a notification
-// whose message contains substr.
 func containsNotification(events []domain.AgentEvent, substr string) bool {
 	for _, ev := range events {
 		if ev.Type == domain.EventNotification && strings.Contains(ev.Message, substr) {

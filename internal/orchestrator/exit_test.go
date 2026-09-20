@@ -168,7 +168,6 @@ func TestComputeBackoffDelay(t *testing.T) {
 		maxRetryBackoffMS int
 		want              int64
 	}{
-		// Default cap (300000), attempts 1..7.
 		{name: "attempt 1 default cap", attempt: 1, maxRetryBackoffMS: 300_000, want: 10_000},
 		{name: "attempt 2 default cap", attempt: 2, maxRetryBackoffMS: 300_000, want: 20_000},
 		{name: "attempt 3 default cap", attempt: 3, maxRetryBackoffMS: 300_000, want: 40_000},
@@ -953,7 +952,7 @@ func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-2", nil) // RetryAttempt nil → NextAttempt returns 1
+	state := exitState(t, "ISSUE-2", nil)
 	params := defaultExitParams(t, store)
 
 	turnTimeoutErr := &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"}
@@ -1395,11 +1394,9 @@ func TestHandleWorkerExit_RuntimeSecondsAccounting(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "ISSUE-5", nil)
-	// Pre-seed some existing seconds to verify additive behavior.
 	state.AgentTotals.SecondsRunning = 100.0
 
 	params := defaultExitParams(t, store)
-	// Return baseTime + 90.5s to get exactly 90.5 seconds elapsed.
 	params.NowFunc = func() time.Time {
 		return baseTime.Add(90*time.Second + 500*time.Millisecond)
 	}
@@ -1687,7 +1684,7 @@ func TestHandleWorkerExit_RetryAttemptNilIncrementsToOne(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-7", nil) // RetryAttempt nil
+	state := exitState(t, "ISSUE-7", nil)
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{
@@ -1711,7 +1708,7 @@ func TestHandleWorkerExit_RetryAttemptIncrements(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
-	state := exitState(t, "ISSUE-8", new(3)) // RetryAttempt = 3
+	state := exitState(t, "ISSUE-8", new(3))
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{
@@ -1910,7 +1907,6 @@ func TestHandleWorkerExit_SessionMetadataPersisted(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "SM-1", nil)
-	// Populate session and token data on the running entry.
 	entry := state.Running["SM-1"]
 	entry.SessionID = "ses-abc"
 	entry.AgentPID = "12345"
@@ -2039,7 +2035,6 @@ func TestHandleWorkerExit_SessionMetadataNilPID(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "SM-2", nil)
-	// AgentPID left as empty string (default).
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{
@@ -2114,8 +2109,6 @@ func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T)
 
 	store := &mockExitStore{}
 	state := exitState(t, "CAN-1", nil)
-	// Pre-schedule a retry (simulates reconciliation stall detection scheduling
-	// a retry before the cancelled worker exits).
 	state.RetryAttempts["CAN-1"] = &RetryEntry{
 		IssueID:    "CAN-1",
 		Identifier: "CAN-1-ident",
@@ -2148,7 +2141,6 @@ func TestHandleWorkerExit_CancelledWithoutRetryReleasesClaim(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "CAN-2", nil)
-	// No pre-scheduled retry.
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{
@@ -2201,7 +2193,6 @@ func TestHandleWorkerExit_NoPendingCleanupSkipsWorkspace(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "NOCLEAN-1", nil)
-	// PendingCleanup is false (default).
 	state.Running["NOCLEAN-1"].Identifier = "NOCLEAN-1-ident"
 
 	wsRoot := t.TempDir()
@@ -2286,7 +2277,7 @@ func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 		Identifier:    "PROJ-99",
 		ExitKind:      WorkerExitCancelled,
 		AgentAdapter:  "mock",
-		WorkspacePath: actualWS, // actual path at old root
+		WorkspacePath: actualWS,
 	}, params)
 
 	if _, err := os.Stat(actualWS); !os.IsNotExist(err) {
@@ -3081,7 +3072,7 @@ func TestHandleWorkerExit_RetryPromiseInvariantAcrossWithheldFamily(t *testing.T
 		const issueID = "PROMISE-PARKED"
 		dir, baseline := handoffEvidenceGitWorkspace(t)
 		store := &mockExitStore{}
-		seedMockHandoffAbsences(store, issueID, 2) // default ceiling is 3
+		seedMockHandoffAbsences(store, issueID, 2)
 		tracker := &mockTrackerAdapter{
 			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
 				result := make(map[string]string, len(ids))
@@ -3856,7 +3847,7 @@ func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testin
 	state := exitStateWithIssue(t, "HO-6", "In Progress")
 	params := defaultExitParams(t, store)
 	params.HandoffState = ""
-	params.ActiveStates = nil // backward compat guard
+	params.ActiveStates = nil
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:      "HO-6",
@@ -5008,7 +4999,7 @@ func exitParamsWithComments(t *testing.T, store *mockExitStore, tracker *mockTra
 	t.Helper()
 	p := defaultExitParams(t, store)
 	p.TrackerAdapter = tracker
-	p.ActiveStates = []string{"In Progress"} // issue state "" is not active → retryScheduled=false on normal exit
+	p.ActiveStates = []string{"In Progress"}
 	p.CommentsConfig = comments
 	return p
 }
@@ -5020,7 +5011,7 @@ func TestHandleWorkerExit_CommentOnNormalExit(t *testing.T) {
 	tracker := &mockTrackerAdapter{}
 	spy := newCommentAwareMetrics()
 
-	state := exitState(t, "CMT-1", nil) // issue.State="" not in ActiveStates → retryScheduled=false
+	state := exitState(t, "CMT-1", nil)
 	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
 	params.Metrics = spy
 
@@ -5160,7 +5151,6 @@ func TestHandleWorkerExit_NoCommentOnCancelled(t *testing.T) {
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{}
 	state := exitState(t, "CMT-5", nil)
-	// Both flags enabled, still no comment for cancellation.
 	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{
 		OnCompletion: true,
 		OnFailure:    true,
@@ -5235,7 +5225,7 @@ func TestHandleWorkerExit_CommentNilTrackerAdapterSafe(t *testing.T) {
 	store := &mockExitStore{}
 	state := exitState(t, "CMT-7", nil)
 	params := defaultExitParams(t, store)
-	params.TrackerAdapter = nil // explicit nil
+	params.TrackerAdapter = nil
 	params.CommentsConfig = config.TrackerCommentsConfig{OnCompletion: true, OnFailure: true}
 
 	HandleWorkerExit(state, WorkerResult{
@@ -5258,7 +5248,7 @@ func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
 	spy := newCommentAwareMetrics()
 
 	state := exitState(t, "CMT-8", nil)
-	state.Running["CMT-8"].SessionID = "entry-ses" // stale value on entry
+	state.Running["CMT-8"].SessionID = "entry-ses"
 	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
 	params.Metrics = spy
 
@@ -5266,7 +5256,7 @@ func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
 		IssueID:      "CMT-8",
 		Identifier:   "CMT-8-ident",
 		ExitKind:     WorkerExitNormal,
-		SessionID:    "result-ses", // authoritative value from adapter
+		SessionID:    "result-ses",
 		AgentAdapter: "mock",
 	}, params)
 
@@ -6305,7 +6295,7 @@ func TestHandleWorkerExit_CIProvider_NilProvider_NoPendingReaction(t *testing.T)
 	store := &mockExitStore{}
 	state := exitState(t, "CI-ISS-2", nil)
 	params := defaultExitParams(t, store)
-	params.CIProvider = nil // no CI provider
+	params.CIProvider = nil
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CI-ISS-2",
@@ -6346,7 +6336,6 @@ func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingReaction(t *testing.
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	// Write SCM metadata without a branch (empty branch field).
 	dotSortie := filepath.Join(wsPath, ".sortie")
 	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -6561,7 +6550,7 @@ func TestHandleWorkerExit_ContinuationRetry_SessionID_FromEntry(t *testing.T) {
 		Identifier:   "SESS-2-ident",
 		ExitKind:     WorkerExitNormal,
 		AgentAdapter: "mock",
-		SessionID:    "", // authoritative source is empty; fall back to entry
+		SessionID:    "",
 	}, params)
 
 	entry, ok := state.RetryAttempts["SESS-2"]
@@ -6655,7 +6644,7 @@ func TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		content string // raw JSON written to .sortie/scm.json
+		content string
 	}{
 		{
 			name:    "missing pr_number",
@@ -6724,7 +6713,7 @@ func TestHandleWorkerExit_AutoMergeEnqueueRequiresConfigured(t *testing.T) {
 	state := exitState(t, "AM-6", nil)
 	params := defaultExitParams(t, store)
 	params.SCMAdapter = &scmAdapterStubExit{}
-	params.AutoMergeReactionConfigured = false // provider unset
+	params.AutoMergeReactionConfigured = false
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "AM-6",
@@ -9438,12 +9427,11 @@ func TestHandleWorkerExit_RequestVerdictUsesWorkerTurnTally(t *testing.T) {
 	entry.APIRequestCount = 0
 
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:       "ISSUE-REQV3",
-		Identifier:    "ISSUE-REQV3-ident",
-		ExitKind:      WorkerExitNormal,
-		AgentAdapter:  "mock",
-		WorkspacePath: "/tmp/ws",
-		// The turn began and then failed, so nothing completed.
+		IssueID:        "ISSUE-REQV3",
+		Identifier:     "ISSUE-REQV3-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		WorkspacePath:  "/tmp/ws",
 		TurnsCompleted: 0,
 		TurnsStarted:   1,
 	}, defaultExitParams(t, store))

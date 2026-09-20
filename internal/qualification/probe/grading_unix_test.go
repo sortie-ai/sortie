@@ -89,7 +89,7 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 	}
 
 	collected.toolServer = qualification.Observation{Grade: toolGrade, Outcome: outcomeForSweptGrade(toolGrade), Detail: "tool server induction: " + string(toolGrade), SessionID: "sess-protocol-mcp"}
-	collected.permission = qualification.Observation{Grade: permissionGrade, Outcome: outcomeForSweptGrade(permissionGrade), Detail: "permission induction: " + string(permissionGrade), SessionID: permissionSessionID}
+	collected.permission = qualification.Observation{Grade: permissionGrade, Outcome: outcomeForSweptGrade(permissionGrade), Detail: "permission induction: " + string(permissionGrade), SessionID: "sess-protocol-permission"}
 	collected.policy = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "policy precondition", SessionID: "sess-protocol-policy"}
 
 	collected.workspaceSecurity = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "workspace security"}
@@ -177,9 +177,11 @@ func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 							}
 
 							path := qualification.WriteEvidenceFile(t, fixture.Records)
-							if _, err := qualification.ValidateObservationsWithDeclarations(path, profile); err != nil {
+							verdict, err := qualification.ValidateObservationsWithDeclarations(path, profile)
+							if err != nil {
 								t.Fatalf("ValidateObservationsWithDeclarations(...) error = %v, want nil", err)
 							}
+							_ = verdict
 
 							if got := gradeOfClass(t, fixture.Records, qualification.RowMCPDelivery); got != toolGrade {
 								t.Errorf("tool server delivery grade = %s, want %s", got, toolGrade)

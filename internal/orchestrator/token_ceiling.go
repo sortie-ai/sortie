@@ -185,11 +185,9 @@ func warnCeilingMeasuredNothing(log *slog.Logger, entry *RunningEntry, budgetTok
 	)
 }
 
-// issueTokenCeilingLogger derives the logger every record in this file
-// is emitted through: issue context always, session context once the
-// entry carries a session. It mirrors the derivation [HandleAgentEvent]
-// performs, so the two sets of records on one run agree on their
-// identifying attributes.
+// issueTokenCeilingLogger derives the issue- and session-scoped logger for
+// this file's records, mirroring [HandleAgentEvent]'s derivation so the two
+// record sets on one run agree on their identifying attributes.
 func issueTokenCeilingLogger(logger *slog.Logger, issueID string, entry *RunningEntry) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()

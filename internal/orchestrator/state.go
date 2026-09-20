@@ -78,10 +78,7 @@ type AgentTotals struct {
 // RateLimitSnapshot holds the latest rate-limit payload from an agent
 // event. Opaque because the payload format is agent-adapter-defined.
 type RateLimitSnapshot struct {
-	// Data holds the raw rate-limit payload from the agent event.
-	Data map[string]any
-
-	// ReceivedAt is the UTC time the rate-limit event was observed.
+	Data       map[string]any
 	ReceivedAt time.Time
 }
 
@@ -486,19 +483,10 @@ type PendingReaction struct {
 // commit pushed after handoff is the one the verdict describes.
 type CIReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
-
-	// Branch is the git branch name from SCM metadata.
-	Branch string
-
-	// SHA is the git commit SHA from SCM metadata, carried for logging
-	// and parity with the sibling reaction data.
-	SHA string
+	Owner    string
+	Repo     string
+	Branch   string
+	SHA      string
 }
 
 // ReviewReactionData holds review-specific fields for a pending review
@@ -507,21 +495,13 @@ type CIReactionData struct {
 // (scm.json), never from tracker project config.
 type ReviewReactionData struct {
 	PRNumber int
+	Owner    string
+	Repo     string
+	Branch   string
+	SHA      string
 
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
-
-	// Branch is the git branch name.
-	Branch string
-
-	// SHA is the git commit SHA at the last known push.
-	SHA string
-
-	// LastEventAt is the UTC timestamp of the most recently detected
-	// review comment. Used for debounce gating.
+	// LastEventAt is the timestamp of the most recently detected review
+	// comment, used for debounce gating.
 	LastEventAt time.Time
 }
 
@@ -547,18 +527,10 @@ type ReviewReactionConfig struct {
 // dispatches immediately.
 type BotReviewReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
-
-	// Branch is the git branch name (PR head).
-	Branch string
-
-	// SHA is the git commit SHA at the last known push.
-	SHA string
+	Owner    string
+	Repo     string
+	Branch   string
+	SHA      string
 }
 
 // BotReviewReactionConfig holds validated bot-review-specific
@@ -581,18 +553,10 @@ type BotReviewReactionConfig struct {
 // [domain.SCMMetadata] (scm.json), never from tracker project config.
 type AutoMergeReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
-
-	// Branch is the git branch name (PR head).
-	Branch string
-
-	// SHA is the git commit SHA at the last known push.
-	SHA string
+	Owner    string
+	Repo     string
+	Branch   string
+	SHA      string
 }
 
 // AutoMergeReactionConfig holds validated auto-merge-specific
@@ -619,19 +583,10 @@ type AutoMergeReactionConfig struct {
 // the PR's current target rather than a value snapshotted at enqueue.
 type MergeConflictReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
-
-	// Branch is the PR head branch (the branch the agent rebases).
-	Branch string
-
-	// SHA is the git commit SHA at the last known push; carried for
-	// logging and parity with the sibling reaction data.
-	SHA string
+	Owner    string
+	Repo     string
+	Branch   string
+	SHA      string
 }
 
 // MergeConflictReactionConfig holds validated merge-conflict-specific
@@ -653,12 +608,8 @@ type MergeConflictReactionConfig struct {
 // [domain.SCMMetadata] (scm.json), never from tracker project config.
 type LabelReviewReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
+	Owner    string
+	Repo     string
 
 	// HighWaterMark caches the newest processed journal position as an
 	// opaque "<RFC3339Nano>|<id>" string; empty means unset. The persisted
@@ -710,12 +661,8 @@ type LabelFixReactionConfig struct {
 // performs no checkout and fingerprints on the live merge commit.
 type MergeCompletionReactionData struct {
 	PRNumber int
-
-	// Owner is the repository owner.
-	Owner string
-
-	// Repo is the repository name.
-	Repo string
+	Owner    string
+	Repo     string
 }
 
 // MergeCompletionReactionConfig holds validated merge-completion-specific

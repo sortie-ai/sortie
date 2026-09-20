@@ -995,7 +995,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	for {
-		// Render the prompt template for this turn.
 		issueMap := issue.ToTemplateMap()
 		var renderOpts []prompt.RenderOption
 		if turnNumber == 1 {
@@ -1221,7 +1220,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// refresh and its active-state gate, resting only on max_turns or the
 		// agent's own .sortie/status signal.
 		if deps.Posture.DrivesIssueState() {
-			// Refresh the tracker state to detect external transitions.
 			refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{issue.ID})
 			if err != nil {
 				stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)

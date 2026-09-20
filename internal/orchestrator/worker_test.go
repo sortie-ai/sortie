@@ -642,8 +642,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 			TrackerAdapter: &mockTrackerAdapter{},
 			AgentAdapter: &mockAgentAdapter{
 				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
-					// The relay delivers no usage-bearing event for this
-					// turn: only a plain notification.
 					if params.OnEvent != nil {
 						params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC()})
 					}
@@ -683,8 +681,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 			TrackerAdapter: &mockTrackerAdapter{},
 			AgentAdapter: &mockAgentAdapter{
 				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
-					// The same usage value arrives through both the event
-					// relay and TurnResult.Usage.
 					if params.OnEvent != nil {
 						params.OnEvent(domain.AgentEvent{
 							Type:      domain.EventTokenUsage,
@@ -859,8 +855,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 			TrackerAdapter: &mockTrackerAdapter{},
 			AgentAdapter: &mockAgentAdapter{
 				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
-					// No event carries usage; only TurnResult reports the
-					// run measured.
 					return domain.TurnResult{
 						SessionID:     session.ID,
 						ExitReason:    domain.EventTurnFailed,
@@ -950,7 +944,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 					result := make(map[string]string, len(ids))
 					for _, id := range ids {
 						if turn >= 1 {
-							result[id] = "Done" // terminal state after turn 1
+							result[id] = "Done"
 						} else {
 							result[id] = "To Do"
 						}
@@ -1096,7 +1090,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 		if result.ExitKind != WorkerExitError {
 			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
 		}
-		// Turn completed (got TurnResult) but exit reason was failure.
 		if result.TurnsCompleted != 1 {
 			t.Errorf("TurnsCompleted = %d, want 1", result.TurnsCompleted)
 		}
@@ -1113,7 +1106,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		badRoot := tmpDir + "/not-a-dir"
-		// Create a file at the path so it's not a directory.
 		createFileAtPath(t, badRoot)
 
 		cfg := defaultWorkerConfig(badRoot)
@@ -1219,7 +1211,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 			TrackerAdapter: &mockTrackerAdapter{},
 			AgentAdapter: &mockAgentAdapter{
 				runTurnFn: func(runCtx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
-					// Cancel the context to simulate reconciliation kill.
 					cancel()
 					return domain.TurnResult{}, runCtx.Err()
 				},
@@ -1271,7 +1262,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 		ec := newExitCapture()
 
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately.
+		cancel()
 
 		deps := WorkerDeps{
 			TrackerAdapter:         &mockTrackerAdapter{},
@@ -1286,9 +1277,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 		RunWorkerAttempt(ctx, workerTestIssue(), nil, deps)
 
 		result := ec.waitResult(t)
-		// workspace.Prepare returns immediately on cancelled context,
-		// so we expect either ExitCancelled (if caught at inter-phase
-		// check) or ExitCancelled (if workspace.Prepare itself fails).
 		if result.ExitKind != WorkerExitCancelled {
 			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitCancelled)
 		}
@@ -1576,7 +1564,6 @@ func TestRunWorkerAttempt(t *testing.T) {
 
 		cfg := defaultWorkerConfig(tmpDir)
 		cfg.Agent.MaxTurns = 5
-		// Hook writes a marker file; workspace.Finish calls this.
 		cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
 
 		ec := newExitCapture()
@@ -1620,7 +1607,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		cfg := defaultWorkerConfig(tmpDir)
-		cfg.Agent.MaxTurns = 0 // Invalid: should be clamped to 1.
+		cfg.Agent.MaxTurns = 0
 
 		ec := newExitCapture()
 
@@ -1653,7 +1640,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		cfg := defaultWorkerConfig(tmpDir)
-		cfg.Agent.MaxTurns = -5 // Negative: should be clamped to 1.
+		cfg.Agent.MaxTurns = -5
 
 		ec := newExitCapture()
 
@@ -2625,10 +2612,6 @@ func TestRunWorkerAttempt_AfterRunHookCannotReachWorkerResult(t *testing.T) {
 
 	ec := newExitCapture()
 	deps := WorkerDeps{
-		// The default mockTrackerAdapter reports "To Do" for every per-turn
-		// refresh, an active state under defaultWorkerConfig's ActiveStates,
-		// so ObservedIssueState is non-empty by the time the loop ends on
-		// max_turns.
 		TrackerAdapter:         &mockTrackerAdapter{},
 		AgentAdapter:           &mockAgentAdapter{},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
@@ -3372,7 +3355,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		ec := newExitCapture()
 
 		issue := workerTestIssue()
-		issue.State = "In Progress" // already transitioned on prior attempt
+		issue.State = "In Progress"
 
 		deps := WorkerDeps{
 			TrackerAdapter:         tracker,
@@ -3692,7 +3675,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			WorkflowPath:           "", // empty → MCP config skipped
+			WorkflowPath:           "",
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3736,7 +3719,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			WorkflowPath:           "/fake/WORKFLOW.md", // non-empty → MCP config generated
+			WorkflowPath:           "/fake/WORKFLOW.md",
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3952,8 +3935,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			// WorkflowPath is inside workflowDir; the file itself need not exist.
-			WorkflowPath: filepath.Join(workflowDir, "WORKFLOW.md"),
+			WorkflowPath:           filepath.Join(workflowDir, "WORKFLOW.md"),
 			// AgentKind is the dispatch-frozen kind, distinct from the
 			// workflow default set on cfg.Agent.Kind above.
 			AgentKind: "codex",
@@ -4040,8 +4022,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
 			Logger:                 discardLogger(),
-			// WorkflowPath is inside workflowDir; the file itself need not exist.
-			WorkflowPath: filepath.Join(workflowDir, "WORKFLOW.md"),
+			WorkflowPath:           filepath.Join(workflowDir, "WORKFLOW.md"),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -4334,10 +4315,6 @@ func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 		if captured.TurnNumber != 1 {
 			t.Errorf("TurnNumber = %d, want 1 (the turn-start write for turn 1 follows the session-start write)", captured.TurnNumber)
 		}
-		// The measured zero belongs to the session-start write, before
-		// any turn began. Once turn one is under way that verdict no
-		// longer holds, and an agent reading its own spend here must not
-		// be handed a zero it can read as a measurement.
 		assertUnmeasuredNull(t, captured)
 	})
 
@@ -5091,7 +5068,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 
 		tmpDir := t.TempDir()
 		cfg := defaultWorkerConfig(tmpDir)
-		cfg.Tracker.Comments.OnDispatch = false // explicit zero value
+		cfg.Tracker.Comments.OnDispatch = false
 
 		spy := &spyMetrics{}
 		tracker := &mockTrackerAdapter{}
@@ -5365,7 +5342,6 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 		if result.TurnsCompleted != 2 {
 			t.Errorf("TurnsCompleted = %d, want 2 (ran all max_turns)", result.TurnsCompleted)
 		}
-		// FetchIssueStatesByIDs was called (signal check happens before state refresh).
 		if fetchStatesCalled.Load() == 0 {
 			t.Error("FetchIssueStatesByIDs not called; want called when no status signal")
 		}
@@ -5391,7 +5367,6 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			// runTurnFn writes nothing; the stale file should be gone by now.
 			TrackerAdapter:         &mockTrackerAdapter{},
 			AgentAdapter:           &mockAgentAdapter{},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
@@ -5407,8 +5382,6 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 		if result.ExitKind != WorkerExitNormal {
 			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
 		}
-		// The stale file was cleaned by PreRunFunc before the turn ran,
-		// so ReadStatusFile finds nothing → SoftStop must be false.
 		if result.SoftStop {
 			t.Error("SoftStop = true, want false (stale status should have been cleaned by PreRunFunc)")
 		}
@@ -5740,11 +5713,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	}
 
 	t.Run("injected_builder_all_five_tools_advertised", func(t *testing.T) {
-		// The first-turn prompt contains a ### heading for each of the
-		// five per-session tools when the injected builder returns all five.
-		// Advertised side: names are extracted from the rendered string,
-		// not from registry.List(), so a buildToolAdvertisement regression
-		// would be caught here.
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -5807,8 +5775,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("injected_builder_suffix_after_advertisement", func(t *testing.T) {
-		// RuntimeStatusSuffix appears after the tool advertisement when
-		// SessionToolRegistryFunc is injected, preserving suffix ordering.
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -5862,8 +5828,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("injected_builder_no_advertisement_on_continuation_turns", func(t *testing.T) {
-		// Continuation turns still omit the advertisement when
-		// SessionToolRegistryFunc is injected.
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -5924,9 +5888,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("injected_builder_error_degrades_no_advertisement", func(t *testing.T) {
-		// Degrade path: when SessionToolRegistryFunc returns an error the
-		// worker logs a Warn and renders no advertisement section, still appends
-		// RuntimeStatusSuffix, and does not fail the attempt.
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -5987,8 +5948,6 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("nil_builder_falls_back_to_tool_registry", func(t *testing.T) {
-		// When SessionToolRegistryFunc is nil the worker falls back to the
-		// static ToolRegistry (existing behavior preserved).
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -6697,7 +6656,7 @@ func TestRunWorkerAttempt_CompletionSignalEntersSelfReview(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfg := defaultWorkerConfig(tmpDir)
-	cfg.Agent.MaxTurns = 10 // high enough that turn-budget exhaustion cannot explain admission
+	cfg.Agent.MaxTurns = 10
 	cfg.SelfReview = config.SelfReviewConfig{
 		Enabled:               true,
 		MaxIterations:         1,
@@ -7830,7 +7789,7 @@ func TestRunWorkerAttempt_NonPositiveTurnTimeoutSubstitutesDefault(t *testing.T)
 
 			deps := WorkerDeps{
 				TrackerAdapter:         &mockTrackerAdapter{},
-				AgentAdapter:           &mockAgentAdapter{}, // default RunTurn completes immediately
+				AgentAdapter:           &mockAgentAdapter{},
 				ConfigFunc:             func() config.ServiceConfig { return cfg },
 				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 				OnEvent:                func(_ string, _ domain.AgentEvent) {},

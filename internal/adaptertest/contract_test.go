@@ -3645,9 +3645,6 @@ func run(cmd *exec.Cmd) error {
 			wantCount: 2,
 		},
 		{
-			// The positive control, reproducing the shape every real
-			// call site outside procutil uses: a local bytes.Buffer,
-			// addressed and shared by both streams.
 			name:       "a bytes.Buffer capture sink is accepted",
 			dirName:    "fixture",
 			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",

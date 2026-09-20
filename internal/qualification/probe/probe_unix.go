@@ -86,7 +86,8 @@ const launchOwnershipInterval = time.Second
 // registers that group with owned, folds a process-table reading into
 // owned while it runs, and charges owned with whatever the launch
 // recorded on exit. A nil env inherits the calling process's
-// environment, and a nil owned charges the launch to no ledger.
+// environment, which the version canary and absent-surface
+// corroboration need before the shared fixture resolves one.
 func startBoundedLaunch(commandPath string, argv []string, dir string, env []string, owned *ownedDescendants) (*boundedLaunch, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, commandPath, argv...) //nolint:gosec // the operator-selected executable with the profile's own documented flags

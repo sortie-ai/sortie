@@ -89,7 +89,7 @@ func TestVersionSuccessIsNotAuthenticationSuccess(t *testing.T) {
 	if os.Getenv("PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS") == "1" {
 		script := agenttest.FakeRuntime(t, t.TempDir(), "runtime", unauthenticatedScenario, struct{}{})
 		coords := canaryCoordinates(script)
-		fixture := &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}}
+		fixture := &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}, usage: &usageTracker{}}
 
 		runVersionCanary(t, coords, fixture)
 		runAuthenticationCanary(t, coords, fixture)
@@ -99,7 +99,7 @@ func TestVersionSuccessIsNotAuthenticationSuccess(t *testing.T) {
 
 	t.Run("the version canary passes for an unauthenticated runtime", func(t *testing.T) {
 		script := agenttest.FakeRuntime(t, t.TempDir(), "runtime", unauthenticatedScenario, struct{}{})
-		fixture := &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}}
+		fixture := &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}, usage: &usageTracker{}}
 
 		runVersionCanary(t, canaryCoordinates(script), fixture)
 	})

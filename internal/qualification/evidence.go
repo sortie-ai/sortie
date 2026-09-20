@@ -444,10 +444,8 @@ const (
 	// that the history reached the model nor that it did not.
 	RecallDeclined         = "same_session_answer_declined"
 	RecallUnobservedActual = "unobserved_actual_session"
-	// RecallPreconditionUnmet states that the probe could not
-	// establish the condition its observation requires, so no
-	// continuation was tried and nothing about the runtime was
-	// observed.
+	// RecallPreconditionUnmet states that the probe could not establish the
+	// condition its observation requires, so no continuation was tried.
 	RecallPreconditionUnmet = "recall_precondition_unmet"
 )
 
@@ -619,8 +617,6 @@ func decodeNullableBool(raw json.RawMessage) (*bool, error) {
 	return &v, nil
 }
 
-// decodeString decodes a JSON string, rejecting null and any
-// non-string value.
 func decodeString(raw json.RawMessage) (string, error) {
 	if string(raw) == "null" {
 		return "", errors.New("got null, want a string")

@@ -220,9 +220,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	warnCeilingMeasuredNothing(log, entry, state.MaxTokens, measured)
 
-	// Capture the actual workspace path from the worker result so that
-	// PendingCleanup operates on the real directory, not a path
-	// reconstructed from potentially-changed config.
+	// Capture the actual workspace path so PendingCleanup operates on the
+	// real directory, not one reconstructed from possibly-changed config.
 	if entry.WorkspacePath == "" && workerResult.WorkspacePath != "" {
 		entry.WorkspacePath = workerResult.WorkspacePath
 	}

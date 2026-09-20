@@ -135,9 +135,6 @@ func TestWriteMeasurement(t *testing.T) {
 	})
 }
 
-// fakeNotesReporter records Fatalf calls in place of failing the
-// enclosing test, so checkNotesConsistency's decision table can be
-// driven without reddening this test's own run.
 func TestWriteUnrecognizedTerminals(t *testing.T) {
 	t.Parallel()
 

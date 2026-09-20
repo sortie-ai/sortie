@@ -65,9 +65,9 @@ func notInducibleAccount(reason string) string {
 	return fmt.Sprintf("not inducible (%s), a reason no rule covers, so the case keeps its obligation", reason)
 }
 
-// Conclusions is the bounded summary a validated evidence set
-// produces. It carries no runtime version, timestamp, session
-// identifier, filesystem path, prompt, or secret value.
+// Conclusions is the bounded summary a validated evidence set produces.
+// It carries no runtime version, timestamp, session identifier,
+// filesystem path, prompt, or secret value.
 type Conclusions struct {
 	// Verdict is the transport-parity answer and Conformance the product
 	// one. Blocking and UnmeasuredRows carry the rows behind the first,
@@ -86,12 +86,10 @@ type Conclusions struct {
 	ConformanceBlocking   []string
 	ConformanceUnmeasured []string
 	Excluded              []string
-	// AbsentSurfaces lists every surface the profile declares absent,
-	// with its declared reason.
-	AbsentSurfaces []summaryAbsentSurface
-	// NativeReferenceAbsent reports that this run measured no
-	// structured native surface, so every comparison row stands on the
-	// protocol surface alone.
+	AbsentSurfaces        []summaryAbsentSurface
+	// NativeReferenceAbsent reports that this run measured no structured
+	// native surface, so every comparison row stands on the protocol
+	// surface alone.
 	NativeReferenceAbsent bool
 }
 

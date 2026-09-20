@@ -851,7 +851,6 @@ func TestDashboard_HTMLEscaping(t *testing.T) {
 	if strings.Contains(dr.Body, "<script>alert") {
 		t.Error("body contains unescaped XSS payload — XSS vulnerability")
 	}
-	// The escaped version should be present.
 	if !strings.Contains(dr.Body, "&lt;script&gt;") {
 		t.Error("body missing HTML-escaped script tag")
 	}
@@ -1687,7 +1686,6 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 
 	t.Run("aria-expanded=false is on button not on tr", func(t *testing.T) {
 		t.Parallel()
-		// Positive: aria-expanded must appear somewhere in the body.
 		if !strings.Contains(body, `aria-expanded="false"`) {
 			t.Error(`body missing aria-expanded="false"`)
 		}
@@ -1702,7 +1700,6 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 
 	t.Run("aria-controls on button matches id of detail row", func(t *testing.T) {
 		t.Parallel()
-		// Each table section uses its own ID prefix with 0-based row counter.
 		pairs := [][2]string{
 			{`aria-controls="detail-running-0"`, `id="detail-running-0"`},
 			{`aria-controls="detail-running-1"`, `id="detail-running-1"`},
@@ -1828,11 +1825,9 @@ func TestBuildDashboardData_TokenRates(t *testing.T) {
 		if !data.HasTokenRates {
 			t.Error("HasTokenRates = false, want true")
 		}
-		// No matching kind → no aggregate cost.
 		if data.EstimatedCostUSD != nil {
 			t.Errorf("EstimatedCostUSD = %q, want nil (no matching kind)", *data.EstimatedCostUSD)
 		}
-		// Per-entry cost string should be empty.
 		if data.Running[0].EstimatedCostUSD != "" {
 			t.Errorf("Running[0].EstimatedCostUSD = %q, want empty", data.Running[0].EstimatedCostUSD)
 		}

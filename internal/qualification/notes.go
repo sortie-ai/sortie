@@ -38,8 +38,8 @@ const NotesEligibilityPrefix = "Eligibility: "
 // product-conformance verdict on.
 const NotesConformancePrefix = "Product conformance: "
 
-// NotesScopeStatement is the sentence a notes document MUST carry to
-// state the profile's Unix-only live scope.
+// NotesScopeStatement is the sentence a notes document MUST carry to state the
+// profile's Unix-only live scope.
 const NotesScopeStatement = "Windows live qualification is unobserved"
 
 // NotesSections returns the required section headings in order, matched as an
@@ -178,9 +178,8 @@ func matchStatedVerdict(lines []string, prefix string, want *Verdict) error {
 	return nil
 }
 
-// ValidateNotes reports the first disagreement between a notes document
-// and a validated run's expectation, or nil when they agree. It never
-// writes.
+// ValidateNotes reports the first disagreement between a notes document and a
+// validated run's expectation, or nil when they agree. It never writes.
 func ValidateNotes(document string, want NotesExpectation) error {
 	lines := strings.Split(document, "\n")
 	trimmed := make([]string, len(lines))

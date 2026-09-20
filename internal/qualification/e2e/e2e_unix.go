@@ -61,11 +61,8 @@ const fixturePrompt = `The workspace for {{ .issue.identifier }} is intentionall
 
     mkdir -p .sortie && echo "no-change-needed" > .sortie/status`
 
-// effectiveSample carries the only effective sample fields the isolated
-// end-to-end harness extracts: agent.kind, agent.command, the agent
-// read/turn/stall bounds, max_turns, max_sessions, max_tokens, and the
-// optional agent-client-protocol mcp_config shape. Nothing else from a
-// sample contract crosses into the harness.
+// effectiveSample carries the only effective sample fields the isolated harness
+// extracts. Nothing else from a sample contract crosses into the harness.
 type effectiveSample struct {
 	AgentKind      string
 	AgentCommand   string
@@ -379,10 +376,9 @@ type Budgets struct {
 	// raises it, so this one cannot stand in for the budget under measurement.
 	MaxSessions int
 
-	// Observation bounds the wait for a terminal condition. It is not a
-	// shutdown bound: qualification.ShutdownDeadline governs that, and
-	// spending one on the other gives a live run a shutdown's worth of
-	// time to do a turn's work.
+	// Observation bounds the wait for a terminal condition. It is not a shutdown
+	// bound: qualification.ShutdownDeadline governs that, and spending one on
+	// the other gives a live run a shutdown's worth of time to do a turn's work.
 	Observation time.Duration
 }
 
@@ -569,8 +565,8 @@ func (c TerminalCondition) unmetDetail() string {
 	return strings.Join(unmet, "; ")
 }
 
-// ObserveTerminalCondition evaluates the terminal condition once
-// against the harness's collaborators.
+// ObserveTerminalCondition evaluates the terminal condition once against the
+// harness's collaborators.
 func ObserveTerminalCondition(t *testing.T, harness *Harness) TerminalCondition {
 	t.Helper()
 

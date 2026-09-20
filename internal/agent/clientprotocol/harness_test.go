@@ -35,9 +35,6 @@ func withUsageReader(reader usageReader) func(*sessionState) {
 	}
 }
 
-// newTestSessionWithLogger behaves like newTestSession, but wires
-// state's logger to logger instead of one that discards everything,
-// for a test that needs to observe what the pump logs.
 func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int, logger *slog.Logger, opts ...func(*sessionState)) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
 

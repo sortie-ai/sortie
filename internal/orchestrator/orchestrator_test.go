@@ -525,7 +525,6 @@ func TestShouldDispatchWithSets(t *testing.T) {
 			activeSet: activeSet, terminalS: terminalSet,
 			want: true,
 		},
-		// Effort budget exhausted.
 		{
 			name:      "budget exhausted blocks dispatch",
 			issue:     baseIssue,
@@ -2351,7 +2350,7 @@ func TestOrchestratorDynamicConfig(t *testing.T) {
 	candidateTracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: tracker,
 		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
-			return nil, nil // no candidates
+			return nil, nil
 		},
 	}
 
@@ -4089,7 +4088,7 @@ do {{ .issue.identifier }}
 			Kind:          "mock",
 			MaxRetries:    2,
 			Escalation:    "label",
-			WatchWindowMS: 24 * 3600 * 1000, // 24h: comfortably survives the first tick
+			WatchWindowMS: 24 * 3600 * 1000,
 		}
 
 		wm := &stubWorkflowManager{config: cfg}
@@ -4667,7 +4666,7 @@ func TestGracefulShutdown(t *testing.T) {
 		})
 
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // pre-cancelled
+		cancel()
 
 		done := make(chan struct{})
 		go func() {
@@ -5145,7 +5144,7 @@ func TestSnapshotDuringDrain(t *testing.T) {
 		Identifier: "MT-1",
 		Issue:      domain.Issue{ID: "id-1", State: "In Progress"},
 		StartedAt:  time.Now().UTC(),
-		CancelFunc: func() {}, // no-op cancel to support drain
+		CancelFunc: func() {},
 	}
 
 	o := NewOrchestrator(OrchestratorParams{
@@ -5367,7 +5366,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		wm := budgetTickConfig(3)
 		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, 0, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession} // pre-populated
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -5383,10 +5382,10 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 	t.Run("max_sessions zero clears BudgetExhausted", func(t *testing.T) {
 		t.Parallel()
 
-		wm := budgetTickConfig(0) // MaxSessions=0 → unlimited
+		wm := budgetTickConfig(0)
 		store := &stubStore{}
 		state := NewState(60000, 10, 0, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // pre-populated
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{}
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -5405,7 +5404,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		wm := budgetTickConfig(3)
 		store := &stubStore{}
 		state := NewState(60000, 10, 0, nil, AgentTotals{})
-		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // pre-populated
+		state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{}
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return nil, nil },
@@ -5494,7 +5493,6 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 			tokenExhaustedIDs:  []string{issueB.ID},
 		}
 		state := NewState(60000, 10, 0, nil, AgentTotals{})
-		// Stale entry from a previous tick: must be pruned from the set.
 		state.BudgetExhausted["iss-stale"] = &BudgetExhaustedEntry{Reason: budgetReasonSession}
 
 		budgetOrchestrator(state, wm, store, candidates(issueA, issueB)).handleTick(context.Background())
@@ -5508,7 +5506,6 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		if _, ok := state.BudgetExhausted["iss-stale"]; ok {
 			t.Error("BudgetExhausted[iss-stale] survived the rebuild, want pruned")
 		}
-		// Total coverage: every entry in the rebuilt set carries a reason.
 		for id, entry := range state.BudgetExhausted {
 			if entry.Reason == "" {
 				t.Errorf("BudgetExhausted[%s].Reason empty, want a reason for every exhausted issue", id)
@@ -6122,7 +6119,7 @@ func TestHandleTick_BudgetAnnouncementLifecycle(t *testing.T) {
 		firstExhaustedAt := entry1.ExhaustedAt
 
 		present = false
-		store.budgetExhaustedIDs = map[string]int{} // stub mirrors production: query results are bounded by candidateIDs
+		store.budgetExhaustedIDs = map[string]int{}
 		orch.handleTick(context.Background())
 		if _, ok := state.BudgetExhausted[issue.ID]; ok {
 			t.Fatal("BudgetExhausted present while the issue is not a candidate, want absent")
@@ -6364,7 +6361,6 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		o, entry := incrementalWriteOrchestrator(t, store)
 
 		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
-		// Backdate the last write past the throttle interval.
 		entry.LastMetadataWrite = time.Now().UTC().Add(-sessionMetadataWriteInterval - time.Second)
 		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(11, 21, 33, 6))
 
@@ -6551,7 +6547,6 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		if !entry.LastMetadataWrite.IsZero() {
 			t.Error("RunningEntry.LastMetadataWrite advanced after failed write, want zero")
 		}
-		// The next event retries immediately because the timestamp did not move.
 		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(11, 21, 33, 6))
 		if writes := store.sessionWrites(); len(writes) != 2 {
 			t.Errorf("UpsertSessionMetadata calls = %d, want 2 (failed write not throttled)", len(writes))
@@ -7029,7 +7024,7 @@ func TestBudgetExhaustionPreventsRedispatch(t *testing.T) {
 	issue := domain.Issue{ID: "iss-redisp", Identifier: "PROJ-1", Title: "Work", State: "To Do"}
 	wm := budgetTickConfig(3)
 	store := &stubStore{budgetExhaustedIDs: map[string]int{issue.ID: 1}}
-	state := NewState(60000, 10, 0, nil, AgentTotals{}) // fresh; BudgetExhausted is empty
+	state := NewState(60000, 10, 0, nil, AgentTotals{})
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{},
 		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -7049,10 +7044,10 @@ func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 	t.Parallel()
 
 	issue := domain.Issue{ID: "iss-clear", Identifier: "PROJ-2", Title: "Retry", State: "To Do"}
-	wm := budgetTickConfig(0) // max_sessions=0 → all issues eligible
+	wm := budgetTickConfig(0)
 	store := &stubStore{}
 	state := NewState(60000, 10, 0, nil, AgentTotals{})
-	state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{} // was previously blocked
+	state.BudgetExhausted[issue.ID] = &BudgetExhaustedEntry{}
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{},
 		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -7218,7 +7213,7 @@ func TestOrchestratorScenarios(t *testing.T) {
 		t.Parallel()
 
 		tmpDir := t.TempDir()
-		cfg := handoffConfig(tmpDir) // HandoffState configured but must NOT be called for "blocked"
+		cfg := handoffConfig(tmpDir)
 		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
 		issue := scenarioIssue("bl-1", "BL-1")
 
@@ -7487,7 +7482,6 @@ func TestOrchestratorScenarios(t *testing.T) {
 		t.Parallel()
 
 		tmpDir := t.TempDir()
-		// Small polling interval so reconciliation fires while the worker is running.
 		cfg := lifecycleConfig(tmpDir)
 		cfg.Polling.IntervalMS = 100
 		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
@@ -7589,7 +7583,7 @@ func TestOrchestratorScenarios(t *testing.T) {
 		tmpDir := t.TempDir()
 		cfg := lifecycleConfig(tmpDir)
 		cfg.Tracker.HandoffState = "In Review"
-		cfg.Polling.IntervalMS = 100 // fast ticks to verify no re-dispatch
+		cfg.Polling.IntervalMS = 100
 		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
 		issue := scenarioIssue("nd-1", "ND-1")
 
@@ -7866,7 +7860,6 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	const warnMsg = "rejected unrecognized ssh_strict_host_key_checking value"
 
 	o.handleTick(ctx)
-	// Second tick: same config, warning must be suppressed.
 	o.handleTick(ctx)
 	if got := strings.Count(buf.String(), warnMsg); got != 1 {
 		t.Errorf("warning count after two identical ticks = %d, want 1\nlog:\n%s", got, buf.String())
@@ -7949,15 +7942,12 @@ func TestTickLogging_DispatchBreakdown(t *testing.T) {
 	if !strings.Contains(got, "dispatched=2") {
 		t.Errorf("log missing dispatched=2: %s", got)
 	}
-	// One issue matched the named rule.
 	if !strings.Contains(got, "dispatched_by_rule=1") {
 		t.Errorf("log missing dispatched_by_rule=1: %s", got)
 	}
-	// No default configured, no default dispatch.
 	if !strings.Contains(got, "dispatched_by_default=0") {
 		t.Errorf("log missing dispatched_by_default=0: %s", got)
 	}
-	// One issue fell through to fallback.
 	if !strings.Contains(got, "dispatched_by_fallback=1") {
 		t.Errorf("log missing dispatched_by_fallback=1: %s", got)
 	}
@@ -8952,7 +8942,7 @@ func TestHandleTick_BudgetHoldNoticeReleaseOnClear(t *testing.T) {
 		t.Fatal("BudgetHoldNoticed missing after the first tick, want present")
 	}
 
-	store.budgetExhaustedIDs = map[string]int{} // the issue is still a candidate; the ceiling clears
+	store.budgetExhaustedIDs = map[string]int{}
 	orch.handleTick(context.Background())
 	state.TrackerOpsWg.Wait()
 
@@ -8998,7 +8988,7 @@ func TestHandleTick_BudgetHoldNoticeAbsenceThenReturn(t *testing.T) {
 	}
 
 	present = false
-	store.budgetExhaustedIDs = map[string]int{} // the rebuild's query is scoped to this tick's candidateIDs
+	store.budgetExhaustedIDs = map[string]int{}
 	orch.handleTick(context.Background())
 	orch.handleTick(context.Background())
 	state.TrackerOpsWg.Wait()

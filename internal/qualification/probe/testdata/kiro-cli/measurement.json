@@ -1,16 +1,16 @@
 {
   "schema_version": 4,
   "profile_digest": "407b4a496684cc43457bc32e87acdf6cb7cae8aad3d767ff2fde4fe4ccd728d6",
-  "measured_at": "2026-09-15",
+  "measured_at": "2026-09-19",
   "expectation": {
     "Verdict": "unmeasured",
-    "Conformance": null,
+    "Conformance": "not_qualified",
     "Grades": [
       {
         "Surface": "protocol",
         "Capability": "turn_disposition",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "usable",
+        "Label": "Observed:"
       },
       {
         "Surface": "protocol",
@@ -21,8 +21,8 @@
       {
         "Surface": "protocol",
         "Capability": "token_ceiling",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "protocol",
@@ -45,51 +45,41 @@
       {
         "Surface": "native_stream_json",
         "Capability": "turn_disposition",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
         "Capability": "retry_classification",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
         "Capability": "token_ceiling",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "gap",
+        "Label": "Observed:"
       },
       {
         "Surface": "native_stream_json",
         "Capability": "session_continuation",
-        "Grade": "not_observed",
-        "Label": "Not observed:"
+        "Grade": "usable",
+        "Label": "Observed:"
       }
     ],
-    "Excluded": null,
+    "Excluded": [
+      "retry_classification non_retryable_refusal: declared outcome_never_produced",
+      "retry_classification unknown_outcome: no deterministic inducer, so neither the condition nor the surface's account of it was established",
+      "turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation",
+      "turn_disposition limit_reached: not induced (prompt_channel_too_small), so the case stays unmeasured on this surface",
+      "turn_disposition runtime_failure: induced, and the surface reported no outcome (output_channel_silent_on_failure), so the case keeps its obligation",
+      "turn_disposition runtime_refusal: declared outcome_never_produced"
+    ],
     "Unobserved": [
-      "native_stream_json retry_classification human_input: not_observed",
-      "native_stream_json retry_classification non_retryable_refusal: not_observed",
-      "native_stream_json retry_classification retryable_runtime_or_transport_failure: not_observed",
-      "native_stream_json retry_classification unknown_outcome: not_observed",
-      "native_stream_json turn_disposition cancellation: not_observed",
-      "native_stream_json turn_disposition limit_reached: not_observed",
-      "native_stream_json turn_disposition runtime_failure: not_observed",
-      "native_stream_json turn_disposition runtime_refusal: not_observed",
-      "native_stream_json turn_disposition success: not_observed",
-      "protocol retry_classification human_input: not_observed",
-      "protocol retry_classification non_retryable_refusal: not_observed",
-      "protocol retry_classification retryable_runtime_or_transport_failure: not_observed",
-      "protocol retry_classification unknown_outcome: not_observed",
-      "protocol turn_disposition cancellation: not_observed",
-      "protocol turn_disposition limit_reached: not_observed",
-      "protocol turn_disposition runtime_failure: not_observed",
-      "protocol turn_disposition runtime_refusal: not_observed",
-      "protocol turn_disposition success: not_observed"
+      "protocol retry_classification human_input: fixture_induction_failed"
     ]
   },
   "requested_model": "claude-haiku-4.5",
   "observed_model": null,
-  "provenance_digest": null
+  "provenance_digest": "7d7ebe76ba7ee297e5ffa92a42913f63999a0d7d9d2e2988ac0a5d4e6bdf3000"
 }
