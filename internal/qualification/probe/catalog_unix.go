@@ -66,6 +66,12 @@ func (u *usageTracker) observe(sessionID string, measured bool) {
 	}
 }
 
+func (u *usageTracker) result() (measured bool, sessionID string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.measured, u.sessionID
+}
+
 // groupTracker is the run-owned registry of every process-group id a
 // graded launch starts.
 type groupTracker struct {
@@ -148,6 +154,12 @@ func (f *sharedFixture) recordNativeOutput(surface qualification.Surface, output
 		f.nativeOutputs = map[qualification.Surface][]string{}
 	}
 	f.nativeOutputs[surface] = append(f.nativeOutputs[surface], output)
+}
+
+func (f *sharedFixture) nativeOutputsFor(surface qualification.Surface) []string {
+	f.nativeOutputsMu.Lock()
+	defer f.nativeOutputsMu.Unlock()
+	return slices.Clone(f.nativeOutputs[surface])
 }
 
 // recordUnrecognized appends a terminal object no recognizer could

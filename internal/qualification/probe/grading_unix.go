@@ -22,6 +22,16 @@ type collectedObservations struct {
 
 	continuationSeed   map[qualification.Surface]qualification.Observation
 	continuationRecall map[qualification.Surface]qualification.Observation
+
+	tokenSessionID map[qualification.Surface]string
+	tokenPaths     map[qualification.Surface][]qualification.TokenObservation
+	tokenInventory map[qualification.Surface]qualification.Observation
+	// tokenExtension is the protocol surface's extension-point reading,
+	// which no native surface has.
+	tokenExtension *qualification.ExtensionReading
+	// tokenCompensation answers for the effective adapter alone, kept
+	// apart from the inventory, which answers for the wire.
+	tokenCompensation tokenCompensation
 }
 
 // declarableSurfaceUnproduced reports whether every declarable measured
@@ -124,6 +134,19 @@ func gradedEvidence(profile qualification.RuntimeProfile, collected collectedObs
 		if err := fixture.SetSessionContinuationObserved(surface, seed, recall); err != nil {
 			return nil, fmt.Errorf("session continuation on surface %s: %w", surface, err)
 		}
+		var extension *qualification.ExtensionReading
+		if surface == qualification.SurfaceProtocol {
+			extension = collected.tokenExtension
+		}
+		if err := fixture.SetTokenInventory(surface, collected.tokenSessionID[surface], collected.tokenPaths[surface], collected.tokenInventory[surface], extension); err != nil {
+			return nil, fmt.Errorf("token inventory on surface %s: %w", surface, err)
+		}
+	}
+
+	// Written after every surface's inventory so the token baseline is
+	// already derived from the wire and this reading cannot enter it.
+	if collected.tokenCompensation.supplied {
+		fixture.SetTokenCompensatedObserved(collected.tokenCompensation.sessionID, compensatedTokenPath, compensatedTokenDetail)
 	}
 
 	fixture.Finalize()
