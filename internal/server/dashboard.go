@@ -303,7 +303,6 @@ func FormatDuration(d time.Duration) string {
 	seconds := totalSec % 60
 
 	if days > 0 {
-		// Show at most 3 components, drop seconds when days present.
 		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
 	}
 	if hours > 0 {
@@ -562,7 +561,7 @@ func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
 
 		wf := r.WorkflowFile
 		if wf == "" {
-			wf = "\u2014" // em dash for missing
+			wf = "\u2014"
 		}
 
 		histDisplayID := r.Identifier

@@ -242,13 +242,11 @@ func BaselineClassification(grade Grade, detail string) Grade {
 	return grade
 }
 
-// DeriveBaselineGrade derives one capability's per-surface baseline
-// grade from that capability's own case classifications only. It
-// first drops every declared_gap and not_inducible entry; an empty
-// remainder derives not_observed. Otherwise, any remaining not_observed
-// case makes the grade not_observed; else any gap case makes it gap;
-// only all-usable cases yield usable. Cases of the other capability
-// never influence the result.
+// DeriveBaselineGrade derives one capability's per-surface baseline grade from
+// that capability's own case classifications. It drops every declared_gap and
+// not_inducible entry; an empty remainder derives not_observed. Otherwise any
+// remaining not_observed makes the grade not_observed, any gap makes it gap, and
+// only all-usable yields usable.
 func DeriveBaselineGrade(classifications []Grade) Grade {
 	remaining := make([]Grade, 0, len(classifications))
 	for _, c := range classifications {
@@ -332,11 +330,11 @@ const (
 	StandingUnmeasured Standing = "unmeasured"
 )
 
-// RowOutcome is one load-bearing row's contribution to the two
-// verdicts. Standing and Cause answer QuestionTransportParity;
-// Conformance and ConformanceCause answer QuestionProductConformance
-// over the same row. Both causes draw only from closed vocabulary and
-// are empty when their standing is StandingSatisfied.
+// RowOutcome is one load-bearing row's contribution to the two verdicts.
+// Standing and Cause answer QuestionTransportParity; Conformance and
+// ConformanceCause answer QuestionProductConformance over the same row. Both
+// causes draw only from closed vocabulary and are empty when their standing is
+// StandingSatisfied.
 type RowOutcome struct {
 	Label            string
 	Standing         Standing
@@ -345,17 +343,15 @@ type RowOutcome struct {
 	ConformanceCause string
 }
 
-// EligibilityReport carries both verdicts and every row that produced
-// them, in canonical row order. Verdict answers
-// QuestionTransportParity and Conformance answers
-// QuestionProductConformance; neither stands for the other.
+// EligibilityReport carries both verdicts and every row that produced them, in
+// canonical row order. Verdict answers QuestionTransportParity and Conformance
+// answers QuestionProductConformance; neither stands for the other.
 type EligibilityReport struct {
 	Verdict     Verdict
 	Conformance Verdict
 	Rows        []RowOutcome
-	// NativeReferenceAbsent reports that the run measured no
-	// structured native surface, so every comparison row stands on the
-	// protocol surface alone.
+	// NativeReferenceAbsent reports that the run measured no structured native
+	// surface, so every comparison row stands on the protocol surface alone.
 	NativeReferenceAbsent bool
 }
 
@@ -403,9 +399,9 @@ func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability
 	return richestNativeReference(surfaceGrades...), "", nativeReferenceGraded
 }
 
-// measuredStructuredNatives returns the structured native surfaces this
-// run measured, in measurableSurfaces order. native_text is excluded;
-// it is not a structured surface.
+// measuredStructuredNatives returns the structured native surfaces this run
+// measured, in measurableSurfaces order. native_text is excluded; it is not a
+// structured surface.
 func measuredStructuredNatives(measured []Surface) []Surface {
 	var structured []Surface
 	for _, surface := range measurableSurfaces {
@@ -540,11 +536,9 @@ func explainSemanticComparisonRow(records []Record, profile RuntimeProfile, capa
 	return RowOutcome{Label: label, Standing: StandingSatisfied}
 }
 
-// explainComparisonRow derives one comparison capability's standing
-// against the ordered condition table: an absent or unmeasured
-// protocol baseline, an incomplete or missing native reference, or a
-// rank comparison between the two. A capability that owns a case set
-// is compared case by case against the same obligations on both sides.
+// explainComparisonRow derives one comparison capability's standing against the
+// ordered condition table. A capability that owns a case set is compared case
+// by case against the same obligations on both sides.
 func explainComparisonRow(records []Record, grades map[Surface]map[Capability]Grade, profile RuntimeProfile, capability Capability, measured []Surface) RowOutcome {
 	label := string(capability)
 	protocolGrade, present := presentGrade(grades, SurfaceProtocol, capability)
@@ -761,8 +755,8 @@ func extensionAccount(records []Record, capability Capability) string {
 	return ""
 }
 
-// singletonRowClasses is the fixed order of the four singleton rows in
-// an EligibilityReport, following the four comparison capabilities.
+// singletonRowClasses is the fixed order of the four singleton rows, following
+// the four comparison capabilities.
 var singletonRowClasses = []RowClass{RowPolicyPrecondition, RowPermission, RowMCPDelivery, RowEndToEnd}
 
 // ExplainEligibility derives both verdicts and the per-row standings from the
@@ -1072,10 +1066,9 @@ func checkExtensionReading(rec *Record, class RowClass) error {
 	return nil
 }
 
-// CheckOutcomeGradePairing enforces the closed pairing between a
-// record's outcome and its grade. It is exported so a collector that
-// builds one record at a time can check that record against the same
-// rule the set validator applies, rather than restating the pairing.
+// CheckOutcomeGradePairing enforces the closed pairing between a record's
+// outcome and its grade. It is exported so a collector building one record at a
+// time can check it against the same rule the set validator applies.
 func CheckOutcomeGradePairing(rec *Record) error {
 	classification := rec.Grade
 	verdict := rec.Outcome
@@ -1345,8 +1338,8 @@ func sameSessionRef(a, b *string) bool {
 	return *a == *b
 }
 
-// indexRecord files a classified record into the lookups the relation
-// and derivation checks consume.
+// indexRecord files a classified record into the lookups the relation and
+// derivation checks consume.
 func (v *setValidation) indexRecord(rec *Record, class RowClass) {
 	switch class {
 	case RowPolicyPrecondition:

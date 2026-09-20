@@ -11,47 +11,24 @@ type AgentEventType string
 
 const (
 	EventSessionStarted AgentEventType = "session_started"
+	EventStartupFailed  AgentEventType = "startup_failed"
+	EventTurnCompleted  AgentEventType = "turn_completed"
+	EventTurnFailed     AgentEventType = "turn_failed"
+	EventTurnCancelled  AgentEventType = "turn_cancelled"
 
-	// EventStartupFailed indicates the agent session could not be
-	// initialized.
-	EventStartupFailed AgentEventType = "startup_failed"
-
-	// EventTurnCompleted indicates the turn finished successfully.
-	EventTurnCompleted AgentEventType = "turn_completed"
-
-	// EventTurnFailed indicates the turn finished with a failure.
-	EventTurnFailed AgentEventType = "turn_failed"
-
-	// EventTurnCancelled indicates the turn was canceled.
-	EventTurnCancelled AgentEventType = "turn_cancelled"
-
-	// EventTurnEndedWithError indicates the turn ended due to an
-	// error condition.
 	EventTurnEndedWithError AgentEventType = "turn_ended_with_error"
 
 	// EventTurnInputRequired is a declared, non-retryable ending: the
 	// agent asked for a decision only a person could give.
 	EventTurnInputRequired AgentEventType = "turn_input_required"
 
-	// EventTokenUsage carries normalized token usage counters:
-	// input_tokens, output_tokens, total_tokens.
-	EventTokenUsage AgentEventType = "token_usage"
-
-	// EventNotification carries an informational message from the
-	// agent.
+	EventTokenUsage   AgentEventType = "token_usage"
 	EventNotification AgentEventType = "notification"
-
-	// EventOtherMessage carries an unclassified message from the
-	// agent.
 	EventOtherMessage AgentEventType = "other_message"
+	EventMalformed    AgentEventType = "malformed"
 
-	// EventMalformed indicates an unparseable or unrecognized message
-	// from the agent.
-	EventMalformed AgentEventType = "malformed"
-
-	// EventToolResult indicates a tool call completed. Adapters that
-	// can observe tool execution timing emit this event with ToolName
-	// and ToolDurationMS populated.
+	// EventToolResult indicates a tool call completed, with ToolName and
+	// ToolDurationMS populated when the adapter can observe them.
 	EventToolResult AgentEventType = "tool_result"
 )
 

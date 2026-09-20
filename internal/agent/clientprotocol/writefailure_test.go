@@ -16,10 +16,9 @@ type alwaysFailWriter struct{ err error }
 
 func (w alwaysFailWriter) Write(p []byte) (int, error) { return 0, w.err }
 
-// newFailWriteSession builds a *sessionState like newTestSession, but
-// with its connection's writer replaced by one that fails every write,
-// so a turn's own prompt send fails asynchronously once
-// handleStartTurn's SendRequest has already enqueued and returned.
+// newFailWriteSession is newTestSession with its connection's writer replaced
+// by one that fails every write, so a turn's prompt send fails asynchronously
+// after handleStartTurn's SendRequest has enqueued and returned.
 func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr error, opts ...func(*sessionState)) (*sessionState, *io.PipeWriter) {
 	t.Helper()
 

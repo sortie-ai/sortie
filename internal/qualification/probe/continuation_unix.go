@@ -4,7 +4,9 @@ package probe
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -84,6 +86,20 @@ func recallObservation(evidence recallEvidence, seedSessionID, actualSessionID s
 		Outcome: qualification.OutcomeRuntimeFailed,
 		Detail:  qualification.RecallUnobservedActual,
 	}
+}
+
+// newRFC4122V4 generates a random v4 UUID, the probe's correlation
+// identifier for a launch, handed to a runtime under seed_args. It is
+// never reported as an identifier a runtime itself produced.
+func newRFC4122V4(t *testing.T) string {
+	t.Helper()
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		t.Fatalf("generate continuation identifier: %v", err)
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
 // answerCarriesNonce reports whether text carries nonce. An empty nonce

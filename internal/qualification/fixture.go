@@ -175,17 +175,16 @@ func (f *Fixture) Finalize() {
 	f.Renumber()
 }
 
-// identityRecord builds one runtime-identity record for SessionID,
-// choosing the not-observed shape on a fixture built from
-// FixtureNotObserved and IdentityFixtureRecord's qualified shape on
-// every other variant.
-func (f *Fixture) identityRecord(SessionID string) Record {
+// identityRecord builds one runtime-identity record for sessionID, choosing the
+// not-observed shape on a FixtureNotObserved fixture and the qualified shape
+// otherwise.
+func (f *Fixture) identityRecord(sessionID string) Record {
 	if f.identitySet {
-		return f.liveIdentityRecord(SessionID)
+		return f.liveIdentityRecord(sessionID)
 	}
-	rec := IdentityFixtureRecord(SessionID)
+	rec := IdentityFixtureRecord(sessionID)
 	if f.variant == FixtureNotObserved {
-		rec = identityFixtureRecordNotObserved(SessionID)
+		rec = identityFixtureRecordNotObserved(sessionID)
 	}
 	rec.ObservedAt = f.observedAt
 	return rec
@@ -498,7 +497,6 @@ func DeriveBaselineOutcome(grade Grade, contributing []Outcome) Outcome {
 	return best
 }
 
-// addBaselines adds the 12 derived per-Surface Capability summaries.
 func (f *Fixture) addBaselines() {
 	for _, Surface := range f.measured() {
 		for _, Capability := range comparisonCapabilities {
@@ -1672,18 +1670,12 @@ func (f *Fixture) sessionIdentity(sessionID *string) (SessionIdentity, bool) {
 	return identity, named
 }
 
-// SetSessionContinuation rewrites surface's session-continuation
-// baseline, recall, and seed Records to grade, following a live replay
-// observation. The baseline carries detail, bounded by DetailBound; the
-// recall Record instead carries the closed detail token
-// checkRecallRecord requires for grade, since a recall Record's detail
-// is not free text. The seed reads usable whenever a turn was observed
-// to complete (grade usable or gap) and not_observed only when nothing
-// was observed at all: the setter receives the surface grade alone, so
-// that is the finest distinction it can draw. Any grade outside usable,
-// gap, and not_observed leaves every record unchanged. What one call
-// writes depends only on surface, grade, and detail, never on what an
-// earlier call to this setter wrote.
+// SetSessionContinuation rewrites surface's session-continuation baseline,
+// recall, and seed Records to grade, following a live replay. The recall
+// carries the closed detail token checkRecallRecord requires for grade, not
+// free text. The seed reads usable whenever a turn completed (usable or gap)
+// and not_observed only when nothing was observed. Any grade outside usable,
+// gap, and not_observed leaves every record unchanged.
 func (f *Fixture) SetSessionContinuation(surface Surface, grade Grade, detail string) {
 	if grade != GradeUsable && grade != GradeGap && grade != GradeNotObserved {
 		return
@@ -1759,9 +1751,8 @@ func (f *Fixture) SetTokenCompensatedObserved(sessionID, path, detail string) {
 	f.Renumber()
 }
 
-// DuplicateAfter inserts a copy of target directly behind it, keeping
-// the canonical ordering intact so the duplicate key check is the check
-// that fires.
+// DuplicateAfter inserts a copy of target directly behind it, keeping canonical
+// ordering intact so the duplicate key check is the check that fires.
 func (f *Fixture) DuplicateAfter(target *Record) {
 	for i := range f.Records {
 		if &f.Records[i] == target {

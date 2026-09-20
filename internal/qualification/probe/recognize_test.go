@@ -133,9 +133,6 @@ func TestNativeFailureObservation(t *testing.T) {
 	})
 }
 
-// writeAll issues one lineBoundedWriter.Write call per element of
-// writes, in order, failing t if any call reports an error or a short
-// write.
 func writeAll(t *testing.T, w *lineBoundedWriter, writes []string) {
 	t.Helper()
 	for _, chunk := range writes {

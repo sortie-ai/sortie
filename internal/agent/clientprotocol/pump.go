@@ -282,12 +282,9 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 		if p.reader != nil {
 			p.reader.Open(p.sessionID)
 		}
-		// Logged here, once per session, rather than when the handshake
-		// control message arrives: the handshake is always published
-		// first (StartSession's own publish order), so the agent's
-		// implementation record is already known by the time the
-		// session identifier is, and this is the first point the log
-		// line can carry both.
+		// Logged once per session here, not on the handshake control message: the
+		// handshake is always published first, so both the implementation record
+		// and the session identifier are known only by this point.
 		p.state.logger.Info("agent implementation",
 			slog.String("session_id", p.sessionID),
 			slog.String("name", p.agentInfo.Name),
@@ -415,9 +412,9 @@ func (p *pumpState) dropReader() {
 	p.lowerCapability(&p.state.caps.tokenCounts, capabilityLabelTokenCounts)
 }
 
-// lowerCapability lowers entry to gap. When that happens after the
-// once-per-session notice has already been sent, it is logged at warn
-// level rather than folded into a second notice.
+// lowerCapability lowers entry to gap. A lowering after the once-per-session
+// notice has been sent is logged at warn level rather than folded into a second
+// notice.
 func (p *pumpState) lowerCapability(entry *capabilityState, label string) {
 	if !lower(entry) {
 		return
@@ -725,9 +722,8 @@ func (p *pumpState) observeModelReached(kind sessionUpdateKind) {
 	}
 }
 
-// emitOrQueue publishes ev into the active turn's sink, or queues it
-// when no turn is in flight, to be flushed immediately after the next
-// turn's session_started event.
+// emitOrQueue publishes ev into the active turn's sink, or queues it when no
+// turn is in flight, to be flushed after the next turn's session_started event.
 func (p *pumpState) emitOrQueue(ev domain.AgentEvent) {
 	if p.activeTurn != nil {
 		p.publish(p.activeTurn)(ev)
@@ -892,9 +888,9 @@ func (p *pumpState) recoverThenFinalize(ev agentcore.TurnEvidence) {
 	p.armDrain(turn, ev, 0)
 }
 
-// beginEndAttempt marks the active turn as winding down toward kind,
-// sends session/cancel exactly once for the turn, and arms the bounded
-// wait for the prompt response.
+// beginEndAttempt marks the active turn as winding down toward kind, sends
+// session/cancel exactly once, and arms the bounded wait for the prompt
+// response.
 func (p *pumpState) beginEndAttempt(kind turnEndKind, detail string) {
 	turn := p.activeTurn
 	if turn == nil {

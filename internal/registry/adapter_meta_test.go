@@ -197,12 +197,9 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 
 		registered := registry.Agents.Kinds()
 
-		// Completeness in both directions: every registered kind has an
-		// expectation entry, and every expectation entry names a
-		// registered kind. A seventh kind added to this file's blank
-		// imports without an entry, or an entry naming a kind that is no
-		// longer registered, fails here by name before any field is
-		// compared.
+		// Completeness in both directions, so a kind added to the blank
+		// imports without an entry (or an entry naming an unregistered
+		// kind) fails by name before any field is compared.
 		for _, kind := range registered {
 			if _, ok := byKind[kind]; !ok {
 				t.Errorf("Agents.Kinds() includes %q, which has no expectation entry in this table", kind)

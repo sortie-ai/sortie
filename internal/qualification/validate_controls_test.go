@@ -864,8 +864,8 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 		fixture.Finalize()
 		declareNotInducible(fixture, SurfaceProtocol, CapabilityRetryClassification, CaseUnknownOutcome)
 		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityRetryClassification, CaseUnknownOutcome)
-		// native_stream_json intentionally left observed: a catalog-wide
-		// not-inducible case must cover every measured surface.
+		// native_stream_json left observed: a catalog-wide not-inducible case
+		// must cover every measured surface.
 		path := WriteEvidenceFile(T, fixture.Records)
 		_, err := ValidateObservations(path)
 		if err == nil {
@@ -1012,9 +1012,32 @@ func scopedNotInducibleHumanInput(reason, detail string) (*Fixture, RuntimeProfi
 	return fixture, declarations
 }
 
-// TestValidatorAllExcludedBaselineControl covers checkDerivedBaselines'
-// rejection of a surface-capability whose every case is excluded,
-// leaving no case to derive a baseline from.
+// A paid qualification run once emitted a usable semantic record
+// without the evidence path needed to audit it.
+func TestValidatorRejectsSemanticRecordWithoutEvidencePath(T *testing.T) {
+	T.Parallel()
+
+	fixture := NewFixture(FixtureQualified)
+	fixture.Finalize()
+	rec := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseSuccess))
+	if rec == nil {
+		T.Fatal("FindFirst(MatchSemantic(protocol, turn_disposition, success)) = nil, want the fixture's own success record")
+	}
+	if rec.Grade != GradeUsable {
+		T.Fatalf("fixture semantic success record grade = %s, want %s before the mutation this test relies on", rec.Grade, GradeUsable)
+	}
+	rec.EvidencePath = nil
+
+	path := WriteEvidenceFile(T, fixture.Records)
+	_, err := ValidateObservations(path)
+	if err == nil {
+		T.Fatal("ValidateObservations() = nil error, want rejection of a usable semantic record with no evidence_path")
+	}
+	if !strings.Contains(err.Error(), "evidence_path must be set for a semantic probe record") {
+		T.Errorf("ValidateObservations() error = %v, want it to name the missing evidence_path on the semantic probe record", err)
+	}
+}
+
 func TestValidatorAllExcludedBaselineControl(T *testing.T) {
 	T.Parallel()
 
@@ -1304,30 +1327,4 @@ func TestCheckSessionRelationSessionlessSurfacePartition(T *testing.T) {
 		}
 		RequireObservationVerdict(T, path, VerdictQualified)
 	})
-}
-
-// A paid qualification run once emitted a usable semantic record
-// without the evidence path needed to audit it.
-func TestValidatorRejectsSemanticRecordWithoutEvidencePath(T *testing.T) {
-	T.Parallel()
-
-	fixture := NewFixture(FixtureQualified)
-	fixture.Finalize()
-	rec := fixture.FindFirst(MatchSemantic(SurfaceProtocol, CapabilityTurnDisposition, CaseSuccess))
-	if rec == nil {
-		T.Fatal("FindFirst(MatchSemantic(protocol, turn_disposition, success)) = nil, want the fixture's own success record")
-	}
-	if rec.Grade != GradeUsable {
-		T.Fatalf("fixture semantic success record grade = %s, want %s before the mutation this test relies on", rec.Grade, GradeUsable)
-	}
-	rec.EvidencePath = nil
-
-	path := WriteEvidenceFile(T, fixture.Records)
-	_, err := ValidateObservations(path)
-	if err == nil {
-		T.Fatal("ValidateObservations() = nil error, want rejection of a usable semantic record with no evidence_path")
-	}
-	if !strings.Contains(err.Error(), "evidence_path must be set for a semantic probe record") {
-		T.Errorf("ValidateObservations() error = %v, want it to name the missing evidence_path on the semantic probe record", err)
-	}
 }

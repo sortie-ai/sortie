@@ -202,14 +202,12 @@ func readTimeout(state *sessionState) time.Duration {
 	return defaultReadTimeout
 }
 
-// startSession launches the runtime, performs the initialize handshake,
-// and creates or continues a session. A non-empty ResumeSessionID picks
-// the continuation route the handshake advertises; every other case,
-// and a continuation that is not confirmed, creates the session with
-// session/new instead. The session capability record is built with its
-// stage-one states before the pump starts, and the pump applies
-// handshake- and continuation-based lowering to it once the
-// corresponding control message arrives.
+// startSession launches the runtime, performs the initialize handshake, and
+// creates or continues a session. A non-empty ResumeSessionID picks the
+// continuation route the handshake advertises; every other case, and a
+// continuation that is not confirmed, creates the session with session/new.
+// The capability record is built before the pump starts, and the pump applies
+// handshake- and continuation-based lowering to it.
 func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams, usage *agentcore.TurnEndUsage) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
@@ -319,10 +317,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		Logger:     state.logger,
 	})
 
-	// The capability record is built here, on this goroutine, with its
-	// stage-one states, before the pump starts. The pump's start orders
-	// this write exactly as it orders the launch target beside it:
-	// StartSession must not touch state.caps after this point.
+	// The capability record is built here, before the pump starts, so the pump
+	// is its sole mutator afterward: StartSession must not touch state.caps past
+	// this point.
 	state.caps = newCapabilityRecord(remote, reader != nil)
 	state.usage = usage
 
@@ -674,7 +671,6 @@ func releaseUsageReader(state *sessionState) {
 	state.reader.Close()
 }
 
-// runTeardown walks steps in order, running every one.
 func runTeardown(state *sessionState, steps []teardownStep) {
 	for _, step := range steps {
 		step.run(state)

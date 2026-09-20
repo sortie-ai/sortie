@@ -276,9 +276,9 @@ func TestRuntimeSnapshot(t *testing.T) {
 	t.Run("running sessions with computed seconds_running", func(t *testing.T) {
 		t.Parallel()
 
-		startA := fixedNow.Add(-60 * time.Second)    // 60s ago
-		startB := fixedNow.Add(-120 * time.Second)   // 120s ago
-		eventTime := fixedNow.Add(-10 * time.Second) // 10s ago
+		startA := fixedNow.Add(-60 * time.Second)
+		startB := fixedNow.Add(-120 * time.Second)
+		eventTime := fixedNow.Add(-10 * time.Second)
 
 		state := NewState(5000, 10, 0, nil, AgentTotals{
 			InputTokens:    500,
@@ -482,7 +482,7 @@ func TestRuntimeSnapshot(t *testing.T) {
 		state.Running["future-issue"] = &RunningEntry{
 			Identifier: "MT-400",
 			Issue:      domain.Issue{ID: "future-issue", State: "In Progress"},
-			StartedAt:  fixedNow.Add(10 * time.Second), // 10s in the future
+			StartedAt:  fixedNow.Add(10 * time.Second),
 		}
 
 		result := RuntimeSnapshot(state, fixedNow)
@@ -499,7 +499,7 @@ func TestRuntimeSnapshot(t *testing.T) {
 		state.Running["zero-ts"] = &RunningEntry{
 			Identifier: "MT-500",
 			Issue:      domain.Issue{ID: "zero-ts", State: "In Progress"},
-			StartedAt:  time.Time{}, // zero value
+			StartedAt:  time.Time{},
 		}
 
 		result := RuntimeSnapshot(state, fixedNow)
@@ -1164,7 +1164,7 @@ func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
 		rc        config.ReactionConfig
 		want      AutoMergeReactionConfig
 		wantErr   bool
-		wantErrIs error // when set, err must satisfy errors.Is(err, wantErrIs)
+		wantErrIs error
 	}{
 		{
 			name: "all defaults",

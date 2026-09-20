@@ -182,6 +182,7 @@ func TestInductionSessionLaunchesUnderTheAllowlist(t *testing.T) {
 	fixture := &sharedFixture{
 		workspaceRoot: t.TempDir(),
 		tracker:       &groupTracker{},
+		usage:         &usageTracker{},
 		env:           launchEnvironment(coords),
 		envWrapper:    writeLaunchEnvWrapper(t, dir, launchEnvNames(coords), ""),
 	}

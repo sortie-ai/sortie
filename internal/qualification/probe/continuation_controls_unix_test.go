@@ -32,51 +32,6 @@ Each message I receive is processed independently. While I can see the conversat
 
 If you need to verify session continuity or test my behavior, I'm happy to help with that in a different way. What are you actually trying to accomplish?`
 
-const continuationNativeScenario = "continuation-native"
-
-type continuationNativeParams struct {
-	SeedOutput   string
-	RecallOutput string
-}
-
-func runContinuationNative(args []string, params continuationNativeParams) int {
-	joined := strings.Join(args, "\x00")
-	var output string
-	switch {
-	case strings.Contains(joined, "SEED_MARKER"):
-		output = params.SeedOutput
-	case strings.Contains(joined, "RECALL_MARKER"):
-		output = params.RecallOutput
-	default:
-		return 1
-	}
-	if _, err := fmt.Fprint(os.Stdout, output); err != nil {
-		return 2
-	}
-	return 0
-}
-
-func init() {
-	probeScenarios[continuationNativeScenario] = agenttest.Typed(runContinuationNative)
-}
-
-const tokenTestSurface = qualification.SurfaceNativeJSON
-
-func tokenRecognizerProfile(recognizer qualification.Recognizer) qualification.RuntimeProfile {
-	return qualification.RuntimeProfile{
-		ProbePrompts: map[string]string{
-			"continuation_seed":   "SEED_MARKER",
-			"continuation_recall": "RECALL_MARKER",
-		},
-		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
-			tokenTestSurface: {Args: []string{"--prompt", "{prompt}"}},
-		},
-		Recognizers: map[qualification.Surface]qualification.Recognizer{
-			tokenTestSurface: recognizer,
-		},
-	}
-}
-
 // continuationStreamScenario writes one canned answer per launch with stdout
 // and stderr under the test's control, so a control can put the nonce on a
 // stream the runtime never answers on.

@@ -317,18 +317,11 @@ func TestLaunchNativeProbe(t *testing.T) {
 	})
 }
 
-// testSharedFixture is the smallest fixture a launch needs: a
-// run-scoped root to launch in and a tracker to register its group
-// with, with no wrapper, so the launch runs the command directly.
 func testSharedFixture(t *testing.T) *sharedFixture {
 	t.Helper()
 	return &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}}
 }
 
-// corroborateAbsentSurfaceCoordinates builds a Coordinates whose Profile
-// decodes from the package's own sampleProfileJSON fixture and whose
-// CommandPath is runtimePath, so corroborateAbsentSurface's native
-// launch runs a real subprocess rather than a canned return value.
 func corroborateAbsentSurfaceCoordinates(t *testing.T, runtimePath string) Coordinates {
 	t.Helper()
 	profilePath := writeValidProfileFixture(t)
@@ -443,18 +436,6 @@ func TestMustRepositoryRoot(t *testing.T) {
 	}
 }
 
-// TestRunVersionCanary confirms the canary's two outcomes: a runtime
-// that serves version_args lets the run continue, and one that fails
-// them stops it before any graded surface spends a turn. Both outcomes
-// launch versionCanaryScenario, which fails the run on its own if it
-// stopped receiving the sample profile's version_args at all: a stub
-// ignoring its arguments would keep this test green even if the canary
-// stopped passing them.
-//
-// The failing call runs in a subprocess, matching the idiom the tests
-// above already use: the canary reports its failure through t.Fatalf,
-// which against this test's own *testing.T would fail the package run
-// rather than exercise the behavior under test.
 func TestRunVersionCanary(t *testing.T) {
 	t.Parallel()
 

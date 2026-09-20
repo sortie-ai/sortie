@@ -381,8 +381,6 @@ func TestResolveCoordinates(t *testing.T) {
 	})
 }
 
-// TestFirstUnsuppliedAuthName covers the three states a declared
-// credential name can be in: supplied, absent, and present but empty.
 func TestFirstUnsuppliedAuthName(t *testing.T) {
 	t.Parallel()
 
