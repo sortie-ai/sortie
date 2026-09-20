@@ -6,13 +6,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 )
 
 func validProfileDoc() map[string]any {
 	return map[string]any{
-		"schema_version":        3,
+		"schema_version":        4,
 		"runtime_id":            "sample-runtime",
 		"identity_tokens":       []string{"sample"},
 		"notes_path":            "docs/sample-notes.md",
@@ -23,10 +24,11 @@ func validProfileDoc() map[string]any {
 		"version_args":          []string{"--version"},
 		"model_args":            []string{"--model", "{model}"},
 		"capability_gap_labels": []string{capabilityGapLabelTokenCounts},
+		"probe_prompts":         validProbePromptsDoc(),
 		"entry_points": map[string]any{
-			"protocol":           map[string]any{"args": []string{"--acp"}},
-			"native_json":        map[string]any{"args": []string{"--output-format", "json", "--prompt", "{prompt}"}},
-			"native_stream_json": map[string]any{"args": []string{"--output-format", "stream-json", "--prompt", "{prompt}"}},
+			"protocol":           map[string]any{"args": []string{"--acp"}, "asking_args": []string{"--acp", "--ask"}},
+			"native_json":        map[string]any{"args": []string{"--output-format", "json", "--prompt", "{prompt}"}, "asking_args": []string{"--output-format", "json", "--ask", "--prompt", "{prompt}"}},
+			"native_stream_json": map[string]any{"args": []string{"--output-format", "stream-json", "--prompt", "{prompt}"}, "asking_args": []string{"--output-format", "stream-json", "--ask", "--prompt", "{prompt}"}},
 		},
 		"recognizers": map[string]any{
 			"native_json": map[string]any{
@@ -50,6 +52,20 @@ func validProfileDoc() map[string]any {
 		},
 		"declarations":    []any{},
 		"absent_surfaces": []any{},
+		"not_inducible_cases": []any{
+			map[string]any{"surface": "native_json", "case": "limit_reached", "reason": NotInducibleChannelTooSmall},
+			map[string]any{"surface": "native_stream_json", "case": "limit_reached", "reason": NotInducibleChannelTooSmall},
+		},
+	}
+}
+
+func validProbePromptsDoc() map[string]any {
+	return map[string]any{
+		"success":             "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
+		"runtime_refusal":     "Decline to continue this turn and report your refusal outcome without calling a tool.",
+		"tool_call":           "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
+		"continuation_seed":   "Remember the nonce {nonce} for the rest of this conversation and reply exactly STORED.",
+		"continuation_recall": "Reply with the nonce supplied by the prior conversation and no other text.",
 	}
 }
 
@@ -100,8 +116,8 @@ func TestDecodeRuntimeProfile(t *testing.T) {
 			mutate: func(doc map[string]any) { delete(doc, "declarations") },
 		},
 		{
-			name:   "schema_version other than 3 is rejected",
-			mutate: func(doc map[string]any) { doc["schema_version"] = 2 },
+			name:   "schema_version other than 4 is rejected",
+			mutate: func(doc map[string]any) { doc["schema_version"] = 3 },
 		},
 		{
 			name:   "a non-lowercase runtime_id is rejected",
@@ -721,6 +737,58 @@ func TestRecognizerTerminal(t *testing.T) {
 	}
 }
 
+func TestRecognizerRawTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		recognizer Recognizer
+		output     string
+		want       map[string]any
+		wantOK     bool
+	}{
+		{
+			name:       "discriminated: a status the recognizer cannot map still returns the located envelope",
+			recognizer: discriminatedRecognizer,
+			output:     `{"type":"result","status":"mystery"}`,
+			want:       map[string]any{"type": "result", "status": "mystery"},
+			wantOK:     true,
+		},
+		{
+			name:       "envelope_path: the object below the discriminated value is returned even when its status does not map",
+			recognizer: envelopedRecognizer,
+			output:     `{"type":"runFinished","data":{"status":"mystery"}}`,
+			want:       map[string]any{"status": "mystery"},
+			wantOK:     true,
+		},
+		{
+			name:       "empty output locates nothing",
+			recognizer: discriminatedRecognizer,
+			output:     "",
+			want:       nil,
+			wantOK:     false,
+		},
+		{
+			name:       "no line matches the discriminator",
+			recognizer: discriminatedRecognizer,
+			output:     `{"type":"init"}`,
+			want:       nil,
+			wantOK:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := tt.recognizer.RawTerminal(tt.output)
+			if ok != tt.wantOK || !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Recognizer.RawTerminal(%q) = %+v, %v, want %+v, %v", tt.output, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
 // TestRecognizerModelRequestsEmptyPath confirms a recognizer naming no
 // model-request path reads unreadable, rather than counting the
 // terminal object's own members as model requests.
@@ -762,11 +830,19 @@ func TestRuntimeProfileAskingArgs(t *testing.T) {
 	t.Run("a profile stating no asking posture reports none", func(t *testing.T) {
 		t.Parallel()
 
-		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		// asking_args is required on every measured surface, so only a
+		// declared-absent surface can state none.
+		doc := validProfileDoc()
+		entryPoints := doc["entry_points"].(map[string]any)
+		delete(entryPoints["native_stream_json"].(map[string]any), "asking_args")
+		doc["absent_surfaces"] = []any{
+			map[string]any{"surface": "native_stream_json", "reason": SurfaceNotOffered},
+		}
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, doc))
 		if err != nil {
 			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
 		}
-		if got, ok := profile.AskingArgs(SurfaceProtocol, "a-model", "", ""); ok {
+		if got, ok := profile.AskingArgs(SurfaceNativeStreamJSON, "a-model", "", ""); ok {
 			t.Errorf("AskingArgs() = %v, true, want no posture reported", got)
 		}
 	})
@@ -774,17 +850,80 @@ func TestRuntimeProfileAskingArgs(t *testing.T) {
 	t.Run("omitting asking_args leaves the digest unmoved", func(t *testing.T) {
 		t.Parallel()
 
-		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, validProfileDoc()))
+		doc := validProfileDoc()
+		entryPoints := doc["entry_points"].(map[string]any)
+		delete(entryPoints["native_stream_json"].(map[string]any), "asking_args")
+		doc["absent_surfaces"] = []any{
+			map[string]any{"surface": "native_stream_json", "reason": SurfaceNotOffered},
+		}
+		profile, err := DecodeRuntimeProfile(marshalProfileDoc(t, doc))
 		if err != nil {
 			t.Fatalf("DecodeRuntimeProfile() error = %v, want nil", err)
 		}
 		bare := profile
 		bare.EntryPoints = maps.Clone(profile.EntryPoints)
-		entry := bare.EntryPoints[SurfaceProtocol]
+		entry := bare.EntryPoints[SurfaceNativeStreamJSON]
 		entry.AskingArgs = nil
-		bare.EntryPoints[SurfaceProtocol] = entry
+		bare.EntryPoints[SurfaceNativeStreamJSON] = entry
 		if profile.Digest() != bare.Digest() {
 			t.Errorf("Digest() moved for a profile that states no asking posture: %s vs %s", profile.Digest(), bare.Digest())
 		}
 	})
+}
+
+func TestRuntimeProfileEntryArgsPolicyPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		args   []string
+		policy string
+		want   []string
+	}{
+		{
+			name:   "flag and placeholder both drop when policy is empty",
+			args:   []string{"--flag", "--sandbox-policy", "{policy}", "--tail"},
+			policy: "",
+			want:   []string{"--flag", "--tail"},
+		},
+		{
+			name:   "flag and placeholder stay adjacent and in order when policy is set",
+			args:   []string{"--flag", "--sandbox-policy", "{policy}", "--tail"},
+			policy: "/tmp/policy.toml",
+			want:   []string{"--flag", "--sandbox-policy", "/tmp/policy.toml", "--tail"},
+		},
+		{
+			name:   "placeholder as the first token with no preceding argument drops alone when empty",
+			args:   []string{"{policy}", "--tail"},
+			policy: "",
+			want:   []string{"--tail"},
+		},
+		{
+			name:   "placeholder as the first token substitutes in place when set",
+			args:   []string{"{policy}", "--tail"},
+			policy: "/tmp/policy.toml",
+			want:   []string{"/tmp/policy.toml", "--tail"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			profile := RuntimeProfile{
+				EntryPoints: map[Surface]EntryPoint{
+					SurfaceProtocol: {Args: tt.args},
+				},
+			}
+
+			got, err := profile.EntryArgs(SurfaceProtocol, "", tt.policy, "")
+
+			if err != nil {
+				t.Fatalf("EntryArgs(%q, policy=%q) unexpected error: %v", tt.args, tt.policy, err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("EntryArgs(%q, policy=%q) = %v, want %v", tt.args, tt.policy, got, tt.want)
+			}
+		})
+	}
 }

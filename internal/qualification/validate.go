@@ -704,8 +704,8 @@ func (v *setValidation) ClassifyRecords() error {
 		if rec.Grade == GradeDeclaredGap && !slices.Contains(DeclaredGapReasons, rec.Detail) {
 			return fmt.Errorf("record %d: declared_gap record detail %q is outside the closed reason set", rec.Sequence, rec.Detail)
 		}
-		if rec.Grade == GradeNotInducible && rec.Detail != NotInducibleDetail {
-			return fmt.Errorf("record %d: not_inducible record detail = %q, want %q", rec.Sequence, rec.Detail, NotInducibleDetail)
+		if rec.Grade == GradeNotInducible && !isNotInducibleDetail(rec.Detail) {
+			return fmt.Errorf("record %d: not_inducible record detail %q is outside the closed reason set", rec.Sequence, rec.Detail)
 		}
 
 		if rec.PriorSessionID != nil && class != RowContinuationRecall {
@@ -1156,8 +1156,8 @@ func (v *setValidation) checkExcludedCase(declarations RuntimeProfile, capabilit
 	if len(catalog) > 0 {
 		for _, surface := range catalog {
 			rec := v.semanticRecord(surface, capability, caseID)
-			if rec.Detail != NotInducibleDetail {
-				return fmt.Errorf("capability %s case %s not-inducible record carries detail %q, want %q", capability, caseID, rec.Detail, NotInducibleDetail)
+			if !isNotInducibleDetail(rec.Detail) {
+				return fmt.Errorf("capability %s case %s not-inducible record carries detail %q, outside the closed reason set", capability, caseID, rec.Detail)
 			}
 		}
 	}

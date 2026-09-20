@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 }
 
 const sampleProfileJSON = `{
-  "schema_version": 3,
+  "schema_version": 4,
   "runtime_id": "sample-runtime",
   "identity_tokens": ["sample"],
   "notes_path": "docs/sample-notes.md",
@@ -29,10 +29,17 @@ const sampleProfileJSON = `{
   "version_args": ["--version"],
   "model_args": ["--model", "{model}"],
   "capability_gap_labels": ["token counts"],
+  "probe_prompts": {
+    "success": "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
+    "runtime_refusal": "Decline to continue this turn and report your refusal outcome without calling a tool.",
+    "tool_call": "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
+    "continuation_seed": "Remember the nonce {nonce} for the rest of this conversation and reply exactly STORED.",
+    "continuation_recall": "Reply with the nonce supplied by the prior conversation and no other text."
+  },
   "entry_points": {
-    "protocol": {"args": ["--acp"]},
-    "native_json": {"args": ["--output-format", "json", "--prompt", "{prompt}"]},
-    "native_stream_json": {"args": ["--output-format", "stream-json", "--prompt", "{prompt}"]}
+    "protocol": {"args": ["--acp"], "asking_args": ["--acp", "--ask"]},
+    "native_json": {"args": ["--output-format", "json", "--prompt", "{prompt}"], "asking_args": ["--output-format", "json", "--ask", "--prompt", "{prompt}"]},
+    "native_stream_json": {"args": ["--output-format", "stream-json", "--prompt", "{prompt}"], "asking_args": ["--output-format", "stream-json", "--ask", "--prompt", "{prompt}"]}
   },
   "recognizers": {
     "native_json": {
@@ -55,7 +62,11 @@ const sampleProfileJSON = `{
     }
   },
   "declarations": [],
-  "absent_surfaces": []
+  "absent_surfaces": [],
+  "not_inducible_cases": [
+    {"surface": "native_json", "case": "limit_reached", "reason": "prompt_channel_too_small"},
+    {"surface": "native_stream_json", "case": "limit_reached", "reason": "prompt_channel_too_small"}
+  ]
 }`
 
 func mustWriteFile(t *testing.T, path, content string) {

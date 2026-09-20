@@ -298,9 +298,83 @@ const (
 	NotInducibleDetail = "no_deterministic_inducer"
 )
 
+func isNotInducibleDetail(detail string) bool {
+	return detail == NotInducibleDetail || slices.Contains(NotInducibleReasons, detail)
+}
+
 // DeclaredGapReasons is the closed set of reasons an operator
 // declaration may carry.
 var DeclaredGapReasons = []string{DeclaredGapNeverProduced, DeclaredGapFolded}
+
+// NotInducibleChannelTooSmall states that the surface's prompt channel cannot
+// carry the input a case's induction requires.
+const NotInducibleChannelTooSmall = "prompt_channel_too_small"
+
+// NotInducibleOutputSilentOnFailure states that the surface emits no bytes
+// when the runtime fails, so no terminal is located and no recognizer can
+// grade that case.
+const NotInducibleOutputSilentOnFailure = "output_channel_silent_on_failure"
+
+// NotInducibleTerminalAtExitOnly states that the surface writes its terminal
+// only at process exit, so a cancellation signal leaves no cancellation-shaped
+// terminal to grade.
+const NotInducibleTerminalAtExitOnly = "terminal_written_at_exit_only"
+
+// NotInducibleTerminalVocabularyClosed states that the surface's recognized
+// terminal carries no member this case could set, so no recognizer can grade
+// it.
+const NotInducibleTerminalVocabularyClosed = "terminal_vocabulary_closed"
+
+// NotInducibleReasons is the closed set of reasons a profile's own
+// not_inducible_cases entry may carry.
+var NotInducibleReasons = []string{
+	NotInducibleChannelTooSmall,
+	NotInducibleOutputSilentOnFailure,
+	NotInducibleTerminalAtExitOnly,
+	NotInducibleTerminalVocabularyClosed,
+}
+
+// ExclusionKind separates what a case's absence from a surface's observations
+// can mean. Collapsing them lets a surface that reports nothing look like one
+// with nothing to report, turning a weakness into an advantage.
+type ExclusionKind uint8
+
+const (
+	// ExclusionNone means the case carries its obligation and is graded on what
+	// the surface reported.
+	ExclusionNone ExclusionKind = iota
+
+	// ExclusionNotApplicable means the runtime reaches this outcome through no
+	// code path, so there is nothing to report and no obligation to compare.
+	ExclusionNotApplicable
+
+	// ExclusionNotInduced means the measurer cannot bring the condition about
+	// on this surface; the case stays unmeasured. It is a limitation of the
+	// measurer, not a finding about the runtime.
+	ExclusionNotInduced
+
+	// ExclusionSurfaceSilent means the condition arises and the surface carries
+	// no account of it, so the case keeps its obligation and the surface fails
+	// it.
+	ExclusionSurfaceSilent
+)
+
+// notInducibleExclusion maps each not_inducible_cases reason onto what its
+// absence means. Only prompt_channel_too_small describes the measurer's reach;
+// the others describe a channel silent on a condition the measurer can create.
+var notInducibleExclusion = map[string]ExclusionKind{
+	NotInducibleChannelTooSmall:          ExclusionNotInduced,
+	NotInducibleOutputSilentOnFailure:    ExclusionSurfaceSilent,
+	NotInducibleTerminalAtExitOnly:       ExclusionSurfaceSilent,
+	NotInducibleTerminalVocabularyClosed: ExclusionSurfaceSilent,
+}
+
+// NotInducibleExclusion reports what one not_inducible_cases reason means for
+// the case's obligation. An unknown reason reports ExclusionNone, keeping the
+// obligation rather than quietly dropping it.
+func NotInducibleExclusion(reason string) ExclusionKind {
+	return notInducibleExclusion[reason]
+}
 
 // The closed recall detail set. A continuation recall record carries
 // exactly one of these; every other value is invalid.

@@ -138,6 +138,19 @@ type EntryPoint struct {
 	// permission handling unmeasured rather than induced against an unverified
 	// launch.
 	AskingArgs []string `json:"asking_args,omitempty"`
+
+	// SeedArgs, appended to Args, launches a session naming its own generated
+	// identifier, for the native continuation seed. It carries "{session_id}"
+	// exactly once and is rejected on SurfaceProtocol. Empty leaves native
+	// continuation unmeasured rather than induced against a guessed identifier.
+	SeedArgs []string `json:"seed_args,omitempty"`
+
+	// ResumeArgs, appended to Args, launches a fresh process against a seeded
+	// session, carrying an optional "{session_id}" substituted with the seed's
+	// confirmed identifier so the recall names the seed's session. It is
+	// rejected on SurfaceProtocol. SeedArgs without ResumeArgs is rejected;
+	// ResumeArgs without SeedArgs requires the recognizer's session_id_path.
+	ResumeArgs []string `json:"resume_args,omitempty"`
 }
 
 // TerminalLocator selects the terminal object out of a native surface's decoded
@@ -170,6 +183,44 @@ type Recognizer struct {
 	// for the model-request reading. It stays an explicit key sequence so no
 	// path-expression grammar enters the schema for a single flat lookup.
 	ModelRequestPath []string `json:"model_request_path"`
+
+	// SessionIDPath is a nested key sequence into the terminal object, read to
+	// resolve the surface's actual session identifier for native continuation.
+	// Empty falls the seed session id back to the run's generated identifier
+	// and leaves the recall arm uninducible.
+	SessionIDPath []string `json:"session_id_path,omitempty"`
+
+	// TokenPaths names the nested key sequences the token-inventory reading
+	// resolves out of the terminal object, each paired with its contract kind.
+	TokenPaths []TokenPath `json:"token_paths,omitempty"`
+}
+
+// TokenPath is one nested key sequence the token-inventory reading resolves out
+// of a native surface's recognized terminal object.
+type TokenPath struct {
+	// Path is the nested key sequence into the terminal object. A segment may
+	// be the wildcard "*" naming the one dynamic key at that level (such as a
+	// per-run model name); that level must carry exactly one key. A path with
+	// more than one wildcard is rejected.
+	Path []string `json:"path"`
+	// Kind is "spend", graded usable, or "occupancy", graded
+	// corroboration_only.
+	Kind string `json:"kind"`
+}
+
+// The two TokenPath.Kind values DecodeRuntimeProfile admits.
+const (
+	tokenPathKindSpend     = "spend"
+	tokenPathKindOccupancy = "occupancy"
+)
+
+// SurfaceNotInducible is one profile-declared claim that a surface's catalog
+// cannot induce a case, scoped to that surface alone, unlike the catalog-wide
+// CatalogNotInducibleCases.
+type SurfaceNotInducible struct {
+	Surface Surface `json:"surface"`
+	Case    Case    `json:"case"`
+	Reason  string  `json:"reason"` // a member of NotInducibleReasons
 }
 
 // Terminal is one native surface's recognized terminal outcome:
@@ -186,24 +237,61 @@ type Terminal struct {
 // one runtime the live probe needs, and nothing about the host it runs on.
 // Declarations and AbsentSurfaces carry the declaration document it supersedes.
 type RuntimeProfile struct {
-	SchemaVersion   int      `json:"schema_version"` // exactly 3
+	SchemaVersion   int      `json:"schema_version"` // exactly 4
 	RuntimeID       string   `json:"runtime_id"`     // e.g. "gemini-cli"
 	IdentityTokens  []string `json:"identity_tokens"`
 	NotesPath       string   `json:"notes_path"`
 	MeasurementPath string   `json:"measurement_path"`
 	PublishedSample string   `json:"published_sample"`
 
-	ToolNameFormat      string   `json:"tool_name_format"`
+	ToolNameFormat string `json:"tool_name_format"`
+
+	// ToolPolicyFormat names the file format this runtime reads a tool policy
+	// in; a harness writing one selects its writer by this format. Empty when
+	// the launch asks for no policy file.
+	ToolPolicyFormat string `json:"tool_policy_format,omitempty"`
+
 	ProjectConfigPaths  []string `json:"project_config_paths"`
 	VersionArgs         []string `json:"version_args"`
 	ModelArgs           []string `json:"model_args"`
 	CapabilityGapLabels []string `json:"capability_gap_labels"`
+
+	// ConfigRootEnvNames are the environment variable names, in declared order,
+	// whose value points the runtime at a configuration root. A native launch
+	// forwards these names when the parent environment carries them; values
+	// never travel through this member. Empty leaves the launch environment
+	// unset.
+	ConfigRootEnvNames []string `json:"config_root_env_names,omitempty"`
+
+	// ProbePrompts carries the five fixed prompt templates the live probe
+	// substitutes for every induced case: success, runtime_refusal, tool_call,
+	// continuation_seed, and continuation_recall.
+	ProbePrompts map[string]string `json:"probe_prompts"`
 
 	EntryPoints map[Surface]EntryPoint `json:"entry_points"`
 	Recognizers map[Surface]Recognizer `json:"recognizers"`
 
 	Declarations   []DeclaredGap   `json:"declarations"`
 	AbsentSurfaces []AbsentSurface `json:"absent_surfaces"`
+
+	// NotInducibleCases lists every (surface, case) pair this profile declares
+	// its catalog cannot induce, scoped to that surface alone, unlike
+	// CatalogNotInducibleCases which excludes a case on every measured surface.
+	NotInducibleCases []SurfaceNotInducible `json:"not_inducible_cases"`
+}
+
+// The five ProbePrompts keys DecodeRuntimeProfile requires.
+const (
+	probePromptSuccess            = "success"
+	probePromptRuntimeRefusal     = "runtime_refusal"
+	probePromptToolCall           = "tool_call"
+	probePromptContinuationSeed   = "continuation_seed"
+	probePromptContinuationRecall = "continuation_recall"
+)
+
+var probePromptKeys = []string{
+	probePromptSuccess, probePromptRuntimeRefusal, probePromptToolCall,
+	probePromptContinuationSeed, probePromptContinuationRecall,
 }
 
 // Measurement is the tracked artifact one live run produces: the notes
@@ -219,26 +307,44 @@ type Measurement struct {
 
 var entryPointPlaceholders = []string{"{model}", "{policy}", "{prompt}"}
 
-// runtimeProfileFields is the exact set of member names a runtime
-// profile document may carry at the top level.
+// ToolPolicyFormatTOMLRuleList names the tool-policy file format whose document
+// is a TOML list of rules, each naming one tool and the decision for a call of
+// it.
+const ToolPolicyFormatTOMLRuleList = "toml_rule_list"
+
+// ToolPolicyFormats is the closed set a profile's tool_policy_format may name.
+// A format is added only alongside a writer that produces it.
+var ToolPolicyFormats = []string{ToolPolicyFormatTOMLRuleList}
+
 var runtimeProfileFieldOrder = []string{
 	"schema_version", "runtime_id", "identity_tokens",
 	"notes_path", "measurement_path", "published_sample",
 	"tool_name_format", "project_config_paths", "version_args",
-	"model_args", "capability_gap_labels",
+	"model_args", "capability_gap_labels", "probe_prompts",
 	"entry_points", "recognizers",
-	"declarations", "absent_surfaces",
+	"declarations", "absent_surfaces", "not_inducible_cases",
 }
 
+// runtimeProfileOptionalFields carries the members a document may omit.
+var runtimeProfileOptionalFields = []string{"config_root_env_names", "tool_policy_format"}
+
+// runtimeProfileFields is the exact set of member names a runtime
+// profile document may carry at the top level.
 var runtimeProfileFields = func() map[string]bool {
-	fields := make(map[string]bool, len(runtimeProfileFieldOrder))
+	fields := make(map[string]bool, len(runtimeProfileFieldOrder)+len(runtimeProfileOptionalFields))
 	for _, name := range runtimeProfileFieldOrder {
+		fields[name] = true
+	}
+	for _, name := range runtimeProfileOptionalFields {
 		fields[name] = true
 	}
 	return fields
 }()
 
-var entryPointFields = map[string]bool{"args": true, "asking_args": true}
+var entryPointFields = map[string]bool{
+	"args": true, "asking_args": true,
+	"seed_args": true, "resume_args": true,
+}
 
 var terminalLocatorFields = map[string]bool{
 	"mode": true, "discriminator_key": true, "discriminator_value": true,
@@ -251,9 +357,16 @@ var recognizerFieldOrder = []string{
 	"model_request_path",
 }
 
+// recognizerOptionalFields carries the recognizer members a discovery pass may
+// leave unstated.
+var recognizerOptionalFields = []string{"session_id_path", "token_paths"}
+
 var recognizerFields = func() map[string]bool {
-	fields := make(map[string]bool, len(recognizerFieldOrder))
+	fields := make(map[string]bool, len(recognizerFieldOrder)+len(recognizerOptionalFields))
 	for _, name := range recognizerFieldOrder {
+		fields[name] = true
+	}
+	for _, name := range recognizerOptionalFields {
 		fields[name] = true
 	}
 	return fields
@@ -286,8 +399,8 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 	if profile.SchemaVersion, err = decodeInt(top["schema_version"]); err != nil {
 		return RuntimeProfile{}, fmt.Errorf("schema_version: %w", err)
 	}
-	if profile.SchemaVersion != 3 {
-		return RuntimeProfile{}, fmt.Errorf("schema_version = %d, want 3", profile.SchemaVersion)
+	if profile.SchemaVersion != 4 {
+		return RuntimeProfile{}, fmt.Errorf("schema_version = %d, want 4", profile.SchemaVersion)
 	}
 
 	if profile.RuntimeID, err = decodeString(top["runtime_id"]); err != nil {
@@ -329,6 +442,15 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 		return RuntimeProfile{}, fmt.Errorf("tool_name_format: %w", err)
 	}
 
+	if toolPolicyFormatRaw, has := top["tool_policy_format"]; has {
+		if profile.ToolPolicyFormat, err = decodeString(toolPolicyFormatRaw); err != nil {
+			return RuntimeProfile{}, fmt.Errorf("tool_policy_format: %w", err)
+		}
+		if !slices.Contains(ToolPolicyFormats, profile.ToolPolicyFormat) {
+			return RuntimeProfile{}, fmt.Errorf("tool_policy_format %q is outside the closed value set %v", profile.ToolPolicyFormat, ToolPolicyFormats)
+		}
+	}
+
 	if err := json.Unmarshal(top["project_config_paths"], &profile.ProjectConfigPaths); err != nil {
 		return RuntimeProfile{}, fmt.Errorf("project_config_paths: %w", err)
 	}
@@ -353,6 +475,19 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 		return RuntimeProfile{}, fmt.Errorf("capability_gap_labels: %w", err)
 	}
 
+	if configRootEnvNamesRaw, has := top["config_root_env_names"]; has {
+		if err := json.Unmarshal(configRootEnvNamesRaw, &profile.ConfigRootEnvNames); err != nil {
+			return RuntimeProfile{}, fmt.Errorf("config_root_env_names: %w", err)
+		}
+		if err := validateConfigRootEnvNames(profile.ConfigRootEnvNames); err != nil {
+			return RuntimeProfile{}, fmt.Errorf("config_root_env_names: %w", err)
+		}
+	}
+
+	if profile.ProbePrompts, err = decodeProbePrompts(top["probe_prompts"]); err != nil {
+		return RuntimeProfile{}, fmt.Errorf("probe_prompts: %w", err)
+	}
+
 	if profile.EntryPoints, err = decodeEntryPoints(top["entry_points"]); err != nil {
 		return RuntimeProfile{}, fmt.Errorf("entry_points: %w", err)
 	}
@@ -362,6 +497,9 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 
 	if profile.Recognizers, err = decodeRecognizers(top["recognizers"], profile.EntryPoints); err != nil {
 		return RuntimeProfile{}, fmt.Errorf("recognizers: %w", err)
+	}
+	if err := checkContinuationCoordinates(profile.EntryPoints, profile.Recognizers); err != nil {
+		return RuntimeProfile{}, err
 	}
 
 	declarations, absentSurfaces, err := decodeDeclarationFields(top)
@@ -386,7 +524,170 @@ func DecodeRuntimeProfile(data []byte) (RuntimeProfile, error) {
 		}
 	}
 
+	if err := checkMeasuredEntryPointShape(profile); err != nil {
+		return RuntimeProfile{}, err
+	}
+
+	if profile.NotInducibleCases, err = decodeNotInducibleCases(top["not_inducible_cases"], profile); err != nil {
+		return RuntimeProfile{}, fmt.Errorf("not_inducible_cases: %w", err)
+	}
+
 	return profile, nil
+}
+
+// decodeProbePrompts strictly decodes the probe_prompts member: exactly the
+// five probePromptKeys, each non-empty, each carrying only the placeholder its
+// own row allows.
+func decodeProbePrompts(raw json.RawMessage) (map[string]string, error) {
+	var prompts map[string]string
+	if err := json.Unmarshal(raw, &prompts); err != nil {
+		return nil, err
+	}
+	for key := range prompts {
+		if !slices.Contains(probePromptKeys, key) {
+			return nil, fmt.Errorf("unknown key %q", key)
+		}
+	}
+	for _, key := range probePromptKeys {
+		value, ok := prompts[key]
+		if !ok {
+			return nil, fmt.Errorf("missing key %q", key)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("%q must be non-empty", key)
+		}
+		switch key {
+		case probePromptToolCall:
+			if err := validatePlaceholders(value, []string{"{tool}"}, []string{"{tool}"}); err != nil {
+				return nil, fmt.Errorf("%q: %w", key, err)
+			}
+		case probePromptContinuationSeed:
+			if err := validatePlaceholders(value, []string{"{nonce}"}, []string{"{nonce}"}); err != nil {
+				return nil, fmt.Errorf("%q: %w", key, err)
+			}
+		default:
+			if err := rejectUnknownPlaceholders(value, nil); err != nil {
+				return nil, fmt.Errorf("%q: %w", key, err)
+			}
+		}
+	}
+	return prompts, nil
+}
+
+// checkContinuationCoordinates enforces that a surface stating seed_args or
+// resume_args also states a session_id_path to resolve the recall arm from.
+func checkContinuationCoordinates(entryPoints map[Surface]EntryPoint, recognizers map[Surface]Recognizer) error {
+	for surface, entry := range entryPoints {
+		if len(entry.SeedArgs) == 0 && len(entry.ResumeArgs) == 0 {
+			continue
+		}
+		recognizer, ok := recognizers[surface]
+		if !ok || len(recognizer.SessionIDPath) == 0 {
+			return fmt.Errorf("entry_points[%s]: seed_args and resume_args require a non-empty recognizers[%s].session_id_path", surface, surface)
+		}
+	}
+	return nil
+}
+
+// checkMeasuredEntryPointShape enforces the per-surface argument-vector rules
+// for measured surfaces: asking_args is required, and args and asking_args
+// carry "{prompt}" exactly once on a native surface and never on the protocol
+// surface.
+func checkMeasuredEntryPointShape(profile RuntimeProfile) error {
+	for _, surface := range profile.MeasuredSurfaces() {
+		entry := profile.EntryPoints[surface]
+		if len(entry.AskingArgs) == 0 {
+			return fmt.Errorf("entry_points[%s]: asking_args is required", surface)
+		}
+		wantPrompt := surface != SurfaceProtocol
+		if err := checkPromptPlaceholder(entry.Args, wantPrompt); err != nil {
+			return fmt.Errorf("entry_points[%s].args: %w", surface, err)
+		}
+		if err := checkPromptPlaceholder(entry.AskingArgs, wantPrompt); err != nil {
+			return fmt.Errorf("entry_points[%s].asking_args: %w", surface, err)
+		}
+	}
+	return nil
+}
+
+// checkPromptPlaceholder requires args to carry "{prompt}" exactly once
+// when want is true, and to carry it not at all otherwise.
+func checkPromptPlaceholder(args []string, want bool) error {
+	count := strings.Count(strings.Join(args, "\x00"), "{prompt}")
+	switch {
+	case want && count != 1:
+		return fmt.Errorf("must carry {prompt} exactly once, found %d", count)
+	case !want && count != 0:
+		return errors.New("must not carry {prompt}")
+	}
+	return nil
+}
+
+// notInducibleReasonCase pins each not_inducible_cases reason to the one case
+// it names, so a profile cannot pair a reason with a case its meaning does not
+// describe.
+var notInducibleReasonCase = map[string]Case{
+	NotInducibleChannelTooSmall:          CaseLimitReached,
+	NotInducibleOutputSilentOnFailure:    CaseRuntimeFailure,
+	NotInducibleTerminalAtExitOnly:       CaseCancellation,
+	NotInducibleTerminalVocabularyClosed: CaseHumanInput,
+}
+
+// decodeNotInducibleCases strictly decodes the not_inducible_cases member and
+// rejects an entry whose reason names a case other than its paired case. The
+// cases a profile names are its own statement about one runtime, so no case is
+// required of every profile.
+func decodeNotInducibleCases(raw json.RawMessage, profile RuntimeProfile) ([]SurfaceNotInducible, error) {
+	var entries []SurfaceNotInducible
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, err
+	}
+
+	seen := map[[2]string]bool{}
+	for i, entry := range entries {
+		if !slices.Contains(Surfaces, entry.Surface) || entry.Surface == SurfaceAggregate {
+			return nil, fmt.Errorf("[%d]: surface %q is outside the measured surface set", i, entry.Surface)
+		}
+		if !slices.Contains(Cases, entry.Case) {
+			return nil, fmt.Errorf("[%d]: case %q is outside qualification.Cases", i, entry.Case)
+		}
+		if slices.Contains(CatalogNotInducibleCases, entry.Case) {
+			return nil, fmt.Errorf("[%d]: case %q is already catalog-wide not-inducible", i, entry.Case)
+		}
+		if !slices.Contains(NotInducibleReasons, entry.Reason) {
+			return nil, fmt.Errorf("[%d]: reason %q is outside the closed value set", i, entry.Reason)
+		}
+		if wantCase := notInducibleReasonCase[entry.Reason]; entry.Case != wantCase {
+			return nil, fmt.Errorf("[%d]: reason %q pairs only with case %s, got %s", i, entry.Reason, wantCase, entry.Case)
+		}
+		key := [2]string{string(entry.Surface), string(entry.Case)}
+		if seen[key] {
+			return nil, fmt.Errorf("[%d]: duplicate (surface, case) pair (%s, %s)", i, entry.Surface, entry.Case)
+		}
+		seen[key] = true
+		if _, declared := profile.Declared(capabilityOwning(entry.Case), entry.Case); declared {
+			return nil, fmt.Errorf("[%d]: (%s, %s) is also named by declarations", i, entry.Surface, entry.Case)
+		}
+	}
+
+	return entries, nil
+}
+
+// CaseExclusion reports what one surface's silence on caseID means, keeping
+// applicability, induction status, and observed behavior three answers. A
+// declaration excludes the case on every surface; a not_inducible_cases entry
+// is scoped to one surface and read through NotInducibleExclusion.
+func (p RuntimeProfile) CaseExclusion(surface Surface, capability Capability, caseID Case) ExclusionKind {
+	if slices.Contains(CatalogNotInducibleCases, caseID) {
+		return ExclusionNotInduced
+	}
+	if _, declared := p.Declared(capability, caseID); declared {
+		return ExclusionNotApplicable
+	}
+	if reason, ok := p.NotInducibleDeclared(surface, caseID); ok {
+		return NotInducibleExclusion(reason)
+	}
+	return ExclusionNone
 }
 
 // validatePlaceholders rejects a string that does not carry every
@@ -455,6 +756,22 @@ func validateCapabilityGapLabels(labels []string) error {
 	return nil
 }
 
+// validateConfigRootEnvNames rejects an entry that is not a bare environment
+// variable name, or a name repeated in the list.
+func validateConfigRootEnvNames(names []string) error {
+	for i, name := range names {
+		switch {
+		case name == "":
+			return fmt.Errorf("entry %d is empty", i)
+		case strings.ContainsAny(name, " \t\n\r="):
+			return fmt.Errorf("entry %d, %q, is not a bare environment variable name", i, name)
+		case slices.Contains(names[:i], name):
+			return fmt.Errorf("entry %d, %q, is a duplicate", i, name)
+		}
+	}
+	return nil
+}
+
 // decodeEntryPoints strictly decodes the entry_points member.
 func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 	var rawEntries map[string]map[string]json.RawMessage
@@ -499,6 +816,36 @@ func decodeEntryPoints(raw json.RawMessage) (map[Surface]EntryPoint, error) {
 			if err := validatePlaceholderArgsAllowed(entry.AskingArgs); err != nil {
 				return nil, fmt.Errorf("%s: asking_args: %w", key, err)
 			}
+		}
+		if seedRaw, hasSeed := fields["seed_args"]; hasSeed {
+			if surface == SurfaceProtocol {
+				return nil, fmt.Errorf("%s: seed_args is rejected on the protocol surface", key)
+			}
+			if err := json.Unmarshal(seedRaw, &entry.SeedArgs); err != nil {
+				return nil, fmt.Errorf("%s: seed_args: %w", key, err)
+			}
+			if err := validatePlaceholderArgs(entry.SeedArgs, []string{"{session_id}"}, []string{"{session_id}"}); err != nil {
+				return nil, fmt.Errorf("%s: seed_args: %w", key, err)
+			}
+		}
+		if resumeRaw, hasResume := fields["resume_args"]; hasResume {
+			if surface == SurfaceProtocol {
+				return nil, fmt.Errorf("%s: resume_args is rejected on the protocol surface", key)
+			}
+			if err := json.Unmarshal(resumeRaw, &entry.ResumeArgs); err != nil {
+				return nil, fmt.Errorf("%s: resume_args: %w", key, err)
+			}
+			if len(entry.ResumeArgs) == 0 {
+				return nil, fmt.Errorf("%s: resume_args must be non-empty when present", key)
+			}
+			for _, arg := range entry.ResumeArgs {
+				if err := rejectUnknownPlaceholders(arg, []string{"{session_id}"}); err != nil {
+					return nil, fmt.Errorf("%s: resume_args carries a placeholder outside {session_id}: %w", key, err)
+				}
+			}
+		}
+		if len(entry.SeedArgs) > 0 && len(entry.ResumeArgs) == 0 {
+			return nil, fmt.Errorf("%s: seed_args requires resume_args", key)
 		}
 		entries[surface] = entry
 	}
@@ -623,7 +970,49 @@ func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error
 		return Recognizer{}, fmt.Errorf("model_request_path: %w", err)
 	}
 
+	if sessionIDPathRaw, has := fields["session_id_path"]; has {
+		if err := json.Unmarshal(sessionIDPathRaw, &recognizer.SessionIDPath); err != nil {
+			return Recognizer{}, fmt.Errorf("session_id_path: %w", err)
+		}
+		if err := validateKeyPath(recognizer.SessionIDPath); err != nil {
+			return Recognizer{}, fmt.Errorf("session_id_path: %w", err)
+		}
+	}
+
+	if tokenPathsRaw, has := fields["token_paths"]; has {
+		if err := json.Unmarshal(tokenPathsRaw, &recognizer.TokenPaths); err != nil {
+			return Recognizer{}, fmt.Errorf("token_paths: %w", err)
+		}
+		seen := map[string]bool{}
+		for i, path := range recognizer.TokenPaths {
+			if err := validateKeyPath(path.Path); err != nil {
+				return Recognizer{}, fmt.Errorf("token_paths[%d]: %w", i, err)
+			}
+			if wildcards := countWildcards(path.Path); wildcards > 1 {
+				return Recognizer{}, fmt.Errorf("token_paths[%d]: path %v carries %d wildcard segments, want at most one", i, path.Path, wildcards)
+			}
+			if path.Kind != tokenPathKindSpend && path.Kind != tokenPathKindOccupancy {
+				return Recognizer{}, fmt.Errorf("token_paths[%d]: kind = %q, want %q or %q", i, path.Kind, tokenPathKindSpend, tokenPathKindOccupancy)
+			}
+			key := strings.Join(path.Path, "\x00")
+			if seen[key] {
+				return Recognizer{}, fmt.Errorf("token_paths[%d]: path %v is duplicated", i, path.Path)
+			}
+			seen[key] = true
+		}
+	}
+
 	return recognizer, nil
+}
+
+// validateKeyPath rejects a nested key sequence carrying an empty key. An empty
+// sequence is valid: it names no path at all, which the caller's presence rule
+// decides.
+func validateKeyPath(path []string) error {
+	if slices.Contains(path, "") {
+		return fmt.Errorf("path %v carries an empty key", path)
+	}
+	return nil
 }
 
 // decodeStringOrEmpty decodes raw as a JSON string. An absent member
@@ -918,6 +1307,17 @@ func (p RuntimeProfile) Declared(capability Capability, caseID Case) (string, bo
 	return "", false
 }
 
+// NotInducibleDeclared reports the declared reason for one surface and case
+// pair.
+func (p RuntimeProfile) NotInducibleDeclared(surface Surface, caseID Case) (string, bool) {
+	for _, entry := range p.NotInducibleCases {
+		if entry.Surface == surface && entry.Case == caseID {
+			return entry.Reason, true
+		}
+	}
+	return "", false
+}
+
 // AbsentSurfaceDeclared reports the declared reason for one surface,
 // performing a linear scan of p.AbsentSurfaces, a small, bounded list.
 func (p RuntimeProfile) AbsentSurfaceDeclared(surface Surface) (string, bool) {
@@ -955,10 +1355,20 @@ func (p RuntimeProfile) MeasuredSurfaces() []Surface {
 // on whitespace, where a flag with an empty value lets the next token fill the
 // gap, so the flag and its value stay either both present or both absent.
 func substitutePlaceholders(args []string, model, policy, prompt string) []string {
-	replacer := strings.NewReplacer("{model}", model, "{policy}", policy, "{prompt}", prompt)
-	out := make([]string, len(args))
-	for i, arg := range args {
-		out[i] = replacer.Replace(arg)
+	replacer := strings.NewReplacer("{model}", model, "{prompt}", prompt)
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "{policy}" {
+			if policy == "" {
+				if len(out) > 0 {
+					out = out[:len(out)-1]
+				}
+				continue
+			}
+			out = append(out, policy)
+			continue
+		}
+		out = append(out, replacer.Replace(arg))
 	}
 	return out
 }
@@ -971,7 +1381,26 @@ func (p RuntimeProfile) EntryArgs(surface Surface, model, policy, prompt string)
 	if !ok {
 		return nil, fmt.Errorf("runtime profile %s carries no entry point for surface %s", p.RuntimeID, surface)
 	}
+	if err := checkSubstitutedPlaceholder(entry.Args, "{model}", model); err != nil {
+		return nil, err
+	}
+	if err := checkSubstitutedPlaceholder(entry.Args, "{prompt}", prompt); err != nil {
+		return nil, err
+	}
 	return substitutePlaceholders(entry.Args, model, policy, prompt), nil
+}
+
+// checkSubstitutedPlaceholder returns an error when args carries token and the
+// caller substituted it with the empty string: a launch cannot silently drop
+// {model} or {prompt} from its argument vector.
+func checkSubstitutedPlaceholder(args []string, token, value string) error {
+	if value != "" {
+		return nil
+	}
+	if strings.Contains(strings.Join(args, "\x00"), token) {
+		return fmt.Errorf("args carry %s but no value was substituted for it", token)
+	}
+	return nil
 }
 
 // AskingArgs substitutes the same placeholders into surface's own
@@ -1079,10 +1508,49 @@ func (r Recognizer) locateEnvelope(values []any) (map[string]any, bool) {
 	return nil, false
 }
 
-// descend walks path from object, reporting failure at the first key
-// that is missing or does not carry a further object.
-func descend(object map[string]any, path []string) (map[string]any, bool) {
-	for _, key := range path {
+type keyResolver func(object map[string]any, segment string) (string, bool)
+
+func literalKey(_ map[string]any, segment string) (string, bool) {
+	return segment, true
+}
+
+// tokenPathWildcard is the TokenPath.Path segment naming "the one dynamic key
+// at this level" instead of a literal key, for a terminal whose key at that
+// level is a per-run value the profile cannot pin.
+const tokenPathWildcard = "*"
+
+// resolveTokenKey resolves a TokenPath.Path segment against object: a literal
+// segment names its key directly, and the wildcard resolves to object's sole
+// key. An object with zero or more than one key fails rather than picking one.
+func resolveTokenKey(object map[string]any, segment string) (string, bool) {
+	if segment != tokenPathWildcard {
+		return segment, true
+	}
+	if len(object) != 1 {
+		return "", false
+	}
+	for key := range object {
+		return key, true
+	}
+	return "", false
+}
+
+func countWildcards(path []string) int {
+	count := 0
+	for _, segment := range path {
+		if segment == tokenPathWildcard {
+			count++
+		}
+	}
+	return count
+}
+
+func descendWith(object map[string]any, path []string, resolve keyResolver) (map[string]any, bool) {
+	for _, segment := range path {
+		key, ok := resolve(object, segment)
+		if !ok {
+			return nil, false
+		}
 		next, ok := object[key].(map[string]any)
 		if !ok {
 			return nil, false
@@ -1090,6 +1558,85 @@ func descend(object map[string]any, path []string) (map[string]any, bool) {
 		object = next
 	}
 	return object, true
+}
+
+// descend walks path from object, reporting failure at the first key
+// that is missing or does not carry a further object.
+func descend(object map[string]any, path []string) (map[string]any, bool) {
+	return descendWith(object, path, literalKey)
+}
+
+func descendValueWith(object map[string]any, path []string, resolve keyResolver) (any, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	parent, ok := descendWith(object, path[:len(path)-1], resolve)
+	if !ok {
+		return nil, false
+	}
+	key, ok := resolve(parent, path[len(path)-1])
+	if !ok {
+		return nil, false
+	}
+	value, exists := parent[key]
+	return value, exists
+}
+
+func descendValue(object map[string]any, path []string) (any, bool) {
+	return descendValueWith(object, path, literalKey)
+}
+
+// SessionID resolves r.SessionIDPath from output, reading the recognized
+// terminal object first and otherwise the first other top-level value that
+// resolves the selector. A streaming surface announces its session in its first
+// event and need not repeat it in the terminal, so reading the terminal alone
+// would report a named session as unobserved. It reports false when r carries
+// no selector or nothing resolves to a string.
+func (r Recognizer) SessionID(output string) (string, bool) {
+	if len(r.SessionIDPath) == 0 {
+		return "", false
+	}
+	values := decodeTopLevelJSONValues(output)
+	if terminal, found := r.locateTerminal(values); found {
+		if id, ok := stringAtPath(terminal, r.SessionIDPath); ok {
+			return id, true
+		}
+	}
+	for _, value := range values {
+		object, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := stringAtPath(object, r.SessionIDPath); ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+func stringAtPath(object map[string]any, path []string) (string, bool) {
+	value, ok := descendValue(object, path)
+	if !ok {
+		return "", false
+	}
+	s, ok := value.(string)
+	return s, ok
+}
+
+// TokenValue resolves path's nested key sequence from output's recognized
+// terminal object, reporting the numeric value found there. A wildcard segment
+// resolves against the terminal's dynamic key at that level.
+func (r Recognizer) TokenValue(path TokenPath, output string) (float64, bool) {
+	terminal, found := r.locateTerminal(decodeTopLevelJSONValues(output))
+	if !found {
+		return 0, false
+	}
+	value, ok := descendValueWith(terminal, path.Path, resolveTokenKey)
+	if !ok {
+		return 0, false
+	}
+	n, ok := value.(float64)
+	return n, ok
 }
 
 // Terminal recognizes one native surface's terminal outcome from its
@@ -1126,6 +1673,14 @@ func (r Recognizer) Terminal(output string) (Terminal, bool) {
 		}
 	}
 	return Terminal{}, false
+}
+
+// RawTerminal resolves the envelope object r.Locator selects out of output,
+// which Recognizer.Terminal discards once recognition fails. It lets a caller
+// distinguish "no envelope exists" from "an envelope exists but none of its
+// members resolved to a known outcome".
+func (r Recognizer) RawTerminal(output string) (map[string]any, bool) {
+	return r.locateTerminal(decodeTopLevelJSONValues(output))
 }
 
 // ModelRequestReading is the three-way state one structured native
