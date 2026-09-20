@@ -48,7 +48,11 @@ func Main(m *testing.M, scenarios map[string]Scenario) {
 	exe, err := os.Executable()
 	if err == nil {
 		if config, readErr := os.ReadFile(configPath(exe)); readErr == nil {
-			os.Exit(runScenario(config, scenarios))
+			code := runScenario(config, scenarios)
+			// The scenario has returned, so nothing more can spawn and the
+			// process is still around to be asked what it left running.
+			recordDescendants(exe)
+			os.Exit(code)
 		}
 	}
 
@@ -213,6 +217,15 @@ func writeOutput(_ []string, out Output) int {
 
 func configPath(exe string) string {
 	return strings.TrimSuffix(exe, ".exe") + ".fake.json"
+}
+
+// DescendantReceipt names the file the program at commandPath appends its own
+// live children's process ids to as it exits, so a launcher can charge itself
+// with whatever that program left running. The program's own record catches a
+// child born between two samples of the process table, which sampling from
+// outside would miss.
+func DescendantReceipt(commandPath string) string {
+	return strings.TrimSuffix(commandPath, ".exe") + ".descendants"
 }
 
 func copyExecutable(src, dst string) error {

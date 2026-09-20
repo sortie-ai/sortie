@@ -13,13 +13,17 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
+// scenarios is filled by this package's test files before TestMain runs, so a
+// scenario only one platform can carry stays in the file that platform builds.
+var scenarios = map[string]agenttest.Scenario{
+	"echo-args": agenttest.Typed(func(args []string, prefix string) int {
+		fmt.Print(prefix + strings.Join(args, " "))
+		return 3
+	}),
+}
+
 func TestMain(m *testing.M) {
-	agenttest.Main(m, map[string]agenttest.Scenario{
-		"echo-args": agenttest.Typed(func(args []string, prefix string) int {
-			fmt.Print(prefix + strings.Join(args, " "))
-			return 3
-		}),
-	})
+	agenttest.Main(m, scenarios)
 }
 
 func TestFakeRuntime(t *testing.T) {
