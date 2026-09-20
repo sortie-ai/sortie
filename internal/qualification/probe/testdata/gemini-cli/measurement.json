@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 4,
   "profile_digest": "a9658370afd47c499492338499f31261651305c1a350c8ad79e61b8c8d21765b",
   "measured_at": "2026-09-15",
   "expectation": {
     "Verdict": "unmeasured",
+    "Conformance": null,
     "Grades": [
       {
         "Surface": "protocol",
@@ -117,5 +118,8 @@
       "protocol turn_disposition runtime_failure: not_observed",
       "protocol turn_disposition success: not_observed"
     ]
-  }
+  },
+  "requested_model": "gemini-3.5-flash",
+  "observed_model": null,
+  "provenance_digest": null
 }

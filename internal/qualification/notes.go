@@ -20,11 +20,23 @@ type NotesGrade struct {
 // state: both verdicts, every surface-capability grade, every excluded case, and
 // every unobserved surface.
 type NotesExpectation struct {
-	Verdict    Verdict
-	Grades     []NotesGrade
-	Excluded   []string
-	Unobserved []string
+	Verdict Verdict
+	// Conformance is nil when the run answered only the transport question;
+	// the document must then state no product-conformance verdict.
+	Conformance *Verdict
+	Grades      []NotesGrade
+	Excluded    []string
+	Unobserved  []string
 }
+
+// NotesEligibilityPrefix is the line prefix a notes document states its
+// transport-parity verdict on, and the label the rendered summary prints it
+// under.
+const NotesEligibilityPrefix = "Eligibility: "
+
+// NotesConformancePrefix is the line prefix a notes document states its
+// product-conformance verdict on.
+const NotesConformancePrefix = "Product conformance: "
 
 // NotesScopeStatement is the sentence a notes document MUST carry to
 // state the profile's Unix-only live scope.
@@ -141,6 +153,31 @@ func matchSectionEntries(section string, got, want []string) error {
 	return nil
 }
 
+// matchStatedVerdict reports the first disagreement between the verdict a
+// document states on lines with prefix and the verdict the run reached. A nil
+// want means the run answered no such question, so the document must state none.
+func matchStatedVerdict(lines []string, prefix string, want *Verdict) error {
+	var stated []string
+	for _, line := range lines {
+		if after, found := strings.CutPrefix(line, prefix); found {
+			stated = append(stated, after)
+		}
+	}
+	if want == nil {
+		if len(stated) > 0 {
+			return fmt.Errorf("notes state %q%s, an answer the validated run does not carry", prefix, stated[0])
+		}
+		return nil
+	}
+	if len(stated) != 1 {
+		return fmt.Errorf("notes carry %d %q lines, want exactly 1", len(stated), prefix)
+	}
+	if stated[0] != string(*want) {
+		return fmt.Errorf("notes state %q%s, which does not match the validated %q", prefix, stated[0], *want)
+	}
+	return nil
+}
+
 // ValidateNotes reports the first disagreement between a notes document
 // and a validated run's expectation, or nil when they agree. It never
 // writes.
@@ -160,18 +197,11 @@ func ValidateNotes(document string, want NotesExpectation) error {
 		position += next + 1
 	}
 
-	eligibilityCount := 0
-	for _, line := range trimmed {
-		if !strings.HasPrefix(line, "Eligibility: ") {
-			continue
-		}
-		eligibilityCount++
-		if value := strings.TrimPrefix(line, "Eligibility: "); value != string(want.Verdict) {
-			return fmt.Errorf("notes eligibility %q does not match the validated verdict %q", value, want.Verdict)
-		}
+	if err := matchStatedVerdict(trimmed, NotesEligibilityPrefix, &want.Verdict); err != nil {
+		return err
 	}
-	if eligibilityCount != 1 {
-		return fmt.Errorf("notes carry %d Eligibility lines, want exactly 1", eligibilityCount)
+	if err := matchStatedVerdict(trimmed, NotesConformancePrefix, want.Conformance); err != nil {
+		return err
 	}
 
 	wantGrades := map[string]NotesGrade{}

@@ -5,6 +5,7 @@ package probe
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,4 +237,201 @@ func TestCheckNoBarePair(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Swept together because the sentinel's zero-source flag would mask a
+// compensating record leaked into the derivation, and the corroborating
+// inventory would not.
+const (
+	wireSentinel      = "the wire offered no source at all"
+	wireCorroborating = "the wire offered a source no budget can be kept in"
+)
+
+// sourcelessWireCollected returns one collection whose protocol wire offered no
+// source a budget can be kept in, the only state in which a reading supplied
+// outside the protocol has anything to credit. supplied states whether the
+// adapter really returned a figure.
+func sourcelessWireCollected(profile qualification.RuntimeProfile, wire string, supplied bool) collectedObservations {
+	collected := fullyObservedCollected(profile, qualification.GradeUsable, qualification.GradeUsable, qualification.GradeUsable)
+	protocol := qualification.SurfaceProtocol
+
+	if wire == wireSentinel {
+		collected.tokenSessionID[protocol] = ""
+		collected.tokenPaths[protocol] = nil
+	} else {
+		collected.tokenPaths[protocol] = []qualification.TokenObservation{
+			{EvidencePath: "/_meta/usage/context_tokens", Kind: "occupancy"},
+		}
+	}
+	collected.tokenInventory[protocol] = qualification.Observation{
+		Grade:   qualification.GradeGap,
+		Outcome: qualification.OutcomePass,
+		Detail:  "read 7 raw result(s) carrying a block no budget can be kept in",
+	}
+	collected.tokenExtension = &qualification.ExtensionReading{
+		Source:   qualification.ExtensionSourcePresent,
+		Admitted: false,
+	}
+	if supplied {
+		collected.tokenCompensation = tokenCompensation{
+			supplied:  true,
+			sessionID: collected.continuationSeed[protocol].SessionID,
+		}
+	}
+	collected.identities = protocolSessionIdentities(collected)
+	return collected
+}
+
+// publishedOutcome grades one collection and reads the report back out of the
+// evidence file it published, so assertions stand on the artifact an operator
+// receives rather than on collection state.
+func publishedOutcome(t *testing.T, profile qualification.RuntimeProfile, collected collectedObservations) (qualification.EligibilityReport, []qualification.Record) {
+	t.Helper()
+
+	fixture, err := gradedEvidence(profile, collected, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
+	}
+	path := qualification.WriteEvidenceFile(t, fixture.Records)
+	if _, err := qualification.ValidateObservationsWithDeclarations(path, profile); err != nil {
+		t.Fatalf("ValidateObservationsWithDeclarations(...) error = %v, want nil", err)
+	}
+	published, err := qualification.ReadEvidenceFile(path)
+	if err != nil {
+		t.Fatalf("ReadEvidenceFile(%s) error = %v, want nil", path, err)
+	}
+	return qualification.ExplainEligibility(published, profile), published
+}
+
+func rowLabelled(t *testing.T, report qualification.EligibilityReport, label string) qualification.RowOutcome {
+	t.Helper()
+	for _, row := range report.Rows {
+		if row.Label == label {
+			return row
+		}
+	}
+	t.Fatalf("published report carries no %q row", label)
+	return qualification.RowOutcome{}
+}
+
+func publishedTokenBaseline(t *testing.T, records []qualification.Record) qualification.Grade {
+	t.Helper()
+	for i := range records {
+		if qualification.MatchBaseline(qualification.SurfaceProtocol, qualification.CapabilityTokenCeiling)(&records[i]) {
+			return records[i].Grade
+		}
+	}
+	t.Fatal("published evidence carries no protocol token_ceiling baseline")
+	return ""
+}
+
+func compensatingRecords(records []qualification.Record) []qualification.Record {
+	var found []qualification.Record
+	for i := range records {
+		if qualification.SuppliedOutsideProtocol(records[i].Source) {
+			found = append(found, records[i])
+		}
+	}
+	return found
+}
+
+func TestCompensationReportsTheFigureWithoutCreditingTheCeilingStop(t *testing.T) {
+	t.Parallel()
+
+	for _, profilePath := range stalenessProfilePaths(t) {
+		profile, err := qualification.ReadRuntimeProfileFile(profilePath)
+		if err != nil {
+			t.Fatalf("ReadRuntimeProfileFile(%s) error = %v, want nil", profilePath, err)
+		}
+
+		for _, wire := range []string{wireSentinel, wireCorroborating} {
+			t.Run(profilePath+" "+wire, func(t *testing.T) {
+				t.Parallel()
+
+				without, withoutRecords := publishedOutcome(t, profile, sourcelessWireCollected(profile, wire, false))
+				with, withRecords := publishedOutcome(t, profile, sourcelessWireCollected(profile, wire, true))
+
+				label := string(qualification.CapabilityTokenCeiling)
+				before := rowLabelled(t, without, label)
+				after := rowLabelled(t, with, label)
+
+				if before.Conformance != qualification.StandingBelow {
+					t.Errorf("unsupplied conformance standing = %s, want below", before.Conformance)
+				}
+				if !strings.Contains(before.ConformanceCause, "nothing outside the protocol supplies it") {
+					t.Errorf("unsupplied conformance cause = %q, want it to state that nothing outside the protocol supplies it", before.ConformanceCause)
+				}
+				if after.Conformance == qualification.StandingSatisfied {
+					t.Errorf("supplied conformance standing = satisfied, want it short of satisfied: a returned figure is not an observed ceiling stop")
+				}
+				if after.Conformance != qualification.StandingUnmeasured {
+					t.Errorf("supplied conformance standing = %s, want unmeasured: the stop was neither observed nor shown absent", after.Conformance)
+				}
+				if !strings.Contains(after.ConformanceCause, "stop") {
+					t.Errorf("supplied conformance cause = %q, want it to name the ceiling stop nothing observed", after.ConformanceCause)
+				}
+				if strings.Contains(after.ConformanceCause, "nothing outside the protocol supplies it") {
+					t.Errorf("supplied conformance cause = %q, want it to stop claiming nothing supplies the figure", after.ConformanceCause)
+				}
+
+				if after.Standing != before.Standing || after.Cause != before.Cause {
+					t.Errorf("parity row moved: %s/%q became %s/%q; the wire carries the same nothing either way",
+						before.Standing, before.Cause, after.Standing, after.Cause)
+				}
+				if with.Verdict != without.Verdict {
+					t.Errorf("transport parity verdict = %s, want %s: compensation must not reach the transport answer", with.Verdict, without.Verdict)
+				}
+
+				baseline := publishedTokenBaseline(t, withoutRecords)
+				if baseline != qualification.GradeGap {
+					t.Errorf("unsupplied protocol token_ceiling baseline = %s, want gap", baseline)
+				}
+				if got := publishedTokenBaseline(t, withRecords); got != baseline {
+					t.Errorf("supplied protocol token_ceiling baseline = %s, want %s: the baseline states what the surface reported", got, baseline)
+				}
+			})
+		}
+	}
+}
+
+func TestUnsuppliedCompensationPublishesNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, profilePath := range stalenessProfilePaths(t) {
+		profile, err := qualification.ReadRuntimeProfileFile(profilePath)
+		if err != nil {
+			t.Fatalf("ReadRuntimeProfileFile(%s) error = %v, want nil", profilePath, err)
+		}
+
+		for _, wire := range []string{wireSentinel, wireCorroborating} {
+			t.Run(profilePath+" "+wire, func(t *testing.T) {
+				t.Parallel()
+
+				_, withoutRecords := publishedOutcome(t, profile, sourcelessWireCollected(profile, wire, false))
+				if found := compensatingRecords(withoutRecords); len(found) != 0 {
+					t.Errorf("a run that measured nothing published %d reading(s) supplied outside the protocol, want 0", len(found))
+				}
+
+				supplied := sourcelessWireCollected(profile, wire, true)
+				_, withRecords := publishedOutcome(t, profile, supplied)
+				found := compensatingRecords(withRecords)
+				if len(found) != 1 {
+					t.Fatalf("a run that measured a figure published %d reading(s) supplied outside the protocol, want 1", len(found))
+				}
+				rec := found[0]
+				if rec.Surface != qualification.SurfaceProtocol || rec.Capability != qualification.CapabilityTokenCeiling {
+					t.Errorf("compensating record is %s/%s, want protocol/token_ceiling", rec.Surface, rec.Capability)
+				}
+				if rec.Grade != qualification.GradeUsable || rec.Outcome != qualification.OutcomePass {
+					t.Errorf("compensating record is %s/%s, want usable/pass", rec.Grade, rec.Outcome)
+				}
+				if rec.SessionID == nil || *rec.SessionID != supplied.tokenCompensation.sessionID {
+					t.Errorf("compensating record names session %v, want the session the figure was measured for %q", rec.SessionID, supplied.tokenCompensation.sessionID)
+				}
+				if !strings.Contains(rec.Detail, ceilingStopUnverified) {
+					t.Errorf("compensating record detail = %q, want it to name the ceiling stop this collection never induced", rec.Detail)
+				}
+			})
+		}
+	}
 }
