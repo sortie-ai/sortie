@@ -82,6 +82,37 @@ const (
 	SourceComparison         Source = "comparison"
 )
 
+// ExtensionSource is what one collection established about a token-bearing
+// extension on the protocol's extension point. The three values stay apart
+// because an output nothing read is not a measured absence.
+type ExtensionSource string
+
+const (
+	// ExtensionSourcePresent states that a read result carried a token-bearing
+	// extension. A block reporting only zeros is present: a turn that spent
+	// nothing answers with real zeros.
+	ExtensionSourcePresent ExtensionSource = "present"
+	// ExtensionSourceAbsent states that results were read and none carried a
+	// token-bearing extension.
+	ExtensionSourceAbsent ExtensionSource = "absent"
+	// ExtensionSourceNotObserved states that no result was read, so what the
+	// transport carried stays unknown.
+	ExtensionSourceNotObserved ExtensionSource = "not_observed"
+)
+
+// ExtensionSources is the closed extension-source set.
+var ExtensionSources = []ExtensionSource{
+	ExtensionSourcePresent, ExtensionSourceAbsent, ExtensionSourceNotObserved,
+}
+
+// SuppliedOutsideProtocol reports whether a record's reading reached Sortie
+// through its own code rather than over the protocol wire. Such a record
+// answers for the effective adapter, not the transport, so it takes no part in
+// any surface's baseline.
+func SuppliedOutsideProtocol(source Source) bool {
+	return source == SourceSortieShared
+}
+
 // Grade is the comparison grade or outcome class a record carries.
 // GradeQualified and GradeNotQualified are valid only on capability
 // eligibility; GradeCorroborationOnly never receives numeric grade 1.
@@ -381,7 +412,16 @@ func NotInducibleExclusion(reason string) ExclusionKind {
 const (
 	RecallConfirmedSameSession = "confirmed_same_session"
 	RecallFreshFallback        = "fresh_session_fallback"
-	RecallUnobservedActual     = "unobserved_actual_session"
+	// RecallSameSessionWithoutRecall states that the runtime carried the recall
+	// turn in the seed's session and still did not return what the seed asked
+	// it to remember: neither an unobserved identifier nor a fresh-session
+	// fallback fits.
+	RecallSameSessionWithoutRecall = "same_session_without_recall"
+	// RecallDeclined states that the runtime carried the recall turn in the
+	// seed's session and the answer declined to give one, establishing neither
+	// that the history reached the model nor that it did not.
+	RecallDeclined         = "same_session_answer_declined"
+	RecallUnobservedActual = "unobserved_actual_session"
 	// RecallPreconditionUnmet states that the probe could not
 	// establish the condition its observation requires, so no
 	// continuation was tried and nothing about the runtime was
@@ -421,6 +461,14 @@ type Record struct {
 	AgentVersion    *string    `json:"agent_version"`
 	ProtocolVersion *int       `json:"protocol_version"`
 	Detail          string     `json:"detail"`
+	// ExtensionSource is the protocol surface's reading of the token-bearing
+	// extension, carried by the token inventory rows it belongs to and null
+	// elsewhere.
+	ExtensionSource *ExtensionSource `json:"extension_source"`
+	// ExtensionAdmitted reports whether the rules let that source stand as the
+	// figure a budget is kept in. Reading a present-but-unadmitted source as no
+	// source lets a partial reading be spent as a total.
+	ExtensionAdmitted *bool `json:"extension_admitted"`
 }
 
 var recordFields = map[string]bool{
@@ -430,6 +478,7 @@ var recordFields = map[string]bool{
 	"input_id": true, "evidence_path": true, "session_id": true,
 	"prior_session_id": true, "agent_name": true, "agent_version": true,
 	"protocol_version": true, "detail": true,
+	"extension_source": true, "extension_admitted": true,
 }
 
 // DetailBound is the maximum number of Unicode code points a detail string may
@@ -528,7 +577,24 @@ func DecodeRecord(line []byte) (Record, error) {
 	} else if points > DetailBound {
 		return Record{}, fmt.Errorf("detail carries %d code points, want at most %d", points, DetailBound)
 	}
+	if rec.ExtensionSource, err = decodeNullableEnum(fields["extension_source"], ExtensionSources); err != nil {
+		return Record{}, fmt.Errorf("extension_source: %w", err)
+	}
+	if rec.ExtensionAdmitted, err = decodeNullableBool(fields["extension_admitted"]); err != nil {
+		return Record{}, fmt.Errorf("extension_admitted: %w", err)
+	}
 	return rec, nil
+}
+
+func decodeNullableBool(raw json.RawMessage) (*bool, error) {
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
 // decodeString decodes a JSON string, rejecting null and any

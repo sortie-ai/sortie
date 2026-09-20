@@ -728,6 +728,9 @@ func (v *setValidation) ClassifyRecords() error {
 		if rec.AgentName != nil && rec.Surface != SurfaceProtocol {
 			return fmt.Errorf("record %d: agent_name is only valid on protocol records", rec.Sequence)
 		}
+		if err := checkExtensionReading(rec, class); err != nil {
+			return fmt.Errorf("record %d: %w", rec.Sequence, err)
+		}
 
 		if err := v.checkUniqueness(rec, class); err != nil {
 			return err
@@ -743,6 +746,28 @@ func (v *setValidation) ClassifyRecords() error {
 		v.indexRecord(rec, class)
 	}
 	return v.checkSemanticSessionRelations()
+}
+
+// checkExtensionReading enforces where a reading of the protocol's extension
+// point may be stated and which combinations of its two members mean anything:
+// the reading belongs to the protocol surface's token inventory alone, an
+// admission verdict requires the source it judges, and an absent or unread
+// source cannot be admitted to a budget.
+func checkExtensionReading(rec *Record, class RowClass) error {
+	onProtocolInventory := class == RowToken && rec.Surface == SurfaceProtocol
+	if !onProtocolInventory && (rec.ExtensionSource != nil || rec.ExtensionAdmitted != nil) {
+		return errors.New("an extension reading is only valid on a protocol token_source record")
+	}
+	if rec.ExtensionSource == nil && rec.ExtensionAdmitted != nil {
+		return errors.New("extension_admitted requires the extension_source it judges")
+	}
+	if rec.ExtensionSource != nil && rec.ExtensionAdmitted == nil {
+		return errors.New("extension_source requires the admission verdict on it")
+	}
+	if rec.ExtensionSource != nil && *rec.ExtensionSource != ExtensionSourcePresent && *rec.ExtensionAdmitted {
+		return fmt.Errorf("extension_source %s cannot be admitted to a budget", *rec.ExtensionSource)
+	}
+	return nil
 }
 
 // CheckOutcomeGradePairing enforces the closed pairing between a
@@ -860,10 +885,19 @@ func (v *setValidation) checkSessionRelation(rec *Record, class RowClass) error 
 		if rec.SessionID != nil {
 			return fmt.Errorf("%s record must use a null session_id", rowLabel(class))
 		}
-	case RowPolicyPrecondition, RowPermission, RowMCPDelivery, RowContinuationSeed, RowEndToEnd:
+	case RowPolicyPrecondition, RowPermission, RowMCPDelivery:
 		if rec.SessionID == nil {
 			return fmt.Errorf("%s record must reference a non-null session_id", rowLabel(class))
 		}
+	case RowEndToEnd:
+		// A launch that never started has no session; one generated to fill the
+		// member would read as a session the workflow actually ran in.
+		if rec.SessionID == nil && rec.Grade != GradeNotObserved {
+			return fmt.Errorf("%s record reporting an observed run must reference the session it ran in", rowLabel(class))
+		}
+	case RowContinuationSeed:
+		// A surface whose runtime reports no identifier names none here; an
+		// invented one would be indistinguishable from a reported one.
 	case RowRuntimeIdentity:
 		if rec.SessionID == nil {
 			return fmt.Errorf("%s record must reference a non-null session_id", rowLabel(class))
@@ -931,13 +965,13 @@ func (v *setValidation) checkRecallRecords() error {
 // checkRecallRecord enforces the closed detail set and the session relation
 // each recall outcome requires.
 func (v *setValidation) checkRecallRecord(rec *Record) error {
-	if rec.PriorSessionID == nil {
-		return fmt.Errorf("continuation recall record must carry prior_session_id")
+	if rec.PriorSessionID == nil && recallDetailNamesPriorSession(rec.Detail) {
+		return fmt.Errorf("recall detail %q requires the prior session id the seed reported", rec.Detail)
 	}
 	switch rec.Detail {
 	case RecallConfirmedSameSession:
-		if rec.SessionID == nil || *rec.SessionID != *rec.PriorSessionID {
-			return fmt.Errorf("confirmed_same_session requires equal non-null actual and prior session ids")
+		if !sameSessionRef(rec.SessionID, rec.PriorSessionID) {
+			return fmt.Errorf("confirmed_same_session requires the actual and prior session ids to agree")
 		}
 		if rec.Grade != GradeUsable {
 			return fmt.Errorf("confirmed_same_session requires classification usable, got %s", rec.Grade)
@@ -948,6 +982,23 @@ func (v *setValidation) checkRecallRecord(rec *Record) error {
 		}
 		if rec.Grade != GradeGap {
 			return fmt.Errorf("fresh_session_fallback requires classification gap, got %s", rec.Grade)
+		}
+	case RecallSameSessionWithoutRecall:
+		if rec.SessionID == nil || *rec.SessionID != *rec.PriorSessionID {
+			return fmt.Errorf("same_session_without_recall requires equal non-null actual and prior session ids")
+		}
+		if rec.Grade != GradeGap {
+			return fmt.Errorf("same_session_without_recall requires classification gap, got %s", rec.Grade)
+		}
+	case RecallDeclined:
+		if rec.SessionID == nil || *rec.SessionID != *rec.PriorSessionID {
+			return fmt.Errorf("same_session_answer_declined requires equal non-null actual and prior session ids")
+		}
+		if rec.Grade != GradeNotObserved {
+			return fmt.Errorf("same_session_answer_declined requires classification not_observed, got %s", rec.Grade)
+		}
+		if rec.Outcome != OutcomeFixtureInductionFailed {
+			return fmt.Errorf("same_session_answer_declined requires verdict fixture_induction_failed, got %s", rec.Outcome)
 		}
 	case RecallUnobservedActual:
 		if rec.SessionID != nil {
@@ -970,6 +1021,26 @@ func (v *setValidation) checkRecallRecord(rec *Record) error {
 		return fmt.Errorf("recall detail %q is outside the closed set", rec.Detail)
 	}
 	return nil
+}
+
+// recallDetailNamesPriorSession reports whether a recall detail states a
+// relation to the seed's session, which only a seed that named one can carry.
+func recallDetailNamesPriorSession(detail string) bool {
+	switch detail {
+	case RecallFreshFallback, RecallSameSessionWithoutRecall, RecallDeclined:
+		return true
+	}
+	return false
+}
+
+// sameSessionRef reports whether two session references name the same session.
+// Two absent references agree: a surface that names no session names none on
+// either row.
+func sameSessionRef(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // indexRecord files a classified record into the lookups the relation
@@ -1191,23 +1262,37 @@ func (v *setValidation) checkContinuationRelations() error {
 			return fmt.Errorf("surface %s has no continuation recall record", surface)
 		}
 		recall := v.recalls[surface]
-		if recall.PriorSessionID == nil {
-			return fmt.Errorf("surface %s recall record carries no prior_session_id", surface)
-		}
 		seed := v.seeds[surface]
-		if seed.SessionID == nil || *seed.SessionID != *recall.PriorSessionID {
+		switch {
+		case seed.SessionID == nil && recall.PriorSessionID != nil:
+			return fmt.Errorf("surface %s recall prior_session_id %s resolves to nothing: that surface's seed named no session", surface, *recall.PriorSessionID)
+		case seed.SessionID != nil && recall.PriorSessionID == nil:
+			return fmt.Errorf("surface %s recall record carries no prior_session_id", surface)
+		case seed.SessionID != nil && *seed.SessionID != *recall.PriorSessionID:
 			return fmt.Errorf("surface %s recall prior_session_id %s does not resolve to that surface's seed session", surface, *recall.PriorSessionID)
 		}
 	}
 	return nil
 }
 
-// checkTokenInventories enforces the per-surface inventory rules:
-// at least one record per surface, at most one sentinel, and mutual
-// exclusion between the sentinel and non-sentinel records.
+// surfaceBorne returns the records a surface itself carried, dropping every
+// reading Sortie's own code supplied outside the protocol.
+func surfaceBorne(records []*Record) []*Record {
+	borne := make([]*Record, 0, len(records))
+	for _, rec := range records {
+		if !SuppliedOutsideProtocol(rec.Source) {
+			borne = append(borne, rec)
+		}
+	}
+	return borne
+}
+
+// checkTokenInventories enforces the sentinel rules over the inventory each
+// surface itself carried. A reading supplied outside the protocol is not part
+// of that inventory.
 func (v *setValidation) checkTokenInventories() error {
 	for _, surface := range v.measured {
-		records := v.tokens[surface]
+		records := surfaceBorne(v.tokens[surface])
 		if len(records) == 0 {
 			return fmt.Errorf("surface %s has no token inventory record", surface)
 		}
@@ -1225,6 +1310,22 @@ func (v *setValidation) checkTokenInventories() error {
 		}
 		if sentinels == 1 && nonSentinels > 0 {
 			return fmt.Errorf("surface %s carries both a token sentinel and non-sentinel records; they are mutually exclusive", surface)
+		}
+		if err := checkExtensionAgreement(surface, records); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkExtensionAgreement requires one inventory to state one reading, since
+// every row of it answers for the same collection.
+func checkExtensionAgreement(surface Surface, records []*Record) error {
+	first := records[0]
+	for _, rec := range records[1:] {
+		if !NullableEqual(rec.ExtensionSource, first.ExtensionSource) ||
+			!NullableEqual(rec.ExtensionAdmitted, first.ExtensionAdmitted) {
+			return fmt.Errorf("surface %s token inventory states more than one extension reading", surface)
 		}
 	}
 	return nil
@@ -1302,19 +1403,25 @@ func (v *setValidation) checkDerivedBaselines() error {
 // An empty inventory grades not_observed, since the gap grade is a claim about
 // the runtime only a completed reading can support.
 func tokenBaselineGrade(records []*Record) Grade {
+	records = surfaceBorne(records)
+	if len(records) == 0 {
+		return GradeNotObserved
+	}
 	usable := false
+	zeroSource := false
 	for _, rec := range records {
 		if rec.EvidencePath == nil {
 			if rec.Grade == GradeNotObserved {
 				return GradeNotObserved
 			}
-			return GradeGap
+			zeroSource = true
+			continue
 		}
 		if rec.Grade == GradeUsable {
 			usable = true
 		}
 	}
-	if usable {
+	if usable && !zeroSource {
 		return GradeUsable
 	}
 	return GradeGap

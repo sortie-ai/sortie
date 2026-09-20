@@ -1143,6 +1143,32 @@ type Observation struct {
 	EvidencePath string
 }
 
+// TokenObservation is one resolved token-bearing path SetTokenInventory writes
+// as its own record.
+type TokenObservation struct {
+	EvidencePath string
+	Kind         string // "spend" or "occupancy"
+}
+
+// ExtensionReading is what one collection established about the token-bearing
+// extension on the protocol's extension point: whether a source was read, and
+// whether the rules let it stand as the figure a budget is kept in. The two
+// travel together because a source present but not admitted is a state of its
+// own.
+type ExtensionReading struct {
+	Source   ExtensionSource
+	Admitted bool
+}
+
+// writeOnto states the reading on one record. A nil reading writes nothing.
+func (r *ExtensionReading) writeOnto(rec *Record) {
+	if r == nil {
+		return
+	}
+	rec.ExtensionSource = new(r.Source)
+	rec.ExtensionAdmitted = new(r.Admitted)
+}
+
 // observationAdmission is the closed grade-outcome admission table every live
 // setter checks obs against before writing.
 var observationAdmission = map[Grade][]Outcome{
@@ -1428,6 +1454,23 @@ func checkRecallObservation(seedSessionID string, recall Observation) error {
 		if recall.Grade != GradeGap {
 			return fmt.Errorf("fresh_session_fallback requires classification gap, got %s", recall.Grade)
 		}
+	case RecallSameSessionWithoutRecall:
+		if recall.SessionID == "" || recall.SessionID != seedSessionID {
+			return errors.New("same_session_without_recall requires a non-empty actual session id equal to the seed's own")
+		}
+		if recall.Grade != GradeGap {
+			return fmt.Errorf("same_session_without_recall requires classification gap, got %s", recall.Grade)
+		}
+	case RecallDeclined:
+		if recall.SessionID == "" || recall.SessionID != seedSessionID {
+			return errors.New("same_session_answer_declined requires a non-empty actual session id equal to the seed's own")
+		}
+		if recall.Grade != GradeNotObserved {
+			return fmt.Errorf("same_session_answer_declined requires classification not_observed, got %s", recall.Grade)
+		}
+		if recall.Outcome != OutcomeFixtureInductionFailed {
+			return fmt.Errorf("same_session_answer_declined requires verdict fixture_induction_failed, got %s", recall.Outcome)
+		}
 	case RecallUnobservedActual:
 		if recall.SessionID != "" {
 			return errors.New("unobserved_actual_session requires an empty session id")
@@ -1447,6 +1490,97 @@ func checkRecallObservation(seedSessionID string, recall Observation) error {
 		}
 	default:
 		return fmt.Errorf("recall detail %q is outside the closed set", recall.Detail)
+	}
+	return nil
+}
+
+// SetTokenInventory removes surface's existing token records and writes from
+// paths and inventory: an empty paths writes a single sentinel; a non-empty
+// paths writes one record per entry carrying sessionID. It rewrites the token
+// baseline. It returns an error for an inventory pair outside the admitted set,
+// a not_observed inventory with a non-empty paths, and a non-empty paths with
+// an empty sessionID.
+//
+// A non-nil extension states what this collection read of the protocol's
+// extension point and belongs to the protocol surface alone; naming one for a
+// native surface is an error.
+func (f *Fixture) SetTokenInventory(surface Surface, sessionID string, paths []TokenObservation, inventory Observation, extension *ExtensionReading) error {
+	admitted := (inventory.Grade == GradeGap && inventory.Outcome == OutcomePass) ||
+		(inventory.Grade == GradeNotObserved && (inventory.Outcome == OutcomeFixtureInductionFailed || inventory.Outcome == OutcomeRuntimeFailed))
+	if !admitted {
+		return fmt.Errorf("token inventory grade %s outcome %s is outside the admitted pairs", inventory.Grade, inventory.Outcome)
+	}
+	if extension != nil {
+		if surface != SurfaceProtocol {
+			return fmt.Errorf("surface %s cannot state a reading of the protocol extension point", surface)
+		}
+		if !slices.Contains(ExtensionSources, extension.Source) {
+			return fmt.Errorf("extension source %q is outside the closed set", extension.Source)
+		}
+		if extension.Admitted && extension.Source != ExtensionSourcePresent {
+			return fmt.Errorf("extension source %s cannot be admitted to a budget", extension.Source)
+		}
+	}
+	if inventory.Grade == GradeNotObserved && len(paths) > 0 {
+		return errors.New("a not_observed inventory must not carry any resolved token path")
+	}
+	if len(paths) > 0 && sessionID == "" {
+		return errors.New("a resolved token path requires the session id that emitted it")
+	}
+
+	f.RemoveAll(matchTokenSurface(surface))
+
+	if len(paths) == 0 {
+		sentinel := f.base()
+		sentinel.Scenario = ScenarioTokenSource
+		sentinel.Surface = surface
+		sentinel.Capability = CapabilityTokenCeiling
+		sentinel.Source = SourceNone
+		sentinel.Grade = inventory.Grade
+		sentinel.Outcome = inventory.Outcome
+		sentinel.InputID = InputTokenInventory
+		sentinel.Detail = boundDetail(inventory.Detail)
+		extension.writeOnto(&sentinel)
+		f.Add(sentinel)
+	} else {
+		source := SourceNativeStructured
+		if surface == SurfaceProtocol {
+			source = SourceProtocolStable
+		}
+		for _, path := range paths {
+			rec := f.base()
+			rec.Scenario = ScenarioTokenSource
+			rec.Surface = surface
+			rec.Capability = CapabilityTokenCeiling
+			rec.Source = source
+			rec.Outcome = OutcomePass
+			rec.InputID = InputTokenInventory
+			rec.EvidencePath = new(path.EvidencePath)
+			rec.SessionID = new(sessionID)
+			rec.Detail = boundDetail(inventory.Detail)
+			if path.Kind == "spend" {
+				rec.Grade = GradeUsable
+			} else {
+				rec.Grade = GradeCorroborationOnly
+			}
+			extension.writeOnto(&rec)
+			f.Add(rec)
+		}
+	}
+
+	if baseline := f.FindFirst(MatchBaseline(surface, CapabilityTokenCeiling)); baseline != nil {
+		var records []*Record
+		for i := range f.Records {
+			if matchTokenSurface(surface)(&f.Records[i]) {
+				records = append(records, &f.Records[i])
+			}
+		}
+		baseline.Grade = tokenBaselineGrade(records)
+		var outcomes []Outcome
+		for _, rec := range records {
+			outcomes = append(outcomes, rec.Outcome)
+		}
+		baseline.Outcome = DeriveBaselineOutcome(baseline.Grade, outcomes)
 	}
 	return nil
 }
@@ -1586,6 +1720,25 @@ func (f *Fixture) SetTokenCorroborationOnly(Surface Surface) {
 	if baseline := f.FindFirst(MatchBaseline(Surface, CapabilityTokenCeiling)); baseline != nil {
 		baseline.Grade = GradeGap
 	}
+}
+
+// SetTokenCompensated adds the protocol-surface token reading Sortie's code
+// supplies outside the protocol, at path. The surface's inventory is left
+// intact, so the published baseline keeps reporting what the wire carried.
+func (f *Fixture) SetTokenCompensated(path string) {
+	f.SetTokenCompensatedObserved(FixtureSession(SurfaceProtocol, "success"), path,
+		"Sortie reads the spend from its own record of the turn")
+}
+
+// SetTokenCompensatedObserved adds the protocol-surface token reading Sortie's
+// code supplied outside the protocol for sessionID, at path, accounted for by
+// detail. Only a run that watched its own adapter return a figure may call it,
+// since the record it writes is read as a measurement, not a fitted capability.
+func (f *Fixture) SetTokenCompensatedObserved(sessionID, path, detail string) {
+	rec := f.tokenRecord(SurfaceProtocol, path, SourceSortieShared, GradeUsable, sessionID, boundDetail(detail))
+	f.Add(rec)
+	slices.SortStableFunc(f.Records, OrderCompare)
+	f.Renumber()
 }
 
 // DuplicateAfter inserts a copy of target directly behind it, keeping
