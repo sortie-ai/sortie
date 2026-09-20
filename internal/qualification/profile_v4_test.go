@@ -308,6 +308,15 @@ func TestDecodeRuntimeProfileV4(t *testing.T) {
 			},
 			wantSub: `missing field "path"`,
 		},
+		{
+			name: "an entry-point argument embedding {policy} is rejected",
+			base: validProfileDoc,
+			mutate: func(doc map[string]any) {
+				entry := doc["entry_points"].(map[string]any)["native_json"].(map[string]any)
+				entry["args"] = []string{"--output-format", "json", "--policy={policy}", "--prompt", "{prompt}"}
+			},
+			wantSub: "must stand alone as its own argument",
+		},
 	}
 
 	for _, tt := range tests {

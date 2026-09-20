@@ -893,6 +893,9 @@ func validatePlaceholderArgsAllowed(args []string) error {
 		if err := rejectUnknownPlaceholders(arg, entryPointPlaceholders); err != nil {
 			return err
 		}
+		if arg != "{policy}" && strings.Contains(arg, "{policy}") {
+			return fmt.Errorf("%q embeds {policy}: an empty policy drops the token together with the element before it, so {policy} must stand alone as its own argument", arg)
+		}
 	}
 	return nil
 }
