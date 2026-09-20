@@ -43,8 +43,7 @@ func writeUnrecognizedTerminals(path string, terminals []map[string]any) error {
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
-// writeMeasurement encodes measurement exactly as the tracked
-// measurement artifact is encoded and writes it to path.
+// writeMeasurement writes measurement to path as indented JSON.
 func writeMeasurement(path string, measurement qualification.Measurement) error {
 	data, err := json.MarshalIndent(measurement, "", "  ")
 	if err != nil {

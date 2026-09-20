@@ -4,10 +4,16 @@ package probe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -603,7 +609,14 @@ func Run(t *testing.T, coords Coordinates) Result {
 		t.Fatalf("write the unrecognized terminal artifact: %v", err)
 	}
 
-	if err := checkNoBarePair(fixture.Records); err != nil {
+	// Graded from the bytes the run published rather than a second
+	// serialization of the same memory, so the reported verdict is the
+	// one a replay of the named evidence reproduces.
+	published, err := qualification.ReadEvidenceFile(evidencePath)
+	if err != nil {
+		t.Fatalf("read back the evidence artifact: %v", err)
+	}
+	if err := checkNoBarePair(published); err != nil {
 		t.Fatalf("%v", err)
 	}
 
@@ -612,7 +625,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 		t.Fatalf("validate the collected evidence: %v", err)
 	}
 
-	conclusions, err := ConclusionsFromRecords(fixture.Records, verdict, profile)
+	conclusions, err := ConclusionsFromRecords(published, verdict, profile)
 	if err != nil {
 		t.Fatalf("derive the bounded summary: %v", err)
 	}
@@ -623,18 +636,25 @@ func Run(t *testing.T, coords Coordinates) Result {
 		t.Fatalf("write the summary artifact: %v", err)
 	}
 
-	measurement := qualification.Measurement{
-		SchemaVersion: 1,
-		ProfileDigest: profile.Digest(),
-		MeasuredAt:    time.Now().UTC().Format("2006-01-02"),
-		Expectation:   ExpectationFrom(conclusions),
+	provenancePath := filepath.Join(outputDir, "provenance.json")
+	if err := writeProvenance(provenancePath, collectionProvenanceOf(t, coords, collectionStartedAt, evidencePath, identities)); err != nil {
+		t.Fatalf("write the provenance artifact: %v", err)
+	}
+	provenanceDigest, err := fileDigest(provenancePath)
+	if err != nil {
+		t.Fatalf("digest the provenance artifact: %v", err)
+	}
+
+	measurement, err := composeMeasurement(profile, conclusions, coords.Model, provenanceDigest)
+	if err != nil {
+		t.Fatalf("compose the measurement document: %v", err)
 	}
 	measurementPath := filepath.Join(outputDir, "measurement.json")
 	if err := writeMeasurement(measurementPath, measurement); err != nil {
 		t.Fatalf("write the measurement artifact: %v", err)
 	}
 
-	t.Logf("qualification artifacts written: evidence=%s summary=%s measurement=%s", evidencePath, summaryPath, measurementPath)
+	t.Logf("qualification artifacts written: evidence=%s summary=%s measurement=%s provenance=%s", evidencePath, summaryPath, measurementPath, provenancePath)
 
 	notesPath := repositoryPath(t, mustRepositoryRoot(t), profile.NotesPath)
 	enforceNotesConsistency(t, notesPath, measurement.Expectation, summary)
@@ -646,7 +666,173 @@ func Run(t *testing.T, coords Coordinates) Result {
 		EvidencePath:    evidencePath,
 		SummaryPath:     summaryPath,
 		MeasurementPath: measurementPath,
+		ProvenancePath:  provenancePath,
 	}
+}
+
+// measurementSchemaVersion is the version of the measurement document
+// this collector writes, so a reader applies the rules that shape was
+// published under.
+const measurementSchemaVersion = 4
+
+// composeMeasurement builds the measurement document one run publishes,
+// bound to the provenance artifact the same run already wrote.
+//
+// An unstated provenanceDigest is refused: it is computable only once
+// the provenance document exists, so requiring it keeps the two
+// artifacts written in order. An unstated product-conformance answer is
+// refused because a document carrying one verdict is read as answering
+// both questions.
+func composeMeasurement(profile qualification.RuntimeProfile, conclusions Conclusions, requestedModel, provenanceDigest string) (qualification.Measurement, error) {
+	if provenanceDigest == "" {
+		return qualification.Measurement{}, errors.New("the provenance artifact must be written and digested before the measurement that names it")
+	}
+	if conclusions.Conformance == "" {
+		return qualification.Measurement{}, errors.New("the conclusions carry no product-conformance answer, and a measurement states both of the run's answers")
+	}
+	return qualification.Measurement{
+		SchemaVersion:  measurementSchemaVersion,
+		ProfileDigest:  profile.Digest(),
+		MeasuredAt:     time.Now().UTC().Format("2006-01-02"),
+		Expectation:    ExpectationFrom(conclusions),
+		RequestedModel: requestedModel,
+		// Nothing this collection reads reports the model a runtime
+		// served, and the requested coordinate is not that reading, so
+		// publishing it here would turn the request into an observation.
+		ObservedModel:    nil,
+		ProvenanceDigest: &provenanceDigest,
+	}, nil
+}
+
+// collectorSourceTree is the directory whose production sources decide
+// what a collection measures and how it grades. Its digest tells a
+// rerun under changed collector logic apart from a replay, which an
+// unchanged profile digest cannot.
+const collectorSourceTree = "internal/qualification"
+
+type provenanceAgent struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// collectionProvenance ties one run's measurement to the evidence bytes
+// it was graded from, the runtime builds that served it, the
+// configuration it measured, and the collector that drove it. Without
+// it a measurement states only a profile digest and a date, which two
+// different collector builds share.
+type collectionProvenance struct {
+	SchemaVersion   int                        `json:"schema_version"`
+	ObservedAt      string                     `json:"observed_at"`
+	ProfileDigest   string                     `json:"profile_digest"`
+	CollectorDigest string                     `json:"collector_digest"`
+	EvidenceFile    string                     `json:"evidence_file"`
+	EvidenceDigest  string                     `json:"evidence_digest"`
+	RequestedModel  string                     `json:"requested_model"`
+	ProtocolVersion int                        `json:"protocol_version"`
+	SessionAgents   map[string]provenanceAgent `json:"session_agents"`
+	CredentialMode  map[string]string          `json:"credential_mode"`
+}
+
+// collectionProvenanceOf assembles the provenance of one run from the
+// coordinates it measured, the moment it began, the evidence it
+// published, and the handshakes it observed.
+func collectionProvenanceOf(t *testing.T, coords Coordinates, startedAt time.Time, evidencePath string, identities map[string]qualification.SessionIdentity) collectionProvenance {
+	t.Helper()
+
+	collector, err := collectorDigest(filepath.Join(mustRepositoryRoot(t), collectorSourceTree))
+	if err != nil {
+		t.Fatalf("digest the collector sources: %v", err)
+	}
+	evidence, err := fileDigest(evidencePath)
+	if err != nil {
+		t.Fatalf("digest the evidence artifact: %v", err)
+	}
+
+	agents := make(map[string]provenanceAgent, len(identities))
+	for sessionID, identity := range identities {
+		agents[sessionID] = provenanceAgent{Name: identity.Name, Version: identity.Version}
+	}
+
+	return collectionProvenance{
+		SchemaVersion:   1,
+		ObservedAt:      startedAt.UTC().Format(time.RFC3339),
+		ProfileDigest:   coords.Profile.Digest(),
+		CollectorDigest: collector,
+		EvidenceFile:    filepath.Base(evidencePath),
+		EvidenceDigest:  evidence,
+		RequestedModel:  coords.Model,
+		ProtocolVersion: pinnedProtocolVersionMirror,
+		SessionAgents:   agents,
+		CredentialMode:  credentialModes(coords.AuthEnvNames),
+	}
+}
+
+// collectorDigest hashes every production Go source under root, each
+// bound to its path so a moved file changes the sum. Test sources are
+// excluded: they decide nothing a published grade rests on.
+func collectorDigest(root string) (string, error) {
+	var paths []string
+	walkErr := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if walkErr != nil {
+		return "", fmt.Errorf("walk %s: %w", root, walkErr)
+	}
+	slices.Sort(paths)
+
+	sum := sha256.New()
+	for _, path := range paths {
+		content, readErr := os.ReadFile(path) //nolint:gosec // paths come from walking the collector's own source tree
+		if readErr != nil {
+			return "", fmt.Errorf("read %s: %w", path, readErr)
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return "", fmt.Errorf("relate %s to %s: %w", path, root, relErr)
+		}
+		sum.Write(fmt.Appendf(nil, "%s\n%d\n", filepath.ToSlash(relative), len(content)))
+		sum.Write(content)
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+func fileDigest(path string) (string, error) {
+	content, err := os.ReadFile(path) //nolint:gosec // an artifact this run just wrote under its own output directory
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// credentialModes reports, per declared authentication variable name,
+// whether the launch environment supplies it. Only that answer travels;
+// a credential value never enters an artifact.
+func credentialModes(names []string) map[string]string {
+	modes := make(map[string]string, len(names))
+	for _, name := range names {
+		mode := "absent"
+		if _, ok := os.LookupEnv(name); ok {
+			mode = "present"
+		}
+		modes[name] = mode
+	}
+	return modes
+}
+
+func writeProvenance(path string, provenance collectionProvenance) error {
+	encoded, err := json.MarshalIndent(provenance, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(encoded, '\n'), 0o600)
 }
 
 func mustRepositoryRoot(t *testing.T) string {

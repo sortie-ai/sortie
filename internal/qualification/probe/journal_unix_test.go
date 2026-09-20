@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,5 +83,47 @@ func TestObservationJournalReportsItsOwnFailure(t *testing.T) {
 
 	if journal.err() == nil {
 		t.Error("the journal reports no error after an append that could not be written, want the first failure kept")
+	}
+}
+
+func TestGradingReplaysFromThePublishedEvidenceAlone(t *testing.T) {
+	t.Parallel()
+
+	profile := threeSurfaceProfile()
+	composed := qualification.NewFixture(qualification.FixtureQualified)
+	composed.Finalize()
+
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	if err := writeEvidenceRecords(path, composed.Records); err != nil {
+		t.Fatalf("write the evidence artifact: %v", err)
+	}
+
+	published, err := qualification.ReadEvidenceFile(path)
+	if err != nil {
+		t.Fatalf("read the evidence artifact back: %v", err)
+	}
+	verdict, err := qualification.ValidateObservationsWithDeclarations(path, profile)
+	if err != nil {
+		t.Fatalf("validate the published evidence: %v", err)
+	}
+	conclusions, err := ConclusionsFromRecords(published, verdict, profile)
+	if err != nil {
+		t.Fatalf("derive the bounded summary from the published evidence: %v", err)
+	}
+
+	wantVerdict := qualification.ComputeEligibility(composed.Records, profile)
+	if verdict != wantVerdict {
+		t.Errorf("the replayed verdict = %s, want %s: the file a run publishes must grade to what the run graded", verdict, wantVerdict)
+	}
+
+	wantConclusions, err := ConclusionsFromRecords(composed.Records, wantVerdict, profile)
+	if err != nil {
+		t.Fatalf("derive the bounded summary from the records in memory: %v", err)
+	}
+	if got, want := FormatSummary(conclusions), FormatSummary(wantConclusions); got != want {
+		t.Errorf("the replayed summary diverges from the composed one at line %d\ngot:\n%s\nwant:\n%s", firstDiffLine(got, want), got, want)
+	}
+	if got, want := ExpectationFrom(conclusions), ExpectationFrom(wantConclusions); !reflect.DeepEqual(got, want) {
+		t.Errorf("the replayed notes expectation = %+v, want %+v", got, want)
 	}
 }
