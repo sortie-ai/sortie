@@ -71,7 +71,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version-file: ../../.tool-versions
           verify: false
           working-directory: tools/qualify
           skip-cache: true
@@ -148,7 +148,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version-file: ../../.tool-versions
           verify: false
           working-directory: tools/qualify
           args: --config ../../.golangci-no-tests.yml --tests=false ./...
