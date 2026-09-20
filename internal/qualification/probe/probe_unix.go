@@ -365,11 +365,14 @@ func Run(t *testing.T, coords Coordinates) Result {
 	permissionGrade, permissionDetail := inducePermissionRequest(t, coords)
 	continuationGrade, continuationDetail := induceSessionContinuation(t, coords)
 
-	fixture := gradedEvidence(profile,
+	fixture, err := gradedEvidence(profile,
 		inducedRow{grade: toolGrade, detail: toolDetail},
 		inducedRow{grade: permissionGrade, detail: permissionDetail},
 		inducedRow{grade: continuationGrade, detail: continuationDetail},
 	)
+	if err != nil {
+		t.Fatalf("compose the collected evidence: %v", err)
+	}
 
 	verdict, err := qualification.ValidateObservationsWithDeclarations(qualification.WriteEvidenceFile(t, fixture.Records), profile)
 	if err != nil {

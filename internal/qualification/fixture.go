@@ -3,11 +3,13 @@ package qualification
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The synthetic identifiers every fixture uses: public test values only, no
@@ -48,6 +50,26 @@ type Fixture struct {
 	// variant is the constructor variant, so Finalize and AppendIdentity choose
 	// the runtime-identity record the variant requires.
 	variant string
+
+	// observedAt is the timestamp every record carries: FixtureTime for a
+	// synthetic fixture, the collection's start moment for a live one, so no
+	// published row is dated by a compiled-in constant.
+	observedAt string
+
+	// identitySet reports whether SetRuntimeIdentity captured a live handshake;
+	// when true, Finalize builds identity records from it rather than from the
+	// variant's fixed constants.
+	identitySet             bool
+	identityObs             Observation
+	identities              map[string]SessionIdentity
+	identityProtocolVersion int
+}
+
+// SessionIdentity is what one session's handshake reported about the agent
+// serving it.
+type SessionIdentity struct {
+	Name    string
+	Version string
 }
 
 // NewFixture builds the non-final records of one variant in canonical order,
@@ -56,7 +78,19 @@ type Fixture struct {
 // read it stand on the protocol surface alone. Finalize adds the identity
 // records.
 func NewFixture(variant string, absent ...AbsentSurface) *Fixture {
-	f := &Fixture{absent: slices.Clone(absent), variant: variant}
+	return newFixtureAt(FixtureTime, variant, absent...)
+}
+
+// NewLiveFixture builds the not-observed skeleton a live collection composes
+// its observations onto, dating every record by observedAt. Reusing NewFixture
+// would publish the synthetic fixture timestamp as the time of a run that
+// happened elsewhere.
+func NewLiveFixture(observedAt time.Time, absent ...AbsentSurface) *Fixture {
+	return newFixtureAt(observedAt.UTC().Format(time.RFC3339), FixtureNotObserved, absent...)
+}
+
+func newFixtureAt(observedAt, variant string, absent ...AbsentSurface) *Fixture {
+	f := &Fixture{absent: slices.Clone(absent), variant: variant, observedAt: observedAt}
 	if variant == FixtureNotObserved {
 		f.addWorkspaceSecurityNotObserved()
 		f.addPolicyPreconditionNotObserved()
@@ -110,7 +144,7 @@ func (f *Fixture) base() Record {
 	return Record{
 		SchemaVersion: 1,
 		Sequence:      0,
-		ObservedAt:    FixtureTime,
+		ObservedAt:    f.observedAt,
 	}
 }
 
@@ -146,10 +180,51 @@ func (f *Fixture) Finalize() {
 // FixtureNotObserved and IdentityFixtureRecord's qualified shape on
 // every other variant.
 func (f *Fixture) identityRecord(SessionID string) Record {
-	if f.variant == FixtureNotObserved {
-		return identityFixtureRecordNotObserved(SessionID)
+	if f.identitySet {
+		return f.liveIdentityRecord(SessionID)
 	}
-	return IdentityFixtureRecord(SessionID)
+	rec := IdentityFixtureRecord(SessionID)
+	if f.variant == FixtureNotObserved {
+		rec = identityFixtureRecordNotObserved(SessionID)
+	}
+	rec.ObservedAt = f.observedAt
+	return rec
+}
+
+// liveIdentityRecord builds one runtime-identity record for sessionID from that
+// session's own handshake. A session no handshake named is recorded as
+// unidentified.
+func (f *Fixture) liveIdentityRecord(sessionID string) Record {
+	rec := Record{
+		SchemaVersion: 1,
+		Sequence:      0,
+		ObservedAt:    f.observedAt,
+		Scenario:      ScenarioRuntimeIdentity,
+		Surface:       SurfaceProtocol,
+		Capability:    CapabilityRuntimeIdentity,
+		Source:        SourceProtocolStable,
+		Grade:         f.identityObs.Grade,
+		Outcome:       f.identityObs.Outcome,
+		InputID:       InputIdentity,
+		EvidencePath:  new("/handshake/agent_info"),
+		SessionID:     new(sessionID),
+		Detail:        boundDetail(f.identityObs.Detail),
+	}
+	if f.identityProtocolVersion != 0 {
+		rec.ProtocolVersion = new(f.identityProtocolVersion)
+	}
+	identity, named := f.identities[sessionID]
+	if !named {
+		rec.Grade = GradeNotObserved
+		if f.identityObs.Grade != GradeNotObserved {
+			rec.Outcome = OutcomeAdapterUnanswered
+			rec.Detail = "no handshake record named this session's own agent"
+		}
+		return rec
+	}
+	rec.AgentName = new(identity.Name)
+	rec.AgentVersion = new(identity.Version)
+	return rec
 }
 
 // Renumber assigns one-based contiguous Sequence numbers in slice order.
@@ -207,17 +282,19 @@ func (f *Fixture) SetSemanticNotObserved(Surface Surface, Capability Capability,
 // Capability's current Case records and writes the derived Grade and outcome.
 func (f *Fixture) UpdateSemanticBaseline(Surface Surface, Capability Capability) {
 	var classes []Grade
+	var outcomes []Outcome
 	for _, caseID := range CapabilityCases[Capability] {
 		rec := f.FindFirst(MatchSemantic(Surface, Capability, caseID))
 		if rec == nil {
 			return
 		}
-		classes = append(classes, rec.Grade)
+		classes = append(classes, BaselineClassification(rec.Grade, rec.Detail))
+		outcomes = append(outcomes, rec.Outcome)
 	}
 	baseline := f.FindFirst(MatchBaseline(Surface, Capability))
 	if baseline != nil {
 		baseline.Grade = DeriveBaselineGrade(classes)
-		baseline.Outcome = BaselineVerdictFor(baseline.Grade)
+		baseline.Outcome = DeriveBaselineOutcome(baseline.Grade, outcomes)
 	}
 }
 
@@ -366,15 +443,21 @@ func semanticIdentity(Surface Surface, caseID Case) (sessionID, evidencePath str
 	default:
 		sessionID = FixtureSession(Surface, string(caseID))
 	}
+	return sessionID, SemanticEvidencePath(Surface)
+}
+
+// SemanticEvidencePath returns the per-surface evidence-path convention a
+// semantic probe record carries: which field of that surface's output a
+// recognized terminal is read from.
+func SemanticEvidencePath(Surface Surface) string {
 	switch Surface {
 	case SurfaceProtocol:
-		evidencePath = "/turn/stop_reason"
+		return "/turn/stop_reason"
 	case SurfaceNativeJSON:
-		evidencePath = "/response/terminal"
+		return "/response/terminal"
 	default:
-		evidencePath = "/stream/terminal"
+		return "/stream/terminal"
 	}
-	return sessionID, evidencePath
 }
 
 // BaselineVerdictFor returns the Outcome a derived baseline Record carries for
@@ -384,6 +467,35 @@ func BaselineVerdictFor(classification Grade) Outcome {
 		return OutcomeNotObserved
 	}
 	return OutcomePass
+}
+
+// outcomeFailureRank ranks the not_observed failure outcomes
+// DeriveBaselineOutcome chooses among, highest first.
+var outcomeFailureRank = map[Outcome]int{
+	OutcomeRuntimeFailed:          3,
+	OutcomeFixtureInductionFailed: 2,
+	OutcomePrerequisiteFailed:     1,
+	OutcomeNotObserved:            0,
+}
+
+// DeriveBaselineOutcome derives a baseline Record's Outcome from its Grade and
+// contributing Outcomes: a Grade other than not_observed derives pass; a
+// not_observed Grade derives the highest-ranked contributing failure, and an
+// empty contributing derives not_observed.
+func DeriveBaselineOutcome(grade Grade, contributing []Outcome) Outcome {
+	if grade != GradeNotObserved {
+		return OutcomePass
+	}
+	best := OutcomeNotObserved
+	bestRank := -1
+	for _, outcome := range contributing {
+		rank, ranked := outcomeFailureRank[outcome]
+		if ranked && rank > bestRank {
+			bestRank = rank
+			best = outcome
+		}
+	}
+	return best
 }
 
 // addBaselines adds the 12 derived per-Surface Capability summaries.
@@ -402,7 +514,8 @@ func (f *Fixture) addBaselines() {
 			case CapabilityTurnDisposition, CapabilityRetryClassification:
 				var classes []Grade
 				for _, caseID := range CapabilityCases[Capability] {
-					classes = append(classes, f.FindFirst(MatchSemantic(Surface, Capability, caseID)).Grade)
+					rec := f.FindFirst(MatchSemantic(Surface, Capability, caseID))
+					classes = append(classes, BaselineClassification(rec.Grade, rec.Detail))
 				}
 				rec.Grade = DeriveBaselineGrade(classes)
 			case CapabilityTokenCeiling:
@@ -976,7 +1089,7 @@ func (f *Fixture) SetTokenSentinel(Surface Surface, failed bool) {
 		if failed {
 			baseline.Grade = GradeNotObserved
 		}
-		baseline.Outcome = BaselineVerdictFor(baseline.Grade)
+		baseline.Outcome = DeriveBaselineOutcome(baseline.Grade, []Outcome{sentinel.Outcome})
 	}
 }
 
@@ -1014,32 +1127,397 @@ func boundDetail(detail string) string {
 	return string(runes[:DetailBound])
 }
 
-// SetToolServerDelivery rewrites the protocol tool-server-delivery
-// Record to grade and detail, following an observation of whether a
-// declared server actually received a call. Outcome is derived from
-// grade with BaselineVerdictFor's convention.
-func (f *Fixture) SetToolServerDelivery(grade Grade, detail string) {
-	rec := f.FindFirst(matchToolServer())
-	if rec == nil {
-		return
-	}
-	rec.Grade = grade
-	rec.Detail = boundDetail(detail)
-	rec.Outcome = BaselineVerdictFor(grade)
+// Observation is one live-collected grade, outcome, detail, and identifier a
+// setter writes onto a matching record. It never derives Outcome from Grade;
+// the caller states both, and the setter admits only the pairs the admission
+// table names.
+type Observation struct {
+	Grade   Grade
+	Outcome Outcome
+	Detail  string
+	// SessionID is the launch's actual identifier. Empty writes a null
+	// session_id.
+	SessionID string
+	// EvidencePath is the field the observation was read from. Empty leaves the
+	// record's current evidence_path unchanged.
+	EvidencePath string
 }
 
-// SetPermissionHandling rewrites the protocol permission-handling
-// Record to grade and detail, following an observation of whether the
-// runtime raised a permission request the client's refusal answered.
-// Outcome is derived from grade with BaselineVerdictFor's convention.
-func (f *Fixture) SetPermissionHandling(grade Grade, detail string) {
+// observationAdmission is the closed grade-outcome admission table every live
+// setter checks obs against before writing.
+var observationAdmission = map[Grade][]Outcome{
+	GradeUsable:            {OutcomePass},
+	GradeGap:               {OutcomePass},
+	GradeCorroborationOnly: {OutcomePass},
+	GradeNotObserved: {
+		OutcomeNotObserved, OutcomePrerequisiteFailed,
+		OutcomeFixtureInductionFailed, OutcomeRuntimeFailed,
+	},
+	GradeDeclaredGap:  {OutcomeNotProducible},
+	GradeNotInducible: {OutcomeNotInducible},
+}
+
+// checkObservationAdmitted rejects a zero-value Outcome and any grade-outcome
+// pair outside observationAdmission.
+func checkObservationAdmitted(obs Observation) error {
+	if obs.Outcome == "" {
+		return errors.New("observation outcome must not be the zero value")
+	}
+	admitted, ok := observationAdmission[obs.Grade]
+	if !ok {
+		return fmt.Errorf("grade %q is outside the observation admission table", obs.Grade)
+	}
+	if !slices.Contains(admitted, obs.Outcome) {
+		return fmt.Errorf("grade %s does not admit outcome %s", obs.Grade, obs.Outcome)
+	}
+	return nil
+}
+
+// applyObservation writes obs's grade, outcome, and bounded detail onto rec,
+// rewrites its session_id (null when obs.SessionID is empty), and rewrites its
+// evidence_path only when obs.EvidencePath is non-empty.
+func applyObservation(rec *Record, obs Observation) {
+	rec.Grade = obs.Grade
+	rec.Outcome = obs.Outcome
+	rec.Detail = boundDetail(obs.Detail)
+	if obs.SessionID == "" {
+		rec.SessionID = nil
+	} else {
+		rec.SessionID = new(obs.SessionID)
+	}
+	if obs.EvidencePath != "" {
+		rec.EvidencePath = new(obs.EvidencePath)
+	}
+}
+
+// requireObservedSession rejects obs with an empty SessionID, for the row
+// classes checkSessionRelation requires one on.
+func requireObservedSession(rowLabel string, obs Observation) error {
+	if obs.SessionID == "" {
+		return fmt.Errorf("%s observation requires a non-empty session id", rowLabel)
+	}
+	return nil
+}
+
+// SetSemanticObservation writes obs onto the matching semantic Case record and
+// rewrites the owning Capability's baseline. It writes nothing and returns the
+// admission error when obs carries a grade-outcome pair outside the table.
+func (f *Fixture) SetSemanticObservation(surface Surface, capability Capability, caseID Case, obs Observation) error {
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+	rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
+	if rec == nil {
+		return fmt.Errorf("no semantic record for surface %s capability %s case %s", surface, capability, caseID)
+	}
+	applyObservation(rec, obs)
+	f.UpdateSemanticBaseline(surface, capability)
+	return nil
+}
+
+// SetSemanticLiveDeclaredGap writes the live declared-gap shape for caseID (and
+// its DeclaredGapPeers partner, if any) onto every declarable measured surface,
+// using that surface's observed session identifier. It returns an error naming
+// the missing surface, writing nothing, when observed lacks one.
+func (f *Fixture) SetSemanticLiveDeclaredGap(capability Capability, caseID Case, reason string, observed map[Surface]string) error {
+	declarable := intersectSurfaces(DeclarableSurfaces, f.measured())
+	for _, surface := range declarable {
+		if observed[surface] == "" {
+			return fmt.Errorf("no observed session identifier for surface %s", surface)
+		}
+	}
+	f.setSemanticLiveDeclaredGapOne(capability, caseID, reason, observed, declarable)
+	if peer, ok := DeclaredGapPeers[caseID]; ok {
+		f.setSemanticLiveDeclaredGapOne(capabilityOwning(peer), peer, reason, observed, declarable)
+	}
+	return nil
+}
+
+// setSemanticLiveDeclaredGapOne rewrites one case's declarable-surface records
+// and baselines from observed, without the DeclaredGapPeers closure.
+func (f *Fixture) setSemanticLiveDeclaredGapOne(capability Capability, caseID Case, reason string, observed map[Surface]string, declarable []Surface) {
+	for _, surface := range declarable {
+		rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
+		if rec == nil {
+			continue
+		}
+		rec.Outcome = OutcomeNotProducible
+		rec.Grade = GradeDeclaredGap
+		rec.Detail = boundDetail(reason)
+		sessionID := observed[surface]
+		rec.SessionID = new(sessionID)
+		rec.EvidencePath = new(SemanticEvidencePath(surface))
+	}
+	f.recordDeclaration(capability, caseID, reason)
+	for _, surface := range declarable {
+		f.UpdateSemanticBaseline(surface, capability)
+	}
+}
+
+// SetToolServerDelivery writes obs onto the protocol tool-server delivery
+// Record. It returns the admission error for a pair outside the table, and an
+// error for an empty obs.SessionID, which RowMCPDelivery requires non-null.
+func (f *Fixture) SetToolServerDelivery(obs Observation) error {
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+	if err := requireObservedSession(rowLabel(RowMCPDelivery), obs); err != nil {
+		return err
+	}
+	rec := f.FindFirst(matchToolServer())
+	if rec == nil {
+		return errors.New("no tool server delivery record")
+	}
+	applyObservation(rec, obs)
+	return nil
+}
+
+// SetPermissionHandling writes obs onto the protocol permission-handling
+// Record. It returns the admission error for a pair outside the table, and an
+// error for an empty obs.SessionID, which RowPermission requires non-null.
+func (f *Fixture) SetPermissionHandling(obs Observation) error {
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+	if err := requireObservedSession(rowLabel(RowPermission), obs); err != nil {
+		return err
+	}
 	rec := f.FindFirst(matchPermission())
+	if rec == nil {
+		return errors.New("no permission handling record")
+	}
+	applyObservation(rec, obs)
+	return nil
+}
+
+// SetPolicyPrecondition writes obs onto the aggregate policy precondition
+// Record. It returns the admission error for a pair outside the table, and an
+// error for an empty obs.SessionID, which RowPolicyPrecondition requires
+// non-null.
+func (f *Fixture) SetPolicyPrecondition(obs Observation) error {
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+	if err := requireObservedSession(rowLabel(RowPolicyPrecondition), obs); err != nil {
+		return err
+	}
+	rec := f.FindFirst(func(rec *Record) bool {
+		return rec.Scenario == ScenarioPolicyPrecondition && rec.Surface == SurfaceAggregate
+	})
+	if rec == nil {
+		return errors.New("no policy precondition record")
+	}
+	applyObservation(rec, obs)
+	return nil
+}
+
+// SetEndToEnd writes obs onto the isolated end-to-end Record. It returns the
+// admission error for a pair outside the table, and an error for an empty
+// obs.SessionID on an observation that reports a run: a not_observed launch
+// never started and has none, and an identifier invented here would read as one
+// the run observed.
+func (f *Fixture) SetEndToEnd(obs Observation) error {
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+	if obs.Grade != GradeNotObserved {
+		if err := requireObservedSession(rowLabel(RowEndToEnd), obs); err != nil {
+			return err
+		}
+	}
+	rec := f.FindFirst(func(rec *Record) bool {
+		return rec.Scenario == ScenarioEndToEnd && rec.Surface == SurfaceProtocol
+	})
+	if rec == nil {
+		return errors.New("no end-to-end record")
+	}
+	applyObservation(rec, obs)
+	return nil
+}
+
+// SetWorkspaceSecurity writes obs onto the aggregate workspace-security Record.
+// It carries no identifier, so it cannot violate the session_id rule and takes
+// no error return.
+func (f *Fixture) SetWorkspaceSecurity(obs Observation) {
+	rec := f.FindFirst(func(rec *Record) bool {
+		return rec.Scenario == ScenarioWorkspaceSecurity && rec.Surface == SurfaceAggregate
+	})
 	if rec == nil {
 		return
 	}
-	rec.Grade = grade
-	rec.Detail = boundDetail(detail)
-	rec.Outcome = BaselineVerdictFor(grade)
+	applyObservation(rec, Observation{Grade: obs.Grade, Outcome: obs.Outcome, Detail: obs.Detail})
+}
+
+// SetProcessCleanup writes obs onto the aggregate process-cleanup Record. It
+// carries no identifier, so it cannot violate the session_id rule and takes no
+// error return.
+func (f *Fixture) SetProcessCleanup(obs Observation) {
+	rec := f.FindFirst(func(rec *Record) bool {
+		return rec.Scenario == ScenarioProcessCleanup && rec.Surface == SurfaceAggregate
+	})
+	if rec == nil {
+		return
+	}
+	applyObservation(rec, Observation{Grade: obs.Grade, Outcome: obs.Outcome, Detail: obs.Detail})
+}
+
+// SetSessionContinuationObserved writes surface's seed and recall records and
+// rewrites its continuation baseline, writing seed.SessionID into the recall's
+// prior_session_id. An empty seed.SessionID writes a null session_id and
+// prior_session_id: a value invented here would be indistinguishable from one a
+// runtime reported.
+func (f *Fixture) SetSessionContinuationObserved(surface Surface, seed, recall Observation) error {
+	if err := checkObservationAdmitted(seed); err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	if err := checkObservationAdmitted(recall); err != nil {
+		return fmt.Errorf("recall: %w", err)
+	}
+	if err := checkRecallObservation(seed.SessionID, recall); err != nil {
+		return err
+	}
+
+	seedRec := f.FindFirst(MatchContinuation(surface, InputContinuationSeed))
+	if seedRec == nil {
+		return fmt.Errorf("no continuation seed record for surface %s", surface)
+	}
+	applyObservation(seedRec, seed)
+
+	recallRec := f.FindFirst(MatchContinuation(surface, InputContinuationRecall))
+	if recallRec == nil {
+		return fmt.Errorf("no continuation recall record for surface %s", surface)
+	}
+	applyObservation(recallRec, recall)
+	recallRec.PriorSessionID = nil
+	if seed.SessionID != "" {
+		recallRec.PriorSessionID = new(seed.SessionID)
+	}
+	recallRec.Detail = recall.Detail
+
+	if baseline := f.FindFirst(MatchBaseline(surface, CapabilitySessionContinuation)); baseline != nil {
+		baseline.Grade = recall.Grade
+		baseline.Detail = boundDetail(recall.Detail)
+		baseline.Outcome = DeriveBaselineOutcome(recall.Grade, []Outcome{recall.Outcome})
+	}
+	return nil
+}
+
+// checkRecallObservation mirrors checkRecallRecord's rules against an
+// about-to-be-written recall observation, so a rejection is caught before the
+// next paid turn rather than at validation time.
+func checkRecallObservation(seedSessionID string, recall Observation) error {
+	switch recall.Detail {
+	case RecallConfirmedSameSession:
+		// The proof is the answer carrying the seed's nonce, so a surface that
+		// named no session on either turn still matches: two absent ids agree.
+		if recall.SessionID != seedSessionID {
+			return errors.New("confirmed_same_session requires the actual session id to be the seed's own")
+		}
+		if recall.Grade != GradeUsable {
+			return fmt.Errorf("confirmed_same_session requires classification usable, got %s", recall.Grade)
+		}
+	case RecallFreshFallback:
+		if seedSessionID == "" {
+			// A run that never learned the seed's session cannot have seen the
+			// runtime open a different one.
+			return errors.New("fresh_session_fallback requires the seed's own observed session id")
+		}
+		if recall.SessionID == "" || recall.SessionID == seedSessionID {
+			return errors.New("fresh_session_fallback requires a non-empty actual session id distinct from the seed's own")
+		}
+		if recall.Grade != GradeGap {
+			return fmt.Errorf("fresh_session_fallback requires classification gap, got %s", recall.Grade)
+		}
+	case RecallUnobservedActual:
+		if recall.SessionID != "" {
+			return errors.New("unobserved_actual_session requires an empty session id")
+		}
+		if recall.Grade != GradeNotObserved {
+			return fmt.Errorf("unobserved_actual_session requires classification not_observed, got %s", recall.Grade)
+		}
+	case RecallPreconditionUnmet:
+		if recall.SessionID != "" {
+			return errors.New("recall_precondition_unmet requires an empty session id")
+		}
+		if recall.Grade != GradeNotObserved {
+			return fmt.Errorf("recall_precondition_unmet requires classification not_observed, got %s", recall.Grade)
+		}
+		if recall.Outcome != OutcomePrerequisiteFailed {
+			return fmt.Errorf("recall_precondition_unmet requires verdict prerequisite_failed, got %s", recall.Outcome)
+		}
+	default:
+		return fmt.Errorf("recall detail %q is outside the closed set", recall.Detail)
+	}
+	return nil
+}
+
+// SetRuntimeIdentity captures what each session's handshake reported, writing
+// agent_name, agent_version, and protocol_version on every protocol record
+// composed from the identity of the session it names, clearing agent_version
+// elsewhere, and supplying the same readings to every identity record Finalize
+// later builds. A record naming no session carries no agent fields.
+//
+// It rejects a non-empty obs.SessionID (Finalize supplies each record's session
+// id), a usable observation with no identity, an identity with an empty name or
+// version, identities alongside a not-observed observation, an
+// OutcomeNotObserved observation, and a zero protocolVersion.
+func (f *Fixture) SetRuntimeIdentity(obs Observation, identities map[string]SessionIdentity, protocolVersion int) error {
+	if obs.SessionID != "" {
+		return errors.New("runtime identity observation must carry an empty session id")
+	}
+	if obs.Grade == GradeUsable && len(identities) == 0 {
+		return errors.New("a usable runtime identity observation requires at least one session's handshake")
+	}
+	if obs.Grade == GradeNotObserved && len(identities) > 0 {
+		return errors.New("a not_observed runtime identity observation cannot carry a session handshake")
+	}
+	for sessionID, identity := range identities {
+		if identity.Name == "" || identity.Version == "" {
+			return fmt.Errorf("the handshake for session %s requires a non-empty name and version", sessionID)
+		}
+	}
+	if obs.Outcome == OutcomeNotObserved {
+		return errors.New("runtime identity observation must not carry outcome not_observed")
+	}
+	if protocolVersion == 0 {
+		return errors.New("runtime identity observation requires a non-zero protocol_version")
+	}
+	if err := checkObservationAdmitted(obs); err != nil {
+		return err
+	}
+
+	f.identitySet = true
+	f.identityObs = obs
+	f.identities = maps.Clone(identities)
+	f.identityProtocolVersion = protocolVersion
+
+	for i := range f.Records {
+		rec := &f.Records[i]
+		if rec.Surface != SurfaceProtocol {
+			rec.AgentVersion = nil
+			continue
+		}
+		rec.ProtocolVersion = new(protocolVersion)
+		identity, named := f.sessionIdentity(rec.SessionID)
+		if !named {
+			rec.AgentName = nil
+			rec.AgentVersion = nil
+			continue
+		}
+		rec.AgentName = new(identity.Name)
+		rec.AgentVersion = new(identity.Version)
+	}
+	return nil
+}
+
+// sessionIdentity returns the handshake reading for the session
+// sessionID names, and reports whether one was observed at all.
+func (f *Fixture) sessionIdentity(sessionID *string) (SessionIdentity, bool) {
+	if sessionID == nil {
+		return SessionIdentity{}, false
+	}
+	identity, named := f.identities[*sessionID]
+	return identity, named
 }
 
 // SetSessionContinuation rewrites surface's session-continuation

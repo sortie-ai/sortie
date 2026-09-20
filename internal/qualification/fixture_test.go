@@ -123,7 +123,9 @@ func TestFixtureSetToolServerDelivery(t *testing.T) {
 			t.Parallel()
 
 			fixture := NewFixture(FixtureQualified)
-			fixture.SetToolServerDelivery(tt.grade, tt.detail)
+			if err := fixture.SetToolServerDelivery(Observation{Grade: tt.grade, Outcome: tt.wantOutcome, Detail: tt.detail, SessionID: "sess-mcp"}); err != nil {
+				t.Fatalf("SetToolServerDelivery(...) error = %v, want nil", err)
+			}
 
 			rec := fixture.FindFirst(matchToolServer())
 			if rec == nil {
@@ -146,7 +148,9 @@ func TestFixtureSetToolServerDelivery(t *testing.T) {
 
 		fixture := NewFixture(FixtureQualified)
 		long := strings.Repeat("x", DetailBound+50)
-		fixture.SetToolServerDelivery(GradeUsable, long)
+		if err := fixture.SetToolServerDelivery(Observation{Grade: GradeUsable, Outcome: OutcomePass, Detail: long, SessionID: "sess-mcp"}); err != nil {
+			t.Fatalf("SetToolServerDelivery(...) error = %v, want nil", err)
+		}
 
 		rec := fixture.FindFirst(matchToolServer())
 		if rec == nil {
@@ -179,7 +183,9 @@ func TestFixtureSetPermissionHandling(t *testing.T) {
 			fixture := NewFixture(FixtureQualified)
 			policyBefore := *fixture.FindFirst(matchPolicyPrecondition())
 
-			fixture.SetPermissionHandling(tt.grade, tt.detail)
+			if err := fixture.SetPermissionHandling(Observation{Grade: tt.grade, Outcome: tt.wantOutcome, Detail: tt.detail, SessionID: "sess-permission"}); err != nil {
+				t.Fatalf("SetPermissionHandling(...) error = %v, want nil", err)
+			}
 
 			rec := fixture.FindFirst(matchPermission())
 			if rec == nil {

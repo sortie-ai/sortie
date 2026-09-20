@@ -231,6 +231,17 @@ func numericGrade(classification Grade) (int, bool) {
 	return 0, false
 }
 
+// BaselineClassification narrows one semantic case record to the grade its
+// baseline is derived from. A not_inducible row excluded because the surface
+// stays silent on a condition that does arise counts as a gap; every other
+// grade stands as published.
+func BaselineClassification(grade Grade, detail string) Grade {
+	if grade == GradeNotInducible && NotInducibleExclusion(detail) == ExclusionSurfaceSilent {
+		return GradeGap
+	}
+	return grade
+}
+
 // DeriveBaselineGrade derives one capability's per-surface baseline
 // grade from that capability's own case classifications only. It
 // first drops every declared_gap and not_inducible entry; an empty
@@ -1232,6 +1243,7 @@ func (v *setValidation) checkDerivedBaselines() error {
 				return fmt.Errorf("surface %s has no %s baseline record", surface, capability)
 			}
 			var derived Grade
+			var contributing []Outcome
 			switch capability {
 			case CapabilityTurnDisposition, CapabilityRetryClassification:
 				var classes []Grade
@@ -1241,8 +1253,10 @@ func (v *setValidation) checkDerivedBaselines() error {
 					if rec == nil {
 						return fmt.Errorf("surface %s is missing its %s %s semantic record", surface, capability, caseID)
 					}
-					classes = append(classes, rec.Grade)
-					if rec.Grade != GradeDeclaredGap && rec.Grade != GradeNotInducible {
+					class := BaselineClassification(rec.Grade, rec.Detail)
+					classes = append(classes, class)
+					contributing = append(contributing, rec.Outcome)
+					if class != GradeDeclaredGap && class != GradeNotInducible {
 						allExcluded = false
 					}
 				}
@@ -1252,11 +1266,29 @@ func (v *setValidation) checkDerivedBaselines() error {
 				derived = DeriveBaselineGrade(classes)
 			case CapabilityTokenCeiling:
 				derived = tokenBaselineGrade(v.tokens[surface])
+				for _, rec := range v.tokens[surface] {
+					contributing = append(contributing, rec.Outcome)
+				}
 			case CapabilitySessionContinuation:
 				derived = v.recalls[surface].Grade
+				contributing = []Outcome{v.recalls[surface].Outcome}
 			}
 			if written != derived {
 				return fmt.Errorf("surface %s %s baseline = %s, want derived %s", surface, capability, written, derived)
+			}
+			var baseline *Record
+			for i := range v.records {
+				if MatchBaseline(surface, capability)(&v.records[i]) {
+					baseline = &v.records[i]
+					break
+				}
+			}
+			if baseline == nil {
+				return fmt.Errorf("surface %s has no %s baseline record", surface, capability)
+			}
+			wantOutcome := DeriveBaselineOutcome(derived, contributing)
+			if baseline.Outcome != wantOutcome {
+				return fmt.Errorf("surface %s %s baseline outcome = %s, want derived %s", surface, capability, baseline.Outcome, wantOutcome)
 			}
 		}
 	}
