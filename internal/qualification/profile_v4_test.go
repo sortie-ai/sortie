@@ -2,6 +2,7 @@ package qualification
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,9 +79,13 @@ func TestDecodeRuntimeProfileV4(t *testing.T) {
 	})
 
 	tests := []struct {
-		name   string
-		base   func() map[string]any
+		name string
+		base func() map[string]any
+
 		mutate func(doc map[string]any)
+		// wantSub, when set, is a substring of the rejection the case means
+		// to provoke, so a case cannot pass on an unrelated earlier check.
+		wantSub string
 	}{
 		{
 			name: "an unknown probe_prompts key is rejected",
@@ -254,11 +259,14 @@ func TestDecodeRuntimeProfileV4(t *testing.T) {
 		},
 		{
 			name: "a not_inducible_cases entry contradicting a declaration is rejected",
-			base: validProfileDocWithDeclaredPeerPair,
+			base: validProfileDoc,
 			mutate: func(doc map[string]any) {
+				doc["declarations"] = append(doc["declarations"].([]any),
+					map[string]any{"capability": "retry_classification", "case": "human_input", "reason": DeclaredGapNeverProduced})
 				doc["not_inducible_cases"] = append(doc["not_inducible_cases"].([]any),
-					map[string]any{"surface": "native_json", "case": "runtime_refusal", "reason": NotInducibleChannelTooSmall})
+					map[string]any{"surface": "native_json", "case": "human_input", "reason": NotInducibleTerminalVocabularyClosed})
 			},
+			wantSub: "is also named by declarations",
 		},
 	}
 
@@ -270,8 +278,12 @@ func TestDecodeRuntimeProfileV4(t *testing.T) {
 			tt.mutate(doc)
 			data := marshalProfileDoc(t, doc)
 
-			if _, err := DecodeRuntimeProfile(data); err == nil {
-				t.Errorf("DecodeRuntimeProfile(%s) = nil error, want a rejection", data)
+			_, err := DecodeRuntimeProfile(data)
+			if err == nil {
+				t.Fatalf("DecodeRuntimeProfile(%s) = nil error, want a rejection", data)
+			}
+			if tt.wantSub != "" && !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("DecodeRuntimeProfile(%s) error = %v, want it to name %q", data, err, tt.wantSub)
 			}
 		})
 	}
