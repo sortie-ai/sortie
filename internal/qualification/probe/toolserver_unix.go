@@ -77,25 +77,30 @@ func fileHasContent(path string) (bool, error) {
 	return info.Size() > 0, nil
 }
 
-// startInductionSession launches one protocol session with argv as the
-// runtime's own arguments and mcpConfigPath declaring the induced tool
-// server, in a fresh isolated workspace. It registers the session's own
-// teardown, including the process-group-absence assertion, before
-// returning.
-func startInductionSession(t *testing.T, coords Coordinates, argv []string, mcpConfigPath string) (domain.AgentAdapter, domain.Session, error) {
+// startInductionSession launches one protocol session with argv,
+// workspace as its cwd, and mcpConfigPath declaring the induced tool
+// server (empty for none). The launch runs through the run's
+// environment wrapper, so both surfaces answer under the same
+// allowlist. The session is registered with the run that owns
+// workspace, so that run is what stops and accounts for it.
+func startInductionSession(t *testing.T, coords Coordinates, argv []string, workspace, mcpConfigPath string) (domain.AgentAdapter, domain.Session, error) {
 	t.Helper()
+
+	fixture := fixtureOwningLaunch(workspace)
+	if fixture == nil {
+		t.Fatalf("induction session workspace %s belongs to no run: a session started outside a run's own launch workspace can be neither stopped nor measured by it", workspace)
+	}
 
 	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
 	if err != nil {
 		return nil, domain.Session{}, fmt.Errorf("construct the induction adapter: %w", err)
 	}
 
-	fullCommand := append([]string{coords.CommandPath}, argv...)
 	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 		AgentConfig: domain.AgentConfig{
 			Kind:           "agent-client-protocol",
-			Command:        strings.Join(fullCommand, " "),
+			Command:        fixture.controlledCommand(coords.CommandPath, argv),
 			ReadTimeoutMS:  30000,
 			TurnTimeoutMS:  int(toolInductionTurnBound / time.Millisecond),
 			StallTimeoutMS: 60000,
@@ -105,8 +110,12 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, mcpC
 	if err != nil {
 		return adapter, domain.Session{}, err
 	}
+	if err := fixture.registerSession(adapter, session); err != nil {
+		_ = adapter.StopSession(context.Background(), session)
+		t.Fatalf("account for the induction session: %v", err)
+	}
 	t.Cleanup(func() {
-		if err := adapter.StopSession(context.Background(), session); err != nil {
+		if err := fixture.stopOpenSessions(context.Background()); err != nil {
 			t.Errorf("stop induction session: %v", err)
 		}
 		assertSessionGroupAbsent(t, session)
@@ -118,7 +127,7 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, mcpC
 // calling the single tool a declared stdio server offers, and grades
 // the row from that server's own call record: never from the wire, and
 // never from delivery alone.
-func induceToolServerCall(t *testing.T, coords Coordinates) (qualification.Grade, string) {
+func induceToolServerCall(t *testing.T, coords Coordinates, fixture *sharedFixture) (qualification.Grade, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -131,7 +140,7 @@ func induceToolServerCall(t *testing.T, coords Coordinates) (qualification.Grade
 		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction could not resolve the protocol entry point: %v", err)
 	}
 
-	adapter, session, err := startInductionSession(t, coords, argv, mcpConfigPath)
+	adapter, session, err := startInductionSession(t, coords, argv, fixture.newLaunchWorkspace(t), mcpConfigPath)
 	if err != nil {
 		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction session failed to start: %v", err)
 	}
@@ -200,7 +209,7 @@ func containsNotification(events []domain.AgentEvent, substr string) bool {
 // and whether the client's own refusal answered it, per this
 // capability's own mapping: an absent request is unmeasured, never
 // usable.
-func inducePermissionRequest(t *testing.T, coords Coordinates) (qualification.Grade, string) {
+func inducePermissionRequest(t *testing.T, coords Coordinates, fixture *sharedFixture) (qualification.Grade, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -213,7 +222,7 @@ func inducePermissionRequest(t *testing.T, coords Coordinates) (qualification.Gr
 		return qualification.GradeNotObserved, fmt.Sprintf("permission induction could not resolve an asking posture: %v", err)
 	}
 
-	adapter, session, err := startInductionSession(t, coords, argv, mcpConfigPath)
+	adapter, session, err := startInductionSession(t, coords, argv, fixture.newLaunchWorkspace(t), mcpConfigPath)
 	if err != nil {
 		return qualification.GradeNotObserved, fmt.Sprintf("permission induction session failed to start: %v", err)
 	}

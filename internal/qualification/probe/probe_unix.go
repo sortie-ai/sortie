@@ -4,45 +4,20 @@ package probe
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
-
-// setProcessGroup configures cmd to start in its own process group,
-// inlined from internal/agent/procutil so this package's own import
-// list stays confined to internal/qualification,
-// internal/qualification/e2e, internal/agent/clientprotocol, and
-// internal/domain. Must be called before [exec.Cmd.Start].
-func setProcessGroup(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Setpgid = true
-}
-
-// signalProcessGroup sends sig to the entire process group led by pid,
-// inlined for the same reason setProcessGroup is. It returns nil when
-// the group no longer exists, since expiry is expected during
-// best-effort cleanup.
-func signalProcessGroup(pid int, sig syscall.Signal) error {
-	err := syscall.Kill(-pid, sig)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
-}
 
 // assertSessionGroupAbsent confirms the process group session's launch
 // produced is gone, per the rule that a survivor is a leak rather than
@@ -60,84 +35,230 @@ func assertSessionGroupAbsent(t *testing.T, session domain.Session) {
 // nativeProbeBound bounds every native surface launch.
 const nativeProbeBound = 5 * time.Minute
 
-// launchNativeProbe launches one native surface's bounded probe with
-// the profile's own entry-point argv, captures its combined output
-// through a line-bounded writer per stream, and drains its process
-// group.
-func launchNativeProbe(t *testing.T, commandPath string, argv []string) (string, error) {
-	t.Helper()
+// nativeDrainBound bounds what a launch waits once its process group has
+// been taken down: the child's reap and the drain of the captured
+// streams. A runtime that ignores a signal, or a descendant that
+// inherited the streams and outlives its parent, is what this bound has
+// to survive, so the wait carries its own bound.
+const nativeDrainBound = 30 * time.Second
 
-	cmd := exec.CommandContext(context.Background(), commandPath, argv...) //nolint:gosec // the operator-selected executable with the profile's own documented flags
-	setProcessGroup(cmd)
+// boundedLaunch is one started native launch whose output is captured
+// through pipes this package owns rather than the copier goroutines an
+// [exec.Cmd] writing into an [io.Writer] starts. A descendant holding
+// the inherited write end keeps those goroutines alive and
+// [exec.Cmd.Wait] waits for them, so owning the pipes is what makes the
+// wait end at all.
+type boundedLaunch struct {
+	pgid   int
+	stdout *lineBoundedWriter
+	stderr *lineBoundedWriter
+	done   chan procutil.CaptureResult
+	ended  chan struct{}
+	cancel context.CancelFunc
+}
+
+// launchOwnershipInterval paces the process-table readings a live
+// launch folds into the ownership ledger, about one query per
+// launch-second: often enough that a launch long enough to serve a turn
+// is read while it lives, rare enough to cost little.
+const launchOwnershipInterval = time.Second
+
+// startBoundedLaunch starts commandPath in its own process group,
+// registers that group with owned, folds a process-table reading into
+// owned while it runs, and charges owned with whatever the launch
+// recorded on exit. A nil env inherits the calling process's
+// environment, and a nil owned charges the launch to no ledger.
+func startBoundedLaunch(commandPath string, argv []string, dir string, env []string, owned *ownedDescendants) (*boundedLaunch, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, commandPath, argv...) //nolint:gosec // the operator-selected executable with the profile's own documented flags
+	cmd.Dir = dir
+	cmd.Env = env
+	procutil.SetGroupKill(cmd)
+
+	// Before the process can exist, so a record read back later cannot
+	// be one this run never wrote.
+	if owned != nil {
+		owned.watchReceipts(commandPath)
+	}
 
 	stdout := &lineBoundedWriter{limit: 1 << 20}
 	stderr := &lineBoundedWriter{limit: 1 << 20}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	capture := func() string {
-		stdout.Flush()
-		stderr.Flush()
-		return stdout.String() + stderr.String()
+	capture, err := procutil.StartCapture(cmd, procutil.CaptureParams{Stdout: stdout, Stderr: stderr, DrainGrace: nativeDrainBound})
+	if err != nil {
+		cancel()
+		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return capture(), fmt.Errorf("native launch: %w: %w", errNativeLaunchFailed, err)
+
+	launch := &boundedLaunch{
+		pgid:   cmd.Process.Pid,
+		stdout: stdout,
+		stderr: stderr,
+		done:   make(chan procutil.CaptureResult, 1),
+		ended:  make(chan struct{}),
+		cancel: cancel,
 	}
-	pgid := cmd.Process.Pid
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case waitErr := <-done:
-		_ = signalProcessGroup(pgid, syscall.SIGKILL)
-		qualification.AwaitProcessGroupAbsence(t, pgid)
-		return capture(), waitErr
-	case <-time.After(nativeProbeBound):
-		_ = signalProcessGroup(pgid, syscall.SIGKILL)
-		<-done
-		qualification.AwaitProcessGroupAbsence(t, pgid)
-		return capture(), fmt.Errorf("native probe: %w", errNativeBoundExceeded)
+	if owned != nil {
+		owned.register(launch.pgid)
+		go launch.observeOwnership(owned)
+	}
+	go func() {
+		result := capture.Wait()
+		// Before anything can see the launch as ended, so what it
+		// recorded on exit is already in the ledger for every later
+		// reading, with no ordering left to race.
+		if owned != nil {
+			owned.ingestReceipts()
+		}
+		close(launch.ended)
+		launch.done <- result
+	}()
+	return launch, nil
+}
+
+// observeOwnership folds a process-table reading into owned until the
+// launch ends. It reaches what no launch record can: a runtime killed
+// outright never names what it started, so a reading taken while it ran
+// is all that is left of it.
+func (l *boundedLaunch) observeOwnership(owned *ownedDescendants) {
+	ticker := time.NewTicker(launchOwnershipInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.ended:
+			return
+		case <-ticker.C:
+			if snapshot, err := psSnapshot(); err == nil {
+				owned.observe(snapshot)
+			}
+		}
 	}
 }
 
-// runAuthenticationCanary runs the profile's version_args once, before
-// any graded surface spends a turn, so a missing or invalid credential
-// fails the run before any other cost is spent.
-func runAuthenticationCanary(t *testing.T, coords Coordinates) {
+// await blocks until the launch has ended and its streams have drained,
+// or until bound passes, and reports which happened. The output is
+// readable only when ended is true: until the capture's wait returns,
+// the reader goroutine still owns the writers.
+func (l *boundedLaunch) await(bound time.Duration) (result procutil.CaptureResult, output string, ended bool) {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case result = <-l.done:
+		l.stdout.Flush()
+		l.stderr.Flush()
+		return result, l.stdout.String() + l.stderr.String(), true
+	case <-timer.C:
+		return procutil.CaptureResult{}, "", false
+	}
+}
+
+// terminate takes the launch's process group down and awaits its end
+// within the drain bound, so a launch that outlived its own bound still
+// returns within one.
+func (l *boundedLaunch) terminate() (result procutil.CaptureResult, output string, ended bool) {
+	l.cancel()
+	return l.await(nativeDrainBound)
+}
+
+// launchNativeProbe launches one native surface's bounded probe,
+// captures its combined output, registers its process group with owned,
+// and drains it.
+func launchNativeProbe(t *testing.T, commandPath string, argv []string, dir string, env []string, owned *ownedDescendants) (string, error) {
+	t.Helper()
+
+	launch, err := startBoundedLaunch(commandPath, argv, dir, env, owned)
+	if err != nil {
+		return "", fmt.Errorf("native launch: %w: %w", errNativeLaunchFailed, err)
+	}
+	defer launch.cancel()
+
+	result, output, ended := launch.await(nativeProbeBound)
+	if !ended {
+		_, output, ended = launch.terminate()
+		if !ended {
+			return "", fmt.Errorf("native probe: %w: the launch did not end within %s of its own group being taken down", errNativeBoundExceeded, nativeDrainBound)
+		}
+		qualification.AwaitProcessGroupAbsence(t, launch.pgid)
+		return output, fmt.Errorf("native probe: %w", errNativeBoundExceeded)
+	}
+	qualification.AwaitProcessGroupAbsence(t, launch.pgid)
+	return output, result.WaitErr
+}
+
+// runVersionCanary runs the profile's version_args once, before any
+// graded surface spends a turn, so a runtime that cannot be launched
+// under the collection's launch environment fails before any cost. It
+// exercises no credential: a runtime prints its version whether or not
+// anyone is authenticated.
+func runVersionCanary(t *testing.T, coords Coordinates, fixture *sharedFixture) {
 	t.Helper()
 	// Through launchNativeProbe rather than its own exec: a runtime that
 	// blocks on an interactive credential prompt while serving
-	// version_args would otherwise hold the run until the whole go test
-	// deadline expires, with no process group to drain it through.
-	output, err := launchNativeProbe(t, coords.CommandPath, coords.Profile.VersionArgs)
+	// version_args would otherwise hold the run until the go test
+	// deadline, with no process group to drain it through.
+	output, err := launchNativeProbe(t, coords.CommandPath, coords.Profile.VersionArgs, fixture.workspaceRoot, fixture.env, fixture.ownership())
 	if err != nil {
-		t.Fatalf("authentication canary %s %v failed: %v; output: %q",
+		t.Fatalf("version canary %s %v failed: %v; output: %q",
 			coords.CommandPath, coords.Profile.VersionArgs, err, strings.TrimSpace(output))
 	}
 }
 
-// corroborateAbsentSurface confirms a declared-absent surface's own
-// launch recognizes no terminal outcome, per the decoder-level rule
-// that a declared absence is corroborated before any graded surface
-// spends a turn.
-func corroborateAbsentSurface(t *testing.T, coords Coordinates, surface qualification.Surface) {
+// authenticationCanaryPrompt is the shortest turn that still needs a
+// credential: a runtime answers it only once a provider accepts the
+// request.
+const authenticationCanaryPrompt = "Reply with exactly SORTIE_AUTH_CANARY_OK and call no tool."
+
+// runAuthenticationCanary spends one turn against the protocol surface,
+// under the launch environment every graded launch carries, and fails
+// the run when it does not complete. Only a turn a provider answered
+// reports that this collection's credential and configuration reach the
+// runtime; running it first keeps a credential fault from being spent
+// on, and graded as, twenty failed rows. It stops its session
+// immediately so no later reading takes it for a graded launch's.
+func runAuthenticationCanary(t *testing.T, coords Coordinates, fixture *sharedFixture) {
+	t.Helper()
+
+	argv, err := coords.Profile.EntryArgs(qualification.SurfaceProtocol, coords.Model, "", "")
+	if err != nil {
+		t.Fatalf("build the authentication canary argv: %v", err)
+	}
+	adapter, session, err := startInductionSession(t, coords, argv, fixture.newLaunchWorkspace(t), "")
+	if err != nil {
+		t.Fatalf("authentication canary: the session did not start: %v", err)
+	}
+	_, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  authenticationCanaryPrompt,
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err := fixture.stopOpenSessions(context.Background()); err != nil {
+		t.Fatalf("authentication canary: stop the canary session: %v", err)
+	}
+	if runErr != nil {
+		t.Fatalf("authentication canary: the turn did not complete: %v; a version check passing here proves only that the executable runs", runErr)
+	}
+}
+
+// corroborateAbsentSurface confirms a declared-absent surface's launch
+// recognizes no terminal outcome, before any graded surface spends a
+// turn.
+func corroborateAbsentSurface(t *testing.T, coords Coordinates, fixture *sharedFixture, surface qualification.Surface) {
 	t.Helper()
 	argv, err := coords.Profile.EntryArgs(surface, coords.Model, "", "corroboration probe")
 	if err != nil {
 		t.Fatalf("build corroboration argv for %s: %v", surface, err)
 	}
-	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv)
+	output, launchErr := launchNativeProbe(t, coords.CommandPath, argv, fixture.workspaceRoot, fixture.env, fixture.ownership())
 	_, _, found := nativeTerminal(coords.Profile, surface, output, launchErr)
 	if found {
 		t.Fatalf("declared-absent surface %s recognized a terminal outcome, contradicting the declaration", surface)
 	}
 }
 
-// runPublishedPostureProbe launches the published sample's own
-// posture, resolved to the profile's command path and model, into a
-// fresh isolated workspace and confirms one turn completes with no
-// permission request raised. It writes no qualification.Record and
-// registers no process group with any tracker, so it cannot reach a
-// graded row through either accumulator.
-func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
+// runPublishedPostureProbe launches the published sample's own posture,
+// resolved to the profile's command path and model, into a fresh
+// isolated workspace and confirms one turn completes with no permission
+// request raised. It writes no qualification.Record and registers no
+// process group, so it cannot reach a graded row.
+func runPublishedPostureProbe(t *testing.T, coords Coordinates, envWrapper string) {
 	t.Helper()
 
 	root, err := qualification.RepositoryRootFromWD()
@@ -161,7 +282,7 @@ func runPublishedPostureProbe(t *testing.T, coords Coordinates) {
 		WorkspacePath: t.TempDir(),
 		AgentConfig: domain.AgentConfig{
 			Kind:           "agent-client-protocol",
-			Command:        strings.Join(argv, " "),
+			Command:        strings.Join(append([]string{envWrapper}, argv...), " "),
 			ReadTimeoutMS:  30000,
 			TurnTimeoutMS:  300000,
 			StallTimeoutMS: 60000,
@@ -354,15 +475,18 @@ func Run(t *testing.T, coords Coordinates) Result {
 		outputDir = defaultOutputDir(t)
 	}
 
-	runAuthenticationCanary(t, coords)
-
 	profile := coords.Profile
+	fixtureState := resolveSharedFixture(t, coords)
+
+	runVersionCanary(t, coords, fixtureState)
+	runAuthenticationCanary(t, coords, fixtureState)
+
 	for _, absent := range profile.AbsentSurfaces {
-		corroborateAbsentSurface(t, coords, absent.Surface)
+		corroborateAbsentSurface(t, coords, fixtureState, absent.Surface)
 	}
 
-	toolGrade, toolDetail := induceToolServerCall(t, coords)
-	permissionGrade, permissionDetail := inducePermissionRequest(t, coords)
+	toolGrade, toolDetail := induceToolServerCall(t, coords, fixtureState)
+	permissionGrade, permissionDetail := inducePermissionRequest(t, coords, fixtureState)
 	continuationGrade, continuationDetail := induceSessionContinuation(t, coords)
 
 	fixture, err := gradedEvidence(profile,
@@ -409,7 +533,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 
 	notesPath := repositoryPath(t, mustRepositoryRoot(t), profile.NotesPath)
 	enforceNotesConsistency(t, notesPath, measurement.Expectation, summary)
-	runPublishedPostureProbe(t, coords)
+	runPublishedPostureProbe(t, coords, fixtureState.envWrapper)
 
 	return Result{
 		Verdict:         verdict,

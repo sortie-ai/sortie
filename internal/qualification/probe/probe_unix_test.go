@@ -5,7 +5,6 @@ package probe
 import (
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +40,7 @@ func spawnDetachedChild(args []string, hangPath string) int {
 
 const versionCanaryScenario = "version-canary"
 
-func runVersionCanary(args []string, out agenttest.Output) int {
+func runVersionScenario(args []string, out agenttest.Output) int {
 	if len(args) == 0 || args[0] != "--version" {
 		fmt.Fprintf(os.Stderr, "unexpected args: %s\n", strings.Join(args, " "))
 		return 9
@@ -52,92 +51,7 @@ func runVersionCanary(args []string, out agenttest.Output) int {
 func init() {
 	probeScenarios[mcpToolServerScenario] = agenttest.Typed(runMCPToolServer)
 	probeScenarios[spawnDetachedChildScenario] = agenttest.Typed(spawnDetachedChild)
-	probeScenarios[versionCanaryScenario] = agenttest.Typed(runVersionCanary)
-}
-
-// TestSetProcessGroup mirrors internal/agent/procutil's own coverage of
-// the function this one inlines: a nil SysProcAttr is allocated, and a
-// pre-existing SysProcAttr field survives alongside Setpgid.
-func TestSetProcessGroup(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil SysProcAttr is allocated", func(t *testing.T) {
-		t.Parallel()
-
-		cmd := &exec.Cmd{}
-		setProcessGroup(cmd)
-
-		if cmd.SysProcAttr == nil {
-			t.Fatal("setProcessGroup() SysProcAttr = nil, want non-nil")
-		}
-		if !cmd.SysProcAttr.Setpgid {
-			t.Error("setProcessGroup() Setpgid = false, want true")
-		}
-	})
-
-	t.Run("an existing SysProcAttr field is preserved", func(t *testing.T) {
-		t.Parallel()
-
-		cmd := &exec.Cmd{SysProcAttr: &syscall.SysProcAttr{Noctty: true}}
-		setProcessGroup(cmd)
-
-		if !cmd.SysProcAttr.Setpgid {
-			t.Error("setProcessGroup() Setpgid = false, want true")
-		}
-		if !cmd.SysProcAttr.Noctty {
-			t.Error("setProcessGroup() Noctty = false, want true: a pre-existing field must be preserved")
-		}
-	})
-}
-
-func waitStatusSignaled(t *testing.T, waitErr error) bool {
-	t.Helper()
-	var exitErr *exec.ExitError
-	if !errors.As(waitErr, &exitErr) {
-		return false
-	}
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok {
-		return false
-	}
-	return status.Signaled()
-}
-
-func TestSignalProcessGroup(t *testing.T) {
-	t.Parallel()
-
-	t.Run("ESRCH against an implausible pid is suppressed", func(t *testing.T) {
-		t.Parallel()
-
-		if err := signalProcessGroup(math.MaxInt32, syscall.SIGTERM); err != nil {
-			t.Errorf("signalProcessGroup(MaxInt32, SIGTERM) = %v, want nil (ESRCH must be suppressed)", err)
-		}
-	})
-
-	t.Run("a live process group is actually terminated", func(t *testing.T) {
-		t.Parallel()
-
-		hangPath := agenttest.FakeRuntime(t, t.TempDir(), "runtime", agenttest.OutputScenario, agenttest.Output{Hang: true})
-		cmd := exec.Command(hangPath) //nolint:gosec // hangPath is a fake runtime this test built under its own temp directory
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("cmd.Start() error = %v, want nil", err)
-		}
-		pid := cmd.Process.Pid
-		t.Cleanup(func() {
-			_ = signalProcessGroup(pid, syscall.SIGKILL)
-			_, _ = cmd.Process.Wait()
-		})
-
-		if err := signalProcessGroup(pid, syscall.SIGTERM); err != nil {
-			t.Fatalf("signalProcessGroup(pid, SIGTERM) = %v, want nil", err)
-		}
-
-		waitErr := cmd.Wait()
-		if !waitStatusSignaled(t, waitErr) {
-			t.Errorf("cmd.Wait() = %v, want the process to have been terminated by SIGTERM", waitErr)
-		}
-	})
+	probeScenarios[versionCanaryScenario] = agenttest.Typed(runVersionScenario)
 }
 
 func TestLaunchNativeProbe(t *testing.T) {
@@ -148,7 +62,7 @@ func TestLaunchNativeProbe(t *testing.T) {
 
 		script := agenttest.FakeRuntime(t, t.TempDir(), "runtime", agenttest.OutputScenario, agenttest.Output{Stdout: "stdout line\n", Stderr: "stderr line\n"})
 
-		output, err := launchNativeProbe(t, script, nil)
+		output, err := launchNativeProbe(t, script, nil, t.TempDir(), nil, nil)
 		if err != nil {
 			t.Fatalf("launchNativeProbe() error = %v, want nil", err)
 		}
@@ -163,7 +77,7 @@ func TestLaunchNativeProbe(t *testing.T) {
 
 		missing := filepath.Join(t.TempDir(), "does-not-exist")
 
-		output, err := launchNativeProbe(t, missing, nil)
+		output, err := launchNativeProbe(t, missing, nil, t.TempDir(), nil, nil)
 		if !errors.Is(err, errNativeLaunchFailed) {
 			t.Fatalf("launchNativeProbe() error = %v, want errNativeLaunchFailed", err)
 		}
@@ -177,7 +91,7 @@ func TestLaunchNativeProbe(t *testing.T) {
 
 		script := agenttest.FakeRuntime(t, t.TempDir(), "runtime", agenttest.OutputScenario, agenttest.Output{ExitCode: 7})
 
-		_, err := launchNativeProbe(t, script, nil)
+		_, err := launchNativeProbe(t, script, nil, t.TempDir(), nil, nil)
 		if err == nil {
 			t.Fatal("launchNativeProbe() error = nil, want the process's own exit error")
 		}
@@ -206,7 +120,7 @@ func TestLaunchNativeProbe(t *testing.T) {
 		hangPath := agenttest.FakeRuntime(t, dir, "grandchild", agenttest.OutputScenario, agenttest.Output{Hang: true})
 		script := agenttest.FakeRuntime(t, dir, "leader", spawnDetachedChildScenario, hangPath)
 
-		if _, err := launchNativeProbe(t, script, []string{pidFile}); err != nil {
+		if _, err := launchNativeProbe(t, script, []string{pidFile}, t.TempDir(), nil, nil); err != nil {
 			t.Fatalf("launchNativeProbe() error = %v, want nil", err)
 		}
 
@@ -223,6 +137,14 @@ func TestLaunchNativeProbe(t *testing.T) {
 			t.Errorf("syscall.Kill(%d, 0) = %v, want ESRCH: launchNativeProbe must have killed the whole process group its leader forked into, not just the leader itself", pid, err)
 		}
 	})
+}
+
+// testSharedFixture is the smallest fixture a launch needs: a
+// run-scoped root to launch in and a tracker to register its group
+// with, with no wrapper, so the launch runs the command directly.
+func testSharedFixture(t *testing.T) *sharedFixture {
+	t.Helper()
+	return &sharedFixture{workspaceRoot: t.TempDir(), tracker: &groupTracker{}}
 }
 
 // corroborateAbsentSurfaceCoordinates builds a Coordinates whose Profile
@@ -244,7 +166,7 @@ func TestCorroborateAbsentSurface(t *testing.T) {
 
 	runtimePath := agenttest.FakeRuntime(t, t.TempDir(), "native", agenttest.OutputScenario, agenttest.Output{Stdout: "plain unrecognized output\n"})
 	coords := corroborateAbsentSurfaceCoordinates(t, runtimePath)
-	corroborateAbsentSurface(t, coords, qualification.SurfaceNativeJSON)
+	corroborateAbsentSurface(t, coords, testSharedFixture(t), qualification.SurfaceNativeJSON)
 }
 
 func TestCorroborateAbsentSurfaceFailsOnARecognizedTerminal(t *testing.T) {
@@ -253,7 +175,7 @@ func TestCorroborateAbsentSurfaceFailsOnARecognizedTerminal(t *testing.T) {
 	if os.Getenv("PROBE_CORROBORATE_ABSENT_SURFACE_HELPER_PROCESS") == "1" {
 		runtimePath := agenttest.FakeRuntime(t, t.TempDir(), "native", agenttest.OutputScenario, agenttest.Output{Stdout: `{"response":{}}` + "\n"})
 		coords := corroborateAbsentSurfaceCoordinates(t, runtimePath)
-		corroborateAbsentSurface(t, coords, qualification.SurfaceNativeJSON)
+		corroborateAbsentSurface(t, coords, testSharedFixture(t), qualification.SurfaceNativeJSON)
 		t.Fatal("corroborateAbsentSurface() returned instead of calling t.Fatalf for a recognized terminal outcome")
 		return
 	}
@@ -343,25 +265,25 @@ func TestMustRepositoryRoot(t *testing.T) {
 	}
 }
 
-// TestRunAuthenticationCanary confirms the canary's two outcomes: a
-// runtime that serves version_args lets the run continue, and one that
-// fails them stops it before any graded surface spends a turn. Both
-// outcomes launch versionCanaryScenario, which fails the run on its
-// own if it stopped receiving the sample profile's version_args at
-// all: a stub ignoring its arguments would keep this test green even
-// if the canary stopped passing them.
+// TestRunVersionCanary confirms the canary's two outcomes: a runtime
+// that serves version_args lets the run continue, and one that fails
+// them stops it before any graded surface spends a turn. Both outcomes
+// launch versionCanaryScenario, which fails the run on its own if it
+// stopped receiving the sample profile's version_args at all: a stub
+// ignoring its arguments would keep this test green even if the canary
+// stopped passing them.
 //
 // The failing call runs in a subprocess, matching the idiom the tests
 // above already use: the canary reports its failure through t.Fatalf,
 // which against this test's own *testing.T would fail the package run
 // rather than exercise the behavior under test.
-func TestRunAuthenticationCanary(t *testing.T) {
+func TestRunVersionCanary(t *testing.T) {
 	t.Parallel()
 
-	if os.Getenv("PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS") == "1" {
+	if os.Getenv("PROBE_VERSION_CANARY_HELPER_PROCESS") == "1" {
 		runtimePath := agenttest.FakeRuntime(t, t.TempDir(), "canary", versionCanaryScenario, agenttest.Output{ExitCode: 3})
-		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, runtimePath))
-		t.Fatal("runAuthenticationCanary() returned instead of calling t.Fatalf for a runtime that failed version_args")
+		runVersionCanary(t, corroborateAbsentSurfaceCoordinates(t, runtimePath), testSharedFixture(t))
+		t.Fatal("runVersionCanary() returned instead of calling t.Fatalf for a runtime that failed version_args")
 		return
 	}
 
@@ -369,19 +291,19 @@ func TestRunAuthenticationCanary(t *testing.T) {
 		t.Parallel()
 
 		runtimePath := agenttest.FakeRuntime(t, t.TempDir(), "canary", versionCanaryScenario, agenttest.Output{Stdout: "stub 1.0\n"})
-		runAuthenticationCanary(t, corroborateAbsentSurfaceCoordinates(t, runtimePath))
+		runVersionCanary(t, corroborateAbsentSurfaceCoordinates(t, runtimePath), testSharedFixture(t))
 	})
 
 	t.Run("a runtime that fails version_args stops the run", func(t *testing.T) {
 		t.Parallel()
 
-		cmd := exec.Command(os.Args[0], "-test.run=^TestRunAuthenticationCanary$", "-test.v") //nolint:gosec // re-invokes this package's own compiled test binary
-		cmd.Env = append(os.Environ(), "PROBE_AUTHENTICATION_CANARY_HELPER_PROCESS=1")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRunVersionCanary$", "-test.v") //nolint:gosec // re-invokes this package's own compiled test binary
+		cmd.Env = append(os.Environ(), "PROBE_VERSION_CANARY_HELPER_PROCESS=1")
 		output, err := cmd.CombinedOutput()
 		if err == nil {
 			t.Fatalf("the helper process exited 0, want a failure; output:\n%s", output)
 		}
-		if !strings.Contains(string(output), "authentication canary") {
+		if !strings.Contains(string(output), "version canary") {
 			t.Errorf("helper output does not name the canary; output:\n%s", output)
 		}
 	})

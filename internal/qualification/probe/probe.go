@@ -137,11 +137,25 @@ func coordinateValue(env func(string) (string, bool), name string) string {
 	return value
 }
 
+// firstUnsuppliedAuthName reports the first name whose value env reports
+// absent or empty, and ("", false) when every name has a non-empty
+// value.
+func firstUnsuppliedAuthName(names []string, env func(string) (string, bool)) (string, bool) {
+	for _, name := range names {
+		value, present := env(name)
+		if !present || value == "" {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // ResolveCoordinates resolves the five gate-enabled coordinates:
 // exactly one executable path, one model identifier, a valid list of
-// authentication environment names that all exist in the parent
-// environment, and one readable runtime profile document. env reports
-// a coordinate's value and whether it is present.
+// authentication environment names, and one readable runtime profile
+// document. An unsupplied authentication value is [Gated]'s clean skip,
+// not a failure. env reports a coordinate's value and whether it is
+// present.
 func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 	command := coordinateValue(env, qualificationCommandEnv)
 	commandPath, err := parseCommand(command)
@@ -162,12 +176,6 @@ func ResolveCoordinates(env func(string) (string, bool)) (Coordinates, error) {
 	if err != nil {
 		return Coordinates{}, err
 	}
-	for _, name := range authNames {
-		if _, present := env(name); !present {
-			return Coordinates{}, fmt.Errorf("authentication environment variable %q named by %s is absent from the invoking environment", name, qualificationAuthNamesEnv)
-		}
-	}
-
 	profilePath, present := env(qualificationProfileEnv)
 	if !present || strings.TrimSpace(profilePath) == "" {
 		return Coordinates{}, fmt.Errorf("%s must name one readable runtime profile document", qualificationProfileEnv)
@@ -198,6 +206,9 @@ func Gated(t *testing.T) (Coordinates, bool) {
 	coords, err := ResolveCoordinates(os.LookupEnv)
 	if err != nil {
 		t.Fatalf("the qualification gate is enabled but a prerequisite is missing: %v", err)
+	}
+	if name, unsupplied := firstUnsuppliedAuthName(coords.AuthEnvNames, os.LookupEnv); unsupplied {
+		t.Skipf("skipping Agent Client Protocol qualification: authentication environment variable %q named by %s carries no value; the operator mints a temporary credential for this run", name, qualificationAuthNamesEnv)
 	}
 	return coords, true
 }
