@@ -49,11 +49,14 @@ func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 						t.Run(name, func(t *testing.T) {
 							t.Parallel()
 
-							fixture := gradedEvidence(profile,
+							fixture, err := gradedEvidence(profile,
 								inducedRow{grade: toolGrade, detail: "tool server induction: " + string(toolGrade)},
 								inducedRow{grade: permissionGrade, detail: "permission induction: " + string(permissionGrade)},
 								inducedRow{grade: continuationGrade, detail: "continuation induction: " + string(continuationGrade)},
 							)
+							if err != nil {
+								t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
+							}
 
 							path := qualification.WriteEvidenceFile(t, fixture.Records)
 							verdict, err := qualification.ValidateObservationsWithDeclarations(path, profile)
@@ -132,11 +135,14 @@ func TestGradedEvidenceOnlyRewritesTheThreeProtocolRows(t *testing.T) {
 		t.Run(profilePath, func(t *testing.T) {
 			t.Parallel()
 
-			fixture := gradedEvidence(profile,
+			fixture, err := gradedEvidence(profile,
 				inducedRow{grade: qualification.GradeUsable, detail: "tool server induction"},
 				inducedRow{grade: qualification.GradeGap, detail: "permission induction"},
 				inducedRow{grade: qualification.GradeUsable, detail: "continuation induction"},
 			)
+			if err != nil {
+				t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
+			}
 
 			for i := range fixture.Records {
 				rec := &fixture.Records[i]

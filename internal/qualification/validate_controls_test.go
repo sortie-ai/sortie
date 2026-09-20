@@ -563,7 +563,7 @@ func TestValidatorContinuationControls(T *testing.T) {
 		recall.Outcome = OutcomePrerequisiteFailed
 		if baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
 			baseline.Grade = GradeNotObserved
-			baseline.Outcome = OutcomeNotObserved
+			baseline.Outcome = OutcomePrerequisiteFailed
 		}
 		path := WriteEvidenceFile(T, fixture.Records)
 		RequireObservationVerdict(T, path, VerdictUnmeasured)
@@ -988,7 +988,7 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 	T.Run("a not-inducible detail equal to the reason the profile scopes to the surface", func(T *testing.T) {
 		T.Parallel()
 
-		fixture, declarations := scopedNotInducibleHumanInput(NotInducibleTerminalVocabularyClosed, NotInducibleTerminalVocabularyClosed)
+		fixture, declarations := scopedNotInducibleHumanInput(NotInducibleChannelTooSmall, NotInducibleChannelTooSmall)
 		path := WriteEvidenceFile(T, fixture.Records)
 		if _, err := ValidateObservationsWithDeclarations(path, declarations); err != nil {
 			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want nil", err)

@@ -325,7 +325,7 @@ func TestEligibilityPredicates(T *testing.T) {
 				recall.Outcome = OutcomePrerequisiteFailed
 				if baseline := f.FindFirst(MatchBaseline(SurfaceProtocol, CapabilitySessionContinuation)); baseline != nil {
 					baseline.Grade = GradeNotObserved
-					baseline.Outcome = OutcomeNotObserved
+					baseline.Outcome = OutcomePrerequisiteFailed
 				}
 			},
 			want: VerdictUnmeasured,
