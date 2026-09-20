@@ -62,6 +62,7 @@ type Result struct {
 	EvidencePath    string
 	SummaryPath     string
 	MeasurementPath string
+	ProvenancePath  string
 }
 
 // isExecutableMode reports whether the file mode carries execute

@@ -43,6 +43,7 @@ func TestQualificationProfile(t *testing.T) {
 		{"evidence", result.EvidencePath},
 		{"summary", result.SummaryPath},
 		{"measurement", result.MeasurementPath},
+		{"provenance", result.ProvenancePath},
 	}
 	for _, artifact := range artifacts {
 		info, err := os.Stat(artifact.path)
