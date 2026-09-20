@@ -1743,6 +1743,11 @@ func contractPackageUnderKindPackage(checkedImportPath, kindPackageImportPath st
 // name that kind.
 func contractIdentityExcludedTokens(pkg contractPackage, kindImportPaths map[string][]string) map[string]bool {
 	excluded := map[string]bool{strings.ToLower(pkg.dirName): true}
+	if contractIdentitySeamImportPath(pkg.importPath) {
+		for _, tok := range contractWideScopedTokens(contractAgentIdentitySnapshotData()) {
+			excluded[strings.ToLower(tok)] = true
+		}
+	}
 	for kindImportPath, kinds := range kindImportPaths {
 		if !contractPackageUnderKindPackage(pkg.importPath, kindImportPath) {
 			continue
@@ -1921,6 +1926,27 @@ func contractWideScopedTokens(snapshot contractAgentIdentitySnapshot) []string {
 // per-family walks the two contract tests already cover.
 var contractWideIdentityRoots = []string{filepath.Join("..", "..", "cmd"), filepath.Join("..", "..", "internal")}
 
+// contractIdentityMeasurementSeam is the one directory where a
+// profile-declared, unanchored token is legal: the transport's
+// measurement sources, which read a runtime's own output format and are
+// vendor-specific by construction. Every other directory under the wide
+// roots stays bound by the rule.
+var contractIdentityMeasurementSeam = filepath.Join("internal", "agent", "clientprotocol", "usagesource")
+
+// contractIdentitySeamImportPath reports whether importPath is the
+// measurement seam's own package.
+func contractIdentitySeamImportPath(importPath string) bool {
+	return strings.HasSuffix(importPath, "/"+filepath.ToSlash(contractIdentityMeasurementSeam))
+}
+
+// contractIdentitySeamDir reports whether walkPath is the measurement
+// seam, under whatever root the walk started from.
+func contractIdentitySeamDir(walkPath string) bool {
+	clean := filepath.Clean(walkPath)
+	return clean == contractIdentityMeasurementSeam ||
+		strings.HasSuffix(clean, string(filepath.Separator)+contractIdentityMeasurementSeam)
+}
+
 // contractWideIdentityNonTestViolations walks every non-test .go file
 // under root (excluding testdata) and applies contractIdentityArm1Violations
 // for the wide-scoped tokens with no exclusion. It returns the violations
@@ -1934,7 +1960,7 @@ func contractWideIdentityNonTestViolations(t *testing.T, fset *token.FileSet, ro
 			return walkErr
 		}
 		if d.IsDir() {
-			if d.Name() == "testdata" {
+			if d.Name() == "testdata" || contractIdentitySeamDir(walkPath) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -1998,7 +2024,7 @@ func contractWideIdentityTestViolations(t *testing.T, fset *token.FileSet, root 
 			return walkErr
 		}
 		if d.IsDir() {
-			if d.Name() == "testdata" {
+			if d.Name() == "testdata" || contractIdentitySeamDir(walkPath) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -2020,16 +2046,59 @@ func contractWideIdentityTestViolations(t *testing.T, fset *token.FileSet, root 
 	return violations, scanned
 }
 
-// TestContractIdentityWideScope confirms rule IDENTITY's wide scope: an
-// unanchored profile-declared token from
-// internal/qualification/profiles/*.json carries no identifier or
-// string literal in a non-test file, and no bare identifier in a test
-// file, anywhere under cmd/ or internal/. It also confirms the wide
-// walk reaches the three production files
-// TestGeminiQualificationAddsNoProductionIdentityBranch (deleted along
-// with the rest of internal/agent/clientprotocol's vendor-shaped
-// driver) proved it reached, and pins the mechanism's own logic
-// against inline fixtures so it cannot pass vacuously.
+// TestContractIdentitySeamIsNarrow holds the one exempted directory to
+// exactly what it is exempted for: removing the exemption must produce
+// violations, and every one of them must sit inside the seam.
+func TestContractIdentitySeamIsNarrow(t *testing.T) {
+	info, err := os.Stat(filepath.Join("..", "..", contractIdentityMeasurementSeam))
+	if err != nil || !info.IsDir() {
+		t.Fatalf("the exempted seam %s is not a directory: %v", contractIdentityMeasurementSeam, err)
+	}
+
+	fset := token.NewFileSet()
+	wideTokens := contractWideScopedTokens(contractAgentIdentitySnapshotData())
+
+	var unexempted []contractViolation
+	for _, root := range contractWideIdentityRoots {
+		err := filepath.WalkDir(root, func(walkPath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				if d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(walkPath, ".go") {
+				return nil
+			}
+			file, parseErr := parser.ParseFile(fset, walkPath, nil, parser.SkipObjectResolution)
+			if parseErr != nil {
+				t.Fatalf("parse %s: %v", walkPath, parseErr)
+			}
+			if strings.HasSuffix(walkPath, "_test.go") {
+				unexempted = append(unexempted, contractIdentityTestFileIdentViolations(fset, file, wideTokens)...)
+				return nil
+			}
+			unexempted = append(unexempted, contractIdentityArm1Violations(fset, file, wideTokens, map[string]bool{})...)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+
+	if len(unexempted) == 0 {
+		t.Fatal("removing the seam exemption produced no violation, so the exemption is dead and this check proves nothing")
+	}
+	for _, v := range unexempted {
+		if !contractIdentitySeamDir(filepath.Dir(v.pos.Filename)) {
+			t.Errorf("%s: %s, outside the one exempted seam", v.pos, v.text)
+		}
+	}
+}
+
 func TestContractIdentityWideScope(t *testing.T) {
 	fset := token.NewFileSet()
 	snapshot := contractAgentIdentitySnapshotData()
