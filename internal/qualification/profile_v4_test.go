@@ -268,6 +268,46 @@ func TestDecodeRuntimeProfileV4(t *testing.T) {
 			},
 			wantSub: "is also named by declarations",
 		},
+		{
+			name: "a not_inducible_cases entry carrying an unknown field is rejected",
+			base: validProfileDoc,
+			mutate: func(doc map[string]any) {
+				doc["not_inducible_cases"] = append(doc["not_inducible_cases"].([]any),
+					map[string]any{"surface": "native_json", "case": "human_input", "reason": NotInducibleTerminalVocabularyClosed, "scope": "everywhere"})
+			},
+			wantSub: `unknown field "scope"`,
+		},
+		{
+			name: "a not_inducible_cases entry missing its reason is rejected",
+			base: validProfileDoc,
+			mutate: func(doc map[string]any) {
+				doc["not_inducible_cases"] = append(doc["not_inducible_cases"].([]any),
+					map[string]any{"surface": "native_json", "case": "human_input"})
+			},
+			wantSub: `missing field "reason"`,
+		},
+		{
+			name: "a token_paths entry carrying an unknown field is rejected",
+			base: validProfileDocWithTokenPaths,
+			mutate: func(doc map[string]any) {
+				recognizer := doc["recognizers"].(map[string]any)["native_json"].(map[string]any)
+				recognizer["token_paths"] = []any{
+					map[string]any{"path": []string{"usage", "total_tokens"}, "kind": tokenPathKindSpend, "unit": "tokens"},
+				}
+			},
+			wantSub: `unknown field "unit"`,
+		},
+		{
+			name: "a token_paths entry missing its path is rejected",
+			base: validProfileDocWithTokenPaths,
+			mutate: func(doc map[string]any) {
+				recognizer := doc["recognizers"].(map[string]any)["native_json"].(map[string]any)
+				recognizer["token_paths"] = []any{
+					map[string]any{"kind": tokenPathKindSpend},
+				}
+			},
+			wantSub: `missing field "path"`,
+		},
 	}
 
 	for _, tt := range tests {

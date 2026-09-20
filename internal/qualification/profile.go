@@ -214,6 +214,10 @@ const (
 	tokenPathKindOccupancy = "occupancy"
 )
 
+var tokenPathFields = map[string]bool{
+	"path": true, "kind": true,
+}
+
 // SurfaceNotInducible is one profile-declared claim that a surface's catalog
 // cannot induce a case, scoped to that surface alone, unlike the catalog-wide
 // CatalogNotInducibleCases.
@@ -221,6 +225,10 @@ type SurfaceNotInducible struct {
 	Surface Surface `json:"surface"`
 	Case    Case    `json:"case"`
 	Reason  string  `json:"reason"` // a member of NotInducibleReasons
+}
+
+var surfaceNotInducibleFields = map[string]bool{
+	"surface": true, "case": true, "reason": true,
 }
 
 // Terminal is one native surface's recognized terminal outcome:
@@ -633,11 +641,39 @@ var notInducibleReasonCase = map[string]Case{
 	NotInducibleTerminalVocabularyClosed: CaseHumanInput,
 }
 
+// checkObjectFields rejects a decoded JSON object carrying a member outside
+// allowed, or missing one of them. A schema object decoded straight into its
+// struct would drop an unknown member silently, leaving an intended setting
+// with no effect and no trace in RuntimeProfile.Digest.
+func checkObjectFields(fields map[string]json.RawMessage, allowed map[string]bool) error {
+	for name := range fields {
+		if !allowed[name] {
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
+	for name := range allowed {
+		if _, ok := fields[name]; !ok {
+			return fmt.Errorf("missing field %q", name)
+		}
+	}
+	return nil
+}
+
 // decodeNotInducibleCases strictly decodes the not_inducible_cases member and
 // rejects an entry whose reason names a case other than its paired case. The
 // cases a profile names are its own statement about one runtime, so no case is
 // required of every profile.
 func decodeNotInducibleCases(raw json.RawMessage, profile RuntimeProfile) ([]SurfaceNotInducible, error) {
+	var rawEntries []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawEntries); err != nil {
+		return nil, err
+	}
+	for i, fields := range rawEntries {
+		if err := checkObjectFields(fields, surfaceNotInducibleFields); err != nil {
+			return nil, fmt.Errorf("[%d]: %w", i, err)
+		}
+	}
+
 	var entries []SurfaceNotInducible
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, err
@@ -980,6 +1016,15 @@ func decodeRecognizerEntry(fields map[string]json.RawMessage) (Recognizer, error
 	}
 
 	if tokenPathsRaw, has := fields["token_paths"]; has {
+		var rawPaths []map[string]json.RawMessage
+		if err := json.Unmarshal(tokenPathsRaw, &rawPaths); err != nil {
+			return Recognizer{}, fmt.Errorf("token_paths: %w", err)
+		}
+		for i, pathFields := range rawPaths {
+			if err := checkObjectFields(pathFields, tokenPathFields); err != nil {
+				return Recognizer{}, fmt.Errorf("token_paths[%d]: %w", i, err)
+			}
+		}
 		if err := json.Unmarshal(tokenPathsRaw, &recognizer.TokenPaths); err != nil {
 			return Recognizer{}, fmt.Errorf("token_paths: %w", err)
 		}
