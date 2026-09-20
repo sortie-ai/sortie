@@ -5,8 +5,6 @@
 
 include default.mk
 
-# ── Building ──────────────────────────────────────────────────────────────────
-
 ##@ Building
 
 .PHONY: build
@@ -16,8 +14,6 @@ build: ## Compile the sortie binary into the repo root
 .PHONY: clean
 clean: ## Remove the binary and all coverage files
 	$(RM) $(BIN) $(COVERAGE_OUT) $(COVERAGE_HTML)
-
-# ── Testing ───────────────────────────────────────────────────────────────────
 
 ##@ Testing
 
@@ -40,8 +36,6 @@ test-coverage: ## Run tests with coverage and print per-package percentages
 test-coverage-html: test-coverage ## Generate an HTML coverage report
 	$(GO) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
 	@printf '$(GREEN)Coverage report written to $(BOLD)$(COVERAGE_HTML)$(RESET)\n'
-
-# ── Quality ───────────────────────────────────────────────────────────────────
 
 ##@ Quality
 
@@ -100,13 +94,77 @@ generate-check: ## Verify wire_gen.go matches what the generator emits, without 
 	fi
 
 .PHONY: check
-check: lint lint-no-tests lint-shell test test-shell generate-check ## Run the CI gates; shell lint covers all tracked scripts
+check: lint lint-no-tests lint-shell test test-shell generate-check lint-tools lint-tools-no-tests test-tools ## Run the CI gates; shell lint covers all tracked scripts
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod
 	$(GO) mod tidy
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+##@ Tool module (tools/qualify)
+
+TOOLS_LINT_GOOS := $(filter-out windows,$(LINT_GOOS))
+
+.PHONY: test-tools
+test-tools: ## Run the tool module's tests with the race detector
+	@tmp=$$(mktemp "$${TMPDIR:-/tmp}/qualify_test.XXXXXX") && \
+	trap 'rm -f "$$tmp"' EXIT; \
+	(cd tools/qualify && $(GO) test -race -count=1 -json ./...) >"$$tmp"; status=$$?; \
+	passed=$$(grep -cE '"Action":"pass".*"Test":"[^"]' "$$tmp"); \
+	if [ "$$passed" -eq 0 ]; then \
+		printf '$(RED)tools/qualify: zero executed tests reported$(RESET)\n'; \
+		cat "$$tmp"; \
+		exit 1; \
+	fi; \
+	if [ "$$status" -ne 0 ]; then \
+		cat "$$tmp"; \
+		exit $$status; \
+	fi; \
+	printf '$(GREEN)tools/qualify: %s tests executed$(RESET)\n' "$$passed"
+
+.PHONY: test-all
+test-all: test test-tools ## Run the root module's tests then the tool module's
+
+.PHONY: lint-tools
+lint-tools: ## Run golangci-lint for the tool module (LINT_GOOS minus windows)
+	@failed=''; \
+	for goos in $(TOOLS_LINT_GOOS); do \
+		printf '$(BOLD)golangci-lint (tools/qualify): GOOS=%s$(RESET)\n' "$$goos"; \
+		(cd tools/qualify && GOOS=$$goos $(LINTER) run ./...) || failed="$$failed $$goos"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf '$(RED)findings reported for:$(RESET)$(BOLD)%s$(RESET)\n' "$$failed"; \
+		exit 1; \
+	fi
+
+.PHONY: lint-tools-no-tests
+lint-tools-no-tests: ## Fail if tool-module code is reachable only from its own test
+	@failed=''; \
+	for goos in $(TOOLS_LINT_GOOS); do \
+		printf '$(BOLD)golangci-lint (tools/qualify, shipped code only): GOOS=%s$(RESET)\n' "$$goos"; \
+		(cd tools/qualify && GOOS=$$goos $(LINTER) run --config ../../.golangci-no-tests.yml --tests=false ./...) || failed="$$failed $$goos"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf '$(RED)findings reported for:$(RESET)$(BOLD)%s$(RESET)\n' "$$failed"; \
+		exit 1; \
+	fi
+
+.PHONY: tidy-tools
+tidy-tools: ## Tidy the tool module's go.sum
+	cd tools/qualify && $(GO) mod tidy
+
+.PHONY: qualify-live
+qualify-live: ## Drive a live capture (spends provider quota; opt-in gated)
+	cd tools/qualify && $(GO) test -count=1 -run TestProbe ./probe/...
+
+.PHONY: qualify-report
+qualify-report: ## Re-derive a report from a saved capture directory and render it (CAPTURE_DIR=path PROFILE=path)
+	cd tools/qualify && SORTIE_CLIENTPROTOCOL_QUALIFICATION_CAPTURE_DIR=$(CAPTURE_DIR) SORTIE_CLIENTPROTOCOL_QUALIFICATION_PROFILE=$(PROFILE) $(GO) test -count=1 -run TestQualifyReport ./eval/...
+
+.PHONY: qualify-reemit
+qualify-reemit: ## Re-emit derived artifacts for a saved capture directory (CAPTURE_DIR=path PROFILE=path)
+	@if [ -z "$(CAPTURE_DIR)" ]; then printf '$(RED)CAPTURE_DIR must be set to a path resolvable from tools/qualify/eval, e.g. CAPTURE_DIR=../probe/testdata/gemini-cli$(RESET)\n'; exit 1; fi
+	@if [ -z "$(PROFILE)" ]; then printf '$(RED)PROFILE must be set to a path resolvable from tools/qualify/eval, e.g. PROFILE=../profiles/gemini-cli.json$(RESET)\n'; exit 1; fi
+	cd tools/qualify && SORTIE_CLIENTPROTOCOL_QUALIFICATION_CAPTURE_DIR=$(CAPTURE_DIR) SORTIE_CLIENTPROTOCOL_QUALIFICATION_PROFILE=$(PROFILE) $(GO) test -count=1 -run TestQualifyReemit ./eval/...
 
 ##@ Utilities
 

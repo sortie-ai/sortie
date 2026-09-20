@@ -17,5 +17,5 @@ comment:
 ignore:
   - "**/testdata/**"
   - "internal/adaptertest/**"
-  - "internal/qualification/probe/toolserver_unix.go"
+  - "tools/qualify/**"
   - "internal/agent/clientprotocol/wire_gen.go"

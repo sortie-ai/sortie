@@ -109,7 +109,7 @@ jobs:
             version_cmd: gemini --version
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
             clientprotocol_command: "gemini --acp"
-            clientprotocol_profile: internal/qualification/profiles/gemini-cli.json
+            clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
 
           - name: Kiro - ACP
             adapter: acp-kiro
@@ -123,7 +123,7 @@ jobs:
             version_cmd: kiro-cli --version
             source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
             clientprotocol_command: "kiro-cli acp -a"
-            clientprotocol_profile: internal/qualification/profiles/kiro-cli.json
+            clientprotocol_profile: tools/qualify/profiles/kiro-cli.json
 
           - name: Jira
             adapter: jira
@@ -277,15 +277,8 @@ jobs:
           RUN_FILTER: ${{ matrix.run_filter }}
           TEST_PATH: ${{ matrix.test_path }}
           TIMEOUT: ${{ matrix.timeout }}
-          # Empty on every shard but the client-protocol ones, which name a
-          # runtime each. Two shards drive that one adapter against two
-          # different binaries, so the coordinates belong to the shard rather
-          # than to the job, and they are declared under their real names here
-          # so the reachability guard can still read them out of the workflow.
           SORTIE_CLIENTPROTOCOL_COMMAND: ${{ matrix.clientprotocol_command }}
           SORTIE_CLIENTPROTOCOL_PROFILE: ${{ matrix.clientprotocol_profile }}
-          # Consumed only by the copilot adapter's test, which reads GH_TOKEN.
-          # The issue-reporting steps override GH_TOKEN with CICDBOT_TOKEN.
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is

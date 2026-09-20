@@ -377,7 +377,7 @@ func checkTurnEndUsageWiring(arrival string, facts turnEndUsageFacts) []usageCon
 // UsageAttribution, or with exactly one of the two set to its none
 // selector.
 //
-// internal/agent/ is the walk root. internal/qualification/e2e/e2e_unix.go
+// internal/agent/ is the walk root. tools/qualify/e2e/e2e_unix.go
 // also calls registry.Agents.RegisterWithMeta, for
 // "qualification-e2e-fixture", deliberately outside this root: it
 // registers a name rather than an adapter, its constructor returning

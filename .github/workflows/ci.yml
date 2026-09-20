@@ -66,6 +66,16 @@ jobs:
           # from the wrong GOOS. setup-go's caches are unaffected.
           skip-cache: true
 
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: matrix.goos != 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version-file: .tool-versions
+          verify: false
+          working-directory: tools/qualify
+          skip-cache: true
+
   lint-shell:
     name: Lint (shell)
     runs-on: ubuntu-latest
@@ -133,6 +143,17 @@ jobs:
           # between the two could carry a result over from the wrong scope.
           skip-cache: true
 
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: matrix.goos != 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version-file: .tool-versions
+          verify: false
+          working-directory: tools/qualify
+          args: --config ../../.golangci-no-tests.yml --tests=false ./...
+          skip-cache: true
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -155,6 +176,9 @@ jobs:
 
       - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Run tool module tests
+        run: make test-tools
 
       - name: Test nightly incident integration
         run: make test-shell

@@ -1,6 +1,7 @@
 package clientprotocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -15,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/qualification"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +64,22 @@ func liveCapabilityGapLabels(events []domain.AgentEvent) []string {
 	return labels
 }
 
+func resolveDriftProfilePath(t *testing.T, path string) string {
+	t.Helper()
+	if filepath.IsAbs(path) {
+		return path
+	}
+	root, err := nightlyRepositoryRoot()
+	if err != nil {
+		t.Fatalf("resolve repository root for %s=%q: %v", capabilityDriftProfileEnv, path, err)
+	}
+	return filepath.Join(root, path)
+}
+
+type capabilityGapLabelsDocument struct {
+	CapabilityGapLabels []string `json:"capability_gap_labels"`
+}
+
 // assertCapabilityGapLabelsMatchProfile reads the runtime profile named
 // by SORTIE_CLIENTPROTOCOL_PROFILE and compares the live capability-gap
 // label set events' notification stream carries against the profile's
@@ -74,23 +90,6 @@ func liveCapabilityGapLabels(events []domain.AgentEvent) []string {
 // typo cannot pass green. It carries no Test prefix of its own by
 // design: it is called from the event stream an existing conformance
 // turn already collects, spending no turn of its own.
-// resolveDriftProfilePath returns path unchanged when it is absolute,
-// and otherwise resolves it against the repository root. go test runs
-// with the package directory as its working directory, so a coordinate
-// written relative to the repository, which is the form an operator
-// and a CI job both reach for, would not otherwise resolve.
-func resolveDriftProfilePath(t *testing.T, path string) string {
-	t.Helper()
-	if filepath.IsAbs(path) {
-		return path
-	}
-	root, err := qualification.RepositoryRootFromWD()
-	if err != nil {
-		t.Fatalf("resolve repository root for %s=%q: %v", capabilityDriftProfileEnv, path, err)
-	}
-	return filepath.Join(root, path)
-}
-
 func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEvent) {
 	t.Helper()
 
@@ -101,13 +100,18 @@ func assertCapabilityGapLabelsMatchProfile(t *testing.T, events []domain.AgentEv
 		t.Logf("capability-gap drift comparison not run: %s is unset", capabilityDriftProfileEnv)
 		return
 	}
-	profile, err := qualification.ReadRuntimeProfileFile(resolveDriftProfilePath(t, profilePath))
+	resolvedPath := resolveDriftProfilePath(t, profilePath)
+	data, err := os.ReadFile(resolvedPath) //nolint:gosec // the coordinate names a repository-tracked or operator-supplied profile
 	if err != nil {
 		t.Fatalf("load the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
 	}
+	var doc capabilityGapLabelsDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode the profile %s names, %q: %v", capabilityDriftProfileEnv, profilePath, err)
+	}
 
 	live := liveCapabilityGapLabels(events)
-	want := slices.Clone(profile.CapabilityGapLabels)
+	want := slices.Clone(doc.CapabilityGapLabels)
 	sort.Strings(want)
 
 	if !slices.Equal(live, want) {
@@ -196,8 +200,8 @@ func nightlyGoTestStep(steps []nightlyWorkflowStep) (nightlyWorkflowStep, bool) 
 	return nightlyWorkflowStep{}, false
 }
 
-// nightlyRepositoryRoot resolves the repository root from this
-// package's own directory.
+// nightlyRepositoryRoot serves both readNightlyWorkflow's caller and
+// resolveDriftProfilePath, so no root-module package exists for either alone.
 func nightlyRepositoryRoot() (string, error) {
 	abs, err := filepath.Abs(filepath.Join(".", nightlyWorkflowRelPath, "..", "..", ".."))
 	if err != nil {
