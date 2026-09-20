@@ -22,7 +22,7 @@ The runtime keeps its own log, and it is the only place some failures are explai
 
 Two routes reach this runtime, and they are not equivalent.
 
-The native `kiro` kind drives `kiro-cli chat` and parses its output. The generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. The protocol route is the one that delivers session continuation and, subject to the credential constraint below, Sortie's own tool servers; the native route delivers neither. Neither kind is retired by the other: pick per deployment.
+The native `kiro` kind drives `kiro-cli chat` and parses its output. The generic `agent-client-protocol` kind drives `kiro-cli acp` and speaks the protocol. Both routes deliver session continuation; only the protocol route delivers Sortie's own tool servers, and that is subject to the credential constraint below. Neither kind is retired by the other: pick per deployment.
 
 The `acp` subcommand does not appear in `kiro-cli --help`. It is listed under `--help-all` only, which is worth knowing before concluding a build does not have it.
 
