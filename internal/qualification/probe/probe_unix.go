@@ -336,83 +336,6 @@ func awaitMinuteBoundary(createdAt time.Time) {
 	}
 }
 
-// induceSessionContinuation drives one harness process throughout: a
-// first session that leaves history, stopped, then a second session
-// against the same workspace naming the first session's identifier as
-// ResumeSessionID. resolveSession's own negative control fires
-// automatically on this same path, before either continuation method
-// it might attempt, so an unimplemented method and a broken one are
-// already distinguished at the adapter's own error classification. The
-// row is graded from what the replay did: a second session that
-// returns the first session's own identifier confirms a replayed
-// continuation; any other identifier is an unconfirmed fallback.
-func induceSessionContinuation(t *testing.T, coords Coordinates) (qualification.Grade, string) {
-	t.Helper()
-
-	argv, err := coords.Profile.EntryArgs(qualification.SurfaceProtocol, coords.Model, "", "")
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction could not resolve the protocol entry point: %v", err)
-	}
-
-	adapter, err := clientprotocol.NewClientProtocolAdapter(nil)
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction could not construct the adapter: %v", err)
-	}
-
-	fullCommand := append([]string{coords.CommandPath}, argv...)
-	launchConfig := domain.AgentConfig{
-		Kind:           "agent-client-protocol",
-		Command:        strings.Join(fullCommand, " "),
-		ReadTimeoutMS:  30000,
-		TurnTimeoutMS:  int(continuationInductionTurnBound / time.Millisecond),
-		StallTimeoutMS: 60000,
-	}
-
-	workspace := t.TempDir()
-	firstSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   launchConfig,
-	})
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction first session failed to start: %v", err)
-	}
-	createdAt := time.Now().UTC()
-
-	_, runErr := adapter.RunTurn(context.Background(), firstSession, domain.RunTurnParams{
-		Prompt:  "Reply with exactly one word: acknowledged.",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if stopErr := adapter.StopSession(context.Background(), firstSession); stopErr != nil {
-		t.Errorf("stop the continuation induction's first session: %v", stopErr)
-	}
-	assertSessionGroupAbsent(t, firstSession)
-	if runErr != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction first turn did not complete: %v", runErr)
-	}
-
-	awaitMinuteBoundary(createdAt)
-
-	secondSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath:   workspace,
-		AgentConfig:     launchConfig,
-		ResumeSessionID: firstSession.ID,
-	})
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("continuation induction second session failed to start: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := adapter.StopSession(context.Background(), secondSession); err != nil {
-			t.Errorf("stop the continuation induction's second session: %v", err)
-		}
-		assertSessionGroupAbsent(t, secondSession)
-	})
-
-	if secondSession.ID == firstSession.ID {
-		return qualification.GradeUsable, "the second session returned the first session's own identifier, confirming a replayed continuation"
-	}
-	return qualification.GradeGap, "the second session returned a fresh identifier; continuation was not confirmed and the run fell back"
-}
-
 // defaultOutputDir returns a fresh run-scoped directory under the OS
 // temporary root, refusing a path inside the repository tree.
 func defaultOutputDir(t *testing.T) string {
@@ -530,6 +453,12 @@ func induceProtocolSemantics(t *testing.T, coords Coordinates, fixture *sharedFi
 	fixture.journal.append(string(surface), "policy_precondition", policy)
 
 	collected.semantic[surface] = byCase
+
+	seed, recall := induceProtocolContinuation(t, coords, fixture)
+	collected.continuationSeed[surface] = seed
+	collected.continuationRecall[surface] = recall
+	fixture.journal.append(string(surface), "continuation_seed", seed)
+	fixture.journal.append(string(surface), "continuation_recall", recall)
 }
 
 // induceNativeSemantics drives every semantic case surface measures on
@@ -554,6 +483,12 @@ func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixt
 	})
 
 	collected.semantic[surface] = byCase
+
+	seed, recall := induceNativeContinuation(t, coords, fixture, surface)
+	collected.continuationSeed[surface] = seed
+	collected.continuationRecall[surface] = recall
+	fixture.journal.append(string(surface), "continuation_seed", seed)
+	fixture.journal.append(string(surface), "continuation_recall", recall)
 }
 
 // Run drives one live qualification collection against coords,
@@ -586,7 +521,9 @@ func Run(t *testing.T, coords Coordinates) Result {
 	}
 
 	collected := &collectedObservations{
-		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		continuationSeed:   map[qualification.Surface]qualification.Observation{},
+		continuationRecall: map[qualification.Surface]qualification.Observation{},
 	}
 
 	induceProtocolSemantics(t, coords, fixtureState, collected)
@@ -596,8 +533,6 @@ func Run(t *testing.T, coords Coordinates) Result {
 		}
 		induceNativeSemantics(t, coords, fixtureState, collected, surface)
 	}
-
-	collected.continuationGrade, collected.continuationDetail = induceSessionContinuation(t, coords)
 
 	fixture, err := gradedEvidence(profile, *collected, collectionStartedAt)
 	if err != nil {
