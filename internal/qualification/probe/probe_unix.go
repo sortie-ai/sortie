@@ -242,7 +242,7 @@ func runAuthenticationCanary(t *testing.T, coords Coordinates, fixture *sharedFi
 		Prompt:  authenticationCanaryPrompt,
 		OnEvent: func(domain.AgentEvent) {},
 	})
-	if err := fixture.stopOpenSessions(context.Background()); err != nil {
+	if _, err := fixture.stopOpenSessions(context.Background()); err != nil {
 		t.Fatalf("authentication canary: stop the canary session: %v", err)
 	}
 	if runErr != nil {
@@ -506,6 +506,19 @@ func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixt
 	fixture.journal.append(string(surface), "token_inventory", inventory)
 }
 
+// checkNoBarePair rejects a composed record set carrying the bare
+// (not_observed, not_observed) pair: every row that records nothing must
+// state why, through declared_gap, not_inducible, or a not_observed
+// failure outcome.
+func checkNoBarePair(records []qualification.Record) error {
+	for _, rec := range records {
+		if rec.Grade == qualification.GradeNotObserved && rec.Outcome == qualification.OutcomeNotObserved {
+			return fmt.Errorf("record %d (%s/%s/%s) carries the bare not_observed pair; every inducer must state a specific failure outcome or a declaration", rec.Sequence, rec.Scenario, rec.Surface, rec.Capability)
+		}
+	}
+	return nil
+}
+
 // Run drives one live qualification collection against coords,
 // corroborating every declared absence and writing the validated
 // evidence, the bounded summary, and a fresh measurement artifact to
@@ -552,6 +565,24 @@ func Run(t *testing.T, coords Coordinates) Result {
 		induceNativeSemantics(t, coords, fixtureState, collected, surface)
 	}
 
+	identityObs, identities := induceRuntimeIdentity(fixtureState)
+	collected.identityObs = identityObs
+	collected.identities = identities
+	collected.identityProtocolVersion = pinnedProtocolVersionMirror
+
+	// The harness record's agent fields never reach the evidence: the
+	// end-to-end row is written from the observation alone and identified
+	// from its own session's handshake, so naming another session's agent
+	// here would attribute a reading it never made.
+	collected.endToEnd = induceEndToEnd(t, coords, fixtureState, "", "")
+
+	collected.workspaceSecurity = induceWorkspaceSecurity(t, coords, fixtureState)
+	collected.processCleanup = induceProcessCleanup(fixtureState)
+	fixtureState.journal.append("run", "runtime_identity", identityObs)
+	fixtureState.journal.append("run", "end_to_end", endToEndObservation(collected.endToEnd))
+	fixtureState.journal.append("run", "workspace_security", collected.workspaceSecurity)
+	fixtureState.journal.append("run", "process_cleanup", collected.processCleanup)
+
 	fixture, err := gradedEvidence(profile, *collected, collectionStartedAt)
 	if err != nil {
 		t.Fatalf("compose the collected evidence: %v", err)
@@ -570,6 +601,10 @@ func Run(t *testing.T, coords Coordinates) Result {
 	unrecognizedPath := filepath.Join(outputDir, "unrecognized.jsonl")
 	if err := writeUnrecognizedTerminals(unrecognizedPath, fixtureState.unrecognizedTerminals()); err != nil {
 		t.Fatalf("write the unrecognized terminal artifact: %v", err)
+	}
+
+	if err := checkNoBarePair(fixture.Records); err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	verdict, err := qualification.ValidateObservationsWithDeclarations(evidencePath, profile)

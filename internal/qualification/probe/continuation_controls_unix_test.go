@@ -431,6 +431,27 @@ func TestInduceNativeContinuationReadsOnlyTheAnsweringStream(t *testing.T) {
 	})
 }
 
+func TestInduceProtocolContinuationAccountsForItsRecallSession(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := agenttest.FakeRuntime(t, dir, "acp-agent", continuationACPScenario, continuationACPParams{
+		SessionID:    controlSeedSessionID,
+		LoadOutcome:  acpLoadReplaysUser,
+		ReplayText:   "remember " + controlNonce,
+		AnswerChunks: []string{controlNonce},
+	})
+	fixture := semanticFixture(t)
+	fixture.nonce = controlNonce
+
+	induceProtocolContinuation(t, Coordinates{CommandPath: script, Profile: continuationACPProfile()}, fixture)
+
+	cleanup := induceProcessCleanup(fixture)
+	if cleanup.Grade != qualification.GradeUsable || !strings.Contains(cleanup.Detail, "stopped_sessions=1") {
+		t.Errorf("induceProcessCleanup(...) = %+v, want usable over the one recall session the continuation induction left open: a session stopped by a teardown of its own is never the cleanup reading's subject", cleanup)
+	}
+}
+
 const continuationACPScenario = "continuation-acp-agent"
 
 type acpLoadOutcome string

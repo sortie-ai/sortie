@@ -32,6 +32,24 @@ type collectedObservations struct {
 	// tokenCompensation answers for the effective adapter alone, kept
 	// apart from the inventory, which answers for the wire.
 	tokenCompensation tokenCompensation
+
+	workspaceSecurity qualification.Observation
+	processCleanup    qualification.Observation
+	endToEnd          qualification.Record
+
+	identityObs             qualification.Observation
+	identities              map[string]qualification.SessionIdentity
+	identityProtocolVersion int
+}
+
+// endToEndObservation renders an end-to-end record as the Observation
+// SetEndToEnd consumes.
+func endToEndObservation(rec qualification.Record) qualification.Observation {
+	obs := qualification.Observation{Grade: rec.Grade, Outcome: rec.Outcome, Detail: rec.Detail}
+	if rec.SessionID != nil {
+		obs.SessionID = *rec.SessionID
+	}
+	return obs
 }
 
 // declarableSurfaceUnproduced reports whether every declarable measured
@@ -147,6 +165,16 @@ func gradedEvidence(profile qualification.RuntimeProfile, collected collectedObs
 	// already derived from the wire and this reading cannot enter it.
 	if collected.tokenCompensation.supplied {
 		fixture.SetTokenCompensatedObserved(collected.tokenCompensation.sessionID, compensatedTokenPath, compensatedTokenDetail)
+	}
+
+	fixture.SetWorkspaceSecurity(collected.workspaceSecurity)
+	fixture.SetProcessCleanup(collected.processCleanup)
+	if err := fixture.SetEndToEnd(endToEndObservation(collected.endToEnd)); err != nil {
+		return nil, fmt.Errorf("end to end: %w", err)
+	}
+
+	if err := fixture.SetRuntimeIdentity(collected.identityObs, collected.identities, collected.identityProtocolVersion); err != nil {
+		return nil, fmt.Errorf("runtime identity: %w", err)
 	}
 
 	fixture.Finalize()

@@ -346,7 +346,7 @@ func induceProtocolContinuation(t *testing.T, coords Coordinates, fixture *share
 		t.Fatalf("account for the continuation induction's recall session: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := fixture.stopOpenSessions(context.Background()); err != nil {
+		if _, err := fixture.stopOpenSessions(context.Background()); err != nil {
 			t.Errorf("stop the continuation induction's recall session: %v", err)
 		}
 		assertSessionGroupAbsent(t, secondSession)

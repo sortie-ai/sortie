@@ -73,7 +73,8 @@ func (u *usageTracker) result() (measured bool, sessionID string) {
 }
 
 // groupTracker is the run-owned registry of every process-group id a
-// graded launch starts.
+// graded launch starts. The process-cleanup inducer drains every group
+// it holds.
 type groupTracker struct {
 	mu    sync.Mutex
 	pgids []int
@@ -446,7 +447,8 @@ func fixtureOwningLaunch(workspace string) *sharedFixture {
 
 // newLaunchWorkspace creates a fresh subdirectory of the controlled
 // checkout, records it as one of the run's launches, and returns its
-// path.
+// path. The workspace-security reading inspects the directories
+// recorded here.
 func (f *sharedFixture) newLaunchWorkspace(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp(f.workspaceRoot, "launch-*")
@@ -464,7 +466,8 @@ func (f *sharedFixture) newLaunchWorkspace(t *testing.T) string {
 // ownership returns the run's ledger of the processes its snapshots
 // have proved it owns. One ledger serves the whole collection because a
 // descendant is provably this run's only while its parent is still
-// there to be traced through.
+// there to be traced through, and the inducers reap those parents long
+// before the teardown reading is taken.
 func (f *sharedFixture) ownership() *ownedDescendants {
 	f.ownershipMu.Lock()
 	defer f.ownershipMu.Unlock()
@@ -472,6 +475,12 @@ func (f *sharedFixture) ownership() *ownedDescendants {
 		f.owned = newOwnedDescendants(f.tracker)
 	}
 	return f.owned
+}
+
+func (f *sharedFixture) launchDirs() []string {
+	f.ownershipMu.Lock()
+	defer f.ownershipMu.Unlock()
+	return slices.Clone(f.launches)
 }
 
 // registerSession records session as one this run must account for and
@@ -503,9 +512,10 @@ func (f *sharedFixture) claimOpenSessions() []*ownedSession {
 	return open
 }
 
-func (f *sharedFixture) stopOpenSessions(ctx context.Context) error {
+func (f *sharedFixture) stopOpenSessions(ctx context.Context) (int, error) {
+	open := f.claimOpenSessions()
 	var firstErr error
-	for _, owned := range f.claimOpenSessions() {
+	for _, owned := range open {
 		stopCtx, cancel := context.WithTimeout(ctx, qualification.ShutdownDeadline)
 		err := owned.adapter.StopSession(stopCtx, owned.session)
 		cancel()
@@ -513,7 +523,7 @@ func (f *sharedFixture) stopOpenSessions(ctx context.Context) error {
 			firstErr = err
 		}
 	}
-	return firstErr
+	return len(open), firstErr
 }
 
 func (f *sharedFixture) observationBound() time.Duration {
