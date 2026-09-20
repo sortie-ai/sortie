@@ -94,6 +94,11 @@ func driveFullyObservedLiveFixture(t *testing.T) *Fixture {
 		if err := fixture.SetSessionContinuationObserved(surface, seed, recall); err != nil {
 			t.Fatalf("SetSessionContinuationObserved(%s, ...) error = %v, want nil", surface, err)
 		}
+		if err := fixture.SetTokenInventory(surface, fmt.Sprintf("live-%s-tokens", surface),
+			[]TokenObservation{{EvidencePath: "/live/usage", Kind: "spend"}},
+			Observation{Grade: GradeGap, Outcome: OutcomePass, Detail: "live token spend observed"}, nil); err != nil {
+			t.Fatalf("SetTokenInventory(%s, ...) error = %v, want nil", surface, err)
+		}
 	}
 
 	fixture.SetWorkspaceSecurity(Observation{Grade: GradeUsable, Outcome: OutcomePass, Detail: "live workspace security"})

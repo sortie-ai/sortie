@@ -511,3 +511,80 @@ func TestFixtureSetSessionContinuationIsOrderIndependent(t *testing.T) {
 		})
 	}
 }
+
+func TestFixtureSetTokenInventoryProtocolArms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		sessionID         string
+		paths             []TokenObservation
+		inventory         Observation
+		wantBaselineGrade Grade
+		wantBaselineOut   Outcome
+	}{
+		{
+			name:              "turns completed with no usage reported leaves the baseline a gap",
+			sessionID:         "",
+			paths:             nil,
+			inventory:         Observation{Grade: GradeGap, Outcome: OutcomePass, Detail: "the inventory completed with no token-bearing path resolved"},
+			wantBaselineGrade: GradeGap,
+			wantBaselineOut:   OutcomePass,
+		},
+		{
+			name:              "no turn completed at all sentinels the baseline not_observed",
+			sessionID:         "",
+			paths:             nil,
+			inventory:         Observation{Grade: GradeNotObserved, Outcome: OutcomeRuntimeFailed, Detail: "no graded protocol turn completed"},
+			wantBaselineGrade: GradeNotObserved,
+			wantBaselineOut:   OutcomeRuntimeFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := NewFixture(FixtureQualified)
+			if err := fixture.SetTokenInventory(SurfaceProtocol, tt.sessionID, tt.paths, tt.inventory, nil); err != nil {
+				t.Fatalf("SetTokenInventory(protocol, %q, %v, %+v) error = %v, want nil", tt.sessionID, tt.paths, tt.inventory, err)
+			}
+
+			baseline := fixture.FindFirst(MatchBaseline(SurfaceProtocol, CapabilityTokenCeiling))
+			if baseline == nil {
+				t.Fatal("fixture carries no protocol token-ceiling baseline")
+			}
+			if baseline.Grade != tt.wantBaselineGrade {
+				t.Errorf("SetTokenInventory(protocol, ...) baseline grade = %s, want %s", baseline.Grade, tt.wantBaselineGrade)
+			}
+			if baseline.Outcome != tt.wantBaselineOut {
+				t.Errorf("SetTokenInventory(protocol, ...) baseline outcome = %s, want %s", baseline.Outcome, tt.wantBaselineOut)
+			}
+
+			if len(tt.paths) == 0 {
+				sentinel := fixture.FindFirst(matchTokenSurface(SurfaceProtocol))
+				if sentinel == nil {
+					t.Fatal("fixture carries no protocol token-source sentinel")
+				}
+				if sentinel.SessionID != nil {
+					t.Errorf("SetTokenInventory(protocol, ...) sentinel SessionID = %v, want nil", *sentinel.SessionID)
+				}
+				if sentinel.EvidencePath != nil {
+					t.Errorf("SetTokenInventory(protocol, ...) sentinel EvidencePath = %v, want nil", *sentinel.EvidencePath)
+				}
+			}
+		})
+	}
+}
+
+func TestFixtureSetTokenInventoryGapArmRejectsResolvedPath(t *testing.T) {
+	t.Parallel()
+
+	fixture := NewFixture(FixtureQualified)
+	err := fixture.SetTokenInventory(SurfaceProtocol, "sess-1",
+		[]TokenObservation{{EvidencePath: "/turn/result/usage", Kind: "spend"}},
+		Observation{Grade: GradeNotObserved, Outcome: OutcomeRuntimeFailed, Detail: "no graded protocol turn completed"}, nil)
+	if err == nil {
+		t.Error("SetTokenInventory(protocol, ...) = nil error, want rejection of a not_observed inventory carrying a resolved path")
+	}
+}
