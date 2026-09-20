@@ -58,7 +58,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version: latest
           verify: false
           # Skip the action's analysis cache: stale entries cause flaky
           # false positives (golangci-lint#5979) that reproduce on no rerun.
@@ -71,7 +71,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: ../../.tool-versions
+          version: latest
           verify: false
           working-directory: tools/qualify
           skip-cache: true
@@ -135,7 +135,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version: latest
           verify: false
           args: --config .golangci-no-tests.yml --tests=false ./...
           # Skip the action's analysis cache: this job runs a different
@@ -148,7 +148,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: ../../.tool-versions
+          version: latest
           verify: false
           working-directory: tools/qualify
           args: --config ../../.golangci-no-tests.yml --tests=false ./...
