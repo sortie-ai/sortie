@@ -140,7 +140,7 @@ func TestRunTurnPreTurnWaits(t *testing.T) {
 			state := &sessionState{
 				agentConfig: domain.AgentConfig{ReadTimeoutMS: 50},
 				inbox:       jsonrpc.NewInbox[pumpItem](),
-				caps:        newCapabilityRecord(false),
+				caps:        newCapabilityRecord(false, false),
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
@@ -203,7 +203,7 @@ func TestDelayedTurnVerdictCannotBlockPump(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		inbox:       jsonrpc.NewInbox[pumpItem](),
 		logger:      discardLogger(),
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
 	}
 
 	outcome := awaitOutcome(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
@@ -241,7 +241,7 @@ func TestAbandonedTurnIsNotStarted(t *testing.T) {
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 20},
 		inbox:       jsonrpc.NewInbox[pumpItem](),
 		logger:      discardLogger(),
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
 	}
 
 	outcome := awaitOutcome(t, runTurnAsyncCtx(context.Background(), state, domain.RunTurnParams{
@@ -292,25 +292,54 @@ func TestNoCounterSessionReportsUnmeasured(t *testing.T) {
 func TestAssertUsageReporting(t *testing.T) {
 	t.Parallel()
 
+	measuredEvents, measuredOutcome := measuredSessionTurn(t)
+	unmeasuredEvents, unmeasuredOutcome := unmeasuredSessionTurn(t)
+
+	agenttest.AssertUsageReporting(t, "agent-client-protocol", []agenttest.UsageReportingCase{
+		{
+			Name:   "a local session whose source proved out settles one figure per turn",
+			Events: measuredEvents,
+			Result: measuredOutcome.result,
+		},
+		{
+			Name:   "a session with no measurement source reports no figure",
+			Remote: true,
+			Events: unmeasuredEvents,
+			Result: unmeasuredOutcome.result,
+		},
+	})
+}
+
+func measuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
+	t.Helper()
+
+	reader := &fakeUsageReader{
+		recognizes: true,
+		drains: []fakeDrain{{
+			found: true,
+			usage: agentcore.RecoveredUsage{
+				Run:   domain.TokenUsage{InputTokens: 1200, OutputTokens: 80, TotalTokens: 1280, CacheReadTokens: 900},
+				Model: "model-of-record",
+			},
+		}},
+	}
+	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
+		discardLogger(), withUsageReader(reader))
+	out := newOutboundReader(outPr)
+	publishHandshake(state, "gemini-cli", "0.59.0")
+	markSessionKnown(state)
+
+	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
+}
+
+func unmeasuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
+	t.Helper()
+
 	state, outPr, inPw := newTestSession(t, domain.AgentConfig{}, clientProtocolMaxLineBytes)
 	out := newOutboundReader(outPr)
 	markSessionKnown(state)
 
-	var events []domain.AgentEvent
-	outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "go", OnEvent: collectEvents(&events)})
-
-	promptID := out.awaitMethod(t, methodSessionPrompt)
-	sendLine(t, inPw, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-test","update":{"sessionUpdate":"usage_update","used":12000,"size":200000}}}`)
-	respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
-
-	outcome := awaitOutcome(t, outcomeCh)
-	if outcome.err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", outcome.err)
-	}
-
-	agenttest.AssertUsageReporting(t, "agent-client-protocol", []agenttest.UsageReportingCase{
-		{Name: "usage_update observed mid-turn reports no measurement", Events: events, Result: outcome.result},
-	})
+	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
 }
 
 func indexOfStepName(t *testing.T, names []string, name string) int {

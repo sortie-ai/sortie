@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -84,6 +85,16 @@ type sessionState struct {
 	// release gives the connection's reader up to drainGrace to end on its own
 	// before giving up. Set once before the pump starts, read-only afterward.
 	release *procutil.OutputRelease
+
+	// usage owns the session's run-cumulative snapshot and measurement verdict,
+	// built here and handed to the pump before it starts. It is not safe for
+	// concurrent use; the pump goroutine is its only user afterward.
+	usage *agentcore.TurnEndUsage
+
+	// reader is the measurement source that claimed this session's launch, or
+	// nil when none did. Set once before the pump starts; the pump is its only
+	// user afterward, apart from teardown's release of it.
+	reader usageReader
 }
 
 // pumpItem is either a message the connection's reader delivered or a control
@@ -110,9 +121,26 @@ type pumpControl struct {
 
 	startTurn *turnStart
 
-	// answerOpen, when non-nil, tells the pump to answer every request
-	// still open; the pump closes it once handleAnswerOpen returns.
+	// usage carries what one turn's drain read, published by the goroutine that
+	// ran the drain so the usage accumulator is touched only on the pump's own
+	// goroutine.
+	usage *usageObserved
+
+	// answerOpen, when non-nil, tells the pump to answer every request still
+	// open; the pump closes it once handleAnswerOpen returns.
 	answerOpen chan struct{}
+}
+
+// usageObserved is one turn's drain result. turn identifies the turn the drain
+// was armed for, so a result arriving after that turn ended is discarded rather
+// than applied to its successor. recovered is nil when neither source produced
+// a record, a measurement that does not exist rather than one of zero.
+// completeness grades recovered and says nothing about whether it exists.
+type usageObserved struct {
+	turn         *activeTurn
+	recovered    *agentcore.RecoveredUsage
+	source       string
+	completeness usagesource.Completeness
 }
 
 // replayQuery is the control message a session/load or session/resume
@@ -182,7 +210,7 @@ func readTimeout(state *sessionState) time.Duration {
 // stage-one states before the pump starts, and the pump applies
 // handshake- and continuation-based lowering to it once the
 // corresponding control message arrives.
-func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams) (domain.Session, error) {
+func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams, usage *agentcore.TurnEndUsage) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
@@ -220,7 +248,21 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	}
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	procutil.SetGroupCancel(cmd, grace)
-	cmd.Env = os.Environ()
+
+	// The reader is chosen before launch because a source needs the launch to
+	// carry its assignments.
+	reader, readerEnv := selectUsageReader(target)
+	state.reader = reader
+	cmd.Env = append(os.Environ(), readerEnv...)
+
+	// Every failure below returns without a session, so nothing else releases
+	// what the claim armed.
+	started := false
+	defer func() {
+		if !started {
+			releaseUsageReader(state)
+		}
+	}()
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
@@ -281,7 +323,8 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	// stage-one states, before the pump starts. The pump's start orders
 	// this write exactly as it orders the launch target beside it:
 	// StartSession must not touch state.caps after this point.
-	state.caps = newCapabilityRecord(remote)
+	state.caps = newCapabilityRecord(remote, reader != nil)
+	state.usage = usage
 
 	// Start the pump before the handshake, so it is the sole mutator of session
 	// protocol state from here on; StartSession publishes what it learns as
@@ -334,6 +377,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: facts}})
 	state.inbox.Put(pumpItem{control: &pumpControl{sessionID: sessionID}})
 
+	started = true
 	return domain.Session{
 		ID:       sessionID,
 		AgentPID: strconv.Itoa(state.pid),
@@ -579,6 +623,7 @@ func stopSession(ctx context.Context, session domain.Session) error {
 	graceCtx, cancel := context.WithTimeout(ctx, grace)
 	defer cancel()
 	runTeardown(state, defaultTeardownOrder(ctx, graceCtx, grace))
+	releaseUsageReader(state)
 	return nil
 }
 
@@ -617,6 +662,16 @@ func defaultTeardownOrder(callerCtx, graceCtx context.Context, grace time.Durati
 		{name: "drain_stderr_and_reap", run: drainStderrAndReap(callerCtx)},
 		{name: "close_pipes", run: closePipes},
 	}
+}
+
+// releaseUsageReader releases whatever the measurement source armed. It runs
+// after teardown, once the pump has stopped and no drain is still reading what
+// it removes.
+func releaseUsageReader(state *sessionState) {
+	if state.reader == nil {
+		return
+	}
+	state.reader.Close()
 }
 
 // runTeardown walks steps in order, running every one.

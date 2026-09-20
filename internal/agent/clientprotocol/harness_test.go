@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -26,10 +27,18 @@ func newTestSession(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes i
 	return newTestSessionWithLogger(t, agentConfig, maxLineBytes, discardLogger())
 }
 
+// withUsageReader must be applied before the pump starts.
+func withUsageReader(reader usageReader) func(*sessionState) {
+	return func(state *sessionState) {
+		state.reader = reader
+		state.caps = newCapabilityRecord(false, true)
+	}
+}
+
 // newTestSessionWithLogger behaves like newTestSession, but wires
 // state's logger to logger instead of one that discards everything,
 // for a test that needs to observe what the pump logs.
-func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int, logger *slog.Logger) (*sessionState, *io.PipeReader, *io.PipeWriter) {
+func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxLineBytes int, logger *slog.Logger, opts ...func(*sessionState)) (*sessionState, *io.PipeReader, *io.PipeWriter) {
 	t.Helper()
 
 	outPr, outPw := io.Pipe()
@@ -37,7 +46,8 @@ func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxL
 
 	state := &sessionState{
 		agentConfig: agentConfig,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
+		usage:       agentcore.NewTurnEndUsage(),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      logger,
@@ -46,6 +56,10 @@ func newTestSessionWithLogger(t *testing.T, agentConfig domain.AgentConfig, maxL
 	state.inbox = jsonrpc.NewInbox[pumpItem]()
 	state.conn = jsonrpc.NewConn(outPw, inPr, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(maxLineBytes))
+
+	for _, opt := range opts {
+		opt(state)
+	}
 
 	go runPump(state)
 

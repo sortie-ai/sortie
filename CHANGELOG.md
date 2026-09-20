@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A run on the `agent-client-protocol` kind now reports token usage when its runtime is a Gemini CLI started on the machine running Sortie, so `agent.max_tokens` applies to it, its spend joins the token and cost totals, and it is no longer counted among the sessions whose usage was never recorded. Sortie reads the counts from the usage records Gemini CLI writes to disk rather than from the protocol, and falls back to the runtime's session journal when those records are unavailable; the figures cover input tokens, output tokens including reasoning, and cache reads. A turn whose spend was never fully reported, a cancelled turn above all, is now recorded as spend of an unknown amount: whatever figure did arrive still counts toward the totals, what that figure leaves out does not, and `used_tokens_complete` in the `cost_budget` tool reads `false`, so the issue's spend reads as a lower bound instead of passing for the whole of it as it did before. A session on a Gemini CLI build other than `0.59.0`, and a runtime started on a remote host through `worker.ssh_hosts`, stay unmeasured with `agent.max_tokens` inactive, because a figure is reported only for a build it was measured against.
+  ([#1057](https://github.com/sortie-ai/sortie/issues/1057))
+
 ### Fixed
 
 - A run that ends having reported no token usage, while `agent.max_tokens` is set, now says so in the log, naming the agent kind and the ceiling the run could not be held to. Before this, only an agent kind that declares up front that it never reports token usage drew a warning, so a kind that declares figures do arrive while the runtime it starts reports none left the ceiling doing nothing and said nothing about it. The dashboard no longer describes such a session as not having reported its tokens yet: once the point its agent reports at has passed with nothing counted, the session's Tokens row reads "not reported", and the footer counts the session among those running an agent that reports no token usage rather than among those still to report.

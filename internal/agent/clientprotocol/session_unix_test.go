@@ -17,11 +17,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+func startTestSession(ctx context.Context, a *ClientProtocolAdapter, params domain.StartSessionParams) (domain.Session, error) {
+	return startSession(ctx, a, params, agentcore.NewTurnEndUsage())
+}
 
 // mcpHandshakeScript is a fake agent that answers exactly the two
 // calls startSession makes before returning: initialize (always id 1,
@@ -59,7 +64,7 @@ func TestStartSessionMCPInjectionWire(t *testing.T) {
 		MCPConfigPath: mcpConfigPath,
 	}
 
-	session, err := startSession(context.Background(), &ClientProtocolAdapter{}, params)
+	session, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, params)
 	if err != nil {
 		t.Fatalf("startSession() error = %v", err)
 	}
@@ -118,7 +123,7 @@ func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeThenGracefulExitScript(evidencePath, "0.4"))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	session, err := startSession(ctx, &ClientProtocolAdapter{}, domain.StartSessionParams{
+	session, err := startTestSession(ctx, &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -156,7 +161,7 @@ func TestStartSessionEmitsCollectedStderrAtWarnOnFailedInitialize(t *testing.T) 
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
-	_, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	_, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -246,7 +251,7 @@ func TestStartSessionEmitsCollectedStderrAtWarnOnFailedResolveSession(t *testing
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
-	_, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	_, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -275,7 +280,7 @@ func TestStopSessionReachesGroupChild(t *testing.T) {
 	pidPath := filepath.Join(dir, "group-child.pid")
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeWithGroupChildScript(pidPath))
 
-	session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	session, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -304,7 +309,7 @@ func TestStopSessionDoesNotReachEscapedProcessGroupMember(t *testing.T) {
 	pidPath := filepath.Join(dir, "escaped.pid")
 	scriptPath := agenttest.WriteScript(t, dir, "agent.sh", mcpHandshakeWithDetachedChildScript(pidPath))
 
-	session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	session, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -355,7 +360,7 @@ func TestStartSessionHandshakeAbandonedByEscapedDescendantFailsWithPortExit(t *t
 	adapter := &ClientProtocolAdapter{drainGrace: grace}
 
 	start := time.Now()
-	_, err := startSession(context.Background(), adapter, domain.StartSessionParams{
+	_, err := startTestSession(context.Background(), adapter, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -432,7 +437,7 @@ func TestStopSessionReturnsBoundedAfterReleaseAbandonsOnARealSubprocess(t *testi
 
 	const grace = 200 * time.Millisecond
 	adapter := &ClientProtocolAdapter{drainGrace: grace}
-	session, err := startSession(context.Background(), adapter, domain.StartSessionParams{
+	session, err := startTestSession(context.Background(), adapter, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: scriptPath},
 	})
@@ -586,7 +591,7 @@ func TestStartSessionSSH_CarriesEnvironmentVariable(t *testing.T) {
 		EnvCapturePath: capturePath,
 	})
 
-	session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	session, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: agentPath},
 		SSHHost:       "user@stand-in-host",
@@ -631,7 +636,7 @@ func TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
-	_, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+	_, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: agentPath},
 		SSHHost:       "user@stand-in-host",
@@ -707,7 +712,7 @@ func TestStartSessionLocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 		scriptPath := agenttest.WriteScript(t, dir, "agent.sh", captureCwdAndFirstLineThenHandshakeScript(cwdPath, firstLinePath))
 
 		workspacePath := t.TempDir()
-		session, err := startSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+		session, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
 			WorkspacePath: workspacePath,
 			AgentConfig:   domain.AgentConfig{Command: scriptPath},
 			SSHEnvNames:   tc.sshEnvNames,

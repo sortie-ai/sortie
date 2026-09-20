@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -21,9 +22,20 @@ func init() {
 		RequiresCommand:     true,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionTranslated,
-		UsageArrival:        registry.UsageArrivalNone,
-		UsageAttribution:    registry.UsageAttributionNone,
+		UsageArrival:        registry.UsageArrivalTurnEnd,
+		UsageAttribution:    registry.UsageAttributionPerModel,
 		CredentialEnv:       registry.DeclareCredentialEnv(),
+		UsageSessionRules: []registry.UsageSessionRule{
+			{
+				// The measurement source reads a local filesystem, while a
+				// worker over SSH writes its measurements on the far host. This
+				// pins what a remote session reports today, not what it can ever
+				// report.
+				When:        func(passthrough map[string]any, remote bool) bool { return remote },
+				Arrival:     registry.UsageArrivalNone,
+				Attribution: registry.UsageAttributionNone,
+			},
+		},
 	})
 }
 
@@ -60,7 +72,7 @@ func NewClientProtocolAdapter(config map[string]any) (domain.AgentAdapter, error
 // creates a session with session/new. The usage accumulator is built here so
 // exactly one exists per session and the pump inherits it.
 func (a *ClientProtocolAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	return startSession(ctx, a, params)
+	return startSession(ctx, a, params, agentcore.NewTurnEndUsage())
 }
 
 func (a *ClientProtocolAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
