@@ -333,6 +333,56 @@ func TestGeminiCloseRemovesWhatClaimArmed(t *testing.T) {
 	}
 }
 
+// Close runs on the session's own goroutine while a drain is in flight on
+// another, so a drain that is only waiting must not hold the lock: a teardown
+// that has not cancelled the drain's context would otherwise wait out the whole
+// deadline.
+func TestGeminiCloseIsNotHeldBehindADrainThatIsWaiting(t *testing.T) {
+	t.Parallel()
+
+	reader := newArmedReader(t, "sess-a")
+
+	// A clock that never advances keeps the drain polling until its context
+	// ends, so releasing the lock for the wait is the only thing that can let
+	// Close through. The second reading is the deadline check of the first
+	// pass, taken while the drain still holds the lock.
+	polling := make(chan struct{})
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	calls := 0
+	reader.now = func() time.Time {
+		calls++
+		if calls == 2 {
+			close(polling)
+		}
+		return at
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		reader.Drain(ctx, 1_000_000)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-drained
+	})
+
+	<-polling
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		reader.Close()
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Error("Close() during an in-flight Drain() = blocked, want it to return")
+	}
+}
+
 // steppingClock advances an hour per reading, so a drain's deadline has already
 // elapsed by its next read and a figure on disk is answered without a wait.
 func steppingClock() func() time.Time {

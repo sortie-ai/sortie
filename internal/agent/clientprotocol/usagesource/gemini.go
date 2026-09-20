@@ -247,10 +247,8 @@ func (r *geminiReader) Drain(ctx context.Context, lowerBound int64) (agentcore.R
 		if !r.clock().Before(deadline) {
 			break
 		}
-		select {
-		case <-ctx.Done():
+		if !r.waitForNextPoll(ctx) {
 			return agentcore.RecoveredUsage{}, "", false
-		case <-time.After(geminiPollInterval):
 		}
 	}
 
@@ -273,6 +271,23 @@ func (r *geminiReader) Drain(ctx context.Context, lowerBound int64) (agentcore.R
 	// measured from.
 	completeness := r.classify(figure.basis, lowerBound)
 	return r.answer(figure, source, completeness, lowerBound)
+}
+
+// waitForNextPoll releases the lock for one poll interval and retakes it before
+// returning, so a Close on the session's own goroutine is not held behind a
+// drain that is only waiting. Everything the loop has accumulated lives in the
+// reader, so it survives the gap. It reports whether the interval elapsed,
+// false meaning the context ended first.
+func (r *geminiReader) waitForNextPoll(ctx context.Context) bool {
+	r.mu.Unlock()
+	defer r.mu.Lock()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(geminiPollInterval):
+		return true
+	}
 }
 
 func (r *geminiReader) answer(figure geminiFigure, source string, completeness Completeness, lowerBound int64) (agentcore.RecoveredUsage, string, bool) {
