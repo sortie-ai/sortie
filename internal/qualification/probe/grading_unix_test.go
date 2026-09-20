@@ -3,31 +3,102 @@
 package probe
 
 import (
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
 var inducedGrades = []qualification.Grade{qualification.GradeUsable, qualification.GradeGap, qualification.GradeNotObserved}
 
-// wantInducedGrade returns the grade a gradedEvidence output's row for
-// surface and capability must carry: the corresponding inducer's own
-// grade for one of the three rows Run's inducers drive, and
-// not_observed for every other row.
-func wantInducedGrade(surface qualification.Surface, capability qualification.Capability, toolGrade, permissionGrade, continuationGrade qualification.Grade) qualification.Grade {
-	if surface != qualification.SurfaceProtocol {
-		return qualification.GradeNotObserved
+func outcomeForSweptGrade(grade qualification.Grade) qualification.Outcome {
+	if grade == qualification.GradeNotObserved {
+		return qualification.OutcomeFixtureInductionFailed
 	}
-	switch capability {
-	case qualification.CapabilityToolServerDelivery:
-		return toolGrade
-	case qualification.CapabilityPermissionHandling:
-		return permissionGrade
-	case qualification.CapabilitySessionContinuation:
-		return continuationGrade
-	default:
-		return qualification.GradeNotObserved
+	return qualification.OutcomePass
+}
+
+func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, permissionGrade, continuationGrade qualification.Grade) collectedObservations {
+	measured := profile.MeasuredSurfaces()
+
+	declared := map[[2]string]bool{}
+	for _, d := range profile.Declarations {
+		declared[[2]string{string(d.Capability), string(d.Case)}] = true
 	}
+	notInducible := map[[2]string]bool{}
+	for _, entry := range profile.NotInducibleCases {
+		notInducible[[2]string{string(entry.Surface), string(entry.Case)}] = true
+	}
+
+	collected := collectedObservations{
+		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+	}
+
+	permissionSessionID := "sess-protocol-permission"
+
+	for _, surface := range measured {
+		byCase := map[qualification.Case]qualification.Observation{}
+		for _, capability := range []qualification.Capability{qualification.CapabilityTurnDisposition, qualification.CapabilityRetryClassification} {
+			for _, caseID := range qualification.CapabilityCases[capability] {
+				if slices.Contains(qualification.CatalogNotInducibleCases, caseID) || notInducible[[2]string{string(surface), string(caseID)}] {
+					continue
+				}
+				// The refusal disposition and its non_retryable_refusal retry
+				// peer derive from one physical run, so both share one session
+				// id per surface; protocol human_input reuses the permission
+				// attempt's session.
+				sessionKey := string(caseID)
+				if _, hasPeer := qualification.DeclaredGapPeers[caseID]; hasPeer {
+					sessionKey = "refusal-pair"
+				}
+				sessionID := fmt.Sprintf("sess-%s-%s", surface, sessionKey)
+				if surface == qualification.SurfaceProtocol && caseID == qualification.CaseHumanInput {
+					sessionID = permissionSessionID
+				}
+				if declared[[2]string{string(capability), string(caseID)}] {
+					byCase[caseID] = qualification.Observation{Grade: qualification.GradeNotObserved, Outcome: qualification.OutcomeFixtureInductionFailed, Detail: "declared", SessionID: sessionID}
+					continue
+				}
+				byCase[caseID] = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "migrated fixture observation", SessionID: sessionID, EvidencePath: "/turn/stop_reason"}
+			}
+		}
+		collected.semantic[surface] = byCase
+	}
+
+	collected.toolServer = qualification.Observation{Grade: toolGrade, Outcome: outcomeForSweptGrade(toolGrade), Detail: "tool server induction: " + string(toolGrade), SessionID: "sess-protocol-mcp"}
+	collected.permission = qualification.Observation{Grade: permissionGrade, Outcome: outcomeForSweptGrade(permissionGrade), Detail: "permission induction: " + string(permissionGrade), SessionID: permissionSessionID}
+	collected.policy = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "policy precondition", SessionID: "sess-protocol-policy"}
+
+	collected.continuationGrade = continuationGrade
+	collected.continuationDetail = "continuation induction: " + string(continuationGrade)
+
+	return collected
+}
+
+func gradeOfClass(t *testing.T, records []qualification.Record, class qualification.RowClass) qualification.Grade {
+	t.Helper()
+	for i := range records {
+		got, err := qualification.ClassifyRecord(&records[i])
+		if err != nil {
+			t.Fatalf("ClassifyRecord(%+v) error = %v, want nil", records[i], err)
+		}
+		if got == class {
+			return records[i].Grade
+		}
+	}
+	return ""
+}
+
+func continuationBaselineGrade(records []qualification.Record) qualification.Grade {
+	for i := range records {
+		rec := &records[i]
+		if rec.Scenario == qualification.ScenarioSurfaceBaseline && rec.Surface == qualification.SurfaceProtocol && rec.Capability == qualification.CapabilitySessionContinuation {
+			return rec.Grade
+		}
+	}
+	return ""
 }
 
 func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
@@ -49,108 +120,28 @@ func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 						t.Run(name, func(t *testing.T) {
 							t.Parallel()
 
-							fixture, err := gradedEvidence(profile,
-								inducedRow{grade: toolGrade, detail: "tool server induction: " + string(toolGrade)},
-								inducedRow{grade: permissionGrade, detail: "permission induction: " + string(permissionGrade)},
-								inducedRow{grade: continuationGrade, detail: "continuation induction: " + string(continuationGrade)},
-							)
+							collected := fullyObservedCollected(profile, toolGrade, permissionGrade, continuationGrade)
+							fixture, err := gradedEvidence(profile, collected, time.Now().UTC())
 							if err != nil {
 								t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
 							}
 
 							path := qualification.WriteEvidenceFile(t, fixture.Records)
-							verdict, err := qualification.ValidateObservationsWithDeclarations(path, profile)
-							if err != nil {
+							if _, err := qualification.ValidateObservationsWithDeclarations(path, profile); err != nil {
 								t.Fatalf("ValidateObservationsWithDeclarations(...) error = %v, want nil", err)
 							}
 
-							conclusions, err := ConclusionsFromRecords(fixture.Records, verdict, profile)
-							if err != nil {
-								t.Fatalf("ConclusionsFromRecords(...) error = %v, want nil", err)
+							if got := gradeOfClass(t, fixture.Records, qualification.RowMCPDelivery); got != toolGrade {
+								t.Errorf("tool server delivery grade = %s, want %s", got, toolGrade)
 							}
-							expectation := ExpectationFrom(conclusions)
-
-							measured := profile.MeasuredSurfaces()
-							wantGrades := len(measured)*len(qualification.ComparisonCapabilities) + 2
-							if len(expectation.Grades) != wantGrades {
-								t.Fatalf("Grades = %d rows, want %d (%d baseline capabilities per measured surface plus tool server delivery and permission handling)",
-									len(expectation.Grades), wantGrades, len(qualification.ComparisonCapabilities))
+							if got := gradeOfClass(t, fixture.Records, qualification.RowPermission); got != permissionGrade {
+								t.Errorf("permission handling grade = %s, want %s", got, permissionGrade)
 							}
-
-							for _, grade := range expectation.Grades {
-								want := wantInducedGrade(grade.Surface, grade.Capability, toolGrade, permissionGrade, continuationGrade)
-								if grade.Grade != want {
-									t.Errorf("Grades row %s %s = %s, want %s", grade.Surface, grade.Capability, grade.Grade, want)
-								}
-								wantLabel := qualification.StatusLabel(want)
-								if grade.Label != wantLabel {
-									t.Errorf("Grades row %s %s label = %q, want %q", grade.Surface, grade.Capability, grade.Label, wantLabel)
-								}
+							if got := continuationBaselineGrade(fixture.Records); got != continuationGrade {
+								t.Errorf("protocol continuation baseline grade = %s, want %s", got, continuationGrade)
 							}
 						})
 					}
-				}
-			}
-		})
-	}
-}
-
-// gradedEvidenceRewrittenRow reports whether rec is one of the five
-// protocol records gradedEvidence's three inducer calls rewrite: tool
-// server delivery, permission handling, and the continuation baseline,
-// recall, and seed.
-func gradedEvidenceRewrittenRow(t *testing.T, rec *qualification.Record) bool {
-	t.Helper()
-
-	if rec.Surface != qualification.SurfaceProtocol {
-		return false
-	}
-	class, err := qualification.ClassifyRecord(rec)
-	if err != nil {
-		t.Fatalf("ClassifyRecord(%+v) error = %v, want nil", *rec, err)
-	}
-	switch class {
-	case qualification.RowMCPDelivery, qualification.RowPermission, qualification.RowContinuationRecall, qualification.RowContinuationSeed:
-		return true
-	case qualification.RowBaseline:
-		return rec.Capability == qualification.CapabilitySessionContinuation
-	default:
-		return false
-	}
-}
-
-// TestGradedEvidenceOnlyRewritesTheThreeProtocolRows confirms that in
-// a gradedEvidence output, every record whose grade is neither
-// not_observed nor declared_gap is one of the five protocol records
-// its three inducer calls rewrite.
-func TestGradedEvidenceOnlyRewritesTheThreeProtocolRows(t *testing.T) {
-	t.Parallel()
-
-	for _, profilePath := range stalenessProfilePaths(t) {
-		profile, err := qualification.ReadRuntimeProfileFile(profilePath)
-		if err != nil {
-			t.Fatalf("ReadRuntimeProfileFile(%s) error = %v, want nil", profilePath, err)
-		}
-
-		t.Run(profilePath, func(t *testing.T) {
-			t.Parallel()
-
-			fixture, err := gradedEvidence(profile,
-				inducedRow{grade: qualification.GradeUsable, detail: "tool server induction"},
-				inducedRow{grade: qualification.GradeGap, detail: "permission induction"},
-				inducedRow{grade: qualification.GradeUsable, detail: "continuation induction"},
-			)
-			if err != nil {
-				t.Fatalf("gradedEvidence(...) error = %v, want nil", err)
-			}
-
-			for i := range fixture.Records {
-				rec := &fixture.Records[i]
-				if rec.Grade == qualification.GradeNotObserved || rec.Grade == qualification.GradeDeclaredGap {
-					continue
-				}
-				if !gradedEvidenceRewrittenRow(t, rec) {
-					t.Errorf("record %d carries grade %s on %s %s, want one of the five protocol rows gradedEvidence rewrites", rec.Sequence, rec.Grade, rec.Surface, rec.Capability)
 				}
 			}
 		})

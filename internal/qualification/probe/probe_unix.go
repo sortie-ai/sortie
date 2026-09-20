@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +19,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
+
+// signalProcessGroup sends sig to the process group led by pid. It
+// reports nil when the group no longer exists, since expiry is expected
+// during best-effort cleanup.
+func signalProcessGroup(pid int, sig syscall.Signal) error {
+	return procutil.SignalProcessGroup(pid, sig)
+}
 
 // assertSessionGroupAbsent confirms the process group session's launch
 // produced is gone, per the rule that a survivor is a leak rather than
@@ -41,6 +49,11 @@ const nativeProbeBound = 5 * time.Minute
 // inherited the streams and outlives its parent, is what this bound has
 // to survive, so the wait carries its own bound.
 const nativeDrainBound = 30 * time.Second
+
+// nativeSignalBound bounds what a launch waits after one signal. A
+// runtime that honours it ends well inside; one that ignores it has its
+// group taken down rather than being waited on indefinitely.
+const nativeSignalBound = time.Minute
 
 // boundedLaunch is one started native launch whose output is captured
 // through pipes this package owns rather than the copier goroutines an
@@ -459,6 +472,90 @@ func repositoryPath(t *testing.T, root, rel string) string {
 	return joined
 }
 
+// induceIfInducible stores induce's result at caseID in byCase, unless
+// the profile declares the (surface, caseID) pair not inducible. A
+// declared pair grades from that declaration and reads no observation,
+// so this skips the launch rather than pay its bounded wait.
+func induceIfInducible(coords Coordinates, fixture *sharedFixture, byCase map[qualification.Case]qualification.Observation, surface qualification.Surface, caseID qualification.Case, induce func() qualification.Observation) {
+	if _, notInducible := coords.Profile.NotInducibleDeclared(surface, caseID); notInducible {
+		return
+	}
+	record(fixture, byCase, surface, caseID, induce())
+}
+
+// record stores obs at caseID in byCase and appends it to the run's
+// journal, so an observation reaches disk when it is obtained rather
+// than only once every launch has finished.
+func record(fixture *sharedFixture, byCase map[qualification.Case]qualification.Observation, surface qualification.Surface, caseID qualification.Case, obs qualification.Observation) {
+	byCase[caseID] = obs
+	fixture.journal.append(string(surface), string(caseID), obs)
+}
+
+// induceProtocolSemantics drives every semantic case the protocol
+// surface measures, plus the tool-server, permission, policy, and
+// human_input induction, recording the results into collected.
+func induceProtocolSemantics(t *testing.T, coords Coordinates, fixture *sharedFixture, collected *collectedObservations) {
+	t.Helper()
+	surface := qualification.SurfaceProtocol
+	byCase := map[qualification.Case]qualification.Observation{}
+
+	record(fixture, byCase, surface, qualification.CaseSuccess, induceSuccess(t, coords, fixture, surface))
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseRuntimeFailure, func() qualification.Observation {
+		return induceRuntimeFailure(t, coords, fixture, surface)
+	})
+	disposition, retry := induceRefusalPair(t, coords, fixture, surface)
+	record(fixture, byCase, surface, qualification.CaseRuntimeRefusal, disposition)
+	record(fixture, byCase, surface, qualification.CaseNonRetryableRefusal, retry)
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseCancellation, func() qualification.Observation {
+		return induceCancellation(t, coords, fixture, surface)
+	})
+	record(fixture, byCase, surface, qualification.CaseRetryableTransport, induceRetryableTransport(t, coords, fixture, surface))
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseLimitReached, func() qualification.Observation {
+		return induceProtocolLimit(t, coords, fixture)
+	})
+
+	permission, policy, humanInput := inducePermissionPolicyHumanInput(t, coords, fixture)
+	// This grouped launch always runs: permission and policy carry no
+	// not-inducible declaration and read it, so a not-inducible
+	// human_input declaration must not suppress it. Only the human_input
+	// row it produced is withheld through the guard.
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseHumanInput, func() qualification.Observation {
+		return humanInput
+	})
+	collected.toolServer = induceToolServer(t, coords, fixture)
+	collected.permission = permission
+	collected.policy = policy
+	fixture.journal.append(string(surface), "tool_server", collected.toolServer)
+	fixture.journal.append(string(surface), "permission", permission)
+	fixture.journal.append(string(surface), "policy_precondition", policy)
+
+	collected.semantic[surface] = byCase
+}
+
+// induceNativeSemantics drives every semantic case surface measures on
+// one structured native surface.
+func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixture, collected *collectedObservations, surface qualification.Surface) {
+	t.Helper()
+	byCase := map[qualification.Case]qualification.Observation{}
+
+	record(fixture, byCase, surface, qualification.CaseSuccess, induceSuccess(t, coords, fixture, surface))
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseRuntimeFailure, func() qualification.Observation {
+		return induceRuntimeFailure(t, coords, fixture, surface)
+	})
+	disposition, retry := induceRefusalPair(t, coords, fixture, surface)
+	record(fixture, byCase, surface, qualification.CaseRuntimeRefusal, disposition)
+	record(fixture, byCase, surface, qualification.CaseNonRetryableRefusal, retry)
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseCancellation, func() qualification.Observation {
+		return induceCancellation(t, coords, fixture, surface)
+	})
+	record(fixture, byCase, surface, qualification.CaseRetryableTransport, induceRetryableTransport(t, coords, fixture, surface))
+	induceIfInducible(coords, fixture, byCase, surface, qualification.CaseHumanInput, func() qualification.Observation {
+		return induceHumanInputNative(t, coords, fixture, surface)
+	})
+
+	collected.semantic[surface] = byCase
+}
+
 // Run drives one live qualification collection against coords,
 // corroborating every declared absence and writing the validated
 // evidence, the bounded summary, and a fresh measurement artifact to
@@ -470,6 +567,8 @@ func repositoryPath(t *testing.T, root, rel string) string {
 func Run(t *testing.T, coords Coordinates) Result {
 	t.Helper()
 
+	collectionStartedAt := time.Now().UTC()
+
 	outputDir := coords.OutputDir
 	if outputDir == "" {
 		outputDir = defaultOutputDir(t)
@@ -477,6 +576,7 @@ func Run(t *testing.T, coords Coordinates) Result {
 
 	profile := coords.Profile
 	fixtureState := resolveSharedFixture(t, coords)
+	fixtureState.journal = &observationJournal{path: filepath.Join(outputDir, "observations.jsonl")}
 
 	runVersionCanary(t, coords, fixtureState)
 	runAuthenticationCanary(t, coords, fixtureState)
@@ -485,20 +585,41 @@ func Run(t *testing.T, coords Coordinates) Result {
 		corroborateAbsentSurface(t, coords, fixtureState, absent.Surface)
 	}
 
-	toolGrade, toolDetail := induceToolServerCall(t, coords, fixtureState)
-	permissionGrade, permissionDetail := inducePermissionRequest(t, coords, fixtureState)
-	continuationGrade, continuationDetail := induceSessionContinuation(t, coords)
+	collected := &collectedObservations{
+		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+	}
 
-	fixture, err := gradedEvidence(profile,
-		inducedRow{grade: toolGrade, detail: toolDetail},
-		inducedRow{grade: permissionGrade, detail: permissionDetail},
-		inducedRow{grade: continuationGrade, detail: continuationDetail},
-	)
+	induceProtocolSemantics(t, coords, fixtureState, collected)
+	for _, surface := range profile.MeasuredSurfaces() {
+		if surface == qualification.SurfaceProtocol {
+			continue
+		}
+		induceNativeSemantics(t, coords, fixtureState, collected, surface)
+	}
+
+	collected.continuationGrade, collected.continuationDetail = induceSessionContinuation(t, coords)
+
+	fixture, err := gradedEvidence(profile, *collected, collectionStartedAt)
 	if err != nil {
 		t.Fatalf("compose the collected evidence: %v", err)
 	}
+	// A paid collection that fails a later check still leaves the rows it
+	// drove, so the failure is readable without re-spending.
+	evidencePath := filepath.Join(outputDir, "evidence.jsonl")
+	if err := writeEvidenceRecords(evidencePath, fixture.Records); err != nil {
+		t.Fatalf("write the evidence artifact: %v", err)
+	}
+	// A run that could not keep the journal for the whole collection says
+	// so here, after the evidence is safely written.
+	if err := fixtureState.journal.err(); err != nil {
+		t.Errorf("the observation journal was not kept for the whole collection: %v", err)
+	}
+	unrecognizedPath := filepath.Join(outputDir, "unrecognized.jsonl")
+	if err := writeUnrecognizedTerminals(unrecognizedPath, fixtureState.unrecognizedTerminals()); err != nil {
+		t.Fatalf("write the unrecognized terminal artifact: %v", err)
+	}
 
-	verdict, err := qualification.ValidateObservationsWithDeclarations(qualification.WriteEvidenceFile(t, fixture.Records), profile)
+	verdict, err := qualification.ValidateObservationsWithDeclarations(evidencePath, profile)
 	if err != nil {
 		t.Fatalf("validate the collected evidence: %v", err)
 	}
@@ -509,10 +630,6 @@ func Run(t *testing.T, coords Coordinates) Result {
 	}
 	summary := FormatSummary(conclusions)
 
-	evidencePath := filepath.Join(outputDir, "evidence.jsonl")
-	if err := writeEvidenceRecords(evidencePath, fixture.Records); err != nil {
-		t.Fatalf("write the evidence artifact: %v", err)
-	}
 	summaryPath := filepath.Join(outputDir, "summary.txt")
 	if err := os.WriteFile(summaryPath, []byte(summary), 0o600); err != nil {
 		t.Fatalf("write the summary artifact: %v", err)

@@ -5,8 +5,10 @@ package probe
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,6 +54,175 @@ func init() {
 	probeScenarios[mcpToolServerScenario] = agenttest.Typed(runMCPToolServer)
 	probeScenarios[spawnDetachedChildScenario] = agenttest.Typed(spawnDetachedChild)
 	probeScenarios[versionCanaryScenario] = agenttest.Typed(runVersionScenario)
+	probeScenarios[semanticOrchestrationScenario] = agenttest.Typed(runSemanticOrchestration)
+}
+
+type semanticOrchestrationParams struct {
+	// ReceiptDir, when non-empty, receives a "cancel-launched" marker the moment
+	// the cancellation branch runs, so a test can prove that branch never ran
+	// rather than only inspecting the Observation, which a declared not-inducible
+	// pair would produce either way.
+	ReceiptDir string
+}
+
+const semanticOrchestrationScenario = "semantic-orchestration"
+
+func runSemanticOrchestration(args []string, params semanticOrchestrationParams) int {
+	joined := strings.Join(args, "\x00")
+	switch {
+	case strings.Contains(joined, "transport-probe"):
+		if !spawnNamedProbe(args) {
+			return 2
+		}
+		agenttest.Hang()
+		return 0
+	case strings.Contains(joined, "cancellation-probe"):
+		if params.ReceiptDir != "" {
+			if err := os.WriteFile(filepath.Join(params.ReceiptDir, "cancel-launched"), nil, 0o600); err != nil {
+				return 2
+			}
+		}
+		if !spawnNamedProbe(args) {
+			return 2
+		}
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT)
+		<-sigCh
+		if _, err := fmt.Fprint(os.Stdout, `{"type":"result","status":"cancelled"}`); err != nil {
+			return 2
+		}
+		return 0
+	default:
+		if _, err := fmt.Fprint(os.Stdout, `{"type":"result","status":"end_turn"}`); err != nil {
+			return 2
+		}
+		return 0
+	}
+}
+
+func semanticOrchestrationCoordinates(runtimePath string, notInducible bool) Coordinates {
+	profile := qualification.RuntimeProfile{
+		ProbePrompts: map[string]string{
+			promptKeySuccess:        "please succeed",
+			promptKeyRuntimeRefusal: "please refuse",
+		},
+		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
+			qualification.SurfaceNativeJSON: {Args: []string{"--prompt", "{prompt}"}},
+		},
+		Recognizers: map[qualification.Surface]qualification.Recognizer{
+			qualification.SurfaceNativeJSON: {
+				Locator:       qualification.TerminalLocator{Mode: "discriminated", DiscriminatorKey: "type", DiscriminatorValue: "result"},
+				ErrorMembers:  []string{"error"},
+				StatusMember:  "status",
+				StatusCases:   map[string]qualification.Case{"cancelled": qualification.CaseCancellation, "refusal": qualification.CaseRuntimeRefusal},
+				StatusEndTurn: []string{"end_turn"},
+			},
+		},
+	}
+	if notInducible {
+		profile.NotInducibleCases = []qualification.SurfaceNotInducible{
+			{Surface: qualification.SurfaceNativeJSON, Case: qualification.CaseCancellation, Reason: qualification.NotInducibleTerminalAtExitOnly},
+		}
+	}
+	return Coordinates{CommandPath: runtimePath, Profile: profile}
+}
+
+func emptyCollectedObservations() *collectedObservations {
+	return &collectedObservations{
+		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+	}
+}
+
+func TestInduceNativeSemanticsSkipsDeclaredNotInducibleCancellation(t *testing.T) {
+	t.Parallel()
+
+	newFixture := signalBindingFixture
+
+	t.Run("a declared not-inducible pair produces zero cancellation launches", func(t *testing.T) {
+		t.Parallel()
+
+		receiptDir := t.TempDir()
+		script := agenttest.FakeRuntime(t, t.TempDir(), "native", semanticOrchestrationScenario, semanticOrchestrationParams{ReceiptDir: receiptDir})
+		coords := semanticOrchestrationCoordinates(script, true)
+		collected := emptyCollectedObservations()
+
+		induceNativeSemantics(t, coords, newFixture(t), collected, qualification.SurfaceNativeJSON)
+
+		if _, err := os.Stat(filepath.Join(receiptDir, "cancel-launched")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("induceNativeSemantics(...) launched the cancellation probe despite the profile declaring (surface, cancellation) not inducible (stat err = %v)", err)
+		}
+		if obs, ok := collected.semantic[qualification.SurfaceNativeJSON][qualification.CaseCancellation]; ok {
+			t.Errorf("collected.semantic[...][CaseCancellation] = %+v, want no collected observation at all: a declared not-inducible pair is graded from the declaration alone", obs)
+		}
+	})
+
+	t.Run("no declaration launches the cancellation probe", func(t *testing.T) {
+		t.Parallel()
+
+		receiptDir := t.TempDir()
+		script := agenttest.FakeRuntime(t, t.TempDir(), "native", semanticOrchestrationScenario, semanticOrchestrationParams{ReceiptDir: receiptDir})
+		coords := semanticOrchestrationCoordinates(script, false)
+		collected := emptyCollectedObservations()
+
+		induceNativeSemantics(t, coords, newFixture(t), collected, qualification.SurfaceNativeJSON)
+
+		if _, err := os.Stat(filepath.Join(receiptDir, "cancel-launched")); err != nil {
+			t.Errorf("induceNativeSemantics(...) did not launch the cancellation probe though the profile declares nothing (stat err = %v), want the fixture's own guard to be the only thing that can suppress it", err)
+		}
+		if _, ok := collected.semantic[qualification.SurfaceNativeJSON][qualification.CaseCancellation]; !ok {
+			t.Errorf("collected.semantic[...] carries no CaseCancellation entry, want one collected from the real launch")
+		}
+	})
+}
+
+func waitStatusSignaled(t *testing.T, waitErr error) bool {
+	t.Helper()
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok {
+		return false
+	}
+	return status.Signaled()
+}
+
+func TestSignalProcessGroup(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ESRCH against an implausible pid is suppressed", func(t *testing.T) {
+		t.Parallel()
+
+		if err := signalProcessGroup(math.MaxInt32, syscall.SIGTERM); err != nil {
+			t.Errorf("signalProcessGroup(MaxInt32, SIGTERM) = %v, want nil (ESRCH must be suppressed)", err)
+		}
+	})
+
+	t.Run("a live process group is actually terminated", func(t *testing.T) {
+		t.Parallel()
+
+		hangPath := agenttest.FakeRuntime(t, t.TempDir(), "runtime", agenttest.OutputScenario, agenttest.Output{Hang: true})
+		cmd := exec.Command(hangPath) //nolint:gosec // hangPath is a fake runtime this test built under its own temp directory
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() error = %v, want nil", err)
+		}
+		pid := cmd.Process.Pid
+		t.Cleanup(func() {
+			_ = signalProcessGroup(pid, syscall.SIGKILL)
+			_, _ = cmd.Process.Wait()
+		})
+
+		if err := signalProcessGroup(pid, syscall.SIGTERM); err != nil {
+			t.Fatalf("signalProcessGroup(pid, SIGTERM) = %v, want nil", err)
+		}
+
+		waitErr := cmd.Wait()
+		if !waitStatusSignaled(t, waitErr) {
+			t.Errorf("cmd.Wait() = %v, want the process to have been terminated by SIGTERM", waitErr)
+		}
+	})
 }
 
 func TestLaunchNativeProbe(t *testing.T) {

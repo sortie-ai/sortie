@@ -267,12 +267,7 @@ func TestConclusionsFromRecordsExclusionAndBlockingBranches(t *testing.T) {
 
 		fixture := qualification.NewFixture(qualification.FixtureQualified)
 		fixture.Finalize()
-		rec := fixture.FindFirst(qualification.MatchSemantic(qualification.SurfaceProtocol, qualification.CapabilityRetryClassification, qualification.CaseUnknownOutcome))
-		if rec == nil {
-			t.Fatal("fixture carries no protocol retry_classification unknown_outcome record to mutate")
-		}
-		rec.Grade = qualification.GradeNotInducible
-		rec.Outcome = qualification.OutcomeNotInducible
+		fixture.SetSemanticNotInducible(qualification.SurfaceProtocol, qualification.CapabilityRetryClassification, qualification.CaseUnknownOutcome, qualification.NotInducibleDetail)
 
 		profile := threeSurfaceProfile()
 		conclusions, err := ConclusionsFromRecords(fixture.Records, qualification.VerdictQualified, profile)
@@ -280,7 +275,7 @@ func TestConclusionsFromRecordsExclusionAndBlockingBranches(t *testing.T) {
 			t.Fatalf("ConclusionsFromRecords(...) = _, %v, want nil", err)
 		}
 
-		wantExcluded := "retry_classification unknown_outcome: no inducer"
+		wantExcluded := "retry_classification unknown_outcome: no deterministic inducer, so neither the condition nor the surface's account of it was established"
 		if !slices.Contains(conclusions.Excluded, wantExcluded) {
 			t.Errorf("Excluded = %v, want it to contain %q", conclusions.Excluded, wantExcluded)
 		}

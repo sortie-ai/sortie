@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/qualification"
@@ -135,6 +136,62 @@ func TestWriteMeasurement(t *testing.T) {
 // fakeNotesReporter records Fatalf calls in place of failing the
 // enclosing test, so checkNotesConsistency's decision table can be
 // driven without reddening this test's own run.
+func TestWriteUnrecognizedTerminals(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an empty set writes no file", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "unrecognized.jsonl")
+		if err := writeUnrecognizedTerminals(path, nil); err != nil {
+			t.Fatalf("writeUnrecognizedTerminals(%q, nil) = %v, want nil", path, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("os.Stat(%q) error = %v, want a not-exist error: an empty set must leave no file behind", path, err)
+		}
+	})
+
+	t.Run("a non-empty set writes one JSON object per line, preserving the envelope verbatim", func(t *testing.T) {
+		t.Parallel()
+
+		terminals := []map[string]any{
+			{"type": "result", "status": "mystery"},
+			{"type": "result", "status": "another_mystery", "detail": map[string]any{"nested": true}},
+		}
+		path := filepath.Join(t.TempDir(), "unrecognized.jsonl")
+		if err := writeUnrecognizedTerminals(path, terminals); err != nil {
+			t.Fatalf("writeUnrecognizedTerminals(%q, ...) = %v, want nil", path, err)
+		}
+
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("os.ReadFile(%q): %v", path, err)
+		}
+		lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+		if len(lines) != len(terminals) {
+			t.Fatalf("written file has %d lines, want %d", len(lines), len(terminals))
+		}
+		for i, line := range lines {
+			var got map[string]any
+			if err := json.Unmarshal([]byte(line), &got); err != nil {
+				t.Fatalf("line %d does not decode as JSON: %v", i, err)
+			}
+			if !reflect.DeepEqual(got, terminals[i]) {
+				t.Errorf("line %d = %+v, want %+v", i, got, terminals[i])
+			}
+		}
+	})
+
+	t.Run("a path under a directory that does not exist reports an error", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "no-such-dir", "unrecognized.jsonl")
+		if err := writeUnrecognizedTerminals(path, []map[string]any{{"type": "result"}}); err == nil {
+			t.Fatalf("writeUnrecognizedTerminals(%q, ...) = nil, want an error", path)
+		}
+	})
+}
+
 type fakeNotesReporter struct {
 	calls []string
 }
