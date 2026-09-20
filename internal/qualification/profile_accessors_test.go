@@ -34,6 +34,43 @@ func TestRepositoryRootFromWD(t *testing.T) {
 	}
 }
 
+func TestNotInducibleDeclared(t *testing.T) {
+	t.Parallel()
+
+	profile := RuntimeProfile{
+		NotInducibleCases: []SurfaceNotInducible{
+			{Surface: SurfaceNativeJSON, Case: CaseCancellation, Reason: NotInducibleTerminalAtExitOnly},
+		},
+	}
+
+	t.Run("a matching surface and case returns the declared reason", func(t *testing.T) {
+		t.Parallel()
+
+		reason, ok := profile.NotInducibleDeclared(SurfaceNativeJSON, CaseCancellation)
+		if !ok || reason != NotInducibleTerminalAtExitOnly {
+			t.Errorf("NotInducibleDeclared(%s, %s) = %q, %v, want %q, true", SurfaceNativeJSON, CaseCancellation, reason, ok, NotInducibleTerminalAtExitOnly)
+		}
+	})
+
+	t.Run("a mismatched surface returns nothing", func(t *testing.T) {
+		t.Parallel()
+
+		reason, ok := profile.NotInducibleDeclared(SurfaceNativeStreamJSON, CaseCancellation)
+		if ok || reason != "" {
+			t.Errorf("NotInducibleDeclared(%s, %s) = %q, %v, want \"\", false", SurfaceNativeStreamJSON, CaseCancellation, reason, ok)
+		}
+	})
+
+	t.Run("a mismatched case returns nothing", func(t *testing.T) {
+		t.Parallel()
+
+		reason, ok := profile.NotInducibleDeclared(SurfaceNativeJSON, CaseSuccess)
+		if ok || reason != "" {
+			t.Errorf("NotInducibleDeclared(%s, %s) = %q, %v, want \"\", false", SurfaceNativeJSON, CaseSuccess, reason, ok)
+		}
+	})
+}
+
 func TestMeasuredSurfaces(t *testing.T) {
 	t.Parallel()
 

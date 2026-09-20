@@ -1,29 +1,42 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "runtime_id": "gemini-cli",
   "identity_tokens": ["gemini"],
   "notes_path": "docs/gemini-adapter-notes.md",
   "measurement_path": "internal/qualification/probe/testdata/gemini-cli/measurement.json",
   "published_sample": "examples/WORKFLOW.agent-client-protocol.md",
   "tool_name_format": "mcp_{server}_{tool}",
+  "tool_policy_format": "toml_rule_list",
   "project_config_paths": [
-    ".gemini/mcp.json",
-    ".gemini/settings.json",
-    ".gemini/settings.yaml"
+    ".gemini/settings.json"
   ],
   "version_args": ["--version"],
   "model_args": ["--model", "{model}"],
   "capability_gap_labels": ["token counts"],
+  "config_root_env_names": ["GEMINI_CLI_HOME"],
+  "probe_prompts": {
+    "success": "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
+    "runtime_refusal": "Decline to continue this turn and report your refusal outcome without calling a tool.",
+    "tool_call": "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
+    "continuation_seed": "Remember the phrase {nonce} for the rest of this conversation and reply exactly STORED.",
+    "continuation_recall": "Reply with the phrase from earlier in this conversation and no other text."
+  },
   "entry_points": {
     "protocol": {
-      "args": ["--model", "{model}", "--approval-mode", "yolo", "--skip-trust", "--acp"],
+      "args": ["--model", "{model}", "--approval-mode", "yolo", "--policy", "{policy}", "--skip-trust", "--acp"],
       "asking_args": ["--model", "{model}", "--approval-mode", "default", "--skip-trust", "--acp"]
     },
     "native_json": {
-      "args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "json", "--prompt", "{prompt}"]
+      "args": ["--model", "{model}", "--approval-mode", "yolo", "--policy", "{policy}", "--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+      "asking_args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+      "seed_args": ["--session-id", "{session_id}"],
+      "resume_args": ["--resume", "{session_id}"]
     },
     "native_stream_json": {
-      "args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"]
+      "args": ["--model", "{model}", "--approval-mode", "yolo", "--policy", "{policy}", "--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+      "asking_args": ["--model", "{model}", "--approval-mode", "default", "--policy", "{policy}", "--skip-trust", "--output-format", "stream-json", "--prompt", "{prompt}"],
+      "seed_args": ["--session-id", "{session_id}"],
+      "resume_args": ["--resume", "{session_id}"]
     }
   },
   "recognizers": {
@@ -34,7 +47,15 @@
       "status_member": "",
       "status_cases": {},
       "status_end_turn": [],
-      "model_request_path": ["stats", "models"]
+      "model_request_path": ["stats", "models"],
+      "session_id_path": ["session_id"],
+      "token_paths": [
+        {"path": ["stats", "models", "*", "tokens", "prompt"], "kind": "spend"},
+        {"path": ["stats", "models", "*", "tokens", "cached"], "kind": "spend"},
+        {"path": ["stats", "models", "*", "tokens", "candidates"], "kind": "spend"},
+        {"path": ["stats", "models", "*", "tokens", "thoughts"], "kind": "spend"},
+        {"path": ["stats", "models", "*", "tokens", "tool"], "kind": "spend"}
+      ]
     },
     "native_stream_json": {
       "locator": {"mode": "discriminated", "discriminator_key": "type", "discriminator_value": "result"},
@@ -48,7 +69,14 @@
         "canceled": "cancellation"
       },
       "status_end_turn": ["end_turn", "success", "completed"],
-      "model_request_path": ["stats", "models"]
+      "model_request_path": [],
+      "session_id_path": ["session_id"],
+      "token_paths": [
+        {"path": ["stats", "total_tokens"], "kind": "spend"},
+        {"path": ["stats", "input_tokens"], "kind": "spend"},
+        {"path": ["stats", "output_tokens"], "kind": "spend"},
+        {"path": ["stats", "cached"], "kind": "spend"}
+      ]
     }
   },
   "declarations": [
@@ -63,5 +91,14 @@
       "reason": "outcome_never_produced"
     }
   ],
-  "absent_surfaces": []
+  "absent_surfaces": [],
+  "not_inducible_cases": [
+    {"surface": "native_json", "case": "limit_reached", "reason": "prompt_channel_too_small"},
+    {"surface": "native_stream_json", "case": "limit_reached", "reason": "prompt_channel_too_small"},
+    {"surface": "native_json", "case": "runtime_failure", "reason": "output_channel_silent_on_failure"},
+    {"surface": "native_json", "case": "cancellation", "reason": "terminal_written_at_exit_only"},
+    {"surface": "native_stream_json", "case": "cancellation", "reason": "terminal_written_at_exit_only"},
+    {"surface": "native_json", "case": "human_input", "reason": "terminal_vocabulary_closed"},
+    {"surface": "native_stream_json", "case": "human_input", "reason": "terminal_vocabulary_closed"}
+  ]
 }

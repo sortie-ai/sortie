@@ -37,6 +37,16 @@ func TestFixtureDeclarationsRoundTrip(t *testing.T) {
 	})
 }
 
+func fixtureProbePrompts() map[string]string {
+	return map[string]string{
+		"success":             "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
+		"runtime_refusal":     "Decline to continue this turn and report your refusal outcome without calling a tool.",
+		"tool_call":           "Call the tool named {tool} now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.",
+		"continuation_seed":   "Remember the nonce {nonce} for the rest of this conversation and reply exactly STORED.",
+		"continuation_recall": "Reply with the nonce supplied by the prior conversation and no other text.",
+	}
+}
+
 // requireDeclarationsRoundTrip fails t unless declarations, embedded
 // in an otherwise-minimal valid profile document, marshals and decodes
 // back through DecodeRuntimeProfile to an equal declarations and
@@ -45,7 +55,7 @@ func requireDeclarationsRoundTrip(t *testing.T, declarations RuntimeProfile) {
 	t.Helper()
 
 	profile := RuntimeProfile{
-		SchemaVersion:       3,
+		SchemaVersion:       4,
 		RuntimeID:           "fixture",
 		IdentityTokens:      []string{"fixture"},
 		NotesPath:           "notes.md",
@@ -54,14 +64,15 @@ func requireDeclarationsRoundTrip(t *testing.T, declarations RuntimeProfile) {
 		ToolNameFormat:      "mcp_{server}_{tool}",
 		ModelArgs:           []string{"--model", "{model}"},
 		CapabilityGapLabels: []string{capabilityGapLabelTokenCounts},
+		ProbePrompts:        fixtureProbePrompts(),
 		// Every measurable surface carries an entry point, and every
 		// structured native one carries a recognizer, because a
 		// profile missing either is rejected before its declarations
 		// are ever read.
 		EntryPoints: map[Surface]EntryPoint{
-			SurfaceProtocol:         {Args: []string{"--acp"}},
-			SurfaceNativeJSON:       {Args: []string{"--json", "{prompt}"}},
-			SurfaceNativeStreamJSON: {Args: []string{"--stream-json", "{prompt}"}},
+			SurfaceProtocol:         {Args: []string{"--acp"}, AskingArgs: []string{"--acp", "--ask"}},
+			SurfaceNativeJSON:       {Args: []string{"--json", "{prompt}"}, AskingArgs: []string{"--json", "--ask", "{prompt}"}},
+			SurfaceNativeStreamJSON: {Args: []string{"--stream-json", "{prompt}"}, AskingArgs: []string{"--stream-json", "--ask", "{prompt}"}},
 		},
 		Recognizers: map[Surface]Recognizer{
 			SurfaceNativeJSON:       {Locator: TerminalLocator{Mode: "first_value"}, SuccessMember: "response"},
@@ -69,6 +80,10 @@ func requireDeclarationsRoundTrip(t *testing.T, declarations RuntimeProfile) {
 		},
 		Declarations:   declarations.Declarations,
 		AbsentSurfaces: declarations.AbsentSurfaces,
+		NotInducibleCases: []SurfaceNotInducible{
+			{Surface: SurfaceNativeJSON, Case: CaseLimitReached, Reason: NotInducibleChannelTooSmall},
+			{Surface: SurfaceNativeStreamJSON, Case: CaseLimitReached, Reason: NotInducibleChannelTooSmall},
+		},
 	}
 
 	data, err := json.Marshal(profile)

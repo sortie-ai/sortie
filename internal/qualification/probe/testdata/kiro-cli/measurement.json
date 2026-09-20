@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile_digest": "302b7ad876dce4077b08e23e827e23d94e8aeaa619360b482244c76b96d167a9",
+  "profile_digest": "407b4a496684cc43457bc32e87acdf6cb7cae8aad3d767ff2fde4fe4ccd728d6",
   "measured_at": "2026-09-15",
   "expectation": {
     "Verdict": "unmeasured",
