@@ -970,6 +970,46 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the differing reasons", err)
 		}
 	})
+
+	T.Run("a not-inducible detail other than the reason the profile scopes to the surface", func(T *testing.T) {
+		T.Parallel()
+
+		fixture, declarations := scopedNotInducibleHumanInput(NotInducibleTerminalVocabularyClosed, NotInducibleDetail)
+		path := WriteEvidenceFile(T, fixture.Records)
+		_, err := ValidateObservationsWithDeclarations(path, declarations)
+		if err == nil {
+			T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of a detail the profile does not scope to the surface")
+		}
+		if !strings.Contains(err.Error(), "the profile scopes to that surface") {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the scoped reason", err)
+		}
+	})
+
+	T.Run("a not-inducible detail equal to the reason the profile scopes to the surface", func(T *testing.T) {
+		T.Parallel()
+
+		fixture, declarations := scopedNotInducibleHumanInput(NotInducibleTerminalVocabularyClosed, NotInducibleTerminalVocabularyClosed)
+		path := WriteEvidenceFile(T, fixture.Records)
+		if _, err := ValidateObservationsWithDeclarations(path, declarations); err != nil {
+			T.Errorf("ValidateObservationsWithDeclarations() error = %v, want nil", err)
+		}
+	})
+}
+
+// scopedNotInducibleHumanInput grades human_input not-inducible on every
+// measured surface with detail, against a profile scoping reason to each of
+// those surfaces.
+func scopedNotInducibleHumanInput(reason, detail string) (*Fixture, RuntimeProfile) {
+	fixture := NewFixture(FixtureQualified)
+	fixture.Finalize()
+	declarations := fixture.Declarations()
+	for _, surface := range measuredSurfaces(declarations) {
+		declareNotInducible(fixture, surface, CapabilityRetryClassification, CaseHumanInput)
+		fixture.FindFirst(MatchSemantic(surface, CapabilityRetryClassification, CaseHumanInput)).Detail = detail
+		declarations.NotInducibleCases = append(declarations.NotInducibleCases,
+			SurfaceNotInducible{Surface: surface, Case: CaseHumanInput, Reason: reason})
+	}
+	return fixture, declarations
 }
 
 // TestValidatorAllExcludedBaselineControl covers checkDerivedBaselines'

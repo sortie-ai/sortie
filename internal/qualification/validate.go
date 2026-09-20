@@ -1156,8 +1156,12 @@ func (v *setValidation) checkExcludedCase(declarations RuntimeProfile, capabilit
 	if len(catalog) > 0 {
 		for _, surface := range catalog {
 			rec := v.semanticRecord(surface, capability, caseID)
-			if !isNotInducibleDetail(rec.Detail) {
-				return fmt.Errorf("capability %s case %s not-inducible record carries detail %q, outside the closed reason set", capability, caseID, rec.Detail)
+			reason, scoped := declarations.NotInducibleDeclared(surface, caseID)
+			if scoped && rec.Detail != reason {
+				return fmt.Errorf("capability %s case %s not-inducible record on surface %s carries detail %q, want the reason %q the profile scopes to that surface", capability, caseID, surface, rec.Detail, reason)
+			}
+			if !scoped && rec.Detail != NotInducibleDetail {
+				return fmt.Errorf("capability %s case %s not-inducible record on surface %s carries detail %q, want %q: no profile entry scopes the case to that surface", capability, caseID, surface, rec.Detail, NotInducibleDetail)
 			}
 		}
 	}
