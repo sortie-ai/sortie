@@ -134,6 +134,9 @@ func emptyCollectedObservations() *collectedObservations {
 		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
 		continuationSeed:   map[qualification.Surface]qualification.Observation{},
 		continuationRecall: map[qualification.Surface]qualification.Observation{},
+		tokenSessionID:     map[qualification.Surface]string{},
+		tokenPaths:         map[qualification.Surface][]qualification.TokenObservation{},
+		tokenInventory:     map[qualification.Surface]qualification.Observation{},
 	}
 }
 

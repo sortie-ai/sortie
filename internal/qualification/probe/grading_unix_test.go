@@ -36,6 +36,9 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
 		continuationSeed:   map[qualification.Surface]qualification.Observation{},
 		continuationRecall: map[qualification.Surface]qualification.Observation{},
+		tokenSessionID:     map[qualification.Surface]string{},
+		tokenPaths:         map[qualification.Surface][]qualification.TokenObservation{},
+		tokenInventory:     map[qualification.Surface]qualification.Observation{},
 	}
 
 	permissionSessionID := "sess-protocol-permission"
@@ -78,6 +81,10 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 		default:
 			collected.continuationRecall[surface] = qualification.Observation{Grade: qualification.GradeGap, Outcome: qualification.OutcomePass, Detail: qualification.RecallFreshFallback, SessionID: fmt.Sprintf("sess-%s-recall-fallback", surface)}
 		}
+
+		collected.tokenSessionID[surface] = fmt.Sprintf("sess-%s-token", surface)
+		collected.tokenPaths[surface] = []qualification.TokenObservation{{EvidencePath: "/token/path", Kind: "spend"}}
+		collected.tokenInventory[surface] = qualification.Observation{Grade: qualification.GradeGap, Outcome: qualification.OutcomePass, Detail: "inventory completed"}
 	}
 
 	collected.toolServer = qualification.Observation{Grade: toolGrade, Outcome: outcomeForSweptGrade(toolGrade), Detail: "tool server induction: " + string(toolGrade), SessionID: "sess-protocol-mcp"}

@@ -459,10 +459,19 @@ func induceProtocolSemantics(t *testing.T, coords Coordinates, fixture *sharedFi
 	collected.continuationRecall[surface] = recall
 	fixture.journal.append(string(surface), "continuation_seed", seed)
 	fixture.journal.append(string(surface), "continuation_recall", recall)
+
+	sessionID, paths, inventory, extension := protocolTokenInventory(fixture)
+	collected.tokenSessionID[surface] = sessionID
+	collected.tokenPaths[surface] = paths
+	collected.tokenInventory[surface] = inventory
+	collected.tokenExtension = extension
+	collected.tokenCompensation = protocolTokenCompensation(fixture)
+	fixture.journal.append(string(surface), "token_inventory", inventory)
 }
 
-// induceNativeSemantics drives every semantic case surface measures on
-// one structured native surface.
+// induceNativeSemantics drives every semantic case, the continuation
+// pair, and the token inventory surface measures on one structured
+// native surface.
 func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixture, collected *collectedObservations, surface qualification.Surface) {
 	t.Helper()
 	byCase := map[qualification.Case]qualification.Observation{}
@@ -489,6 +498,12 @@ func induceNativeSemantics(t *testing.T, coords Coordinates, fixture *sharedFixt
 	collected.continuationRecall[surface] = recall
 	fixture.journal.append(string(surface), "continuation_seed", seed)
 	fixture.journal.append(string(surface), "continuation_recall", recall)
+
+	sessionID, paths, inventory := nativeTokenInventory(t, coords, surface, fixture.nativeOutputsFor(surface))
+	collected.tokenSessionID[surface] = sessionID
+	collected.tokenPaths[surface] = paths
+	collected.tokenInventory[surface] = inventory
+	fixture.journal.append(string(surface), "token_inventory", inventory)
 }
 
 // Run drives one live qualification collection against coords,
@@ -524,6 +539,9 @@ func Run(t *testing.T, coords Coordinates) Result {
 		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
 		continuationSeed:   map[qualification.Surface]qualification.Observation{},
 		continuationRecall: map[qualification.Surface]qualification.Observation{},
+		tokenSessionID:     map[qualification.Surface]string{},
+		tokenPaths:         map[qualification.Surface][]qualification.TokenObservation{},
+		tokenInventory:     map[qualification.Surface]qualification.Observation{},
 	}
 
 	induceProtocolSemantics(t, coords, fixtureState, collected)
