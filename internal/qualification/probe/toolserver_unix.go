@@ -147,7 +147,8 @@ func fileHasContent(path string) (bool, error) {
 // server (empty for none). The launch runs through the run's
 // environment wrapper, so both surfaces answer under the same
 // allowlist. The session is registered with the run that owns
-// workspace, so that run is what stops and accounts for it.
+// workspace, so the process-cleanup reading stops and measures it while
+// the run is still being graded.
 func startInductionSession(t *testing.T, coords Coordinates, argv []string, workspace, mcpConfigPath string) (domain.AgentAdapter, domain.Session, error) {
 	t.Helper()
 
@@ -180,7 +181,7 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 		t.Fatalf("account for the induction session: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := fixture.stopOpenSessions(context.Background()); err != nil {
+		if _, err := fixture.stopOpenSessions(context.Background()); err != nil {
 			t.Errorf("stop induction session: %v", err)
 		}
 		assertSessionGroupAbsent(t, session)

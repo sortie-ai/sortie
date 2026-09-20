@@ -91,7 +91,39 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 	collected.permission = qualification.Observation{Grade: permissionGrade, Outcome: outcomeForSweptGrade(permissionGrade), Detail: "permission induction: " + string(permissionGrade), SessionID: permissionSessionID}
 	collected.policy = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "policy precondition", SessionID: "sess-protocol-policy"}
 
+	collected.workspaceSecurity = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "workspace security"}
+	collected.processCleanup = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "checked_groups=0"}
+	collected.endToEnd = qualification.Record{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "one succeeded history row", SessionID: new("sess-protocol-e2e")}
+	collected.identityObs = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "handshake reported name and version"}
+	collected.identities = protocolSessionIdentities(collected)
+	collected.identityProtocolVersion = 1
+
 	return collected
+}
+
+// protocolSessionIdentities gives every protocol session one handshake reading,
+// the shape a collection that observed every session it opened produces.
+func protocolSessionIdentities(collected collectedObservations) map[string]qualification.SessionIdentity {
+	identity := qualification.SessionIdentity{Name: "fixture-agent", Version: "1.0.0-fixture"}
+	identities := map[string]qualification.SessionIdentity{}
+	named := func(sessionID string) {
+		if sessionID != "" {
+			identities[sessionID] = identity
+		}
+	}
+	for _, obs := range collected.semantic[qualification.SurfaceProtocol] {
+		named(obs.SessionID)
+	}
+	named(collected.continuationSeed[qualification.SurfaceProtocol].SessionID)
+	named(collected.continuationRecall[qualification.SurfaceProtocol].SessionID)
+	named(collected.tokenSessionID[qualification.SurfaceProtocol])
+	named(collected.toolServer.SessionID)
+	named(collected.permission.SessionID)
+	named(collected.policy.SessionID)
+	if collected.endToEnd.SessionID != nil {
+		named(*collected.endToEnd.SessionID)
+	}
+	return identities
 }
 
 func gradeOfClass(t *testing.T, records []qualification.Record, class qualification.RowClass) qualification.Grade {
@@ -163,4 +195,45 @@ func TestGradedEvidenceValidatesAgainstEveryProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckNoBarePair(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a bare not_observed pair is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		records := []qualification.Record{{Sequence: 1, Scenario: qualification.ScenarioSemanticProbe, Surface: qualification.SurfaceProtocol, Grade: qualification.GradeNotObserved, Outcome: qualification.OutcomeNotObserved}}
+		if err := checkNoBarePair(records); err == nil {
+			t.Error("checkNoBarePair(...) = nil error, want a rejection of the bare pair")
+		}
+	})
+
+	t.Run("a not_observed row with a stated failure outcome is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		records := []qualification.Record{{Sequence: 1, Grade: qualification.GradeNotObserved, Outcome: qualification.OutcomeRuntimeFailed}}
+		if err := checkNoBarePair(records); err != nil {
+			t.Errorf("checkNoBarePair(...) error = %v, want nil", err)
+		}
+	})
+
+	t.Run("every tracked profile's fully-observed composition carries no bare pair", func(t *testing.T) {
+		t.Parallel()
+
+		for _, profilePath := range stalenessProfilePaths(t) {
+			profile, err := qualification.ReadRuntimeProfileFile(profilePath)
+			if err != nil {
+				t.Fatalf("ReadRuntimeProfileFile(%s) error = %v, want nil", profilePath, err)
+			}
+			collected := fullyObservedCollected(profile, qualification.GradeUsable, qualification.GradeUsable, qualification.GradeUsable)
+			fixture, err := gradedEvidence(profile, collected, time.Now().UTC())
+			if err != nil {
+				t.Fatalf("gradedEvidence(%s, ...) error = %v, want nil", profilePath, err)
+			}
+			if err := checkNoBarePair(fixture.Records); err != nil {
+				t.Errorf("checkNoBarePair(...) error = %v, want nil for profile %s", err, profilePath)
+			}
+		}
+	})
 }

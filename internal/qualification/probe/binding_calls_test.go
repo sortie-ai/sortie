@@ -19,6 +19,8 @@ var runCallSiteTargets = []string{"Run"}
 var productionBindingCallSiteTargets = []string{
 	"enforceNotesConsistency", "runPublishedPostureProbe",
 	"induceProtocolSemantics", "induceNativeSemantics",
+	"induceRuntimeIdentity", "induceEndToEnd",
+	"induceWorkspaceSecurity", "induceProcessCleanup",
 }
 
 var allBindingCallSiteTargets = append(slices.Clone(runCallSiteTargets), productionBindingCallSiteTargets...)
@@ -210,6 +212,10 @@ func collect() {
 	runPublishedPostureProbe(t, coords)
 	induceProtocolSemantics(t, coords, fixture, collected)
 	induceNativeSemantics(t, coords, fixture, collected, surface)
+	induceRuntimeIdentity(fixture)
+	induceEndToEnd(t, coords, fixture, name, version)
+	induceWorkspaceSecurity(t, coords, fixture)
+	induceProcessCleanup(fixture)
 }
 `, parser.SkipObjectResolution)
 		if err != nil {
@@ -240,6 +246,14 @@ func collect() {
 	induceProtocolSemantics(t, coords, fixture, collected)
 	induceNativeSemantics(t, coords, fixture, collected, surface)
 	induceNativeSemantics(t, coords, fixture, collected, surface)
+	induceRuntimeIdentity(fixture)
+	induceRuntimeIdentity(fixture)
+	induceEndToEnd(t, coords, fixture, name, version)
+	induceEndToEnd(t, coords, fixture, name, version)
+	induceWorkspaceSecurity(t, coords, fixture)
+	induceWorkspaceSecurity(t, coords, fixture)
+	induceProcessCleanup(fixture)
+	induceProcessCleanup(fixture)
 }
 `, parser.SkipObjectResolution)
 		if err != nil {
