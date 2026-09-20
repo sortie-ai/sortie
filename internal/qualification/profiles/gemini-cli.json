@@ -13,7 +13,7 @@
   "version_args": ["--version"],
   "model_args": ["--model", "{model}"],
   "capability_gap_labels": ["token counts"],
-  "config_root_env_names": ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH", "GEMINI_CLI_SYSTEM_DEFAULTS_PATH"],
+  "config_root_env_names": ["GEMINI_CLI_HOME"],
   "probe_prompts": {
     "success": "Reply with exactly SORTIE_BASELINE_OK and do not call any tool.",
     "runtime_refusal": "Decline to continue this turn and report your refusal outcome without calling a tool.",
