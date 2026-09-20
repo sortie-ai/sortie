@@ -226,6 +226,7 @@ func TestTerminalRecordGrades(t *testing.T) {
 		groupClean  bool
 		wantGrade   qualification.Grade
 		wantOutcome qualification.Outcome
+		wantDetail  string
 	}{
 		{
 			name:        "reached with a clean process group is usable",
@@ -233,13 +234,15 @@ func TestTerminalRecordGrades(t *testing.T) {
 			groupClean:  true,
 			wantGrade:   qualification.GradeUsable,
 			wantOutcome: qualification.OutcomePass,
+			wantDetail:  "one succeeded history row and the issue reached its handoff state",
 		},
 		{
-			name:        "not reached is not observed",
+			name:        "not reached is a runtime failure",
 			condition:   notReached,
 			groupClean:  true,
 			wantGrade:   qualification.GradeNotObserved,
-			wantOutcome: qualification.OutcomeNotObserved,
+			wantOutcome: qualification.OutcomeRuntimeFailed,
+			wantDetail:  "StopSession never completed",
 		},
 		{
 			name:        "reached with a surviving group is a runtime failure",
@@ -247,6 +250,7 @@ func TestTerminalRecordGrades(t *testing.T) {
 			groupClean:  false,
 			wantGrade:   qualification.GradeNotObserved,
 			wantOutcome: qualification.OutcomeRuntimeFailed,
+			wantDetail:  "the issue reached its handoff state and a captured process group outlived the run",
 		},
 	}
 
@@ -260,6 +264,9 @@ func TestTerminalRecordGrades(t *testing.T) {
 			}
 			if rec.Outcome != tt.wantOutcome {
 				t.Errorf("TerminalRecord() outcome = %q, want %q", rec.Outcome, tt.wantOutcome)
+			}
+			if rec.Detail != tt.wantDetail {
+				t.Errorf("TerminalRecord() detail = %q, want %q", rec.Detail, tt.wantDetail)
 			}
 			if rec.SessionID == nil || *rec.SessionID != "sess-1" {
 				t.Errorf("TerminalRecord() session id = %v, want a pointer to \"sess-1\"", rec.SessionID)
@@ -344,6 +351,7 @@ func TestBudgetsWithDefaults(t *testing.T) {
 			TurnTimeoutMS:  10000,
 			StallTimeoutMS: 10000,
 			Observation:    qualification.ShutdownDeadline,
+			MaxSessions:    1,
 		}
 		if got != want {
 			t.Errorf("Budgets{}.withDefaults() = %+v, want %+v", got, want)
@@ -357,6 +365,7 @@ func TestBudgetsWithDefaults(t *testing.T) {
 			TurnTimeoutMS:  300000,
 			StallTimeoutMS: 60000,
 			Observation:    10 * time.Minute,
+			MaxSessions:    4,
 		}
 		if got := live.withDefaults(); got != live {
 			t.Errorf("withDefaults() = %+v, want the caller's own bounds %+v", got, live)

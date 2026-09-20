@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -50,6 +51,15 @@ const (
 	issueID         = "sortie-e2e-1"
 	issueIdentifier = "SORTIE-E2E-1"
 )
+
+// fixturePrompt is the isolated harness's only agent prompt. It states plainly
+// that the workspace is empty and names the "no-change-needed" status signal:
+// a prompt that omitted this left a live model searching for a task that was
+// never there until its turn budget ran out, measuring whether the model gives
+// up rather than the orchestrator's handoff plumbing.
+const fixturePrompt = `The workspace for {{ .issue.identifier }} is intentionally empty: it holds only a git directory and an empty state directory, and no fixture task lives anywhere in it. The requested outcome already holds, so do not search for a task or make any change. Signal completion immediately by running:
+
+    mkdir -p .sortie && echo "no-change-needed" > .sortie/status`
 
 // effectiveSample carries the only effective sample fields the isolated
 // end-to-end harness extracts: agent.kind, agent.command, the agent
@@ -358,6 +368,17 @@ type Budgets struct {
 	TurnTimeoutMS  int
 	StallTimeoutMS int
 
+	// MaxTokens is the per-issue token ceiling. Zero leaves the run unbounded;
+	// a finite value is carried only by a run whose subject is the stop itself,
+	// since a ceiling left in force elsewhere would end an unrelated run the
+	// moment its agent reported a figure.
+	MaxTokens int
+
+	// MaxSessions is the per-issue session budget, defaulting to the one a
+	// single deterministic run needs. A harness whose subject is another budget
+	// raises it, so this one cannot stand in for the budget under measurement.
+	MaxSessions int
+
 	// Observation bounds the wait for a terminal condition. It is not a
 	// shutdown bound: qualification.ShutdownDeadline governs that, and
 	// spending one on the other gives a live run a shutdown's worth of
@@ -379,6 +400,9 @@ func (b Budgets) withDefaults() Budgets {
 	}
 	if b.Observation == 0 {
 		b.Observation = qualification.ShutdownDeadline
+	}
+	if b.MaxSessions == 0 {
+		b.MaxSessions = 1
 	}
 	return b
 }
@@ -446,11 +470,11 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 		TurnTimeoutMS:  budgets.TurnTimeoutMS,
 		StallTimeoutMS: budgets.StallTimeoutMS,
 		MaxTurns:       1,
-		MaxSessions:    1,
-		MaxTokens:      0,
+		MaxSessions:    budgets.MaxSessions,
+		MaxTokens:      budgets.MaxTokens,
 	}
 	cfg := serviceConfig(workspaceRoot, sample)
-	tmpl, err := prompt.Parse("Work the fixture task for {{ .issue.identifier }}.", "fixture", 0)
+	tmpl, err := prompt.Parse(fixturePrompt, "fixture", 0)
 	if err != nil {
 		t.Fatalf("parse fixture prompt template: %v", err)
 	}
@@ -474,7 +498,7 @@ func NewHarnessWithAgent(t *testing.T, agent domain.AgentAdapter, agentCommand, 
 	if err != nil {
 		t.Fatalf("resolve the tool server binary: %v", err)
 	}
-	state := orchestrator.NewState(20, 1, 0, nil, orchestrator.AgentTotals{})
+	state := orchestrator.NewState(20, 1, sample.MaxTokens, nil, orchestrator.AgentTotals{})
 	orch := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		MCPServerBinary: toolServer,
 		State:           state,
@@ -522,6 +546,27 @@ type TerminalCondition struct {
 // Reached reports whether every part of the terminal condition holds.
 func (c TerminalCondition) Reached() bool {
 	return c.SucceededRow && c.HandoffReached && c.NoRunningEntry && c.NoRetryEntry && c.StopSessionDone
+}
+
+// unmetDetail names every part of the terminal condition that did not hold.
+func (c TerminalCondition) unmetDetail() string {
+	var unmet []string
+	if !c.SucceededRow {
+		unmet = append(unmet, "no succeeded history row")
+	}
+	if !c.HandoffReached {
+		unmet = append(unmet, "the issue never reached its handoff state")
+	}
+	if !c.NoRunningEntry {
+		unmet = append(unmet, "a running snapshot entry remains")
+	}
+	if !c.NoRetryEntry {
+		unmet = append(unmet, "a retry snapshot entry remains")
+	}
+	if !c.StopSessionDone {
+		unmet = append(unmet, "StopSession never completed")
+	}
+	return strings.Join(unmet, "; ")
 }
 
 // ObserveTerminalCondition evaluates the terminal condition once
@@ -572,18 +617,20 @@ func TerminalRecord(condition TerminalCondition, groupClean bool, sessionID, age
 		AgentName:       new(agentName),
 		AgentVersion:    new(agentVersion),
 		ProtocolVersion: new(1),
-		Detail:          "one succeeded history row and the issue reached its handoff state",
 	}
 	switch {
 	case condition.Reached() && groupClean:
 		rec.Grade = qualification.GradeUsable
 		rec.Outcome = qualification.OutcomePass
+		rec.Detail = "one succeeded history row and the issue reached its handoff state"
 	case !condition.Reached():
 		rec.Grade = qualification.GradeNotObserved
-		rec.Outcome = qualification.OutcomeNotObserved
+		rec.Outcome = qualification.OutcomeRuntimeFailed
+		rec.Detail = condition.unmetDetail()
 	default:
 		rec.Grade = qualification.GradeNotObserved
 		rec.Outcome = qualification.OutcomeRuntimeFailed
+		rec.Detail = "the issue reached its handoff state and a captured process group outlived the run"
 	}
 	return rec
 }
