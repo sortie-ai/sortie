@@ -197,16 +197,6 @@ func TestResolveCoordinates(t *testing.T) {
 			wantSub: qualificationAuthNamesEnv,
 		},
 		{
-			name: "named authentication entry absent from the environment",
-			coords: map[string]string{
-				qualificationCommandEnv:   executable,
-				qualificationModelEnv:     "fixture-model",
-				qualificationAuthNamesEnv: "FIXTURE_ABSENT_AUTH_NAME",
-				qualificationProfileEnv:   profilePath,
-			},
-			wantSub: "absent from the invoking environment",
-		},
-		{
 			name: "profile coordinate missing entirely",
 			coords: map[string]string{
 				qualificationCommandEnv:   executable,
@@ -362,6 +352,67 @@ func TestResolveCoordinates(t *testing.T) {
 		}
 		if _, err := ResolveCoordinates(env); err == nil {
 			t.Fatal("ResolveCoordinates() = nil error, want an unset coordinate to fail rather than read as a stored login")
+		}
+	})
+
+	t.Run("a named auth entry absent from the environment still resolves", func(t *testing.T) {
+		t.Parallel()
+
+		env := func(name string) (string, bool) {
+			switch name {
+			case qualificationCommandEnv:
+				return executable, true
+			case qualificationModelEnv:
+				return "fixture-model", true
+			case qualificationAuthNamesEnv:
+				return "FIXTURE_ABSENT_AUTH_NAME", true
+			case qualificationProfileEnv:
+				return profilePath, true
+			}
+			return "", false
+		}
+		coords, err := ResolveCoordinates(env)
+		if err != nil {
+			t.Fatalf("ResolveCoordinates() error = %v, want nil: an unsupplied credential is Gated's own skip, not ResolveCoordinates's failure", err)
+		}
+		if name, unsupplied := firstUnsuppliedAuthName(coords.AuthEnvNames, env); !unsupplied || name != "FIXTURE_ABSENT_AUTH_NAME" {
+			t.Errorf("firstUnsuppliedAuthName(%v, ...) = %q, %v, want (%q, true)", coords.AuthEnvNames, name, unsupplied, "FIXTURE_ABSENT_AUTH_NAME")
+		}
+	})
+}
+
+// TestFirstUnsuppliedAuthName covers the three states a declared
+// credential name can be in: supplied, absent, and present but empty.
+func TestFirstUnsuppliedAuthName(t *testing.T) {
+	t.Parallel()
+
+	supplied := map[string]string{"NAME_ONE": "value-one", "NAME_TWO": "value-two"}
+	env := func(name string) (string, bool) {
+		value, ok := supplied[name]
+		return value, ok
+	}
+
+	t.Run("every name carries a value", func(t *testing.T) {
+		t.Parallel()
+		if name, unsupplied := firstUnsuppliedAuthName([]string{"NAME_ONE", "NAME_TWO"}, env); unsupplied {
+			t.Errorf("firstUnsuppliedAuthName() = %q, true, want (\"\", false)", name)
+		}
+	})
+
+	t.Run("an absent name is reported", func(t *testing.T) {
+		t.Parallel()
+		name, unsupplied := firstUnsuppliedAuthName([]string{"NAME_ONE", "NAME_MISSING", "NAME_TWO"}, env)
+		if !unsupplied || name != "NAME_MISSING" {
+			t.Errorf("firstUnsuppliedAuthName() = %q, %v, want (%q, true)", name, unsupplied, "NAME_MISSING")
+		}
+	})
+
+	t.Run("an empty value is reported the same as absent", func(t *testing.T) {
+		t.Parallel()
+		emptyEnv := func(name string) (string, bool) { return "", true }
+		name, unsupplied := firstUnsuppliedAuthName([]string{"NAME_ONE"}, emptyEnv)
+		if !unsupplied || name != "NAME_ONE" {
+			t.Errorf("firstUnsuppliedAuthName() = %q, %v, want (%q, true)", name, unsupplied, "NAME_ONE")
 		}
 	})
 }
