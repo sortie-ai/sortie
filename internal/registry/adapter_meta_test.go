@@ -124,12 +124,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			wantCredentialEnvNames []string
 		}{
 			{
-				name:                   "agent-client-protocol requires command, declares MCP injection translated, declares none/none usage, declares no resume blocker, and declares no credential names",
+				name:                   "agent-client-protocol requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
 				kind:                   "agent-client-protocol",
 				wantCommand:            true,
 				wantMCPInjection:       registry.MCPInjectionTranslated,
-				wantUsageArrival:       registry.UsageArrivalNone,
-				wantUsageAttribution:   registry.UsageAttributionNone,
+				wantUsageArrival:       registry.UsageArrivalTurnEnd,
+				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
 			},
 			{

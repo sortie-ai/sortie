@@ -2,6 +2,7 @@ package clientprotocol
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/clientprotocol/usagesource"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -60,6 +62,39 @@ type activeTurn struct {
 	pendingDetail string
 	cancelSent    bool
 	deadlineC     <-chan time.Time
+
+	// modelReached records that this turn reached the model. A turn that reached
+	// the model and produced no figure is spend that occurred and was not
+	// measured.
+	modelReached bool
+
+	// drainEvidence is the disposition this turn is finalized on once its drain
+	// reports, held while the drain runs. draining distinguishes a turn waiting
+	// on a drain from one whose bounded wait belongs to an end attempt.
+	drainEvidence agentcore.TurnEvidence
+	draining      bool
+
+	// endSettled marks a turn the transport has already seen end, kept in flight
+	// only long enough to collect its figure.
+	endSettled bool
+}
+
+// disposition returns the evidence turn is finalized on. A turn winding down
+// toward a forced outcome reports that outcome, unless the transport has already
+// seen how the turn ended: an end attempt arriving while such a turn waits for
+// its figure stops nothing still running, and taking its outcome would report
+// the failure as something else.
+func (t *activeTurn) disposition(ev agentcore.TurnEvidence) agentcore.TurnEvidence {
+	if t.endSettled {
+		return ev
+	}
+	switch t.pendingEnd {
+	case turnEndCancelled:
+		return agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
+	case turnEndHumanInput:
+		return agentcore.HumanInputEvidence(t.pendingDetail)
+	}
+	return ev
 }
 
 // pumpState is the pump's mutable state. It exists only inside runPump's
@@ -69,6 +104,15 @@ type pumpState struct {
 	state *sessionState
 
 	tracker *agentcore.ToolTracker
+
+	// reader is the session's measurement source while it still applies. It is
+	// cleared, and the token-counts entry lowered, the moment the source proves
+	// inapplicable.
+	reader usageReader
+
+	// drainProven latches once a drain has produced a record. Until it does, a
+	// drain that produces nothing drops the source for the rest of the session.
+	drainProven bool
 
 	sessionID      string
 	sessionIDKnown bool
@@ -134,6 +178,7 @@ func runPump(state *sessionState) {
 	p := &pumpState{
 		state:        state,
 		tracker:      agentcore.NewToolTracker(),
+		reader:       state.reader,
 		openRequests: make(map[jsonrpc.ID]string),
 	}
 
@@ -234,6 +279,9 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 	case ctrl.sessionID != "":
 		p.sessionID = ctrl.sessionID
 		p.sessionIDKnown = true
+		if p.reader != nil {
+			p.reader.Open(p.sessionID)
+		}
 		// Logged here, once per session, rather than when the handshake
 		// control message arrives: the handshake is always published
 		// first (StartSession's own publish order), so the agent's
@@ -262,6 +310,9 @@ func (p *pumpState) handleControl(ctrl pumpControl) {
 
 	case ctrl.startTurn != nil:
 		p.handleStartTurn(ctrl.startTurn)
+
+	case ctrl.usage != nil:
+		p.handleUsageObserved(ctrl.usage)
 
 	case ctrl.answerOpen != nil:
 		p.handleAnswerOpen()
@@ -352,6 +403,16 @@ func (p *pumpState) applyHandshakeCapabilityLowering(facts *handshakeFacts) {
 	if facts.toolServersWithheld {
 		p.lowerCapability(&p.state.caps.toolServers, capabilityLabelToolServers)
 	}
+	if p.reader != nil && !p.reader.Recognize(facts.agentInfo.Name, facts.agentInfo.Version) {
+		p.dropReader()
+	}
+}
+
+// dropReader gives up on the measurement source and lowers the token-counts
+// entry to the gap it would have held with no source.
+func (p *pumpState) dropReader() {
+	p.reader = nil
+	p.lowerCapability(&p.state.caps.tokenCounts, capabilityLabelTokenCounts)
 }
 
 // lowerCapability lowers entry to gap. When that happens after the
@@ -387,7 +448,7 @@ func (p *pumpState) handleStreamEnd() {
 	if p.activeTurn == nil {
 		return
 	}
-	p.finalizeTurn(agentcore.TurnEvidence{
+	p.recoverThenFinalize(agentcore.TurnEvidence{
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
 		TerminalMessage:   p.state.release.TurnEndMessage(streamEndedMessage),
@@ -443,7 +504,7 @@ func (p *pumpState) handleWriteFailed() {
 	if p.activeTurn == nil {
 		return
 	}
-	p.finalizeTurn(agentcore.TurnEvidence{
+	p.recoverThenFinalize(agentcore.TurnEvidence{
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
 		TerminalMessage:   promptSendFailedMessage,
@@ -499,14 +560,14 @@ func (p *pumpState) handleStreamEndMessage(msg *jsonrpc.Message) {
 		return
 	}
 	if errors.Is(msg.Err, bufio.ErrTooLong) {
-		p.finalizeTurn(agentcore.TurnEvidence{
+		p.recoverThenFinalize(agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnOutcomeUnknown,
 			TerminalMessage:   lineTooLongMessage,
 		})
 		return
 	}
-	p.finalizeTurn(agentcore.TurnEvidence{
+	p.recoverThenFinalize(agentcore.TurnEvidence{
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
 		TerminalMessage:   p.state.release.TurnEndMessage(streamEndedMessage),
@@ -524,7 +585,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 	}
 
 	if msg.Error != nil {
-		p.finalizeTurn(agentcore.TurnEvidence{
+		p.recoverThenFinalize(agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrResponseError,
 			TerminalMessage:   fmt.Sprintf("session/prompt error %d: %s", msg.Error.Code, msg.Error.Message),
@@ -534,7 +595,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 
 	var resp promptResponse
 	if err := json.Unmarshal(msg.Result, &resp); err != nil {
-		p.finalizeTurn(agentcore.TurnEvidence{
+		p.recoverThenFinalize(agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnOutcomeUnknown,
 			TerminalMessage:   promptResponseUndecodedMessage,
@@ -542,7 +603,76 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		return
 	}
 
-	p.finalizeTurn(stopReasonEvidence(resp.StopReason))
+	evidence := stopReasonEvidence(resp.StopReason)
+	bound, _ := spendLowerBound(resp.Meta)
+	if bound > 0 {
+		turn.modelReached = true
+	}
+
+	// A turn winding down toward a forced outcome already has a disposition
+	// and, on the cancelled path, no figure to wait for.
+	if p.reader == nil || bound <= 0 || turn.pendingEnd != turnEndNone {
+		p.finalizeTurn(evidence)
+		return
+	}
+	p.armDrain(turn, evidence, bound)
+}
+
+// armDrain hands one turn's measurement wait to its own goroutine and leaves the
+// pump loop running: the source is batched behind a tick this transport cannot
+// shorten, and a blocked pump would stop answering the runtime for that tick.
+// The drain publishes its result back through the inbox, so the usage
+// accumulator is touched only by the pump goroutine.
+func (p *pumpState) armDrain(turn *activeTurn, evidence agentcore.TurnEvidence, bound int64) {
+	turn.drainEvidence = evidence
+	turn.draining = true
+	if turn.deadlineC == nil {
+		turn.deadlineC = time.After(readTimeout(p.state))
+	}
+
+	reader := p.reader
+	inbox := p.state.inbox
+	stop := p.state.stopCh
+
+	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-stop:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+
+		recovered, source, found := reader.Drain(ctx, bound)
+		observed := &usageObserved{turn: turn, source: source, completeness: reader.Completeness()}
+		if found {
+			observed.recovered = &recovered
+		}
+		inbox.Put(pumpItem{control: &pumpControl{usage: observed}})
+	}()
+}
+
+// handleUsageObserved applies one turn's drain result. A result for a turn that
+// already ended some other way is discarded.
+func (p *pumpState) handleUsageObserved(observed *usageObserved) {
+	turn := p.activeTurn
+	if turn == nil || turn != observed.turn {
+		return
+	}
+
+	if observed.recovered == nil {
+		if !p.drainProven {
+			p.dropReader()
+		}
+		p.finalizeTurnWithUsage(turn.drainEvidence, observed)
+		return
+	}
+
+	p.drainProven = true
+	p.state.logger.Debug("usage recovered for a turn", slog.String("source", observed.source))
+	p.finalizeTurnWithUsage(turn.drainEvidence, observed)
 }
 
 func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
@@ -573,10 +703,25 @@ func (p *pumpState) handleSessionUpdateMessage(msg *jsonrpc.Message) {
 	if sue.kind == updateUserMessageChunk || sue.kind == updateAgentMessageChunk {
 		p.observeReplay()
 	}
+	p.observeModelReached(sue.kind)
 
 	result := applySessionUpdate(p.tracker, sue)
 	if result.hasEvent {
 		p.emitOrQueue(result.event)
+	}
+}
+
+// observeModelReached records that the active turn reached the model, for the
+// kinds only a served model produces. A thought chunk counts, since reasoning
+// tokens are billed; a replayed user chunk does not, being this session's own
+// prompt echoed back.
+func (p *pumpState) observeModelReached(kind sessionUpdateKind) {
+	if p.activeTurn == nil {
+		return
+	}
+	switch kind {
+	case updateAgentMessageChunk, updateAgentThoughtChunk, updateToolCall:
+		p.activeTurn.modelReached = true
 	}
 }
 
@@ -691,27 +836,60 @@ func (p *pumpState) emitCapabilityGapNoticeOnce(turn *activeTurn) {
 // finalizeTurn ends the active turn on the disposition [activeTurn.disposition]
 // settles.
 func (p *pumpState) finalizeTurn(ev agentcore.TurnEvidence) {
+	p.finalizeTurnWithUsage(ev, nil)
+}
+
+// finalizeTurnWithUsage ends the active turn, settling the drained figure into
+// the session's run-cumulative snapshot. A nil observed, or one whose source
+// held no record, leaves the snapshot and the measurement verdict as they stood.
+func (p *pumpState) finalizeTurnWithUsage(ev agentcore.TurnEvidence, observed *usageObserved) {
 	turn := p.activeTurn
 	if turn == nil {
 		return
 	}
 	p.activeTurn = nil
+	ev = turn.disposition(ev)
 
-	switch turn.pendingEnd {
-	case turnEndCancelled:
-		ev = agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled}
-	case turnEndHumanInput:
-		ev = agentcore.HumanInputEvidence(turn.pendingDetail)
+	var recovered *agentcore.RecoveredUsage
+	if observed != nil {
+		recovered = observed.recovered
 	}
 
 	emit := p.publish(turn)
-	meta := agentcore.TurnMeta{SessionID: p.sessionID}
-	result, agentErr := agentcore.FinalizeTurn(emit, p.state.logger, ev, meta)
+	result, agentErr := p.state.usage.Finalize(emit, p.state.logger, ev, p.sessionID, 0, recovered)
+
+	// Unmeasured spend and a figure short of its turn are not folded into the
+	// measurement verdict, which asserts a measurement exists, not that the
+	// accounting is complete.
+	result.SpendUnaccounted = turn.modelReached && !accountsForWholeTurn(observed)
 
 	select {
 	case turn.resultCh <- turnEnd{result: result, err: agentErr}:
 	case <-turn.done:
 	}
+}
+
+func accountsForWholeTurn(observed *usageObserved) bool {
+	return observed != nil && observed.recovered != nil &&
+		observed.completeness == usagesource.CompletenessAccounted
+}
+
+// recoverThenFinalize ends the active turn on ev, first giving the measurement
+// source the one bounded chance it would otherwise never get: a turn that ends
+// without a wire result still spent what its completed requests cost. ev is the
+// disposition either way, no wire result is waited for, and a turn already
+// draining keeps that drain.
+func (p *pumpState) recoverThenFinalize(ev agentcore.TurnEvidence) {
+	turn := p.activeTurn
+	if turn == nil {
+		return
+	}
+	if p.reader == nil || !turn.modelReached || turn.draining {
+		p.finalizeTurn(ev)
+		return
+	}
+	turn.endSettled = true
+	p.armDrain(turn, ev, 0)
 }
 
 // beginEndAttempt marks the active turn as winding down toward kind,
@@ -739,7 +917,14 @@ func (p *pumpState) beginEndAttempt(kind turnEndKind, detail string) {
 // the prompt response has elapsed. The evidence passed here is overridden by
 // finalizeTurn's own pendingEnd handling.
 func (p *pumpState) finalizeActiveTurnOnDeadline() {
-	if p.activeTurn == nil {
+	turn := p.activeTurn
+	if turn == nil {
+		return
+	}
+	// A turn whose bounded wait belongs to a drain already has its disposition;
+	// the wait elapsing costs it its figure, not its outcome.
+	if turn.draining {
+		p.finalizeTurn(turn.drainEvidence)
 		return
 	}
 	p.finalizeTurn(agentcore.TurnEvidence{Terminal: agentcore.TerminalFailure, TerminalErrorKind: domain.ErrTurnFailed})

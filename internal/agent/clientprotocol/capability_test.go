@@ -10,7 +10,7 @@ import (
 
 func newPumpForCapabilityTests(t *testing.T) (*sessionState, *pumpState) {
 	t.Helper()
-	state := &sessionState{caps: newCapabilityRecord(false), logger: discardLogger()}
+	state := &sessionState{caps: newCapabilityRecord(false, false), logger: discardLogger()}
 	return state, &pumpState{state: state}
 }
 
@@ -30,7 +30,7 @@ func TestNewCapabilityRecordToolServersStageOne(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			record := newCapabilityRecord(tt.remote)
+			record := newCapabilityRecord(tt.remote, false)
 
 			if record.toolServers != tt.wantState {
 				t.Errorf("newCapabilityRecord(%v).toolServers = %q, want %q", tt.remote, record.toolServers, tt.wantState)
@@ -54,7 +54,7 @@ func TestNewCapabilityRecordStageOneEntries(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			record := newCapabilityRecord(tt.remote)
+			record := newCapabilityRecord(tt.remote, false)
 
 			wantToolServers := capabilityProtocol
 			if tt.remote {

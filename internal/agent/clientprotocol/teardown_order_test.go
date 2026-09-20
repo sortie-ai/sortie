@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -72,7 +73,8 @@ func TestTeardown_AnswerOpenWrittenBeforeCloseSessionAndStdinClose(t *testing.T)
 	writer := &orderedStdinWriter{w: outPw, rec: rec, replyWriteStarted: make(chan struct{})}
 
 	state := &sessionState{
-		caps:           newCapabilityRecord(false),
+		caps:           newCapabilityRecord(false, false),
+		usage:          agentcore.NewTurnEndUsage(),
 		stopCh:         make(chan struct{}),
 		pumpDone:       make(chan struct{}),
 		logger:         discardLogger(),

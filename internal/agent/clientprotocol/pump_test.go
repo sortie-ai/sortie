@@ -319,7 +319,7 @@ func TestToolDeliveryReportSkippedDuringWindDownAndTeardown(t *testing.T) {
 		inPr, _ := io.Pipe()
 		var buf bytes.Buffer
 		state := &sessionState{
-			caps:   newCapabilityRecord(false),
+			caps:   newCapabilityRecord(false, false),
 			stopCh: make(chan struct{}),
 			logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		}
@@ -490,7 +490,8 @@ func newTestSessionWithRelease(t *testing.T, grace time.Duration, reaped <-chan 
 	inPr, inPw := io.Pipe()
 
 	state := &sessionState{
-		caps:     newCapabilityRecord(false),
+		caps:     newCapabilityRecord(false, false),
+		usage:    agentcore.NewTurnEndUsage(),
 		stopCh:   make(chan struct{}),
 		pumpDone: make(chan struct{}),
 		logger:   discardLogger(),
@@ -624,8 +625,9 @@ func TestHandleStartTurnRefusedOnceReleaseAbandonedBeforePumpHandlesIt(t *testin
 
 	p := &pumpState{
 		state: &sessionState{
-			caps:    newCapabilityRecord(false),
+			caps:    newCapabilityRecord(false, false),
 			logger:  discardLogger(),
+			usage:   agentcore.NewTurnEndUsage(),
 			release: buildAbandonedRelease(t),
 			inbox:   inbox,
 			conn:    conn,
@@ -745,6 +747,7 @@ func TestStreamEndSitesReportAbandonmentMessageOnceReleaseHasGivenUp(t *testing.
 		p := &pumpState{
 			state: &sessionState{
 				logger:  discardLogger(),
+				usage:   agentcore.NewTurnEndUsage(),
 				release: buildAbandonedRelease(t),
 				inbox:   jsonrpc.NewInbox[pumpItem](),
 			},
@@ -770,6 +773,7 @@ func TestStreamEndSitesReportAbandonmentMessageOnceReleaseHasGivenUp(t *testing.
 		p := &pumpState{
 			state: &sessionState{
 				logger:  discardLogger(),
+				usage:   agentcore.NewTurnEndUsage(),
 				release: buildAbandonedRelease(t),
 			},
 			activeTurn: turn,
@@ -798,6 +802,7 @@ func TestHandleAbandonmentDrainsQueuedResponseBeforeFinalizing(t *testing.T) {
 	p := &pumpState{
 		state: &sessionState{
 			logger:  discardLogger(),
+			usage:   agentcore.NewTurnEndUsage(),
 			release: buildAbandonedRelease(t),
 			inbox:   jsonrpc.NewInbox[pumpItem](),
 		},

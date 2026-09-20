@@ -9,6 +9,7 @@ type capabilityState string
 
 const (
 	capabilityProtocol capabilityState = "protocol"
+	capabilityOurs     capabilityState = "ours"
 	capabilityGap      capabilityState = "gap"
 )
 
@@ -40,20 +41,22 @@ type capabilityRecord struct {
 // states. remote reports whether the launch target is remote; measured reports
 // whether a measurement source claimed the launch.
 //
-// sessionContinuation starts at protocol: the handshake lowers it when
-// the agent advertises neither continuation method, and a continuation
-// call the agent does not deliver on lowers it later still. A local
-// launch with no generated tool-server configuration at all leaves
-// toolServers at protocol, because nothing was withheld when nothing
-// was offered.
-func newCapabilityRecord(remote bool) *capabilityRecord {
+// tokenCounts never reaches protocol because the wire carries no spend counter.
+// toolServers starts at protocol for a local launch, since nothing is withheld
+// when nothing was offered; the handshake and a later undelivered call are what
+// lower it and sessionContinuation.
+func newCapabilityRecord(remote, measured bool) *capabilityRecord {
 	toolServers := capabilityProtocol
 	if remote {
 		toolServers = capabilityGap
 	}
+	tokenCounts := capabilityGap
+	if measured {
+		tokenCounts = capabilityOurs
+	}
 	return &capabilityRecord{
 		toolServers:         toolServers,
-		tokenCounts:         capabilityGap,
+		tokenCounts:         tokenCounts,
 		sessionContinuation: capabilityProtocol,
 		agentVersion:        capabilityProtocol,
 	}

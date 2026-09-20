@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -105,7 +106,8 @@ func newParkedTeardownFixture(t *testing.T, withStderrHolder bool) *parkedTeardo
 		pumpDone:    make(chan struct{}),
 		logger:      discardLogger(),
 		agentConfig: domain.AgentConfig{ReadTimeoutMS: 60000},
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
+		usage:       agentcore.NewTurnEndUsage(),
 	}
 	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 
@@ -478,7 +480,8 @@ func newGracefulTeardownSession(t *testing.T, script, readyPath string, logger *
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      logger,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
+		usage:       agentcore.NewTurnEndUsage(),
 	}
 	state.stderrCollector = procutil.NewStderrCollector(pipes.Stderr, state.logger)
 	state.inbox = jsonrpc.NewInbox[pumpItem]()

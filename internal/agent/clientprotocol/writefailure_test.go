@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -19,13 +20,14 @@ func (w alwaysFailWriter) Write(p []byte) (int, error) { return 0, w.err }
 // with its connection's writer replaced by one that fails every write,
 // so a turn's own prompt send fails asynchronously once
 // handleStartTurn's SendRequest has already enqueued and returned.
-func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr error) (*sessionState, *io.PipeWriter) {
+func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr error, opts ...func(*sessionState)) (*sessionState, *io.PipeWriter) {
 	t.Helper()
 
 	inPr, inPw := io.Pipe()
 	state := &sessionState{
 		agentConfig: agentConfig,
-		caps:        newCapabilityRecord(false),
+		caps:        newCapabilityRecord(false, false),
+		usage:       agentcore.NewTurnEndUsage(),
 		stopCh:      make(chan struct{}),
 		pumpDone:    make(chan struct{}),
 		logger:      discardLogger(),
@@ -34,6 +36,10 @@ func newFailWriteSession(t *testing.T, agentConfig domain.AgentConfig, writeErr 
 	state.inbox = jsonrpc.NewInbox[pumpItem]()
 	state.conn = jsonrpc.NewConn(alwaysFailWriter{err: writeErr}, inPr, jsonrpc.Deliver(state.inbox, wrapPumpMessage),
 		jsonrpc.WithVersionMember(), jsonrpc.WithMaxLineBytes(8<<20))
+
+	for _, opt := range opts {
+		opt(state)
+	}
 
 	go runPump(state)
 	t.Cleanup(func() {
