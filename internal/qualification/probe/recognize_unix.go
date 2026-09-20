@@ -108,16 +108,39 @@ func (w *lineBoundedWriter) String() string {
 // exit is several runtimes' documented error terminal. launchErr
 // decides only once recognition fails.
 func nativeTerminal(profile qualification.RuntimeProfile, surface qualification.Surface, output string, launchErr error) (terminal qualification.Terminal, transportLoss bool, found bool) {
-	if launchErr != nil {
-		if errors.Is(launchErr, errNativeLaunchFailed) {
-			return qualification.Terminal{}, false, false
-		}
-		return qualification.Terminal{}, true, true
+	if launchErr != nil && errors.Is(launchErr, errNativeLaunchFailed) {
+		return qualification.Terminal{}, false, false
 	}
 	recognizer, ok := profile.Recognizers[surface]
 	if !ok {
 		return qualification.Terminal{}, false, false
 	}
-	terminal, found = recognizer.Terminal(output)
-	return terminal, false, found
+	if terminal, found = recognizer.Terminal(output); found {
+		return terminal, false, true
+	}
+	if launchErr != nil {
+		return qualification.Terminal{}, true, false
+	}
+	return qualification.Terminal{}, false, false
+}
+
+// nativeFailureObservation grades a native launch that produced no
+// recognized terminal, naming transport loss as a runtime failure
+// rather than folding it into the caller's "no recognized terminal"
+// detail, which describes a scenario the launch never reached.
+func nativeFailureObservation(sessionID string, transportLoss bool, fallbackOutcome qualification.Outcome, fallbackDetail string) qualification.Observation {
+	if transportLoss {
+		return qualification.Observation{
+			Grade:     qualification.GradeNotObserved,
+			Outcome:   qualification.OutcomeRuntimeFailed,
+			Detail:    "the launch ended in a bounded exit or timeout, producing no recognized terminal",
+			SessionID: sessionID,
+		}
+	}
+	return qualification.Observation{
+		Grade:     qualification.GradeNotObserved,
+		Outcome:   fallbackOutcome,
+		Detail:    fallbackDetail,
+		SessionID: sessionID,
+	}
 }

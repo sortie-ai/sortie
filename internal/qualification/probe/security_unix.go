@@ -156,9 +156,8 @@ func recordedDescendants(receipt string) []int {
 	return pids
 }
 
-// observe folds one snapshot into the ownership set and returns every
-// owned process still running in it.
-func (o *ownedDescendants) observe(members []processMember) []processMember {
+// observe folds one snapshot into the ownership set.
+func (o *ownedDescendants) observe(members []processMember) {
 	pgids := o.groups()
 
 	o.mu.Lock()
@@ -180,11 +179,4 @@ func (o *ownedDescendants) observe(members []processMember) []processMember {
 			}
 		}
 	}
-	var survivors []processMember
-	for _, m := range members {
-		if o.owned[m.pid] {
-			survivors = append(survivors, m)
-		}
-	}
-	return survivors
 }

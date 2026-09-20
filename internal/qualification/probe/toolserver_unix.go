@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/qualification"
@@ -27,18 +27,6 @@ const (
 	// toolInductionTurnBound bounds one tool-server or
 	// permission-handling induction turn.
 	toolInductionTurnBound = 3 * time.Minute
-
-	// permissionAcceptedNotice and permissionNoOptionNotice mirror the
-	// two operator-facing notice strings
-	// internal/agent/agentcore.DecideHumanRequest emits for a
-	// permission request under this client's own unattended refusal
-	// posture. This file's own import list stays confined to
-	// internal/qualification, internal/agent/clientprotocol, and
-	// internal/domain, so the two strings are duplicated here rather
-	// than referenced; a change to either constant on the adapter side
-	// is a change this file must follow.
-	permissionAcceptedNotice = "refused a permission request because this run is unattended and no one can approve it"
-	permissionNoOptionNotice = "the agent needs a permission this unattended run cannot grant"
 )
 
 // mcpToolServerScenario names the Go fake runtime the tool-server and
@@ -61,6 +49,83 @@ func writeToolServerMCPConfig(t *testing.T, dir, scriptPath string) string {
 		t.Fatalf("write induction MCP configuration %s: %v", path, err)
 	}
 	return path
+}
+
+// qualifiedToolName substitutes server and tool into the runtime's
+// declared tool-name format.
+func qualifiedToolName(toolNameFormat, server, tool string) string {
+	replacer := strings.NewReplacer("{server}", server, "{tool}", tool)
+	return replacer.Replace(toolNameFormat)
+}
+
+// policyPlaceholder is the entry-point token a profile carries where
+// the launch wants the path of a policy file.
+const policyPlaceholder = "{policy}"
+
+// requestsToolPolicy reports whether any entry point asks its launch
+// for a policy file. A file written when none is asked for would be a
+// format claim about a runtime that never reads it.
+func requestsToolPolicy(profile qualification.RuntimeProfile) bool {
+	for _, entry := range profile.EntryPoints {
+		for _, args := range [][]string{entry.Args, entry.AskingArgs, entry.SeedArgs, entry.ResumeArgs} {
+			if slices.Contains(args, policyPlaceholder) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// toolServerPolicyWriters holds, per policy-file format, the writer
+// that produces a file in it. A policy file is not portable: its
+// syntax, name and rule vocabulary belong to the runtime that reads it.
+var toolServerPolicyWriters = map[string]func(t *testing.T, dir, qualifiedTool string) string{
+	qualification.ToolPolicyFormatTOMLRuleList: writeTOMLRuleListPolicyFile,
+}
+
+// writeTOMLRuleListPolicyFile writes a policy file carrying one allow
+// rule for qualifiedTool as a TOML rule list, and returns its path.
+// Every other tool call falls back on the launch's approval mode.
+func writeTOMLRuleListPolicyFile(t *testing.T, dir, qualifiedTool string) string {
+	t.Helper()
+	path := filepath.Join(dir, "tool-server-policy.toml")
+	content := fmt.Sprintf("[[rule]]\ntoolName = %q\ndecision = \"allow\"\npriority = 100\n", qualifiedTool)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write tool-server policy %s: %v", path, err)
+	}
+	return path
+}
+
+// writeToolServerPolicy writes the policy file the profile's runtime
+// reads, carrying one allow rule for the probe tool, and returns its
+// path. It returns the empty path when no entry point asks for a policy
+// file, and fails the run when one asks for a format no writer
+// produces, since a file the runtime cannot read would grade as a
+// refused tool call rather than the harness gap it is.
+func writeToolServerPolicy(t *testing.T, dir string, profile qualification.RuntimeProfile) string {
+	t.Helper()
+	write, err := toolPolicyWriterFor(profile)
+	if err != nil {
+		t.Fatalf("resolve the tool-server policy writer: %v", err)
+	}
+	if write == nil {
+		return ""
+	}
+	return write(t, dir, qualifiedToolName(profile.ToolNameFormat, toolServerName, probeToolName))
+}
+
+// toolPolicyWriterFor resolves the writer for the format the profile
+// states: nil when no policy file is asked for, and an error when a
+// format this package writes none in is asked for.
+func toolPolicyWriterFor(profile qualification.RuntimeProfile) (func(t *testing.T, dir, qualifiedTool string) string, error) {
+	if !requestsToolPolicy(profile) {
+		return nil, nil
+	}
+	write, ok := toolServerPolicyWriters[profile.ToolPolicyFormat]
+	if !ok {
+		return nil, fmt.Errorf("profile %q asks its launch for a policy file in format %q, and this package writes none in that format", profile.RuntimeID, profile.ToolPolicyFormat)
+	}
+	return write, nil
 }
 
 // fileHasContent reports whether path exists and is non-empty. A
@@ -123,75 +188,6 @@ func startInductionSession(t *testing.T, coords Coordinates, argv []string, work
 	return adapter, session, nil
 }
 
-// induceToolServerCall drives one turn that can only be answered by
-// calling the single tool a declared stdio server offers, and grades
-// the row from that server's own call record: never from the wire, and
-// never from delivery alone.
-func induceToolServerCall(t *testing.T, coords Coordinates, fixture *sharedFixture) (qualification.Grade, string) {
-	t.Helper()
-
-	dir := t.TempDir()
-	callRecordPath := filepath.Join(dir, "calls.jsonl")
-	scriptPath := agenttest.FakeRuntime(t, dir, "mcp-server", mcpToolServerScenario, mcpToolServerParams{RecordPath: callRecordPath})
-	mcpConfigPath := writeToolServerMCPConfig(t, dir, scriptPath)
-
-	argv, err := coords.Profile.EntryArgs(qualification.SurfaceProtocol, coords.Model, "", "")
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction could not resolve the protocol entry point: %v", err)
-	}
-
-	adapter, session, err := startInductionSession(t, coords, argv, fixture.newLaunchWorkspace(t), mcpConfigPath)
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction session failed to start: %v", err)
-	}
-
-	var calledAnyTool bool
-	_, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt: fmt.Sprintf("Call the tool named %s now, with no arguments, then reply with exactly SORTIE_PROBE_DONE.", probeToolName),
-		OnEvent: func(ev domain.AgentEvent) {
-			if ev.Type == domain.EventToolResult {
-				calledAnyTool = true
-			}
-		},
-	})
-	if runErr != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction turn did not complete: %v", runErr)
-	}
-
-	recorded, err := fileHasContent(callRecordPath)
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("tool-server induction could not read the server's own call record: %v", err)
-	}
-	switch {
-	case recorded:
-		return qualification.GradeUsable, "the declared tool server recorded a call and the turn consumed it"
-	case calledAnyTool:
-		// The runtime reached a tool but not this one, which separates a
-		// delivery that never arrived from one the runtime routed
-		// elsewhere. A gap that names only the missing record leaves the
-		// two indistinguishable to whoever reads the tracked artifact.
-		return qualification.GradeGap, "the turn completed a tool call that never reached the declared server"
-	default:
-		return qualification.GradeGap, "the turn completed without calling any tool, so the declared server was never reached"
-	}
-}
-
-// permissionAskingArgs reads the protocol entry point's own stated
-// asking posture. It is read rather than derived from the graded
-// launch: which element of an argument vector is the posture switch is
-// not recoverable from the vector, and a profile whose trailing element
-// is the protocol switch would be relaunched out of protocol mode
-// entirely by any positional rule. A profile that states no asking
-// posture leaves the row unmeasured, which is the honest outcome, and
-// nothing here reads which runtime it launches.
-func permissionAskingArgs(coords Coordinates) ([]string, error) {
-	argv, ok := coords.Profile.AskingArgs(qualification.SurfaceProtocol, coords.Model, "", "")
-	if !ok {
-		return nil, fmt.Errorf("runtime %s's protocol entry point states no asking posture", coords.Profile.RuntimeID)
-	}
-	return argv, nil
-}
-
 // containsNotification reports whether events carries a notification
 // whose message contains substr.
 func containsNotification(events []domain.AgentEvent, substr string) bool {
@@ -201,57 +197,4 @@ func containsNotification(events []domain.AgentEvent, substr string) bool {
 		}
 	}
 	return false
-}
-
-// inducePermissionRequest reuses induceToolServerCall's own server and
-// forcing prompt under the posture permissionAskingArgs restores, and
-// grades the row from whether the runtime raised a permission request
-// and whether the client's own refusal answered it, per this
-// capability's own mapping: an absent request is unmeasured, never
-// usable.
-func inducePermissionRequest(t *testing.T, coords Coordinates, fixture *sharedFixture) (qualification.Grade, string) {
-	t.Helper()
-
-	dir := t.TempDir()
-	callRecordPath := filepath.Join(dir, "calls.jsonl")
-	scriptPath := agenttest.FakeRuntime(t, dir, "mcp-server", mcpToolServerScenario, mcpToolServerParams{RecordPath: callRecordPath})
-	mcpConfigPath := writeToolServerMCPConfig(t, dir, scriptPath)
-
-	argv, err := permissionAskingArgs(coords)
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("permission induction could not resolve an asking posture: %v", err)
-	}
-
-	adapter, session, err := startInductionSession(t, coords, argv, fixture.newLaunchWorkspace(t), mcpConfigPath)
-	if err != nil {
-		return qualification.GradeNotObserved, fmt.Sprintf("permission induction session failed to start: %v", err)
-	}
-
-	var events []domain.AgentEvent
-	var calledAnyTool bool
-	_, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt: fmt.Sprintf("Call the tool named %s now, with no arguments.", probeToolName),
-		OnEvent: func(ev domain.AgentEvent) {
-			events = append(events, ev)
-			if ev.Type == domain.EventToolResult {
-				calledAnyTool = true
-			}
-		},
-	})
-
-	switch {
-	case containsNotification(events, permissionAcceptedNotice):
-		return qualification.GradeUsable, "the runtime raised a permission request and the client's refusal answered it with none left pending"
-	case containsNotification(events, permissionNoOptionNotice):
-		return qualification.GradeGap, "the runtime raised a permission request but offered no refusing option to answer it with"
-	case runErr != nil:
-		return qualification.GradeNotObserved, fmt.Sprintf("permission induction turn did not complete and raised no visible request: %v", runErr)
-	case !calledAnyTool:
-		// Nothing asked for consent because nothing was attempted, which
-		// is a different unmeasured state from a runtime that ran a tool
-		// and asked no one.
-		return qualification.GradeNotObserved, "the turn called no tool at all, so no permission request could arise to observe"
-	default:
-		return qualification.GradeNotObserved, "the runtime raised no permission request under a posture that should provoke one"
-	}
 }

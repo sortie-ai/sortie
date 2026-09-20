@@ -24,6 +24,25 @@ func writeEvidenceRecords(path string, records []qualification.Record) error {
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 
+// writeUnrecognizedTerminals writes terminals as newline-delimited JSON
+// to path. It is a no-op when terminals is empty, leaving no misleading
+// empty file behind.
+func writeUnrecognizedTerminals(path string, terminals []map[string]any) error {
+	if len(terminals) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, terminal := range terminals {
+		line, err := json.Marshal(terminal)
+		if err != nil {
+			return err
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
 // writeMeasurement encodes measurement exactly as the tracked
 // measurement artifact is encoded and writes it to path.
 func writeMeasurement(path string, measurement qualification.Measurement) error {

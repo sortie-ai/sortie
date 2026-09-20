@@ -3,9 +3,11 @@
 package probe
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -25,7 +28,8 @@ import (
 // probeStartedMarker is the file name every probe executable creates in
 // its own working directory. It attests to a file and nothing more: the
 // runtime is handed the probe's path and can create this marker without
-// running the script.
+// running the script, so readings that must observe the probe running
+// use awaitProbeExecution instead.
 const probeStartedMarker = "sortie-probe-started"
 
 // The three probe executables' script bodies: failing exits non-zero
@@ -43,6 +47,24 @@ const (
 	transportProbeScript = "touch " + probeStartedMarker + "\n" +
 		"while true; do sleep 0.1; done\n"
 )
+
+// usageTracker accumulates whether any protocol turn reported
+// UsageMeasured and which session first did, so the protocol
+// token-inventory reading is composed once at the end of the phase.
+type usageTracker struct {
+	mu        sync.Mutex
+	measured  bool
+	sessionID string
+}
+
+func (u *usageTracker) observe(sessionID string, measured bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if measured && !u.measured {
+		u.measured = true
+		u.sessionID = sessionID
+	}
+}
 
 // groupTracker is the run-owned registry of every process-group id a
 // graded launch starts.
@@ -86,8 +108,17 @@ type sharedFixture struct {
 	env               []string
 	envWrapper        string
 	tracker           *groupTracker
+	journal           *observationJournal
+
+	// probeObservationBound and signalWaitBound carry this run's waits
+	// for a probe to be observed running and for a signalled launch to
+	// end. Zero resolves to the collection's own bounds; only a control
+	// shortens them.
+	probeObservationBound time.Duration
+	signalWaitBound       time.Duration
 
 	logSpy *agenttest.LogSpy
+	usage  *usageTracker
 
 	// wireTraceDir holds one file per protocol launch carrying the bytes
 	// that launch wrote on the transport. The adapter normalizes a
@@ -100,6 +131,117 @@ type sharedFixture struct {
 	sessions    []*ownedSession   // guarded by ownershipMu
 	owned       *ownedDescendants // guarded by ownershipMu
 
+	nativeOutputsMu sync.Mutex
+	nativeOutputs   map[qualification.Surface][]string
+
+	unrecognizedMu sync.Mutex
+	unrecognized   []map[string]any
+}
+
+// recordNativeOutput appends output to surface's accumulated native
+// induction outputs, read back by the per-surface token inventory once
+// that surface's induction phase completes.
+func (f *sharedFixture) recordNativeOutput(surface qualification.Surface, output string) {
+	f.nativeOutputsMu.Lock()
+	defer f.nativeOutputsMu.Unlock()
+	if f.nativeOutputs == nil {
+		f.nativeOutputs = map[qualification.Surface][]string{}
+	}
+	f.nativeOutputs[surface] = append(f.nativeOutputs[surface], output)
+}
+
+// recordUnrecognized appends a terminal object no recognizer could
+// resolve to a known outcome, read back at the end of Run to write the
+// unrecognized.jsonl discovery artifact.
+func (f *sharedFixture) recordUnrecognized(terminal map[string]any) {
+	f.unrecognizedMu.Lock()
+	defer f.unrecognizedMu.Unlock()
+	f.unrecognized = append(f.unrecognized, terminal)
+}
+
+func (f *sharedFixture) unrecognizedTerminals() []map[string]any {
+	f.unrecognizedMu.Lock()
+	defer f.unrecognizedMu.Unlock()
+	return slices.Clone(f.unrecognized)
+}
+
+// observationJournal appends every observation a collection obtains to
+// a run-scoped file as it is obtained. Evidence is composed only once
+// every launch has finished, so journaling each reading as it happens
+// makes a composition failure cost a report rather than the whole run.
+type observationJournal struct {
+	mu       sync.Mutex
+	path     string
+	firstErr error
+}
+
+type journalEntry struct {
+	Surface    string `json:"surface"`
+	Case       string `json:"case"`
+	Grade      string `json:"grade"`
+	Outcome    string `json:"outcome"`
+	Detail     string `json:"detail,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	RecordedAt string `json:"recorded_at"`
+}
+
+// append writes one observation to the journal. A journal with no path
+// writes nothing.
+func (j *observationJournal) append(surface, caseID string, obs qualification.Observation) {
+	if j == nil || j.path == "" {
+		return
+	}
+	entry := journalEntry{
+		Surface:    surface,
+		Case:       caseID,
+		Grade:      string(obs.Grade),
+		Outcome:    string(obs.Outcome),
+		Detail:     obs.Detail,
+		SessionID:  obs.SessionID,
+		RecordedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	line, err := json.Marshal(entry)
+	if err != nil {
+		j.fail(err)
+		return
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	file, err := os.OpenFile(j.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		j.recordErr(err)
+		return
+	}
+	defer file.Close() //nolint:errcheck // best-effort close after a completed append
+	if _, err := file.Write(append(line, '\n')); err != nil {
+		j.recordErr(err)
+	}
+}
+
+func (j *observationJournal) fail(err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordErr(err)
+}
+
+// recordErr keeps the first failure. Callers hold j.mu.
+func (j *observationJournal) recordErr(err error) {
+	if j.firstErr == nil {
+		j.firstErr = err
+	}
+}
+
+// err reports the first failure the journal met, so a run whose
+// observations were not all persisted says so rather than leaving a
+// short file to be read as a short run.
+func (j *observationJournal) err() error {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.firstErr
 }
 
 // resolveSharedFixture builds the shared fixture once for the whole
@@ -129,6 +271,7 @@ func resolveSharedFixture(t *testing.T, coords Coordinates) *sharedFixture {
 		envWrapper:        writeLaunchEnvWrapper(t, scriptDir, launchEnvNames(coords), traceDir),
 		tracker:           &groupTracker{},
 		logSpy:            agenttest.InstallLogSpy(t),
+		usage:             &usageTracker{},
 	}
 	fixture.ownership().watchReceipts(coords.CommandPath, fixture.failingProbe, fixture.cancellationProbe, fixture.transportProbe)
 	return fixture
@@ -359,4 +502,98 @@ func (f *sharedFixture) stopOpenSessions(ctx context.Context) error {
 		}
 	}
 	return firstErr
+}
+
+func (f *sharedFixture) observationBound() time.Duration {
+	return cmp.Or(f.probeObservationBound, nativeProbeBound)
+}
+
+func (f *sharedFixture) signalBound() time.Duration {
+	return cmp.Or(f.signalWaitBound, nativeSignalBound)
+}
+
+func probeStarted(workspace string) bool {
+	_, err := os.Stat(filepath.Join(workspace, probeStartedMarker))
+	return err == nil
+}
+
+const probeExecutionPollInterval = 100 * time.Millisecond
+
+// awaitProbeExecution blocks until the launch led by pgid is observed
+// running the program at probePath, or until deadline passes, and
+// reports which happened.
+//
+// It reads the process table, not the started marker: the runtime is
+// handed the probe's path and can create the marker without running the
+// script. Every snapshot is folded into owned, since this is the last
+// moment a launch about to be signalled can be traced to a detached
+// descendant.
+func awaitProbeExecution(owned *ownedDescendants, probePath string, pgid int, deadline time.Time) bool {
+	basename := filepath.Base(probePath)
+	for {
+		if snapshot, err := psSnapshot(); err == nil {
+			owned.observe(snapshot)
+			if launchRunsProgram(snapshot, pgid, basename) {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(probeExecutionPollInterval)
+	}
+}
+
+func launchRunsProgram(members []processMember, pgid int, basename string) bool {
+	for _, m := range members {
+		if m.basename != basename {
+			continue
+		}
+		if m.pgid == pgid || descendantOf(members, m, pgid) {
+			return true
+		}
+	}
+	return false
+}
+
+// descendantOf reports whether member's parent chain inside members
+// reaches pid. The walk is bounded by the snapshot's size, so a parent
+// cycle a reused pid can fabricate ends it rather than hanging.
+func descendantOf(members []processMember, member processMember, pid int) bool {
+	byPID := make(map[int]processMember, len(members))
+	for _, m := range members {
+		byPID[m.pid] = m
+	}
+	for range len(members) {
+		if member.ppid == pid {
+			return true
+		}
+		parent, ok := byPID[member.ppid]
+		if !ok {
+			return false
+		}
+		member = parent
+	}
+	return false
+}
+
+// The qualification.RuntimeProfile.ProbePrompts keys this package
+// substitutes, mirrored here because the map carries no named constants.
+const (
+	promptKeySuccess        = "success"
+	promptKeyRuntimeRefusal = "runtime_refusal"
+	promptKeyToolCall       = "tool_call"
+)
+
+func (f *sharedFixture) probePath(name string) string {
+	switch name {
+	case "failing":
+		return f.failingProbe
+	case "cancellation":
+		return f.cancellationProbe
+	case "transport":
+		return f.transportProbe
+	default:
+		return ""
+	}
 }

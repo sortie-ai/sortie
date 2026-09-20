@@ -46,6 +46,25 @@ type summaryContinuation struct {
 	Grade   qualification.Grade
 }
 
+// notInducibleAccount states which of three things a not-inducible
+// case's reason means: the condition was never created, it was and the
+// surface gave no account, or the run states no reason. The comparison
+// row grades these differently, so one phrase for all would let a
+// surface shortfall read as a limit of the measurer.
+func notInducibleAccount(reason string) string {
+	switch qualification.NotInducibleExclusion(reason) {
+	case qualification.ExclusionNotInduced:
+		return fmt.Sprintf("not induced (%s), so the case stays unmeasured on this surface", reason)
+	case qualification.ExclusionSurfaceSilent:
+		return fmt.Sprintf("induced, and the surface reported no outcome (%s), so the case keeps its obligation", reason)
+	case qualification.ExclusionNone:
+	}
+	if reason == qualification.NotInducibleDetail {
+		return "no deterministic inducer, so neither the condition nor the surface's account of it was established"
+	}
+	return fmt.Sprintf("not inducible (%s), a reason no rule covers, so the case keeps its obligation", reason)
+}
+
 // Conclusions is the bounded summary a validated evidence set
 // produces. It carries no runtime version, timestamp, session
 // identifier, filesystem path, prompt, or secret value.
@@ -110,7 +129,7 @@ func ConclusionsFromRecords(records []qualification.Record, verdict qualificatio
 					fmt.Sprintf("%s %s: declared %s", rec.Capability, semantic.Case, rec.Detail))
 			case qualification.GradeNotInducible:
 				conclusions.Excluded = append(conclusions.Excluded,
-					fmt.Sprintf("%s %s: no inducer", rec.Capability, semantic.Case))
+					fmt.Sprintf("%s %s: %s", rec.Capability, semantic.Case, notInducibleAccount(rec.Detail)))
 			}
 		case qualification.RowToken:
 			path := "(no token-bearing path)"

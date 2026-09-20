@@ -3,6 +3,7 @@
 package probe
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/qualification"
@@ -37,8 +38,8 @@ func TestNativeTerminal(t *testing.T) {
 		t.Parallel()
 
 		terminal, transportLoss, found := nativeTerminal(firstValueProfile, qualification.SurfaceNativeJSON, "", errNativeBoundExceeded)
-		if !found || !transportLoss || terminal != (qualification.Terminal{}) {
-			t.Errorf("nativeTerminal() = %+v, %v, %v, want zero Terminal, true, true for a bounded exit with no recognized terminal", terminal, transportLoss, found)
+		if found || !transportLoss || terminal != (qualification.Terminal{}) {
+			t.Errorf("nativeTerminal() = %+v, %v, %v, want zero Terminal, true, false for a bounded exit with no recognized terminal", terminal, transportLoss, found)
 		}
 	})
 
@@ -49,6 +50,26 @@ func TestNativeTerminal(t *testing.T) {
 		terminal, transportLoss, found := nativeTerminal(profile, qualification.SurfaceNativeJSON, `{"response":{}}`, nil)
 		if found || transportLoss || terminal != (qualification.Terminal{}) {
 			t.Errorf("nativeTerminal() = %+v, %v, %v, want zero Terminal, false, false when the profile carries no recognizer for the surface", terminal, transportLoss, found)
+		}
+	})
+
+	t.Run("a non-zero exit with a recognized terminal is graded from that terminal, not transport loss", func(t *testing.T) {
+		t.Parallel()
+
+		nonZeroExit := errors.New("exit status 1")
+		terminal, transportLoss, found := nativeTerminal(firstValueProfile, qualification.SurfaceNativeJSON, `{"response":{}}`, nonZeroExit)
+		if !found || transportLoss || terminal != (qualification.Terminal{EndTurn: true}) {
+			t.Errorf("nativeTerminal() = %+v, %v, %v, want {EndTurn:true}, false, true: this is gemini's own documented error contract, a recognized terminal from a non-zero exit", terminal, transportLoss, found)
+		}
+	})
+
+	t.Run("a non-zero exit with nothing recognizable is still transport loss", func(t *testing.T) {
+		t.Parallel()
+
+		nonZeroExit := errors.New("exit status 1")
+		terminal, transportLoss, found := nativeTerminal(firstValueProfile, qualification.SurfaceNativeJSON, "not json at all", nonZeroExit)
+		if found || !transportLoss || terminal != (qualification.Terminal{}) {
+			t.Errorf("nativeTerminal() = %+v, %v, %v, want zero Terminal, true, false: a non-zero exit with no recognized terminal is transport loss, the sibling to the recognized-terminal case above", terminal, transportLoss, found)
 		}
 	})
 }
@@ -76,6 +97,40 @@ func TestNativeTerminalDispatchIsProfileDriven(t *testing.T) {
 	if !kiroFound || kiroTerminal != (qualification.Terminal{EndTurn: true}) {
 		t.Fatalf("nativeTerminal(kiroShapedProfile, %q) = %+v, found=%v, want {EndTurn:true}, found=true: this profile's recognizer names success_member %q, present in the output", output, kiroTerminal, kiroFound, "result")
 	}
+}
+
+func TestNativeFailureObservation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("transport loss overrides the outcome to runtime failure whatever the caller passed", func(t *testing.T) {
+		t.Parallel()
+
+		obs := nativeFailureObservation("sess-1", true, qualification.OutcomePass, "caller's own detail")
+		want := qualification.Observation{
+			Grade:     qualification.GradeNotObserved,
+			Outcome:   qualification.OutcomeRuntimeFailed,
+			Detail:    "the launch ended in a bounded exit or timeout, producing no recognized terminal",
+			SessionID: "sess-1",
+		}
+		if obs != want {
+			t.Errorf("nativeFailureObservation(%q, true, %q, %q) = %+v, want %+v", "sess-1", qualification.OutcomePass, "caller's own detail", obs, want)
+		}
+	})
+
+	t.Run("no transport loss passes the caller's own outcome and detail through unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		obs := nativeFailureObservation("sess-2", false, qualification.OutcomeFixtureInductionFailed, "caller's own detail")
+		want := qualification.Observation{
+			Grade:     qualification.GradeNotObserved,
+			Outcome:   qualification.OutcomeFixtureInductionFailed,
+			Detail:    "caller's own detail",
+			SessionID: "sess-2",
+		}
+		if obs != want {
+			t.Errorf("nativeFailureObservation(%q, false, %q, %q) = %+v, want %+v", "sess-2", qualification.OutcomeFixtureInductionFailed, "caller's own detail", obs, want)
+		}
+	})
 }
 
 // writeAll issues one lineBoundedWriter.Write call per element of

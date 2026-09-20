@@ -5,42 +5,36 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// bindingCallSiteTargets are the three calls the live profile must make
-// exactly once: Run itself, the notes-consistency binding, and the
-// published-posture probe. No measurement can be removed by deleting
-// its call site alone while this count stays pinned at one. Run is on
-// the list because the two bindings below run inside it, so pinning
-// only those two would keep a fully implemented but uncalled Run green:
-// a collection nothing invokes measures nothing, whatever it contains.
-var bindingCallSiteTargets = []string{"Run", "enforceNotesConsistency", "runPublishedPostureProbe"}
+// Run's one legitimate call site lives in live_test.go, so it is pinned across
+// test files too.
+var runCallSiteTargets = []string{"Run"}
 
-// gradingCallSiteTargets are the two calls that build every
-// collection's evidence: gradedEvidence itself, and the one
-// qualification.NewFixture call gradedEvidence makes.
-var gradingCallSiteTargets = []string{"gradedEvidence", "NewFixture"}
+// productionBindingCallSiteTargets are scored against non-test files only, so a
+// direct unit test of an inducer cannot redden the guard with a second call.
+var productionBindingCallSiteTargets = []string{
+	"enforceNotesConsistency", "runPublishedPostureProbe",
+	"induceProtocolSemantics", "induceNativeSemantics",
+}
 
-// bindingCallSiteCounts walks file's AST and counts, for every name in
-// targets, the *ast.CallExpr nodes whose called function is a bare
-// identifier equal to that name. It matches bare identifiers only, so
-// a method call sharing a target's name, such as t.Run in a subtest,
-// is never mistaken for the package-level call under test.
+var allBindingCallSiteTargets = append(slices.Clone(runCallSiteTargets), productionBindingCallSiteTargets...)
+
+var gradingCallSiteTargets = []string{"gradedEvidence", "NewLiveFixture"}
+
+// bindingCallSiteCounts counts calls whose function is a bare identifier equal
+// to a target, so a method call sharing the name, such as t.Run in a subtest,
+// is never counted.
 func bindingCallSiteCounts(file *ast.File, targets []string) map[string]int {
 	return callSiteCounts(file, targets, false)
 }
 
-// gradingCallSiteCounts walks file's AST and counts, for every name in
-// targets, the *ast.CallExpr nodes whose called function is either a
-// bare identifier equal to that name or a selector expression whose
-// selector is equal to that name, so a call reached through a package
-// qualifier such as qualification.NewFixture counts the same as a bare
-// call to a name declared in the same package. Its two targets,
-// gradedEvidence and NewFixture, share no name with a method this
-// package's own tests call, so the broader match carries no risk of
-// the false positive a shared method name like Run would produce.
+// gradingCallSiteCounts also counts calls reached through a package qualifier
+// such as qualification.NewLiveFixture; its targets share no name with a method
+// this package's tests call, so the broader match is safe.
 func gradingCallSiteCounts(file *ast.File, targets []string) map[string]int {
 	return callSiteCounts(file, targets, true)
 }
@@ -95,13 +89,9 @@ func packageGoFiles(t *testing.T, skipTestFiles bool) []string {
 	return names
 }
 
-// scanBindingCallSites parses every .go file directly under this
-// package's own directory, test files included since the call sites
-// under test live in _test.go files, and totals bindingCallSiteCounts
-// across them.
-func scanBindingCallSites(t *testing.T, targets []string) map[string]int {
+func scanBindingCallSites(t *testing.T, targets []string, skipTestFiles bool) map[string]int {
 	t.Helper()
-	return scanGoFiles(t, packageGoFiles(t, false), targets, bindingCallSiteCounts)
+	return scanGoFiles(t, packageGoFiles(t, skipTestFiles), targets, bindingCallSiteCounts)
 }
 
 // gradingCallSiteFuncNames returns the enclosing function name for each
@@ -164,13 +154,24 @@ func scanGoFiles(t *testing.T, names []string, targets []string, count func(*ast
 func TestQualificationBindingHasExactlyOneCallSite(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the real tree calls each binding exactly once", func(t *testing.T) {
+	t.Run("the real tree calls Run exactly once, test files included", func(t *testing.T) {
 		t.Parallel()
 
-		counts := scanBindingCallSites(t, bindingCallSiteTargets)
-		for _, target := range bindingCallSiteTargets {
+		counts := scanBindingCallSites(t, runCallSiteTargets, false)
+		for _, target := range runCallSiteTargets {
 			if got := counts[target]; got != 1 {
 				t.Errorf("call sites for %s = %d, want exactly 1", target, got)
+			}
+		}
+	})
+
+	t.Run("the real tree's non-test files call each production binding target exactly once", func(t *testing.T) {
+		t.Parallel()
+
+		counts := scanBindingCallSites(t, productionBindingCallSiteTargets, true)
+		for _, target := range productionBindingCallSiteTargets {
+			if got := counts[target]; got != 1 {
+				t.Errorf("non-test call sites for %s = %d, want exactly 1", target, got)
 			}
 		}
 	})
@@ -182,15 +183,15 @@ func TestQualificationBindingHasExactlyOneCallSite(t *testing.T) {
 		file, err := parser.ParseFile(fset, "fixture.go", `package fixture
 
 func collect() {
-	// Run, enforceNotesConsistency and runPublishedPostureProbe are
-	// deliberately absent here, standing in for a removed call site.
+	// Every pinned target is deliberately absent here, standing in for
+	// a removed call site.
 }
 `, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse fixture: %v", err)
 		}
-		counts := bindingCallSiteCounts(file, bindingCallSiteTargets)
-		for _, target := range bindingCallSiteTargets {
+		counts := bindingCallSiteCounts(file, allBindingCallSiteTargets)
+		for _, target := range allBindingCallSiteTargets {
 			if got := counts[target]; got != 0 {
 				t.Errorf("call sites for %s in the call-site-removed fixture = %d, want 0", target, got)
 			}
@@ -207,15 +208,47 @@ func collect() {
 	Run(t, coords)
 	enforceNotesConsistency(nil, "", want, "")
 	runPublishedPostureProbe(t, coords)
+	induceProtocolSemantics(t, coords, fixture, collected)
+	induceNativeSemantics(t, coords, fixture, collected, surface)
 }
 `, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse fixture: %v", err)
 		}
-		counts := bindingCallSiteCounts(file, bindingCallSiteTargets)
-		for _, target := range bindingCallSiteTargets {
+		counts := bindingCallSiteCounts(file, allBindingCallSiteTargets)
+		for _, target := range allBindingCallSiteTargets {
 			if got := counts[target]; got != 1 {
 				t.Errorf("call sites for %s in the present-call-site fixture = %d, want 1", target, got)
+			}
+		}
+	})
+
+	t.Run("a fixture with each call site duplicated counts two", func(t *testing.T) {
+		t.Parallel()
+
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "fixture.go", `package fixture
+
+func collect() {
+	Run(t, coords)
+	Run(t, coords)
+	enforceNotesConsistency(nil, "", want, "")
+	enforceNotesConsistency(nil, "", want, "")
+	runPublishedPostureProbe(t, coords)
+	runPublishedPostureProbe(t, coords)
+	induceProtocolSemantics(t, coords, fixture, collected)
+	induceProtocolSemantics(t, coords, fixture, collected)
+	induceNativeSemantics(t, coords, fixture, collected, surface)
+	induceNativeSemantics(t, coords, fixture, collected, surface)
+}
+`, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		counts := bindingCallSiteCounts(file, allBindingCallSiteTargets)
+		for _, target := range allBindingCallSiteTargets {
+			if got := counts[target]; got != 2 {
+				t.Errorf("call sites for %s in the duplicated-call-site fixture = %d, want 2", target, got)
 			}
 		}
 	})
@@ -227,7 +260,7 @@ func TestQualificationGradingHasExactlyOneCallSite(t *testing.T) {
 	t.Run("the real tree's non-test files call each grading target exactly once, inside its expected enclosing function", func(t *testing.T) {
 		t.Parallel()
 
-		wantEnclosingFunc := map[string]string{"gradedEvidence": "Run", "NewFixture": "gradedEvidence"}
+		wantEnclosingFunc := map[string]string{"gradedEvidence": "Run", "NewLiveFixture": "gradedEvidence"}
 		locations := scanGradingCallSiteFuncNames(t, gradingCallSiteTargets)
 		for _, target := range gradingCallSiteTargets {
 			got := locations[target]
@@ -248,7 +281,7 @@ func TestQualificationGradingHasExactlyOneCallSite(t *testing.T) {
 		file, err := parser.ParseFile(fset, "fixture.go", `package fixture
 
 func gradedEvidence() {
-	// qualification.NewFixture is deliberately absent here, standing
+	// qualification.NewLiveFixture is deliberately absent here, standing
 	// in for a removed call site, and this function's own name is not
 	// a call expression.
 }
@@ -271,7 +304,7 @@ func gradedEvidence() {
 		file, err := parser.ParseFile(fset, "fixture.go", `package probe
 
 func gradedEvidence(profile qualification.RuntimeProfile) *qualification.Fixture {
-	return qualification.NewFixture(qualification.FixtureNotObserved, profile.AbsentSurfaces...)
+	return qualification.NewLiveFixture(qualification.FixtureNotObserved, profile.AbsentSurfaces...)
 }
 
 func Run() {
@@ -289,7 +322,7 @@ func Run() {
 		}
 	})
 
-	t.Run("a fixture where NewFixture moves from gradedEvidence into Run reports the call inside Run", func(t *testing.T) {
+	t.Run("a fixture where NewLiveFixture moves from gradedEvidence into Run reports the call inside Run", func(t *testing.T) {
 		t.Parallel()
 
 		fset := token.NewFileSet()
@@ -300,7 +333,7 @@ func gradedEvidence(fixture *qualification.Fixture) *qualification.Fixture {
 }
 
 func Run() {
-	fixture := qualification.NewFixture(qualification.FixtureUnmeasured)
+	fixture := qualification.NewLiveFixture(qualification.FixtureUnmeasured)
 	gradedEvidence(fixture)
 }
 `, parser.SkipObjectResolution)
@@ -308,8 +341,8 @@ func Run() {
 			t.Fatalf("parse fixture: %v", err)
 		}
 		locations := gradingCallSiteFuncNames(file, gradingCallSiteTargets)
-		if got := locations["NewFixture"]; len(got) != 1 || got[0] != "Run" {
-			t.Errorf("gradingCallSiteFuncNames() NewFixture enclosing = %v, want [Run]: this fixture moved the call there, and the gate must see it move", got)
+		if got := locations["NewLiveFixture"]; len(got) != 1 || got[0] != "Run" {
+			t.Errorf("gradingCallSiteFuncNames() NewLiveFixture enclosing = %v, want [Run]: this fixture moved the call there, and the gate must see it move", got)
 		}
 	})
 
@@ -320,7 +353,7 @@ func Run() {
 		file, err := parser.ParseFile(fset, "fixture.go", `package probe
 
 func gradedEvidence(profile qualification.RuntimeProfile) *qualification.Fixture {
-	return qualification.NewFixture(qualification.FixtureNotObserved, profile.AbsentSurfaces...)
+	return qualification.NewLiveFixture(qualification.FixtureNotObserved, profile.AbsentSurfaces...)
 }
 
 func buildFixture(profile qualification.RuntimeProfile) *qualification.Fixture {

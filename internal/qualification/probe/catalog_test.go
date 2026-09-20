@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
@@ -49,6 +53,115 @@ func TestProbeScriptsCarryNoNetworkCommand(t *testing.T) {
 				t.Errorf("probe script %q contains %q, want no network command", name, tool)
 			}
 		}
+	}
+}
+
+// awaitProbeStarted blocks until workspace carries the probe started marker or
+// deadline passes. It serves the probe scripts' own contract tests, where the
+// script writes the file; no induction binds a signal to it, since a marker
+// attests only to a file the measured runtime can write itself.
+func awaitProbeStarted(workspace string, deadline time.Time) bool {
+	for {
+		if probeStarted(workspace) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestFailingProbeScriptTouchesMarkerAndExitsNonZero(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := agenttest.WriteScript(t, dir, "failing-probe", failingProbeScript)
+
+	cmd := exec.Command(script) //nolint:gosec // script is this test's own fixture
+	cmd.Dir = dir
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	if err == nil {
+		t.Fatal("failing-probe script exited 0, want a non-zero exit")
+	}
+	if !isExitError(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Errorf("failing-probe script error = %v, want exit code 1", err)
+	}
+	if !probeStarted(dir) {
+		t.Error("failing-probe script did not create its own started marker before exiting")
+	}
+}
+
+func isExitError(err error, target **exec.ExitError) bool {
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		return false
+	}
+	*target = ee
+	return true
+}
+
+func TestCancellationProbeScriptExitsGracefullyOnSIGINT(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := agenttest.WriteScript(t, dir, "cancellation-probe", cancellationProbeScript)
+
+	cmd := exec.Command(script) //nolint:gosec // script is this test's own fixture
+	cmd.Dir = dir
+	procutil.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() error = %v, want nil", err)
+	}
+	pgid := cmd.Process.Pid
+
+	deadline := time.Now().Add(30 * time.Second)
+	if !awaitProbeStarted(dir, deadline) {
+		_ = signalProcessGroup(pgid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+		t.Fatal("cancellation-probe script never created its own started marker")
+	}
+
+	if err := signalProcessGroup(pgid, syscall.SIGINT); err != nil {
+		t.Fatalf("signalProcessGroup(pgid, SIGINT) error = %v, want nil", err)
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		t.Errorf("cmd.Wait() = %v, want a clean exit(0) after a graceful SIGINT trap", waitErr)
+	}
+}
+
+func TestTransportProbeScriptRequiresForcefulTermination(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := agenttest.WriteScript(t, dir, "transport-probe", transportProbeScript)
+
+	cmd := exec.Command(script) //nolint:gosec // script is this test's own fixture
+	cmd.Dir = dir
+	procutil.SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() error = %v, want nil", err)
+	}
+	pgid := cmd.Process.Pid
+	t.Cleanup(func() {
+		_ = signalProcessGroup(pgid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	})
+
+	deadline := time.Now().Add(30 * time.Second)
+	if !awaitProbeStarted(dir, deadline) {
+		t.Fatal("transport-probe script never created its own started marker")
+	}
+
+	if err := signalProcessGroup(pgid, syscall.SIGKILL); err != nil {
+		t.Fatalf("signalProcessGroup(pgid, SIGKILL) error = %v, want nil", err)
+	}
+	waitErr := cmd.Wait()
+	if !waitStatusSignaled(t, waitErr) {
+		t.Errorf("cmd.Wait() = %v, want the process to have been terminated by SIGKILL rather than exiting on its own", waitErr)
 	}
 }
 
