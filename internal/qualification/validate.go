@@ -381,15 +381,7 @@ func presentGrade(grades map[Surface]map[Capability]Grade, surface Surface, capa
 // baseline grades, an incomplete standing naming the first unmeasured surface,
 // or a missing standing when no structured native surface was measured.
 func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability Capability, measured []Surface) (Grade, Surface, nativeReferenceState) {
-	var structured []Surface
-	for _, surface := range measurableSurfaces {
-		if surface != SurfaceNativeJSON && surface != SurfaceNativeStreamJSON {
-			continue
-		}
-		if slices.Contains(measured, surface) {
-			structured = append(structured, surface)
-		}
-	}
+	structured := measuredStructuredNatives(measured)
 	if len(structured) == 0 {
 		return "", "", nativeReferenceMissing
 	}
@@ -404,15 +396,156 @@ func nativeReferenceStanding(grades map[Surface]map[Capability]Grade, capability
 	return richestNativeReference(surfaceGrades...), "", nativeReferenceGraded
 }
 
+// measuredStructuredNatives returns the structured native surfaces this
+// run measured, in measurableSurfaces order. native_text is excluded;
+// it is not a structured surface.
+func measuredStructuredNatives(measured []Surface) []Surface {
+	var structured []Surface
+	for _, surface := range measurableSurfaces {
+		if surface != SurfaceNativeJSON && surface != SurfaceNativeStreamJSON {
+			continue
+		}
+		if slices.Contains(measured, surface) {
+			structured = append(structured, surface)
+		}
+	}
+	return structured
+}
+
+// comparableCaseGrades derives, for one capability, each measured surface's
+// per-case grade as the comparison reads it. A case missing from a surface's
+// map carries no obligation. A row excluded because the surface stays silent on
+// a condition that does arise is read as a gap.
+func comparableCaseGrades(records []Record, profile RuntimeProfile, capability Capability, measured []Surface) map[Surface]map[Case]Grade {
+	observed := map[Surface]map[Case]Grade{}
+	for i := range records {
+		rec := &records[i]
+		if rec.Scenario != ScenarioSemanticProbe || rec.Capability != capability || rec.SemanticCase == nil {
+			continue
+		}
+		if observed[rec.Surface] == nil {
+			observed[rec.Surface] = map[Case]Grade{}
+		}
+		observed[rec.Surface][*rec.SemanticCase] = rec.Grade
+	}
+
+	grades := map[Surface]map[Case]Grade{}
+	put := func(surface Surface, caseID Case, grade Grade) {
+		if grades[surface] == nil {
+			grades[surface] = map[Case]Grade{}
+		}
+		grades[surface][caseID] = grade
+	}
+	for _, surface := range measured {
+		for _, caseID := range CapabilityCases[capability] {
+			grade, ok := observed[surface][caseID]
+			if !ok {
+				continue
+			}
+			switch grade {
+			case GradeDeclaredGap:
+				continue
+			case GradeNotInducible:
+				if profile.CaseExclusion(surface, capability, caseID) == ExclusionSurfaceSilent {
+					put(surface, caseID, GradeGap)
+				}
+				continue
+			}
+			put(surface, caseID, grade)
+		}
+	}
+	return grades
+}
+
+// caseNativeReference derives one case's native reference from the structured
+// native surfaces that carry that case's obligation: the richest of their
+// grades, an incomplete standing naming the first such surface without a
+// numeric grade, or a missing standing when none carries the obligation.
+func caseNativeReference(grades map[Surface]map[Case]Grade, structured []Surface, caseID Case) (Grade, Surface, nativeReferenceState) {
+	collected := make([]Grade, 0, len(structured))
+	for _, surface := range structured {
+		grade, ok := grades[surface][caseID]
+		if !ok {
+			continue
+		}
+		if _, numeric := numericGrade(grade); !numeric {
+			return "", surface, nativeReferenceIncomplete
+		}
+		collected = append(collected, grade)
+	}
+	if len(collected) == 0 {
+		return "", "", nativeReferenceMissing
+	}
+	return richestNativeReference(collected...), "", nativeReferenceGraded
+}
+
+// explainSemanticComparisonRow derives one semantic capability's standing case
+// by case, so each side answers for the same obligation. A case only one side
+// carries settles nothing and drops out for both.
+func explainSemanticComparisonRow(records []Record, profile RuntimeProfile, capability Capability, measured []Surface) RowOutcome {
+	label := string(capability)
+	if !slices.Contains(measured, SurfaceProtocol) {
+		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
+	}
+	structured := measuredStructuredNatives(measured)
+	if len(structured) == 0 {
+		// With no structured native surface, there is nothing for the protocol
+		// surface to be below.
+		return RowOutcome{Label: label, Standing: StandingSatisfied}
+	}
+
+	grades := comparableCaseGrades(records, profile, capability, measured)
+	for _, caseID := range CapabilityCases[capability] {
+		protocolGrade, protocolCarried := grades[SurfaceProtocol][caseID]
+		protocolRank, protocolNumeric := numericGrade(protocolGrade)
+		if protocolCarried && !protocolNumeric {
+			// An obligation the protocol surface carries and nobody measured
+			// settles nothing about parity.
+			return RowOutcome{
+				Label:    label,
+				Standing: StandingUnmeasured,
+				Cause:    fmt.Sprintf("protocol %s not measured", caseID),
+			}
+		}
+		referenceGrade, unmeasuredSurface, standing := caseNativeReference(grades, structured, caseID)
+		switch standing {
+		case nativeReferenceMissing:
+			continue
+		case nativeReferenceIncomplete:
+			return RowOutcome{
+				Label:    label,
+				Standing: StandingUnmeasured,
+				Cause:    fmt.Sprintf("native reference incomplete: %s %s not measured", unmeasuredSurface, caseID),
+			}
+		}
+		if !protocolCarried {
+			continue
+		}
+		referenceRank, _ := numericGrade(referenceGrade)
+		if protocolRank < referenceRank {
+			return RowOutcome{
+				Label:    label,
+				Standing: StandingBelow,
+				Cause:    fmt.Sprintf("protocol %s %s below native reference %s", caseID, protocolGrade, referenceGrade),
+			}
+		}
+	}
+	return RowOutcome{Label: label, Standing: StandingSatisfied}
+}
+
 // explainComparisonRow derives one comparison capability's standing
 // against the ordered condition table: an absent or unmeasured
 // protocol baseline, an incomplete or missing native reference, or a
-// rank comparison between the two.
-func explainComparisonRow(grades map[Surface]map[Capability]Grade, capability Capability, measured []Surface) RowOutcome {
+// rank comparison between the two. A capability that owns a case set
+// is compared case by case against the same obligations on both sides.
+func explainComparisonRow(records []Record, grades map[Surface]map[Capability]Grade, profile RuntimeProfile, capability Capability, measured []Surface) RowOutcome {
 	label := string(capability)
 	protocolGrade, present := presentGrade(grades, SurfaceProtocol, capability)
 	if !present {
 		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "baseline record missing"}
+	}
+	if len(CapabilityCases[capability]) > 0 {
+		return explainSemanticComparisonRow(records, profile, capability, measured)
 	}
 	if protocolGrade == GradeNotObserved {
 		return RowOutcome{Label: label, Standing: StandingUnmeasured, Cause: "protocol surface not measured"}
@@ -487,7 +620,7 @@ func ExplainEligibility(records []Record, declarations RuntimeProfile) Eligibili
 		NativeReferenceAbsent: !slices.Contains(measured, SurfaceNativeJSON) && !slices.Contains(measured, SurfaceNativeStreamJSON),
 	}
 	for _, capability := range comparisonCapabilities {
-		report.Rows = append(report.Rows, explainComparisonRow(grades, capability, measured))
+		report.Rows = append(report.Rows, explainComparisonRow(records, grades, declarations, capability, measured))
 	}
 	for _, class := range singletonRowClasses {
 		report.Rows = append(report.Rows, explainSingletonRow(records, class))
@@ -1169,6 +1302,24 @@ func (v *setValidation) checkExcludedCases(declarations RuntimeProfile) error {
 	return nil
 }
 
+// notInducibleRequiredSurfaces returns the surface set a not_inducible grade
+// must cover for one (capability, case) pair: every measured surface for a
+// catalog-wide case, otherwise the profile's not_inducible_cases entries for
+// caseID, intersected with measured so a declared-absent surface is never
+// required.
+func notInducibleRequiredSurfaces(declarations RuntimeProfile, caseID Case, measured []Surface) []Surface {
+	if slices.Contains(CatalogNotInducibleCases, caseID) {
+		return measured
+	}
+	var required []Surface
+	for _, entry := range declarations.NotInducibleCases {
+		if entry.Case == caseID {
+			required = append(required, entry.Surface)
+		}
+	}
+	return intersectSurfaces(required, measured)
+}
+
 // checkExcludedCase enforces the closed excluded-case rules for one
 // (capability, case) pair.
 func (v *setValidation) checkExcludedCase(declarations RuntimeProfile, capability Capability, caseID Case) error {
@@ -1198,8 +1349,12 @@ func (v *setValidation) checkExcludedCase(declarations RuntimeProfile, capabilit
 		}
 	}
 	if len(catalog) > 0 {
-		if missing := missingSurfaces(catalog, v.measured); len(missing) > 0 {
+		required := notInducibleRequiredSurfaces(declarations, caseID, v.measured)
+		if missing := missingSurfaces(catalog, required); len(missing) > 0 {
 			return fmt.Errorf("capability %s case %s not-inducible grade is missing on surfaces %v", capability, caseID, missing)
+		}
+		if extra := missingSurfaces(required, catalog); len(extra) > 0 {
+			return fmt.Errorf("capability %s case %s carries an unexpected not-inducible grade on surfaces %v", capability, caseID, extra)
 		}
 	}
 	if len(declared) == 0 && len(catalog) == 0 {

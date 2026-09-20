@@ -862,10 +862,10 @@ func TestValidatorExcludedCaseControls(T *testing.T) {
 
 		fixture := NewFixture(FixtureQualified)
 		fixture.Finalize()
-		declareNotInducible(fixture, SurfaceProtocol, CapabilityRetryClassification, CaseHumanInput)
-		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityRetryClassification, CaseHumanInput)
-		// native_stream_json intentionally left observed: not_inducible
-		// must cover every measured surface.
+		declareNotInducible(fixture, SurfaceProtocol, CapabilityRetryClassification, CaseUnknownOutcome)
+		declareNotInducible(fixture, SurfaceNativeJSON, CapabilityRetryClassification, CaseUnknownOutcome)
+		// native_stream_json intentionally left observed: a catalog-wide
+		// not-inducible case must cover every measured surface.
 		path := WriteEvidenceFile(T, fixture.Records)
 		_, err := ValidateObservations(path)
 		if err == nil {
@@ -1020,19 +1020,26 @@ func TestValidatorAllExcludedBaselineControl(T *testing.T) {
 
 	fixture := NewFixture(FixtureQualified)
 	fixture.Finalize()
+	var notInducible []SurfaceNotInducible
 	for _, surface := range measuredSurfaces(fixture.Declarations()) {
 		declareNotInducible(fixture, surface, CapabilityTurnDisposition, CaseRuntimeRefusal)
+		fixture.FindFirst(MatchSemantic(surface, CapabilityTurnDisposition, CaseRuntimeRefusal)).Detail = NotInducibleChannelTooSmall
+		notInducible = append(notInducible, SurfaceNotInducible{Surface: surface, Case: CaseRuntimeRefusal, Reason: NotInducibleChannelTooSmall})
 		for _, caseID := range CapabilityCases[CapabilityRetryClassification] {
 			declareNotInducible(fixture, surface, CapabilityRetryClassification, caseID)
+			if caseID != CaseUnknownOutcome {
+				fixture.FindFirst(MatchSemantic(surface, CapabilityRetryClassification, caseID)).Detail = NotInducibleChannelTooSmall
+				notInducible = append(notInducible, SurfaceNotInducible{Surface: surface, Case: caseID, Reason: NotInducibleChannelTooSmall})
+			}
 		}
 	}
 	path := WriteEvidenceFile(T, fixture.Records)
-	_, err := ValidateObservations(path)
+	_, err := ValidateObservationsWithDeclarations(path, RuntimeProfile{NotInducibleCases: notInducible})
 	if err == nil {
-		T.Fatal("ValidateObservations() = nil error, want rejection of a surface-capability with every case excluded")
+		T.Fatal("ValidateObservationsWithDeclarations() = nil error, want rejection of a surface-capability with every case excluded")
 	}
 	if !strings.Contains(err.Error(), "has every case excluded") {
-		T.Errorf("ValidateObservations() error = %v, want it to name the all-excluded surface and capability", err)
+		T.Errorf("ValidateObservationsWithDeclarations() error = %v, want it to name the all-excluded surface and capability", err)
 	}
 }
 
