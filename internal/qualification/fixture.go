@@ -1241,6 +1241,24 @@ func (f *Fixture) SetSemanticObservation(surface Surface, capability Capability,
 	return nil
 }
 
+// SetSemanticNotInducible writes the closed not_inducible shape onto the
+// matching semantic Case record (GradeNotInducible, OutcomeNotInducible, reason
+// as detail, null session_id and evidence_path) and rewrites the baseline.
+// reason states why the case was not induced here, or NotInducibleDetail where
+// no inducer exists.
+func (f *Fixture) SetSemanticNotInducible(surface Surface, capability Capability, caseID Case, reason string) {
+	rec := f.FindFirst(MatchSemantic(surface, capability, caseID))
+	if rec == nil {
+		return
+	}
+	rec.Grade = GradeNotInducible
+	rec.Outcome = OutcomeNotInducible
+	rec.Detail = reason
+	rec.SessionID = nil
+	rec.EvidencePath = nil
+	f.UpdateSemanticBaseline(surface, capability)
+}
+
 // SetSemanticLiveDeclaredGap writes the live declared-gap shape for caseID (and
 // its DeclaredGapPeers partner, if any) onto every declarable measured surface,
 // using that surface's observed session identifier. It returns an error naming
