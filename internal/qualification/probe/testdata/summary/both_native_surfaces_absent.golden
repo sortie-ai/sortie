@@ -1,5 +1,7 @@
 Eligibility: qualified
 Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it.
+Product conformance: qualified
+The effective adapter meets every load-bearing obligation, counting what Sortie's own code supplies outside the protocol.
 Declared-absent surfaces:
 native_json: declared absent (surface_not_offered); corroborated
 native_stream_json: declared absent (surface_not_offered); corroborated
@@ -7,6 +9,10 @@ no structured native surface was measured: every comparison row stands on the pr
 Blocking rows:
 none
 Unmeasured rows:
+none
+Conformance-blocking rows:
+none
+Conformance-unmeasured rows:
 none
 Excluded cases:
 none

@@ -1,9 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 4,
   "profile_digest": "407b4a496684cc43457bc32e87acdf6cb7cae8aad3d767ff2fde4fe4ccd728d6",
   "measured_at": "2026-09-15",
   "expectation": {
     "Verdict": "unmeasured",
+    "Conformance": null,
     "Grades": [
       {
         "Surface": "protocol",
@@ -87,5 +88,8 @@
       "protocol turn_disposition runtime_refusal: not_observed",
       "protocol turn_disposition success: not_observed"
     ]
-  }
+  },
+  "requested_model": "claude-haiku-4.5",
+  "observed_model": null,
+  "provenance_digest": null
 }

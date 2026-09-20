@@ -69,16 +69,23 @@ func notInducibleAccount(reason string) string {
 // produces. It carries no runtime version, timestamp, session
 // identifier, filesystem path, prompt, or secret value.
 type Conclusions struct {
-	Verdict        qualification.Verdict
-	Grades         []summaryGrade
-	Semantics      []summarySemantic
-	Tokens         []summaryToken
-	Continuations  []summaryContinuation
-	Workspace      string
-	Unobserved     []string
-	Blocking       []string
-	UnmeasuredRows []string
-	Excluded       []string
+	// Verdict is the transport-parity answer and Conformance the product
+	// one. Blocking and UnmeasuredRows carry the rows behind the first,
+	// ConformanceBlocking and ConformanceUnmeasured those behind the
+	// second, so one list cannot stand for the other.
+	Verdict               qualification.Verdict
+	Conformance           qualification.Verdict
+	Grades                []summaryGrade
+	Semantics             []summarySemantic
+	Tokens                []summaryToken
+	Continuations         []summaryContinuation
+	Workspace             string
+	Unobserved            []string
+	Blocking              []string
+	UnmeasuredRows        []string
+	ConformanceBlocking   []string
+	ConformanceUnmeasured []string
+	Excluded              []string
 	// AbsentSurfaces lists every surface the profile declares absent,
 	// with its declared reason.
 	AbsentSurfaces []summaryAbsentSurface
@@ -202,6 +209,7 @@ func ConclusionsFromRecords(records []qualification.Record, verdict qualificatio
 	conclusions.Excluded = slices.Compact(conclusions.Excluded)
 
 	report := qualification.ExplainEligibility(records, profile)
+	conclusions.Conformance = report.Conformance
 	conclusions.NativeReferenceAbsent = report.NativeReferenceAbsent
 	for _, entry := range profile.AbsentSurfaces {
 		conclusions.AbsentSurfaces = append(conclusions.AbsentSurfaces, summaryAbsentSurface{
@@ -219,9 +227,17 @@ func ConclusionsFromRecords(records []qualification.Record, verdict qualificatio
 		case qualification.StandingUnmeasured:
 			conclusions.UnmeasuredRows = append(conclusions.UnmeasuredRows, fmt.Sprintf("%s: %s", row.Label, row.Cause))
 		}
+		switch row.Conformance {
+		case qualification.StandingBelow:
+			conclusions.ConformanceBlocking = append(conclusions.ConformanceBlocking, fmt.Sprintf("%s: %s", row.Label, row.ConformanceCause))
+		case qualification.StandingUnmeasured:
+			conclusions.ConformanceUnmeasured = append(conclusions.ConformanceUnmeasured, fmt.Sprintf("%s: %s", row.Label, row.ConformanceCause))
+		}
 	}
 	slices.Sort(conclusions.Blocking)
 	slices.Sort(conclusions.UnmeasuredRows)
+	slices.Sort(conclusions.ConformanceBlocking)
+	slices.Sort(conclusions.ConformanceUnmeasured)
 
 	return conclusions, nil
 }
@@ -230,8 +246,10 @@ func ConclusionsFromRecords(records []qualification.Record, verdict qualificatio
 // prints after final validation.
 func FormatSummary(conclusions Conclusions) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Eligibility: %s\n", conclusions.Verdict)
-	fmt.Fprintf(&b, "%s\n", qualification.VerdictRationale(conclusions.Verdict))
+	fmt.Fprintf(&b, "%s%s\n", qualification.NotesEligibilityPrefix, conclusions.Verdict)
+	fmt.Fprintf(&b, "%s\n", qualification.QuestionRationale(qualification.QuestionTransportParity, conclusions.Verdict))
+	fmt.Fprintf(&b, "%s%s\n", qualification.NotesConformancePrefix, conclusions.Conformance)
+	fmt.Fprintf(&b, "%s\n", qualification.QuestionRationale(qualification.QuestionProductConformance, conclusions.Conformance))
 	fmt.Fprint(&b, "Declared-absent surfaces:\n")
 	if len(conclusions.AbsentSurfaces) == 0 {
 		fmt.Fprint(&b, "none\n")
@@ -242,27 +260,11 @@ func FormatSummary(conclusions Conclusions) string {
 	if conclusions.NativeReferenceAbsent {
 		fmt.Fprint(&b, "no structured native surface was measured: every comparison row stands on the protocol surface alone\n")
 	}
-	fmt.Fprint(&b, "Blocking rows:\n")
-	if len(conclusions.Blocking) == 0 {
-		fmt.Fprint(&b, "none\n")
-	}
-	for _, entry := range conclusions.Blocking {
-		fmt.Fprintf(&b, "%s\n", entry)
-	}
-	fmt.Fprint(&b, "Unmeasured rows:\n")
-	if len(conclusions.UnmeasuredRows) == 0 {
-		fmt.Fprint(&b, "none\n")
-	}
-	for _, entry := range conclusions.UnmeasuredRows {
-		fmt.Fprintf(&b, "%s\n", entry)
-	}
-	fmt.Fprint(&b, "Excluded cases:\n")
-	if len(conclusions.Excluded) == 0 {
-		fmt.Fprint(&b, "none\n")
-	}
-	for _, entry := range conclusions.Excluded {
-		fmt.Fprintf(&b, "%s\n", entry)
-	}
+	writeSummaryList(&b, "Blocking rows:", conclusions.Blocking)
+	writeSummaryList(&b, "Unmeasured rows:", conclusions.UnmeasuredRows)
+	writeSummaryList(&b, "Conformance-blocking rows:", conclusions.ConformanceBlocking)
+	writeSummaryList(&b, "Conformance-unmeasured rows:", conclusions.ConformanceUnmeasured)
+	writeSummaryList(&b, "Excluded cases:", conclusions.Excluded)
 	fmt.Fprint(&b, "Capability grades:\n")
 	for _, grade := range conclusions.Grades {
 		fmt.Fprintf(&b, "%s %s: %s %s\n", grade.Surface, grade.Capability, grade.Label, grade.Grade)
@@ -284,14 +286,21 @@ func FormatSummary(conclusions Conclusions) string {
 		fmt.Fprintf(&b, "%s: %s (%s %s)\n", continuation.Surface, continuation.Outcome, qualification.StatusLabel(continuation.Grade), continuation.Grade)
 	}
 	fmt.Fprintf(&b, "Workspace security:\n%s\n", conclusions.Workspace)
-	fmt.Fprint(&b, "Unobserved semantic cases:\n")
-	if len(conclusions.Unobserved) == 0 {
-		fmt.Fprint(&b, "none\n")
-	}
-	for _, entry := range conclusions.Unobserved {
-		fmt.Fprintf(&b, "%s\n", entry)
-	}
+	writeSummaryList(&b, "Unobserved semantic cases:", conclusions.Unobserved)
 	return b.String()
+}
+
+// writeSummaryList renders one heading and its entries, printing "none"
+// for an empty list so an empty section is not read as one the summary
+// forgot.
+func writeSummaryList(b *strings.Builder, heading string, entries []string) {
+	fmt.Fprintf(b, "%s\n", heading)
+	if len(entries) == 0 {
+		fmt.Fprint(b, "none\n")
+	}
+	for _, entry := range entries {
+		fmt.Fprintf(b, "%s\n", entry)
+	}
 }
 
 // ExpectationFrom maps the bounded conclusions to the runtime-neutral
@@ -307,10 +316,14 @@ func ExpectationFrom(conclusions Conclusions) qualification.NotesExpectation {
 			Label:      grade.Label,
 		})
 	}
-	return qualification.NotesExpectation{
+	expectation := qualification.NotesExpectation{
 		Verdict:    conclusions.Verdict,
 		Grades:     grades,
 		Excluded:   conclusions.Excluded,
 		Unobserved: conclusions.Unobserved,
 	}
+	if conclusions.Conformance != "" {
+		expectation.Conformance = &conclusions.Conformance
+	}
+	return expectation
 }

@@ -22,6 +22,28 @@ const (
 // Verdicts is the closed verdict set.
 var Verdicts = []Verdict{VerdictQualified, VerdictNotQualified, VerdictUnmeasured}
 
+// Question names what one verdict answers. A run answers both over one
+// observation set, reported apart because an answer to one is not an answer to
+// the other.
+type Question string
+
+const (
+	// QuestionTransportParity asks whether the protocol route can replace the
+	// native route without losing what the operator had. It reads this
+	// runtime's native surfaces as the reference, so a shortfall both routes
+	// share satisfies it.
+	QuestionTransportParity Question = "transport_parity"
+
+	// QuestionProductConformance asks whether the effective adapter meets
+	// Sortie's obligation. It reads no native surface, so nothing excuses a
+	// shortfall, and it counts what Sortie's own code supplies outside the
+	// protocol.
+	QuestionProductConformance Question = "product_conformance"
+)
+
+// Questions is the closed question set.
+var Questions = []Question{QuestionTransportParity, QuestionProductConformance}
+
 // Scenario names the kind of observation one evidence line carries.
 type Scenario string
 

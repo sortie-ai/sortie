@@ -332,20 +332,27 @@ const (
 	StandingUnmeasured Standing = "unmeasured"
 )
 
-// RowOutcome is one load-bearing row's contribution to the verdict.
-// Cause is assembled only from closed vocabulary and is empty when
-// Standing is StandingSatisfied.
+// RowOutcome is one load-bearing row's contribution to the two
+// verdicts. Standing and Cause answer QuestionTransportParity;
+// Conformance and ConformanceCause answer QuestionProductConformance
+// over the same row. Both causes draw only from closed vocabulary and
+// are empty when their standing is StandingSatisfied.
 type RowOutcome struct {
-	Label    string
-	Standing Standing
-	Cause    string
+	Label            string
+	Standing         Standing
+	Cause            string
+	Conformance      Standing
+	ConformanceCause string
 }
 
-// EligibilityReport carries the verdict and every row that produced
-// it, in canonical row order.
+// EligibilityReport carries both verdicts and every row that produced
+// them, in canonical row order. Verdict answers
+// QuestionTransportParity and Conformance answers
+// QuestionProductConformance; neither stands for the other.
 type EligibilityReport struct {
-	Verdict Verdict
-	Rows    []RowOutcome
+	Verdict     Verdict
+	Conformance Verdict
+	Rows        []RowOutcome
 	// NativeReferenceAbsent reports that the run measured no
 	// structured native surface, so every comparison row stands on the
 	// protocol surface alone.
@@ -605,6 +612,155 @@ func explainSingletonRow(records []Record, class RowClass) RowOutcome {
 	}
 }
 
+// tokenCeilingStopUnobserved is the cause a received spend figure leaves the
+// token-ceiling conformance row with: no collection observes a run crossing a
+// finite ceiling or the absence of a dispatch after that crossing stopped it.
+const tokenCeilingStopUnobserved = "a spend figure reaches Sortie outside the protocol, but no run crossed a finite ceiling, so the stop and the absence of a dispatch after it stay unobserved"
+
+// compensatingRecord returns the record by which Sortie's code supplies one
+// capability outside the protocol, or nil. Only a usable reading of a completed
+// observation compensates.
+func compensatingRecord(records []Record, capability Capability) *Record {
+	for i := range records {
+		rec := &records[i]
+		if rec.Surface != SurfaceProtocol || rec.Capability != capability {
+			continue
+		}
+		if SuppliedOutsideProtocol(rec.Source) && rec.Grade == GradeUsable && rec.Outcome == OutcomePass {
+			return rec
+		}
+	}
+	return nil
+}
+
+// conformanceCaseStanding maps one protocol-surface case record onto what it
+// says about the effective adapter, reporting whether the case carries an
+// obligation. An unproduced outcome carries none; a condition no measurer can
+// induce is unmeasured; one that arises unreported and a merely corroborating
+// reading are shortfalls; only a usable reading is satisfied.
+func conformanceCaseStanding(grade Grade, exclusion ExclusionKind) (Standing, bool) {
+	switch grade {
+	case GradeUsable:
+		return StandingSatisfied, true
+	case GradeGap, GradeCorroborationOnly:
+		return StandingBelow, true
+	case GradeDeclaredGap, GradeNotApplicable:
+		return "", false
+	case GradeNotInducible:
+		switch exclusion {
+		case ExclusionSurfaceSilent:
+			return StandingBelow, true
+		case ExclusionNotApplicable:
+			return "", false
+		}
+	}
+	return StandingUnmeasured, true
+}
+
+// explainSemanticConformance derives one semantic capability's product-
+// conformance standing from the protocol surface's case records. Unlike the
+// baseline derivation it never drops a case the measurer could not induce: a
+// row nobody measured is unmeasured, never satisfied.
+func explainSemanticConformance(records []Record, profile RuntimeProfile, capability Capability) (Standing, string) {
+	observed := map[Case]*Record{}
+	for i := range records {
+		rec := &records[i]
+		if rec.Scenario == ScenarioSemanticProbe && rec.Surface == SurfaceProtocol &&
+			rec.Capability == capability && rec.SemanticCase != nil {
+			observed[*rec.SemanticCase] = rec
+		}
+	}
+
+	obligations := 0
+	unmeasured := ""
+	for _, caseID := range CapabilityCases[capability] {
+		rec, ok := observed[caseID]
+		if !ok {
+			if unmeasured == "" {
+				unmeasured = fmt.Sprintf("protocol %s record missing", caseID)
+			}
+			continue
+		}
+		standing, carries := conformanceCaseStanding(rec.Grade, profile.CaseExclusion(SurfaceProtocol, capability, caseID))
+		if !carries {
+			continue
+		}
+		obligations++
+		switch standing {
+		case StandingBelow:
+			return StandingBelow, conformanceCaseCause(caseID, rec)
+		case StandingUnmeasured:
+			if unmeasured == "" {
+				unmeasured = conformanceCaseCause(caseID, rec)
+			}
+		}
+	}
+	switch {
+	case unmeasured != "":
+		return StandingUnmeasured, unmeasured
+	case obligations == 0:
+		return StandingUnmeasured, "no case carries an obligation"
+	}
+	return StandingSatisfied, ""
+}
+
+// conformanceCaseCause names one case's standing on the protocol surface. A
+// not-inducible row carries its reason, the only thing separating a condition
+// no measurer can induce from one the surface never reports.
+func conformanceCaseCause(caseID Case, rec *Record) string {
+	if rec.Grade == GradeNotInducible {
+		return fmt.Sprintf("protocol %s %s: %s", caseID, rec.Grade, rec.Detail)
+	}
+	return fmt.Sprintf("protocol %s %s", caseID, rec.Grade)
+}
+
+// explainConformanceRow derives one comparison capability's product-conformance
+// standing: what the operator gets from the effective adapter, counting a
+// source Sortie's code supplies outside the protocol and reading no native
+// surface. A shortfall this runtime's native surfaces share does not excuse it.
+func explainConformanceRow(records []Record, grades map[Surface]map[Capability]Grade, profile RuntimeProfile, capability Capability) (Standing, string) {
+	// A reading supplied outside the protocol settles that the operator
+	// receives the figure, but the only capability it is published for is the
+	// token ceiling, whose row asserts the figure accumulates against a finite
+	// limit and stops the run. No collection induces that crossing, so a
+	// received figure leaves the row unknown rather than answered.
+	if compensatingRecord(records, capability) != nil {
+		return StandingUnmeasured, tokenCeilingStopUnobserved
+	}
+	if len(CapabilityCases[capability]) > 0 {
+		return explainSemanticConformance(records, profile, capability)
+	}
+	grade, present := presentGrade(grades, SurfaceProtocol, capability)
+	if !present {
+		return StandingUnmeasured, "baseline record missing"
+	}
+	switch grade {
+	case GradeUsable:
+		return StandingSatisfied, ""
+	case GradeGap:
+		return StandingBelow, fmt.Sprintf("protocol %s%s, and nothing outside the protocol supplies it", grade, extensionAccount(records, capability))
+	}
+	return StandingUnmeasured, fmt.Sprintf("protocol %s%s", grade, extensionAccount(records, capability))
+}
+
+// extensionAccount names what the run read of the protocol's extension point
+// for capability. A present-but-unadmitted source most needs telling apart from
+// no source: the figure arrived and cannot be spent as a total. The reading is
+// scoped to capability, so a cause cannot borrow another capability's reading.
+func extensionAccount(records []Record, capability Capability) string {
+	for i := range records {
+		rec := &records[i]
+		if rec.Surface != SurfaceProtocol || rec.Capability != capability || rec.ExtensionSource == nil || rec.ExtensionAdmitted == nil {
+			continue
+		}
+		if *rec.ExtensionSource == ExtensionSourcePresent && !*rec.ExtensionAdmitted {
+			return fmt.Sprintf(" with an extension source %s and not admitted", *rec.ExtensionSource)
+		}
+		return fmt.Sprintf(" with an extension source %s", *rec.ExtensionSource)
+	}
+	return ""
+}
+
 // singletonRowClasses is the fixed order of the four singleton rows in
 // an EligibilityReport, following the four comparison capabilities.
 var singletonRowClasses = []RowClass{RowPolicyPrecondition, RowPermission, RowMCPDelivery, RowEndToEnd}
@@ -620,15 +776,30 @@ func ExplainEligibility(records []Record, declarations RuntimeProfile) Eligibili
 		NativeReferenceAbsent: !slices.Contains(measured, SurfaceNativeJSON) && !slices.Contains(measured, SurfaceNativeStreamJSON),
 	}
 	for _, capability := range comparisonCapabilities {
-		report.Rows = append(report.Rows, explainComparisonRow(records, grades, declarations, capability, measured))
+		row := explainComparisonRow(records, grades, declarations, capability, measured)
+		row.Conformance, row.ConformanceCause = explainConformanceRow(records, grades, declarations, capability)
+		report.Rows = append(report.Rows, row)
 	}
 	for _, class := range singletonRowClasses {
-		report.Rows = append(report.Rows, explainSingletonRow(records, class))
+		row := explainSingletonRow(records, class)
+		// A singleton row reads no native reference, so nothing about it changes
+		// when the native surfaces stop being consulted.
+		row.Conformance, row.ConformanceCause = row.Standing, row.Cause
+		report.Rows = append(report.Rows, row)
 	}
 
+	report.Verdict = verdictOver(report.Rows, func(row RowOutcome) Standing { return row.Standing })
+	report.Conformance = verdictOver(report.Rows, func(row RowOutcome) Standing { return row.Conformance })
+	return report
+}
+
+// verdictOver reduces one question's row standings to its verdict: a single
+// below decides against, an unmeasured row withholds the answer, and only an
+// all-satisfied set qualifies.
+func verdictOver(rows []RowOutcome, standingOf func(RowOutcome) Standing) Verdict {
 	below, unmeasured := false, false
-	for _, row := range report.Rows {
-		switch row.Standing {
+	for _, row := range rows {
+		switch standingOf(row) {
 		case StandingBelow:
 			below = true
 		case StandingUnmeasured:
@@ -637,13 +808,11 @@ func ExplainEligibility(records []Record, declarations RuntimeProfile) Eligibili
 	}
 	switch {
 	case below:
-		report.Verdict = VerdictNotQualified
+		return VerdictNotQualified
 	case unmeasured:
-		report.Verdict = VerdictUnmeasured
-	default:
-		report.Verdict = VerdictQualified
+		return VerdictUnmeasured
 	}
-	return report
+	return VerdictQualified
 }
 
 // ComputeEligibility derives the qualification verdict from the non-final
@@ -1718,13 +1887,32 @@ func AggregateGradeFor(verdict Verdict) Grade {
 // VerdictRationale returns the operator-facing rationale line for a
 // transport-parity verdict.
 func VerdictRationale(verdict Verdict) string {
-	switch verdict {
-	case VerdictQualified:
-		return "Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it."
-	case VerdictNotQualified:
-		return "The protocol surface is below the richest measured native reference on at least one load-bearing row. This runtime stays on its existing integration."
-	case VerdictUnmeasured:
-		return "At least one load-bearing row was not measured. This runtime waits; re-run the profile after the causes listed below are removed."
+	return QuestionRationale(QuestionTransportParity, verdict)
+}
+
+// QuestionRationale returns the operator-facing rationale line for one
+// question's verdict. It is total over Questions and Verdicts, names no
+// runtime, and returns the zero value for a value outside either set.
+func QuestionRationale(question Question, verdict Verdict) string {
+	switch question {
+	case QuestionTransportParity:
+		switch verdict {
+		case VerdictQualified:
+			return "Every load-bearing row was measured, and where a native reference was measured, the protocol surface was not below it."
+		case VerdictNotQualified:
+			return "The protocol surface is below the richest measured native reference on at least one load-bearing row, so the protocol route would cost this runtime's operator something the native route gave them."
+		case VerdictUnmeasured:
+			return "At least one load-bearing row was not measured. This runtime waits; re-run the profile after the causes listed below are removed."
+		}
+	case QuestionProductConformance:
+		switch verdict {
+		case VerdictQualified:
+			return "The effective adapter meets every load-bearing obligation, counting what Sortie's own code supplies outside the protocol."
+		case VerdictNotQualified:
+			return "The effective adapter does not meet at least one load-bearing obligation, and nothing outside the protocol supplies it. The capability does not work for the operator on this runtime, whichever route they take."
+		case VerdictUnmeasured:
+			return "At least one load-bearing obligation was not measured, so whether the effective adapter meets it is unknown; re-run the profile after the causes listed below are removed."
+		}
 	}
 	return ""
 }

@@ -63,9 +63,10 @@ func TestWriteMeasurement(t *testing.T) {
 		t.Parallel()
 
 		measurement := qualification.Measurement{
-			SchemaVersion: 1,
-			ProfileDigest: "digest-fixture",
-			MeasuredAt:    "2026-01-01",
+			SchemaVersion:  4,
+			ProfileDigest:  "digest-fixture",
+			MeasuredAt:     "2026-01-01",
+			RequestedModel: "a-model",
 			Expectation: qualification.NotesExpectation{
 				Verdict: qualification.VerdictQualified,
 				Grades: []qualification.NotesGrade{
@@ -99,10 +100,11 @@ func TestWriteMeasurement(t *testing.T) {
 		t.Parallel()
 
 		measurement := qualification.Measurement{
-			SchemaVersion: 1,
-			ProfileDigest: "digest-fixture",
-			MeasuredAt:    "2026-01-01",
-			Expectation:   qualification.NotesExpectation{Verdict: qualification.VerdictUnmeasured},
+			SchemaVersion:  4,
+			ProfileDigest:  "digest-fixture",
+			MeasuredAt:     "2026-01-01",
+			RequestedModel: "a-model",
+			Expectation:    qualification.NotesExpectation{Verdict: qualification.VerdictUnmeasured},
 		}
 		path := filepath.Join(t.TempDir(), "measurement.json")
 		if err := writeMeasurement(path, measurement); err != nil {

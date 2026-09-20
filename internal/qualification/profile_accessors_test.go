@@ -282,10 +282,13 @@ func TestDecodeRuntimeProfileRejectsUnlaunchableDeclarations(t *testing.T) {
 
 func validMeasurementDoc() map[string]any {
 	return map[string]any{
-		"schema_version": 1,
-		"profile_digest": "a-digest",
-		"measured_at":    "2026-01-01",
-		"expectation":    map[string]any{},
+		"schema_version":    4,
+		"profile_digest":    "a-digest",
+		"measured_at":       "2026-01-01",
+		"expectation":       map[string]any{"Conformance": nil},
+		"requested_model":   "a-model",
+		"observed_model":    nil,
+		"provenance_digest": nil,
 	}
 }
 
@@ -301,13 +304,22 @@ func TestDecodeMeasurementRejections(t *testing.T) {
 		{name: "a missing profile_digest", mutate: func(d map[string]any) { delete(d, "profile_digest") }},
 		{name: "a missing measured_at", mutate: func(d map[string]any) { delete(d, "measured_at") }},
 		{name: "a missing expectation", mutate: func(d map[string]any) { delete(d, "expectation") }},
-		{name: "a schema_version other than one", mutate: func(d map[string]any) { d["schema_version"] = 2 }},
+		{name: "a missing requested_model", mutate: func(d map[string]any) { delete(d, "requested_model") }},
+		{name: "a missing observed_model", mutate: func(d map[string]any) { delete(d, "observed_model") }},
+		{name: "a missing provenance_digest", mutate: func(d map[string]any) { delete(d, "provenance_digest") }},
+		{name: "a schema_version other than four", mutate: func(d map[string]any) { d["schema_version"] = 2 }},
 		{name: "a non-numeric schema_version", mutate: func(d map[string]any) { d["schema_version"] = "one" }},
 		{name: "an empty profile_digest", mutate: func(d map[string]any) { d["profile_digest"] = "" }},
 		{name: "a non-string profile_digest", mutate: func(d map[string]any) { d["profile_digest"] = 7 }},
 		{name: "an empty measured_at", mutate: func(d map[string]any) { d["measured_at"] = "" }},
 		{name: "a non-string measured_at", mutate: func(d map[string]any) { d["measured_at"] = 7 }},
 		{name: "a non-object expectation", mutate: func(d map[string]any) { d["expectation"] = "no" }},
+		{name: "an expectation stating no product answer", mutate: func(d map[string]any) { d["expectation"] = map[string]any{} }},
+		{name: "an empty requested_model", mutate: func(d map[string]any) { d["requested_model"] = "" }},
+		{name: "a non-string requested_model", mutate: func(d map[string]any) { d["requested_model"] = 7 }},
+		{name: "an empty observed_model", mutate: func(d map[string]any) { d["observed_model"] = "" }},
+		{name: "a non-string observed_model", mutate: func(d map[string]any) { d["observed_model"] = 7 }},
+		{name: "an empty provenance_digest", mutate: func(d map[string]any) { d["provenance_digest"] = "" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+" is rejected", func(t *testing.T) {

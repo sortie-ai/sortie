@@ -307,10 +307,21 @@ var probePromptKeys = []string{
 // and a link to its provenance. The date is machine-read data rather than notes
 // prose because ValidateNotes rejects a notes line carrying a date.
 type Measurement struct {
-	SchemaVersion int              `json:"schema_version"` // exactly 1
+	SchemaVersion int              `json:"schema_version"`
 	ProfileDigest string           `json:"profile_digest"`
 	MeasuredAt    string           `json:"measured_at"`
 	Expectation   NotesExpectation `json:"expectation"`
+	// RequestedModel is the model coordinate the run asked for. A runtime may
+	// serve a different one, so this states the request, not the answer.
+	RequestedModel string `json:"requested_model"`
+	// ObservedModel is the model the runtime reported serving. Null while no
+	// reader produces one; defaulting it to the request would republish the
+	// request as an observation.
+	ObservedModel *string `json:"observed_model"`
+	// ProvenanceDigest is the sha256 of the provenance document the same run
+	// published. Without it a measurement stands only on a profile digest and a
+	// date, which two runs of different collector builds share.
+	ProvenanceDigest *string `json:"provenance_digest"`
 }
 
 var entryPointPlaceholders = []string{"{model}", "{policy}", "{prompt}"}
@@ -1282,7 +1293,10 @@ func ReadPublishedSampleCommand(path string) ([]string, error) {
 
 // notesExpectationFields is the exact set of member names a
 // Measurement's expectation object may carry.
-var measurementFieldOrder = []string{"schema_version", "profile_digest", "measured_at", "expectation"}
+var measurementFieldOrder = []string{
+	"schema_version", "profile_digest", "measured_at", "expectation",
+	"requested_model", "observed_model", "provenance_digest",
+}
 
 var measurementFields = func() map[string]bool {
 	fields := make(map[string]bool, len(measurementFieldOrder))
@@ -1315,8 +1329,8 @@ func DecodeMeasurement(data []byte) (Measurement, error) {
 	if err := json.Unmarshal(top["schema_version"], &measurement.SchemaVersion); err != nil {
 		return Measurement{}, fmt.Errorf("schema_version: %w", err)
 	}
-	if measurement.SchemaVersion != 1 {
-		return Measurement{}, fmt.Errorf("schema_version = %d, want 1", measurement.SchemaVersion)
+	if measurement.SchemaVersion != 4 {
+		return Measurement{}, fmt.Errorf("schema_version = %d, want 4", measurement.SchemaVersion)
 	}
 	if err := json.Unmarshal(top["profile_digest"], &measurement.ProfileDigest); err != nil {
 		return Measurement{}, fmt.Errorf("profile_digest: %w", err)
@@ -1333,7 +1347,51 @@ func DecodeMeasurement(data []byte) (Measurement, error) {
 	if err := json.Unmarshal(top["expectation"], &measurement.Expectation); err != nil {
 		return Measurement{}, fmt.Errorf("expectation: %w", err)
 	}
+	if err := requireStatedProductAnswer(top["expectation"]); err != nil {
+		return Measurement{}, fmt.Errorf("expectation: %w", err)
+	}
+	if err := json.Unmarshal(top["requested_model"], &measurement.RequestedModel); err != nil {
+		return Measurement{}, fmt.Errorf("requested_model: %w", err)
+	}
+	if measurement.RequestedModel == "" {
+		return Measurement{}, errors.New("requested_model must be non-empty")
+	}
+	var err error
+	if measurement.ObservedModel, err = decodeStatedString(top["observed_model"]); err != nil {
+		return Measurement{}, fmt.Errorf("observed_model: %w", err)
+	}
+	if measurement.ProvenanceDigest, err = decodeStatedString(top["provenance_digest"]); err != nil {
+		return Measurement{}, fmt.Errorf("provenance_digest: %w", err)
+	}
 	return measurement, nil
+}
+
+// requireStatedProductAnswer rejects an expectation that says nothing about
+// product conformance. Silence would be indistinguishable from a run that
+// answered both questions and published one verdict for both.
+func requireStatedProductAnswer(raw json.RawMessage) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return err
+	}
+	if _, stated := members["Conformance"]; !stated {
+		return errors.New("no Conformance member; state null when the run answered only the transport question")
+	}
+	return nil
+}
+
+// decodeStatedString decodes a member that is either null or a
+// non-empty string. An empty string is rejected: it reads as a stated
+// value while naming nothing.
+func decodeStatedString(raw json.RawMessage) (*string, error) {
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	if value != nil && *value == "" {
+		return nil, errors.New("a stated value must be non-empty; state null when there is none")
+	}
+	return value, nil
 }
 
 // ReadMeasurementFile reads and strictly decodes a Measurement file.

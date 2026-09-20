@@ -104,3 +104,29 @@ func TestRecallRowDoesNotGradeADeclinedAnswerAsLostMemory(t *testing.T) {
 		t.Errorf("session continuation baseline = %s, want %s: an answer that declined measured nothing", baseline.Grade, GradeNotObserved)
 	}
 }
+
+func TestDeclinedRecallDoesNotBlockAVerdict(t *testing.T) {
+	t.Parallel()
+
+	const session = "live-seed-session"
+	fixture := NewFixture(FixtureQualified)
+	seed := Observation{Grade: GradeUsable, Outcome: OutcomePass, Detail: "the seed turn completed and left history", SessionID: session}
+	recall := Observation{Grade: GradeNotObserved, Outcome: OutcomeFixtureInductionFailed, Detail: RecallDeclined, SessionID: session}
+	if err := fixture.SetSessionContinuationObserved(SurfaceProtocol, seed, recall); err != nil {
+		t.Fatalf("SetSessionContinuationObserved(protocol, seed, declined) error = %v, want nil", err)
+	}
+	fixture.Finalize()
+
+	report := publishedReport(t, fixture.Records, fixture.Declarations())
+	row := rowFor(report, CapabilitySessionContinuation)
+
+	if row.Standing != StandingUnmeasured {
+		t.Errorf("session_continuation parity standing = %s, want %s: a declined answer settles nothing about the transport", row.Standing, StandingUnmeasured)
+	}
+	if row.Conformance == StandingBelow {
+		t.Errorf("session_continuation conformance standing = %s, want the row unmeasured rather than a shortfall the operator feels", row.Conformance)
+	}
+	if report.Conformance == VerdictNotQualified {
+		t.Errorf("product conformance = %s, want no verdict resting on a model's refusal", report.Conformance)
+	}
+}
