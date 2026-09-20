@@ -580,9 +580,11 @@ func descendantOf(members []processMember, member processMember, pid int) bool {
 // The qualification.RuntimeProfile.ProbePrompts keys this package
 // substitutes, mirrored here because the map carries no named constants.
 const (
-	promptKeySuccess        = "success"
-	promptKeyRuntimeRefusal = "runtime_refusal"
-	promptKeyToolCall       = "tool_call"
+	promptKeySuccess            = "success"
+	promptKeyRuntimeRefusal     = "runtime_refusal"
+	promptKeyToolCall           = "tool_call"
+	promptKeyContinuationSeed   = "continuation_seed"
+	promptKeyContinuationRecall = "continuation_recall"
 )
 
 func (f *sharedFixture) probePath(name string) string {

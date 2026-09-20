@@ -20,8 +20,8 @@ type collectedObservations struct {
 	permission qualification.Observation
 	policy     qualification.Observation
 
-	continuationGrade  qualification.Grade
-	continuationDetail string
+	continuationSeed   map[qualification.Surface]qualification.Observation
+	continuationRecall map[qualification.Surface]qualification.Observation
 }
 
 // declarableSurfaceUnproduced reports whether every declarable measured
@@ -118,7 +118,13 @@ func gradedEvidence(profile qualification.RuntimeProfile, collected collectedObs
 		return nil, fmt.Errorf("policy precondition: %w", err)
 	}
 
-	fixture.SetSessionContinuation(qualification.SurfaceProtocol, collected.continuationGrade, collected.continuationDetail)
+	for _, surface := range measured {
+		seed := collected.continuationSeed[surface]
+		recall := collected.continuationRecall[surface]
+		if err := fixture.SetSessionContinuationObserved(surface, seed, recall); err != nil {
+			return nil, fmt.Errorf("session continuation on surface %s: %w", surface, err)
+		}
+	}
 
 	fixture.Finalize()
 	return fixture, nil

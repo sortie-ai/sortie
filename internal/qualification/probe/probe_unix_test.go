@@ -103,8 +103,10 @@ func runSemanticOrchestration(args []string, params semanticOrchestrationParams)
 func semanticOrchestrationCoordinates(runtimePath string, notInducible bool) Coordinates {
 	profile := qualification.RuntimeProfile{
 		ProbePrompts: map[string]string{
-			promptKeySuccess:        "please succeed",
-			promptKeyRuntimeRefusal: "please refuse",
+			promptKeySuccess:            "please succeed",
+			promptKeyRuntimeRefusal:     "please refuse",
+			promptKeyContinuationSeed:   "please seed",
+			promptKeyContinuationRecall: "please recall",
 		},
 		EntryPoints: map[qualification.Surface]qualification.EntryPoint{
 			qualification.SurfaceNativeJSON: {Args: []string{"--prompt", "{prompt}"}},
@@ -129,7 +131,9 @@ func semanticOrchestrationCoordinates(runtimePath string, notInducible bool) Coo
 
 func emptyCollectedObservations() *collectedObservations {
 	return &collectedObservations{
-		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		continuationSeed:   map[qualification.Surface]qualification.Observation{},
+		continuationRecall: map[qualification.Surface]qualification.Observation{},
 	}
 }
 

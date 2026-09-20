@@ -33,7 +33,9 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 	}
 
 	collected := collectedObservations{
-		semantic: map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		semantic:           map[qualification.Surface]map[qualification.Case]qualification.Observation{},
+		continuationSeed:   map[qualification.Surface]qualification.Observation{},
+		continuationRecall: map[qualification.Surface]qualification.Observation{},
 	}
 
 	permissionSessionID := "sess-protocol-permission"
@@ -65,14 +67,22 @@ func fullyObservedCollected(profile qualification.RuntimeProfile, toolGrade, per
 			}
 		}
 		collected.semantic[surface] = byCase
+
+		seedID := fmt.Sprintf("sess-%s-seed", surface)
+		collected.continuationSeed[surface] = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "seed", SessionID: seedID}
+		switch continuationGrade {
+		case qualification.GradeNotObserved:
+			collected.continuationRecall[surface] = qualification.Observation{Grade: qualification.GradeNotObserved, Outcome: qualification.OutcomeRuntimeFailed, Detail: qualification.RecallUnobservedActual}
+		case qualification.GradeUsable:
+			collected.continuationRecall[surface] = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: qualification.RecallConfirmedSameSession, SessionID: seedID}
+		default:
+			collected.continuationRecall[surface] = qualification.Observation{Grade: qualification.GradeGap, Outcome: qualification.OutcomePass, Detail: qualification.RecallFreshFallback, SessionID: fmt.Sprintf("sess-%s-recall-fallback", surface)}
+		}
 	}
 
 	collected.toolServer = qualification.Observation{Grade: toolGrade, Outcome: outcomeForSweptGrade(toolGrade), Detail: "tool server induction: " + string(toolGrade), SessionID: "sess-protocol-mcp"}
 	collected.permission = qualification.Observation{Grade: permissionGrade, Outcome: outcomeForSweptGrade(permissionGrade), Detail: "permission induction: " + string(permissionGrade), SessionID: permissionSessionID}
 	collected.policy = qualification.Observation{Grade: qualification.GradeUsable, Outcome: qualification.OutcomePass, Detail: "policy precondition", SessionID: "sess-protocol-policy"}
-
-	collected.continuationGrade = continuationGrade
-	collected.continuationDetail = "continuation induction: " + string(continuationGrade)
 
 	return collected
 }
