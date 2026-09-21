@@ -290,7 +290,15 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 	copilotSessionID := params.ResumeSessionID
 	if copilotSessionID == "" {
-		copilotSessionID = agentcore.NewUUIDv4()
+		uuid, uuidErr := agentcore.NewUUIDv4()
+		if uuidErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "could not generate a session id",
+				Err:     uuidErr,
+			}
+		}
+		copilotSessionID = uuid
 	}
 
 	state := &sessionState{

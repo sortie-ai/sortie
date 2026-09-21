@@ -151,7 +151,15 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		sessionUUID = params.ResumeSessionID
 		isContinuation = true
 	} else {
-		sessionUUID = agentcore.NewUUIDv4()
+		uuid, uuidErr := agentcore.NewUUIDv4()
+		if uuidErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "could not generate a session id",
+				Err:     uuidErr,
+			}
+		}
+		sessionUUID = uuid
 	}
 
 	state := &sessionState{
