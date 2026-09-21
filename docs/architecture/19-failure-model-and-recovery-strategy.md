@@ -21,6 +21,7 @@
    - User input requested (hard fail)
    - Subprocess exit
    - Stalled session (no activity)
+   - Credential not verified before the first turn
 
 4. `Tracker Failures`
    - API transport errors

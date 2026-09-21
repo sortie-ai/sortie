@@ -285,6 +285,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - An adapter whose runtime publishes a task-completion report carries a test driving both a turn the agent declared complete and a turn the runtime ended without that report through the adapter, asserting the two dispositions differ
 - A turn whose subprocess standard-error handle is held open by a surviving descendant still publishes its outcome and cleans up its process group within a bounded time
 - A turn whose subprocess standard-output handle is held open by a surviving descendant still ends within the adapter's own bound, naming the runtime's exit, rather than reaching the orchestrator's stall timeout
+- Each kind that launches a runtime carries the shared credential-verification conformance assertion (§10.9), driven against a working, a refused, and, for every kind requiring an agent command, an SSH connection-failure case; registry-enumerated completeness fails, naming the kind, when any registered kind lacks a runnable test calling that assertion
+- Each gated live suite, its own environment variable set, adds a working-credential case and, when its credential-override coordinate is set, a refused-credential case proving the run ends before any working session with `credential_unverified` and no retryable kind is reported that way
 
 ### 17.6 Observability
 

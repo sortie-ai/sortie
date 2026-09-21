@@ -294,6 +294,17 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   if run_hook("before_run", workspace.path) failed:
     fail_worker("before_run hook error")
 
+  // Credential-verification step (§10.9): a separate session, one
+  // fixed request, stopped, before the working session starts.
+  notify("verifying the agent credential")
+  verify_result, verify_err = agent_adapter.verify_credential(workspace=workspace.path)
+  fold verify_result into the run's usage mirror
+  offset = the mirror's componentwise watermark
+  if verify_err failed:
+    run_hook_best_effort("after_run", workspace.path)
+    fail_worker("agent session start error", verify_err)
+  log_info("agent credential verified", duration_ms)
+
   session = agent_adapter.start_session(workspace=workspace.path)
   if session failed:
     run_hook_best_effort("after_run", workspace.path)
