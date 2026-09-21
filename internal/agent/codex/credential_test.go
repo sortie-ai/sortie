@@ -58,6 +58,8 @@ func serveCredentialFullTurn(client *bufio.Scanner, out io.Writer, status string
 // credential surfaces as a failed turn.
 func TestCredentialVerification(t *testing.T) {
 	// Not parallel: t.Setenv carries the fake ssh stand-in on PATH.
+	t.Setenv("CODEX_API_KEY", "")
+
 	verifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioCredentialFullTurn, credentialFullTurnParams{Status: "completed"})
 	unverifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "codex", scenarioCredentialFullTurn, credentialFullTurnParams{Status: "failed"})
 
