@@ -18,10 +18,11 @@ type credentialPropertyAdapter struct {
 	verifyRunFn func(ctx context.Context, params domain.RunTurnParams) (domain.TurnResult, error)
 	workRunFn   func(params domain.RunTurnParams) (domain.TurnResult, error)
 
-	mu                 sync.Mutex
-	workingStartCalls  int
-	workingRunCalls    int
-	workingStartParams domain.StartSessionParams
+	mu                  sync.Mutex
+	workingStartCalls   int
+	workingRunCalls     int
+	workingStartParams  domain.StartSessionParams
+	verifyWorkspacePath string
 }
 
 type credentialPropertySessionMeta struct{}
@@ -30,6 +31,9 @@ var _ domain.AgentAdapter = (*credentialPropertyAdapter)(nil)
 
 func (a *credentialPropertyAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	if params.CredentialVerification {
+		a.mu.Lock()
+		a.verifyWorkspacePath = params.WorkspacePath
+		a.mu.Unlock()
 		return domain.Session{ID: "sess-verify", Internal: &credentialPropertySessionMeta{}}, nil
 	}
 	a.mu.Lock()
@@ -61,6 +65,12 @@ func (a *credentialPropertyAdapter) working() (start, run int, params domain.Sta
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.workingStartCalls, a.workingRunCalls, a.workingStartParams
+}
+
+func (a *credentialPropertyAdapter) workspacePath() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.verifyWorkspacePath
 }
 
 func runCredentialWorker(t *testing.T, ctx context.Context, cfg config.ServiceConfig, adapter domain.AgentAdapter, onEvent func(domain.AgentEvent)) WorkerResult {
@@ -122,6 +132,27 @@ func TestRunWorkerAttempt_PassingCredentialStepStartsTheWorkingSession(t *testin
 	}
 	if params.CredentialVerification || params.ResumeSessionID != "resume-abc" {
 		t.Errorf("working StartSessionParams = {CredentialVerification: %v, ResumeSessionID: %q}, want {false, %q}", params.CredentialVerification, params.ResumeSessionID, "resume-abc")
+	}
+}
+
+// TestRunWorkerAttempt_HandoffEvidenceBaselineCapturedBeforeCredentialVerification
+// proves the baseline is read before credential verification touches the
+// workspace: the verification turn below only turns the workspace into a
+// Git repository once it runs, so a baseline captured afterward would find
+// a repository where a baseline captured beforehand finds none.
+func TestRunWorkerAttempt_HandoffEvidenceBaselineCapturedBeforeCredentialVerification(t *testing.T) {
+	t.Parallel()
+
+	adapter := &credentialPropertyAdapter{}
+	adapter.verifyRunFn = func(context.Context, domain.RunTurnParams) (domain.TurnResult, error) {
+		initGitRepo(t, adapter.workspacePath())
+		return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+	}
+
+	result := runCredentialWorker(t, context.Background(), defaultWorkerConfig(t.TempDir()), adapter, nil)
+
+	if result.HandoffEvidenceBaselineError == nil {
+		t.Error("WorkerResult.HandoffEvidenceBaselineError = nil, want a non-Git-workspace error: the baseline must be captured before credential verification can turn the workspace into a Git repository")
 	}
 }
 

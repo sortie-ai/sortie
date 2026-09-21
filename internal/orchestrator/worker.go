@@ -992,6 +992,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		})
 	}
 
+	if handoffEvidencePolicy != config.HandoffEvidenceOff {
+		baseline, baselineErr := workspace.CaptureHandoffEvidenceBaseline(ctx, wsResult.Path)
+		if baselineErr != nil {
+			handoffEvidenceBaselineErr = baselineErr
+		} else {
+			handoffEvidenceBaseline = &baseline
+		}
+	}
+
 	verificationStarted := time.Now()
 	verificationResult, verificationErr := agentcore.VerifyCredential(ctx, deps.AgentAdapter, agentcore.CredentialVerification{
 		Session:   params,
@@ -1029,15 +1038,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	logger.Info("agent credential verified", slog.Int64("duration_ms", time.Since(verificationStarted).Milliseconds()))
-
-	if handoffEvidencePolicy != config.HandoffEvidenceOff {
-		baseline, baselineErr := workspace.CaptureHandoffEvidenceBaseline(ctx, wsResult.Path)
-		if baselineErr != nil {
-			handoffEvidenceBaselineErr = baselineErr
-		} else {
-			handoffEvidenceBaseline = &baseline
-		}
-	}
 
 	session, err = deps.AgentAdapter.StartSession(ctx, params)
 	if err != nil {
