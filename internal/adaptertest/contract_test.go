@@ -1,6 +1,7 @@
 package adaptertest
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,8 +16,6 @@ import (
 	"sync"
 	"testing"
 	"unicode"
-
-	"github.com/sortie-ai/sortie/internal/qualification"
 )
 
 // contractRegistryImportPath is the import path the checker resolves the
@@ -1623,13 +1622,12 @@ func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 // contractRuntimeProfilesGlob matches every runtime profile document. A
 // package variable, not an inline literal, so a staleness-guard test can
 // point it at a scratch fixture directory.
-var contractRuntimeProfilesGlob = filepath.Join("..", "qualification", "profiles", "*.json")
+var contractRuntimeProfilesGlob = filepath.Join("..", "..", "tools", "qualify", "profiles", "*.json")
 
-// contractProfileDeclaredTokens reads every profile matching pattern via
-// qualification.ReadRuntimeProfileFile, unioning each profile's
-// identity_tokens into tokenSet and returning the lowercased
-// profile-declared subset. A profile that fails to decode contributes an
-// extraction error rather than being skipped.
+type contractIdentityTokensDocument struct {
+	IdentityTokens []string `json:"identity_tokens"`
+}
+
 func contractProfileDeclaredTokens(pattern string, tokenSet map[string]bool) (profileDeclaredTokens map[string]bool, extractionErrors []contractViolation) {
 	profileDeclaredTokens = map[string]bool{}
 	profilePaths, globErr := filepath.Glob(pattern)
@@ -1637,12 +1635,17 @@ func contractProfileDeclaredTokens(pattern string, tokenSet map[string]bool) (pr
 		extractionErrors = append(extractionErrors, contractViolation{text: "glob runtime profiles: " + globErr.Error()})
 	}
 	for _, profilePath := range profilePaths {
-		profile, readErr := qualification.ReadRuntimeProfileFile(profilePath)
+		data, readErr := os.ReadFile(profilePath) //nolint:gosec // the caller supplies a repository-tracked glob
 		if readErr != nil {
 			extractionErrors = append(extractionErrors, contractViolation{text: "read runtime profile " + profilePath + ": " + readErr.Error()})
 			continue
 		}
-		for _, tok := range profile.IdentityTokens {
+		var doc contractIdentityTokensDocument
+		if decodeErr := json.Unmarshal(data, &doc); decodeErr != nil {
+			extractionErrors = append(extractionErrors, contractViolation{text: "decode runtime profile " + profilePath + ": " + decodeErr.Error()})
+			continue
+		}
+		for _, tok := range doc.IdentityTokens {
 			lower := strings.ToLower(tok)
 			tokenSet[lower] = true
 			profileDeclaredTokens[lower] = true
@@ -2526,6 +2529,7 @@ var contractCaptureTeardownRoots = []struct {
 }{
 	{filepath.Join("..", "..", "cmd"), "github.com/sortie-ai/sortie/cmd"},
 	{filepath.Join("..", "..", "internal"), "github.com/sortie-ai/sortie/internal"},
+	{filepath.Join("..", "..", "tools", "qualify"), "github.com/sortie-ai/sortie/tools/qualify"},
 }
 
 // contractWalkCaptureAndTeardown walks both roots through contractWalkRoot

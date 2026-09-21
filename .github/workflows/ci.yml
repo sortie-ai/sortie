@@ -58,12 +58,22 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version: latest
           verify: false
           # Skip the action's analysis cache: stale entries cause flaky
           # false positives (golangci-lint#5979) that reproduce on no rerun.
           # A cache shared across the matrix would also carry a result over
           # from the wrong GOOS. setup-go's caches are unaffected.
+          skip-cache: true
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: matrix.goos != 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: latest
+          verify: false
+          working-directory: tools/qualify
           skip-cache: true
 
   lint-shell:
@@ -125,12 +135,23 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
         with:
-          version-file: .tool-versions
+          version: latest
           verify: false
           args: --config .golangci-no-tests.yml --tests=false ./...
           # Skip the action's analysis cache: this job runs a different
           # analyzer scope than the main Lint job, and a cache shared
           # between the two could carry a result over from the wrong scope.
+          skip-cache: true
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: matrix.goos != 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+        with:
+          version: latest
+          verify: false
+          working-directory: tools/qualify
+          args: --config ../../.golangci-no-tests.yml --tests=false ./...
           skip-cache: true
 
   test:
@@ -155,6 +176,9 @@ jobs:
 
       - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Run tool module tests
+        run: make test-tools
 
       - name: Test nightly incident integration
         run: make test-shell

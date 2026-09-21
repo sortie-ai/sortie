@@ -8,7 +8,7 @@ Product conformance: not_qualified
 
 The two answers are computed separately and diverge here. No load-bearing row puts the protocol surface below the richest measured native reference, and retry classification is unmeasured on that surface, so whether the protocol route can stand in for the native one has no answer yet. Product conformance does have one: the effective adapter does not meet the token-accounting obligation, and nothing outside the protocol supplies it, so that capability does not work for the operator whichever route they take.
 
-This file is validated against the tracked measurement under `internal/qualification/probe/testdata/kiro-cli/`, so an edit to a grade row below reddens the staleness gate until a fresh run replaces that artifact.
+This file is validated against the tracked measurement under `tools/qualify/probe/testdata/kiro-cli/`, so an edit to a grade row below reddens the staleness gate until a fresh run replaces that artifact.
 
 ## Where to get the volatile facts
 

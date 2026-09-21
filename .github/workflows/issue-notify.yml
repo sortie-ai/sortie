@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
 
-# Cancelling drops the notification outright.
 concurrency:
   group: issue-notify
   cancel-in-progress: false
@@ -19,10 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
-    # The Nightly workflow already reports its own incidents. Filtering on the
-    # label is sound because scripts/nightly-issue.sh attaches it inside the
-    # same GraphQL createIssue mutation that files the issue, so it is present
-    # in this payload rather than added by a later call racing this workflow.
     if: >-
       !contains(github.event.issue.labels.*.name, 'ci-nightly')
 
@@ -36,8 +31,6 @@ jobs:
         continue-on-error: true
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
-          # An issue title is attacker-controlled, and `${{ }}` inside a run
-          # block substitutes before the shell parses it.
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_URL: ${{ github.event.issue.html_url }}
