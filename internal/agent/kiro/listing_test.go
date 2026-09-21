@@ -3,6 +3,7 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -110,19 +111,26 @@ func runListingCallScenario(args []string, params listingCallParams) int {
 func TestDeleteVerificationConversation(t *testing.T) {
 	t.Parallel()
 
+	marshalListing := func(t *testing.T, cwd string, sessions ...kiroSessionListing) string {
+		t.Helper()
+		data, err := json.Marshal([]kiroSessionListGroup{{Cwd: cwd, Sessions: sessions}})
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		return string(data)
+	}
+	priorSession := kiroSessionListing{SessionID: "existing-1", Source: "classic", Title: "prior"}
 	baseline := func(cwd string) string {
-		return `[{"cwd":"` + cwd + `","sessions":[{"sessionId":"existing-1","source":"classic","title":"prior"}]}]`
+		return marshalListing(t, cwd, priorSession)
 	}
 	oneNew := func(cwd string) string {
-		return `[{"cwd":"` + cwd + `","sessions":[` +
-			`{"sessionId":"existing-1","source":"classic","title":"prior"},` +
-			`{"sessionId":"` + verificationUUID + `","source":"classic","title":"a"}]}]`
+		return marshalListing(t, cwd, priorSession, kiroSessionListing{SessionID: verificationUUID, Source: "classic", Title: "a"})
 	}
 	twoNew := func(cwd string) string {
-		return `[{"cwd":"` + cwd + `","sessions":[` +
-			`{"sessionId":"existing-1","source":"classic","title":"prior"},` +
-			`{"sessionId":"` + verificationUUID + `","source":"classic","title":"a"},` +
-			`{"sessionId":"bb778ea0-6eab-4ce9-b87e-11d6d33dab4f","source":"classic","title":"b"}]}]`
+		return marshalListing(t, cwd,
+			priorSession,
+			kiroSessionListing{SessionID: verificationUUID, Source: "classic", Title: "a"},
+			kiroSessionListing{SessionID: "bb778ea0-6eab-4ce9-b87e-11d6d33dab4f", Source: "classic", Title: "b"})
 	}
 
 	tests := []struct {
