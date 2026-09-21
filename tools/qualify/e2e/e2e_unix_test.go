@@ -143,8 +143,8 @@ func TestTerminalOracle(t *testing.T) {
 		t.Fatal("the orchestrator did not drain within the shared shutdown bound")
 	}
 
-	if len(harness.Agent().PGIDs()) != 1 {
-		t.Fatalf("captured group count = %d, want 1 for the single fixture session", len(harness.Agent().PGIDs()))
+	if len(harness.Agent().PGIDs()) != 2 {
+		t.Fatalf("captured group count = %d, want 2 (the credential verification launch and the working session)", len(harness.Agent().PGIDs()))
 	}
 	for _, pgid := range harness.Agent().PGIDs() {
 		procgroup.AwaitAbsence(t, pgid)

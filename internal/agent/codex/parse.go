@@ -105,7 +105,8 @@ type accountResult struct {
 // accountLoginNotification is the params payload of an
 // account/login/completed notification.
 type accountLoginNotification struct {
-	Success bool `json:"success"`
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
 }
 
 // normalizeBreakdown converts a raw [tokenUsageBreakdown] into a

@@ -326,7 +326,7 @@ func measuredSessionTurn(t *testing.T) ([]domain.AgentEvent, turnOutcome) {
 	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 		discardLogger(), withUsageReader(reader))
 	out := newOutboundReader(outPr)
-	publishHandshake(state, "gemini-cli", "0.59.0")
+	publishHandshake(state, "0.59.0")
 	markSessionKnown(state)
 
 	return measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))

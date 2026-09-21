@@ -1186,7 +1186,7 @@ func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("turn_failed count = %d, want 1 (the recovered detail replaces the masked relay), messages=%q", len(messages), messages)
 	}
-	const wantMessage = "Model not found: nonexistent/nonexistent"
+	const wantMessage = "Model not found: nonexistent/nonexistent; the runtime lists no nonexistent model, which is how it presents a provider with no credential"
 	if messages[0] != wantMessage {
 		t.Errorf("turn_failed message = %q, want %q", messages[0], wantMessage)
 	}
@@ -2852,9 +2852,8 @@ exit 0
 	return writeOpenCodeScript(t, dir, body)
 }
 
-// TestRunTurn_LatchSetDuringPostExitDrain covers P8's third case: a turn
-// whose first JSON event is received only after the exit has been
-// observed must still set the first-JSON latch, so finalizeExitedTurn
+// A turn whose first JSON event is received only after the exit has
+// been observed must still set the first-JSON latch, so finalizeExitedTurn
 // does not re-emit the direct child's standard error at WARN on a turn
 // that otherwise succeeded. The gate opens no earlier than
 // agent.read_timeout_ms after the direct child has already exited and

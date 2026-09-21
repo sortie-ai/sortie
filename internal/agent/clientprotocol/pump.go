@@ -445,11 +445,25 @@ func (p *pumpState) handleStreamEnd() {
 	if p.activeTurn == nil {
 		return
 	}
-	p.recoverThenFinalize(agentcore.TurnEvidence{
+	p.recoverThenFinalize(streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), nil))
+}
+
+func streamEndedEvidence(state *sessionState, message string, cause error) agentcore.TurnEvidence {
+	if agentcore.ConnectionFailedForRequest(state.sshConnectionFailed(), false) {
+		connErr := agentcore.ConnectionFailedError()
+		return agentcore.TurnEvidence{
+			Terminal:          agentcore.TerminalFailure,
+			TerminalErrorKind: connErr.Kind,
+			TerminalMessage:   connErr.Message,
+			Cause:             connErr.Err,
+		}
+	}
+	return agentcore.TurnEvidence{
 		Terminal:          agentcore.TerminalFailure,
 		TerminalErrorKind: domain.ErrPortExit,
-		TerminalMessage:   p.state.release.TurnEndMessage(streamEndedMessage),
-	})
+		TerminalMessage:   message,
+		Cause:             cause,
+	}
 }
 
 // handleAbandonment runs once the release gives up on the connection's reader.
@@ -464,11 +478,7 @@ func (p *pumpState) handleAbandonment() {
 	if p.activeTurn == nil {
 		return
 	}
-	p.finalizeTurn(agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrPortExit,
-		TerminalMessage:   p.state.release.TurnEndMessage(streamEndedMessage),
-	})
+	p.finalizeTurn(streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), nil))
 }
 
 // releaseAbandoned reports whether the release has given up on the connection's
@@ -564,12 +574,7 @@ func (p *pumpState) handleStreamEndMessage(msg *jsonrpc.Message) {
 		})
 		return
 	}
-	p.recoverThenFinalize(agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrPortExit,
-		TerminalMessage:   p.state.release.TurnEndMessage(streamEndedMessage),
-		Cause:             msg.Err,
-	})
+	p.recoverThenFinalize(streamEndedEvidence(p.state, p.state.release.TurnEndMessage(streamEndedMessage), msg.Err))
 }
 
 // handleResponse finalizes the active turn when msg answers its awaited request
@@ -585,7 +590,7 @@ func (p *pumpState) handleResponse(msg *jsonrpc.Message) {
 		p.recoverThenFinalize(agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrResponseError,
-			TerminalMessage:   fmt.Sprintf("session/prompt error %d: %s", msg.Error.Code, msg.Error.Message),
+			TerminalMessage:   fmt.Sprintf("session/prompt error %d: %s", msg.Error.Code, quoteJSONRPCError(msg.Error)),
 		})
 		return
 	}

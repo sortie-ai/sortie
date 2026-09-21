@@ -140,6 +140,8 @@ var goTypeRegistry = map[string]reflect.Type{
 	"contentChunk":                             reflect.TypeFor[contentChunk](),
 	"cost":                                     reflect.TypeFor[cost](),
 	"currentModeUpdate":                        reflect.TypeFor[currentModeUpdate](),
+	"deleteSessionRequest":                     reflect.TypeFor[deleteSessionRequest](),
+	"deleteSessionResponse":                    reflect.TypeFor[deleteSessionResponse](),
 	"diff":                                     reflect.TypeFor[diff](),
 	"elicitationCapabilities":                  reflect.TypeFor[elicitationCapabilities](),
 	"elicitationFormCapabilities":              reflect.TypeFor[elicitationFormCapabilities](),
@@ -812,6 +814,17 @@ func TestSchemaConformance(t *testing.T) {
 	dir := schemaAssetsDir
 	assertProvenance(t, dir)
 	defs := loadSchemaDefs(t, dir)
+
+	authDef, _ := definition(defs, "ErrorCode")
+	var authConst any
+	for _, m := range authDef["anyOf"].([]any) {
+		if mm := m.(map[string]any); mm["title"] == "Authentication required" {
+			authConst = mm["const"]
+		}
+	}
+	if authConst != float64(errorCodeAuthRequired) {
+		t.Errorf("ErrorCode %q const = %v, want %d", "Authentication required", authConst, errorCodeAuthRequired)
+	}
 
 	t.Run("generated struct fields mirror the pinned definitions", func(t *testing.T) {
 		t.Parallel()

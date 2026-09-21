@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -211,5 +212,50 @@ func TestForkPerTurnSession_SSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T)
 	lines := agenttest.RequireWarnLines(t, spy, "SSH_NoDD")
 	if !slices.Contains(lines, ddMissingMessage) {
 		t.Errorf("WARN agent stderr lines = %v, want one equal to the guard's message %q", lines, ddMissingMessage)
+	}
+}
+
+// An ssh exit of 255 is a connection failure only when the runtime
+// produced no output first; after output, the runtime connected and ran.
+func TestForkPerTurnSession_SSH_Exit255(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		script   string
+		wantConn bool
+		wantKind domain.AgentErrorKind
+	}{
+		{name: "no output is a connection failure", script: "exit 255\n", wantConn: true, wantKind: domain.ErrPortExit},
+		{name: "after output is not", script: "echo the-runtime-answered\nexit 255\n", wantConn: false, wantKind: domain.ErrTurnFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			target := &LaunchTarget{
+				Command:       agenttest.WriteScript(t, t.TempDir(), "ssh", tt.script),
+				SSHHost:       "user@stand-in-host",
+				WorkspacePath: t.TempDir(),
+				RemoteCommand: "irrelevant-remote-command",
+			}
+			hooks := noopHooks()
+			hooks.ParseLine = func(line []byte, _ func(domain.AgentEvent), _ string) (any, error) {
+				return string(line), nil
+			}
+			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, _ int, _ []string) (domain.TurnResult, *domain.AgentError) {
+				EmitTurnFailed(emit, "exit code 255", 0, domain.TokenUsage{})
+				return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "exit code 255"}
+			}
+			sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
+
+			emit, _ := sinkEvents()
+			_, err := sess.RunTurn(context.Background(), "p", emit)
+
+			if got := errors.Is(err, sshutil.ErrConnectionFailed); got != tt.wantConn {
+				t.Fatalf("RunTurn() error = %v, wraps sshutil.ErrConnectionFailed = %v, want %v", err, got, tt.wantConn)
+			}
+			requireAgentError(t, err, tt.wantKind)
+		})
 	}
 }

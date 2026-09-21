@@ -26,14 +26,18 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -53,11 +57,6 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*KiroAdapter)(nil)
-
-// whoamiSuccessMarker is the line "kiro-cli whoami" prints when the API key
-// is valid. Its absence from the canary output marks a present-but-unusable
-// credential, which the adapter rejects before any turn runs.
-const whoamiSuccessMarker = "Authenticated with API key"
 
 // KiroAdapter satisfies [domain.AgentAdapter] by managing Kiro CLI
 // subprocesses. One adapter instance serves all concurrent sessions;
@@ -92,6 +91,14 @@ type sessionState struct {
 	// turn-disposition decision. Reset at the top of each RunTurn before
 	// delegating to forkSession.
 	work *agentcore.WorkObserver
+
+	credentialVerification bool
+
+	verificationBefore []kiroSessionListing
+
+	// verificationBeforeListed false makes StopSession delete nothing:
+	// without a baseline every existing conversation would read as new.
+	verificationBeforeListed bool
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -118,32 +125,41 @@ func NewKiroAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	return &KiroAdapter{passthrough: pt}, nil
 }
 
-// StartSession validates the workspace path, resolves the kiro-cli binary,
-// verifies the credential, and initializes per-session state. No subprocess
-// is spawned; that happens in [KiroAdapter.RunTurn].
-//
-// In local mode it confirms KIRO_API_KEY is present and runs a "kiro-cli
-// whoami" canary, because a missing credential makes headless chat hang on
-// interactive login and an invalid credential exits 0 with empty output. In
-// SSH mode the credential preflight is skipped.
+// StartSession resolves the kiro-cli binary and initializes per-session
+// state. Only a verification session spawns anything here: the whoami
+// guard and a listing of the workspace's conversations.
 func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "kiro-cli")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}
 
-	if target.RemoteCommand == "" {
-		if authErr := checkCredential(ctx, target.Command, procutil.StopGrace(params.AgentConfig.StopGraceMS)); authErr != nil {
+	baseLogger := slog.Default().With(slog.String("component", "kiro-adapter"))
+
+	var verificationBefore []kiroSessionListing
+	var verificationBeforeListed bool
+	if params.CredentialVerification {
+		if authErr := checkCredential(ctx, target, params.AgentConfig.StopGraceMS); authErr != nil {
 			return domain.Session{}, authErr
+		}
+		listing, listErr := listWorkspaceConversations(ctx, target, agentcore.AuxiliaryTimeout(params.AgentConfig), params.AgentConfig.StopGraceMS)
+		if listErr != nil {
+			baseLogger.Warn("failed to delete credential verification session", slog.Any("error", listErr))
+		} else {
+			verificationBefore = listing
+			verificationBeforeListed = true
 		}
 	}
 
 	state := &sessionState{
-		target:      target,
-		agentConfig: params.AgentConfig,
-		passthrough: a.passthrough,
-		baseLogger:  slog.Default().With(slog.String("component", "kiro-adapter")),
-		sessionID:   params.ResumeSessionID,
+		target:                   target,
+		agentConfig:              params.AgentConfig,
+		passthrough:              a.passthrough,
+		baseLogger:               baseLogger,
+		sessionID:                params.ResumeSessionID,
+		credentialVerification:   params.CredentialVerification,
+		verificationBefore:       verificationBefore,
+		verificationBeforeListed: verificationBeforeListed,
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -168,19 +184,14 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		GetUsage:     func() (domain.TokenUsage, bool) { return domain.TokenUsage{}, false },
 		GetSessionID: func() string { return state.sessionID },
 		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			creditsSeen, authFailed := classifyStderr(stderrLines)
+			creditsSeen := classifyStderr(stderrLines)
 
 			ev := agentcore.TurnEvidence{ExitObserved: true, ExitCode: exitCode}
 			ev.Work, ev.WorkDetail = state.work.Report()
 
-			switch {
-			case exitCode == 0 && creditsSeen:
+			if exitCode == 0 && creditsSeen {
 				ev.Terminal = agentcore.TerminalSuccess
 				state.resumeRequested = true
-			case exitCode == 0 && authFailed && !state.work.Observed():
-				ev.Terminal = agentcore.TerminalFailure
-				ev.TerminalErrorKind = domain.ErrResponseError
-				ev.TerminalMessage = "kiro authentication failed"
 			}
 
 			meta := agentcore.TurnMeta{SessionID: state.sessionID}
@@ -198,52 +209,125 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 	}, nil
 }
 
-// checkCredential verifies that KIRO_API_KEY is present and usable before
-// any chat turn. It returns nil on success and a [domain.AgentError] with
-// [domain.ErrResponseError] when the key is absent, when the whoami canary
-// times out or exits non-zero, or when the canary output shows the key is
-// invalid.
-//
-// The canary binary is already resolved by [agentcore.ResolveLaunchTarget]
-// before this runs, so a canary execution failure means the present binary
-// could not confirm the credential (a timeout or non-zero exit), not that
-// the agent is missing. It is classified as a retryable credential problem
-// rather than the non-retryable [domain.ErrAgentNotFound].
-func checkCredential(ctx context.Context, command string, stopGrace time.Duration) *domain.AgentError {
-	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) == "" {
-		return &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "KIRO_API_KEY is not set",
-		}
-	}
-
-	canaryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// checkCredential runs "kiro-cli whoami" because a headless chat under a
+// missing or invalid credential either hangs on interactive login or exits
+// 0 with empty output. The generous bound covers a token refresh.
+func checkCredential(ctx context.Context, target agentcore.LaunchTarget, stopGraceMS int) *domain.AgentError {
+	canaryCtx, cancel := context.WithTimeout(ctx, agentcore.CredentialExchangeBound)
 	defer cancel()
 
-	cmd := exec.CommandContext(canaryCtx, command, "whoami") //nolint:gosec // command resolved by ResolveLaunchTarget via LookPath
-	var combined bytes.Buffer
-	result, startErr := procutil.RunCapture(cmd, stopGrace, procutil.CaptureParams{Stdout: &combined, Stderr: &combined})
-	if startErr != nil || result.WaitErr != nil {
-		canaryErr := startErr
-		if canaryErr == nil {
-			canaryErr = result.WaitErr
-		}
-		return &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "kiro-cli whoami canary timed out or exited non-zero",
-			Err:     canaryErr,
-		}
+	cmd := target.AuxiliaryCommand(canaryCtx, []string{"whoami"}, nil, nil)
+	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{})
+
+	if target.RemoteCommand != "" && startErr == nil && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
+		return agentcore.ConnectionFailedError()
 	}
 
-	output := combined.String()
-	if strings.Contains(output, authFailedMarker) || !strings.Contains(output, whoamiSuccessMarker) {
-		return &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: "KIRO_API_KEY is invalid or expired",
-		}
+	switch {
+	case startErr != nil:
+		return agentcore.CredentialAbsentError("whoami could not be started", startErr)
+	case errors.Is(canaryCtx.Err(), context.DeadlineExceeded):
+		reason := fmt.Sprintf("whoami did not finish within %d ms", agentcore.CredentialExchangeBound.Milliseconds())
+		return agentcore.CredentialAbsentError(reason, canaryCtx.Err())
+	case result.WaitErr != nil:
+		reason := fmt.Sprintf("whoami exited with status %d", procutil.ExtractExitCode(result.WaitErr))
+		return agentcore.CredentialAbsentError(reason, result.WaitErr)
 	}
-
 	return nil
+}
+
+type kiroSessionListing struct {
+	SessionID string `json:"sessionId"`
+	Source    string `json:"source"`
+	Title     string `json:"title"`
+}
+
+type kiroSessionListGroup struct {
+	Cwd      string               `json:"cwd"`
+	Sessions []kiroSessionListing `json:"sessions"`
+}
+
+func listWorkspaceConversations(ctx context.Context, target agentcore.LaunchTarget, timeout time.Duration, stopGraceMS int) ([]kiroSessionListing, error) {
+	listCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var out bytes.Buffer
+	cmd := target.AuxiliaryCommand(listCtx, []string{"chat", "--list-sessions", "-f", "json"}, nil, nil)
+	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{Stdout: &out})
+	if startErr != nil {
+		return nil, startErr
+	}
+	if result.WaitErr != nil {
+		return nil, result.WaitErr
+	}
+
+	var groups []kiroSessionListGroup
+	if err := json.Unmarshal(out.Bytes(), &groups); err != nil {
+		return nil, fmt.Errorf("unmarshal conversation listing: %w", err)
+	}
+	if len(groups) != 1 {
+		return nil, fmt.Errorf("conversation listing carries %d directory groups, want 1", len(groups))
+	}
+	group := groups[0]
+	if filepath.Clean(group.Cwd) != filepath.Clean(target.WorkspacePath) {
+		return nil, fmt.Errorf("conversation listing cwd %q does not match workspace %q", group.Cwd, target.WorkspacePath)
+	}
+	return group.Sessions, nil
+}
+
+var kiroSessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// errAmbiguousVerificationListing names the outcome logged when the
+// before/after listings do not resolve to exactly one new classic
+// conversation: deleting the wrong one would destroy real work.
+var errAmbiguousVerificationListing = errors.New("credential verification listing is ambiguous")
+
+type verificationListingOutcome uint8
+
+const (
+	verificationNoNewEntry verificationListingOutcome = iota
+	verificationConversationFound
+	verificationAmbiguous
+)
+
+// findVerificationConversation reports anything but exactly one new classic
+// conversation as ambiguous, since deleting a wrong one destroys real work.
+func findVerificationConversation(before, after []kiroSessionListing) (listing kiroSessionListing, outcome verificationListingOutcome) {
+	beforeIDs := make(map[string]bool, len(before))
+	for _, s := range before {
+		beforeIDs[s.SessionID] = true
+	}
+
+	var newEntries []kiroSessionListing
+	for _, s := range after {
+		if !beforeIDs[s.SessionID] {
+			newEntries = append(newEntries, s)
+		}
+	}
+	if len(newEntries) == 0 {
+		return kiroSessionListing{}, verificationNoNewEntry
+	}
+	if len(newEntries) != 1 {
+		return kiroSessionListing{}, verificationAmbiguous
+	}
+
+	candidate := newEntries[0]
+	if candidate.Source != "classic" || !kiroSessionIDPattern.MatchString(candidate.SessionID) {
+		return kiroSessionListing{}, verificationAmbiguous
+	}
+	return candidate, verificationConversationFound
+}
+
+func deleteConversation(ctx context.Context, target agentcore.LaunchTarget, id string, timeout time.Duration, stopGraceMS int) error {
+	delCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := target.AuxiliaryCommand(delCtx, []string{"chat", "--delete-session", id, "--session-source", "v1"}, nil, nil)
+	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{})
+	if startErr != nil {
+		return startErr
+	}
+	return result.WaitErr
 }
 
 // RunTurn executes one agent turn by delegating to the session's
@@ -278,8 +362,37 @@ func (a *KiroAdapter) StopSession(ctx context.Context, session domain.Session) e
 			Message: "unexpected session internal type",
 		}
 	}
-	if state.forkSession == nil {
-		return nil
+	var stopErr error
+	if state.forkSession != nil {
+		stopErr = state.forkSession.Stop(ctx)
 	}
-	return state.forkSession.Stop(ctx)
+	if state.credentialVerification {
+		state.deleteVerificationConversation(ctx)
+	}
+	return stopErr
+}
+
+func (s *sessionState) deleteVerificationConversation(ctx context.Context) {
+	if !s.verificationBeforeListed {
+		return
+	}
+
+	timeout := agentcore.AuxiliaryTimeout(s.agentConfig)
+	after, listErr := listWorkspaceConversations(ctx, s.target, timeout, s.agentConfig.StopGraceMS)
+	if listErr != nil {
+		s.logger().Warn("failed to delete credential verification session", slog.Any("error", listErr))
+		return
+	}
+
+	candidate, outcome := findVerificationConversation(s.verificationBefore, after)
+	switch outcome {
+	case verificationNoNewEntry:
+		return
+	case verificationConversationFound:
+		if delErr := deleteConversation(ctx, s.target, candidate.SessionID, timeout, s.agentConfig.StopGraceMS); delErr != nil {
+			s.logger().Warn("failed to delete credential verification session", slog.Any("error", delErr))
+		}
+	default:
+		s.logger().Warn("failed to delete credential verification session", slog.Any("error", errAmbiguousVerificationListing))
+	}
 }

@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -47,7 +48,7 @@ func runWhoamiHeldDescendant(args []string, p whoamiHeldDescendantParams) int {
 		fmt.Fprintf(os.Stderr, "whoami held descendant: write child pid: %v\n", err)
 		return 2
 	}
-	fmt.Print(whoamiSuccessMarker + "\n")
+	fmt.Print("Authenticated with API key\n")
 	return 0
 }
 
@@ -92,10 +93,6 @@ func pollKiroWinPIDAndAssertGone(t *testing.T, path string) {
 	t.Errorf("descendant %d still running after 3s, want gone", pid)
 }
 
-// TestCheckCredential_HeldDescendantHoldingOutput pins P9 for L1 on the
-// Windows job: with a held descendant holding the whoami canary's
-// output, checkCredential returns within its timer with a valid
-// credential yielding nil, and the descendant is gone.
 func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 	setValidAPIKey(t)
 
@@ -107,11 +104,13 @@ func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 		ChildPIDPath: pidPath,
 	})
 
+	target := agentcore.LaunchTarget{Command: binPath, WorkspacePath: dir}
+
 	type outcome struct{ err *domain.AgentError }
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		agentErr := checkCredential(context.Background(), binPath, procutil.DefaultStopGrace)
+		agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()))
 		done <- outcome{agentErr}
 	}()
 

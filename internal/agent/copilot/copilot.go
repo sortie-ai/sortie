@@ -82,10 +82,9 @@ type sessionState struct {
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
 
-	// fallbackToContinue is set when a turn completes without a
-	// result event containing a sessionId. On the next turn,
-	// buildArgs uses --continue instead of --resume.
-	fallbackToContinue bool
+	isContinuation bool
+
+	credentialVerification bool
 
 	// forkSession owns the subprocess lifecycle for this session.
 	forkSession *agentcore.ForkPerTurnSession
@@ -266,7 +265,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		return domain.Session{}, agentErr
 	}
 
-	// Canary check and auth preflight are local-mode only.
+	// The canary check is local-mode only.
 	if target.RemoteCommand == "" {
 		stopGrace := procutil.StopGrace(params.AgentConfig.StopGraceMS)
 
@@ -287,25 +286,23 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			}
 		}
 		slog.Debug("copilot version check passed", slog.String("version", strings.TrimSpace(combined.String())))
-
-		if authErr := checkAuth(ctx, stopGrace); authErr != nil {
-			return domain.Session{}, authErr
-		}
 	}
 
-	copilotSessionID := ""
-	if params.ResumeSessionID != "" {
-		copilotSessionID = params.ResumeSessionID
+	copilotSessionID := params.ResumeSessionID
+	if copilotSessionID == "" {
+		copilotSessionID = agentcore.NewUUIDv4()
 	}
 
 	state := &sessionState{
-		target:            target,
-		copilotSessionID:  copilotSessionID,
-		agentConfig:       params.AgentConfig,
-		baseLogger:        slog.Default().With(slog.String("component", "copilot-adapter")),
-		mcpConfigPath:     params.MCPConfigPath,
-		runCreatedSession: params.ResumeSessionID == "",
-		usage:             agentcore.NewTurnEndUsage(),
+		target:                 target,
+		copilotSessionID:       copilotSessionID,
+		agentConfig:            params.AgentConfig,
+		baseLogger:             slog.Default().With(slog.String("component", "copilot-adapter")),
+		mcpConfigPath:          params.MCPConfigPath,
+		isContinuation:         params.ResumeSessionID != "",
+		credentialVerification: params.CredentialVerification,
+		runCreatedSession:      params.ResumeSessionID == "",
+		usage:                  agentcore.NewTurnEndUsage(),
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -463,13 +460,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			// Capture session ID from result event for subsequent turns.
 			if lastResult != nil && lastResult.SessionID != "" {
 				state.copilotSessionID = lastResult.SessionID
-				state.fallbackToContinue = false
 				state.refreshForkLogger()
-			} else if state.copilotSessionID == "" {
-				// No result event and no session ID from a prior turn.
-				// Use --continue on the next turn to resume the most recent
-				// conversation in the workspace directory.
-				state.fallbackToContinue = true
 			}
 
 			recovered := state.recoverUsage(state.logger())
@@ -510,8 +501,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			return state.usage.Finalize(emit, state.logger(), ev, state.copilotSessionID, apiDurationMS, recovered)
 		},
 		// Copilot emits EventSessionStarted before the scan loop using the
-		// current session ID (empty on turn 1; populated on turns 2+ from
-		// the previous turn's terminal result).
+		// session's own ID, assigned in StartSession.
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
 
@@ -521,39 +511,6 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		ID:       copilotSessionID,
 		Internal: state,
 	}, nil
-}
-
-// checkAuth validates that at least one GitHub authentication source
-// is available in the environment. Returns nil on success or an
-// [domain.AgentError] if no source is found.
-func checkAuth(ctx context.Context, stopGrace time.Duration) error {
-	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		if strings.TrimSpace(os.Getenv(env)) != "" {
-			return nil
-		}
-	}
-	// No env var set. Check for gh CLI with valid auth as a fallback.
-	if _, err := exec.LookPath("gh"); err == nil {
-		authCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-
-		cmd := exec.CommandContext(authCtx, "gh", "auth", "status") //nolint:gosec // fixed args
-		result, startErr := procutil.RunCapture(cmd, stopGrace, procutil.CaptureParams{})
-
-		// A clean wait already proves gh exited on its own: a context
-		// that expired while it ran would have terminated it. Reading
-		// the context here instead would reject a successful check
-		// whenever a descendant held the captured output past the
-		// deadline, and report the account as unauthenticated.
-		if startErr == nil && result.WaitErr == nil {
-			slog.Warn("no GitHub token env var set; relying on gh auth for Copilot CLI authentication")
-			return nil
-		}
-	}
-	return &domain.AgentError{
-		Kind:    domain.ErrAgentNotFound,
-		Message: "no GitHub authentication source found; set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or run 'gh auth login' to authenticate",
-	}
 }
 
 // RunTurn executes one agent turn by delegating to the session's
@@ -591,8 +548,12 @@ func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	if state.forkSession == nil {
-		return nil
+	var stopErr error
+	if state.forkSession != nil {
+		stopErr = state.forkSession.Stop(ctx)
 	}
-	return state.forkSession.Stop(ctx)
+	if state.credentialVerification && state.copilotSessionID != "" {
+		deleteVerificationSession(ctx, state.target, state.copilotSessionID, agentcore.AuxiliaryTimeout(state.agentConfig), state.agentConfig.StopGraceMS, state.logger())
+	}
+	return stopErr
 }

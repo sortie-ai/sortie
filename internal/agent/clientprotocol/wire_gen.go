@@ -248,6 +248,17 @@ type currentModeUpdate struct {
 	CurrentModeID sessionModeId   `json:"currentModeId"`
 }
 
+// deleteSessionRequest is generated from the DeleteSessionRequest definition of the pinned schema.
+type deleteSessionRequest struct {
+	Meta      json.RawMessage `json:"_meta,omitempty"`
+	SessionID sessionId       `json:"sessionId"`
+}
+
+// deleteSessionResponse is generated from the DeleteSessionResponse definition of the pinned schema.
+type deleteSessionResponse struct {
+	Meta json.RawMessage `json:"_meta,omitempty"`
+}
+
 // diff is generated from the Diff definition of the pinned schema.
 type diff struct {
 	Meta    json.RawMessage `json:"_meta,omitempty"`
@@ -1072,6 +1083,8 @@ var wireTypeByDefinition = map[string]string{
 	"ContentChunk":                             "contentChunk",
 	"Cost":                                     "cost",
 	"CurrentModeUpdate":                        "currentModeUpdate",
+	"DeleteSessionRequest":                     "deleteSessionRequest",
+	"DeleteSessionResponse":                    "deleteSessionResponse",
 	"Diff":                                     "diff",
 	"ElicitationCapabilities":                  "elicitationCapabilities",
 	"ElicitationFormCapabilities":              "elicitationFormCapabilities",

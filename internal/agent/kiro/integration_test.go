@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/sortie-ai/sortie/internal/agent/kiro"
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/kiro"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -100,4 +102,49 @@ func TestKiroAdapter_Integration(t *testing.T) {
 	if err := adapter.StopSession(context.Background(), session); err != nil {
 		t.Errorf("StopSession(): %v", err)
 	}
+}
+
+func TestIntegration_CredentialVerification(t *testing.T) {
+	skipIfNotEnabled(t)
+
+	adapter := mustNewAdapter(t)
+	params := func(t *testing.T) domain.StartSessionParams {
+		return domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+		}
+	}
+
+	t.Run("working credential verifies and leaves no conversation", func(t *testing.T) {
+		sessionParams := params(t)
+		// Listed through a launch target resolved independently of the
+		// adapter, so the check does not trust the adapter's own deletion.
+		target, targetErr := agentcore.ResolveLaunchTarget(sessionParams, "kiro-cli")
+		if targetErr != nil {
+			t.Fatalf("ResolveLaunchTarget: %v", targetErr)
+		}
+		list := func() []kiro.SessionListingForTest {
+			listing, err := kiro.ListWorkspaceConversationsForTest(context.Background(), target, agentcore.AuxiliaryTimeout(sessionParams.AgentConfig), 0)
+			if err != nil {
+				t.Fatalf("ListWorkspaceConversationsForTest(): %v", err)
+			}
+			return listing
+		}
+
+		before := list()
+		if _, err := credentialtest.VerifyLive(adapter, sessionParams); err != nil {
+			t.Fatalf("VerifyCredential() error = %v, want nil", err)
+		}
+		if kiro.VerificationConversationFoundForTest(before, list()) {
+			t.Error("a verification conversation is still listed after the step, want it deleted")
+		}
+	})
+
+	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
+		// Not parallel: t.Setenv carries the invalid credential.
+		credentialtest.SetRefusedCredential(t, "SORTIE_KIRO_CREDENTIAL_ENV")
+
+		_, err := credentialtest.VerifyLive(adapter, params(t))
+		credentialtest.RequireUnverified(t, err)
+	})
 }

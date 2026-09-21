@@ -183,7 +183,7 @@ func TestInitializeHandshake_ErrorResponse(t *testing.T) {
 func TestInitializeHandshake_EOF(t *testing.T) {
 	t.Parallel()
 
-	state := handshakeState(t) // empty fixture → immediate EOF
+	state := handshakeState(t)
 
 	err := initializeHandshake(context.Background(), state)
 	if err == nil {
@@ -205,7 +205,6 @@ func TestAuthenticateIfNeeded_AlreadyLoggedIn(t *testing.T) {
 func TestAuthenticateIfNeeded_NullAccountNoAPIKey(t *testing.T) {
 	t.Parallel()
 
-	// account/read response with null account, CODEX_API_KEY not set → return nil.
 	state := handshakeState(t, `{"id":1,"result":{"account":null}}`)
 
 	if err := authenticateIfNeeded(context.Background(), state, discardTestLogger()); err != nil {
@@ -228,9 +227,6 @@ func TestAuthenticateIfNeeded_LoginSuccess(t *testing.T) {
 	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "test-api-key-12345")
 
-	// id=1: account/read → null account
-	// id=2: account/login/start → success response
-	// notification: login/completed
 	state := handshakeState(t,
 		`{"id":1,"result":{"account":null}}`,
 		`{"id":2,"result":{}}`,
@@ -246,8 +242,6 @@ func TestAuthenticateIfNeeded_LoginResponseError(t *testing.T) {
 	// No t.Parallel(): uses t.Setenv.
 	t.Setenv("CODEX_API_KEY", "invalid-key")
 
-	// id=1: account/read → null
-	// id=2: account/login/start → error
 	state := handshakeState(t,
 		`{"id":1,"result":{"account":null}}`,
 		`{"id":2,"error":{"code":-32001,"message":"invalid API key"}}`,
@@ -277,8 +271,12 @@ func TestAuthenticateIfNeeded_LoginCompletedFailed(t *testing.T) {
 	if !errors.As(err, &ae) {
 		t.Fatalf("error type = %T, want *domain.AgentError", err)
 	}
-	if ae.Kind != domain.ErrResponseError {
-		t.Errorf("AgentError.Kind = %q, want %q", ae.Kind, domain.ErrResponseError)
+	if ae.Kind != domain.ErrCredentialUnverified {
+		t.Errorf("AgentError.Kind = %q, want %q", ae.Kind, domain.ErrCredentialUnverified)
+	}
+	const wantMessage = "the agent runtime refused its credential: the login did not succeed"
+	if ae.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", ae.Message, wantMessage)
 	}
 }
 

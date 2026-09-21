@@ -78,76 +78,53 @@ func TestClassifyStderr(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		lines          []string
-		wantCredits    bool
-		wantAuthFailed bool
+		name        string
+		lines       []string
+		wantCredits bool
 	}{
 		{
-			name:           "credits trailer present",
-			lines:          []string{"some warning", "▸ Credits: 0.01 • Time: 1s"},
-			wantCredits:    true,
-			wantAuthFailed: false,
+			name:        "credits trailer present",
+			lines:       []string{"some warning", "▸ Credits: 0.01 • Time: 1s"},
+			wantCredits: true,
 		},
 		{
-			name:           "different credit and time values still match",
-			lines:          []string{"▸ Credits: 0.05 • Time: 6s"},
-			wantCredits:    true,
-			wantAuthFailed: false,
+			name:        "different credit and time values still match",
+			lines:       []string{"▸ Credits: 0.05 • Time: 6s"},
+			wantCredits: true,
 		},
 		{
-			name:           "authentication failure present",
-			lines:          []string{"Authentication failed. Your API key may be invalid or expired."},
-			wantCredits:    false,
-			wantAuthFailed: true,
+			name:        "neither marker present",
+			lines:       []string{"Failed to retrieve MCP settings; MCP functionality disabled"},
+			wantCredits: false,
 		},
 		{
-			name:           "neither marker present",
-			lines:          []string{"Failed to retrieve MCP settings; MCP functionality disabled"},
-			wantCredits:    false,
-			wantAuthFailed: false,
+			name:        "empty lines",
+			lines:       nil,
+			wantCredits: false,
 		},
 		{
-			name:           "empty lines",
-			lines:          nil,
-			wantCredits:    false,
-			wantAuthFailed: false,
+			name:        "credits trailer embedded mid-line",
+			lines:       []string{"trailing noise ▸ Credits: 1.20 • Time: 12s done"},
+			wantCredits: true,
 		},
 		{
-			name:           "credits trailer embedded mid-line",
-			lines:          []string{"trailing noise ▸ Credits: 1.20 • Time: 12s done"},
-			wantCredits:    true,
-			wantAuthFailed: false,
+			name:        "abandonment marker is not evidence",
+			lines:       []string{procutil.AbandonedMarker},
+			wantCredits: false,
 		},
 		{
-			name:           "abandonment marker is not evidence",
-			lines:          []string{procutil.AbandonedMarker},
-			wantCredits:    false,
-			wantAuthFailed: false,
-		},
-		{
-			name:           "credits trailer collected before abandonment does not prove a turn ran",
-			lines:          []string{"▸ Credits: 1.20 • Time: 12s", procutil.AbandonedMarker},
-			wantCredits:    false,
-			wantAuthFailed: false,
-		},
-		{
-			name:           "authentication failure survives abandonment",
-			lines:          []string{"Authentication failed.", procutil.AbandonedMarker},
-			wantCredits:    false,
-			wantAuthFailed: true,
+			name:        "credits trailer collected before abandonment does not prove a turn ran",
+			lines:       []string{"▸ Credits: 1.20 • Time: 12s", procutil.AbandonedMarker},
+			wantCredits: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			gotCredits, gotAuthFailed := classifyStderr(tt.lines)
+			gotCredits := classifyStderr(tt.lines)
 			if gotCredits != tt.wantCredits {
 				t.Errorf("classifyStderr(%v) creditsSeen = %v, want %v", tt.lines, gotCredits, tt.wantCredits)
-			}
-			if gotAuthFailed != tt.wantAuthFailed {
-				t.Errorf("classifyStderr(%v) authFailed = %v, want %v", tt.lines, gotAuthFailed, tt.wantAuthFailed)
 			}
 		})
 	}
@@ -253,10 +230,9 @@ func TestOnFinalize_CreditsBeforeAbandonmentDoesNotSelectSuccess(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"▸ Credits: 1.20 • Time: 12s", procutil.AbandonedMarker}
-	creditsSeen, authFailed := classifyStderr(lines)
-	if creditsSeen || authFailed {
-		t.Fatalf("classifyStderr(%v) = (creditsSeen=%v, authFailed=%v), want (false, false)",
-			lines, creditsSeen, authFailed)
+	creditsSeen := classifyStderr(lines)
+	if creditsSeen {
+		t.Fatalf("classifyStderr(%v) = %v, want false", lines, creditsSeen)
 	}
 
 	ev := agentcore.TurnEvidence{
@@ -275,25 +251,19 @@ func TestOnFinalize_CreditsBeforeAbandonmentDoesNotSelectSuccess(t *testing.T) {
 
 // TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow pins the disposition
 // consequence of an abandoned stderr drain: marker-only stderr classifies
-// as neither the credits trailer nor an authentication failure, so the
-// evidence StartSession's OnFinalize closure builds from it selects the
-// shared decision's zero-work row and reports turn_failed rather than a
-// success. An end-to-end kiro turn is not exercised here because
-// drainGrace is unexported and this package cannot inject a short bound.
+// as no credits trailer and reports turn_failed. An end-to-end kiro
+// turn is not exercised because drainGrace is unexported and this
+// package cannot inject a short bound.
 func TestOnFinalize_MarkerOnlyStderrSelectsZeroWorkRow(t *testing.T) {
 	t.Parallel()
 
-	creditsSeen, authFailed := classifyStderr([]string{procutil.AbandonedMarker})
-	if creditsSeen || authFailed {
-		t.Fatalf("classifyStderr(%v) = (creditsSeen=%v, authFailed=%v), want (false, false)",
-			procutil.AbandonedMarker, creditsSeen, authFailed)
+	creditsSeen := classifyStderr([]string{procutil.AbandonedMarker})
+	if creditsSeen {
+		t.Fatalf("classifyStderr(%v) = %v, want false", procutil.AbandonedMarker, creditsSeen)
 	}
 
-	// Mirrors the TurnEvidence StartSession's OnFinalize closure builds in
-	// kiro.go: neither the success nor the auth-failure switch arm matches
-	// when creditsSeen and authFailed are both false, so Terminal stays
-	// TerminalAbsent and the shared table decides from ExitCode and the
-	// observer's report for a turn with no non-blank stdout line.
+	// Mirrors the evidence StartSession's OnFinalize closure builds when
+	// no credits trailer was seen.
 	ev := agentcore.TurnEvidence{
 		ExitObserved: true,
 		ExitCode:     0,

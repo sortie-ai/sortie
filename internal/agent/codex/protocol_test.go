@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -99,4 +100,35 @@ func TestStartSession_SSHBinaryNotFound(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
 	})
 	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
+
+func TestBuildSandboxPolicy_CredentialVerificationIsAlwaysReadOnly(t *testing.T) {
+	t.Parallel()
+
+	state := &sessionState{
+		credentialVerification: true,
+		target:                 agentcore.LaunchTarget{WorkspacePath: "/ws"},
+	}
+	pt := passthroughConfig{
+		ThreadSandbox:     "dangerFullAccess",
+		TurnSandboxPolicy: map[string]any{"type": "danger-full-access", "networkAccess": true},
+	}
+
+	policy := buildSandboxPolicy(state, pt)
+
+	if policy["type"] != "readOnly" {
+		t.Errorf("buildSandboxPolicy(verification).type = %v, want %q", policy["type"], "readOnly")
+	}
+	if roots, ok := policy["writableRoots"].([]string); !ok || len(roots) != 0 {
+		t.Errorf("buildSandboxPolicy(verification).writableRoots = %v, want an empty slice", policy["writableRoots"])
+	}
+	if policy["networkAccess"] != false {
+		t.Errorf("buildSandboxPolicy(verification).networkAccess = %v, want false", policy["networkAccess"])
+	}
+
+	workingState := &sessionState{target: agentcore.LaunchTarget{WorkspacePath: "/ws"}}
+	workingPolicy := buildSandboxPolicy(workingState, pt)
+	if workingPolicy["type"] != "danger-full-access" {
+		t.Errorf("buildSandboxPolicy(working).type = %v, want the operator override %q", workingPolicy["type"], "danger-full-access")
+	}
 }

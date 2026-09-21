@@ -154,6 +154,10 @@ const (
 	// its own budget for requests or turns within the session was
 	// exhausted.
 	ErrTurnRequestLimit AgentErrorKind = "turn_request_limit"
+
+	// ErrCredentialUnverified indicates the runtime did not complete a
+	// request with its credential before the first turn.
+	ErrCredentialUnverified AgentErrorKind = "credential_unverified" //nolint:gosec // G101: an error-kind label, not a credential
 )
 
 // AgentError is a structured error returned by [AgentAdapter]
@@ -250,7 +254,7 @@ func (k AgentErrorKind) RetryClassification() RetryClassification {
 		return RetryClassification{Backoff: BackoffNone}
 	case ErrTurnTokenLimit:
 		return RetryClassification{Backoff: BackoffNone}
-	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete, ErrTurnRequestLimit:
+	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed, ErrTurnIncomplete, ErrTurnRequestLimit, ErrCredentialUnverified:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
 	default:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}

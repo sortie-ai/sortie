@@ -1,9 +1,12 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -147,6 +150,22 @@ func buildRunEnv(base []string, pt passthroughConfig) ([]string, error) {
 	}
 
 	return env, nil
+}
+
+// auxiliaryCommand builds a one-shot opencode subcommand through the
+// session's launch target, carrying the same environment and managed
+// variables every working turn carries, so a delete, an export query,
+// and a models query never diverge in what they run with.
+func auxiliaryCommand(ctx context.Context, state *sessionState, args []string) (*exec.Cmd, error) {
+	env, err := buildRunEnv(os.Environ(), state.passthrough)
+	if err != nil {
+		return nil, err
+	}
+	managedEnv, err := buildManagedEnv(state.passthrough)
+	if err != nil {
+		return nil, err
+	}
+	return state.target.AuxiliaryCommand(ctx, args, nil, env, sortedEnvVars(managedEnv)...), nil
 }
 
 // sortedEnvVars converts managed into a name-sorted slice of

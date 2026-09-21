@@ -89,7 +89,23 @@ type mockAgentAdapter struct {
 
 var _ domain.AgentAdapter = (*mockAgentAdapter)(nil)
 
+// mockAgentSessionMeta lets RunTurn and StopSession answer a credential
+// verification session directly, bypassing a test's custom *Fn
+// overrides: a verification call consuming their call-count or
+// prompt-capture state would silently shift every assertion built on it.
+type mockAgentSessionMeta struct {
+	credentialVerification bool
+}
+
+func isMockVerificationSession(session domain.Session) bool {
+	meta, ok := session.Internal.(*mockAgentSessionMeta)
+	return ok && meta.credentialVerification
+}
+
 func (m *mockAgentAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "sess-verify-mock", Internal: &mockAgentSessionMeta{credentialVerification: true}}, nil
+	}
 	if m.startSessionFn != nil {
 		return m.startSessionFn(ctx, params)
 	}
@@ -97,6 +113,9 @@ func (m *mockAgentAdapter) StartSession(ctx context.Context, params domain.Start
 }
 
 func (m *mockAgentAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if isMockVerificationSession(session) {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}
 	if m.runTurnFn != nil {
 		return m.runTurnFn(ctx, session, params)
 	}
@@ -114,6 +133,9 @@ func (m *mockAgentAdapter) RunTurn(ctx context.Context, session domain.Session, 
 }
 
 func (m *mockAgentAdapter) StopSession(ctx context.Context, session domain.Session) error {
+	if isMockVerificationSession(session) {
+		return nil
+	}
 	if m.stopSessionFn != nil {
 		return m.stopSessionFn(ctx, session)
 	}
@@ -133,7 +155,10 @@ type turnEmissionAdapter struct {
 
 var _ domain.AgentAdapter = (*turnEmissionAdapter)(nil)
 
-func (a *turnEmissionAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+func (a *turnEmissionAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "sess-verify", Internal: &mockAgentSessionMeta{credentialVerification: true}}, nil
+	}
 	return domain.Session{ID: "sess-1"}, nil
 }
 
@@ -142,6 +167,9 @@ func (a *turnEmissionAdapter) StopSession(_ context.Context, _ domain.Session) e
 }
 
 func (a *turnEmissionAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if isMockVerificationSession(session) {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}
 	a.turn++
 	turn := a.turn
 	if a.beforeRunTurn != nil {
@@ -2412,16 +2440,19 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 			t.Errorf("WorkerResult.Usage.TotalTokens = %d, want %d", result.Usage.TotalTokens, reviewUsage.TotalTokens)
 		}
 
-		if len(received) != len(emitted) {
-			t.Fatalf("deps.OnEvent received %d events, want %d (one per emitted event): %+v", len(received), len(emitted), received)
+		if len(received) != len(emitted)+1 {
+			t.Fatalf("deps.OnEvent received %d events, want %d (the verification start notification plus one per emitted event): %+v", len(received), len(emitted)+1, received)
+		}
+		if received[0].event.Type != domain.EventNotification || received[0].event.Message != "verifying the agent credential" {
+			t.Errorf("received[0].event = %+v, want the verification start notification", received[0].event)
 		}
 		for i, want := range emitted {
-			got := received[i]
+			got := received[i+1]
 			if got.issueID != workerTestIssue().ID {
-				t.Errorf("received[%d].issueID = %q, want %q", i, got.issueID, workerTestIssue().ID)
+				t.Errorf("received[%d].issueID = %q, want %q", i+1, got.issueID, workerTestIssue().ID)
 			}
 			if !reflect.DeepEqual(got.event, want) {
-				t.Errorf("received[%d].event = %+v, want %+v (equal to the emitted event across every field)", i, got.event, want)
+				t.Errorf("received[%d].event = %+v, want %+v (equal to the emitted event across every field)", i+1, got.event, want)
 			}
 		}
 
@@ -2429,12 +2460,12 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 		// copy: the mock's runTurnFn mutates the original map after
 		// emitting the event, and the defensive copy in the self-review
 		// relay must keep that mutation from reaching the recorded event.
-		gotLimits := received[1].event.RateLimits
+		gotLimits := received[2].event.RateLimits
 		if gotLimits == nil {
-			t.Fatal("received[1].RateLimits = nil, want a non-nil copy")
+			t.Fatal("received[2].RateLimits = nil, want a non-nil copy")
 		}
 		if gotLimits["limit"] != int64(5) {
-			t.Errorf(`received[1].RateLimits["limit"] = %v, want 5 (unaffected by the later mutation)`, gotLimits["limit"])
+			t.Errorf(`received[2].RateLimits["limit"] = %v, want 5 (unaffected by the later mutation)`, gotLimits["limit"])
 		}
 
 		state := readWorkerStateFile(t, result.WorkspacePath)
@@ -4849,8 +4880,8 @@ func TestRunWorkerAttempt_UsageArrivalNoneDiscardsFigures(t *testing.T) {
 		if result.APIRequestCount != 0 {
 			t.Errorf("WorkerResult.APIRequestCount = %d, want 0", result.APIRequestCount)
 		}
-		if got := onEventCount.Load(); got != 2 {
-			t.Errorf("OnEvent relayed %d times, want 2 (every emitted event still reaches deps.OnEvent)", got)
+		if got := onEventCount.Load(); got != 3 {
+			t.Errorf("OnEvent relayed %d times, want 3 (the verification start notification plus every emitted turn event still reaches deps.OnEvent)", got)
 		}
 
 		if got := strings.Count(lb.String(), discardMessage); got != 1 {

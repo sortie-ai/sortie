@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+var copilotUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 // turnCounterScenario names the fake runtime scenario that answers its
 // first invocation with a fixed stdout payload and every later
@@ -237,33 +240,9 @@ func TestStartSession(t *testing.T) {
 	}
 }
 
-func TestStartSession_NoAuthSource(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-
-	// Unset all GitHub token env vars and ensure gh is not on PATH.
-	// If gh is on PATH, this test skips: PATH cannot be overridden
-	// without affecting other tests, and the gh check is best-effort.
-	if _, err := exec.LookPath("gh"); err == nil {
-		t.Skip("gh is on PATH; checkAuth() will pass via gh fallback, skipping auth-failure test")
-	}
-
-	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		t.Setenv(env, "")
-	}
-
-	adapter, _ := NewCopilotAdapter(map[string]any{})
-	fakeBin := fakeCopilotBinary(t)
-	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: fakeBin},
-	})
-	requireAgentError(t, err, domain.ErrAgentNotFound)
-}
-
 func TestStartSession_NewSession(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 
-	// Provide a GitHub token so checkAuth() passes.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, _ := NewCopilotAdapter(map[string]any{})
@@ -277,18 +256,18 @@ func TestStartSession_NewSession(t *testing.T) {
 		t.Fatalf("StartSession() error = %v", err)
 	}
 
-	// Copilot CLI does not pre-assign a session ID: the ID is empty
-	// until the first turn's result event provides one.
-	if session.ID != "" {
-		t.Errorf("session.ID = %q, want empty (Copilot ID assigned after first turn)", session.ID)
+	// The adapter assigns a v4 UUID session ID itself in StartSession,
+	// so it is never empty and no launch falls back to --continue.
+	if !copilotUUIDPattern.MatchString(session.ID) {
+		t.Errorf("session.ID = %q, want a v4 UUID", session.ID)
 	}
 
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
 	}
-	if state.copilotSessionID != "" {
-		t.Errorf("state.copilotSessionID = %q, want empty for new session", state.copilotSessionID)
+	if state.copilotSessionID != session.ID {
+		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, session.ID)
 	}
 	if state.target.WorkspacePath != workspace {
 		// t.TempDir() may return a path through a symlink; compare with os.Stat.
@@ -296,8 +275,8 @@ func TestStartSession_NewSession(t *testing.T) {
 			t.Errorf("state.target.WorkspacePath = %q, want %q", state.target.WorkspacePath, workspace)
 		}
 	}
-	if state.fallbackToContinue {
-		t.Error("state.fallbackToContinue = true, want false for new session")
+	if state.isContinuation {
+		t.Error("state.isContinuation = true, want false for a new session")
 	}
 	if state.target.SSHHost != "" {
 		t.Errorf("state.target.SSHHost = %q, want empty for local mode", state.target.SSHHost)
@@ -379,17 +358,6 @@ func TestStartSession_SSHMode(t *testing.T) {
 	if state.target.Command != sshPath {
 		t.Errorf("state.target.Command = %q, want %q (ssh binary)", state.target.Command, sshPath)
 	}
-	// Auth check is skipped in SSH mode.
-}
-
-// fakeGhBinaryDir creates a fake "gh" runtime that exits non-zero
-// (simulating an unauthenticated host) and returns the directory
-// containing it, ready for use as the sole PATH entry.
-func fakeGhBinaryDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	agenttest.FakeRuntime(t, dir, "gh", agenttest.OutputScenario, agenttest.Output{ExitCode: 1})
-	return dir
 }
 
 // TestStartSession_SSHHostWhitespaceOnly verifies that a whitespace-only
@@ -419,42 +387,6 @@ func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
 	if state.target.RemoteCommand != "" {
 		t.Errorf("state.target.RemoteCommand = %q, want empty for local mode", state.target.RemoteCommand)
 	}
-}
-
-// TestCheckAuth_GhPresentButUnauthenticated verifies that checkAuth returns
-// ErrAgentNotFound when the gh binary is present but "gh auth status" exits
-// non-zero (i.e., the host has gh installed but not authenticated).
-func TestCheckAuth_GhPresentButUnauthenticated(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-
-	// Point PATH to a directory containing only a fake gh that exits 1.
-	t.Setenv("PATH", fakeGhBinaryDir(t))
-
-	// Unset all GitHub token env vars so the env-var fast-path is skipped.
-	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		t.Setenv(env, "")
-	}
-
-	err := checkAuth(context.Background(), 5*time.Second)
-	requireAgentError(t, err, domain.ErrAgentNotFound)
-}
-
-// TestCheckAuth_WhitespaceOnlyToken verifies that a token env var set to
-// whitespace-only does not satisfy the auth preflight. The check must fall
-// through to the gh auth probe; when that also fails the function returns
-// ErrAgentNotFound.
-func TestCheckAuth_WhitespaceOnlyToken(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-
-	// COPILOT_GITHUB_TOKEN is whitespace-only; the other vars are absent.
-	t.Setenv("COPILOT_GITHUB_TOKEN", "   ")
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	// Point PATH to an unauthenticated fake gh so the fallback also fails.
-	t.Setenv("PATH", fakeGhBinaryDir(t))
-
-	err := checkAuth(context.Background(), 5*time.Second)
-	requireAgentError(t, err, domain.ErrAgentNotFound)
 }
 
 // fakeCopilotBinaryWithOutput creates a fake copilot runtime that

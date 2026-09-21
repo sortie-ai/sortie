@@ -111,12 +111,26 @@ func newBudgetE2EAgent() *budgetE2EAgent {
 
 var _ domain.AgentAdapter = (*budgetE2EAgent)(nil)
 
+// budgetE2ESession lets RunTurn answer a credential verification
+// session immediately, never through the blocking usage/proceed
+// handshake the working turn exercises.
+type budgetE2ESession struct {
+	credentialVerification bool
+}
+
 func (a *budgetE2EAgent) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "sess-budget-e2e-verify", Internal: &budgetE2ESession{credentialVerification: true}}, nil
+	}
 	a.started <- params
-	return domain.Session{ID: "sess-budget-e2e"}, nil
+	return domain.Session{ID: "sess-budget-e2e", Internal: &budgetE2ESession{}}, nil
 }
 
 func (a *budgetE2EAgent) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if state, ok := session.Internal.(*budgetE2ESession); ok && state.credentialVerification {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, UsageMeasured: true}, nil
+	}
+
 	select {
 	case total := <-a.emitUsage:
 		params.OnEvent(domain.AgentEvent{

@@ -1,10 +1,14 @@
 package agentcore
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -332,4 +336,84 @@ func TestLaunchTarget_SSHOptions(t *testing.T) {
 			t.Errorf("SSHOptions() Env = %v, want nil", got.Env)
 		}
 	})
+}
+
+func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	target := LaunchTarget{
+		Command:       "/usr/bin/agent",
+		Args:          []string{"app-server"},
+		WorkspacePath: ws,
+	}
+	stdin := strings.NewReader("aux-stdin")
+
+	cmd := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, stdin, []string{"A=1"})
+
+	wantArgs := []string{target.Command, "app-server", "whoami"}
+	if cmd.Path != target.Command || !slices.Equal(cmd.Args, wantArgs) {
+		t.Errorf("AuxiliaryCommand() = %q %v, want %q %v", cmd.Path, cmd.Args, target.Command, wantArgs)
+	}
+	if cmd.Dir != ws {
+		t.Errorf("AuxiliaryCommand().Dir = %q, want %q", cmd.Dir, ws)
+	}
+	if !slices.Equal(cmd.Env, []string{"A=1"}) {
+		t.Errorf("AuxiliaryCommand().Env = %v, want [A=1]", cmd.Env)
+	}
+	if cmd.Stdin != stdin {
+		t.Errorf("AuxiliaryCommand().Stdin = %v, want the passed-in reader", cmd.Stdin)
+	}
+
+	if nilEnv := target.AuxiliaryCommand(context.Background(), nil, nil, nil); !slices.Equal(nilEnv.Env, os.Environ()) {
+		t.Errorf("AuxiliaryCommand(env=nil).Env = %v, want os.Environ()", nilEnv.Env)
+	}
+}
+
+func TestLaunchTarget_AuxiliaryCommand_Remote(t *testing.T) {
+	// Not parallel: t.Setenv carries the SSH environment variable.
+	t.Setenv("AUX_CARRIED_VAR", "carried-value")
+	ws := t.TempDir()
+	target := LaunchTarget{
+		Command:       "/usr/bin/ssh",
+		WorkspacePath: ws,
+		RemoteCommand: "kiro-cli",
+		SSHHost:       "worker-host",
+		SSHEnvNames:   []string{"AUX_CARRIED_VAR"},
+	}
+
+	cmd := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, strings.NewReader("aux-stdin"), nil)
+
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "cd --") || strings.Index(joined, "cd --") > strings.Index(joined, "kiro-cli") {
+		t.Errorf("AuxiliaryCommand().Args = %v, want the ssh command to enter the workspace directory before the remote command", cmd.Args)
+	}
+	if cmd.Dir != ws {
+		t.Errorf("AuxiliaryCommand().Dir = %q, want %q", cmd.Dir, ws)
+	}
+	got, err := io.ReadAll(cmd.Stdin)
+	if err != nil {
+		t.Fatalf("io.ReadAll(cmd.Stdin): %v", err)
+	}
+	if !strings.Contains(string(got), "AUX_CARRIED_VAR") || !strings.HasSuffix(string(got), "aux-stdin") {
+		t.Errorf("cmd.Stdin = %q, want the preamble followed by the caller's own stdin", got)
+	}
+}
+
+func TestAuxiliaryTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		readTimeoutMS int
+		want          time.Duration
+	}{
+		{0, 30 * time.Second},
+		{1000, 2 * time.Second},
+		{20000, 30 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := AuxiliaryTimeout(domain.AgentConfig{ReadTimeoutMS: tt.readTimeoutMS}); got != tt.want {
+			t.Errorf("AuxiliaryTimeout(ReadTimeoutMS=%d) = %v, want %v", tt.readTimeoutMS, got, tt.want)
+		}
+	}
 }

@@ -7,18 +7,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
-const (
-	// creditsMarker is the stderr cost-trailer prefix that headless Kiro
-	// emits only after a turn actually executed. Matched as a substring
-	// because the numeric credit and time values vary; the prefix shape is
-	// the stable contract.
-	creditsMarker = "▸ Credits:" //nolint:gosec // G101: stderr cost-trailer prefix, not a credential
-
-	// authFailedMarker is the stderr line headless Kiro emits when the
-	// credential is present but invalid. Matched as a substring because the
-	// trailing detail text after the marker is not contracted.
-	authFailedMarker = "Authentication failed."
-)
+// creditsMarker prefixes the stderr cost trailer headless Kiro prints only
+// after a turn ran; the values after it vary, so it is matched as a substring.
+const creditsMarker = "▸ Credits:" //nolint:gosec // G101: stderr cost-trailer prefix, not a credential
 
 // ansiEscapeRE matches the ANSI color and style escape sequences that
 // headless Kiro leaves in stdout (for example "\x1b[38;5;141m> \x1b[0m").
@@ -32,18 +23,13 @@ func stripANSI(s string) string {
 	return ansiEscapeRE.ReplaceAllString(s, "")
 }
 
-// classifyStderr scans the collected stderr lines for the two headless
-// Kiro signals. creditsSeen is true when any line contains the cost-trailer
-// marker, the one positive proof that a turn ran. authFailed is true when
-// any line contains the authentication-failure marker. Both are matched by
-// substring containment, never by the numeric values that follow them.
+// classifyStderr reports whether stderr proves a turn ran.
 //
 // A transcript the collector marked incomplete cannot prove a turn ran:
 // the trailer is the last thing headless Kiro writes, so one collected
 // before the drain was cut short may belong to output whose remainder
-// never arrived. The failure marker survives, because a line that was
-// read was read whether or not the rest of the transcript followed.
-func classifyStderr(stderrLines []string) (creditsSeen bool, authFailed bool) {
+// never arrived.
+func classifyStderr(stderrLines []string) (creditsSeen bool) {
 	var incomplete bool
 	for _, line := range stderrLines {
 		if strings.Contains(line, procutil.AbandonedMarker) {
@@ -52,9 +38,6 @@ func classifyStderr(stderrLines []string) (creditsSeen bool, authFailed bool) {
 		if strings.Contains(line, creditsMarker) {
 			creditsSeen = true
 		}
-		if strings.Contains(line, authFailedMarker) {
-			authFailed = true
-		}
 	}
-	return creditsSeen && !incomplete, authFailed
+	return creditsSeen && !incomplete
 }

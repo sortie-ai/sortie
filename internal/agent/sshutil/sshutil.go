@@ -4,12 +4,25 @@ package sshutil
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 	"sync"
 )
+
+// ErrConnectionFailed marks an ssh client that failed to connect, as
+// opposed to a remote command that failed.
+var ErrConnectionFailed = errors.New("the SSH connection to the worker host failed")
+
+const sshConnectionFailedExitStatus = 255
+
+// ConnectionFailed reports whether exitStatus is the one OpenSSH reserves
+// for its own connection failures rather than the remote command's.
+func ConnectionFailed(exitStatus int) bool {
+	return exitStatus == sshConnectionFailedExitStatus
+}
 
 // shellQuote quotes s for safe inclusion in a POSIX shell command.
 // Uses single-quoting with embedded single-quote escaping to prevent

@@ -1,8 +1,6 @@
 package claude
 
 import (
-	"crypto/rand"
-	"fmt"
 	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -127,28 +125,19 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 	if pt.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", pt.SystemPrompt)
 	}
-	if state.mcpConfigPath != "" {
-		args = append(args, "--mcp-config", state.mcpConfigPath)
-	} else if pt.MCPConfig != "" {
-		args = append(args, "--mcp-config", pt.MCPConfig)
-	}
-	if !pt.SessionPersistence {
-		args = append(args, "--no-session-persistence")
+
+	if state.credentialVerification {
+		args = append(args, "--tools", "", "--strict-mcp-config", "--no-session-persistence")
+	} else {
+		if state.mcpConfigPath != "" {
+			args = append(args, "--mcp-config", state.mcpConfigPath)
+		} else if pt.MCPConfig != "" {
+			args = append(args, "--mcp-config", pt.MCPConfig)
+		}
+		if !pt.SessionPersistence {
+			args = append(args, "--no-session-persistence")
+		}
 	}
 
 	return args
-}
-
-// newUUID generates a random v4 UUID string using crypto/rand.
-// Panics if the system random source is unavailable.
-func newUUID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		panic(fmt.Sprintf("claude: crypto/rand unavailable: %v", err))
-	}
-	// Set version (4) and variant (RFC 4122).
-	buf[6] = (buf[6] & 0x0f) | 0x40
-	buf[8] = (buf[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }

@@ -76,7 +76,7 @@ func parsePassthroughConfig(config map[string]any) (passthroughConfig, *typeutil
 // buildArgs constructs the CLI argument slice for a Copilot CLI
 // invocation. The arguments are passed directly to exec.Command,
 // avoiding shell interpolation.
-func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfig) []string { //nolint:unparam // turn mirrors the ForkPerTurnHooks.BuildArgs signature; copilot tracks sessions via state fields
+func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfig) []string {
 	args := []string{
 		"-p", prompt,
 		"--output-format", "json",
@@ -85,13 +85,17 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 		"--no-ask-user",
 	}
 
-	args = append(args, "--max-autopilot-continues", strconv.Itoa(effectiveMaxAutopilotContinues(pt)))
+	if state.credentialVerification {
+		args = append(args, "--max-autopilot-continues", "0")
+	} else {
+		args = append(args, "--max-autopilot-continues", strconv.Itoa(effectiveMaxAutopilotContinues(pt)))
+	}
 
-	// Session resume: fallback to --continue when session ID was
-	// never captured, or use --resume with the known session ID.
-	if state.fallbackToContinue {
-		args = append(args, "--continue")
-	} else if state.copilotSessionID != "" {
+	// Never --continue: it resumes the home directory's most recent
+	// session, possibly another issue's.
+	if turn == 1 && !state.isContinuation {
+		args = append(args, "--session-id", state.copilotSessionID)
+	} else {
 		args = append(args, "--resume", state.copilotSessionID)
 	}
 
@@ -122,13 +126,17 @@ func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfi
 	if pt.ExcludedTools != "" {
 		args = append(args, "--excluded-tools", pt.ExcludedTools)
 	}
-	if state.mcpConfigPath != "" {
-		args = append(args, "--additional-mcp-config", "@"+state.mcpConfigPath)
-	} else if v := formatMCPConfigValue(pt.MCPConfig); v != "" {
-		args = append(args, "--additional-mcp-config", v)
-	}
-	if pt.DisableBuiltinMCPs {
+	if state.credentialVerification {
 		args = append(args, "--disable-builtin-mcps")
+	} else {
+		if state.mcpConfigPath != "" {
+			args = append(args, "--additional-mcp-config", "@"+state.mcpConfigPath)
+		} else if v := formatMCPConfigValue(pt.MCPConfig); v != "" {
+			args = append(args, "--additional-mcp-config", v)
+		}
+		if pt.DisableBuiltinMCPs {
+			args = append(args, "--disable-builtin-mcps")
+		}
 	}
 	if pt.NoCustomInstructions {
 		args = append(args, "--no-custom-instructions")

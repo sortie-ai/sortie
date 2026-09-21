@@ -1,6 +1,41 @@
 package clientprotocol
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+
+	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
+	"github.com/sortie-ai/sortie/internal/typeutil"
+)
+
+// quoteJSONRPCError renders e for display only; no behavior may depend
+// on its Message or Data.
+func quoteJSONRPCError(e *jsonrpc.Error) string {
+	if e == nil {
+		return ""
+	}
+	text := e.Message
+	if data := formatErrorData(e.Data); data != "" {
+		text += ": " + data
+	}
+	return typeutil.TruncateRunes(text, messageTruncateLimit)
+}
+
+func formatErrorData(data json.RawMessage) string {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err == nil {
+		return s
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, trimmed); err == nil {
+		return compact.String()
+	}
+	return string(trimmed)
+}
 
 // sessionUpdateKind identifies which of the eleven pinned session/update
 // variants a decoded notification carried.

@@ -35,6 +35,10 @@ const pinnedProtocolVersion = 1
 // agent.read_timeout_ms is not set.
 const defaultReadTimeout = 30 * time.Second
 
+// errorCodeAuthRequired is the protocol's "Authentication required"
+// code, returned when the runtime refuses its credential.
+const errorCodeAuthRequired = -32000
+
 // sessionState is this adapter's session state, reached through
 // domain.Session.Internal. Fields set once during StartSession before the pump
 // starts are read-only afterward; fields the pump owns are documented as such.
@@ -57,6 +61,8 @@ type sessionState struct {
 	stderrCollector *procutil.StderrCollector
 	waitCh          <-chan struct{} // closed once the subprocess has been reaped
 
+	reaper *procutil.Reaper
+
 	// inbox is where the connection's reader delivers routed messages and every
 	// control publish lands, in one order. runPump is its only taker; it is
 	// never closed, so the pump keeps taking late controls until stopCh closes.
@@ -67,9 +73,13 @@ type sessionState struct {
 
 	// closeSessionID is written once, on the StartSession goroutine, after
 	// resolveSession returns and before StartSession returns. It is left at zero
-	// when the handshake does not advertise session/close. Teardown is its only
+	// when the handshake advertises no teardown method. Teardown is its only
 	// reader.
 	closeSessionID string
+
+	closeMethod string
+
+	credentialVerification bool
 
 	logger *slog.Logger
 
@@ -222,12 +232,13 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	}
 
 	state := &sessionState{
-		target:      target,
-		agentConfig: params.AgentConfig,
-		stopCh:      make(chan struct{}),
-		pumpDone:    make(chan struct{}),
-		logger:      slog.Default().With(slog.String("component", "clientprotocol-adapter")),
-		origins:     &a.origins,
+		target:                 target,
+		agentConfig:            params.AgentConfig,
+		stopCh:                 make(chan struct{}),
+		pumpDone:               make(chan struct{}),
+		logger:                 slog.Default().With(slog.String("component", "clientprotocol-adapter")),
+		origins:                &a.origins,
+		credentialVerification: params.CredentialVerification,
 	}
 	state.drainGrace = a.drainGrace
 	if state.drainGrace <= 0 {
@@ -302,6 +313,7 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	// close_pipes steps end that reader.
 	reaper := procutil.StartReaper(cmd, state.logger)
 	state.waitCh = reaper.Done()
+	state.reaper = reaper
 
 	// The release ends a handshake call or a turn that would otherwise wait
 	// forever on a reaped runtime whose reader did not end inside the drain
@@ -349,6 +361,10 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	if withheld {
 		state.logger.Warn("configured tool servers were not delivered: the agent does not advertise HTTP tool-server support")
 	}
+	if params.CredentialVerification {
+		// Non-nil so the wire carries mcpServers: [] rather than null.
+		wireServers = []mcpServer{}
+	}
 
 	var caps agentCapabilities
 	if initResp.AgentCapabilities != nil {
@@ -361,8 +377,13 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
 		return domain.Session{}, agentErr
 	}
-	if advertisesSessionClose(caps) {
+	switch {
+	case params.CredentialVerification && advertisesSessionDelete(caps):
 		state.closeSessionID = sessionID
+		state.closeMethod = methodSessionDelete
+	case advertisesSessionClose(caps):
+		state.closeSessionID = sessionID
+		state.closeMethod = methodSessionClose
 	}
 
 	facts := &handshakeFacts{toolServersWithheld: withheld, toolServersDelivered: len(wireServers) > 0, caps: caps}
@@ -392,7 +413,7 @@ func wrapPumpMessage(msg jsonrpc.Message) pumpItem {
 // doInitialize sends the initialize request and validates the pinned protocol
 // version.
 func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse, *domain.AgentError) {
-	callCtx, cancel := context.WithTimeout(ctx, readTimeout(state))
+	callCtx, cancel := context.WithTimeout(ctx, max(readTimeout(state), agentcore.CredentialExchangeBound))
 	defer cancel()
 
 	no := false
@@ -405,13 +426,19 @@ func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse
 	}
 
 	resp, err := state.conn.Call(callCtx, methodInitialize, req)
-	if agentErr := translateCallError(err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
+		if state.credentialVerification && agentErr.Kind == domain.ErrPortExit && !errors.Is(agentErr.Err, sshutil.ErrConnectionFailed) {
+			return nil, agentcore.CredentialUnverifiedError("agent connection ended before responding", agentErr.Err)
+		}
 		return nil, agentErr
 	}
 	if resp.Error != nil {
+		if resp.Error.Code == errorCodeAuthRequired {
+			return nil, agentcore.CredentialRefusedError(quoteJSONRPCError(resp.Error), nil)
+		}
 		return nil, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
-			Message: fmt.Sprintf("initialize error %d: %s", resp.Error.Code, resp.Error.Message),
+			Message: fmt.Sprintf("initialize error %d: %s", resp.Error.Code, quoteJSONRPCError(resp.Error)),
 		}
 	}
 
@@ -436,13 +463,16 @@ func doNewSession(ctx context.Context, state *sessionState, cwd string, servers 
 
 	req := newSessionRequest{Cwd: cwd, MCPServers: servers}
 	resp, err := state.conn.Call(callCtx, methodSessionNew, req)
-	if agentErr := translateCallError(err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
 		return nil, agentErr
 	}
 	if resp.Error != nil {
+		if resp.Error.Code == errorCodeAuthRequired {
+			return nil, agentcore.CredentialRefusedError(quoteJSONRPCError(resp.Error), nil)
+		}
 		return nil, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
-			Message: fmt.Sprintf("session/new error %d: %s", resp.Error.Code, resp.Error.Message),
+			Message: fmt.Sprintf("session/new error %d: %s", resp.Error.Code, quoteJSONRPCError(resp.Error)),
 		}
 	}
 
@@ -456,14 +486,21 @@ func doNewSession(ctx context.Context, state *sessionState, cwd string, servers 
 // translateCallError maps a jsonrpc.Conn.Call failure to the normalized failure
 // table: a timeout against callCtx's own deadline is response_timeout, and every
 // other failure is port_exit, the loss of the subprocess.
-func translateCallError(err error, callCtx context.Context) *domain.AgentError {
+func translateCallError(state *sessionState, err error, callCtx context.Context) *domain.AgentError {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) && callCtx.Err() == context.DeadlineExceeded {
 		return &domain.AgentError{Kind: domain.ErrResponseTimeout, Message: "timed out waiting for a response", Err: err}
 	}
+	if state.sshConnectionFailed() {
+		return agentcore.ConnectionFailedError()
+	}
 	return &domain.AgentError{Kind: domain.ErrPortExit, Message: "agent connection ended before responding", Err: err}
+}
+
+func (state *sessionState) sshConnectionFailed() bool {
+	return agentcore.ReaperConnectionFailed(state.target.RemoteCommand != "", state.reaper, state.drainGrace)
 }
 
 // textContentBlock builds a text content block from scratch: contentBlock's
@@ -566,7 +603,10 @@ func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func
 		if state.closeSessionID == "" || state.conn == nil {
 			return
 		}
-		conn, id := state.conn, state.closeSessionID
+		conn, id, method := state.conn, state.closeSessionID, state.closeMethod
+		if method == "" {
+			method = methodSessionClose
+		}
 
 		// Half of what remains on graceCtx, not half of the configured grace: a
 		// nearer caller deadline would otherwise let this call spend the whole
@@ -580,8 +620,14 @@ func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func
 		callCtx, cancel := context.WithTimeout(graceCtx, bound)
 		defer cancel()
 
-		resp, err := conn.Call(callCtx, methodSessionClose, closeSessionRequest{SessionID: sessionId(id)})
-		logCloseSessionOutcome(state, callerCtx, bound, closeCallOutcome{resp: resp, err: err})
+		var resp jsonrpc.Response
+		var err error
+		if method == methodSessionDelete {
+			resp, err = conn.Call(callCtx, methodSessionDelete, deleteSessionRequest{SessionID: sessionId(id)})
+		} else {
+			resp, err = conn.Call(callCtx, methodSessionClose, closeSessionRequest{SessionID: sessionId(id)})
+		}
+		logCloseSessionOutcome(state, callerCtx, bound, method, closeCallOutcome{resp: resp, err: err})
 	}
 }
 
@@ -589,15 +635,15 @@ func closeSession(callerCtx, graceCtx context.Context, grace time.Duration) func
 // error logs at Warn with the numeric code only, never the peer's message text.
 // A call that did not complete because callCtx ended logs at Warn; any other
 // failure logs at Debug, because the process is already going away.
-func logCloseSessionOutcome(state *sessionState, callerCtx context.Context, bound time.Duration, got closeCallOutcome) {
+func logCloseSessionOutcome(state *sessionState, callerCtx context.Context, bound time.Duration, method string, got closeCallOutcome) {
+	if method == methodSessionDelete {
+		logDeleteSessionOutcome(state, callerCtx, bound, got)
+		return
+	}
 	if got.err != nil {
-		if errors.Is(got.err, context.DeadlineExceeded) || errors.Is(got.err, context.Canceled) {
-			outcome := "bound elapsed"
-			if callerCtx.Err() != nil {
-				outcome = "caller deadline"
-			}
+		if isCallContextEnded(got.err) {
 			state.logger.Warn("session/close did not complete before the wait ended",
-				slog.Duration("bound", bound), slog.String("outcome", outcome))
+				slog.Duration("bound", bound), slog.String("outcome", waitEndOutcome(callerCtx)))
 			return
 		}
 		state.logger.Debug("session/close call did not complete")
@@ -608,6 +654,33 @@ func logCloseSessionOutcome(state *sessionState, callerCtx context.Context, boun
 		return
 	}
 	state.logger.Debug("session closed through the protocol")
+}
+
+// logDeleteSessionOutcome logs every failure at Warn, unlike session/close,
+// because a failed delete leaves the verification session stored.
+func logDeleteSessionOutcome(state *sessionState, callerCtx context.Context, bound time.Duration, got closeCallOutcome) {
+	const failed = "failed to delete credential verification session"
+	switch {
+	case got.err != nil && isCallContextEnded(got.err):
+		state.logger.Warn(failed, slog.Duration("bound", bound), slog.String("outcome", waitEndOutcome(callerCtx)))
+	case got.err != nil:
+		state.logger.Warn(failed, slog.Any("error", got.err))
+	case got.resp.Error != nil:
+		state.logger.Warn(failed, slog.Int("code", got.resp.Error.Code))
+	default:
+		state.logger.Debug("session deleted through the protocol")
+	}
+}
+
+func isCallContextEnded(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+func waitEndOutcome(callerCtx context.Context) string {
+	if callerCtx.Err() != nil {
+		return "caller deadline"
+	}
+	return "bound elapsed"
 }
 
 // stopSession runs teardown's fixed step order.

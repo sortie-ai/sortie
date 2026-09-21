@@ -18,11 +18,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// versionHeldDescendantScenario names the fake copilot binary L2's
-// fixture uses: on a "--version" invocation it starts an already-built
-// descendant inheriting its own standard output and standard error,
-// records the descendant's pid, then prints a version line and exits
-// 0.
 const versionHeldDescendantScenario = "copilot.version-held-descendant"
 
 type versionHeldDescendantParams struct {
@@ -42,27 +37,6 @@ func runVersionHeldDescendant(args []string, p versionHeldDescendantParams) int 
 	return 0
 }
 
-// ghAuthHeldDescendantScenario names the fake gh binary L3's fixture
-// uses: on an "auth status" invocation it starts an already-built
-// descendant the same way, then exits 0.
-const ghAuthHeldDescendantScenario = "copilot.gh-auth-held-descendant"
-
-type ghAuthHeldDescendantParams struct {
-	ChildPath    string
-	ChildPIDPath string
-}
-
-func runGhAuthHeldDescendant(args []string, p ghAuthHeldDescendantParams) int {
-	if len(args) < 2 || args[0] != "auth" || args[1] != "status" {
-		return 0
-	}
-	if err := startHeldDescendant(p.ChildPath, p.ChildPIDPath); err != nil {
-		fmt.Fprintf(os.Stderr, "gh auth held descendant: %v\n", err)
-		return 2
-	}
-	return 0
-}
-
 func startHeldDescendant(childPath, childPIDPath string) error {
 	cmd := exec.Command(childPath) //nolint:gosec // fake runtime path this scenario was handed
 	cmd.Stdout = os.Stdout
@@ -75,7 +49,6 @@ func startHeldDescendant(childPath, childPIDPath string) error {
 
 func init() {
 	fakeScenarios[versionHeldDescendantScenario] = agenttest.Typed(runVersionHeldDescendant)
-	fakeScenarios[ghAuthHeldDescendantScenario] = agenttest.Typed(runGhAuthHeldDescendant)
 }
 
 // pollCopilotPIDAndAssertGone polls path for a positive PID, then
@@ -109,10 +82,6 @@ func pollCopilotPIDAndAssertGone(t *testing.T, path string) {
 	t.Errorf("descendant %d still answers signal 0, want it gone", pid)
 }
 
-// TestStartSession_VersionCanaryHeldDescendantHoldingOutput pins P9
-// for L2: with a held descendant holding the version canary's output,
-// StartSession returns within its timer with the canary passing, and
-// the descendant is gone.
 func TestStartSession_VersionCanaryHeldDescendantHoldingOutput(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
@@ -139,36 +108,6 @@ func TestStartSession_VersionCanaryHeldDescendantHoldingOutput(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("StartSession() error = %v, want nil", err)
-	}
-
-	pollCopilotPIDAndAssertGone(t, pidPath)
-}
-
-// TestCheckAuth_HeldDescendantHoldingOutput pins P9 for L3: with a
-// held descendant holding the "gh auth status" output, checkAuth
-// returns within its timer reporting authentication present, and the
-// descendant is gone.
-func TestCheckAuth_HeldDescendantHoldingOutput(t *testing.T) {
-	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		t.Setenv(env, "")
-	}
-
-	dir := t.TempDir()
-	descendantPath := agenttest.FakeRuntime(t, dir, "descendant", agenttest.OutputScenario, agenttest.Output{Hang: true})
-	pidPath := filepath.Join(dir, "child.pid")
-	agenttest.FakeRuntime(t, dir, "gh", ghAuthHeldDescendantScenario, ghAuthHeldDescendantParams{
-		ChildPath:    descendantPath,
-		ChildPIDPath: pidPath,
-	})
-	t.Setenv("PATH", dir)
-
-	start := time.Now()
-	err := checkAuth(context.Background(), 5*time.Second)
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("checkAuth() took %v, want within 3s", elapsed)
-	}
-	if err != nil {
-		t.Fatalf("checkAuth() = %v, want nil", err)
 	}
 
 	pollCopilotPIDAndAssertGone(t, pidPath)

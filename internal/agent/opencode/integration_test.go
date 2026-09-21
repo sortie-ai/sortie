@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -470,4 +471,24 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 	if !toolCalled {
 		t.Error("no EventToolResult observed: the agent turn never called a Sortie tool through the translated MCP channel")
 	}
+}
+
+func TestIntegration_CredentialVerification(t *testing.T) {
+	skipIfNotEnabled(t)
+
+	adapter := mustNewAdapter(t)
+	params := domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+	}
+	if _, err := credentialtest.VerifyLive(adapter, params); err != nil {
+		t.Fatalf("VerifyCredential() error = %v, want nil", err)
+	}
+
+	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
+		credentialtest.SetRefusedCredential(t, "SORTIE_OPENCODE_CREDENTIAL_ENV")
+
+		_, err := credentialtest.VerifyLive(adapter, params)
+		credentialtest.RequireUnverified(t, err)
+	})
 }

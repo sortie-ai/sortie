@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
@@ -45,7 +46,7 @@ func runWhoamiHeldDescendant(args []string, p whoamiHeldDescendantParams) int {
 		fmt.Fprintf(os.Stderr, "whoami held descendant: write child pid: %v\n", err)
 		return 2
 	}
-	fmt.Print(whoamiSuccessMarker + "\n")
+	fmt.Print("Authenticated with API key\n")
 	return 0
 }
 
@@ -53,10 +54,6 @@ func init() {
 	fakeScenarios[whoamiHeldDescendantScenario] = agenttest.Typed(runWhoamiHeldDescendant)
 }
 
-// TestCheckCredential_HeldDescendantHoldingOutput pins P9 for L1: with
-// a held descendant holding the whoami canary's output, checkCredential
-// returns within its timer with a valid credential yielding nil, and
-// the descendant is gone.
 func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 	setValidAPIKey(t)
 
@@ -68,8 +65,10 @@ func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 		ChildPIDPath: pidPath,
 	})
 
+	target := agentcore.LaunchTarget{Command: binPath, WorkspacePath: dir}
+
 	start := time.Now()
-	agentErr := checkCredential(context.Background(), binPath, procutil.DefaultStopGrace)
+	agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()))
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("checkCredential() took %v, want within 3s", elapsed)
 	}

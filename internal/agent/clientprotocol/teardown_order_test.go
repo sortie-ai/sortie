@@ -153,7 +153,7 @@ func TestLogCloseSessionOutcome(t *testing.T) {
 		var buf bytes.Buffer
 		state := &sessionState{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 
-		logCloseSessionOutcome(state, context.Background(), 500*time.Millisecond, closeCallOutcome{err: context.DeadlineExceeded})
+		logCloseSessionOutcome(state, context.Background(), 500*time.Millisecond, methodSessionClose, closeCallOutcome{err: context.DeadlineExceeded})
 
 		output := buf.String()
 		if !strings.Contains(output, "level=WARN") {
@@ -179,7 +179,7 @@ func TestLogCloseSessionOutcome(t *testing.T) {
 		callerCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		logCloseSessionOutcome(state, callerCtx, 500*time.Millisecond, closeCallOutcome{err: context.Canceled})
+		logCloseSessionOutcome(state, callerCtx, 500*time.Millisecond, methodSessionClose, closeCallOutcome{err: context.Canceled})
 
 		output := buf.String()
 		if !strings.Contains(output, `outcome="caller deadline"`) {
@@ -193,7 +193,7 @@ func TestLogCloseSessionOutcome(t *testing.T) {
 		var buf bytes.Buffer
 		state := &sessionState{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 
-		logCloseSessionOutcome(state, context.Background(), 500*time.Millisecond, closeCallOutcome{err: jsonrpc.ErrClosed})
+		logCloseSessionOutcome(state, context.Background(), 500*time.Millisecond, methodSessionClose, closeCallOutcome{err: jsonrpc.ErrClosed})
 
 		output := buf.String()
 		if strings.Contains(output, "level=WARN") {

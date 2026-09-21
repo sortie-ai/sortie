@@ -487,6 +487,19 @@ loop:
 		}
 	}
 
+	sshFailed := s.target.RemoteCommand != "" && sshutil.ConnectionFailed(exitCode)
+	if ConnectionFailedForRequest(sshFailed, lastParsed != nil) {
+		usage, measured := s.hooks.GetUsage()
+		EmitTurnFailed(emit, "ssh connection failed", 0, usage)
+		result := domain.TurnResult{
+			SessionID:     s.hooks.GetSessionID(),
+			ExitReason:    domain.EventTurnFailed,
+			Usage:         usage,
+			UsageMeasured: measured,
+		}
+		return result, ConnectionFailedError()
+	}
+
 	// The explicit nil check prevents a typed-nil *domain.AgentError from
 	// becoming a non-nil error interface on the success path. The
 	// skeleton calls EmitWarnLines when agentErr is non-nil, so

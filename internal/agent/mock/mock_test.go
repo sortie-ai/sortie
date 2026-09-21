@@ -8,6 +8,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -1101,4 +1102,67 @@ func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
 	if toolResults[1].ToolError {
 		t.Errorf("tool_result[1] ToolError = true, want false (Read has no error config)")
 	}
+}
+
+// The verification flag belongs to the session, not the adapter: a
+// working session started after a verification session must not change
+// how the verification turn runs, and the verification turn consumes
+// no turn_outcomes entry.
+func TestRunTurn_CredentialVerification(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewMockAdapter(map[string]any{"turn_outcomes": []any{"failed"}})
+	if err != nil {
+		t.Fatalf("NewMockAdapter() error = %v", err)
+	}
+	verifySession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath:          "/tmp/work",
+		CredentialVerification: true,
+	})
+	if err != nil {
+		t.Fatalf("StartSession(verification) error = %v", err)
+	}
+	workingSession, err := adapter.StartSession(context.Background(), domain.StartSessionParams{WorkspacePath: "/tmp/work"})
+	if err != nil {
+		t.Fatalf("StartSession(working) error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), verifySession, domain.RunTurnParams{
+		Prompt:  agentcore.CredentialVerificationPrompt,
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil || result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("verification RunTurn() = (%q, %v), want (%q, nil)", result.ExitReason, err, domain.EventTurnCompleted)
+	}
+	if len(events) != 0 {
+		t.Errorf("verification RunTurn() emitted %d events, want 0", len(events))
+	}
+
+	_, err = adapter.RunTurn(context.Background(), workingSession, defaultParams())
+	if ae, ok := errors.AsType[*domain.AgentError](err); !ok || ae.Kind != domain.ErrTurnFailed {
+		t.Errorf("working RunTurn() error = %v, want turn_failed from its own turn_outcomes[0]", err)
+	}
+}
+
+func TestMockAdapter_CredentialVerificationConformance(t *testing.T) {
+	t.Parallel()
+
+	verified, _ := NewMockAdapter(map[string]any{})
+	unverified, _ := NewMockAdapter(map[string]any{"credential_error": "refused"})
+
+	credentialtest.AssertCredentialVerification(t, "mock", []credentialtest.CredentialVerificationCase{
+		{
+			Name:    "no credential_error passes",
+			Adapter: verified,
+			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work"},
+			Want:    credentialtest.WantVerified,
+		},
+		{
+			Name:    "credential_error set fails",
+			Adapter: unverified,
+			Params:  domain.StartSessionParams{WorkspacePath: "/tmp/work"},
+			Want:    credentialtest.WantUnverified,
+		},
+	})
 }
