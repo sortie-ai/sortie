@@ -12,10 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A run on the `agent-client-protocol` kind now reports token usage when its runtime is a Gemini CLI started on the machine running Sortie, so `agent.max_tokens` applies to it, its spend joins the token and cost totals, and it is no longer counted among the sessions whose usage was never recorded. Sortie reads the counts from the usage records Gemini CLI writes to disk rather than from the protocol, and falls back to the runtime's session journal when those records are unavailable; the figures cover input tokens, output tokens including reasoning, and cache reads. A turn whose spend was never fully reported, a cancelled turn above all, is now recorded as spend of an unknown amount: whatever figure did arrive still counts toward the totals, what that figure leaves out does not, and `used_tokens_complete` in the `cost_budget` tool reads `false`, so the issue's spend reads as a lower bound instead of passing for the whole of it as it did before. A session on a Gemini CLI build other than `0.59.0`, and a runtime started on a remote host through `worker.ssh_hosts`, stay unmeasured with `agent.max_tokens` inactive, because a figure is reported only for a build it was measured against.
   ([#1057](https://github.com/sortie-ai/sortie/issues/1057))
 
+- Sortie now verifies the agent's credential before it starts work on an issue, on every agent kind, locally and on `worker.ssh_hosts`. A credential the agent cannot use stops the run before any work with an error naming the credential, and the run is retried. Stored logins now pass on `kiro` and `copilot-cli`, which previously required an API key or token variable. The check costs one short model request per run.
+  ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
+
+### Changed
+
+- Workflows that use the `copilot-cli` agent kind now need GitHub Copilot CLI 1.0.51 or later.
+  ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
+
 ### Fixed
 
 - A run that ends having reported no token usage, while `agent.max_tokens` is set, now says so in the log, naming the agent kind and the ceiling the run could not be held to. Before this, only an agent kind that declares up front that it never reports token usage drew a warning, so a kind that declares figures do arrive while the runtime it starts reports none left the ceiling doing nothing and said nothing about it. The dashboard no longer describes such a session as not having reported its tokens yet: once the point its agent reports at has passed with nothing counted, the session's Tokens row reads "not reported", and the footer counts the session among those running an agent that reports no token usage rather than among those still to report.
   ([#1112](https://github.com/sortie-ai/sortie/issues/1112))
+
+- A `copilot-cli` session could resume another issue's conversation on the same host; it now always continues its own.
+  ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
+
+- Kiro CLI on the `agent-client-protocol` kind no longer times out at startup when it signs in with an API key.
+  ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
 
 ### Migrations
 
