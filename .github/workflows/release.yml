@@ -316,6 +316,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_CLAUDE_TEST: "1"
+      SORTIE_CLAUDE_CREDENTIAL_ENV: ANTHROPIC_API_KEY
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Verify Claude Code secrets are configured
@@ -348,7 +349,7 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/claude/...
+        run: go test -race -count=1 -v -timeout 600s -run 'Integration' ./internal/agent/claude/...
 
   test-integration-copilot:
     name: "Integration: Copilot"
@@ -356,6 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_COPILOT_TEST: "1"
+      SORTIE_COPILOT_CREDENTIAL_ENV: GH_TOKEN
       GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
     steps:
       - name: Verify Copilot CLI secrets are configured
@@ -396,6 +398,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_CODEX_TEST: "1"
+      SORTIE_CODEX_CREDENTIAL_ENV: CODEX_API_KEY
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
     steps:
       - name: Verify Codex secrets are configured
@@ -464,6 +467,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_KIRO_TEST: "1"
+      SORTIE_KIRO_CREDENTIAL_ENV: KIRO_API_KEY
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
     steps:
       - name: Verify Kiro secrets are configured
@@ -503,6 +507,7 @@ jobs:
     env:
       SORTIE_CLIENTPROTOCOL_TEST: "1"
       SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: GEMINI_API_KEY
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - name: Verify Gemini secrets are configured
@@ -544,6 +549,7 @@ jobs:
     env:
       SORTIE_CLIENTPROTOCOL_TEST: "1"
       SORTIE_CLIENTPROTOCOL_COMMAND: kiro-cli acp -a
+      SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: KIRO_API_KEY
       KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
     steps:
       - name: Verify Kiro secrets are configured
