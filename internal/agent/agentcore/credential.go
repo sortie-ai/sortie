@@ -133,7 +133,10 @@ func classifyVerificationStartError(ctx, turnCtx context.Context, turnBound time
 // bound before runErr, because both make any RunTurn outcome moot.
 func classifyVerificationRunTurnOutcome(ctx, turnCtx context.Context, turnBound time.Duration, result domain.TurnResult, runErr error) error {
 	if ctx.Err() != nil {
-		return runErr
+		if runErr != nil {
+			return runErr
+		}
+		return ctx.Err()
 	}
 	if verificationTurnBoundElapsed(ctx, turnCtx) {
 		return turnBoundError(turnBound, turnCtx.Err())

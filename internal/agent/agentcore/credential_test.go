@@ -83,6 +83,14 @@ func TestVerifyCredential_Verdict(t *testing.T) {
 			wantUnchanged: cancelledRun,
 		},
 		{
+			name: "ctx ended during RunTurn with a nil error must not report success",
+			run: func(_ context.Context, cancel context.CancelFunc) (domain.TurnResult, error) {
+				cancel()
+				return domain.TurnResult{}, nil
+			},
+			wantUnchanged: context.Canceled,
+		},
+		{
 			name: "turn bound elapsed",
 			run: func(ctx context.Context, _ context.CancelFunc) (domain.TurnResult, error) {
 				<-ctx.Done()
