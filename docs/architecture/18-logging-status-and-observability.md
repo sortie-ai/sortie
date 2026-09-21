@@ -117,6 +117,8 @@ A run is measured when the runtime reported at least one usage figure for the se
 
 The run record carries this distinction alongside the four token counters. An unmeasured run contributes nothing to any token counter and is excluded from cost pricing. It advances no Prometheus token counter and creates no series, the same as a run that never emitted a usage event.
 
+The run's usage includes the credential-verification step (§10.9): the step's own request is a model request like any other, and the working session's figures continue its series rather than starting over from zero. The worker captures the step's componentwise watermark once the step ends and adds it to every later working-session figure, event and turn result alike, before that figure is folded into the run's totals and before it is relayed; an all-zero working figure, or a step that reported nothing, changes nothing. A verification `SpendUnaccounted` result raises the run's unaccounted count exactly as a working turn's does. The relayed verification events carry the message `verifying the agent credential` and are `token_usage` or `notification` only, with no `session_id`, `agent_pid`, tool field, or rate-limit payload.
+
 Token accounting rules:
 
 - Agent adapters normalize token counts before emitting events. The orchestrator receives `{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly.

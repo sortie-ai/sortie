@@ -17,6 +17,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -452,32 +453,6 @@ func TestBuildArgs_DefaultConfigurationSkipsPermissions(t *testing.T) {
 	}
 }
 
-func TestNewUUID(t *testing.T) {
-	t.Parallel()
-
-	uuidRe := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-
-	for i := range 10 {
-		t.Run(fmt.Sprintf("iter_%d", i), func(t *testing.T) {
-			t.Parallel()
-			id := newUUID()
-			if !uuidRe.MatchString(id) {
-				t.Errorf("newUUID() = %q does not match v4 UUID pattern", id)
-			}
-		})
-	}
-
-	// Uniqueness check.
-	seen := make(map[string]struct{}, 100)
-	for range 100 {
-		id := newUUID()
-		if _, dup := seen[id]; dup {
-			t.Fatalf("duplicate UUID: %s", id)
-		}
-		seen[id] = struct{}{}
-	}
-}
-
 func TestParsePassthroughConfig(t *testing.T) {
 	t.Parallel()
 
@@ -487,7 +462,7 @@ func TestParsePassthroughConfig(t *testing.T) {
 			"permission_mode":     "dontAsk",
 			"model":               "claude-opus-4-20250514",
 			"fallback_model":      "claude-haiku-3",
-			"max_turns":           float64(10), // JSON numbers → float64
+			"max_turns":           float64(10), // JSON numbers decode as float64
 			"max_budget_usd":      2.5,
 			"effort":              "high",
 			"allowed_tools":       "Bash Read",
@@ -2320,7 +2295,7 @@ func TestTruncateToolError(t *testing.T) {
 		},
 		{
 			// Pin to 512 to preserve as a boundary test. No newline in
-			// input → tailBytes(s, 512) → last 512 bytes.
+			// input, so tailBytes keeps the last 512 bytes.
 			name:    "600_ascii_bytes",
 			input:   strings.Repeat("a", 600),
 			maxLen:  512,
@@ -2329,7 +2304,7 @@ func TestTruncateToolError(t *testing.T) {
 		{
 			// Pin to 512 to preserve CJK rune-boundary coverage.
 			// tailBytes(cjk, 512): 512 mod 3 = 1 (continuation byte),
-			// advances to next rune start → 510 bytes (170 full runes).
+			// advances to next rune start: 510 bytes (170 full runes).
 			name:    "multibyte_mid_rune_boundary",
 			input:   cjk,
 			maxLen:  512,
@@ -2349,14 +2324,12 @@ func TestTruncateToolError(t *testing.T) {
 			wantSame: true,
 		},
 		{
-			// No newline → tailBytes fallback.
 			name:    "no_newline_tail_only",
 			input:   strings.Repeat("x", 600),
 			maxLen:  512,
 			wantLen: 512,
 		},
 		{
-			// First line alone > maxLen → tailBudget <= 0 → tailBytes fallback.
 			name:    "first_line_exceeds_budget",
 			input:   strings.Repeat("a", 600) + "\nFAIL pkg",
 			maxLen:  512,
@@ -3094,4 +3067,21 @@ func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
 		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
+}
+
+func TestCredentialVerification(t *testing.T) {
+	// Not parallel: t.Setenv carries the fake ssh stand-in on PATH.
+	verifiedBin := fakeClaude(t, t.TempDir(), agenttest.Output{Stdout: `{"type":"system","subtype":"init","session_id":"verify-ok","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"SORTIE_CREDENTIAL_OK","is_error":false,"session_id":"verify-ok"}
+`})
+	unverifiedBin := fakeClaude(t, t.TempDir(), agenttest.Output{Stdout: `{"type":"system","subtype":"init","session_id":"verify-fail","cwd":"/tmp"}
+{"type":"result","subtype":"error","result":"Failed to authenticate. API Error: 401 API key is invalid.","is_error":true,"session_id":"verify-fail"}
+`})
+
+	adapter, err := NewClaudeCodeAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewClaudeCodeAdapter() error = %v", err)
+	}
+
+	credentialtest.AssertCredentialVerification(t, "claude-code", credentialtest.RuntimeCases(t, adapter, domain.AgentConfig{}, verifiedBin, unverifiedBin, "claude"))
 }

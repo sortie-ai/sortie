@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
-	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 )
 
@@ -99,10 +99,11 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 		return fmt.Errorf("account/login/start: %w", err)
 	}
 	if loginResp.Error != nil {
-		return &domain.AgentError{
-			Kind:    domain.ErrResponseError,
-			Message: fmt.Sprintf("login failed: %s", loginResp.Error.Message),
+		text := loginResp.Error.Message
+		if text == "" {
+			text = "the login did not succeed"
 		}
+		return agentcore.CredentialRefusedError(text, nil)
 	}
 
 	// Wait for account/login/completed notification.
@@ -130,10 +131,11 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 					return fmt.Errorf("login notification unmarshal: %w", err)
 				}
 				if !loginNotif.Success {
-					return &domain.AgentError{
-						Kind:    domain.ErrResponseError,
-						Message: "authentication failed",
+					text := loginNotif.Error
+					if text == "" {
+						text = "the login did not succeed"
 					}
+					return agentcore.CredentialRefusedError(text, nil)
 				}
 				return nil
 			}
@@ -158,11 +160,17 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	if sandbox == "" {
 		sandbox = "workspace-write"
 	}
+	if state.credentialVerification {
+		sandbox = "read-only"
+	}
 
 	params := map[string]any{
 		"cwd":            state.target.WorkspacePath,
 		"approvalPolicy": approvalPolicy,
 		"sandbox":        sandbox,
+	}
+	if state.credentialVerification {
+		params["ephemeral"] = true
 	}
 	if pt.Model != "" {
 		params["model"] = pt.Model
@@ -251,6 +259,14 @@ func resumeThread(ctx context.Context, state *sessionState, threadID string) (mo
 // (WORKFLOW.md turn_sandbox_policy) are merged on top and may
 // replace any key, including writableRoots and networkAccess.
 func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]any {
+	if state.credentialVerification {
+		return map[string]any{
+			"type":          "readOnly",
+			"writableRoots": []string{},
+			"networkAccess": false,
+		}
+	}
+
 	sandboxType := denormalizeSandbox(pt.ThreadSandbox)
 	if sandboxType == "" {
 		sandboxType = "workspaceWrite"

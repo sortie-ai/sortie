@@ -17,10 +17,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -474,10 +476,6 @@ func TestIntegration_ResumeSession(t *testing.T) {
 		t.Errorf("state.copilotSessionID = %q, want %q (should match turn 1 result)",
 			state.copilotSessionID, result1.SessionID)
 	}
-	if state.fallbackToContinue {
-		t.Error("state.fallbackToContinue = true after successful turn, want false")
-	}
-
 	// Turn 2: continuation must produce the same session ID.
 	result2, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
 		Prompt:  "Say exactly one word: world",
@@ -558,4 +556,44 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 		t.Errorf("resumed session: SessionID = %q, want %q (same original session)",
 			result2.SessionID, result1.SessionID)
 	}
+}
+
+func TestIntegration_CredentialVerification(t *testing.T) {
+	skipUnlessCopilotIntegration(t)
+
+	adapter, err := NewCopilotAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewCopilotAdapter: %v", err)
+	}
+	params := func(t *testing.T) domain.StartSessionParams {
+		return domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+		}
+	}
+
+	t.Run("working credential verifies and leaves no session state", func(t *testing.T) {
+		result, err := credentialtest.VerifyLive(adapter, params(t))
+		if err != nil {
+			t.Fatalf("VerifyCredential() error = %v, want nil", err)
+		}
+		if result.SessionID == "" {
+			t.Fatal("VerifyCredential() TurnResult.SessionID is empty, want the minted verification session id")
+		}
+		root, rootErr := sessionStateRoot(os.Getenv, os.UserHomeDir)
+		if rootErr != nil {
+			t.Fatalf("sessionStateRoot: %v", rootErr)
+		}
+		if _, statErr := os.Stat(filepath.Join(root, result.SessionID)); !os.IsNotExist(statErr) {
+			t.Errorf("session-state directory for verification session %q still present after the step, want deleted (stat error = %v)", result.SessionID, statErr)
+		}
+	})
+
+	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
+		// Not parallel: t.Setenv carries the invalid credential.
+		credentialtest.SetRefusedCredential(t, "SORTIE_COPILOT_CREDENTIAL_ENV")
+
+		_, err := credentialtest.VerifyLive(adapter, params(t))
+		credentialtest.RequireUnverified(t, err)
+	})
 }

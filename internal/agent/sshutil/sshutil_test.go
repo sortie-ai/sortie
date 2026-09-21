@@ -10,6 +10,33 @@ import (
 	"time"
 )
 
+func TestConnectionFailed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		exitStatus int
+		want       bool
+	}{
+		{"OpenSSH's own reserved connection-failure status", 255, true},
+		{"a remote command's own non-zero exit", 1, false},
+		{"a clean exit", 0, false},
+		{"a status near but distinct from 255", 254, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ConnectionFailed(tt.exitStatus)
+
+			if got != tt.want {
+				t.Errorf("ConnectionFailed(%d) = %v, want %v", tt.exitStatus, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	t.Parallel()
 

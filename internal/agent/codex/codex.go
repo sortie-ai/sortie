@@ -155,6 +155,21 @@ type sessionState struct {
 	// reader has exited and inbox has been closed.
 	inbox      *jsonrpc.Inbox[jsonrpc.Message]
 	readerDone chan struct{}
+
+	reaper *procutil.Reaper
+
+	credentialVerification bool
+}
+
+func (state *sessionState) sshConnectionFailed() bool {
+	return agentcore.ReaperConnectionFailed(state.target.RemoteCommand != "", state.reaper, state.drainGrace)
+}
+
+func connectionFailureErr(state *sessionState) *domain.AgentError {
+	if !state.sshConnectionFailed() {
+		return nil
+	}
+	return agentcore.ConnectionFailedError()
 }
 
 // closeConn closes state.conn when it is non-nil, tolerating a
@@ -384,9 +399,10 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	state := &sessionState{
-		target:      target,
-		agentConfig: params.AgentConfig,
-		acc:         agentcore.NewRunUsage(),
+		target:                 target,
+		agentConfig:            params.AgentConfig,
+		acc:                    agentcore.NewRunUsage(),
+		credentialVerification: params.CredentialVerification,
 	}
 
 	var cmd *exec.Cmd
@@ -462,6 +478,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	reaper := procutil.StartReaper(cmd, logger)
 	state.waitCh = reaper.Done()
+	state.reaper = reaper
 
 	// killOnError is a cleanup closure used if any handshake step fails.
 	killOnError := func() {
@@ -521,6 +538,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	if err := initializeHandshake(ctx, state); err != nil {
 		state.closeConn()
 		killOnError()
+		if sshErr := connectionFailureErr(state); sshErr != nil {
+			return domain.Session{}, sshErr
+		}
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
 			Message: fmt.Sprintf("handshake failed: %v", err),
@@ -534,6 +554,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		var agentErr *domain.AgentError
 		if ok := isAgentError(err, &agentErr); ok {
 			return domain.Session{}, agentErr
+		}
+		if sshErr := connectionFailureErr(state); sshErr != nil {
+			return domain.Session{}, sshErr
 		}
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -554,6 +577,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			if startErr != nil {
 				state.closeConn()
 				killOnError()
+				if sshErr := connectionFailureErr(state); sshErr != nil {
+					return domain.Session{}, sshErr
+				}
 				return domain.Session{}, &domain.AgentError{
 					Kind:    domain.ErrResponseError,
 					Message: fmt.Sprintf("thread/start failed: %v", startErr),
@@ -571,6 +597,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		if startErr != nil {
 			state.closeConn()
 			killOnError()
+			if sshErr := connectionFailureErr(state); sshErr != nil {
+				return domain.Session{}, sshErr
+			}
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrResponseError,
 				Message: fmt.Sprintf("thread/start failed: %v", startErr),
@@ -663,6 +692,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		// must not wait for a drain that cannot finish.
 		if state.readerEnded() {
 			state.reportStderr(logger)
+			if sshErr := connectionFailureErr(state); sshErr != nil {
+				return domain.TurnResult{UsageMeasured: state.usageMeasured}, sshErr
+			}
 		}
 		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
@@ -740,6 +772,12 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Terminal:          agentcore.TerminalFailure,
 					TerminalErrorKind: domain.ErrPortExit,
 					TerminalMessage:   state.release.TurnEndMessage("subprocess stdout closed unexpectedly"),
+				}
+				if agentcore.ConnectionFailedForRequest(state.sshConnectionFailed(), false) {
+					connErr := agentcore.ConnectionFailedError()
+					ev.TerminalErrorKind = connErr.Kind
+					ev.TerminalMessage = connErr.Message
+					ev.Cause = connErr.Err
 				}
 				meta := agentcore.TurnMeta{
 					SessionID:     state.threadID,

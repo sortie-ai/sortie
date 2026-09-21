@@ -1,9 +1,6 @@
 package main
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"testing"
 )
@@ -16,102 +13,6 @@ const usageCompletenessAgenttestImportPath = "github.com/sortie-ai/sortie/intern
 // usageCompletenessAssertFuncName is the exported function name a
 // kind's test files must call at least once.
 const usageCompletenessAssertFuncName = "AssertUsageReporting"
-
-// fileCallsAssertUsageReporting reports whether file contains a call
-// whose selector resolves to importAlias.AssertUsageReporting, where
-// importAlias is file's own local binding for
-// usageCompletenessAgenttestImportPath.
-func fileCallsAssertUsageReporting(file *ast.File) bool {
-	alias := resolveTestImportName(file, usageCompletenessAgenttestImportPath)
-	if alias == "" {
-		return false
-	}
-
-	found := false
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || !isRunnableTestFunc(fn) {
-			continue
-		}
-		if found {
-			break
-		}
-		inspectForUsageAssertCall(fn.Body, alias, &found)
-	}
-	return found
-}
-
-// inspectForUsageAssertCall sets *found when body calls the
-// conformance assertion through alias. Only a test function's own
-// body is walked: a call sitting in a helper nothing runs would
-// otherwise count as coverage, which is the failure this check exists
-// to catch.
-func inspectForUsageAssertCall(body *ast.BlockStmt, alias string, found *bool) {
-	ast.Inspect(body, func(n ast.Node) bool {
-		if *found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != usageCompletenessAssertFuncName {
-			return true
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok || ident.Name != alias {
-			return true
-		}
-		*found = true
-		return false
-	})
-}
-
-// kindsMissingUsageReportingCoverage reports, in the order kinds are
-// given, every kind whose registration call cannot be found under
-// agentRoot, or whose package directory's _test.go files carry no
-// call resolving to agenttest.AssertUsageReporting. A kind present in
-// kinds and covered by such a call is omitted from the result.
-func kindsMissingUsageReportingCoverage(kinds []string, agentRoot string) []string {
-	fset := token.NewFileSet()
-
-	kindDirs, err := discoverKindDirectories(fset, agentRoot)
-	if err != nil {
-		return append([]string(nil), kinds...)
-	}
-
-	var missing []string
-	for _, kind := range kinds {
-		dir, ok := kindDirs[kind]
-		if !ok {
-			missing = append(missing, kind)
-			continue
-		}
-
-		testFiles, globErr := filepath.Glob(filepath.Join(dir, "*_test.go"))
-		if globErr != nil || len(testFiles) == 0 {
-			missing = append(missing, kind)
-			continue
-		}
-
-		covered := false
-		for _, path := range testFiles {
-			file, parseErr := parser.ParseFile(fset, path, nil, 0)
-			if parseErr != nil {
-				continue
-			}
-			if fileCallsAssertUsageReporting(file) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			missing = append(missing, kind)
-		}
-	}
-	return missing
-}
 
 // TestEveryAgentKindHasUsageReportingCoverage enumerates every agent
 // kind registry.Agents held once main's own blank imports had run,
@@ -127,7 +28,7 @@ func TestEveryAgentKindHasUsageReportingCoverage(t *testing.T) {
 		t.Fatal("registry.Agents.Kinds() returned no kinds, want at least the built-in adapters main.go blank-imports")
 	}
 
-	missing := kindsMissingUsageReportingCoverage(mcpCompletenessRegisteredKinds, mcpCompletenessAgentRoot)
+	missing := kindsMissingCoverage(mcpCompletenessRegisteredKinds, mcpCompletenessAgentRoot, usageCompletenessAgenttestImportPath, usageCompletenessAssertFuncName)
 	if len(missing) != 0 {
 		t.Errorf("agent kind(s) %v have no test file calling agenttest.AssertUsageReporting against their own package", missing)
 	}
@@ -237,15 +138,15 @@ func TestKindsMissingUsageReportingCoverage(t *testing.T) {
 	// "missing-kind" is registered nowhere under root.
 
 	kinds := []string{"covered-kind", "uncovered-kind", "helper-only-kind", "missing-kind"}
-	got := kindsMissingUsageReportingCoverage(kinds, root)
+	got := kindsMissingCoverage(kinds, root, usageCompletenessAgenttestImportPath, usageCompletenessAssertFuncName)
 
 	want := []string{"uncovered-kind", "helper-only-kind", "missing-kind"}
 	if len(got) != len(want) {
-		t.Fatalf("kindsMissingUsageReportingCoverage(%v, %q) = %v, want %v", kinds, root, got, want)
+		t.Fatalf("kindsMissingCoverage(%v, %q) = %v, want %v", kinds, root, got, want)
 	}
 	for i, k := range want {
 		if got[i] != k {
-			t.Errorf("kindsMissingUsageReportingCoverage(%v, %q)[%d] = %q, want %q", kinds, root, i, got[i], k)
+			t.Errorf("kindsMissingCoverage(%v, %q)[%d] = %q, want %q", kinds, root, i, got[i], k)
 		}
 	}
 }

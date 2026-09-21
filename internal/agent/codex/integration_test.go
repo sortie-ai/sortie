@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -712,4 +713,30 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
 	}
 	assertContainsEventType(t, events, domain.EventToolResult)
+}
+
+func TestIntegration_CredentialVerification(t *testing.T) {
+	skipUnlessCodexIntegration(t)
+
+	adapter, err := NewCodexAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewCodexAdapter: %v", err)
+	}
+	params := func(t *testing.T) domain.StartSessionParams {
+		return domain.StartSessionParams{WorkspacePath: gitInitWorkspace(t), AgentConfig: integrationAgentConfig()}
+	}
+
+	t.Run("working credential verifies", func(t *testing.T) {
+		if _, err := credentialtest.VerifyLive(adapter, params(t)); err != nil {
+			t.Fatalf("VerifyCredential() error = %v, want nil", err)
+		}
+	})
+
+	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
+		// Not parallel: t.Setenv carries the invalid credential.
+		credentialtest.SetRefusedCredential(t, "SORTIE_CODEX_CREDENTIAL_ENV")
+
+		_, err := credentialtest.VerifyLive(adapter, params(t))
+		credentialtest.RequireUnverified(t, err)
+	})
 }

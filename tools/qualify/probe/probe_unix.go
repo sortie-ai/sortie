@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -211,11 +212,6 @@ func runVersionCanary(t *testing.T, coords Coordinates, fixture *sharedFixture) 
 	}
 }
 
-// authenticationCanaryPrompt is the shortest turn that still needs a
-// credential: a runtime answers it only once a provider accepts the
-// request.
-const authenticationCanaryPrompt = "Reply with exactly SORTIE_AUTH_CANARY_OK and call no tool."
-
 // runAuthenticationCanary fails the run if the turn doesn't complete,
 // so a credential fault costs one turn rather than twenty failed rows.
 // It stops its session immediately so no later reading mistakes it for
@@ -232,7 +228,7 @@ func runAuthenticationCanary(t *testing.T, coords Coordinates, fixture *sharedFi
 		t.Fatalf("authentication canary: the session did not start: %v", err)
 	}
 	_, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt:  authenticationCanaryPrompt,
+		Prompt:  agentcore.CredentialVerificationPrompt,
 		OnEvent: func(domain.AgentEvent) {},
 	})
 	if _, err := fixture.stopOpenSessions(context.Background()); err != nil {

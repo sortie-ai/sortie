@@ -1,9 +1,11 @@
 package kiro
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -54,9 +57,6 @@ const chatScenario = "kiro-chat"
 
 // chatParams parameterizes [chatScenario].
 type chatParams struct {
-	// WhoamiExitCode is the exit code the "whoami" canary returns. Zero,
-	// the default, answers with [whoamiSuccessMarker]; any other value
-	// exits with no output, simulating a canary failure.
 	WhoamiExitCode int
 
 	// Stdout, Stderr and ExitCode are replayed verbatim for any
@@ -82,7 +82,7 @@ func runChat(args []string, p chatParams) int {
 		if p.WhoamiExitCode != 0 {
 			return p.WhoamiExitCode
 		}
-		fmt.Print(whoamiSuccessMarker + "\n")
+		fmt.Print("Authenticated with API key\n")
 		return 0
 	}
 
@@ -140,9 +140,6 @@ func setValidAPIKey(t *testing.T) {
 	t.Setenv("KIRO_API_KEY", "kiro-test-key")
 }
 
-// mustStartSession starts a Kiro session against the given fake binary and
-// returns the adapter, the session, and the adapter-internal state. The caller
-// must have set a valid KIRO_API_KEY so the whoami canary passes.
 func mustStartSession(t *testing.T, command string) (domain.AgentAdapter, domain.Session, *sessionState) {
 	t.Helper()
 	adapter, err := NewKiroAdapter(map[string]any{})
@@ -254,7 +251,7 @@ func TestOnFinalize_SuccessWithCredits(t *testing.T) {
 	}, result, err)
 }
 
-func TestOnFinalize_AuthFailed(t *testing.T) {
+func TestOnFinalize_AuthFailureLineIsNotClassified(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
 
@@ -266,60 +263,28 @@ func TestOnFinalize_AuthFailed(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrResponseError)
+	requireAgentError(t, err, domain.ErrTurnFailed)
 	if !hasEventType(events, domain.EventTurnFailed) {
-		t.Error("EventTurnFailed not delivered for auth failure")
+		t.Error("EventTurnFailed not delivered")
 	}
 	if result.Usage != (domain.TokenUsage{}) {
 		t.Errorf("result.Usage = %+v, want zero TokenUsage", result.Usage)
 	}
 	if state.resumeRequested {
-		t.Error("state.resumeRequested = true, want false after an auth-failed turn")
+		t.Error("state.resumeRequested = true, want false after a failed turn")
+	}
+
+	const wantMessage = "agent exited without producing output: no message from the agent"
+	var agentErr *domain.AgentError
+	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
 
 	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrResponseError,
-		TerminalMessage:   "kiro authentication failed",
-		ExitObserved:      true,
-		ExitCode:          0,
-		Work:              agentcore.WorkUnobservable,
-		WorkDetail:        "no credits trailer on stderr",
-	}, result, err)
-}
-
-// TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout pins the
-// all-whitespace form of the auth-failure case: an authentication marker
-// on stderr and a stdout carrying only whitespace still reports
-// turn_failed, because the observer's trim-then-check threshold treats
-// a whitespace-only line as no signal, so the authentication branch's
-// guard still fires.
-func TestOnFinalize_AuthFailedWithWhitespaceOnlyStdout(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-	setValidAPIKey(t)
-
-	bin := newKiroCLI(t, t.TempDir(), chatParams{Stdout: "   \n", Stderr: authFailLine})
-	adapter, session, state := mustStartSession(t, bin)
-
-	events, result, err := runChatTurn(t, adapter, session, "ping")
-
-	if result.ExitReason != domain.EventTurnFailed {
-		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
-	}
-	requireAgentError(t, err, domain.ErrResponseError)
-	if !hasEventType(events, domain.EventTurnFailed) {
-		t.Error("EventTurnFailed not delivered for auth failure with whitespace-only stdout")
-	}
-	if state.resumeRequested {
-		t.Error("state.resumeRequested = true, want false after an auth-failed turn")
-	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		Terminal:          agentcore.TerminalFailure,
-		TerminalErrorKind: domain.ErrResponseError,
-		TerminalMessage:   "kiro authentication failed",
-		ExitObserved:      true,
-		ExitCode:          0,
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no message from the agent",
 	}, result, err)
 }
 
@@ -410,12 +375,6 @@ func TestOnFinalize_NonZeroExit(t *testing.T) {
 	}, result, err)
 }
 
-// TestOnFinalize_AuthLineWithStdoutIsNotAuthError verifies the
-// auth-failure arm requires no non-blank stdout line: an auth line
-// accompanied by a non-blank transcript line stops the auth-failure
-// guard from firing, and the observer's own report of the non-blank
-// line reports turn_completed. This is the one combination where the
-// stdout-substitution guard change flips the disposition.
 func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -658,57 +617,11 @@ func TestStopSession_NilForkSession(t *testing.T) {
 	}
 }
 
-func TestStartSession_MissingCredential(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-	t.Setenv("KIRO_API_KEY", "")
-
-	bin := newKiroCLI(t, t.TempDir(), chatParams{})
-	adapter, err := NewKiroAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewKiroAdapter: %v", err)
-	}
-
-	_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: bin},
-	})
-	requireAgentError(t, err, domain.ErrResponseError)
-}
-
-func TestStartSession_InvalidCredential(t *testing.T) {
-	// t.Setenv is incompatible with t.Parallel.
-	t.Setenv("KIRO_API_KEY", "kiro-test-key")
-
-	// whoami reports the auth-failure marker, so the canary must reject the key.
-	dir := t.TempDir()
-	bin := agenttest.FakeRuntime(t, dir, "kiro-cli", agenttest.OutputScenario, agenttest.Output{Stdout: "Authentication failed.\n"})
-
-	adapter, err := NewKiroAdapter(map[string]any{})
-	if err != nil {
-		t.Fatalf("NewKiroAdapter: %v", err)
-	}
-
-	_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   domain.AgentConfig{Command: bin},
-	})
-	requireAgentError(t, err, domain.ErrResponseError)
-}
-
-// TestStartSession_CanaryNonZeroExitIsResponseError locks the classification of
-// the whoami-canary failure arm: when the canary binary resolves but its whoami
-// invocation exits non-zero, the credential preflight returns ErrResponseError
-// (a retryable credential/runtime problem), never ErrAgentNotFound. The binary
-// here is already on PATH and resolvable, so a missing-agent classification
-// would be wrong. The fake's whoami arm exits 1 to drive the canaryErr != nil
-// branch; the 5s timeout path is intentionally not exercised.
-func TestStartSession_CanaryNonZeroExitIsResponseError(t *testing.T) {
+func TestStartSession_WorkingSessionSkipsCredentialGuard(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
 
-	dir := t.TempDir()
-	bin := newKiroCLI(t, dir, chatParams{WhoamiExitCode: 1})
-
+	bin := newKiroCLI(t, t.TempDir(), chatParams{WhoamiExitCode: 1})
 	adapter, err := NewKiroAdapter(map[string]any{})
 	if err != nil {
 		t.Fatalf("NewKiroAdapter: %v", err)
@@ -718,7 +631,67 @@ func TestStartSession_CanaryNonZeroExitIsResponseError(t *testing.T) {
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: bin},
 	})
-	requireAgentError(t, err, domain.ErrResponseError)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v, want nil for a working session", err)
+	}
+}
+
+func TestStartSession_CredentialVerificationGuard(t *testing.T) {
+	var listingFailureLogs bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&listingFailureLogs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	tests := []struct {
+		name           string
+		whoamiExitCode int
+		wantErr        bool
+		wantMessage    string
+	}{
+		{
+			name:           "exit 0 passes regardless of output content",
+			whoamiExitCode: 0,
+		},
+		{
+			name:           "non-zero exit fails with the exit status in the message",
+			whoamiExitCode: 1,
+			wantErr:        true,
+			wantMessage:    "the agent runtime reports no usable credential: whoami exited with status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// t.Setenv is incompatible with t.Parallel.
+			bin := newKiroCLI(t, t.TempDir(), chatParams{WhoamiExitCode: tt.whoamiExitCode})
+			adapter, err := NewKiroAdapter(map[string]any{})
+			if err != nil {
+				t.Fatalf("NewKiroAdapter: %v", err)
+			}
+
+			_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
+				WorkspacePath:          t.TempDir(),
+				AgentConfig:            domain.AgentConfig{Command: bin},
+				CredentialVerification: true,
+			})
+
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("StartSession() error = %v, want nil", err)
+				}
+				return
+			}
+			requireAgentError(t, err, domain.ErrCredentialUnverified)
+			var agentErr *domain.AgentError
+			if errors.As(err, &agentErr) && agentErr.Message != tt.wantMessage {
+				t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, tt.wantMessage)
+			}
+		})
+	}
+
+	if !strings.Contains(listingFailureLogs.String(), "component=kiro-adapter") {
+		t.Errorf("listing-failure Warn = %q, want component=kiro-adapter", listingFailureLogs.String())
+	}
 }
 
 func TestStartSession_BinaryNotFound(t *testing.T) {
@@ -749,4 +722,19 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "kiro-cli"},
 	})
 	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
+}
+
+// The whoami guard accepts any key, so a refused credential surfaces
+// only as a turn with no credits trailer.
+func TestCredentialVerification(t *testing.T) {
+	// Not parallel: t.Setenv carries the fake ssh stand-in on PATH.
+	verifiedBin := newKiroCLI(t, t.TempDir(), chatParams{Stderr: creditsLine})
+	unverifiedBin := newKiroCLI(t, t.TempDir(), chatParams{})
+
+	adapter, err := NewKiroAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewKiroAdapter: %v", err)
+	}
+
+	credentialtest.AssertCredentialVerification(t, "kiro", credentialtest.RuntimeCases(t, adapter, domain.AgentConfig{}, verifiedBin, unverifiedBin, "kiro-cli"))
 }

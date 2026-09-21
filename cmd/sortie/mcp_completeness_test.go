@@ -152,12 +152,11 @@ func discoverKindDirectories(fset *token.FileSet, agentRoot string) (map[string]
 	return kindDirs, nil
 }
 
-// fileCallsAssertMCPInjection reports whether file contains a call
-// whose selector resolves to importAlias.AssertMCPInjection, where
-// importAlias is file's own local binding for
-// mcpCompletenessAgenttestImportPath.
-func fileCallsAssertMCPInjection(file *ast.File) bool {
-	alias := resolveTestImportName(file, mcpCompletenessAgenttestImportPath)
+// fileCallsAssertion reports whether a runnable test function's own
+// body in file calls importAlias.funcName, where importAlias is file's
+// local binding for importPath.
+func fileCallsAssertion(file *ast.File, importPath, funcName string) bool {
+	alias := resolveTestImportName(file, importPath)
 	if alias == "" {
 		return false
 	}
@@ -171,7 +170,7 @@ func fileCallsAssertMCPInjection(file *ast.File) bool {
 		if found {
 			break
 		}
-		inspectForAssertCall(fn.Body, alias, &found)
+		inspectForAssertCall(fn.Body, alias, funcName, &found)
 	}
 	return found
 }
@@ -211,10 +210,10 @@ func isRunnableTestFunc(fn *ast.FuncDecl) bool {
 }
 
 // inspectForAssertCall sets *found when body calls the conformance
-// assertion through alias. Only a test function's own body is walked:
-// a call sitting in a helper nothing runs would otherwise count as
-// coverage, which is the failure this check exists to catch.
-func inspectForAssertCall(body *ast.BlockStmt, alias string, found *bool) {
+// assertion funcName through alias. Only a test function's own body
+// is walked: a call sitting in a helper nothing runs would otherwise
+// count as coverage, which is the failure this check exists to catch.
+func inspectForAssertCall(body *ast.BlockStmt, alias, funcName string, found *bool) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		if *found {
 			return false
@@ -224,7 +223,7 @@ func inspectForAssertCall(body *ast.BlockStmt, alias string, found *bool) {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != mcpCompletenessAssertFuncName {
+		if !ok || sel.Sel.Name != funcName {
 			return true
 		}
 		ident, ok := sel.X.(*ast.Ident)
@@ -236,12 +235,15 @@ func inspectForAssertCall(body *ast.BlockStmt, alias string, found *bool) {
 	})
 }
 
-// kindsMissingMCPInjectionCoverage reports, in the order kinds are
-// given, every kind whose registration call cannot be found under
-// agentRoot, or whose package directory's _test.go files carry no
-// call resolving to agenttest.AssertMCPInjection. A kind present in
-// kinds and covered by such a call is omitted from the result.
-func kindsMissingMCPInjectionCoverage(kinds []string, agentRoot string) []string {
+// kindsMissingCoverage reports, in the order kinds are given, every
+// kind whose registration call cannot be found under agentRoot, or
+// whose package directory's _test.go files carry no call resolving to
+// importPath.funcName. A kind present in kinds and covered by such a
+// call is omitted from the result. The three completeness tests in
+// this package (MCP injection, usage reporting, credential
+// verification) share this walk and differ only in which assertion
+// they require.
+func kindsMissingCoverage(kinds []string, agentRoot, importPath, funcName string) []string {
 	fset := token.NewFileSet()
 
 	kindDirs, err := discoverKindDirectories(fset, agentRoot)
@@ -269,7 +271,7 @@ func kindsMissingMCPInjectionCoverage(kinds []string, agentRoot string) []string
 			if parseErr != nil {
 				continue
 			}
-			if fileCallsAssertMCPInjection(file) {
+			if fileCallsAssertion(file, importPath, funcName) {
 				covered = true
 				break
 			}
@@ -306,7 +308,7 @@ func TestEveryAgentKindHasMCPInjectionCoverage(t *testing.T) {
 		t.Fatal("registry.Agents.Kinds() returned no kinds, want at least the built-in adapters main.go blank-imports")
 	}
 
-	missing := kindsMissingMCPInjectionCoverage(mcpCompletenessRegisteredKinds, mcpCompletenessAgentRoot)
+	missing := kindsMissingCoverage(mcpCompletenessRegisteredKinds, mcpCompletenessAgentRoot, mcpCompletenessAgenttestImportPath, mcpCompletenessAssertFuncName)
 	if len(missing) != 0 {
 		t.Errorf("agent kind(s) %v have no test file calling agenttest.AssertMCPInjection against their own package", missing)
 	}
@@ -428,15 +430,15 @@ func TestKindsMissingMCPInjectionCoverage(t *testing.T) {
 	// "missing-kind" is registered nowhere under root.
 
 	kinds := []string{"covered-kind", "uncovered-kind", "helper-only-kind", "missing-kind"}
-	got := kindsMissingMCPInjectionCoverage(kinds, root)
+	got := kindsMissingCoverage(kinds, root, mcpCompletenessAgenttestImportPath, mcpCompletenessAssertFuncName)
 
 	want := []string{"uncovered-kind", "helper-only-kind", "missing-kind"}
 	if len(got) != len(want) {
-		t.Fatalf("kindsMissingMCPInjectionCoverage(%v, %q) = %v, want %v", kinds, root, got, want)
+		t.Fatalf("kindsMissingCoverage(%v, %q) = %v, want %v", kinds, root, got, want)
 	}
 	for i, k := range want {
 		if got[i] != k {
-			t.Errorf("kindsMissingMCPInjectionCoverage(%v, %q)[%d] = %q, want %q", kinds, root, i, got[i], k)
+			t.Errorf("kindsMissingCoverage(%v, %q)[%d] = %q, want %q", kinds, root, i, got[i], k)
 		}
 	}
 }

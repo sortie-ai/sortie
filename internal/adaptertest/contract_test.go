@@ -157,6 +157,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc":                   {reason: "shared newline-delimited JSON-RPC framing and message delivery; registers no kind and holds no adapter", coreImportable: true},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest":                 {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest":  {reason: "shared credential-verification conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 }
 
 // contractPackageBannedImports maps one package's import path to the
@@ -1878,9 +1879,12 @@ func contractIdentityArm2Violations(fset *token.FileSet, file *ast.File) []contr
 	return violations
 }
 
-// checkContractIdentity evaluates both arms of the identity rule against
-// pkg.files: the token arm (using the shared snapshot minus pkg's own
-// exclusions) and the agentInfo branch arm. Test files are exempt.
+const contractIdentityTestFileScope = "clientprotocol"
+
+// checkContractIdentity also runs both identity arms against
+// clientprotocol's test files: its identity-free contract covers them,
+// so a test-file literal naming a kind is as much a layering violation
+// as one in production code.
 func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractViolation {
 	snapshot := contractAgentIdentitySnapshotData()
 	excluded := contractIdentityExcludedTokens(pkg, snapshot.kindImportPaths)
@@ -1889,6 +1893,15 @@ func checkContractIdentity(fset *token.FileSet, pkg contractPackage) []contractV
 	for _, file := range pkg.files {
 		violations = append(violations, contractIdentityArm1Violations(fset, file, snapshot.tokens, excluded)...)
 		violations = append(violations, contractIdentityArm2Violations(fset, file)...)
+	}
+	if contractIdentitySeamImportPath(pkg.importPath) {
+		return violations
+	}
+	if pkg.dirName == contractIdentityTestFileScope {
+		for _, file := range pkg.testFiles {
+			violations = append(violations, contractIdentityArm1Violations(fset, file, snapshot.tokens, excluded)...)
+			violations = append(violations, contractIdentityArm2Violations(fset, file)...)
+		}
 	}
 	return violations
 }
@@ -2419,7 +2432,9 @@ func contractWalkRoot(t *testing.T, fset *token.FileSet, dir, importPath string)
 
 		isTestFile := strings.HasSuffix(path, "_test.go")
 		mode := parser.SkipObjectResolution
-		if isTestFile {
+		// Only clientprotocol's test files need their literals and
+		// identifiers; every other test file is read for imports alone.
+		if isTestFile && pkg.dirName != contractIdentityTestFileScope {
 			mode |= parser.ImportsOnly
 		}
 		file, parseErr := parser.ParseFile(fset, path, nil, mode)
@@ -4437,6 +4452,74 @@ func TestContractIdentityRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
 			t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")
 		}
 	})
+}
+
+func TestContractIdentityRule_TestFileExtensionCatchesARealBreak(t *testing.T) {
+	fset := token.NewFileSet()
+
+	const fixtureSrc = `package clientprotocol
+
+func pickRuntimeName() string { return "gemini-cli" }
+`
+	file, err := parser.ParseFile(fset, "fixture_test.go", fixtureSrc, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+
+	pkg := contractPackage{
+		dirName:    "clientprotocol",
+		importPath: "github.com/sortie-ai/sortie/internal/agent/clientprotocol",
+		testFiles:  []*ast.File{file},
+	}
+
+	violations := checkContractIdentity(fset, pkg)
+	if len(violations) == 0 {
+		t.Fatal("checkContractIdentity() found no violation for a clientprotocol test-file literal naming a registered kind, want at least one")
+	}
+
+	t.Run("the same literal in a package the extension does not cover passes", func(t *testing.T) {
+		otherPkg := contractPackage{
+			dirName:    "codex",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/codex",
+			testFiles:  []*ast.File{file},
+		}
+		if got := checkContractIdentity(fset, otherPkg); len(got) != 0 {
+			t.Errorf("checkContractIdentity() = %v, want none: the test-file extension is scoped to clientprotocol alone", got)
+		}
+	})
+}
+
+func TestContractIdentityRule_ClientProtocolTestFilesParseInFull(t *testing.T) {
+	fset := token.NewFileSet()
+	walked, _ := contractWalkRoot(t, fset, filepath.Join("..", "agent"), contractAgentFamilyPath)
+
+	hasFuncDecl := func(file *ast.File) bool {
+		for _, decl := range file.Decls {
+			if _, ok := decl.(*ast.FuncDecl); ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	var sawClientprotocolFuncDecl, sawOtherFuncDecl bool
+	for _, w := range walked {
+		for _, file := range w.pkg.testFiles {
+			if w.pkg.dirName == contractIdentityTestFileScope {
+				if hasFuncDecl(file) {
+					sawClientprotocolFuncDecl = true
+				}
+			} else if hasFuncDecl(file) {
+				sawOtherFuncDecl = true
+			}
+		}
+	}
+	if !sawClientprotocolFuncDecl {
+		t.Fatal("no clientprotocol test file parsed past its imports (parser.ImportsOnly never yields a *ast.FuncDecl), want a full parse")
+	}
+	if sawOtherFuncDecl {
+		t.Error("a non-clientprotocol agent package's test file parsed past its imports, want imports-only for every package but clientprotocol")
+	}
 }
 
 // TestContractStopGraceRule_AppliesAndStaysCurrent guards rule STOPGRACE

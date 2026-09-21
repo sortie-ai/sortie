@@ -82,6 +82,8 @@ type sessionState struct {
 	// declares no server, or when the launch target is remote. Set
 	// once in StartSession and never mutated after.
 	mcpConfigContent string
+
+	credentialVerification bool
 }
 
 type turnRuntime struct {
@@ -92,6 +94,7 @@ type turnRuntime struct {
 	reader          *procutil.StdoutReader
 	stderrCollector *procutil.StderrCollector
 	firstJSONSeen   bool
+	turnFinished    bool
 	terminalError   *rawRunError
 	terminalOutcome domain.AgentEventType
 	waitMu          sync.Mutex
@@ -143,16 +146,17 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 	}
 
 	state := &sessionState{
-		target:           target,
-		agentConfig:      params.AgentConfig,
-		passthrough:      a.passthrough,
-		sessionID:        params.ResumeSessionID,
-		baseLogger:       slog.Default().With(slog.String("component", "opencode-adapter")),
-		createdSession:   params.ResumeSessionID == "",
-		runStartedAtMS:   time.Now().UnixMilli(),
-		usage:            agentcore.NewTurnEndUsage(),
-		drainGrace:       procutil.DefaultDrainGrace,
-		mcpConfigContent: mcpConfigContent,
+		target:                 target,
+		agentConfig:            params.AgentConfig,
+		passthrough:            a.passthrough,
+		sessionID:              params.ResumeSessionID,
+		baseLogger:             slog.Default().With(slog.String("component", "opencode-adapter")),
+		createdSession:         params.ResumeSessionID == "",
+		runStartedAtMS:         time.Now().UnixMilli(),
+		usage:                  agentcore.NewTurnEndUsage(),
+		drainGrace:             procutil.DefaultDrainGrace,
+		mcpConfigContent:       mcpConfigContent,
+		credentialVerification: params.CredentialVerification,
 	}
 
 	return domain.Session{
@@ -425,6 +429,9 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid step_finish payload"})
 				return domain.TurnResult{}, nil, false
 			}
+			if stepFinishEndsTurn(part.Reason) {
+				runtime.turnFinished = true
+			}
 			agentcore.EmitNotification(emit, fmt.Sprintf("step finished: %s", part.Reason))
 
 		case "error":
@@ -584,7 +591,36 @@ func (a *OpenCodeAdapter) StopSession(ctx context.Context, session domain.Sessio
 	state.active = nil
 	state.mu.Unlock()
 
-	return stopActiveTurn(ctx, active, procutil.StopGrace(state.agentConfig.StopGraceMS), state.logger())
+	stopErr := stopActiveTurn(ctx, active, procutil.StopGrace(state.agentConfig.StopGraceMS), state.logger())
+
+	if state.credentialVerification {
+		if sessionID := state.currentSessionID(); sessionID != "" {
+			deleteVerificationSession(ctx, state, sessionID)
+		}
+	}
+
+	return stopErr
+}
+
+// deleteVerificationSession only logs a failure, exit 1 for an unknown
+// identifier included: a leftover session does not fail the run.
+func deleteVerificationSession(ctx context.Context, state *sessionState, sessionID string) {
+	deleteCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
+	defer cancel()
+
+	cmd, buildErr := auxiliaryCommand(deleteCtx, state, []string{"session", "delete", sessionID})
+	if buildErr != nil {
+		state.logger().Warn("failed to delete credential verification session", slog.Any("error", buildErr))
+		return
+	}
+	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{})
+	if startErr != nil {
+		state.logger().Warn("failed to delete credential verification session", slog.Any("error", startErr))
+		return
+	}
+	if result.WaitErr != nil {
+		state.logger().Warn("failed to delete credential verification session", slog.Any("error", result.WaitErr))
+	}
 }
 
 // finalizeExitedTurn builds and emits the turn's terminal disposition once
@@ -615,7 +651,17 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	}
 	ev.Work, ev.WorkDetail = runtime.work.Report()
 
+	sshFailed := state.target.RemoteCommand != "" && sshutil.ConnectionFailed(exit.exitCode)
+	hasTerminalResult := runtime.terminalOutcome == domain.EventTurnFailed || runtime.turnFinished
+
 	switch {
+	case agentcore.ConnectionFailedForRequest(sshFailed, hasTerminalResult):
+		connErr := agentcore.ConnectionFailedError()
+		ev.Terminal = agentcore.TerminalFailure
+		ev.TerminalErrorKind = connErr.Kind
+		ev.TerminalMessage = connErr.Message
+		ev.Cause = connErr.Err
+
 	case runtime.terminalOutcome == domain.EventTurnFailed:
 		ev.Terminal = agentcore.TerminalFailure
 		ev.TerminalErrorKind = domain.ErrTurnFailed
@@ -831,14 +877,6 @@ func readTimeout(state *sessionState) time.Duration {
 	return 30 * time.Second
 }
 
-func exportTimeout(state *sessionState) time.Duration {
-	timeout := 2 * readTimeout(state)
-	if timeout <= 0 || timeout > 30*time.Second {
-		return 30 * time.Second
-	}
-	return timeout
-}
-
 func isPermissionWarning(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "! permission requested:")
 }
@@ -876,6 +914,12 @@ func isMaskedServerError(message string) bool {
 	return strings.TrimSpace(message) == maskedServerErrorMessage
 }
 
+// stepFinishEndsTurn reports whether reason ends the turn rather than
+// continuing with another step after tool calls.
+func stepFinishEndsTurn(reason string) bool {
+	return reason != "tool-calls"
+}
+
 // recoverUsage runs the session export and returns what it recovered, or
 // nil when it recovered nothing.
 //
@@ -895,7 +939,7 @@ func recoverUsage(ctx context.Context, state *sessionState, sinceUnixMS int64) *
 	// while the read timeout or the process exit is being handled), so the
 	// detach belongs here rather than at each call site, where the next
 	// terminal path added would have to remember it. Still bounded:
-	// `queryExportUsage` applies its own `exportTimeout`.
+	// `queryExportUsage` applies its own `agentcore.AuxiliaryTimeout`.
 	usage := queryExportUsage(context.WithoutCancel(ctx), state, sinceUnixMS)
 	if !hasUsage(usage) {
 		return nil

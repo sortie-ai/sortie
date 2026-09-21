@@ -105,6 +105,10 @@ func advertisesSessionClose(caps agentCapabilities) bool {
 	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Close != nil
 }
 
+func advertisesSessionDelete(caps agentCapabilities) bool {
+	return caps.SessionCapabilities != nil && caps.SessionCapabilities.Delete != nil
+}
+
 // lower moves *entry to the gap state and reports whether it changed. An entry
 // never rises back to protocol within a session, so lowering one already at gap
 // is idempotent.

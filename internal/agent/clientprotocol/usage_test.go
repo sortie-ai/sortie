@@ -194,7 +194,7 @@ func TestUsageDrainReportsTurnEndFigure(t *testing.T) {
 	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 		discardLogger(), withUsageReader(reader))
 	out := newOutboundReader(outPr)
-	publishHandshake(state, "gemini-cli", "0.59.0")
+	publishHandshake(state, "0.59.0")
 	markSessionKnown(state)
 
 	events, outcome := measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
@@ -238,7 +238,7 @@ func TestUsageMeasurementExistenceIsNotItsCompleteness(t *testing.T) {
 		state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 			discardLogger(), withUsageReader(reader))
 		out := newOutboundReader(outPr)
-		publishHandshake(state, "gemini-cli", "0.59.0")
+		publishHandshake(state, "0.59.0")
 		markSessionKnown(state)
 
 		events, outcome := measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
@@ -265,7 +265,7 @@ func TestUsageMeasurementExistenceIsNotItsCompleteness(t *testing.T) {
 		state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 			discardLogger(), withUsageReader(reader))
 		out := newOutboundReader(outPr)
-		publishHandshake(state, "gemini-cli", "0.59.0")
+		publishHandshake(state, "0.59.0")
 		markSessionKnown(state)
 
 		events, outcome := measuredTurn(t, state, inPw, out, quotaMeta(1100, 70))
@@ -291,7 +291,7 @@ func TestUsageReaderDroppedOnUnrecognizedBuild(t *testing.T) {
 	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 		discardLogger(), withUsageReader(reader))
 	out := newOutboundReader(outPr)
-	publishHandshake(state, "other-cli", "0.58.0")
+	publishHandshake(state, "0.58.0")
 	markSessionKnown(state)
 
 	events, outcome := measuredTurn(t, state, inPw, out, quotaMeta(1250, 40))
@@ -402,7 +402,7 @@ func readerSession(t *testing.T, reader usageReader) (*sessionState, *outboundRe
 
 	state, outPr, inPw := newTestSessionWithLogger(t, domain.AgentConfig{}, clientProtocolMaxLineBytes,
 		discardLogger(), withUsageReader(reader))
-	publishHandshake(state, "gemini-cli", "0.59.0")
+	publishHandshake(state, "0.59.0")
 	markSessionKnown(state)
 	return state, newOutboundReader(outPr), inPw
 }
@@ -749,9 +749,9 @@ func awaitPumpObserved(t *testing.T, state *sessionState) {
 	}
 }
 
-func publishHandshake(state *sessionState, name, version string) {
+func publishHandshake(state *sessionState, version string) {
 	state.inbox.Put(pumpItem{control: &pumpControl{handshake: &handshakeFacts{
-		agentInfo:        implementation{Name: name, Version: version},
+		agentInfo:        implementation{Name: "other-cli", Version: version},
 		agentInfoPresent: true,
 	}}})
 }

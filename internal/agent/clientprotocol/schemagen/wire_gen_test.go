@@ -64,14 +64,16 @@ func TestGenerateMatchesCommittedWireGen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate(%q) returned error: %v", assetsDir, err)
 	}
-	if gotCount := bytes.Count(got, []byte("\ntype ")); gotCount != 106 {
-		t.Errorf("Generate(%q) type declaration count = %d, want 106", assetsDir, gotCount)
+	if gotCount := bytes.Count(got, []byte("\ntype ")); gotCount != 108 {
+		t.Errorf("Generate(%q) type declaration count = %d, want 108", assetsDir, gotCount)
 	}
 	for _, continuation := range []string{
 		"type loadSessionRequest ",
 		"type loadSessionResponse ",
 		"type resumeSessionRequest ",
 		"type resumeSessionResponse ",
+		"type deleteSessionRequest ",
+		"type deleteSessionResponse ",
 	} {
 		if !bytes.Contains(got, []byte(continuation)) {
 			t.Errorf("Generate(%q) does not contain permitted continuation type %q", assetsDir, continuation)

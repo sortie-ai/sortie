@@ -72,10 +72,15 @@ type MockAdapter struct {
 	apiDurationMS          int64
 	toolCalls              []mockToolCall
 	reportTokenUsage       bool
+	credentialError        string
 
 	// mu guards turnIndex for concurrent RunTurn calls.
 	mu        sync.Mutex
 	turnIndex int
+}
+
+type mockSessionState struct {
+	credentialVerification bool
 }
 
 // mockToolCall describes a single tool call to emit as a tool_result
@@ -102,6 +107,8 @@ type mockToolCall struct {
 // true; when false, the adapter emits no token_usage event, leaves
 // [domain.TurnResult] Usage at the zero value, and reports
 // UsageMeasured false, simulating a runtime that reported nothing.
+// A verification session's turn emits no event, consumes no
+// turn_outcomes entry, and fails with credential_error when it is set.
 func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m := &MockAdapter{
 		sessionID:           "mock-session-001",
@@ -122,6 +129,9 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	}
 	if v, ok := config["stop_error"].(string); ok {
 		m.stopError = v
+	}
+	if v, ok := config["credential_error"].(string); ok {
+		m.credentialError = v
 	}
 
 	if raw, ok := config["turn_outcomes"]; ok {
@@ -193,6 +203,7 @@ func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSession
 	return domain.Session{
 		ID:       m.sessionID,
 		AgentPID: m.agentPID,
+		Internal: &mockSessionState{credentialVerification: params.CredentialVerification},
 	}, nil
 }
 
@@ -202,6 +213,25 @@ func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSession
 func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("mock: OnEvent must be non-nil")
+	}
+
+	state, _ := session.Internal.(*mockSessionState)
+	verifying := state != nil && state.credentialVerification
+
+	if verifying {
+		result := domain.TurnResult{
+			SessionID:     session.ID,
+			ExitReason:    domain.EventTurnCompleted,
+			UsageMeasured: m.reportTokenUsage,
+		}
+		if m.credentialError != "" {
+			result.ExitReason = domain.EventTurnFailed
+			return result, &domain.AgentError{
+				Kind:    domain.ErrTurnFailed,
+				Message: m.credentialError,
+			}
+		}
+		return result, nil
 	}
 
 	// Critical section: read and advance turn state.

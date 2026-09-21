@@ -64,6 +64,8 @@ type sessionState struct {
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
 
+	credentialVerification bool
+
 	// forkSession owns the subprocess lifecycle for this session.
 	forkSession *agentcore.ForkPerTurnSession
 
@@ -149,17 +151,26 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		sessionUUID = params.ResumeSessionID
 		isContinuation = true
 	} else {
-		sessionUUID = newUUID()
+		uuid, uuidErr := agentcore.NewUUIDv4()
+		if uuidErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "could not generate a session id",
+				Err:     uuidErr,
+			}
+		}
+		sessionUUID = uuid
 	}
 
 	state := &sessionState{
-		target:          target,
-		claudeSessionID: sessionUUID,
-		isContinuation:  isContinuation,
-		agentConfig:     params.AgentConfig,
-		baseLogger:      slog.Default().With(slog.String("component", "claude-adapter")),
-		mcpConfigPath:   params.MCPConfigPath,
-		acc:             agentcore.NewRunUsage(),
+		target:                 target,
+		claudeSessionID:        sessionUUID,
+		isContinuation:         isContinuation,
+		agentConfig:            params.AgentConfig,
+		baseLogger:             slog.Default().With(slog.String("component", "claude-adapter")),
+		mcpConfigPath:          params.MCPConfigPath,
+		credentialVerification: params.CredentialVerification,
+		acc:                    agentcore.NewRunUsage(),
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -334,7 +345,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					ev.TerminalMessage = typeutil.TruncateRunes(lastResult.Result, 500)
 				} else {
 					ev.Terminal = agentcore.TerminalFailure
-					ev.TerminalMessage = lastResult.Subtype
+					if strings.TrimSpace(lastResult.Result) != "" {
+						ev.TerminalMessage = typeutil.TruncateRunes(lastResult.Result, 500)
+					} else {
+						ev.TerminalMessage = lastResult.Subtype
+					}
 				}
 			}
 

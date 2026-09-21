@@ -153,6 +153,11 @@ func newFakeAgent() *fakeAgent {
 	return &fakeAgent{}
 }
 
+type fakeAgentSession struct {
+	cmd                    *exec.Cmd
+	credentialVerification bool
+}
+
 // StartSession launches a bounded fake runtime process in its own process
 // group, so the run's teardown and the exact PGID postcondition have an
 // attributable group.
@@ -171,19 +176,22 @@ func (a *fakeAgent) StartSession(_ context.Context, params domain.StartSessionPa
 	return domain.Session{
 		ID:       "sess-e2e-fake",
 		AgentPID: strconv.Itoa(cmd.Process.Pid),
-		Internal: cmd,
+		Internal: &fakeAgentSession{cmd: cmd, credentialVerification: params.CredentialVerification},
 	}, nil
 }
 
 // RunTurn writes one marker file into the workspace as the fake agent's
-// work evidence and reports a successful terminal disposition.
+// work evidence and reports a successful terminal disposition. A
+// verification turn writes none, since it must not read as work.
 func (a *fakeAgent) RunTurn(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
-	cmd, ok := session.Internal.(*exec.Cmd)
+	fs, ok := session.Internal.(*fakeAgentSession)
 	if !ok {
 		return domain.TurnResult{}, &domain.AgentError{Kind: domain.ErrPortExit, Message: "unexpected session internal type"}
 	}
-	if err := os.WriteFile(filepath.Join(cmd.Dir, "agent-work-marker"), []byte("work"), 0o600); err != nil {
-		return domain.TurnResult{}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "fake agent work failed", Err: err}
+	if !fs.credentialVerification {
+		if err := os.WriteFile(filepath.Join(fs.cmd.Dir, "agent-work-marker"), []byte("work"), 0o600); err != nil {
+			return domain.TurnResult{}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "fake agent work failed", Err: err}
+		}
 	}
 	params.OnEvent(domain.AgentEvent{
 		Type:      domain.EventNotification,
@@ -204,12 +212,12 @@ func (a *fakeAgent) RunTurn(_ context.Context, session domain.Session, params do
 // StopSession terminates the fake runtime's process group and reaps it,
 // recording that the session teardown completed.
 func (a *fakeAgent) StopSession(_ context.Context, session domain.Session) error {
-	cmd, ok := session.Internal.(*exec.Cmd)
+	fs, ok := session.Internal.(*fakeAgentSession)
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-	_ = procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGKILL)
-	_, _ = cmd.Process.Wait()
+	_ = procutil.SignalProcessGroup(fs.cmd.Process.Pid, syscall.SIGKILL)
+	_, _ = fs.cmd.Process.Wait()
 
 	a.mu.Lock()
 	a.stopCalls++

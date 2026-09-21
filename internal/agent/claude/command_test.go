@@ -160,3 +160,29 @@ func TestBuildArgs_MCPConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildArgs_CredentialVerificationSwitches(t *testing.T) {
+	t.Parallel()
+
+	state := &sessionState{
+		claudeSessionID:        "verify-session-id",
+		isContinuation:         false,
+		credentialVerification: true,
+		mcpConfigPath:          "/ws/.sortie/mcp.json",
+	}
+	pt := passthroughConfig{MCPConfig: "/op/mcp.json", SessionPersistence: true}
+
+	args := buildArgs(state, 1, "Say exactly: SORTIE_CREDENTIAL_OK", pt)
+
+	assertHasArgPair(t, args, "--tools", "")
+	assertHasFlag(t, args, "--strict-mcp-config")
+	assertHasFlag(t, args, "--no-session-persistence")
+	assertNoFlag(t, args, "--mcp-config")
+}
+
+func assertHasFlag(t *testing.T, args []string, flag string) {
+	t.Helper()
+	if !slices.Contains(args, flag) {
+		t.Errorf("buildArgs() missing flag %q in [%s]", flag, strings.Join(args, " "))
+	}
+}

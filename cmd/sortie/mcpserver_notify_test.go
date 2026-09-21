@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -143,7 +144,17 @@ func newSequentialAgent(sessionIDFor func(call int) string) *sequentialAgent {
 
 var _ domain.AgentAdapter = (*sequentialAgent)(nil)
 
+// notifyE2ESessionMeta lets RunTurn answer a credential verification
+// session immediately, without consuming a slot in the controller
+// queues that drive the working sessions.
+type notifyE2ESessionMeta struct {
+	credentialVerification bool
+}
+
 func (a *sequentialAgent) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "verify", Internal: &notifyE2ESessionMeta{credentialVerification: true}}, nil
+	}
 	call := int(a.calls.Add(1)) - 1
 	id := params.ResumeSessionID
 	if id == "" {
@@ -152,10 +163,13 @@ func (a *sequentialAgent) StartSession(_ context.Context, params domain.StartSes
 	tc := newTurnController(id, params)
 	a.pending <- tc
 	a.handles <- tc
-	return domain.Session{ID: id}, nil
+	return domain.Session{ID: id, Internal: &notifyE2ESessionMeta{}}, nil
 }
 
 func (a *sequentialAgent) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if meta, ok := session.Internal.(*notifyE2ESessionMeta); ok && meta.credentialVerification {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}
 	tc := <-a.pending
 	return runControlledTurn(ctx, tc, session, params.OnEvent)
 }
@@ -165,6 +179,7 @@ func (a *sequentialAgent) StopSession(_ context.Context, _ domain.Session) error
 type concurrentAgent struct {
 	sessionIDFor func(call int) string
 	calls        atomic.Int64
+	verifyCalls  atomic.Int64
 	handles      chan *turnController
 
 	mu          sync.Mutex
@@ -182,6 +197,9 @@ func newConcurrentAgent(sessionIDFor func(call int) string) *concurrentAgent {
 var _ domain.AgentAdapter = (*concurrentAgent)(nil)
 
 func (a *concurrentAgent) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "verify-" + strconv.FormatInt(a.verifyCalls.Add(1), 10), Internal: &notifyE2ESessionMeta{credentialVerification: true}}, nil
+	}
 	call := int(a.calls.Add(1)) - 1
 	id := a.sessionIDFor(call)
 	tc := newTurnController(id, params)
@@ -189,10 +207,13 @@ func (a *concurrentAgent) StartSession(_ context.Context, params domain.StartSes
 	a.controllers[id] = tc
 	a.mu.Unlock()
 	a.handles <- tc
-	return domain.Session{ID: id}, nil
+	return domain.Session{ID: id, Internal: &notifyE2ESessionMeta{}}, nil
 }
 
 func (a *concurrentAgent) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if meta, ok := session.Internal.(*notifyE2ESessionMeta); ok && meta.credentialVerification {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}
 	a.mu.Lock()
 	tc := a.controllers[session.ID]
 	a.mu.Unlock()

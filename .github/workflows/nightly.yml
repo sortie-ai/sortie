@@ -41,9 +41,10 @@ jobs:
             adapter: claude
             kind: agent
             guard: SORTIE_CLAUDE_TEST
+            credential_env: ANTHROPIC_API_KEY
             run_filter: Integration
             test_path: ./internal/agent/claude/...
-            timeout: 300s
+            timeout: 600s
             node: true
             install: npm install -g @anthropic-ai/claude-code
             version_cmd: claude --version
@@ -53,6 +54,7 @@ jobs:
             adapter: codex
             kind: agent
             guard: SORTIE_CODEX_TEST
+            credential_env: CODEX_API_KEY
             run_filter: Integration
             test_path: ./internal/agent/codex/...
             timeout: 300s
@@ -65,6 +67,7 @@ jobs:
             adapter: copilot
             kind: agent
             guard: SORTIE_COPILOT_TEST
+            credential_env: GH_TOKEN
             run_filter: Integration
             test_path: ./internal/agent/copilot/...
             timeout: 300s
@@ -89,6 +92,7 @@ jobs:
             adapter: kiro
             kind: agent
             guard: SORTIE_KIRO_TEST
+            credential_env: KIRO_API_KEY
             run_filter: Integration
             test_path: ./internal/agent/kiro/...
             timeout: 300s
@@ -101,6 +105,7 @@ jobs:
             adapter: acp-gemini
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: GEMINI_API_KEY
             run_filter: Integration
             test_path: ./internal/agent/clientprotocol/...
             timeout: 900s
@@ -115,6 +120,7 @@ jobs:
             adapter: acp-kiro
             kind: agent
             guard: SORTIE_CLIENTPROTOCOL_TEST
+            credential_env: KIRO_API_KEY
             run_filter: Integration
             test_path: ./internal/agent/clientprotocol/...
             timeout: 900s
@@ -272,6 +278,7 @@ jobs:
         env:
           ADAPTER: ${{ matrix.adapter }}
           GUARD: ${{ matrix.guard }}
+          CREDENTIAL_ENV: ${{ matrix.credential_env }}
           INSTALL_CMD: ${{ matrix.install }}
           VERSION_CMD: ${{ matrix.version_cmd }}
           RUN_FILTER: ${{ matrix.run_filter }}
@@ -307,6 +314,13 @@ jobs:
 
           # Enable only the targeted adapter's integration tests.
           export "${GUARD}=1"
+
+          # The refused-credential case's coordinate name follows the
+          # guard's own name; opencode sets none, since its suite
+          # defaults to the runtime's free model.
+          if [ -n "${CREDENTIAL_ENV}" ]; then
+            export "${GUARD%_TEST}_CREDENTIAL_ENV=${CREDENTIAL_ENV}"
+          fi
 
           TIMEOUT_FLAG=()
           if [ -n "${TIMEOUT}" ]; then TIMEOUT_FLAG=(-timeout "${TIMEOUT}"); fi

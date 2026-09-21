@@ -186,10 +186,10 @@ func TestBuildArgs(t *testing.T) {
 		check  func(t *testing.T, args []string)
 	}{
 		{
-			name: "first turn no session ID has no resume or continue",
+			name: "first turn of a new session uses session-id, no resume or continue",
 			state: &sessionState{
-				copilotSessionID:   "",
-				fallbackToContinue: false,
+				copilotSessionID: "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f",
+				isContinuation:   false,
 			},
 			prompt: "fix the bug",
 			pt:     passthroughConfig{},
@@ -202,50 +202,24 @@ func TestBuildArgs(t *testing.T) {
 				assertHasFlag(t, args, "--autopilot")
 				assertHasFlag(t, args, "--no-ask-user")
 				assertHasArgPair(t, args, "--max-autopilot-continues", "50")
+				assertHasArgPair(t, args, "--session-id", "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f")
 				assertNoFlag(t, args, "--resume")
 				assertNoFlag(t, args, "--continue")
 			},
 		},
 		{
-			name: "turn with copilotSessionID uses resume flag",
+			name: "turn continuing a prior session uses resume flag, never continue",
 			state: &sessionState{
-				copilotSessionID:   "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f",
-				fallbackToContinue: false,
+				copilotSessionID: "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f",
+				isContinuation:   true,
 			},
 			prompt: "continue task",
 			pt:     passthroughConfig{},
 			check: func(t *testing.T, args []string) {
 				t.Helper()
 				assertHasArgPair(t, args, "--resume", "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f")
+				assertNoFlag(t, args, "--session-id")
 				assertNoFlag(t, args, "--continue")
-			},
-		},
-		{
-			name: "fallbackToContinue uses continue not resume",
-			state: &sessionState{
-				copilotSessionID:   "",
-				fallbackToContinue: true,
-			},
-			prompt: "retry",
-			pt:     passthroughConfig{},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				assertHasFlag(t, args, "--continue")
-				assertNoFlag(t, args, "--resume")
-			},
-		},
-		{
-			name: "fallbackToContinue takes priority over empty session ID",
-			state: &sessionState{
-				copilotSessionID:   "",
-				fallbackToContinue: true,
-			},
-			prompt: "p",
-			pt:     passthroughConfig{},
-			check: func(t *testing.T, args []string) {
-				t.Helper()
-				assertHasFlag(t, args, "--continue")
-				assertNoFlag(t, args, "--resume")
 			},
 		},
 		{

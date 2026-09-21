@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
 	"slices"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
-	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 )
 
 type parsedLine struct {
@@ -178,40 +176,15 @@ func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int6
 		return exportUsage{}
 	}
 
-	env, err := buildRunEnv(os.Environ(), state.passthrough)
+	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
+	defer cancel()
+
+	exportArgs := []string{"export", "--sanitize", sessionID}
+	cmd, err := auxiliaryCommand(queryCtx, state, exportArgs)
 	if err != nil {
 		state.logger().Warn("failed to build opencode export environment", slog.Any("error", err))
 		return exportUsage{}
 	}
-
-	managedEnv, err := buildManagedEnv(state.passthrough)
-	if err != nil {
-		state.logger().Warn("failed to build opencode managed environment", slog.Any("error", err))
-		return exportUsage{}
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, exportTimeout(state))
-	defer cancel()
-
-	exportArgs := []string{"export", "--sanitize", sessionID}
-	var cmd *exec.Cmd
-	var launch sshutil.SSHLaunch
-	if state.target.RemoteCommand != "" {
-		launch = sshutil.BuildSSHLaunch(
-			state.target.SSHHost,
-			state.target.WorkspacePath,
-			state.target.RemoteCommand,
-			exportArgs,
-			state.target.SSHOptions(sortedEnvVars(managedEnv)...),
-		)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
-	} else {
-		allArgs := append(slices.Clone(state.target.Args), exportArgs...)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
-	}
-	cmd.Dir = state.target.WorkspacePath
-	cmd.Env = env
-	cmd.Stdin = launch.StdinReader()
 
 	var stdout bytes.Buffer
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
@@ -248,40 +221,15 @@ func queryModelNotFound(ctx context.Context, state *sessionState) (message strin
 		return "", false
 	}
 
-	env, err := buildRunEnv(os.Environ(), state.passthrough)
+	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
+	defer cancel()
+
+	modelsArgs := []string{"models"}
+	cmd, err := auxiliaryCommand(queryCtx, state, modelsArgs)
 	if err != nil {
 		state.logger().Warn("failed to build opencode models environment", slog.Any("error", err))
 		return "", false
 	}
-
-	managedEnv, err := buildManagedEnv(state.passthrough)
-	if err != nil {
-		state.logger().Warn("failed to build opencode managed environment", slog.Any("error", err))
-		return "", false
-	}
-
-	queryCtx, cancel := context.WithTimeout(ctx, exportTimeout(state))
-	defer cancel()
-
-	modelsArgs := []string{"models"}
-	var cmd *exec.Cmd
-	var launch sshutil.SSHLaunch
-	if state.target.RemoteCommand != "" {
-		launch = sshutil.BuildSSHLaunch(
-			state.target.SSHHost,
-			state.target.WorkspacePath,
-			state.target.RemoteCommand,
-			modelsArgs,
-			state.target.SSHOptions(sortedEnvVars(managedEnv)...),
-		)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
-	} else {
-		allArgs := append(slices.Clone(state.target.Args), modelsArgs...)
-		cmd = exec.CommandContext(queryCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
-	}
-	cmd.Dir = state.target.WorkspacePath
-	cmd.Env = env
-	cmd.Stdin = launch.StdinReader()
 
 	var stdout bytes.Buffer
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
@@ -304,7 +252,18 @@ func queryModelNotFound(ctx context.Context, state *sessionState) (message strin
 		return "", false
 	}
 
-	return "Model not found: " + model, true
+	message = "Model not found: " + model
+	if provider, _, cut := strings.Cut(model, "/"); cut && !hasProviderModel(entries, provider) {
+		message += fmt.Sprintf("; the runtime lists no %s model, which is how it presents a provider with no credential", provider)
+	}
+	return message, true
+}
+
+func hasProviderModel(entries []string, provider string) bool {
+	prefix := provider + "/"
+	return slices.ContainsFunc(entries, func(entry string) bool {
+		return strings.HasPrefix(entry, prefix)
+	})
 }
 
 // parseExportOutput extracts run-cumulative token usage from the JSON

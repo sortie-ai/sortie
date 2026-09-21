@@ -250,10 +250,11 @@ func TestAgentErrorKind_RetryClassification(t *testing.T) {
 		{"turn_outcome_unknown", ErrTurnOutcomeUnknown, false, BackoffNone},
 		{"turn_token_limit", ErrTurnTokenLimit, false, BackoffNone},
 		{"turn_request_limit", ErrTurnRequestLimit, true, BackoffExponential},
+		{"credential_unverified", ErrCredentialUnverified, true, BackoffExponential},
 	}
 
-	if len(tests) != 14 {
-		t.Errorf("expected 14 agent error kinds, got %d", len(tests))
+	if len(tests) != 15 {
+		t.Errorf("expected 15 agent error kinds, got %d", len(tests))
 	}
 
 	for _, tt := range tests {

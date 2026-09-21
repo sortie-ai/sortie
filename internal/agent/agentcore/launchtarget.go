@@ -2,10 +2,13 @@ package agentcore
 
 import (
 	"cmp"
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -172,4 +175,48 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 		StrictHostKeyChecking: t.SSHStrictHostKeyChecking,
 		Env:                   carried,
 	}
+}
+
+// AuxiliaryCommand builds a one-shot runtime subcommand run in the
+// workspace, locally or over ssh like the session itself. A nil env
+// means os.Environ(); stdin may be nil.
+func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin io.Reader, env []string, carried ...sshutil.EnvVar) *exec.Cmd {
+	var cmd *exec.Cmd
+	if t.RemoteCommand == "" {
+		allArgs := append(slices.Clone(t.Args), args...)
+		cmd = exec.CommandContext(ctx, t.Command, allArgs...) //nolint:gosec // args are constructed programmatically
+		cmd.Stdin = stdin
+	} else {
+		launch := sshutil.BuildSSHLaunch(t.SSHHost, t.WorkspacePath, t.RemoteCommand, args, t.SSHOptions(carried...))
+		cmd = exec.CommandContext(ctx, t.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd.Stdin = prependPreamble(launch.StdinReader(), stdin)
+	}
+	cmd.Dir = t.WorkspacePath
+	if env != nil {
+		cmd.Env = env
+	} else {
+		cmd.Env = os.Environ()
+	}
+	return cmd
+}
+
+func prependPreamble(preamble, stdin io.Reader) io.Reader {
+	switch {
+	case preamble == nil:
+		return stdin
+	case stdin == nil:
+		return preamble
+	default:
+		return io.MultiReader(preamble, stdin)
+	}
+}
+
+// AuxiliaryTimeout returns the bound for an auxiliary launch: twice
+// cfg.ReadTimeoutMS, capped at 30 seconds, and never non-positive.
+func AuxiliaryTimeout(cfg domain.AgentConfig) time.Duration {
+	readTimeout := time.Duration(cfg.ReadTimeoutMS) * time.Millisecond
+	if readTimeout <= 0 {
+		readTimeout = 30 * time.Second
+	}
+	return min(2*readTimeout, 30*time.Second)
 }

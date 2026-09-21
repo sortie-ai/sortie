@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -444,6 +445,13 @@ func exitKindForErr(ctx context.Context) WorkerExitKind {
 // assembled in code cannot leave a turn unbounded.
 const defaultTurnTimeoutMS = 3_600_000
 
+func effectiveTurnTimeoutMS(turnTimeoutMS int) int {
+	if turnTimeoutMS > 0 {
+		return turnTimeoutMS
+	}
+	return defaultTurnTimeoutMS
+}
+
 // runBoundedTurn calls adapter.RunTurn under a deadline derived from
 // turnTimeoutMS. A parent ctx already done takes priority over the deadline,
 // so stall detection, reconciliation, and shutdown keep reporting their own
@@ -460,11 +468,10 @@ func runBoundedTurn(
 	logger *slog.Logger,
 	identity ...slog.Attr,
 ) (domain.TurnResult, error) {
-	effectiveMS := turnTimeoutMS
-	if effectiveMS <= 0 {
+	effectiveMS := effectiveTurnTimeoutMS(turnTimeoutMS)
+	if turnTimeoutMS <= 0 {
 		attrs := append([]slog.Attr{slog.Int("configured_turn_timeout_ms", turnTimeoutMS)}, identity...)
 		logger.LogAttrs(ctx, slog.LevelWarn, "non-positive turn timeout, applying default", attrs...)
-		effectiveMS = defaultTurnTimeoutMS
 	}
 
 	turnCtx, cancel := context.WithTimeout(ctx, time.Duration(effectiveMS)*time.Millisecond)
@@ -514,6 +521,21 @@ func foldLocalUsage(usage, cumulative, lastUsage domain.TokenUsage) (newCumulati
 		CacheReadTokens: max(lastUsage.CacheReadTokens, usage.CacheReadTokens),
 	}
 	return newCumulative, newLastUsage
+}
+
+// applyUsageOffset adds offset to a measured usage. A working session
+// counts from its own start, so the verification spend that preceded it
+// must be added explicitly.
+func applyUsageOffset(usage, offset domain.TokenUsage) domain.TokenUsage {
+	if !hasUsage(usage) {
+		return usage
+	}
+	return domain.TokenUsage{
+		InputTokens:     usage.InputTokens + offset.InputTokens,
+		OutputTokens:    usage.OutputTokens + offset.OutputTokens,
+		TotalTokens:     usage.TotalTokens + offset.TotalTokens,
+		CacheReadTokens: usage.CacheReadTokens + offset.CacheReadTokens,
+	}
 }
 
 // RunWorkerAttempt executes a single worker attempt: it prepares the
@@ -598,6 +620,22 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			localModelName = model
 		}
 		return measurementArrived
+	}
+
+	foldTurnResult := func(result domain.TurnResult) (carriesMeasurement bool) {
+		if result.SpendUnaccounted {
+			localUnaccounted++
+		}
+		carriesMeasurement = hasUsage(result.Usage) || result.UsageMeasured
+		if carriesMeasurement && !admitMeasurement() {
+			carriesMeasurement = false
+		} else if hasUsage(result.Usage) {
+			localUsage, localLastUsage = foldLocalUsage(result.Usage, localUsage, localLastUsage)
+		}
+		if carriesMeasurement {
+			localMeasured = true
+		}
+		return carriesMeasurement
 	}
 
 	if tmpl == nil {
@@ -916,6 +954,44 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		return
 	}
 
+	var sshEnvNames []string
+	if strings.TrimSpace(deps.SSHHost) != "" && deps.SSHEnvNamesFunc != nil {
+		sshEnvNames = deps.SSHEnvNamesFunc(agentKind)
+	}
+
+	params := domain.StartSessionParams{
+		WorkspacePath:            wsResult.Path,
+		AgentConfig:              toDomainAgentConfig(cfg.Agent, agentKind),
+		ResumeSessionID:          deps.ResumeSessionID,
+		SSHHost:                  deps.SSHHost,
+		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
+		SSHEnvNames:              sshEnvNames,
+		MCPConfigPath:            mcpConfigPath,
+	}
+
+	deps.OnEvent(issue.ID, domain.AgentEvent{
+		Type:      domain.EventNotification,
+		Timestamp: time.Now().UTC(),
+		Message:   "verifying the agent credential",
+	})
+
+	relayVerificationEvent := func(event domain.AgentEvent) {
+		foldRelayedEvent(event)
+		relayType := domain.EventNotification
+		var model string
+		if event.Type == domain.EventTokenUsage {
+			relayType = domain.EventTokenUsage
+			model = event.Model
+		}
+		deps.OnEvent(issue.ID, domain.AgentEvent{
+			Type:      relayType,
+			Timestamp: event.Timestamp,
+			Message:   "verifying the agent credential",
+			Usage:     event.Usage,
+			Model:     model,
+		})
+	}
+
 	if handoffEvidencePolicy != config.HandoffEvidenceOff {
 		baseline, baselineErr := workspace.CaptureHandoffEvidenceBaseline(ctx, wsResult.Path)
 		if baselineErr != nil {
@@ -925,20 +1001,45 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}
 
-	var sshEnvNames []string
-	if strings.TrimSpace(deps.SSHHost) != "" && deps.SSHEnvNamesFunc != nil {
-		sshEnvNames = deps.SSHEnvNamesFunc(agentKind)
+	verificationStarted := time.Now()
+	verificationResult, verificationErr := agentcore.VerifyCredential(ctx, deps.AgentAdapter, agentcore.CredentialVerification{
+		Session:   params,
+		Issue:     issue,
+		TurnBound: time.Duration(effectiveTurnTimeoutMS(cfg.Agent.TurnTimeoutMS)) * time.Millisecond,
+		StopBound: stopSessionDeadline(cfg),
+		OnRequest: func() { localMeasured = false },
+		OnEvent:   relayVerificationEvent,
+		Logger:    logger,
+	})
+
+	foldTurnResult(verificationResult)
+
+	verificationSpend := localLastUsage
+
+	if verificationErr != nil {
+		finishWorkspace()
+		reported = true
+		deps.OnExit(issue.ID, WorkerResult{
+			IssueID:          issue.ID,
+			Identifier:       issue.Identifier,
+			ExitKind:         exitKindForErr(ctx),
+			Error:            fmt.Errorf("agent session start: %w", verificationErr),
+			WorkspacePath:    wsResult.Path,
+			AgentAdapter:     agentKind,
+			Attempt:          attempt,
+			SSHHost:          deps.SSHHost,
+			Usage:            localUsage,
+			UsageMeasured:    localMeasured,
+			UnaccountedTurns: localUnaccounted,
+			ModelName:        localModelName,
+			APIRequestCount:  localRequestCount,
+		})
+		return
 	}
 
-	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
-		WorkspacePath:            wsResult.Path,
-		AgentConfig:              toDomainAgentConfig(cfg.Agent, agentKind),
-		ResumeSessionID:          deps.ResumeSessionID,
-		SSHHost:                  deps.SSHHost,
-		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
-		SSHEnvNames:              sshEnvNames,
-		MCPConfigPath:            mcpConfigPath,
-	})
+	logger.Info("agent credential verified", slog.Int64("duration_ms", time.Since(verificationStarted).Milliseconds()))
+
+	session, err = deps.AgentAdapter.StartSession(ctx, params)
 	if err != nil {
 		finishWorkspace()
 		reported = true
@@ -1063,15 +1164,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			deps.OnTurnStarted(issue.ID, turnsStarted)
 		}
 
-		if turnNumber == 1 {
-			localMeasured = false
-		}
-
 		writeDispatchIdentity(acceptedSessionID)
 
-		// The turn-start write follows the flip above: writing earlier would
-		// put a measured verdict on disk for all of turn one, which an agent
-		// reading its own spend would take as a measurement of zero.
 		if mcpConfigPath != "" {
 			if err := writeWorkerState(wsResult.Path, workerState{
 				TurnNumber: turnNumber,
@@ -1096,6 +1190,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
+				event.Usage = applyUsageOffset(event.Usage, verificationSpend)
 				measurementArrived := foldRelayedEvent(event)
 				if measurementArrived && mcpConfigPath != "" {
 					if err := writeWorkerState(wsResult.Path, workerState{
@@ -1115,22 +1210,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			},
 		}, cfg.Agent.TurnTimeoutMS, logger, slog.Int("turn_number", turnNumber))
 
-		// Fold TurnResult.Usage on both success and error paths so a
-		// run-cumulative figure the adapter reported only on TurnResult (not
-		// through an event) is not lost. A figure here is a measurement
-		// whether or not it also sets the flag.
-		if turnResult.SpendUnaccounted {
-			localUnaccounted++
-		}
-		resultCarriesMeasurement := hasUsage(turnResult.Usage) || turnResult.UsageMeasured
-		if resultCarriesMeasurement && !admitMeasurement() {
-			resultCarriesMeasurement = false
-		} else if hasUsage(turnResult.Usage) {
-			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
-		}
-		if resultCarriesMeasurement {
-			localMeasured = true
-		}
+		turnResult.Usage = applyUsageOffset(turnResult.Usage, verificationSpend)
+		resultCarriesMeasurement := foldTurnResult(turnResult)
 
 		// An adapter may report a session's only measurement here rather
 		// than through an event; on the last turn no later write would carry
@@ -1301,6 +1382,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
+				event.Usage = applyUsageOffset(event.Usage, verificationSpend)
 				foldRelayedEvent(event)
 				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
 					acceptedSessionID = event.SessionID

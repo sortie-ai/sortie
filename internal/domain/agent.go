@@ -189,6 +189,10 @@ type StartSessionParams struct {
 	// path adapters inject via their MCP config CLI flag. When empty,
 	// adapters use the operator-configured mcp_config passthrough.
 	MCPConfigPath string
+
+	// CredentialVerification marks a session that carries only the
+	// request proving the runtime's credential works.
+	CredentialVerification bool
 }
 
 // RunTurnParams contains the inputs for [AgentAdapter.RunTurn].
