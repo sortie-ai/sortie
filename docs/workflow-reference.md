@@ -1214,7 +1214,7 @@ The value is a sequence, not a single object. A second channel is a second list 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
 | `kind` | string | Yes | _(none)_ | Backend discriminator. v1 backends are `webhook` and `slack`. |
-| `max_per_session` | int | No | `20` | Notification cap for one `sortie mcp-server` process. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
+| `max_per_session` | int | No | `20` | Notification cap for the whole agent run. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
 
 Per-backend fields depend on `kind` and are passed through to the backend untyped:
 
@@ -1225,7 +1225,7 @@ Per-backend fields depend on `kind` and are passed through to the backend untype
 
 The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint. It is unrelated to inbound tracker webhooks ([architecture §20](architecture/25-webhook-support.md)), which trigger reconciliation. The two share a name but not a direction.
 
-When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends, and belongs to one `sortie mcp-server` process: an agent runtime that starts a new tool server process for each turn starts a new count with each turn, rather than sharing one count across the whole session.
+When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap covers one agent run on every agent kind: every turn and every tool server process of that run share one count, which Sortie keeps as files in the workspace's `.sortie/notification_slots/` directory. A retry or a continuation starts a new run and a new count. A call counts once it reached at least one backend, not once per backend it reached.
 
 The `webhook` backend posts a JSON object whose keys use the generic notifier vocabulary, so any consumer can correlate and route without backend-specific knowledge:
 
@@ -2951,7 +2951,7 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
 | `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Notifier backend list; `notify_operator` tool; absent = tool unregistered             |
 | `notifications[].kind`                  | string           | _(required)_                 | —                                        | Backend discriminator; v1: `webhook`, `slack`                                          |
-| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for one `sortie mcp-server` process; `0` selects the default; never unlimited; non-negative |
+| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | `notify_operator` cap for the whole agent run; `0` selects the default; never unlimited; non-negative |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |
