@@ -49,7 +49,7 @@ func init() {
 	})
 }
 
-// fakeReporter is a minimal [usageContractReporter] double that records
+// fakeReporter is a minimal [contractReporter] double that records
 // Errorf calls instead of failing the enclosing test, so a
 // deliberately-violating input can be driven through
 // assertUsageContract without reddening the smoke test itself.
@@ -503,7 +503,7 @@ func TestAssertResolvedUsageReporting_AttributionArms(t *testing.T) {
 	})
 }
 
-// TestAssertResolvedUsageReporting_TurnEndTerminalOrdering proves P14:
+// TestAssertResolvedUsageReporting_TurnEndTerminalOrdering proves that
 // a turn_end case whose usage event has no later turn-terminal event
 // fails, and the same case with turn_completed appended passes.
 func TestAssertResolvedUsageReporting_TurnEndTerminalOrdering(t *testing.T) {

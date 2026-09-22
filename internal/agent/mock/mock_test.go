@@ -299,7 +299,7 @@ func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
 	adapter, _ := NewMockAdapter(map[string]any{})
-	sess := domain.Session{ID: "s"}
+	sess := domain.Session{ID: "mock-session-001"}
 
 	// First turn: consume.
 	adapter.RunTurn(context.Background(), sess, defaultParams()) //nolint:errcheck // test setup
@@ -308,7 +308,7 @@ func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	params := defaultParams()
 	events := collectEvents(&params)
 
-	_, err := adapter.RunTurn(context.Background(), sess, params)
+	result, err := adapter.RunTurn(context.Background(), sess, params)
 	if err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
@@ -323,6 +323,7 @@ func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	if !found {
 		t.Error("session_started not emitted on second turn; expected on every turn")
 	}
+	agenttest.AssertSessionIDContract(t, []string{sess.ID}, *events, result)
 }
 
 func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {

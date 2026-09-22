@@ -148,6 +148,26 @@ func checkWorkerResultNoStoppedByTokenCeilingLiteral(fset *token.FileSet, files 
 	return violations
 }
 
+func checkWorkerResultNoSessionIDLiteral(fset *token.FileSet, files []*ast.File) (violations []workerResultLiteralViolation) {
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			ident, ok := lit.Type.(*ast.Ident)
+			if !ok || ident.Name != "WorkerResult" {
+				return true
+			}
+			if value := workerResultKeyValue(lit, "SessionID"); value != nil {
+				violations = append(violations, workerResultLiteralViolation{pos: fset.Position(value.Pos()), detail: "SessionID is set in a WorkerResult literal"})
+			}
+			return true
+		})
+	}
+	return violations
+}
+
 func checkOnExitCallSites(files []*ast.File) (callCount int) {
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -295,6 +315,10 @@ func TestWorkerResultLiteral_RealPackage(t *testing.T) {
 		t.Errorf("checkWorkerResultNoStoppedByTokenCeilingLiteral() found %d violations in the real package, want 0: %+v", len(violations), violations)
 	}
 
+	if violations := checkWorkerResultNoSessionIDLiteral(fset, files); len(violations) != 0 {
+		t.Errorf("checkWorkerResultNoSessionIDLiteral() found %d violations in the real package, want 0: %+v", len(violations), violations)
+	}
+
 	if count := checkOnExitCallSites(files); count != 1 {
 		t.Errorf("checkOnExitCallSites() found %d deps.OnExit calls in the real package, want exactly 1", count)
 	}
@@ -402,6 +426,7 @@ func TestWorkerResultLiteralRules_ScratchMutationDetected(t *testing.T) {
 	}{
 		{"ExitKind", exitKindCheck},
 		{"StoppedByTokenCeilingLiteral", checkWorkerResultNoStoppedByTokenCeilingLiteral},
+		{"SessionIDLiteral", checkWorkerResultNoSessionIDLiteral},
 		{"OnExitCallSites", onExitCheck},
 	}
 
@@ -432,6 +457,14 @@ func TestWorkerResultLiteralRules_ScratchMutationDetected(t *testing.T) {
 			replacements: []string{
 				"report(WorkerResult{\n\t\t\tIssueID:          issue.ID,\n\t\t\tIdentifier:       issue.Identifier,\n\t\t\tExitKind:         WorkerExitError,",
 				"deps.OnExit(issue.ID, WorkerResult{\n\t\t\tIssueID:          issue.ID,\n\t\t\tIdentifier:       issue.Identifier,\n\t\t\tExitKind:         WorkerExitError,",
+			},
+		},
+		{
+			name: "SessionID set in the normal-exit literal",
+			own:  "SessionIDLiteral",
+			replacements: []string{
+				"\t\tExitKind:                     WorkerExitNormal,",
+				"\t\tExitKind:                     WorkerExitNormal,\n\t\tSessionID:                    session.ID,",
 			},
 		},
 	}

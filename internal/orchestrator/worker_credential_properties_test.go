@@ -15,8 +15,9 @@ import (
 )
 
 type credentialPropertyAdapter struct {
-	verifyRunFn func(ctx context.Context, params domain.RunTurnParams) (domain.TurnResult, error)
-	workRunFn   func(params domain.RunTurnParams) (domain.TurnResult, error)
+	verifyRunFn  func(ctx context.Context, params domain.RunTurnParams) (domain.TurnResult, error)
+	workRunFn    func(params domain.RunTurnParams) (domain.TurnResult, error)
+	workStartErr error
 
 	mu                  sync.Mutex
 	workingStartCalls   int
@@ -40,6 +41,9 @@ func (a *credentialPropertyAdapter) StartSession(_ context.Context, params domai
 	defer a.mu.Unlock()
 	a.workingStartCalls++
 	a.workingStartParams = params
+	if a.workStartErr != nil {
+		return domain.Session{}, a.workStartErr
+	}
 	return domain.Session{ID: "sess-work"}, nil
 }
 
@@ -402,5 +406,74 @@ func TestRunWorkerAttempt_SelfReviewUsageIncludesVerificationOffset(t *testing.T
 
 	if result.Usage != want {
 		t.Errorf("WorkerResult.Usage = %+v, want %+v", result.Usage, want)
+	}
+}
+
+func TestRunWorkerAttempt_VerificationSessionIdentifierNeverAccepted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		workStartErr  error
+		wantExitKind  WorkerExitKind
+		wantSessionID string
+	}{
+		{
+			name:          "normal exit",
+			wantExitKind:  WorkerExitNormal,
+			wantSessionID: "sess-work",
+		},
+		{
+			name:          "verification precedes a failed working StartSession",
+			workStartErr:  errors.New("boom"),
+			wantExitKind:  WorkerExitError,
+			wantSessionID: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = 1
+
+			adapter := &credentialPropertyAdapter{
+				workStartErr: tt.workStartErr,
+				verifyRunFn: func(_ context.Context, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "V", Timestamp: time.Now().UTC()})
+					return domain.TurnResult{SessionID: "V", ExitReason: domain.EventTurnCompleted}, nil
+				},
+			}
+
+			ec := newExitCapture()
+			RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+				TrackerAdapter:         &mockTrackerAdapter{},
+				AgentAdapter:           adapter,
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+				WorkflowPath:           "/fake/WORKFLOW.md",
+				DispatchID:             "D1",
+			})
+			result := ec.waitResult(t)
+
+			if result.ExitKind != tt.wantExitKind {
+				t.Fatalf("WorkerResult.ExitKind = %q, want %q (error: %v)", result.ExitKind, tt.wantExitKind, result.Error)
+			}
+			if result.SessionID != tt.wantSessionID {
+				t.Errorf("WorkerResult.SessionID = %q, want %q", result.SessionID, tt.wantSessionID)
+			}
+
+			wsPath := adapter.workspacePath()
+			if dispatchRecordExists(wsPath) {
+				rec := readDispatchRecord(t, wsPath)
+				if rec.SessionID == "V" {
+					t.Errorf("dispatch identity record = %+v, want SessionID never %q", rec, "V")
+				}
+			}
+		})
 	}
 }

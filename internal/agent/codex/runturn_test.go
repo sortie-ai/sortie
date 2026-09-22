@@ -813,15 +813,17 @@ func TestRunTurn_ModelRerouted_EmptyToModel(t *testing.T) {
 func TestRunTurn_FirstTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
-	// turnCount=0 → incremented to 1 inside RunTurn → EventSessionStarted.
+	// turnCount=0 -> incremented to 1 inside RunTurn -> EventSessionStarted.
 	state := makeTestState(t, loadFixture(t, "runturn_success.jsonl"))
 	adapter, _ := NewCodexAdapter(map[string]any{})
+	session := fakeSession(state)
 
 	var events []domain.AgentEvent
-	if _, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "hello",
 		OnEvent: collectEvents(&events),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
@@ -832,6 +834,7 @@ func TestRunTurn_FirstTurnEmitsSessionStarted(t *testing.T) {
 	if e.SessionID != "thread-001" {
 		t.Errorf("EventSessionStarted.SessionID = %q, want %q", e.SessionID, "thread-001")
 	}
+	agenttest.AssertSessionIDContract(t, []string{session.ID}, events, result)
 }
 
 func TestRunTurn_SubsequentTurnEmitsNotification(t *testing.T) {
@@ -1225,11 +1228,11 @@ func TestRunTurn_MiscNotifications(t *testing.T) {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	// some/unknown/method → EventOtherMessage
+	// some/unknown/method -> EventOtherMessage
 	if _, ok := firstEventOfType(events, domain.EventOtherMessage); !ok {
 		t.Error("expected EventOtherMessage for unknown notification method, not found")
 	}
-	// turn/plan/updated → EventNotification
+	// turn/plan/updated -> EventNotification
 	found := false
 	for _, e := range events {
 		if e.Type == domain.EventNotification && e.Message == "plan updated" {

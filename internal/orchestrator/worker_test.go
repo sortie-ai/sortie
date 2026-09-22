@@ -2102,6 +2102,9 @@ func TestRunWorkerAttempt(t *testing.T) {
 		if !strings.Contains(logOutput, "level=WARN") || !strings.Contains(logOutput, "tool channel unknown for agent kind") {
 			t.Errorf("log output = %q, want a WARN log containing %q", logOutput, "tool channel unknown for agent kind")
 		}
+		if got := strings.Count(logOutput, "agent session id accepted"); got != 0 {
+			t.Errorf("log contains %d %q records, want 0 (no replacement reported): %s", got, "agent session id accepted", logOutput)
+		}
 	})
 
 	t.Run("resolver reporting no channel withholds advertisement and logs info", func(t *testing.T) {
@@ -4582,7 +4585,7 @@ func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 						if rec != want {
 							t.Errorf("record at second RunTurn = %+v, want %+v (rewritten at turn start after mid-turn removal)", rec, want)
 						}
-						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+						return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 					}
 
 					rec := readDispatchRecord(t, wsPath())
@@ -4611,7 +4614,7 @@ func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 						t.Fatal("dispatch.json still exists immediately after Remove")
 					}
 
-					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
@@ -4671,6 +4674,7 @@ func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 						}
 
 						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+						return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 					case !codingDone:
 						codingDone = true
 						writeStatusFile(t, wsPath(), "needs-human-review")
@@ -4756,6 +4760,196 @@ func TestRunWorkerAttempt_DispatchIdentityRecordPoints(t *testing.T) {
 			t.Error("dispatch.json exists, want none when DispatchID is empty")
 		}
 	})
+}
+
+func TestRunWorkerAttempt_RelayedReplacementReachesWorkerResult(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 1
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: func(context.Context, domain.StartSessionParams) (domain.Session, error) {
+				return domain.Session{ID: "S0"}, nil
+			},
+			runTurnFn: func(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S1", Timestamp: time.Now().UTC()})
+				return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SessionID != "S1" {
+		t.Errorf("WorkerResult.SessionID = %q, want %q", result.SessionID, "S1")
+	}
+}
+
+func TestRunWorkerAttempt_TurnResultReplacementRecordedAndSurvives(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	startFn, wsPath := captureWorkspacePath()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var recordDuringRefresh workspace.DispatchIdentity
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			recordDuringRefresh = readDispatchRecord(t, wsPath())
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "To Do"
+			}
+			return result, nil
+		},
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: tracker,
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				return domain.TurnResult{SessionID: "S2", ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 logger,
+		WorkflowPath:           "/fake/WORKFLOW.md",
+		DispatchID:             "D1",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, WorkerExitNormal, result.Error)
+	}
+	if recordDuringRefresh.SessionID != "S2" {
+		t.Errorf("dispatch identity record read during issue state refresh = %+v, want SessionID %q", recordDuringRefresh, "S2")
+	}
+	if result.SessionID != "S2" {
+		t.Errorf("WorkerResult.SessionID = %q, want %q", result.SessionID, "S2")
+	}
+
+	output := logs.String()
+	if got := strings.Count(output, "agent session id accepted"); got != 1 {
+		t.Fatalf("log contains %d %q records, want exactly 1: %s", got, "agent session id accepted", output)
+	}
+	if !strings.Contains(output, "previous_session_id=sess-1") || !strings.Contains(output, "accepted_session_id=S2") {
+		t.Errorf("log record missing expected attributes, got: %s", output)
+	}
+}
+
+func TestRunWorkerAttempt_ReplacementSurvivesEveryExitKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		maxTurns       int
+		buildRunTurnFn func(cancel context.CancelFunc) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error)
+		wantExitKind   WorkerExitKind
+	}{
+		{
+			name:     "normal exit",
+			maxTurns: 1,
+			buildRunTurnFn: func(_ context.CancelFunc) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+				return func(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S1", Timestamp: time.Now().UTC()})
+					return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+				}
+			},
+			wantExitKind: WorkerExitNormal,
+		},
+		{
+			name:     "turn error",
+			maxTurns: 1,
+			buildRunTurnFn: func(_ context.CancelFunc) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+				return func(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S1", Timestamp: time.Now().UTC()})
+					return domain.TurnResult{}, errors.New("turn failed")
+				}
+			},
+			wantExitKind: WorkerExitError,
+		},
+		{
+			name:     "context cancellation",
+			maxTurns: 2,
+			buildRunTurnFn: func(cancel context.CancelFunc) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+				return func(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S1", Timestamp: time.Now().UTC()})
+					cancel()
+					return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+				}
+			},
+			wantExitKind: WorkerExitCancelled,
+		},
+		{
+			name:     "panic",
+			maxTurns: 1,
+			buildRunTurnFn: func(_ context.CancelFunc) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+				return func(_ context.Context, _ domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventSessionStarted, SessionID: "S1", Timestamp: time.Now().UTC()})
+					panic("crash after replacement")
+				}
+			},
+			wantExitKind: WorkerExitError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = tt.maxTurns
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			ec := newExitCapture()
+			deps := WorkerDeps{
+				TrackerAdapter: &mockTrackerAdapter{},
+				AgentAdapter: &mockAgentAdapter{
+					startSessionFn: func(context.Context, domain.StartSessionParams) (domain.Session, error) {
+						return domain.Session{ID: "S0"}, nil
+					},
+					runTurnFn: tt.buildRunTurnFn(cancel),
+				},
+				ConfigFunc:             func() config.ServiceConfig { return cfg },
+				PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+				OnEvent:                func(_ string, _ domain.AgentEvent) {},
+				OnExit:                 ec.onExit,
+				Logger:                 discardLogger(),
+			}
+
+			RunWorkerAttempt(ctx, workerTestIssue(), nil, deps)
+			result := ec.waitResult(t)
+
+			if result.ExitKind != tt.wantExitKind {
+				t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, tt.wantExitKind, result.Error)
+			}
+			if result.SessionID != "S1" {
+				t.Errorf("WorkerResult.SessionID = %q, want %q", result.SessionID, "S1")
+			}
+		})
+	}
 }
 
 func TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment(t *testing.T) {
