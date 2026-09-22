@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -951,7 +952,7 @@ func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "looks good"}},
 	}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, cancelledAtEnding, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -963,6 +964,9 @@ func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 		TurnsCompleted: &turns,
 	})
 
+	if cancelledAtEnding {
+		t.Error("cancelledAtEnding = true, want false: the phase ended on its own with a pass verdict")
+	}
 	if meta == nil {
 		t.Fatal("meta = nil, want non-nil")
 	}
@@ -1001,9 +1005,9 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 	turns := 0
 
 	// Turn sequence (zero-indexed verdictWriter.callIdx):
-	//   0 = review turn 1 → iterate
-	//   1 = fix turn 1    → no verdict
-	//   2 = review turn 2 → pass
+	//   0 = review turn 1, iterate
+	//   1 = fix turn 1, no verdict
+	//   2 = review turn 2, pass
 	adapter := &verdictWriter{
 		wsPath: wsPath,
 		verdicts: []domain.ReviewVerdict{
@@ -1013,7 +1017,7 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 		},
 	}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1052,9 +1056,9 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 	cfg.MaxIterations = 2
 
 	// Turn sequence:
-	//   0 = review turn 1 → iterate
-	//   1 = fix turn 1    → no verdict
-	//   2 = review turn 2 → iterate (cap reached after this)
+	//   0 = review turn 1, iterate
+	//   1 = fix turn 1, no verdict
+	//   2 = review turn 2, iterate (cap reached after this)
 	adapter := &verdictWriter{
 		wsPath: wsPath,
 		verdicts: []domain.ReviewVerdict{
@@ -1064,7 +1068,7 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 		},
 	}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, cancelledAtEnding, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1076,6 +1080,9 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 		TurnsCompleted: &turns,
 	})
 
+	if cancelledAtEnding {
+		t.Error("cancelledAtEnding = true, want false: the phase ended on its own by reaching the iteration cap")
+	}
 	if !meta.CapReached {
 		t.Error("CapReached = false, want true")
 	}
@@ -1105,7 +1112,7 @@ func TestSelfReviewLoop_MissingVerdict(t *testing.T) {
 	// Adapter writes no verdict file.
 	adapter := &verdictWriter{wsPath: wsPath, verdicts: nil}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1133,7 +1140,7 @@ func TestSelfReviewLoop_TurnError(t *testing.T) {
 
 	adapter := &failOnFirstAdapter{wsPath: wsPath}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, cancelledAtEnding, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1145,9 +1152,69 @@ func TestSelfReviewLoop_TurnError(t *testing.T) {
 		TurnsCompleted: &turns,
 	})
 
+	if cancelledAtEnding {
+		t.Error("cancelledAtEnding = true, want false: the turn failed on its own with the context still live")
+	}
+
 	// Loop should break on error; TurnsCompleted must not increment.
 	if turns != 0 {
 		t.Errorf("TurnsCompleted = %d, want 0 after turn error", turns)
+	}
+	if meta.TotalIterations != 1 {
+		t.Errorf("TotalIterations = %d, want 1 (partial record appended)", meta.TotalIterations)
+	}
+}
+
+// cancelOnMessageHandler stands in for a stop request landing while the
+// loop is still writing a log record, before the loop reads the cancellation.
+type cancelOnMessageHandler struct {
+	message string
+	cancel  context.CancelCauseFunc
+	cause   error
+}
+
+func (h *cancelOnMessageHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *cancelOnMessageHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == h.message {
+		h.cancel(h.cause)
+	}
+	return nil
+}
+func (h *cancelOnMessageHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *cancelOnMessageHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestSelfReviewLoop_CancelledDuringTurnFailureLogging(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	turns := 0
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	logger := slog.New(&cancelOnMessageHandler{
+		message: "self-review turn failed",
+		cancel:  cancel,
+		cause:   errTokenCeilingStop,
+	})
+
+	adapter := &failOnFirstAdapter{wsPath: wsPath}
+
+	meta, _, cancelledAtEnding, phaseErr := runSelfReviewLoop(ctx, RunSelfReviewParams{
+		Session:        domain.Session{ID: "sess"},
+		Issue:          selfReviewIssue(),
+		WorkspacePath:  wsPath,
+		Config:         selfReviewCfg(),
+		AgentAdapter:   adapter,
+		OnEvent:        func(_ string, _ domain.AgentEvent) {},
+		Logger:         logger,
+		Metrics:        &domain.NoopMetrics{},
+		TurnsCompleted: &turns,
+	})
+
+	if phaseErr != nil {
+		t.Fatalf("phaseErr = %v, want nil", phaseErr)
+	}
+	if cancelledAtEnding {
+		t.Error("cancelledAtEnding = true, want false: the turn failed on its own before the stop request landed")
 	}
 	if meta.TotalIterations != 1 {
 		t.Errorf("TotalIterations = %d, want 1 (partial record appended)", meta.TotalIterations)
@@ -1163,7 +1230,7 @@ func TestSelfReviewLoop_StatusBlocked(t *testing.T) {
 	// Adapter writes "blocked" status signal during the first review turn.
 	adapter := &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
 
-	meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _, cancelledAtEnding, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1174,6 +1241,10 @@ func TestSelfReviewLoop_StatusBlocked(t *testing.T) {
 		Metrics:        &domain.NoopMetrics{},
 		TurnsCompleted: &turns,
 	})
+
+	if cancelledAtEnding {
+		t.Error("cancelledAtEnding = true, want false: a blocked signal ended the phase on its own")
+	}
 
 	// TurnsCompleted increments because the turn itself succeeded even though
 	// the status signal triggered an abort. turns == 1.
@@ -1202,7 +1273,7 @@ func TestSelfReviewLoop_ContextCancelled(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "done"}},
 	}
 
-	meta, _, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
+	meta, _, cancelledAtEnding, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1216,6 +1287,9 @@ func TestSelfReviewLoop_ContextCancelled(t *testing.T) {
 
 	if meta.TotalIterations != 0 {
 		t.Errorf("TotalIterations = %d, want 0 for pre-cancelled context", meta.TotalIterations)
+	}
+	if !cancelledAtEnding {
+		t.Error("cancelledAtEnding = false, want true: the per-iteration check found the context already done")
 	}
 }
 
@@ -1235,7 +1309,7 @@ func TestSelfReviewLoop_ProgressEvents(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "good"}},
 	}
 
-	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1278,7 +1352,7 @@ func TestSelfReviewLoop_ReviewSummaryWritten(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "ok"}},
 	}
 
-	_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	_, _, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1419,7 +1493,7 @@ func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
 				cancel()
 			}
 
-			_, signal, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
+			_, signal, _, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 				Session:        domain.Session{ID: "sess"},
 				Issue:          selfReviewIssue(),
 				WorkspacePath:  wsPath,
@@ -1470,7 +1544,7 @@ func TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues(t *testing.T) {
 		},
 	}
 
-	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1513,7 +1587,7 @@ func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
 
 	adapter := &repeatingNeedsReviewAdapter{t: t, wsPath: wsPath}
 
-	meta, signal, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, signal, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1644,7 +1718,7 @@ func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
 			cfg.MaxIterations = 2
 			adapter := &fixTurnTimeoutAdapter{t: t, wsPath: wsPath, verdict: tt.verdict, rawVerdict: tt.rawVerdict}
 
-			meta, _, phaseErr := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+			meta, _, cancelledAtEnding, phaseErr := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 				Session:        domain.Session{ID: "sess"},
 				Issue:          selfReviewIssue(),
 				WorkspacePath:  wsPath,
@@ -1667,6 +1741,9 @@ func TestSelfReviewLoop_FixTurnTimeoutAnnotatesIteration(t *testing.T) {
 			}
 			if agentErr.Kind != domain.ErrTurnTimeout {
 				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnTimeout)
+			}
+			if cancelledAtEnding {
+				t.Error("cancelledAtEnding = true, want false: a deadline expiry is reported through the error, not the cancellation flag")
 			}
 			if meta == nil {
 				t.Fatal("ReviewMetadata = nil, want the iteration record to survive the failure exit")
@@ -1739,7 +1816,7 @@ func TestSelfReviewLoop_OnTurnStartedCalledBeforeEachTurn(t *testing.T) {
 			log: &log,
 		}
 
-		meta, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+		meta, _, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 			Session:        domain.Session{ID: "sess"},
 			Issue:          selfReviewIssue(),
 			WorkspacePath:  wsPath,
@@ -1782,7 +1859,7 @@ func TestSelfReviewLoop_OnTurnStartedCalledBeforeEachTurn(t *testing.T) {
 			log:          &log,
 		}
 
-		_, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+		_, _, _, _ = runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 			Session:        domain.Session{ID: "sess"},
 			Issue:          selfReviewIssue(),
 			WorkspacePath:  wsPath,

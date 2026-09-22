@@ -1320,11 +1320,11 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 		o, store, spy, logBuf := budgetCeilingExemptionFixture(t)
 		var cancelCalls atomic.Int32
 		o.state.Running["X"] = &RunningEntry{
-			Identifier:           "X-ident",
-			Issue:                domain.Issue{ID: "X", Identifier: "X-ident"},
-			StartedAt:            time.Now().UTC(),
-			IssueTokensCompleted: 90,
-			CancelFunc:           func() { cancelCalls.Add(1) },
+			Identifier:             "X-ident",
+			Issue:                  domain.Issue{ID: "X", Identifier: "X-ident"},
+			StartedAt:              time.Now().UTC(),
+			IssueTokensCompleted:   90,
+			TokenCeilingCancelFunc: func() { cancelCalls.Add(1) },
 		}
 		o.state.Claimed["X"] = struct{}{}
 		o.agentEventCh <- budgetCeilingCrossingEvent("X")
@@ -1344,7 +1344,7 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 			t.Error(`log contains "run stopped by token ceiling", want no such record`)
 		}
 		if cancelCalls.Load() != 0 {
-			t.Errorf("CancelFunc called %d times, want 0", cancelCalls.Load())
+			t.Errorf("TokenCeilingCancelFunc called %d times, want 0", cancelCalls.Load())
 		}
 		if len(store.runHistories) != 1 {
 			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
@@ -1364,11 +1364,11 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 		o, store, spy, logBuf := budgetCeilingExemptionFixture(t)
 		var cancelCalls atomic.Int32
 		o.state.Running["X"] = &RunningEntry{
-			Identifier:           "X-ident",
-			Issue:                domain.Issue{ID: "X", Identifier: "X-ident"},
-			StartedAt:            time.Now().UTC(),
-			IssueTokensCompleted: 90,
-			CancelFunc:           func() { cancelCalls.Add(1) },
+			Identifier:             "X-ident",
+			Issue:                  domain.Issue{ID: "X", Identifier: "X-ident"},
+			StartedAt:              time.Now().UTC(),
+			IssueTokensCompleted:   90,
+			TokenCeilingCancelFunc: func() { cancelCalls.Add(1) },
 		}
 		o.state.Claimed["X"] = struct{}{}
 		o.agentEventCh <- budgetCeilingCrossingEvent("X")
@@ -1388,7 +1388,7 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 			t.Error(`log contains "run stopped by token ceiling", want no such record`)
 		}
 		if cancelCalls.Load() != 0 {
-			t.Errorf("CancelFunc called %d times, want 0", cancelCalls.Load())
+			t.Errorf("TokenCeilingCancelFunc called %d times, want 0", cancelCalls.Load())
 		}
 		if len(store.runHistories) != 1 {
 			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
@@ -1413,11 +1413,11 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 			StartedAt:  time.Now().UTC(),
 		}
 		o.state.Running["Y"] = &RunningEntry{
-			Identifier:           "Y-ident",
-			Issue:                domain.Issue{ID: "Y", Identifier: "Y-ident"},
-			StartedAt:            time.Now().UTC(),
-			IssueTokensCompleted: 90,
-			CancelFunc:           func() { yCancels.Add(1) },
+			Identifier:             "Y-ident",
+			Issue:                  domain.Issue{ID: "Y", Identifier: "Y-ident"},
+			StartedAt:              time.Now().UTC(),
+			IssueTokensCompleted:   90,
+			TokenCeilingCancelFunc: func() { yCancels.Add(1) },
 		}
 		o.state.Claimed["X"] = struct{}{}
 		o.state.Claimed["Y"] = struct{}{}
@@ -1443,7 +1443,7 @@ func TestHandleWorkerExit_NoBudgetStopForExitingRun(t *testing.T) {
 			t.Error(`log contains "run stopped by token ceiling", want no such record`)
 		}
 		if yCancels.Load() != 0 {
-			t.Errorf("Y's CancelFunc called %d times, want 0", yCancels.Load())
+			t.Errorf("Y's TokenCeilingCancelFunc called %d times, want 0", yCancels.Load())
 		}
 		if len(store.runHistories) != 2 {
 			t.Fatalf("AppendRunHistory called %d times, want 2", len(store.runHistories))
@@ -1467,44 +1467,41 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 		o, _, spy, logBuf := budgetCeilingExemptionFixture(t)
 		var xCancels, yCancels atomic.Int32
 		o.state.Running["X"] = &RunningEntry{
-			Identifier:           "X-ident",
-			Issue:                domain.Issue{ID: "X", Identifier: "X-ident"},
-			StartedAt:            time.Now().UTC(),
-			IssueTokensCompleted: 90,
-			CancelFunc:           func() { xCancels.Add(1) },
+			Identifier:             "X-ident",
+			Issue:                  domain.Issue{ID: "X", Identifier: "X-ident"},
+			StartedAt:              time.Now().UTC(),
+			IssueTokensCompleted:   90,
+			TokenCeilingCancelFunc: func() { xCancels.Add(1) },
 		}
 		o.state.Running["Y"] = &RunningEntry{
-			Identifier:           "Y-ident",
-			Issue:                domain.Issue{ID: "Y", Identifier: "Y-ident"},
-			StartedAt:            time.Now().UTC(),
-			IssueTokensCompleted: 90,
-			CancelFunc:           func() { yCancels.Add(1) },
+			Identifier:             "Y-ident",
+			Issue:                  domain.Issue{ID: "Y", Identifier: "Y-ident"},
+			StartedAt:              time.Now().UTC(),
+			IssueTokensCompleted:   90,
+			TokenCeilingCancelFunc: func() { yCancels.Add(1) },
 		}
 		o.agentEventCh <- budgetCeilingCrossingEvent("Y")
 		o.agentEventCh <- budgetCeilingCrossingEvent("X")
 
 		o.applyQueuedAheadOfExit(context.Background(), map[string]struct{}{"X": {}})
 
-		if got := len(spy.runsStoppedByBudget); got != 1 {
-			t.Fatalf("IncRunsStoppedByBudget called %d times, want 1: %v", got, spy.runsStoppedByBudget)
+		if got := len(spy.runsStoppedByBudget); got != 0 {
+			t.Fatalf("IncRunsStoppedByBudget called %d times, want 0 (the stop request alone reports nothing): %v", got, spy.runsStoppedByBudget)
 		}
-		if got := strings.Count(logBuf.String(), "run stopped by token ceiling"); got != 1 {
-			t.Fatalf(`log contains %d "run stopped by token ceiling" records, want exactly 1: %s`, got, logBuf.String())
-		}
-		if !strings.Contains(logBuf.String(), "issue_id=Y") {
-			t.Errorf(`log does not name issue_id=Y: %s`, logBuf.String())
+		if strings.Contains(logBuf.String(), "run stopped by token ceiling") {
+			t.Fatalf(`log contains "run stopped by token ceiling", want no such record: %s`, logBuf.String())
 		}
 		if yCancels.Load() != 1 {
-			t.Errorf("Y's CancelFunc called %d times, want 1", yCancels.Load())
+			t.Errorf("Y's TokenCeilingCancelFunc called %d times, want 1", yCancels.Load())
 		}
 		if xCancels.Load() != 0 {
-			t.Errorf("X's CancelFunc called %d times, want 0", xCancels.Load())
+			t.Errorf("X's TokenCeilingCancelFunc called %d times, want 0", xCancels.Load())
 		}
-		if !o.state.Running["Y"].TokenCeilingStopped {
-			t.Error("Y's TokenCeilingStopped = false, want true")
+		if o.state.Running["Y"].TokenCeilingStopRequest == nil {
+			t.Error("Y's TokenCeilingStopRequest = nil, want non-nil")
 		}
-		if o.state.Running["X"].TokenCeilingStopped {
-			t.Error("X's TokenCeilingStopped = true, want false")
+		if o.state.Running["X"].TokenCeilingStopRequest != nil {
+			t.Error("X's TokenCeilingStopRequest is non-nil, want nil")
 		}
 	})
 
@@ -1527,7 +1524,7 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 			state.Running[issueX].IssueTokensCompleted = 90
 			state.Running[issueY] = queuedOrderingIssueEntry(issueY)
 			state.Running[issueY].IssueTokensCompleted = 90
-			state.Running[issueY].CancelFunc = func() { yCancels.Add(1) }
+			state.Running[issueY].TokenCeilingCancelFunc = func() { yCancels.Add(1) }
 
 			tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
 			o := budgetOrchestratorWithMetrics(state, wm, store, tracker, discardLogger(), spy)
@@ -1535,9 +1532,9 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 			// X's row is the trial's first run_history row, appended after
 			// applyQueuedAheadOfExit has already applied (and, for Y,
 			// ceiling-enforced) every message queued ahead of X's exit. The
-			// hook observes Y's CancelFunc and the budget-stop counter at
+			// hook observes Y's TokenCeilingCancelFunc and the budget-stop counter at
 			// that moment, from the loop goroutine, before Y's own exit or
-			// the shutdown drain can call Y's CancelFunc again. The send
+			// the shutdown drain can call Y's TokenCeilingCancelFunc again. The send
 			// never blocks, so Y's later row cannot stall the loop.
 			type observedRow struct {
 				yCancels        int32
@@ -1580,10 +1577,11 @@ func TestApplyQueuedAheadOfExit_EnforcesCeilingForOtherIssues(t *testing.T) {
 			<-done
 
 			if row.yCancels != 1 {
-				t.Fatalf("trial %d: Y's CancelFunc called %d times by the time X's row was upserted, want 1", trial, row.yCancels)
+				t.Fatalf("trial %d: Y's TokenCeilingCancelFunc called %d times by the time X's row was upserted, want 1", trial, row.yCancels)
 			}
-			if row.stoppedByBudget != 1 {
-				t.Fatalf("trial %d: IncRunsStoppedByBudget called %d times by the time X's row was upserted, want 1", trial, row.stoppedByBudget)
+			// The counter fires only once Y's own exit confirms the ceiling ended it.
+			if row.stoppedByBudget != 0 {
+				t.Fatalf("trial %d: IncRunsStoppedByBudget called %d times by the time X's row was upserted, want 0", trial, row.stoppedByBudget)
 			}
 		}
 	})
@@ -2931,6 +2929,7 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	wm := &stubWorkflowManager{config: cfg, template: tmpl}
 	store := &stubStore{}
 	regs := passingPreflightRegistries()
+	spy := &spyMetrics{}
 
 	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, cfg.Agent.MaxTokens, nil, AgentTotals{})
 	o := NewOrchestrator(OrchestratorParams{
@@ -2940,6 +2939,7 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 		AgentAdapter:    agent,
 		WorkflowManager: wm,
 		Store:           store,
+		Metrics:         spy,
 		PreflightParams: PreflightParams{
 			ReloadWorkflow:  func() error { return nil },
 			ConfigFunc:      wm.Config,
@@ -3003,6 +3003,9 @@ func TestOrchestratorLifecycle_TokenCeilingStopsRunMidTurn(t *testing.T) {
 	}
 	if got := turnNumber.Load(); got != 2 {
 		t.Errorf("turns started = %d, want 2 (the ceiling fired during the second turn, not the first)", got)
+	}
+	if len(spy.runsStoppedByBudget) != 1 || spy.runsStoppedByBudget[0] != budgetReasonToken {
+		t.Errorf("IncRunsStoppedByBudget calls = %v, want exactly one %q", spy.runsStoppedByBudget, budgetReasonToken)
 	}
 }
 
@@ -3243,7 +3246,7 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	<-done
 
 	if _, ok := state.Completed["td-1"]; !ok {
-		t.Error("issue TD-1 not in Completed set — per-state exhaustion blocked cross-state dispatch")
+		t.Error("issue TD-1 not in Completed set, per-state exhaustion blocked cross-state dispatch")
 	}
 
 	store.mu.Lock()
@@ -3254,7 +3257,7 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	store.mu.Unlock()
 
 	if firstThreeIDs["ip-3"] && !firstThreeIDs["td-1"] {
-		t.Error("ip-3 was dispatched before td-1 — per-state limit was not enforced")
+		t.Error("ip-3 was dispatched before td-1, per-state limit was not enforced")
 	}
 }
 
@@ -3565,7 +3568,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		entry := state.Running["arch-1"]
 		if entry == nil {
-			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+			t.Fatal("entry removed from Running, reconciliation should not remove entries")
 			return
 		}
 		if entry.PendingCleanup {
@@ -3584,7 +3587,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		entry = state.Running["arch-1"]
 		if entry == nil {
-			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+			t.Fatal("entry removed from Running, reconciliation should not remove entries")
 			return
 		}
 		if !entry.PendingCleanup {
@@ -3885,7 +3888,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		entry := state.Running["g-1"]
 		if entry == nil {
-			t.Fatal("entry g-1 removed from Running — reconciliation should not remove entries")
+			t.Fatal("entry g-1 removed from Running, reconciliation should not remove entries")
 			return
 		}
 		if !entry.PendingCleanup {

@@ -467,12 +467,17 @@ func readAndConsumeStatusSignal(workspacePath string, logger *slog.Logger) works
 	return signal
 }
 
-func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal, error) {
+func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal, bool, error) {
 	maxIter := params.Config.MaxIterations
 	iterations := make([]domain.ReviewIterationRecord, 0, maxIter)
 	logger := params.Logger
 	terminalSignal := workspace.StatusNone
 	var expiryErr error
+
+	// cancelledAtEnding is read at each cut point rather than once the loop
+	// returns, so a phase that ended on its own is never reclassified by a
+	// stop request landing afterward.
+	var cancelledAtEnding bool
 
 	if params.OnProgress != nil {
 		params.OnProgress(selfReviewProgressMsg{
@@ -485,6 +490,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
+			cancelledAtEnding = true
 			break
 		}
 
@@ -524,6 +530,10 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			)
 		}
 
+		if ctx.Err() != nil {
+			cancelledAtEnding = true
+			break
+		}
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()
 		}
@@ -534,6 +544,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 				params.OnEvent(params.Issue.ID, event)
 			},
 		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "review"))
+		cutByCancel := ctx.Err() != nil
 		if turnErr != nil {
 			logger.Warn("self-review turn failed",
 				slog.Int("iteration", i),
@@ -549,6 +560,8 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			var agentErr *domain.AgentError
 			if errors.As(turnErr, &agentErr) && agentErr.Kind == domain.ErrTurnTimeout {
 				expiryErr = fmt.Errorf("self-review review turn (iteration %d): %w", i, turnErr)
+			} else if cutByCancel {
+				cancelledAtEnding = true
 			}
 			break
 		}
@@ -634,6 +647,10 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 		fixPrompt := buildFixPrompt(verdict, parseErr, i, maxIter)
 
+		if ctx.Err() != nil {
+			cancelledAtEnding = true
+			break
+		}
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()
 		}
@@ -644,6 +661,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 				params.OnEvent(params.Issue.ID, event)
 			},
 		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "fix"))
+		fixCutByCancel := ctx.Err() != nil
 		if fixErr != nil {
 			logger.Warn("self-review fix turn failed",
 				slog.Int("iteration", i),
@@ -659,6 +677,8 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 				} else {
 					last.VerdictParseError += "; " + note
 				}
+			} else if fixCutByCancel {
+				cancelledAtEnding = true
 			}
 			break
 		}
@@ -709,5 +729,5 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 
 	params.Metrics.IncSelfReviewSessions(finalVerdict)
 
-	return meta, terminalSignal, expiryErr
+	return meta, terminalSignal, cancelledAtEnding, expiryErr
 }

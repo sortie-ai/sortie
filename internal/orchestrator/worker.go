@@ -96,6 +96,10 @@ type WorkerResult struct {
 	// for a cancellation that interrupted no failing operation.
 	Error error
 
+	// StoppedByTokenCeiling is true when the worker context's cancellation
+	// cause is the in-flight token ceiling's own stop request.
+	StoppedByTokenCeiling bool
+
 	// TurnsCompleted is the number of turns that received a TurnResult
 	// before exit.
 	TurnsCompleted int
@@ -430,13 +434,22 @@ func stopSessionBestEffort(
 	}
 }
 
-// exitKindForErr returns WorkerExitCancelled if the context is done, else
-// WorkerExitError.
-func exitKindForErr(ctx context.Context) WorkerExitKind {
-	if ctx.Err() != nil {
+// exitKindAtEnding classifies a worker's exit as observed when the run
+// ended. cancelledAtEnding always yields WorkerExitCancelled; otherwise a
+// live context yields WorkerExitError, and a done context yields
+// WorkerExitError only for the ceiling's own stop cause, so a stop
+// landing during teardown never retroactively cancels a finished run.
+func exitKindAtEnding(ctx context.Context, cancelledAtEnding bool) WorkerExitKind {
+	if cancelledAtEnding {
 		return WorkerExitCancelled
 	}
-	return WorkerExitError
+	if ctx.Err() == nil {
+		return WorkerExitError
+	}
+	if errors.Is(context.Cause(ctx), errTokenCeilingStop) {
+		return WorkerExitError
+	}
+	return WorkerExitCancelled
 }
 
 // defaultTurnTimeoutMS is the fallback bound runBoundedTurn applies for a
@@ -638,11 +651,23 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		return carriesMeasurement
 	}
 
+	// reported guards against double-reporting from the panic recovery.
+	reported := false
+
+	// cancelledAtEnding is read right after the call that last ended a run attempt.
+	var cancelledAtEnding bool
+
+	report := func(result WorkerResult) {
+		result.StoppedByTokenCeiling = result.ExitKind == WorkerExitCancelled && errors.Is(context.Cause(ctx), errTokenCeilingStop)
+		reported = true
+		deps.OnExit(issue.ID, result)
+	}
+
 	if tmpl == nil {
 		logger.Error("prompt template lookup returned nil",
 			slog.String("template_id", deps.TemplateID),
 		)
-		deps.OnExit(issue.ID, WorkerResult{
+		report(WorkerResult{
 			IssueID:          issue.ID,
 			Identifier:       issue.Identifier,
 			ExitKind:         WorkerExitError,
@@ -700,9 +725,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}
 
-	// reported guards against double-reporting from the panic recovery.
-	reported := false
-
 	// Pre-declared so the panic recovery defer can access them.
 	var workspacePath string
 	var sessionID string
@@ -736,7 +758,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				})
 			}
 			if !reported {
-				deps.OnExit(issue.ID, WorkerResult{
+				report(WorkerResult{
 					IssueID:            issue.ID,
 					Identifier:         issue.Identifier,
 					ExitKind:           WorkerExitError,
@@ -773,12 +795,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if prepErr == nil {
 			ensureResult, prepErr = workspace.Ensure(cfg.Workspace.Root, issue.Identifier)
 		}
+		cancelledAtEnding = ctx.Err() != nil
 		if prepErr != nil {
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:          issue.ID,
 				Identifier:       issue.Identifier,
-				ExitKind:         exitKindForErr(ctx),
+				ExitKind:         exitKindAtEnding(ctx, cancelledAtEnding),
 				Error:            fmt.Errorf("workspace preparation: %w", prepErr),
 				AgentAdapter:     agentKind,
 				Attempt:          attempt,
@@ -811,12 +833,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				workspace.CleanupStatusFile(wsPath, logger)
 			},
 		})
+		cancelledAtEnding = ctx.Err() != nil
 		if err != nil {
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:          issue.ID,
 				Identifier:       issue.Identifier,
-				ExitKind:         exitKindForErr(ctx),
+				ExitKind:         exitKindAtEnding(ctx, cancelledAtEnding),
 				Error:            fmt.Errorf("workspace preparation: %w", err),
 				AgentAdapter:     agentKind,
 				Attempt:          attempt,
@@ -859,8 +881,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		execPath, execErr := resolveToolServerBinary(deps.MCPServerBinary)
 		if execErr != nil {
 			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:          issue.ID,
 				Identifier:       issue.Identifier,
 				ExitKind:         WorkerExitError,
@@ -895,8 +916,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		})
 		if genErr != nil {
 			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:          issue.ID,
 				Identifier:       issue.Identifier,
 				ExitKind:         WorkerExitError,
@@ -936,8 +956,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	if ctx.Err() != nil {
 		finishWorkspace()
-		reported = true
-		deps.OnExit(issue.ID, WorkerResult{
+		report(WorkerResult{
 			IssueID:          issue.ID,
 			Identifier:       issue.Identifier,
 			ExitKind:         WorkerExitCancelled,
@@ -1011,6 +1030,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		OnEvent:   relayVerificationEvent,
 		Logger:    logger,
 	})
+	cancelledAtEnding = ctx.Err() != nil
 
 	foldTurnResult(verificationResult)
 
@@ -1018,11 +1038,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	if verificationErr != nil {
 		finishWorkspace()
-		reported = true
-		deps.OnExit(issue.ID, WorkerResult{
+		report(WorkerResult{
 			IssueID:          issue.ID,
 			Identifier:       issue.Identifier,
-			ExitKind:         exitKindForErr(ctx),
+			ExitKind:         exitKindAtEnding(ctx, cancelledAtEnding),
 			Error:            fmt.Errorf("agent session start: %w", verificationErr),
 			WorkspacePath:    wsResult.Path,
 			AgentAdapter:     agentKind,
@@ -1040,13 +1059,13 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	logger.Info("agent credential verified", slog.Int64("duration_ms", time.Since(verificationStarted).Milliseconds()))
 
 	session, err = deps.AgentAdapter.StartSession(ctx, params)
+	cancelledAtEnding = ctx.Err() != nil
 	if err != nil {
 		finishWorkspace()
-		reported = true
-		deps.OnExit(issue.ID, WorkerResult{
+		report(WorkerResult{
 			IssueID:          issue.ID,
 			Identifier:       issue.Identifier,
-			ExitKind:         exitKindForErr(ctx),
+			ExitKind:         exitKindAtEnding(ctx, cancelledAtEnding),
 			Error:            fmt.Errorf("agent session start: %w", err),
 			WorkspacePath:    wsResult.Path,
 			AgentAdapter:     agentKind,
@@ -1096,6 +1115,30 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	for {
+		if ctx.Err() != nil {
+			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
+			finishWorkspace()
+			report(WorkerResult{
+				IssueID:            issue.ID,
+				Identifier:         issue.Identifier,
+				ExitKind:           WorkerExitCancelled,
+				TurnsCompleted:     turnsCompleted,
+				TurnsStarted:       turnsStarted,
+				SessionID:          session.ID,
+				WorkspacePath:      wsResult.Path,
+				AgentAdapter:       agentKind,
+				Attempt:            attempt,
+				SSHHost:            deps.SSHHost,
+				ObservedIssueState: observedIssueState,
+				Usage:              localUsage,
+				UsageMeasured:      localMeasured,
+				UnaccountedTurns:   localUnaccounted,
+				ModelName:          localModelName,
+				APIRequestCount:    localRequestCount,
+			})
+			return
+		}
+
 		issueMap := issue.ToTemplateMap()
 		var renderOpts []prompt.RenderOption
 		if turnNumber == 1 {
@@ -1108,14 +1151,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			}
 		}
 		rendered, err := prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, renderOpts...)
+		cancelledAtEnding = ctx.Err() != nil
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:            issue.ID,
 				Identifier:         issue.Identifier,
-				ExitKind:           exitKindForErr(ctx),
+				ExitKind:           exitKindAtEnding(ctx, cancelledAtEnding),
 				Error:              fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
@@ -1209,6 +1252,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				deps.OnEvent(issue.ID, event)
 			},
 		}, cfg.Agent.TurnTimeoutMS, logger, slog.Int("turn_number", turnNumber))
+		cancelledAtEnding = ctx.Err() != nil
 
 		turnResult.Usage = applyUsageOffset(turnResult.Usage, verificationSpend)
 		resultCarriesMeasurement := foldTurnResult(turnResult)
@@ -1230,11 +1274,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:            issue.ID,
 				Identifier:         issue.Identifier,
-				ExitKind:           exitKindForErr(ctx),
+				ExitKind:           exitKindAtEnding(ctx, cancelledAtEnding),
 				Error:              fmt.Errorf("agent turn %d: %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
@@ -1260,16 +1303,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if !isTurnSuccess(turnResult.ExitReason) {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
-			reported = true
-			exitKind := exitKindForErr(ctx)
 			logger.Warn("turn exit reason indicates failure",
 				slog.Int("turn_number", turnNumber),
 				slog.Any("exit_reason", turnResult.ExitReason),
 			)
-			deps.OnExit(issue.ID, WorkerResult{
+			report(WorkerResult{
 				IssueID:            issue.ID,
 				Identifier:         issue.Identifier,
-				ExitKind:           exitKind,
+				ExitKind:           exitKindAtEnding(ctx, cancelledAtEnding),
 				Error:              fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
@@ -1301,15 +1342,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		// refresh and its active-state gate, resting only on max_turns or the
 		// agent's own .sortie/status signal.
 		if deps.Posture.DrivesIssueState() {
-			refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{issue.ID})
+			refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(runContextFrom(ctx), []string{issue.ID})
+			cancelledAtEnding = ctx.Err() != nil
 			if err != nil {
 				stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 				finishWorkspace()
-				reported = true
-				deps.OnExit(issue.ID, WorkerResult{
+				report(WorkerResult{
 					IssueID:            issue.ID,
 					Identifier:         issue.Identifier,
-					ExitKind:           exitKindForErr(ctx),
+					ExitKind:           exitKindAtEnding(ctx, cancelledAtEnding),
 					Error:              fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
 					TurnsCompleted:     turnsCompleted,
 					TurnsStarted:       turnsStarted,
@@ -1354,13 +1395,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	reviewCfg := deps.ConfigFunc()
 	var reviewMeta *domain.ReviewMetadata
 	var phaseErr error
+	var phaseCut bool
 
 	signalAdmits := pendingSoftStopReason == "" ||
 		pendingSoftStopReason == string(workspace.StatusNeedsHumanReview) ||
 		pendingSoftStopReason == string(workspace.StatusNoChangeNeeded)
-	selfReviewGate := reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() && signalAdmits
+	selfReviewAdmitted := reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && deps.Posture.DrivesIssueState() && signalAdmits
 
-	if selfReviewGate {
+	if selfReviewAdmitted && ctx.Err() == nil {
 		if pendingSoftStopReason != "" {
 			logger.Info("agent signaled a status admitting self-review, entering the phase",
 				slog.String("status", pendingSoftStopReason),
@@ -1369,7 +1411,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			workspace.CleanupStatusFile(wsResult.Path, logger)
 		}
 		var phaseSignal workspace.StatusSignal
-		reviewMeta, phaseSignal, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
+		reviewMeta, phaseSignal, cancelledAtEnding, phaseErr = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:       session,
 			Issue:         issue,
 			WorkspacePath: wsResult.Path,
@@ -1409,6 +1451,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			pendingSoftStopReason = string(workspace.StatusBlocked)
 		}
 		pendingSoftStopReason = retractUnconfirmedNoChangeDeclaration(pendingSoftStopReason, reviewMeta, logger)
+		phaseCut = phaseErr == nil && cancelledAtEnding
+	} else if selfReviewAdmitted {
+		phaseCut = true
 	} else if pendingSoftStopReason != "" {
 		logger.Info("agent signaled status, exiting worker",
 			slog.String("status", pendingSoftStopReason),
@@ -1456,12 +1501,51 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SelfReviewSummaryPath: selfReviewSummaryPath,
 			})
 		}
-		reported = true
-		deps.OnExit(issue.ID, WorkerResult{
+		report(WorkerResult{
 			IssueID:            issue.ID,
 			Identifier:         issue.Identifier,
-			ExitKind:           exitKindForErr(ctx),
+			ExitKind:           exitKindAtEnding(ctx, cancelledAtEnding),
 			Error:              phaseErr,
+			ReviewMetadata:     reviewMeta,
+			TurnsCompleted:     turnsCompleted,
+			TurnsStarted:       turnsStarted,
+			SessionID:          session.ID,
+			WorkspacePath:      wsResult.Path,
+			AgentAdapter:       agentKind,
+			Attempt:            attempt,
+			SSHHost:            deps.SSHHost,
+			ObservedIssueState: observedIssueState,
+			Usage:              localUsage,
+			UsageMeasured:      localMeasured,
+			UnaccountedTurns:   localUnaccounted,
+			ModelName:          localModelName,
+			APIRequestCount:    localRequestCount,
+		})
+		return
+	}
+
+	// A ceiling stop that cut the phase short, or kept it from starting,
+	// exits as a ceiling stop; any other cancellation falls through below.
+	if phaseCut && errors.Is(context.Cause(ctx), errTokenCeilingStop) {
+		stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
+		if deps.Posture.RunsSetupHooks() {
+			workspace.Finish(ctx, workspace.FinishParams{
+				Path:                  wsResult.Path,
+				Identifier:            issue.Identifier,
+				IssueID:               issue.ID,
+				Attempt:               attemptInt,
+				AfterRun:              cfg.Hooks.AfterRun,
+				HookTimeoutMS:         cfg.Hooks.TimeoutMS,
+				Logger:                logger,
+				SSHHost:               deps.SSHHost,
+				SelfReviewStatus:      selfReviewStatus,
+				SelfReviewSummaryPath: selfReviewSummaryPath,
+			})
+		}
+		report(WorkerResult{
+			IssueID:            issue.ID,
+			Identifier:         issue.Identifier,
+			ExitKind:           WorkerExitCancelled,
 			ReviewMetadata:     reviewMeta,
 			TurnsCompleted:     turnsCompleted,
 			TurnsStarted:       turnsStarted,
@@ -1501,8 +1585,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		slog.Int("turns_completed", turnsCompleted),
 	)
 
-	reported = true
-	deps.OnExit(issue.ID, WorkerResult{
+	report(WorkerResult{
 		IssueID:                      issue.ID,
 		Identifier:                   issue.Identifier,
 		ExitKind:                     WorkerExitNormal,

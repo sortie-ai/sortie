@@ -1295,24 +1295,30 @@ func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testi
 	t.Parallel()
 
 	store := &mockExitStore{}
+	spy := &spyMetrics{}
+	lb, logger := textLogger()
 	state := exitState(t, "ISSUE-CEIL", nil)
 	// A reload moved the configured ceiling between the stop and this
 	// exit. The record must name the ceiling the run actually hit, not
 	// whichever one is current.
 	state.MaxTokens = 900
 	entry := state.Running["ISSUE-CEIL"]
-	entry.TokenCeilingStopped = true
-	entry.TokenCeilingAtStop = 500
+	entry.TokenCeilingStopRequest = &TokenCeilingStopRequest{BudgetTokens: 500, UsedTokens: 550, SumSource: tokenSumConfirmedRead}
 	entry.IssueTokensCompleted = 300
 	entry.AgentTotalTokens = 250
 
+	params := defaultExitParams(t, store)
+	params.Metrics = spy
+	params.Logger = logger
+
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:       "ISSUE-CEIL",
-		Identifier:    "ISSUE-CEIL-ident",
-		ExitKind:      WorkerExitCancelled,
-		AgentAdapter:  "mock",
-		WorkspacePath: "/tmp/ws",
-	}, defaultExitParams(t, store))
+		IssueID:               "ISSUE-CEIL",
+		Identifier:            "ISSUE-CEIL-ident",
+		ExitKind:              WorkerExitCancelled,
+		StoppedByTokenCeiling: true,
+		AgentAdapter:          "mock",
+		WorkspacePath:         "/tmp/ws",
+	}, params)
 
 	if len(store.runHistories) != 1 {
 		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
@@ -1333,8 +1339,29 @@ func TestHandleWorkerExit_TokenCeilingStoppedRecordsBudgetStoppedStatus(t *testi
 	if _, ok := state.RetryAttempts["ISSUE-CEIL"]; ok {
 		t.Error("RetryAttempts[ISSUE-CEIL] present after a ceiling-stopped exit, want none")
 	}
+	if len(spy.runsStoppedByBudget) != 1 {
+		t.Errorf("IncRunsStoppedByBudget called %d times, want 1", len(spy.runsStoppedByBudget))
+	}
+	if got := strings.Count(lb.String(), "run stopped by token ceiling"); got != 1 {
+		t.Errorf(`log contains %d "run stopped by token ceiling" records, want 1`, got)
+	}
 }
 
+func TestReportTokenCeilingStop_SessionSpendAloneOmitsIncompleteSpendCounts(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+
+	reportTokenCeilingStop(logger, &spyMetrics{}, &TokenCeilingStopRequest{BudgetTokens: 500, UsedTokens: 600, SumSource: tokenSumSessionSpendAlone})
+
+	line := lineWith(t, lb.String(), "run stopped by token ceiling")
+	if !strings.Contains(line, "sum_source=session_spend_alone") {
+		t.Errorf("stop record missing sum_source=session_spend_alone:\n%s", line)
+	}
+	if strings.Contains(line, "unaccounted_turns=") {
+		t.Errorf("stop record reports unaccounted_turns=, a count no read supplied:\n%s", line)
+	}
+}
 func TestHandleWorkerExit_CancelledWithoutTokenCeilingStopStaysCancelled(t *testing.T) {
 	t.Parallel()
 
@@ -1358,10 +1385,42 @@ func TestHandleWorkerExit_CancelledWithoutTokenCeilingStopStaysCancelled(t *test
 	}
 }
 
+func TestHandleWorkerExit_CancelledWithStopRequestButNotAttributedStaysCancelled(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	spy := &spyMetrics{}
+	state := exitState(t, "ISSUE-RACE2", nil)
+	state.Running["ISSUE-RACE2"].TokenCeilingStopRequest = &TokenCeilingStopRequest{BudgetTokens: 500}
+
+	params := defaultExitParams(t, store)
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:               "ISSUE-RACE2",
+		Identifier:            "ISSUE-RACE2-ident",
+		ExitKind:              WorkerExitCancelled,
+		StoppedByTokenCeiling: false,
+		Error:                 errors.New("stall timeout"),
+		AgentAdapter:          "mock",
+		WorkspacePath:         "/tmp/ws",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].Status; got != "cancelled" {
+		t.Errorf("RunHistory.Status = %q, want %q (a stop request alone must not override the run's own attribution)", got, "cancelled")
+	}
+	if len(spy.runsStoppedByBudget) != 0 {
+		t.Errorf("IncRunsStoppedByBudget calls = %v, want none", spy.runsStoppedByBudget)
+	}
+}
+
 // TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit: a
-// latched TokenCeilingStopped entry does not produce "budget_stopped" on
+// recorded TokenCeilingStopRequest does not produce "budget_stopped" on
 // a non-cancelled exit, since the run may finish on its own in the window
-// between the cancel and the worker noticing it.
+// between the request and the worker noticing it.
 func TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit(t *testing.T) {
 	t.Parallel()
 
@@ -1369,7 +1428,7 @@ func TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit(t *testing.
 	state := exitState(t, "ISSUE-RACE", nil)
 	state.MaxTokens = 500
 	entry := state.Running["ISSUE-RACE"]
-	entry.TokenCeilingStopped = true
+	entry.TokenCeilingStopRequest = &TokenCeilingStopRequest{BudgetTokens: 500}
 	entry.IssueTokensCompleted = 300
 	entry.AgentTotalTokens = 250
 
@@ -1386,6 +1445,50 @@ func TestHandleWorkerExit_TokenCeilingLatchIgnoredOnNonCancelledExit(t *testing.
 	}
 	if got := store.runHistories[0].Status; got != "succeeded" {
 		t.Errorf("RunHistory.Status = %q, want %q (a latched ceiling stop must not override a non-cancelled exit)", got, "succeeded")
+	}
+}
+
+func TestHandleWorkerExit_ContextsReleased(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		exitKind WorkerExitKind
+	}{
+		{name: "normal exit", exitKind: WorkerExitNormal},
+		{name: "failure", exitKind: WorkerExitError},
+		{name: "cancellation", exitKind: WorkerExitCancelled},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "ISSUE-CONTEXT-RELEASE"
+
+			state := NewState(5000, 4, 0, nil, AgentTotals{})
+			var workerCtx context.Context
+			workerDone := make(chan struct{})
+			DispatchIssue(context.Background(), state, domain.Issue{ID: issueID, Identifier: issueID + "-ident"}, nil, "",
+				func(ctx context.Context, _ domain.Issue, _ *int) {
+					workerCtx = ctx
+					close(workerDone)
+				})
+			<-workerDone
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:    issueID,
+				Identifier: issueID + "-ident",
+				ExitKind:   tt.exitKind,
+			}, defaultExitParams(t, &mockExitStore{}))
+
+			if workerCtx.Err() == nil {
+				t.Error("worker context is not done after HandleWorkerExit, want it released")
+			}
+			if runCtx := runContextFrom(workerCtx); runCtx.Err() == nil {
+				t.Error("run context is not done after HandleWorkerExit, want it released")
+			}
+		})
 	}
 }
 
@@ -5445,7 +5548,7 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 	t.Run("normal_exit_without_soft_stop_still_schedules_retry", func(t *testing.T) {
 		t.Parallel()
 
-		// Regression guard: SoftStop=false + active issue → continuation retry.
+		// An active issue with no soft stop must still schedule a continuation retry.
 		store := &mockExitStore{}
 		state := exitState(t, "SS-4", nil)
 		state.Running["SS-4"].Issue.State = "In Progress"

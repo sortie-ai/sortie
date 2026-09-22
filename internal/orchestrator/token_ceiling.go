@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -9,6 +10,31 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
+
+// errTokenCeilingStop distinguishes a ceiling stop from other cancellation causes.
+var errTokenCeilingStop = errors.New("token ceiling reached")
+
+// TokenCeilingStopRequest records the in-flight token ceiling's decision
+// to stop a run, set by [requestTokenCeilingStop].
+type TokenCeilingStopRequest struct {
+	// BudgetTokens is the ceiling in force when the stop was decided.
+	BudgetTokens int
+
+	// UsedTokens is IssueTokensCompleted plus SessionTokens at the decision.
+	UsedTokens int64
+
+	// IssueTokensCompleted is the issue's completed-session sum at the decision.
+	IssueTokensCompleted int64
+
+	// SessionTokens is this session's own cumulative spend at the decision.
+	SessionTokens int64
+
+	// SumSource is tokenSumConfirmedRead or tokenSumSessionSpendAlone.
+	SumSource string
+
+	// Usage is the confirming read behind the decision, nil for tokenSumSessionSpendAlone.
+	Usage *persistence.IssueTokenUsage
+}
 
 // issueTokenStore is the persistence contract [freezeIssueTokenBaseline]
 // and [enforceInFlightTokenCeiling] need.
@@ -58,7 +84,7 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 	entry.IssueTokensCompleted = usage.TotalTokens
 }
 
-// enforceInFlightTokenCeiling stops the run when the issue's
+// enforceInFlightTokenCeiling requests a stop of the run when the issue's
 // completed-session sum plus this session's cumulative spend reaches the
 // ceiling. An integer pre-filter against the frozen baseline keeps every
 // event free of I/O; only an event crossing the pre-filter triggers a
@@ -67,7 +93,7 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 //
 // Must run on the single-writer event loop, after [HandleAgentEvent] has
 // applied the event's usage delta.
-func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store issueTokenStore, metrics domain.Metrics, logger *slog.Logger) {
+func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID string, event domain.AgentEvent, store issueTokenStore, logger *slog.Logger) {
 	ceiling := state.MaxTokens
 	if ceiling <= 0 {
 		return
@@ -76,7 +102,7 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 		return
 	}
 	entry, ok := state.Running[issueID]
-	if !ok || entry.TokenCeilingStopped {
+	if !ok || entry.TokenCeilingStopRequest != nil {
 		return
 	}
 	if !admitsUsageFigures(entry.UsageArrival) {
@@ -93,7 +119,7 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 		// already reaches the ceiling proves the breach without the failed
 		// read, keeping a persistence outage from suspending the ceiling.
 		if entry.AgentTotalTokens >= int64(ceiling) {
-			stopRunAtTokenCeiling(entry, metrics, log, ceiling, nil, tokenSumSessionSpendAlone)
+			requestTokenCeilingStop(entry, ceiling, nil, tokenSumSessionSpendAlone)
 			return
 		}
 		if !entry.TokenCeilingQueryWarned {
@@ -110,7 +136,7 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 		return
 	}
 
-	stopRunAtTokenCeiling(entry, metrics, log, ceiling, &usage, tokenSumConfirmedRead)
+	requestTokenCeilingStop(entry, ceiling, &usage, tokenSumConfirmedRead)
 }
 
 // sum_source values for the stop record. A confirmed read carries an exact
@@ -122,30 +148,40 @@ const (
 	tokenSumSessionSpendAlone = "session_spend_alone"
 )
 
-// stopRunAtTokenCeiling latches the stop, counts it, records it, and
-// cancels the run. usage is nil when no read supplied it.
-func stopRunAtTokenCeiling(entry *RunningEntry, metrics domain.Metrics, log *slog.Logger, ceiling int, usage *persistence.IssueTokenUsage, sumSource string) {
-	entry.TokenCeilingStopped = true
-	entry.TokenCeilingAtStop = ceiling
+// requestTokenCeilingStop records the ceiling's decision and cancels the
+// worker context with [errTokenCeilingStop]. usage is nil without a read.
+func requestTokenCeilingStop(entry *RunningEntry, ceiling int, usage *persistence.IssueTokenUsage, sumSource string) {
+	entry.TokenCeilingStopRequest = &TokenCeilingStopRequest{
+		BudgetTokens:         ceiling,
+		UsedTokens:           entry.IssueTokensCompleted + entry.AgentTotalTokens,
+		IssueTokensCompleted: entry.IssueTokensCompleted,
+		SessionTokens:        entry.AgentTotalTokens,
+		SumSource:            sumSource,
+		Usage:                usage,
+	}
+	if entry.TokenCeilingCancelFunc != nil {
+		entry.TokenCeilingCancelFunc()
+	}
+}
+
+// reportTokenCeilingStop counts and logs a decided stop once the run's
+// exit confirms the ceiling ended it. Must be called at most once per run.
+func reportTokenCeilingStop(log *slog.Logger, metrics domain.Metrics, request *TokenCeilingStopRequest) {
 	metrics.IncRunsStoppedByBudget(budgetReasonToken)
 
 	attrs := []any{
 		slog.String("reason", budgetReasonToken),
-		slog.Int64("used_tokens", entry.IssueTokensCompleted+entry.AgentTotalTokens),
-		slog.Int("budget_tokens", ceiling),
-		slog.Int64("issue_tokens_completed", entry.IssueTokensCompleted),
-		slog.Int64("session_tokens", entry.AgentTotalTokens),
-		slog.String("sum_source", sumSource),
+		slog.Int64("used_tokens", request.UsedTokens),
+		slog.Int("budget_tokens", request.BudgetTokens),
+		slog.Int64("issue_tokens_completed", request.IssueTokensCompleted),
+		slog.Int64("session_tokens", request.SessionTokens),
+		slog.String("sum_source", request.SumSource),
 		slog.String("ceiling_setting", ceilingSettingByBudgetReason[budgetReasonToken]),
 	}
-	if usage != nil {
-		attrs = append(attrs, incompleteSpendAttrs(*usage)...)
+	if request.Usage != nil {
+		attrs = append(attrs, incompleteSpendAttrs(*request.Usage)...)
 	}
 	log.Warn("run stopped by token ceiling", attrs...)
-
-	if entry.CancelFunc != nil {
-		entry.CancelFunc()
-	}
 }
 
 // incompleteSpendAttrs names the two counts that keep a summed token total

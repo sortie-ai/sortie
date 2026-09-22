@@ -3019,29 +3019,31 @@ func TestStopSessionBestEffort_LogMessage(t *testing.T) {
 	}
 }
 
-func TestExitKindForErr(t *testing.T) {
+func TestExitKindAtEnding(t *testing.T) {
 	t.Parallel()
 
-	t.Run("live_context_returns_error", func(t *testing.T) {
-		t.Parallel()
+	ceilingCtx, cancelCeiling := context.WithCancelCause(context.Background())
+	cancelCeiling(errTokenCeilingStop)
 
-		got := exitKindForErr(context.Background())
-		if got != WorkerExitError {
-			t.Errorf("exitKindForErr(live ctx) = %q, want %q", got, WorkerExitError)
-		}
-	})
+	tests := []struct {
+		name              string
+		ctx               context.Context
+		cancelledAtEnding bool
+		want              WorkerExitKind
+	}{
+		{name: "cancelledAtEnding true always returns cancelled regardless of context", ctx: ceilingCtx, cancelledAtEnding: true, want: WorkerExitCancelled},
+		{name: "cancelledAtEnding false, live context", ctx: context.Background(), want: WorkerExitError},
+		{name: "cancelledAtEnding false, ceiling cause does not retroactively cancel a run that already ended", ctx: ceilingCtx, want: WorkerExitError},
+		{name: "cancelledAtEnding false, other cancellation cause", ctx: func() context.Context { c, cancel := context.WithCancel(context.Background()); cancel(); return c }(), want: WorkerExitCancelled},
+	}
 
-	t.Run("cancelled_context_returns_cancelled", func(t *testing.T) {
-		t.Parallel()
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		got := exitKindForErr(ctx)
-		if got != WorkerExitCancelled {
-			t.Errorf("exitKindForErr(cancelled ctx) = %q, want %q", got, WorkerExitCancelled)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := exitKindAtEnding(tt.ctx, tt.cancelledAtEnding); got != tt.want {
+				t.Errorf("exitKindAtEnding(_, %v) = %q, want %q", tt.cancelledAtEnding, got, tt.want)
+			}
+		})
+	}
 }
 
 func createFileAtPath(t *testing.T, path string) {
@@ -7711,6 +7713,227 @@ func TestRunWorkerAttempt_CancellationNotReportedAsTimeout(t *testing.T) {
 	}
 	if lines := linesWithAttr(logBuf.String(), "turn_timeout_ms"); len(lines) != 0 {
 		t.Errorf("WARN records carrying turn_timeout_ms = %v, want none on a cancellation", lines)
+	}
+}
+
+func statesToDo(ids []string) map[string]string {
+	states := make(map[string]string, len(ids))
+	for _, id := range ids {
+		states[id] = "To Do"
+	}
+	return states
+}
+
+func runWorkerForResult(t *testing.T, ctx context.Context, cfg config.ServiceConfig, tracker domain.TrackerAdapter, agent domain.AgentAdapter) WorkerResult {
+	t.Helper()
+
+	ec := newExitCapture()
+	RunWorkerAttempt(ctx, workerTestIssue(), nil, WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           agent,
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	})
+	return ec.waitResult(t)
+}
+
+func TestRunWorkerAttempt_TurnLoopCancellationCheck(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 2
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var runTurnCalls atomic.Int32
+	tracker := &mockTrackerAdapter{fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+		cancel()
+		return statesToDo(ids), nil
+	}}
+	agent := &mockAgentAdapter{runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+		runTurnCalls.Add(1)
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}}
+
+	result := runWorkerForResult(t, ctx, cfg, tracker, agent)
+
+	if result.ExitKind != WorkerExitCancelled {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitCancelled)
+	}
+	if got := runTurnCalls.Load(); got != 1 {
+		t.Errorf("RunTurn called %d times, want 1 (the loop-top check must stop the second iteration before it starts)", got)
+	}
+}
+
+func TestRunWorkerAttempt_PostTurnRefreshUsesRunContext(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 1
+
+	runCtx := context.Background()
+	workerCtx, cancelWorker := context.WithCancelCause(runCtx)
+	ctx := withRunContext(workerCtx, runCtx)
+
+	tracker := &mockTrackerAdapter{fetchStatesFn: func(refreshCtx context.Context, ids []string) (map[string]string, error) {
+		cancelWorker(errTokenCeilingStop)
+		if refreshCtx.Err() != nil {
+			return nil, refreshCtx.Err()
+		}
+		return statesToDo(ids), nil
+	}}
+
+	result := runWorkerForResult(t, ctx, cfg, tracker, &mockAgentAdapter{})
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.StoppedByTokenCeiling {
+		t.Error("StoppedByTokenCeiling = true, want false")
+	}
+}
+
+func TestRunWorkerAttempt_TurnFailureStaysFailureDespiteCeilingDuringTeardown(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 1
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	turnErr := errors.New("turn boom")
+	agent := &mockAgentAdapter{
+		runTurnFn: func(_ context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+			return domain.TurnResult{}, turnErr
+		},
+		stopSessionFn: func(_ context.Context, _ domain.Session) error {
+			cancel(errTokenCeilingStop)
+			return nil
+		},
+	}
+
+	result := runWorkerForResult(t, ctx, cfg, &mockTrackerAdapter{}, agent)
+
+	if result.ExitKind != WorkerExitError {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
+	}
+	if result.StoppedByTokenCeiling {
+		t.Error("StoppedByTokenCeiling = true, want false: the turn failed on its own before the teardown's cancellation")
+	}
+	if !errors.Is(result.Error, turnErr) {
+		t.Errorf("Error = %v, want it to wrap %v", result.Error, turnErr)
+	}
+}
+
+func TestRunWorkerAttempt_CancellationCausePriority(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 1
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	workerCtx, cancelCeiling := context.WithCancelCause(runCtx)
+	ctx := withRunContext(workerCtx, runCtx)
+
+	tracker := &mockTrackerAdapter{fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
+		cancelRun()
+		cancelCeiling(errTokenCeilingStop)
+		return nil, errors.New("refresh failed")
+	}}
+
+	result := runWorkerForResult(t, ctx, cfg, tracker, &mockAgentAdapter{})
+
+	if result.ExitKind != WorkerExitCancelled {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitCancelled)
+	}
+	if result.StoppedByTokenCeiling {
+		t.Error("StoppedByTokenCeiling = true, want false: the run context was cancelled before the stop request")
+	}
+}
+
+func TestRunWorkerAttempt_SelfReviewCeilingAttribution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		cancelDuringCoding bool
+		cancelCause        error
+		wantExitKind       WorkerExitKind
+		wantAttributed     bool
+	}{
+		{name: "ceiling during the last coding turn keeps the phase from starting", cancelDuringCoding: true, cancelCause: errTokenCeilingStop, wantExitKind: WorkerExitCancelled, wantAttributed: true},
+		{name: "a non-ceiling cancellation cuts the review turn short and exits normal", cancelCause: errors.New("shutdown"), wantExitKind: WorkerExitNormal},
+		{name: "the ceiling cancellation cuts the review turn short and records an attributed cancellation", cancelCause: errTokenCeilingStop, wantExitKind: WorkerExitCancelled, wantAttributed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := defaultWorkerConfig(t.TempDir())
+			cfg.Agent.MaxTurns = 1
+			cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 2}
+
+			ctx, cancel := context.WithCancelCause(context.Background())
+			calls := 0
+			agent := &mockAgentAdapter{runTurnFn: func(turnCtx context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				calls++
+				if calls == 1 {
+					if tt.cancelDuringCoding {
+						cancel(tt.cancelCause)
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				}
+				cancel(tt.cancelCause)
+				return domain.TurnResult{}, turnCtx.Err()
+			}}
+
+			result := runWorkerForResult(t, ctx, cfg, &mockTrackerAdapter{}, agent)
+
+			if result.ExitKind != tt.wantExitKind {
+				t.Fatalf("ExitKind = %q, want %q", result.ExitKind, tt.wantExitKind)
+			}
+			if result.StoppedByTokenCeiling != tt.wantAttributed {
+				t.Errorf("StoppedByTokenCeiling = %v, want %v", result.StoppedByTokenCeiling, tt.wantAttributed)
+			}
+			if tt.wantAttributed && !tt.cancelDuringCoding && result.ReviewMetadata == nil {
+				t.Error("ReviewMetadata = nil, want the phase's partial record to survive the ceiling exit")
+			}
+		})
+	}
+}
+
+func TestRunWorkerAttempt_SelfReviewPassVerdictThenCeilingStopExitsNormal(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.Agent.MaxTurns = 1
+	cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 2}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	startFn, wsPath := captureWorkspacePath()
+	agent := &mockAgentAdapter{
+		startSessionFn: startFn,
+		runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+			if isSelfReviewTurnPrompt(params.Prompt) {
+				writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				cancel(errTokenCeilingStop)
+			}
+			return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+		},
+	}
+
+	result := runWorkerForResult(t, ctx, cfg, &mockTrackerAdapter{}, agent)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.StoppedByTokenCeiling {
+		t.Error("StoppedByTokenCeiling = true, want false: the phase ended on its own before the stop request was read")
+	}
+	if result.ReviewMetadata == nil || result.ReviewMetadata.FinalVerdict != "pass" {
+		t.Errorf("ReviewMetadata.FinalVerdict = %v, want %q", result.ReviewMetadata, "pass")
 	}
 }
 

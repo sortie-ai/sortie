@@ -425,7 +425,7 @@ func (o *Orchestrator) applyAgentEvent(ctx context.Context, msg agentEventMsg, e
 	HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
 	o.maybeWriteIncrementalMetadata(ctx, msg.IssueID, msg.Event)
 	if enforceCeiling {
-		enforceInFlightTokenCeiling(ctx, o.state, msg.IssueID, msg.Event, o.store, o.metrics, o.logger)
+		enforceInFlightTokenCeiling(ctx, o.state, msg.IssueID, msg.Event, o.store, o.logger)
 	}
 }
 

@@ -182,6 +182,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		return
 	}
 	delete(state.Running, workerResult.IssueID)
+	if entry.CancelFunc != nil {
+		entry.CancelFunc()
+	}
 
 	// Reconcile the entry's token totals from the worker's own figure before
 	// the run_history/session_metadata/aggregate writes below, so a trailing
@@ -347,12 +350,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	status := mapExitKindToStatus(workerResult.ExitKind)
 	runError := workerResult.Error
 
-	// The token ceiling's own cancel gets its own status, distinct from a
-	// stall, terminal-state, or shutdown cancel, so the record attributes
+	// Distinct from a stall, terminal-state, or shutdown cancel: attribute
 	// the stop to the budget.
-	if workerResult.ExitKind == WorkerExitCancelled && entry.TokenCeilingStopped {
+	request := entry.TokenCeilingStopRequest
+	if workerResult.ExitKind == WorkerExitCancelled && workerResult.StoppedByTokenCeiling && request != nil {
 		status = "budget_stopped"
-		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, entry.TokenCeilingAtStop)
+		runError = tokenCeilingStopError(entry.IssueTokensCompleted+entry.AgentTotalTokens, request.BudgetTokens)
+		reportTokenCeilingStop(log, metrics, request)
 	}
 
 	// A needs-a-person ending gets its own status only when the worker's own
