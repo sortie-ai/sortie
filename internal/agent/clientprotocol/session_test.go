@@ -47,6 +47,7 @@ func TestRunTurnFinalize(t *testing.T) {
 				outcome := awaitOutcome(t, outcomeCh)
 				want := stopReasonEvidence(tt.reason)
 				dispositiontest.AssertDispositionContract(t, want, outcome.result, outcome.err)
+				agenttest.AssertSessionIDContract(t, []string{fakeSession(state).ID}, events, outcome.result)
 			})
 		}
 	})

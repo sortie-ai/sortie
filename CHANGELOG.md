@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `notify_operator`'s `max_per_session` cap now limits a whole agent run on every agent kind; on `claude-code`, `copilot-cli`, and `opencode` it used to reset with every turn. A notification that reached at least one configured channel now counts against the limit even when another channel failed to receive it. When Sortie cannot keep the count, `notify_operator` now sends nothing and tells the agent so, instead of sending anyway; this also covers a `sortie mcp-server` started by hand, outside a Sortie run.
   ([#1118](https://github.com/sortie-ai/sortie/issues/1118))
 
+- When the agent runtime reports a session ID other than the one a run started with, a continuation now resumes under the ID the runtime reported last, where it previously used the earlier one and could fail to rejoin the conversation the previous run left off in. The session ID recorded for the run and shown in its tracker comments now matches the one its operator notifications carry.
+  ([#1120](https://github.com/sortie-ai/sortie/issues/1120))
+
 ### Migrations
 
 - Add `unaccounted_turns INTEGER NOT NULL DEFAULT 0` to `run_history`, counting the run's turns that spent tokens no figure was proven to account for, whether no figure arrived at all or the one that did fell short of the turn. A pre-migration row reads back zero and so presents as fully accounted, but nothing measured it: before the upgrade a turn that spent tokens without reporting a figure was indistinguishable from one that cost nothing, and because `run_history` is an append-only record no later run can correct, that zero stays. A historical run's spend therefore reads as complete because nothing can now establish otherwise, not because it was verified.

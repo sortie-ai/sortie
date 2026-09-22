@@ -110,9 +110,11 @@ type WorkerResult struct {
 	// TurnsCompleted.
 	TurnsStarted int
 
-	// SessionID is the adapter-assigned session identifier, empty if the
-	// worker exited before starting a session. Enables session continuity
-	// on continuation retries.
+	// SessionID is the accepted session identifier at the moment report
+	// hands this result to [WorkerDeps.OnExit]. It is empty when the
+	// working session never started, or started with an empty identifier
+	// that no later report replaced. Enables session continuity on
+	// continuation retries.
 	SessionID string
 
 	// WorkspacePath is the workspace directory for this attempt, empty if
@@ -653,11 +655,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// reported guards against double-reporting from the panic recovery.
 	reported := false
 
+	var acceptedSessionID string
+
 	// cancelledAtEnding is read right after the call that last ended a run attempt.
 	var cancelledAtEnding bool
 
 	report := func(result WorkerResult) {
 		result.StoppedByTokenCeiling = result.ExitKind == WorkerExitCancelled && errors.Is(context.Cause(ctx), errTokenCeilingStop)
+		result.SessionID = acceptedSessionID
 		reported = true
 		deps.OnExit(issue.ID, result)
 	}
@@ -726,7 +731,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Pre-declared so the panic recovery defer can access them.
 	var workspacePath string
-	var sessionID string
 	var turnsCompleted int
 	var turnsStarted int
 	var observedIssueState string
@@ -764,7 +768,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					Error:              fmt.Errorf("worker panic: %v", r),
 					TurnsCompleted:     turnsCompleted,
 					TurnsStarted:       turnsStarted,
-					SessionID:          sessionID,
 					WorkspacePath:      workspacePath,
 					AgentAdapter:       agentKind,
 					Attempt:            attempt,
@@ -940,7 +943,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			slog.String("operator_mcp_config_path", settings.MCPConfigPath))
 	}
 
-	var acceptedSessionID string
 	writeDispatchIdentity := func(sessionID string) {
 		if mcpConfigPath == "" || deps.DispatchID == "" {
 			return
@@ -1080,7 +1082,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	sessionStarted = true
-	sessionID = session.ID
 	logger = logging.WithSession(logger, session.ID)
 	logger.Info("agent session started")
 
@@ -1109,6 +1110,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}.withTokens(localUsage, localMeasured))
 	}
 
+	acceptSessionID := func(id string) bool {
+		if id == "" || id == acceptedSessionID {
+			return false
+		}
+		previous := acceptedSessionID
+		logger.Info("agent session id accepted",
+			slog.String("previous_session_id", previous),
+			slog.String("accepted_session_id", id),
+		)
+		acceptedSessionID = id
+		return true
+	}
+
 	relayTurnEvent := func(event domain.AgentEvent) {
 		// Defensive copy in the worker goroutine, before the event crosses
 		// the goroutine boundary, so the orchestrator never iterates a map
@@ -1123,7 +1137,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			}
 		}
 		if event.Type == domain.EventSessionStarted && event.SessionID != "" {
-			acceptedSessionID = event.SessionID
+			acceptSessionID(event.SessionID)
 			writeDispatchIdentity(acceptedSessionID)
 		}
 		deps.OnEvent(issue.ID, event)
@@ -1138,6 +1152,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			if err := publishWorkerState(turnNumber); err != nil {
 				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))
 			}
+		}
+		if acceptSessionID(result.SessionID) {
+			writeDispatchIdentity(acceptedSessionID)
 		}
 	}
 
@@ -1160,7 +1177,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:           WorkerExitCancelled,
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
-				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
 				Attempt:            attempt,
@@ -1198,7 +1214,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Error:              fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
-				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
 				Attempt:            attempt,
@@ -1271,7 +1286,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Error:              fmt.Errorf("agent turn %d: %w", turnNumber, err),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
-				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
 				Attempt:            attempt,
@@ -1304,7 +1318,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Error:              fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
 				TurnsCompleted:     turnsCompleted,
 				TurnsStarted:       turnsStarted,
-				SessionID:          session.ID,
 				WorkspacePath:      wsResult.Path,
 				AgentAdapter:       agentKind,
 				Attempt:            attempt,
@@ -1344,7 +1357,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					Error:              fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
 					TurnsCompleted:     turnsCompleted,
 					TurnsStarted:       turnsStarted,
-					SessionID:          session.ID,
 					WorkspacePath:      wsResult.Path,
 					AgentAdapter:       agentKind,
 					Attempt:            attempt,
@@ -1488,7 +1500,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			ReviewMetadata:     reviewMeta,
 			TurnsCompleted:     turnsCompleted,
 			TurnsStarted:       turnsStarted,
-			SessionID:          session.ID,
 			WorkspacePath:      wsResult.Path,
 			AgentAdapter:       agentKind,
 			Attempt:            attempt,
@@ -1528,7 +1539,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			ReviewMetadata:     reviewMeta,
 			TurnsCompleted:     turnsCompleted,
 			TurnsStarted:       turnsStarted,
-			SessionID:          session.ID,
 			WorkspacePath:      wsResult.Path,
 			AgentAdapter:       agentKind,
 			Attempt:            attempt,
@@ -1570,7 +1580,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		ExitKind:                     WorkerExitNormal,
 		TurnsCompleted:               turnsCompleted,
 		TurnsStarted:                 turnsStarted,
-		SessionID:                    session.ID,
 		WorkspacePath:                wsResult.Path,
 		HandoffEvidencePolicy:        handoffEvidencePolicy,
 		HandoffEvidenceBaseline:      handoffEvidenceBaseline,

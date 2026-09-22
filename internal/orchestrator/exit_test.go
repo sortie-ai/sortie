@@ -2205,6 +2205,55 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 				store.sessionMetadata[0].SessionID, "entry-ses")
 		}
 	})
+
+	t.Run("replaced id carries into session metadata, continuation retry, and completion comment", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "SID-3", "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.ActiveStates = []string{"In Progress"}
+		params.CommentsConfig.OnCompletion = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "SID-3",
+			Identifier:   "SID-3-ident",
+			ExitKind:     WorkerExitNormal,
+			SessionID:    "S1",
+			AgentAdapter: "mock",
+		}, params)
+		state.TrackerOpsWg.Wait()
+
+		if len(store.sessionMetadata) != 1 {
+			t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+		}
+		if store.sessionMetadata[0].SessionID != "S1" {
+			t.Errorf("SessionMetadata.SessionID = %q, want %q", store.sessionMetadata[0].SessionID, "S1")
+		}
+
+		retryEntry, ok := state.RetryAttempts["SID-3"]
+		if !ok {
+			t.Fatal("continuation retry not scheduled")
+		}
+		if retryEntry.SessionID != "S1" {
+			t.Errorf("RetryEntry.SessionID = %q, want %q", retryEntry.SessionID, "S1")
+		}
+
+		if len(store.retryEntries) != 1 {
+			t.Fatalf("SaveRetryEntry called %d times, want 1", len(store.retryEntries))
+		}
+		if got := store.retryEntries[0].SessionID; got == nil || *got != "S1" {
+			t.Errorf("persisted RetryEntry.SessionID = %v, want %q", got, "S1")
+		}
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
+		}
+		if !strings.Contains(tracker.commentCalls[0].Text, "Session: S1") {
+			t.Errorf("completion comment = %q, want it to carry session %q", tracker.commentCalls[0].Text, "S1")
+		}
+	})
 }
 
 func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T) {

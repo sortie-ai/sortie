@@ -496,7 +496,7 @@ func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
 	bin := newKiroCLI(t, dir, chatParams{Stdout: "PONG", Stderr: creditsLine, ArgsLogPath: argsLog})
 	adapter, session, state := mustStartSession(t, bin)
 
-	_, result1, err := runChatTurn(t, adapter, session, "first")
+	events1, result1, err := runChatTurn(t, adapter, session, "first")
 	if err != nil {
 		t.Fatalf("RunTurn(first) error = %v", err)
 	}
@@ -506,6 +506,7 @@ func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
 	if !state.resumeRequested {
 		t.Fatal("state.resumeRequested = false after a successful turn, want true")
 	}
+	agenttest.AssertSessionIDContract(t, []string{session.ID}, events1, result1)
 
 	if _, _, err := runChatTurn(t, adapter, session, "second"); err != nil {
 		t.Fatalf("RunTurn(second) error = %v", err)

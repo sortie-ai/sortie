@@ -47,6 +47,12 @@ The orchestrator interacts with an agent session as follows:
 
 The session handle and any session identifiers are adapter-specific. The orchestrator treats `session_id` as an opaque string.
 
+The worker accepts a session id from three sources, in this order: the working session's `StartSession` result, each relayed `session_started` event's non-empty `session_id`, and each coding or self-review turn result's non-empty `session_id`. An empty report is ignored, and a later report replaces the currently accepted session id. The credential-verification session's identifiers (§10.9) are never accepted, whether reported through an event or through its own turn result.
+
+A turn result's `session_id`, when non-empty, MUST name only the identifier the adapter would continue the session under as of the end of that turn; it MUST NOT name a session id the session has already replaced.
+
+The accepted session id is what the dispatch identity record (§9.5.2), the worker's exit result, the exit's `session_metadata` row, the tracker comments, and a continuation retry's resume identifier all carry.
+
 #### 10.2.1 Handoff-Evidence Ownership
 
 The handoff-evidence verdict belongs to the orchestrator. It is computed from the workspace baseline and the positive SCM signals the orchestrator already reads, after an otherwise-eligible normal worker exit. This decision adds no operation, event, result field, or work-classification obligation to the agent adapter interface.

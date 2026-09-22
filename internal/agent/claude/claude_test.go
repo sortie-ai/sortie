@@ -647,6 +647,7 @@ func TestRunTurn_SuccessfulSession(t *testing.T) {
 	if state.claudeSessionID != "test-session-id" {
 		t.Errorf("claudeSessionID = %q, want test-session-id", state.claudeSessionID)
 	}
+	agenttest.AssertSessionIDContract(t, []string{session.ID}, events, result)
 
 	// Verify event sequence. The assistant message carries no usage
 	// object, so no token_usage event fires from it; the result event's

@@ -966,6 +966,7 @@ func TestRunTurn_SessionStartedOnce(t *testing.T) {
 	if n := countType(turn1Events, domain.EventSessionStarted); n != 1 {
 		t.Errorf("turn 1: session_started count = %d, want 1", n)
 	}
+	agenttest.AssertSessionIDContract(t, []string{session.ID}, turn1Events, result1)
 
 	// Second turn on the same session: session_started must not fire again.
 	turn2Events, result2, err := collectEvents(t, a, session, "second prompt")

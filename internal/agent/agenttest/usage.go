@@ -18,17 +18,6 @@ func AssertUsageContract(t *testing.T, events []domain.AgentEvent) {
 	assertUsageContract(t, events)
 }
 
-// usageContractReporter is the minimal reporting surface
-// assertUsageContract needs; [*testing.T] satisfies it. Splitting the
-// check out from [AssertUsageContract] lets a package-internal test
-// drive the same failure-detection logic against a lightweight double,
-// since a *testing.T's own failure state cannot itself be inspected
-// without failing the enclosing test.
-type usageContractReporter interface {
-	Helper()
-	Errorf(format string, args ...any)
-}
-
 // AssertMeasurementAbsent fails t when the given events or result assert a
 // usage measurement that a runtime reporting nothing must not produce: any
 // event of type [domain.EventTokenUsage], any event carrying a non-zero
@@ -38,7 +27,7 @@ func AssertMeasurementAbsent(t *testing.T, events []domain.AgentEvent, result do
 	assertMeasurementAbsent(t, events, result)
 }
 
-func assertMeasurementAbsent(t usageContractReporter, events []domain.AgentEvent, result domain.TurnResult) {
+func assertMeasurementAbsent(t contractReporter, events []domain.AgentEvent, result domain.TurnResult) {
 	t.Helper()
 
 	for i, event := range events {
@@ -63,7 +52,7 @@ func AssertModelReported(t *testing.T, events []domain.AgentEvent, wantModel str
 	assertModelReported(t, events, wantModel)
 }
 
-func assertModelReported(t usageContractReporter, events []domain.AgentEvent, wantModel string) {
+func assertModelReported(t contractReporter, events []domain.AgentEvent, wantModel string) {
 	t.Helper()
 
 	seen := false
@@ -81,7 +70,7 @@ func assertModelReported(t usageContractReporter, events []domain.AgentEvent, wa
 	}
 }
 
-func assertUsageContract(t usageContractReporter, events []domain.AgentEvent) {
+func assertUsageContract(t contractReporter, events []domain.AgentEvent) {
 	t.Helper()
 
 	var prev domain.TokenUsage
@@ -144,7 +133,7 @@ func AssertUsageReporting(t *testing.T, kind string, cases []UsageReportingCase)
 // entry's When matched.
 const unreachedRuleIndex = -1
 
-func assertUsageReporting(t usageContractReporter, kind string, cases []UsageReportingCase) {
+func assertUsageReporting(t contractReporter, kind string, cases []UsageReportingCase) {
 	t.Helper()
 
 	meta, registered := registry.Agents.Meta(kind)
@@ -187,7 +176,7 @@ func assertUsageReporting(t usageContractReporter, kind string, cases []UsageRep
 // against the pair meta.UsageDisposition resolved for it, per the two
 // admissible shapes UsageArrivalIncremental and UsageArrivalTurnEnd
 // are exact complements of on a stream that can tell them apart.
-func assertResolvedUsageReporting(t usageContractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution) {
+func assertResolvedUsageReporting(t contractReporter, tc UsageReportingCase, arrival registry.UsageArrival, attribution registry.UsageAttribution) {
 	t.Helper()
 
 	var usageIdx []int

@@ -483,6 +483,7 @@ func TestRunTurn_HappyPath(t *testing.T) {
 	if state.copilotSessionID != wantSessionID {
 		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, wantSessionID)
 	}
+	agenttest.AssertSessionIDContract(t, []string{session.ID}, events, result)
 	for _, typ := range []domain.AgentEventType{
 		domain.EventSessionStarted,
 		domain.EventTurnCompleted,
