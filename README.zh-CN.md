@@ -64,7 +64,7 @@ Sortie 是一个独立的可执行文件，无需另行部署数据库或任务�
 
 ## 先前工作
 
-Sortie 的架构借鉴了 [OpenAI Symphony](https://github.com/openai/symphony)。
+Sortie 的架构借鉴了 [OpenAI Symphony](https://github.com/openai/symphony)——一个规范优先的编排框架，附带 Elixir 参考实现。Sortie 在以下方面有所不同：语言选择（Go，简化部署）、持久化方案（SQLite 取代内存状态）、可扩展性（可插拔适配器，支持任意工单系统和智能体，而非硬编码为 Linear 和 Codex）、以及完成信号机制（由编排器管理交接状态转换，而非完全依赖智能体主动写入工单系统）。
 
 ## 许可证
 
