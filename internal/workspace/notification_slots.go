@@ -62,6 +62,12 @@ func ReserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 		if errors.Is(createErr, fs.ErrExist) {
 			continue
 		}
+		// Windows reports an exclusive create over an existing directory as
+		// EISDIR rather than ErrExist; a stat confirms occupancy regardless
+		// of what already sits at name.
+		if _, statErr := root.Lstat(name); statErr == nil {
+			continue
+		}
 		return nil, false, fmt.Errorf("create notification slot %q: %w", name, createErr)
 	}
 	return nil, false, nil
