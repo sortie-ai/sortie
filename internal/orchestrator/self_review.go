@@ -37,7 +37,10 @@ type RunSelfReviewParams struct {
 	Config        config.SelfReviewConfig
 	AgentAdapter  domain.AgentAdapter
 	OnEvent       func(issueID string, event domain.AgentEvent)
-	OnProgress    func(selfReviewProgressMsg)
+	// OnTurnResult, when non-nil, receives the result of each review and
+	// fix turn.
+	OnTurnResult func(domain.TurnResult)
+	OnProgress   func(selfReviewProgressMsg)
 	// OnTurnStarted, when non-nil, is called on the worker goroutine
 	// before each review and fix turn.
 	OnTurnStarted func()
@@ -537,7 +540,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()
 		}
-		_, turnErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
+		reviewResult, turnErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
 			Prompt: reviewPrompt,
 			Issue:  params.Issue,
 			OnEvent: func(event domain.AgentEvent) {
@@ -545,6 +548,9 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			},
 		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "review"))
 		cutByCancel := ctx.Err() != nil
+		if params.OnTurnResult != nil {
+			params.OnTurnResult(reviewResult)
+		}
 		if turnErr != nil {
 			logger.Warn("self-review turn failed",
 				slog.Int("iteration", i),
@@ -654,7 +660,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 		if params.OnTurnStarted != nil {
 			params.OnTurnStarted()
 		}
-		_, fixErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
+		fixResult, fixErr := runBoundedTurn(ctx, params.AgentAdapter, params.Session, domain.RunTurnParams{
 			Prompt: fixPrompt,
 			Issue:  params.Issue,
 			OnEvent: func(event domain.AgentEvent) {
@@ -662,6 +668,9 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain
 			},
 		}, params.TurnTimeoutMS, logger, slog.Int("iteration", i), slog.String("review_turn", "fix"))
 		fixCutByCancel := ctx.Err() != nil
+		if params.OnTurnResult != nil {
+			params.OnTurnResult(fixResult)
+		}
 		if fixErr != nil {
 			logger.Warn("self-review fix turn failed",
 				slog.Int("iteration", i),
