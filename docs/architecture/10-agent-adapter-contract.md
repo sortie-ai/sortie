@@ -271,14 +271,15 @@ The system-owned envelope carries a generated notification id, an ISO-8601 UTC t
 
 The dispatch id and the session id are distinct identities. The dispatch id is minted once for the current worker attempt and stays the same for every notification and every tool server process of that attempt; it is new for every dispatch, retry, and continuation. The session id is read from the workspace's dispatch identity record (Section 9.5.2) each time an envelope is built, and reflects the latest session id the worker has accepted for the tool server's own dispatch; it stays empty until the worker accepts one, and an agent kind that never reports a session id leaves it empty for the whole dispatch. A record naming a different dispatch id, or no record at all, also yields an empty session id, so a tool server outliving its dispatch cannot post another dispatch's session id.
 
-Rate limiting: the tool enforces a cap, `max_per_session`, where `0` selects the default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing. An accepted call increments the counter once, after delivery, not once per backend. The counter lives in one tool server process and belongs to it: a runtime that starts a new process for each turn starts a new count with each turn rather than sharing one across the session. A session id change never resets the count.
+Rate limiting: the tool enforces a cap, `max_per_session`, where `0` selects the default rather than unlimited. The count belongs to the dispatch and is shared by every tool server process that serves it, kept as files in the workspace's notification slot directory (Section 9.5.3): a runtime that starts a new process for each turn shares the same count across every turn instead of restarting it. A retry or a continuation mints a new dispatch id and starts a new count; a session id change never resets it. A call claims its slot before delivery, not once per backend; the slot is released, so the call does not count against the cap, when no backend accepted the notification. A call past the cap returns `rate_limited` and sends nothing. A call whose slot cannot be evaluated returns `state_unavailable` and sends nothing; this also covers a tool server started with no dispatch identity.
 
 Result semantics: on success the tool returns `{"success": true, "data": {"delivered": <int>, "notification_id": "<id>"}}`, the uniform success envelope of Section 10.4.2. On a domain failure it returns `{"success": false, "error": {"kind": "...", "message": "..."}}` with `error.kind` in the closed set below. The Go error return is reserved for an internal marshal failure.
 
 | `error.kind` | Condition |
 |---|---|
 | `invalid_input` | Input fails schema decode, carries unknown or trailing fields, has an out-of-enum `severity` or `category`, or has an empty `title` or `body` |
-| `rate_limited` | The tool server process's counter has reached `max_per_session` |
+| `state_unavailable` | The dispatch's notification count could not be established; no backend is called |
+| `rate_limited` | The dispatch's notification count has reached `max_per_session` |
 | `send_failed` | A backend returned a transport failure, a non-2xx response, or an unparseable response. The message is a redacted category and never echoes the URL, request body, or response body |
 | `backend_unavailable` | No backend could be resolved at execution time (defensive; normal operation gates registration on a configured backend) |
 

@@ -90,13 +90,14 @@ func assertMCPInjection(t mcpInjectionReporter, declared registry.MCPInjection, 
 }
 
 // assertTranslatedInjection fails t unless every server declared in
-// the generated configuration at mcpConfigPath, and the command path
-// of every stdio server among them, appears on surface. Unlike
+// the generated configuration at mcpConfigPath, the command path of
+// every stdio server among them, and the name of every environment
+// variable a stdio server declares, appears on surface. Unlike
 // carriesMCPConfigPath's exact-or-composition-marker match, this
 // check is a plain substring test: a translated adapter embeds each
-// server's name and command inside one larger rendered value (a TOML
-// inline table, a JSON document), never as a whole surface element on
-// its own.
+// server's name, command, and environment inside one larger rendered
+// value (a TOML inline table, a JSON document), never as a whole
+// surface element on its own.
 func assertTranslatedInjection(t mcpInjectionReporter, mcpConfigPath string, surface MCPLaunchSurface) {
 	t.Helper()
 
@@ -115,6 +116,13 @@ func assertTranslatedInjection(t mcpInjectionReporter, mcpConfigPath string, sur
 		}
 		if server.Transport == mcpconfig.TransportHTTP && !surfaceContains(surface, server.URL) {
 			t.Errorf("declared = %q, server %q url %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name, server.URL)
+		}
+		if server.Transport == mcpconfig.TransportStdio {
+			for name := range server.Env {
+				if !surfaceContains(surface, name) {
+					t.Errorf("declared = %q, server %q env variable %q not found on the launch surface", registry.MCPInjectionTranslated, server.Name, name)
+				}
+			}
 		}
 	}
 }

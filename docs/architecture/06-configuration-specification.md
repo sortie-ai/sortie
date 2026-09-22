@@ -172,7 +172,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `dispatch.default.template`: path, optional; default template when no rule matches; falls through to the Markdown body
 - `notifications`: list of notifier backend objects, optional; default empty; configures the backends behind the `notify_operator` tool (Section 5.3.11). An empty or absent list leaves the tool unregistered
 - `notifications[].kind`: string, required per entry; registry discriminator; v1 backends are `webhook` and `slack`
-- `notifications[].max_per_session`: integer, optional; `notify_operator` call cap for one `sortie mcp-server` process; not a per-entry default; omitted/`null`/`0` contributes nothing and the cap falls back to `20` only when every entry is `0` or unset; never unlimited; negative is rejected
+- `notifications[].max_per_session`: integer, optional; `notify_operator` call cap for the whole agent run, shared by every tool server process of the dispatch; not a per-entry default; omitted/`null`/`0` contributes nothing and the cap falls back to `20` only when every entry is `0` or unset; never unlimited; negative is rejected
 - `notifications[].<backend fields>`: pass-through per `kind`; `webhook` requires `url`, `slack` requires `webhook_url`; secrets SHOULD be `$SORTIE_*` references (only those are guaranteed propagated to the sidecar), resolved at sidecar startup
 - `self_review.enabled`: boolean, default `false`; activates the self-review loop
 - `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap

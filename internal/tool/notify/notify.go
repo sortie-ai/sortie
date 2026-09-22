@@ -46,6 +46,13 @@ var validCategories = map[string]bool{
 // "" when none is available.
 type SessionIDFunc func() string
 
+// SlotReserver claims a dispatch-scoped notification slot. It returns
+// (release, true, nil) when a slot under limit is claimed, (nil, false,
+// nil) when every slot is occupied, and (nil, false, err) when the
+// reservation could not be evaluated. release removes the claimed slot
+// and is called at most once.
+type SlotReserver func(limit int) (release func(), reserved bool, err error)
+
 // NotificationEnvelopeContext contains system-owned notification metadata.
 type NotificationEnvelopeContext struct {
 	// IssueID is the tracker-internal issue id.
@@ -74,22 +81,27 @@ type NotifyTool struct {
 	env           NotificationEnvelopeContext
 	sessionID     SessionIDFunc
 	maxPerSession int
-	count         int
+	reserveSlot   SlotReserver
 }
 
-// New returns a [NotifyTool]. It panics when backends is empty or sessionID is nil.
-func New(backends []domain.Notifier, env NotificationEnvelopeContext, sessionID SessionIDFunc, maxPerSession int) *NotifyTool {
+// New returns a [NotifyTool]. It panics when backends is empty or when
+// sessionID or reserveSlot is nil. New touches no file.
+func New(backends []domain.Notifier, env NotificationEnvelopeContext, sessionID SessionIDFunc, maxPerSession int, reserveSlot SlotReserver) *NotifyTool {
 	if len(backends) == 0 {
 		panic("notify.New: backends must not be empty")
 	}
 	if sessionID == nil {
 		panic("notify.New: sessionID must not be nil")
 	}
+	if reserveSlot == nil {
+		panic("notify.New: reserveSlot must not be nil")
+	}
 	return &NotifyTool{
 		backends:      backends,
 		env:           env,
 		sessionID:     sessionID,
 		maxPerSession: maxPerSession,
+		reserveSlot:   reserveSlot,
 	}
 }
 
@@ -119,13 +131,15 @@ type toolInput struct {
 	Category string `json:"category,omitempty"`
 }
 
-// Execute validates the message, enforces the cap, and delivers one
-// [domain.Notification] to the configured backends in configuration
-// order. The first backend that fails short-circuits the loop and yields
-// a send_failed result; partial delivery across backends is not reported
-// in this version. Domain failures are encoded
-// in the JSON result with success: false and a nil Go error. The Go
-// error return is reserved for a result-marshal failure.
+// Execute validates the message, claims a slot through reserveSlot, and
+// delivers one [domain.Notification] to the configured backends in
+// configuration order. A reservation error yields state_unavailable and
+// sends nothing; an exhausted cap yields rate_limited. The first backend
+// that fails short-circuits the loop, releases the claimed slot when no
+// backend has yet accepted the notification, and yields a send_failed
+// result. Domain failures are encoded in the JSON result with success:
+// false and a nil Go error. The Go error return is reserved for a
+// result-marshal failure.
 func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var in toolInput
 	dec := json.NewDecoder(bytes.NewReader(input))
@@ -151,7 +165,11 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 		return toolresult.Failure("backend_unavailable", "no notification backend is configured")
 	}
 
-	if t.count >= t.maxPerSession {
+	release, reserved, err := t.reserveSlot(t.maxPerSession)
+	if err != nil {
+		return toolresult.Failure("state_unavailable", "the notification count could not be established, nothing was sent")
+	}
+	if !reserved {
 		return toolresult.Failure("rate_limited", "per-session notification cap reached")
 	}
 
@@ -168,12 +186,14 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 	delivered := 0
 	for _, backend := range t.backends {
 		if err := backend.Send(ctx, notification); err != nil {
+			if delivered == 0 {
+				release()
+			}
 			return toolresult.Failure("send_failed", fmt.Sprintf("notification delivery failed: %s", err))
 		}
 		delivered++
 	}
 
-	t.count++
 	return toolresult.Success(map[string]any{
 		"delivered":       delivered,
 		"notification_id": notification.Envelope.NotificationID,

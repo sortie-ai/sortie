@@ -160,6 +160,16 @@ The `.sortie/dispatch.json` file records, for the current dispatch, the latest s
 
 The record holds one JSON object with two fields, `dispatch_id` and `session_id`. A reader accepts the recorded session id only when the record's `dispatch_id` equals its own dispatch id, so a tool server process outliving its dispatch, or reading a record a later dispatch has since overwritten, never observes a session id that is not its own. The reader rejects a `.sortie` directory or a record that is a symbolic link or not the expected type, opens the record without waiting for a writer, and reads at most 4096 bytes; any rejection yields an empty session id rather than an error. Like `.sortie/mcp.json`, the agent may also write this file directly.
 
+### 9.5.3 Notification slot directory (`.sortie/notification_slots/`)
+
+The `.sortie/notification_slots/` directory holds the shared count `notify_operator`'s rate limit enforces for one dispatch (Section 10.4.5). It is created, mode `0o750`, the first time any tool server process of the dispatch claims a slot; a dispatch that never calls `notify_operator` never creates it.
+
+Layout: one empty regular file per notification currently counted against the cap, named `<dispatch_id>-<n>` where `n` runs from `1` without leading zeros. Its exclusive creation is the claim: the file existing is what counts a slot as taken, and no other state records the count. A slot is removed only when the notification it claimed reached no backend, freeing that `n` for reuse by a later call.
+
+Every tool server process of the dispatch creates and removes slots in this directory identically, whatever agent kind spawned it and whether it runs for one turn or the whole session; the shared count is what lets the cap bound one run instead of one process. The directory's lifetime matches the workspace's: a release removes only the slot its own call claimed, and only when the notification reached no backend; nothing else ever removes a slot, so a delivered notification's file accumulates until the workspace itself is removed.
+
+The agent can write anywhere under `.sortie/`, so it can reset its own count by removing slot files, or exhaust it early by planting occupying entries; the cap bounds a cooperating agent, not an adversarial one.
+
 ### 9.6 Safety Invariants
 
 This is the most important portability constraint.
@@ -189,3 +199,5 @@ Invariant 5: `workspace.retention_days` cannot be configured below its floor, an
 Invariant 6: The age bound performs no tracker write, no source-control write, no reaction fingerprint write, and no creation or deletion of a pending reaction entry. Reaction state is read-only to the age bound. Every removal it performs routes through the same workspace removal path as the terminal gate, so key sanitization, containment under the workspace root, and the `before_remove` hook apply unchanged. The age bound introduces no new way to reach the filesystem.
 
 Invariant 7: Every file the orchestrator writes into a workspace's `.sortie/` directory replaces its destination through an exclusive create under a fresh name and a rename, with every step resolved inside the workspace directory. No symbolic link planted in the workspace, or in place of `.sortie` itself, redirects such a write outside the workspace, and a `.sortie` found to be a symbolic link or not a directory is refused. The check and the write are separate steps, so a link swapped in between them can still send the write to another location inside the workspace; the boundary the invariant holds is the workspace, not the destination within it.
+
+Invariant 8: Every notification slot a tool server process creates or removes resolves inside the workspace, the same boundary Invariant 7 holds for the orchestrator's own writes. A `.sortie` or `.sortie/notification_slots` found to be a symbolic link or not a directory is refused, and the only removal a release performs is of the regular file the same call created. The check and the operation stay separate steps, so the boundary held is the workspace, not the destination within it.

@@ -517,6 +517,9 @@ func TestBuildSessionToolRegistry_NotifyOperatorWithoutIdentity(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".sortie"), 0o750); err != nil {
+		t.Fatalf("MkdirAll(.sortie): %v", err)
+	}
 
 	tests := []struct {
 		name          string
@@ -569,25 +572,58 @@ func TestBuildSessionToolRegistry_NotifyOperatorWithoutIdentity(t *testing.T) {
 			}
 			var result2 struct {
 				Success bool `json:"success"`
+				Error   struct {
+					Kind string `json:"kind"`
+				} `json:"error"`
 			}
 			if err := json.Unmarshal(raw, &result2); err != nil {
 				t.Fatalf("unmarshal Execute result: %v", err)
 			}
-			if !result2.Success {
-				t.Fatalf("Execute result success = false: %s", raw)
+			if result2.Success {
+				t.Fatalf("Execute result success = true, want false: %s", raw)
+			}
+			if result2.Error.Kind != "state_unavailable" {
+				t.Errorf("Execute result error.kind = %q, want %q", result2.Error.Kind, "state_unavailable")
 			}
 
-			var body map[string]any
-			if err := json.Unmarshal(captured, &body); err != nil {
-				t.Fatalf("unmarshal posted body %q: %v", captured, err)
-			}
-			got, present := body["session_id"]
-			if !present {
-				t.Fatal("posted body has no session_id key, want present with an empty value")
-			}
-			if got != "" {
-				t.Errorf("posted body[session_id] = %v, want empty", got)
+			if captured != nil {
+				t.Errorf("backend received a request %q, want none reached without dispatch identity", captured)
 			}
 		})
+	}
+}
+
+func TestBuildSessionToolRegistry_CreatesNoFileBeforeExecute(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".sortie"), 0o750); err != nil {
+		t.Fatalf("MkdirAll(.sortie): %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	params := SessionToolParams{
+		WorkspacePath: tmpDir,
+		DispatchID:    "dispatch-construction",
+		Notifications: []config.NotificationBackend{
+			{Kind: "webhook", Config: map[string]any{"url": srv.URL}},
+		},
+	}
+
+	result, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+	if err != nil {
+		t.Fatalf("BuildSessionToolRegistry error = %v, want nil", err)
+	}
+	t.Cleanup(func() { closeResult(t, result) })
+
+	entries, readErr := os.ReadDir(filepath.Join(tmpDir, ".sortie", "notification_slots"))
+	if readErr == nil {
+		t.Errorf("notification_slots directory exists with entries %v before Execute, want absent", entries)
+	} else if !os.IsNotExist(readErr) {
+		t.Fatalf("ReadDir(notification_slots) unexpected error: %v", readErr)
 	}
 }

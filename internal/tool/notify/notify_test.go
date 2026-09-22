@@ -40,6 +40,43 @@ func testEnv() NotificationEnvelopeContext {
 
 func testSessionIDFunc() string { return "sess-001" }
 
+// alwaysReserve returns a [SlotReserver] that claims up to limit calls and
+// never fails. Each call gets its own counter, so concurrent tools sharing
+// this helper do not share state.
+func alwaysReserve() SlotReserver {
+	claimed := 0
+	return func(limit int) (func(), bool, error) {
+		if claimed >= limit {
+			return nil, false, nil
+		}
+		claimed++
+		return func() { claimed-- }, true, nil
+	}
+}
+
+// reserveSpy is a [SlotReserver] test double.
+type reserveSpy struct {
+	reserved bool
+	err      error
+
+	calls   int
+	limits  []int
+	claimed bool
+}
+
+func (s *reserveSpy) reserve(limit int) (func(), bool, error) {
+	s.calls++
+	s.limits = append(s.limits, limit)
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	if !s.reserved || s.claimed {
+		return nil, false, nil
+	}
+	s.claimed = true
+	return func() { s.claimed = false }, true, nil
+}
+
 // executeJSON runs Execute with the given JSON input and unmarshals the
 // result into a map.
 func executeJSON(t *testing.T, tool *NotifyTool, input string) map[string]any {
@@ -79,7 +116,7 @@ func assertFailureKind(t *testing.T, m map[string]any, wantKind string) {
 func TestNotifyTool_Name(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	if got := tool.Name(); got != "notify_operator" {
 		t.Errorf("Name() = %q, want %q", got, "notify_operator")
 	}
@@ -88,7 +125,7 @@ func TestNotifyTool_Name(t *testing.T) {
 func TestNotifyTool_Description(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	if got := tool.Description(); got == "" {
 		t.Error(`Description() = "", want non-empty`)
 	}
@@ -97,7 +134,7 @@ func TestNotifyTool_Description(t *testing.T) {
 func TestNotifyTool_InputSchema_ValidJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	schema := tool.InputSchema()
 
 	var m map[string]any
@@ -139,7 +176,7 @@ func TestNotifyTool_InputSchema_ValidJSON(t *testing.T) {
 func TestNotifyTool_InputSchema_DefensiveCopy(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	schema1 := tool.InputSchema()
 	for i := range schema1 {
 		schema1[i] = 'X'
@@ -166,7 +203,7 @@ func TestNew_PanicsOnEmptyBackends(t *testing.T) {
 		}
 	}()
 
-	New([]domain.Notifier{}, testEnv(), testSessionIDFunc, 10)
+	New([]domain.Notifier{}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 }
 
 func TestNew_PanicsOnNilBackends(t *testing.T) {
@@ -179,7 +216,7 @@ func TestNew_PanicsOnNilBackends(t *testing.T) {
 		}
 	}()
 
-	New(nil, testEnv(), testSessionIDFunc, 10)
+	New(nil, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 }
 
 func TestNew_PanicsOnNilSessionIDFunc(t *testing.T) {
@@ -196,14 +233,14 @@ func TestNew_PanicsOnNilSessionIDFunc(t *testing.T) {
 		}
 	}()
 
-	New([]domain.Notifier{&mockNotifier{}}, testEnv(), nil, 10)
+	New([]domain.Notifier{&mockNotifier{}}, testEnv(), nil, 10, alwaysReserve())
 }
 
 func TestExecute_ValidCallDispatchesToBackend(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"Hello","body":"World"}`)
 	assertSuccess(t, m)
@@ -218,7 +255,7 @@ func TestExecute_EnvelopeCarriesSessionContext(t *testing.T) {
 
 	mock := &mockNotifier{}
 	env := testEnv()
-	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10, alwaysReserve())
 
 	executeJSON(t, tool, `{"severity":"warning","title":"Check","body":"Details"}`)
 
@@ -268,7 +305,7 @@ func TestExecute_ResolvesSessionIDPerNotification(t *testing.T) {
 
 	current = "should-never-be-observed"
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), sessionID, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), sessionID, 10, alwaysReserve())
 	if calls != 0 {
 		t.Fatalf("sessionID called %d times during New, want 0", calls)
 	}
@@ -294,7 +331,7 @@ func TestExecute_MessageCarriesAgentFields(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	executeJSON(t, tool, `{"severity":"critical","title":"Urgent","body":"Stop now","category":"blocked"}`)
 
@@ -321,7 +358,7 @@ func TestExecute_SuccessResultShape(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"Hi","body":"Body"}`)
 	assertSuccess(t, m)
@@ -348,7 +385,7 @@ func TestExecute_SuccessResultShape(t *testing.T) {
 func TestExecute_InvalidInput_UnknownField(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B","unknown_field":"x"}`)
 	assertFailureKind(t, m, "invalid_input")
@@ -374,7 +411,7 @@ func TestExecute_RejectsSystemOwnedFields(t *testing.T) {
 			t.Parallel()
 
 			mock := &mockNotifier{}
-			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 			input := fmt.Sprintf(`{"severity":"info","title":"T","body":"B",%q:%s}`, field, value)
 			m := executeJSON(t, tool, input)
@@ -382,9 +419,6 @@ func TestExecute_RejectsSystemOwnedFields(t *testing.T) {
 
 			if len(mock.received) != 0 {
 				t.Errorf("Send called %d times for envelope field %q, want 0", len(mock.received), field)
-			}
-			if tool.count != 0 {
-				t.Errorf("counter = %d after envelope field %q rejected, want 0", tool.count, field)
 			}
 		})
 	}
@@ -406,7 +440,7 @@ func TestExecute_InvalidInput_BadSeverity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+			tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 			input := fmt.Sprintf(`{"severity":%q,"title":"T","body":"B"}`, tt.severity)
 			m := executeJSON(t, tool, input)
 			assertFailureKind(t, m, "invalid_input")
@@ -417,7 +451,7 @@ func TestExecute_InvalidInput_BadSeverity(t *testing.T) {
 func TestExecute_InvalidInput_BadCategory(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B","category":"not_valid"}`)
 	assertFailureKind(t, m, "invalid_input")
 }
@@ -425,7 +459,7 @@ func TestExecute_InvalidInput_BadCategory(t *testing.T) {
 func TestExecute_InvalidInput_EmptyTitle(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	m := executeJSON(t, tool, `{"severity":"info","title":"","body":"B"}`)
 	assertFailureKind(t, m, "invalid_input")
 }
@@ -433,7 +467,7 @@ func TestExecute_InvalidInput_EmptyTitle(t *testing.T) {
 func TestExecute_InvalidInput_EmptyBody(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":""}`)
 	assertFailureKind(t, m, "invalid_input")
 }
@@ -441,7 +475,7 @@ func TestExecute_InvalidInput_EmptyBody(t *testing.T) {
 func TestExecute_InvalidInput_MalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	m := executeJSON(t, tool, `{bad json}`)
 	assertFailureKind(t, m, "invalid_input")
 }
@@ -449,7 +483,7 @@ func TestExecute_InvalidInput_MalformedJSON(t *testing.T) {
 func TestExecute_InvalidInput_GoErrorIsNil(t *testing.T) {
 	t.Parallel()
 
-	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	// Unknown field triggers invalid_input; the Go error must be nil.
 	_, goErr := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B","extra":1}`))
 	if goErr != nil {
@@ -462,7 +496,7 @@ func TestExecute_RateLimited_PastCap(t *testing.T) {
 
 	mock := &mockNotifier{}
 	const cap = 3
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, cap)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, cap, alwaysReserve())
 
 	input := `{"severity":"info","title":"T","body":"B"}`
 	for range cap {
@@ -485,7 +519,7 @@ func TestExecute_RateLimitPersistsAcrossSessionIDChanges(t *testing.T) {
 		return fmt.Sprintf("sess-%d", callCount)
 	}
 	const cap = 2
-	tool := New([]domain.Notifier{mock}, testEnv(), changingSessionID, cap)
+	tool := New([]domain.Notifier{mock}, testEnv(), changingSessionID, cap, alwaysReserve())
 
 	input := `{"severity":"info","title":"T","body":"B"}`
 	for range cap {
@@ -505,7 +539,7 @@ func TestExecute_RateLimited_SendNotCalledWhenCapped(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 1)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 1, alwaysReserve())
 
 	input := `{"severity":"info","title":"T","body":"B"}`
 	executeJSON(t, tool, input) // consumes the cap
@@ -519,35 +553,19 @@ func TestExecute_RateLimited_SendNotCalledWhenCapped(t *testing.T) {
 	}
 }
 
-func TestExecute_AcceptedCallIncrementsCounterOnce(t *testing.T) {
+func TestExecute_AcceptedCallsAllDispatchToBackend(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	input := `{"severity":"info","title":"T","body":"B"}`
 	executeJSON(t, tool, input)
 	executeJSON(t, tool, input)
 	executeJSON(t, tool, input)
 
-	if mock.received != nil && len(mock.received) != 3 {
+	if len(mock.received) != 3 {
 		t.Errorf("Send called %d times, want 3 for 3 accepted calls", len(mock.received))
-	}
-	if tool.count != 3 {
-		t.Errorf("internal counter = %d, want 3", tool.count)
-	}
-}
-
-func TestExecute_RejectedCallDoesNotIncrementCounter(t *testing.T) {
-	t.Parallel()
-
-	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
-
-	// Validation failure; counter must not increment.
-	executeJSON(t, tool, `{"severity":"bad","title":"T","body":"B"}`)
-	if tool.count != 0 {
-		t.Errorf("counter = %d after rejected call, want 0", tool.count)
 	}
 }
 
@@ -555,7 +573,7 @@ func TestExecute_SendFailed_ReturnsCorrectKind(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{err: errors.New("connection failure")}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertFailureKind(t, m, "send_failed")
@@ -565,7 +583,7 @@ func TestExecute_SendFailed_GoErrorIsNil(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{err: errors.New("transport error")}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	_, goErr := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B"}`))
 	if goErr != nil {
@@ -587,7 +605,7 @@ func TestExecute_SendFailed_MessageRedacted(t *testing.T) {
 	// Backends expose only a classified error so URLs and secrets cannot reach tool output.
 	const secretURL = "https://secret-endpoint.example.com/tok"
 	mock := &mockNotifier{err: &classifiedSendError{Category: "connection failure"}}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertFailureKind(t, m, "send_failed")
@@ -613,7 +631,7 @@ func TestExecute_AllValidSeverities(t *testing.T) {
 			t.Parallel()
 
 			mock := &mockNotifier{}
-			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 			input := fmt.Sprintf(`{"severity":%q,"title":"T","body":"B"}`, sev)
 			m := executeJSON(t, tool, input)
 			assertSuccess(t, m)
@@ -629,7 +647,7 @@ func TestExecute_AllValidCategories(t *testing.T) {
 			t.Parallel()
 
 			mock := &mockNotifier{}
-			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 			input := fmt.Sprintf(`{"severity":"info","title":"T","body":"B","category":%q}`, cat)
 			m := executeJSON(t, tool, input)
 			assertSuccess(t, m)
@@ -641,7 +659,7 @@ func TestExecute_OptionalCategoryAbsent(t *testing.T) {
 	t.Parallel()
 
 	mock := &mockNotifier{}
-	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertSuccess(t, m)
 
@@ -658,7 +676,7 @@ func TestExecute_MultipleBackends_AllReceiveNotification(t *testing.T) {
 
 	mock1 := &mockNotifier{}
 	mock2 := &mockNotifier{}
-	tool := New([]domain.Notifier{mock1, mock2}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock1, mock2}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertSuccess(t, m)
@@ -683,7 +701,7 @@ func TestExecute_MultipleBackends_FirstErrorShortCircuits(t *testing.T) {
 
 	mock1 := &mockNotifier{err: errors.New("first backend error")}
 	mock2 := &mockNotifier{}
-	tool := New([]domain.Notifier{mock1, mock2}, testEnv(), testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock1, mock2}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertFailureKind(t, m, "send_failed")
@@ -699,7 +717,7 @@ func TestExecute_SourceFromEnvContext(t *testing.T) {
 	mock := &mockNotifier{}
 	env := testEnv()
 	env.Source = "custom-source"
-	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10, alwaysReserve())
 
 	executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 
@@ -717,7 +735,7 @@ func TestExecute_EmptyAgentFieldIsNotError(t *testing.T) {
 	mock := &mockNotifier{}
 	env := testEnv()
 	env.Agent = ""
-	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10)
+	tool := New([]domain.Notifier{mock}, env, testSessionIDFunc, 10, alwaysReserve())
 
 	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
 	assertSuccess(t, m)
@@ -727,5 +745,106 @@ func TestExecute_EmptyAgentFieldIsNotError(t *testing.T) {
 	}
 	if got := mock.received[0].Envelope.Agent; got != "" {
 		t.Errorf("Envelope.Agent = %q, want empty when Agent is unset", got)
+	}
+}
+
+func TestExecute_SendFailed_ReleasesSlotForNextCall(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockNotifier{err: errors.New("boom")}
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 1, alwaysReserve())
+
+	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertFailureKind(t, m, "send_failed")
+
+	mock.err = nil
+	m2 := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertSuccess(t, m2)
+}
+
+func TestExecute_PartialDeliveryKeepsSlot_ThenRateLimited(t *testing.T) {
+	t.Parallel()
+
+	mock1 := &mockNotifier{}
+	mock2 := &mockNotifier{err: errors.New("boom")}
+	tool := New([]domain.Notifier{mock1, mock2}, testEnv(), testSessionIDFunc, 1, alwaysReserve())
+
+	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertFailureKind(t, m, "send_failed")
+	if len(mock1.received) != 1 {
+		t.Fatalf("backend 1 Send called %d times, want 1", len(mock1.received))
+	}
+
+	m2 := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertFailureKind(t, m2, "rate_limited")
+	if len(mock1.received) != 1 {
+		t.Errorf("backend 1 Send called %d times after rate_limited, want still 1 (nothing sent)", len(mock1.received))
+	}
+	if len(mock2.received) != 1 {
+		t.Errorf("backend 2 Send called %d times after rate_limited, want still 1 (nothing sent)", len(mock2.received))
+	}
+}
+
+func TestExecute_StateUnavailable_ReservationError(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockNotifier{}
+	spy := &reserveSpy{err: errors.New("workspace unusable")}
+	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, spy.reserve)
+
+	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertFailureKind(t, m, "state_unavailable")
+
+	if len(mock.received) != 0 {
+		t.Errorf("Send called %d times after a reservation error, want 0", len(mock.received))
+	}
+}
+
+func TestExecute_InvalidInput_NeverReservesSlot(t *testing.T) {
+	t.Parallel()
+
+	spy := &reserveSpy{reserved: true}
+	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, spy.reserve)
+
+	m := executeJSON(t, tool, `{"severity":"bogus","title":"T","body":"B"}`)
+	assertFailureKind(t, m, "invalid_input")
+
+	if spy.calls != 0 {
+		t.Errorf("SlotReserver called %d times for invalid_input, want 0", spy.calls)
+	}
+}
+
+func TestExecute_BackendUnavailable_NeverReservesSlot(t *testing.T) {
+	t.Parallel()
+
+	spy := &reserveSpy{reserved: true}
+	tool := &NotifyTool{
+		env:           testEnv(),
+		sessionID:     testSessionIDFunc,
+		maxPerSession: 10,
+		reserveSlot:   spy.reserve,
+	}
+
+	m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+	assertFailureKind(t, m, "backend_unavailable")
+
+	if spy.calls != 0 {
+		t.Errorf("SlotReserver called %d times for backend_unavailable, want 0", spy.calls)
+	}
+}
+
+func TestNew_TouchesNoFile(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	reserve := func(int) (func(), bool, error) {
+		called = true
+		return func() {}, true, nil
+	}
+
+	New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, reserve)
+
+	if called {
+		t.Error("New invoked the SlotReserver during construction, want no invocation")
 	}
 }
