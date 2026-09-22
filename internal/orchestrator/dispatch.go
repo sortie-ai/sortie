@@ -649,6 +649,24 @@ func dispatchIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// dispatchRunContextCtxKey is the context key for the run context [withRunContext] attaches.
+type dispatchRunContextCtxKey struct{}
+
+// withRunContext attaches runCtx to workerCtx, recoverable with
+// [runContextFrom]. runCtx outlives a ceiling stop, which cancels only the worker context.
+func withRunContext(workerCtx, runCtx context.Context) context.Context {
+	return context.WithValue(workerCtx, dispatchRunContextCtxKey{}, runCtx)
+}
+
+// runContextFrom returns the run context [withRunContext] attached to ctx,
+// or ctx itself when none is attached.
+func runContextFrom(ctx context.Context) context.Context {
+	if runCtx, ok := ctx.Value(dispatchRunContextCtxKey{}).(context.Context); ok {
+		return runCtx
+	}
+	return ctx
+}
+
 // WorkerFunc is the function signature for the worker goroutine spawned by
 // [DispatchIssue]. The orchestrator provides the actual worker implementation
 // at call time; tests inject a controllable stub.
@@ -675,7 +693,11 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 		panic("DispatchIssue: nil WorkerFunc")
 	}
 
-	workerCtx, cancelFn := context.WithCancel(ctx) //nolint:gosec // G118: cancelFn is stored in RunningEntry.CancelFunc for later use
+	runCtx, cancelFn := context.WithCancel(ctx) //nolint:gosec // G118: cancelFn is stored in RunningEntry.CancelFunc for later use
+	workerCtx, cancelWorkerCause := context.WithCancelCause(runCtx)
+	tokenCeilingCancelFn := func() {
+		cancelWorkerCause(errTokenCeilingStop)
+	}
 
 	var attemptCopy *int
 	if attempt != nil {
@@ -683,18 +705,20 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 	}
 
 	dispatchID := rand.Text()
+	workerCtx = withRunContext(workerCtx, runCtx)
 	workerCtx = withDispatchID(workerCtx, dispatchID)
 
 	state.Claimed[issue.ID] = struct{}{}
 
 	state.Running[issue.ID] = &RunningEntry{
-		Identifier:   issue.Identifier,
-		Issue:        issue,
-		DispatchID:   dispatchID,
-		RetryAttempt: attemptCopy,
-		StartedAt:    time.Now().UTC(),
-		CancelFunc:   cancelFn,
-		SSHHost:      sshHost,
+		Identifier:             issue.Identifier,
+		Issue:                  issue,
+		DispatchID:             dispatchID,
+		RetryAttempt:           attemptCopy,
+		StartedAt:              time.Now().UTC(),
+		CancelFunc:             cancelFn,
+		TokenCeilingCancelFunc: tokenCeilingCancelFn,
+		SSHHost:                sshHost,
 	}
 
 	CancelRetry(state, issue.ID)

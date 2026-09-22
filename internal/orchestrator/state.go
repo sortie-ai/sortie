@@ -151,9 +151,13 @@ type RunningEntry struct {
 	// lifetime, self-review turns included.
 	TurnCount int
 
-	// CancelFunc cancels the per-worker context. Nil only in test fixtures
-	// that bypass [DispatchIssue].
+	// CancelFunc cancels the run context, cascading to the worker context
+	// nested under it. Nil only in test fixtures that bypass [DispatchIssue].
 	CancelFunc context.CancelFunc
+
+	// TokenCeilingCancelFunc cancels the worker context with cause
+	// [errTokenCeilingStop]. Nil only in test fixtures that bypass [DispatchIssue].
+	TokenCeilingCancelFunc context.CancelFunc
 
 	// PendingCleanup is set by reconciliation on a terminal-state
 	// observation; [HandleWorkerExit] performs the cleanup after the
@@ -237,19 +241,13 @@ type RunningEntry struct {
 	// confirming read. 0 when the dispatch read failed.
 	IssueTokensCompleted int64
 
-	// TokenCeilingStopped latches once the in-flight ceiling has stopped
-	// this run.
-	TokenCeilingStopped bool
+	// TokenCeilingStopRequest is set once the ceiling decides to stop this
+	// run. Non-nil alone does not mean the ceiling ended it; decided at exit.
+	TokenCeilingStopRequest *TokenCeilingStopRequest
 
 	// TokenCeilingQueryWarned latches once the ceiling's confirming read
 	// has failed and been reported for this run.
 	TokenCeilingQueryWarned bool
-
-	// TokenCeilingAtStop is the ceiling in force when this run was stopped.
-	// A reload can move the configured ceiling between the stop and the
-	// exit, and the durable record must name the ceiling the run hit.
-	// Meaningful only while TokenCeilingStopped is true.
-	TokenCeilingAtStop int
 }
 
 // RetryEntry holds the runtime state for a pending retry. IssueID,

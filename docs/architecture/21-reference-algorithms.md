@@ -315,11 +315,20 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   pending_reason = ""  // set once a post-turn read admits a recognized value
 
   while true:
+    if worker_ctx is done:
+      // Applies to every cancellation source reaching this point, not only
+      // the ceiling's own stop: without it, a persistent-session kind would
+      // start a runtime turn on an already-cancelled worker context.
+      agent_adapter.stop_session(session)
+      run_hook_best_effort("after_run", workspace.path)
+      exit_cancelled()
+
     prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
+    cancelled_at_ending = worker_ctx is done  // read immediately after the call, before any teardown below
     if prompt failed:
       agent_adapter.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
-      fail_worker("prompt error")
+      fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), "prompt error")
 
     // The derived turn context bounds only this call; worker_ctx itself is
     // never replaced and keeps flowing to every consumer below.
@@ -330,6 +339,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       issue=issue,
       on_message=(msg) -> send(orchestrator_channel, {agent_update, issue.id, msg})
     )
+    cancelled_at_ending = worker_ctx is done  // one read serves both exits below
     // An expiry of the derived context, observed once run_turn returns and
     // with worker_ctx still live, is reclassified as a turn_timeout error.
     // A worker_ctx that is already done (stall detection, terminal-state
@@ -339,18 +349,22 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
     if turn_result failed:
       agent_adapter.stop_session(session)  // on worker_ctx, never the derived turn context
       run_hook_best_effort("after_run", workspace.path)
-      fail_worker(exit_kind_for_err(worker_ctx), turn_err)
+      fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), turn_err)
 
     status = read_sortie_status(workspace.path)
     if status in ["blocked", "needs-human-review", "no-change-needed"]:
       pending_reason = status
       break  // leaves the loop; the phase and teardown below run regardless of which value this is
 
-    refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
+    // run_ctx, not worker_ctx: an in-flight ceiling stop does not interrupt
+    // this refresh. Stall detection, a tracker state change, and shutdown
+    // still cancel run_ctx itself, which does interrupt it.
+    refreshed_issue = tracker.fetch_issue_states_by_ids(ctx=run_ctx, [issue.id])
+    cancelled_at_ending = worker_ctx is done
     if refreshed_issue failed:
       agent_adapter.stop_session(session)
       run_hook_best_effort("after_run", workspace.path)
-      fail_worker("issue state refresh error")
+      fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), "issue state refresh error")
 
     issue = refreshed_issue[0] or issue
     observed_issue_state = refreshed_issue[0].state or observed_issue_state  # carried into the exit report
@@ -368,16 +382,22 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   // when it is empty or names the completion signal or the no-change
   // declaration; a pending "blocked" reason skips the phase. A "blocked"
   // signal the phase itself reports becomes the run's soft-stop reason
-  // whichever admission the gate granted.
+  // whichever admission the gate granted. A stop request that cuts the
+  // phase short or keeps it from starting once it was otherwise admitted
+  // ends the run as a ceiling stop rather than falling through to the
+  // normal exit below; any other cancellation of the phase keeps the
+  // normal exit.
   review_metadata = null
   phase_err = null
+  phase_cut = false
   cfg = current_config()  // re-read for dynamic reload; NOT the source of turn_timeout_ms (R-9)
   signal_admits = pending_reason == "" OR pending_reason == "needs-human-review" OR pending_reason == "no-change-needed"
-  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND deps.Posture.DrivesIssueState() AND signal_admits:
+  admitted = cfg.self_review.enabled AND issue.state is active AND deps.Posture.DrivesIssueState() AND signal_admits
+  if admitted AND worker_ctx is not done:
     if pending_reason != "":
       log_info("agent signaled a status admitting self-review, entering the phase", issue.id, pending_reason)
       remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
-    review_metadata, phase_signal, phase_err = run_self_review_loop(
+    review_metadata, phase_signal, cancelled_at_ending, phase_err = run_self_review_loop(
       session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel,
       turn_timeout_ms=turn_timeout_ms  // the attempt-start snapshot, bounding both phase turns
     )
@@ -394,6 +414,9 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       else if review_metadata.total_iterations != 1 OR review_metadata.final_verdict != "pass":
         log_info("no-change declaration retracted", cause="phase_unconfirmed", iterations=review_metadata.total_iterations, final_verdict=review_metadata.final_verdict)
         pending_reason = ""
+    phase_cut = phase_err == null AND cancelled_at_ending
+  else if admitted:
+    phase_cut = true  // worker_ctx was already done at the gate
   else if pending_reason != "":
     log_info("agent signaled status, exiting worker", issue.id, pending_reason)
 
@@ -420,7 +443,15 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       SORTIE_SELF_REVIEW_STATUS: self_review_status,
       SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
     })
-    fail_worker(exit_kind_for_err(worker_ctx), phase_err, review_metadata=review_metadata)
+    fail_worker(exit_kind_at_ending(worker_ctx, cancelled_at_ending), phase_err, review_metadata=review_metadata)
+
+  if phase_cut AND cancellation_cause(worker_ctx) == token_ceiling_stop:
+    agent_adapter.stop_session(session)
+    run_hook_best_effort("after_run", workspace.path, {
+      SORTIE_SELF_REVIEW_STATUS: self_review_status,
+      SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
+    })
+    exit_cancelled(review_metadata=review_metadata)
 
   agent_adapter.stop_session(session)
   run_hook_best_effort("after_run", workspace.path, {
@@ -436,10 +467,20 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 ```text
 on_worker_exit(issue_id, reason, worker_result, state):
   running_entry = state.running.remove(issue_id)
+  if running_entry.cancel_func is not null:
+    running_entry.cancel_func()  // also cancels the worker context nested under it
   state = add_runtime_seconds_to_totals(state, running_entry)
 
   status = status_for_exit(reason)
   run_error = worker_result.error
+
+  // A stop request the run's own cancellation confirms gets its own
+  // status, distinct from a stall, terminal-state, or shutdown cancel.
+  if reason == cancelled AND worker_result.stopped_by_token_ceiling AND running_entry.token_ceiling_stop_request is not null:
+    status = "budget_stopped"
+    run_error = token_ceiling_stop_error(running_entry.issue_tokens_completed + running_entry.agent_total_tokens, running_entry.token_ceiling_stop_request.budget_tokens)
+    report_token_ceiling_stop(log, metrics, running_entry.token_ceiling_stop_request)
+
   handoff_path = false
   evidence_withheld = false
   evidence_work_observed = false

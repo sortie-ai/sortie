@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kiro CLI on the `agent-client-protocol` kind no longer times out at startup when it signs in with an API key.
   ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
 
+- Runs that the `agent.max_tokens` ceiling did not stop are no longer reported as stopped by it. A run that finished, failed, stalled, or was cancelled by a tracker state change or shutdown keeps its real outcome in the run history, the `sortie_runs_stopped_by_budget_total` counter, the log, and the budget hold notice. A run whose final turn reaches the ceiling finishes normally, but if the ceiling cuts its self-review short or keeps it from starting, the run is recorded as stopped by the ceiling and its issue does not move to the handoff state.
+  ([#1101](https://github.com/sortie-ai/sortie/issues/1101))
+
+- Memory use of a long-running Sortie process no longer grows with every completed run.
+  ([#1158](https://github.com/sortie-ai/sortie/issues/1158))
+
 ### Migrations
 
 - Add `unaccounted_turns INTEGER NOT NULL DEFAULT 0` to `run_history`, counting the run's turns that spent tokens no figure was proven to account for, whether no figure arrived at all or the one that did fell short of the turn. A pre-migration row reads back zero and so presents as fully accounted, but nothing measured it: before the upgrade a turn that spent tokens without reporting a figure was indistinguishable from one that cost nothing, and because `run_history` is an append-only record no later run can correct, that zero stays. A historical run's spend therefore reads as complete because nothing can now establish otherwise, not because it was verified.
