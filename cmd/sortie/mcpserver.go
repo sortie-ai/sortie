@@ -148,7 +148,7 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 // unknown kind or constructor error (including a required secret that
 // resolved empty) is fatal and returned as a non-nil error rather than a
 // partial registration.
-func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext, sessionID notify.SessionIDFunc) (domain.AgentTool, error) {
+func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext, sessionID notify.SessionIDFunc, reserveSlot notify.SlotReserver) (domain.AgentTool, error) {
 	if len(configured) == 0 {
 		return nil, nil
 	}
@@ -166,7 +166,7 @@ func buildNotifyTool(configured []config.NotificationBackend, env notify.Notific
 		backends = append(backends, notifier)
 	}
 
-	return notify.New(backends, env, sessionID, resolveNotificationCap(configured)), nil
+	return notify.New(backends, env, sessionID, resolveNotificationCap(configured), reserveSlot), nil
 }
 
 // resolveNotificationCap returns the maximum non-zero max_per_session

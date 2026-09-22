@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -454,6 +456,20 @@ func (r *bodyRecorder) count() int {
 	return len(r.bodies)
 }
 
+func (r *bodyRecorder) nth(t *testing.T, i int) map[string]any {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i < 0 || i >= len(r.bodies) {
+		t.Fatalf("bodyRecorder.nth(%d): only %d bodies recorded", i, len(r.bodies))
+	}
+	var m map[string]any
+	if err := json.Unmarshal(r.bodies[i], &m); err != nil {
+		t.Fatalf("unmarshal captured webhook body %d: %v", i, err)
+	}
+	return m
+}
+
 func (r *bodyRecorder) latest(t *testing.T) map[string]any {
 	t.Helper()
 	r.mu.Lock()
@@ -738,4 +754,333 @@ func TestMCPServerNotify_Concurrent(t *testing.T) {
 
 	close(tcA.finish)
 	close(tcB.finish)
+}
+
+type mcpServerLaunch struct {
+	Args []string
+	Env  map[string]string
+}
+
+func parseMCPServerLaunch(mcpConfigPath string) (mcpServerLaunch, error) {
+	raw, err := os.ReadFile(mcpConfigPath)
+	if err != nil {
+		return mcpServerLaunch{}, err
+	}
+	var parsed struct {
+		McpServers map[string]struct {
+			Args []string          `json:"args"`
+			Env  map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return mcpServerLaunch{}, err
+	}
+	entry, ok := parsed.McpServers["sortie-tools"]
+	if !ok {
+		return mcpServerLaunch{}, fmt.Errorf("mcp.json %q has no sortie-tools entry", mcpConfigPath)
+	}
+	return mcpServerLaunch{Args: entry.Args, Env: entry.Env}, nil
+}
+
+func workflowPathFromArgs(args []string) (string, error) {
+	for i, a := range args {
+		if a == "--workflow" && i+1 < len(args) {
+			return args[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("mcp-server args %v carry no --workflow value", args)
+}
+
+type jsonRPCTestRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      any    `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+func buildMCPRequestLine(method string, id, params any) (string, error) {
+	b, err := json.Marshal(jsonRPCTestRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
+}
+
+func parseNotifyToolCallLine(line []byte) (notifyExecResult, error) {
+	var resp struct {
+		Error  any `json:"error"`
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return notifyExecResult{}, fmt.Errorf("unmarshal tools/call response %q: %w", line, err)
+	}
+	if resp.Error != nil {
+		return notifyExecResult{}, fmt.Errorf("tools/call JSON-RPC error: %v", resp.Error)
+	}
+	if len(resp.Result.Content) == 0 {
+		return notifyExecResult{}, fmt.Errorf("tools/call response has no content: %s", line)
+	}
+	var res notifyExecResult
+	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &res); err != nil {
+		return notifyExecResult{}, fmt.Errorf("unmarshal notify_operator result %q: %w", resp.Result.Content[0].Text, err)
+	}
+	return res, nil
+}
+
+// runNotifyTurnAsSubprocess runs on the orchestrator's own goroutine, not
+// the test's, so it reports failure through its error return rather than
+// any *testing.T method; the caller relays that error from the test's own
+// goroutine.
+func runNotifyTurnAsSubprocess(mcpConfigPath string) (pid int, res notifyExecResult, err error) {
+	launch, err := parseMCPServerLaunch(mcpConfigPath)
+	if err != nil {
+		return 0, notifyExecResult{}, err
+	}
+	workflowPath, err := workflowPathFromArgs(launch.Args)
+	if err != nil {
+		return 0, notifyExecResult{}, err
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestMCPServerNotify_MultiProcessCapSharing")
+	cmd.Env = append(os.Environ(), "SORTIE_TEST_MCP_HELPER=1", "SORTIE_TEST_MCP_WORKFLOW="+workflowPath)
+	for k, v := range launch.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return 0, notifyExecResult{}, fmt.Errorf("StdinPipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, notifyExecResult{}, fmt.Errorf("StdoutPipe: %w", err)
+	}
+	var stderrBuf lockedBuf
+	cmd.Stderr = &stderrBuf
+
+	if startErr := cmd.Start(); startErr != nil {
+		return 0, notifyExecResult{}, fmt.Errorf("start mcp-server subprocess: %w", startErr)
+	}
+	pid = cmd.Process.Pid
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10<<20)
+
+	initLine, err := buildMCPRequestLine("initialize", 1, map[string]any{"protocolVersion": "2024-11-05"})
+	if err != nil {
+		return pid, notifyExecResult{}, err
+	}
+	if _, writeErr := io.WriteString(stdin, initLine); writeErr != nil {
+		return pid, notifyExecResult{}, fmt.Errorf("write initialize request: %w", writeErr)
+	}
+	if !scanner.Scan() {
+		return pid, notifyExecResult{}, fmt.Errorf("no initialize response (scanner err: %v, stderr: %s)", scanner.Err(), stderrBuf.String())
+	}
+
+	callLine, err := buildMCPRequestLine("tools/call", 2, map[string]any{
+		"name":      "notify_operator",
+		"arguments": map[string]any{"severity": "info", "title": "T", "body": "B"},
+	})
+	if err != nil {
+		return pid, notifyExecResult{}, err
+	}
+	if _, writeErr := io.WriteString(stdin, callLine); writeErr != nil {
+		return pid, notifyExecResult{}, fmt.Errorf("write notify_operator request: %w", writeErr)
+	}
+	if !scanner.Scan() {
+		return pid, notifyExecResult{}, fmt.Errorf("no notify_operator response (scanner err: %v, stderr: %s)", scanner.Err(), stderrBuf.String())
+	}
+	res, err = parseNotifyToolCallLine(scanner.Bytes())
+	if err != nil {
+		return pid, notifyExecResult{}, err
+	}
+
+	if closeErr := stdin.Close(); closeErr != nil {
+		return pid, res, fmt.Errorf("close mcp-server subprocess stdin: %w", closeErr)
+	}
+	if waitErr := cmd.Wait(); waitErr != nil {
+		return pid, res, fmt.Errorf("mcp-server subprocess exited with error: %w (stderr: %s)", waitErr, stderrBuf.String())
+	}
+
+	return pid, res, nil
+}
+
+type multiProcessTurnOutcome struct {
+	pid int
+	res notifyExecResult
+	err error
+}
+
+type multiProcessSessionMeta struct {
+	credentialVerification bool
+	capped                 bool
+	mcpConfigPath          string
+}
+
+type processPerTurnAgent struct {
+	cfg config.ServiceConfig
+
+	calls atomic.Int64
+
+	mu              sync.Mutex
+	firstDispatchID string
+
+	turns chan multiProcessTurnOutcome
+}
+
+func newProcessPerTurnAgent(cfg config.ServiceConfig) *processPerTurnAgent {
+	return &processPerTurnAgent{
+		cfg:   cfg,
+		turns: make(chan multiProcessTurnOutcome, 8),
+	}
+}
+
+var _ domain.AgentAdapter = (*processPerTurnAgent)(nil)
+
+func (a *processPerTurnAgent) firstDispatchIDValue() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.firstDispatchID
+}
+
+func (a *processPerTurnAgent) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification {
+		return domain.Session{ID: "verify", Internal: &multiProcessSessionMeta{credentialVerification: true}}, nil
+	}
+
+	launch, err := parseMCPServerLaunch(params.MCPConfigPath)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	getenv := func(key string) string { return launch.Env[key] }
+	dispatchID := sessionToolParamsFromEnv(getenv, a.cfg, nil).DispatchID
+
+	a.mu.Lock()
+	if a.firstDispatchID == "" {
+		a.firstDispatchID = dispatchID
+	}
+	capped := dispatchID == a.firstDispatchID
+	a.mu.Unlock()
+
+	call := int(a.calls.Add(1)) - 1
+	return domain.Session{
+		ID: fmt.Sprintf("multiprocess-session-%d", call),
+		Internal: &multiProcessSessionMeta{
+			capped:        capped,
+			mcpConfigPath: params.MCPConfigPath,
+		},
+	}, nil
+}
+
+func (a *processPerTurnAgent) RunTurn(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+	meta, _ := session.Internal.(*multiProcessSessionMeta)
+	if meta == nil || meta.credentialVerification || !meta.capped {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+	}
+
+	pid, res, err := runNotifyTurnAsSubprocess(meta.mcpConfigPath)
+	a.turns <- multiProcessTurnOutcome{pid: pid, res: res, err: err}
+	if err != nil {
+		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnFailed}, err
+	}
+
+	return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+}
+
+func (a *processPerTurnAgent) StopSession(_ context.Context, _ domain.Session) error { return nil }
+
+func writeMultiProcessWorkflowFile(t *testing.T, path, webhookURL string) {
+	t.Helper()
+	content := fmt.Sprintf(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+notifications:
+  - kind: webhook
+    url: %q
+    max_per_session: 2
+---
+Do {{ .issue.title }}.
+`, webhookURL)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func TestMCPServerNotify_MultiProcessCapSharing(t *testing.T) {
+	if os.Getenv("SORTIE_TEST_MCP_HELPER") == "1" {
+		wfPath := os.Getenv("SORTIE_TEST_MCP_WORKFLOW")
+		os.Exit(runMCPServer(context.Background(), []string{"--workflow", wfPath}, os.Stdout, os.Stderr))
+		return // unreachable, silences staticcheck
+	}
+
+	tmpDir := t.TempDir()
+	tracker := &notifyE2ETracker{issues: []domain.Issue{
+		{ID: "issue-multiprocess", Identifier: "NOTIFY-MULTI-1", Title: "notify multi-process fixture", State: "todo"},
+	}}
+
+	cfg := notifyE2EBaseConfig(tmpDir)
+	cfg.Agent.MaxTurns = 3
+
+	srv, bodies := newCapturingServer(t)
+
+	dbPath := filepath.Join(tmpDir, "notify-multiprocess.db")
+	workflowPath := filepath.Join(filepath.Dir(dbPath), "WORKFLOW.md")
+	writeMultiProcessWorkflowFile(t, workflowPath, srv.URL)
+
+	agent := newProcessPerTurnAgent(cfg)
+
+	startNotifyOrchestrator(t, cfg, tracker, agent, dbPath)
+
+	var outcomes []multiProcessTurnOutcome
+	for turn := 1; turn <= 3; turn++ {
+		select {
+		case o := <-agent.turns:
+			if o.err != nil {
+				t.Fatalf("turn %d: %v", turn, o.err)
+			}
+			outcomes = append(outcomes, o)
+		case <-time.After(30 * time.Second):
+			t.Fatalf("timed out waiting for turn %d's notify_operator call", turn)
+		}
+	}
+
+	if !outcomes[0].res.Success {
+		t.Errorf("turn 1 result = %+v, want success", outcomes[0].res)
+	}
+	if !outcomes[1].res.Success {
+		t.Errorf("turn 2 result = %+v, want success", outcomes[1].res)
+	}
+	if outcomes[2].res.Success {
+		t.Errorf("turn 3 result = %+v, want rate_limited, got success", outcomes[2].res)
+	}
+	if got := outcomes[2].res.Error.Kind; got != "rate_limited" {
+		t.Errorf("turn 3 error.kind = %q, want %q", got, "rate_limited")
+	}
+
+	n := bodies.count()
+	if n != 2 {
+		t.Errorf("webhook server received %d requests, want exactly 2", n)
+	}
+	dispatchID := agent.firstDispatchIDValue()
+	for i := range n {
+		body := bodies.nth(t, i)
+		if got, _ := body["dispatch_id"].(string); got != dispatchID {
+			t.Errorf("request %d dispatch_id = %q, want %q", i, got, dispatchID)
+		}
+	}
 }

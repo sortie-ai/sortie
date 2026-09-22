@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -595,5 +596,32 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
 		credentialtest.RequireUnverified(t, err)
+	})
+}
+
+func TestIntegration_ToolServerIdentity(t *testing.T) {
+	skipUnlessCopilotIntegration(t)
+
+	agenttest.AssertToolServerIdentity(t, func(ctx context.Context, workspacePath, mcpConfigPath string) error {
+		adapter, err := NewCopilotAdapter(integrationConfig())
+		if err != nil {
+			return err
+		}
+
+		session, err := adapter.StartSession(ctx, domain.StartSessionParams{
+			WorkspacePath: workspacePath,
+			AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
+			MCPConfigPath: mcpConfigPath,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = adapter.StopSession(context.Background(), session) }()
+
+		_, err = adapter.RunTurn(ctx, session, domain.RunTurnParams{
+			Prompt:  "Say exactly: hello",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		return err
 	})
 }

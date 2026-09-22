@@ -142,6 +142,7 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 	translatedPartialPath := writeGeneratedMCPConfig(t, twoServerMCPConfig)
 
 	windowsCommandConfigPath := writeGeneratedMCPConfig(t, `{"mcpServers":{"win-server":{"command":"C:\\Program Files\\sortie\\mcp.exe"}}}`)
+	envDroppedConfigPath := writeGeneratedMCPConfig(t, `{"mcpServers":{"sortie-tools":{"command":"/usr/local/bin/sortie","args":["mcp-server"],"env":{"SORTIE_DISPATCH_ID":"d1","SORTIE_WORKSPACE":"/ws"}}}}`)
 
 	tests := []struct {
 		name          string
@@ -240,6 +241,15 @@ func TestAssertMCPInjection_Violating(t *testing.T) {
 			mcpConfigPath: windowsCommandConfigPath,
 			surface:       MCPLaunchSurface{Wire: []string{`{"argv":["win-server","--other-flag"]}`}},
 			wantSubstr:    `command %q not found on the launch surface`,
+		},
+		{
+			name:          "translated declared but the surface drops a declared env variable name",
+			declared:      registry.MCPInjectionTranslated,
+			mcpConfigPath: envDroppedConfigPath,
+			surface: MCPLaunchSurface{Args: []string{
+				"-c", `mcp_servers.sortie-tools={command="/usr/local/bin/sortie", args=["mcp-server"], env={SORTIE_WORKSPACE="/ws"}}`,
+			}},
+			wantSubstr: `env variable %q not found on the launch surface`,
 		},
 		{
 			// The path appears only as encoding/json would render it

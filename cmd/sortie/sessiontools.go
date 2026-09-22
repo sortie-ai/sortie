@@ -115,13 +115,20 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	sessionIDFunc := func() string {
 		return workspace.ReadDispatchSessionID(params.WorkspacePath, params.DispatchID, logger)
 	}
+	reserveSlot := func(limit int) (func(), bool, error) {
+		release, reserved, err := workspace.ReserveNotificationSlot(params.WorkspacePath, params.DispatchID, limit, logger)
+		if err != nil {
+			logger.Warn("notification slot directory unusable", slog.Any("error", err))
+		}
+		return release, reserved, err
+	}
 	notifyTool, err := buildNotifyTool(params.Notifications, notify.NotificationEnvelopeContext{
 		IssueID:    params.IssueID,
 		Identifier: params.Identifier,
 		DispatchID: params.DispatchID,
 		Attempt:    params.Attempt,
 		Agent:      params.AgentKind,
-	}, sessionIDFunc)
+	}, sessionIDFunc, reserveSlot)
 	if err != nil {
 		if store != nil {
 			store.Close() //nolint:errcheck,gosec // There is no recovery path during cleanup.

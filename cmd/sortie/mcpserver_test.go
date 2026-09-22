@@ -613,10 +613,14 @@ func TestSessionToolParamsFromEnv_Attempt(t *testing.T) {
 
 func testNotifySessionIDFunc() string { return "" }
 
+// testAlwaysReserveSlot is a [notify.SlotReserver] test double that claims
+// unconditionally.
+func testAlwaysReserveSlot(int) (func(), bool, error) { return func() {}, true, nil }
+
 func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 	t.Parallel()
 
-	tool, err := buildNotifyTool(nil, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool(nil, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err != nil {
 		t.Fatalf("buildNotifyTool(nil) error = %v, want nil", err)
 	}
@@ -628,7 +632,7 @@ func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 func TestBuildNotifyTool_EmptySlice_ReturnsNilNil(t *testing.T) {
 	t.Parallel()
 
-	tool, err := buildNotifyTool([]config.NotificationBackend{}, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool([]config.NotificationBackend{}, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err != nil {
 		t.Fatalf("buildNotifyTool(empty) error = %v, want nil", err)
 	}
@@ -654,7 +658,7 @@ func TestBuildNotifyTool_ValidWebhookBackend_ReturnsNonNilTool(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err != nil {
 		t.Fatalf("buildNotifyTool(webhook) error = %v, want nil", err)
 	}
@@ -686,7 +690,7 @@ func TestBuildNotifyTool_PropagatesSessionID(t *testing.T) {
 	env := notify.NotificationEnvelopeContext{DispatchID: "dispatch-reaches-tool"}
 	sessionID := func() string { return "session-reaches-tool" }
 
-	tool, err := buildNotifyTool(backends, env, sessionID)
+	tool, err := buildNotifyTool(backends, env, sessionID, testAlwaysReserveSlot)
 	if err != nil {
 		t.Fatalf("buildNotifyTool: %v", err)
 	}
@@ -735,7 +739,7 @@ func TestBuildNotifyTool_ValidSlackBackend_ReturnsNonNilTool(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err != nil {
 		t.Fatalf("buildNotifyTool(slack) error = %v, want nil", err)
 	}
@@ -754,7 +758,7 @@ func TestBuildNotifyTool_UnknownKind_ReturnsError(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err == nil {
 		t.Fatal("buildNotifyTool(unknown kind) error = nil, want non-nil error")
 	}
@@ -791,7 +795,7 @@ func TestBuildNotifyTool_EmptyRequiredSecret_ReturnsError(t *testing.T) {
 				{Kind: tt.kind, Config: tt.config},
 			}
 
-			tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+			tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 			if err == nil {
 				t.Fatalf("buildNotifyTool(%q, empty secret) error = nil, want fatal constructor error", tt.kind)
 			}
@@ -817,7 +821,7 @@ func TestBuildNotifyTool_PartialFailureIsTotal(t *testing.T) {
 		{Kind: "unknown-kind-for-partial-test", Config: map[string]any{"url": srv.URL}},
 	}
 
-	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{}, testNotifySessionIDFunc, testAlwaysReserveSlot)
 	if err == nil {
 		t.Fatal("buildNotifyTool(partial failure) = nil error, want non-nil (no partial registration)")
 	}
