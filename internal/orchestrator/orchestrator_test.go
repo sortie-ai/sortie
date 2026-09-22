@@ -3626,9 +3626,10 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{
 				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					// A terminal state re-dispatches runs across the template swap.
 					result := make(map[string]string, len(ids))
 					for _, id := range ids {
-						result[id] = "Done"
+						result[id] = "To Do"
 					}
 					return result, nil
 				},
@@ -3671,17 +3672,14 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		deadline := time.After(10 * time.Second)
 		for {
-			store.mu.Lock()
-			n := len(store.runHistories)
-			store.mu.Unlock()
-			if n >= 1 {
+			if _, ok := capturedPrompts.Load("P-1"); ok {
 				break
 			}
 			select {
 			case <-deadline:
 				cancel()
 				<-done
-				t.Fatal("timed out waiting for first issue to complete")
+				t.Fatal("timed out waiting for the prompt for P-1")
 			default:
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -3693,17 +3691,14 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		deadline = time.After(10 * time.Second)
 		for {
-			store.mu.Lock()
-			n := len(store.runHistories)
-			store.mu.Unlock()
-			if n >= 2 {
+			if _, ok := capturedPrompts.Load("P-2"); ok {
 				break
 			}
 			select {
 			case <-deadline:
 				cancel()
 				<-done
-				t.Fatal("timed out waiting for second issue to complete")
+				t.Fatal("timed out waiting for the prompt for P-2")
 			default:
 			}
 			time.Sleep(20 * time.Millisecond)
