@@ -1225,7 +1225,7 @@ Per-backend fields depend on `kind` and are passed through to the backend untype
 
 The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint. It is unrelated to inbound tracker webhooks ([architecture §20](architecture/25-webhook-support.md)), which trigger reconciliation. The two share a name but not a direction.
 
-When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap covers one agent run on every agent kind: every turn and every tool server process of that run share one count, which Sortie keeps as files in the workspace's `.sortie/notification_slots/` directory. A retry or a continuation starts a new run and a new count. A call counts once it reached at least one backend, not once per backend it reached.
+When the list configures more than one backend, the effective cap is the maximum non-zero `max_per_session` across entries, falling back to the default when every entry is `0` or unset. The cap covers one agent run on every agent kind: every turn and every tool server process of that run share one count, which Sortie keeps as files in the workspace's `.sortie/notification_slots/` directory. A retry or a continuation starts a new run and a new count. A call counts once at least one backend accepts the notification, not once per backend that accepts it; if no backend accepts it, the reserved slot is released and the call does not count.
 
 The `webhook` backend posts a JSON object whose keys use the generic notifier vocabulary, so any consumer can correlate and route without backend-specific knowledge:
 

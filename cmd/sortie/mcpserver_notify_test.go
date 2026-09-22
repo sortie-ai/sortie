@@ -866,6 +866,14 @@ func runNotifyTurnAsSubprocess(mcpConfigPath string) (pid int, res notifyExecRes
 		return 0, notifyExecResult{}, fmt.Errorf("start mcp-server subprocess: %w", startErr)
 	}
 	pid = cmd.Process.Pid
+	waitCalled := false
+	defer func() {
+		if waitCalled {
+			return
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10<<20)
@@ -902,6 +910,7 @@ func runNotifyTurnAsSubprocess(mcpConfigPath string) (pid int, res notifyExecRes
 	if closeErr := stdin.Close(); closeErr != nil {
 		return pid, res, fmt.Errorf("close mcp-server subprocess stdin: %w", closeErr)
 	}
+	waitCalled = true
 	if waitErr := cmd.Wait(); waitErr != nil {
 		return pid, res, fmt.Errorf("mcp-server subprocess exited with error: %w (stderr: %s)", waitErr, stderrBuf.String())
 	}
