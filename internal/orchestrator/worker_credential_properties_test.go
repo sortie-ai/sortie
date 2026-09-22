@@ -94,6 +94,28 @@ func runCredentialWorker(t *testing.T, ctx context.Context, cfg config.ServiceCo
 	return ec.waitResult(t)
 }
 
+func runCredentialWorkerWithSelfReview(t *testing.T, ctx context.Context, cfg config.ServiceConfig, adapter domain.AgentAdapter, onEvent func(domain.AgentEvent)) WorkerResult {
+	t.Helper()
+	cfg.Agent.MaxTurns = 1
+	ec := newExitCapture()
+	RunWorkerAttempt(ctx, workerTestIssue(), nil, WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           adapter,
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+		ResumeSessionID:        "resume-abc",
+		WorkflowPath:           "/fake/WORKFLOW.md",
+		OnEvent: func(_ string, e domain.AgentEvent) {
+			if onEvent != nil {
+				onEvent(e)
+			}
+		},
+		OnExit: ec.onExit,
+		Logger: discardLogger(),
+	})
+	return ec.waitResult(t)
+}
+
 func TestRunWorkerAttempt_FailedCredentialStepReachesNoWorkingSession(t *testing.T) {
 	t.Parallel()
 
@@ -331,5 +353,54 @@ func TestRunWorkerAttempt_TokenColumnsEqualVerificationPlusWorking(t *testing.T)
 	}
 	if result.APIRequestCount < 2 || !result.UsageMeasured {
 		t.Errorf("WorkerResult = {APIRequestCount: %d, UsageMeasured: %v}, want at least 2 requests counted and usage measured", result.APIRequestCount, result.UsageMeasured)
+	}
+}
+
+func TestRunWorkerAttempt_SelfReviewUsageIncludesVerificationOffset(t *testing.T) {
+	t.Parallel()
+
+	verifyUsage := domain.TokenUsage{InputTokens: 80, OutputTokens: 20, TotalTokens: 100, CacheReadTokens: 5}
+	reviewUsage := domain.TokenUsage{InputTokens: 40, OutputTokens: 10, TotalTokens: 50, CacheReadTokens: 2}
+	want := domain.TokenUsage{
+		InputTokens:     verifyUsage.InputTokens + reviewUsage.InputTokens,
+		OutputTokens:    verifyUsage.OutputTokens + reviewUsage.OutputTokens,
+		TotalTokens:     verifyUsage.TotalTokens + reviewUsage.TotalTokens,
+		CacheReadTokens: verifyUsage.CacheReadTokens + reviewUsage.CacheReadTokens,
+	}
+
+	adapter := &credentialPropertyAdapter{
+		verifyRunFn: func(_ context.Context, params domain.RunTurnParams) (domain.TurnResult, error) {
+			params.OnEvent(domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Usage: verifyUsage})
+			return domain.TurnResult{ExitReason: domain.EventTurnCompleted, Usage: verifyUsage, UsageMeasured: true}, nil
+		},
+	}
+	var midReviewState workerState
+	adapter.workRunFn = func(params domain.RunTurnParams) (domain.TurnResult, error) {
+		if !isSelfReviewTurnPrompt(params.Prompt) {
+			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+		}
+		params.OnEvent(domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Usage: reviewUsage})
+		_, _, startParams := adapter.working()
+		midReviewState = readWorkerStateFile(t, startParams.WorkspacePath)
+		writeVerdictFile(t, startParams.WorkspacePath, domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+		return domain.TurnResult{ExitReason: domain.EventTurnCompleted, Usage: reviewUsage}, nil
+	}
+
+	cfg := defaultWorkerConfig(t.TempDir())
+	cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 1}
+
+	result := runCredentialWorkerWithSelfReview(t, context.Background(), cfg, adapter, nil)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, WorkerExitNormal, result.Error)
+	}
+
+	assertTokenUsageMatches(t, midReviewState, want)
+
+	finalState := readWorkerStateFile(t, result.WorkspacePath)
+	assertTokenUsageMatches(t, finalState, want)
+
+	if result.Usage != want {
+		t.Errorf("WorkerResult.Usage = %+v, want %+v", result.Usage, want)
 	}
 }

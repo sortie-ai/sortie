@@ -2365,11 +2365,6 @@ func TestRunWorkerAttempt_WorkerMirrorFoldsModelAndRequestCount(t *testing.T) {
 	}
 }
 
-// TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror pins that self-review
-// events fold into the worker mirror (final ModelName "r",
-// APIRequestCount 2, Usage.TotalTokens 150), that deps.OnEvent receives
-// every emitted event once with a defensively-copied RateLimits map, and
-// that the self-review phase leaves .sortie/state.json unwritten.
 func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 	t.Parallel()
 
@@ -2381,7 +2376,7 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 		event   domain.AgentEvent
 	}
 
-	type buildRunTurnFn func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent)) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error)
+	type buildRunTurnFn func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent), codingTurnState, reviewTurnState *workerState) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error)
 
 	runVariant := func(t *testing.T, build buildRunTurnFn, maxIterations int) {
 		t.Helper()
@@ -2400,6 +2395,7 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 		startFn, wsPath := captureWorkspacePath()
 		var received []receivedEvent
 		var emitted []domain.AgentEvent
+		var codingTurnState, reviewTurnState workerState
 		record := func(event domain.AgentEvent) {
 			if event.RateLimits != nil {
 				event.RateLimits = maps.Clone(event.RateLimits)
@@ -2412,7 +2408,7 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 			TrackerAdapter: &mockTrackerAdapter{},
 			AgentAdapter: &mockAgentAdapter{
 				startSessionFn: startFn,
-				runTurnFn:      build(t, wsPath, rateLimits, record),
+				runTurnFn:      build(t, wsPath, rateLimits, record, &codingTurnState, &reviewTurnState),
 			},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
@@ -2456,10 +2452,9 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 			}
 		}
 
-		// The review-phase event's RateLimits must reach deps.OnEvent as a
-		// copy: the mock's runTurnFn mutates the original map after
-		// emitting the event, and the defensive copy in the self-review
-		// relay must keep that mutation from reaching the recorded event.
+		// The event's RateLimits must reach deps.OnEvent as a copy: the
+		// mock's runTurnFn mutates the original map after emitting the
+		// event.
 		gotLimits := received[2].event.RateLimits
 		if gotLimits == nil {
 			t.Fatal("received[2].RateLimits = nil, want a non-nil copy")
@@ -2468,22 +2463,27 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 			t.Errorf(`received[2].RateLimits["limit"] = %v, want 5 (unaffected by the later mutation)`, gotLimits["limit"])
 		}
 
+		assertTokenUsageMatches(t, reviewTurnState, reviewUsage)
+		assertNonTokenFieldsMatch(t, reviewTurnState, codingTurnState)
+
 		state := readWorkerStateFile(t, result.WorkspacePath)
-		if state.TotalTokens == nil || *state.TotalTokens != mainUsage.TotalTokens {
-			t.Errorf(".sortie/state.json total_tokens = %v, want %d (self-review phase leaves it unwritten)", state.TotalTokens, mainUsage.TotalTokens)
+		if state.TotalTokens == nil || *state.TotalTokens != reviewUsage.TotalTokens {
+			t.Errorf(".sortie/state.json total_tokens = %v, want %d", state.TotalTokens, reviewUsage.TotalTokens)
 		}
+		assertNonTokenFieldsMatch(t, state, codingTurnState)
 	}
 
 	t.Run("event emitted during the review turn", func(t *testing.T) {
 		t.Parallel()
 
-		build := buildRunTurnFn(func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent)) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+		build := buildRunTurnFn(func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent), codingTurnState, reviewTurnState *workerState) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
 			var codingTurnDone bool
 			return func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 				switch {
 				case isSelfReviewTurnPrompt(params.Prompt):
 					event := domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Model: "r", Usage: reviewUsage, Message: "review notes", RateLimits: rateLimits}
 					params.OnEvent(event)
+					*reviewTurnState = readWorkerStateFile(t, wsPath())
 					record(event)
 					rateLimits["limit"] = int64(999)
 					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
@@ -2493,6 +2493,7 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 					params.OnEvent(event)
 					record(event)
 					writeStatusFile(t, wsPath(), "needs-human-review")
+					*codingTurnState = readWorkerStateFile(t, wsPath())
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, Usage: mainUsage}, nil
 				}
 				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
@@ -2505,13 +2506,14 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 	t.Run("event emitted during the fix turn", func(t *testing.T) {
 		t.Parallel()
 
-		build := buildRunTurnFn(func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent)) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+		build := buildRunTurnFn(func(t *testing.T, wsPath func() string, rateLimits map[string]any, record func(domain.AgentEvent), codingTurnState, reviewTurnState *workerState) func(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
 			var codingTurnDone bool
 			return func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 				switch {
 				case isSelfReviewFixPrompt(params.Prompt):
 					event := domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Model: "r", Usage: reviewUsage, Message: "review notes", RateLimits: rateLimits}
 					params.OnEvent(event)
+					*reviewTurnState = readWorkerStateFile(t, wsPath())
 					record(event)
 					rateLimits["limit"] = int64(999)
 				case isSelfReviewTurnPrompt(params.Prompt):
@@ -2522,6 +2524,7 @@ func TestRunWorkerAttempt_SelfReviewFoldsWorkerMirror(t *testing.T) {
 					params.OnEvent(event)
 					record(event)
 					writeStatusFile(t, wsPath(), "needs-human-review")
+					*codingTurnState = readWorkerStateFile(t, wsPath())
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, Usage: mainUsage}, nil
 				}
 				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
@@ -4304,10 +4307,45 @@ func assertUnmeasuredNull(t *testing.T, s workerState) {
 	}
 }
 
-// TestRunWorkerAttempt_StateFileTokenGate proves the token gate holds at
-// all three writeWorkerState call sites. Each case reads
-// .sortie/state.json from inside a runTurnFn closure, the one point
-// where a test can observe the file between two writes.
+func assertTokenUsageMatches(t *testing.T, got workerState, want domain.TokenUsage) {
+	t.Helper()
+	if !got.TokensMeasured {
+		t.Error("TokensMeasured = false, want true")
+	}
+	checks := map[string]struct {
+		got  *int64
+		want int64
+	}{
+		"InputTokens": {got.InputTokens, want.InputTokens}, "OutputTokens": {got.OutputTokens, want.OutputTokens},
+		"TotalTokens": {got.TotalTokens, want.TotalTokens}, "CacheReadTokens": {got.CacheReadTokens, want.CacheReadTokens},
+	}
+	for name, c := range checks {
+		if c.got == nil {
+			t.Errorf("%s = nil, want %d", name, c.want)
+			continue
+		}
+		if *c.got != c.want {
+			t.Errorf("%s = %d, want %d", name, *c.got, c.want)
+		}
+	}
+}
+
+func assertNonTokenFieldsMatch(t *testing.T, got, want workerState) {
+	t.Helper()
+	if got.TurnNumber != want.TurnNumber {
+		t.Errorf("TurnNumber = %d, want %d", got.TurnNumber, want.TurnNumber)
+	}
+	if got.MaxTurns != want.MaxTurns {
+		t.Errorf("MaxTurns = %d, want %d", got.MaxTurns, want.MaxTurns)
+	}
+	if (got.Attempt == nil) != (want.Attempt == nil) || (got.Attempt != nil && *got.Attempt != *want.Attempt) {
+		t.Errorf("Attempt = %v, want %v", got.Attempt, want.Attempt)
+	}
+	if got.StartedAt != want.StartedAt {
+		t.Errorf("StartedAt = %q, want %q", got.StartedAt, want.StartedAt)
+	}
+}
+
 func TestRunWorkerAttempt_StateFileTokenGate(t *testing.T) {
 	t.Parallel()
 
@@ -9188,6 +9226,182 @@ func TestMakeWorkerFn_OnTurnStartedBlocksThenEscapesOnContextDone(t *testing.T) 
 		msg := <-o.turnStartedCh
 		if msg.IssueID != "filler" {
 			t.Errorf("turnStartedCh holds %+v, want the untouched filler message", msg)
+		}
+	})
+}
+
+func TestRunWorkerAttempt_SelfReviewResultOnlyMeasurementFoldsWorkerMirror(t *testing.T) {
+	t.Parallel()
+
+	mainUsage := domain.TokenUsage{InputTokens: 80, OutputTokens: 20, TotalTokens: 100}
+	reviewUsage := domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 2}
+
+	startFn, wsPath := captureWorkspacePath()
+	var fixTurnStartState workerState
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewFixPrompt(params.Prompt):
+					if fixTurnStartState == (workerState{}) {
+						fixTurnStartState = readWorkerStateFile(t, wsPath())
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				case isSelfReviewTurnPrompt(params.Prompt):
+					if fixTurnStartState != (workerState{}) {
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					}
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, Usage: reviewUsage, UsageMeasured: true}, nil
+				case !codingTurnDone:
+					codingTurnDone = true
+					params.OnEvent(domain.AgentEvent{Type: domain.EventTokenUsage, Timestamp: time.Now().UTC(), Usage: mainUsage})
+					writeStatusFile(t, wsPath(), "needs-human-review")
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, Usage: mainUsage}, nil
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		WorkflowPath:           "/fake/WORKFLOW.md",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+	result := ec.waitResult(t)
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, WorkerExitNormal, result.Error)
+	}
+
+	assertTokenUsageMatches(t, fixTurnStartState, reviewUsage)
+}
+
+func TestRunWorkerAttempt_SelfReviewTurnResultsCountUnaccountedSpend(t *testing.T) {
+	t.Parallel()
+
+	t.Run("review and fix turns each add one unaccounted turn", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 2}
+
+		startFn, wsPath := captureWorkspacePath()
+		var reviewCalls int
+		var codingTurnDone bool
+		ec := newExitCapture()
+
+		const codingTurnsUnaccounted = 1
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					switch {
+					case isSelfReviewFixPrompt(params.Prompt):
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, SpendUnaccounted: true}, nil
+					case isSelfReviewTurnPrompt(params.Prompt):
+						reviewCalls++
+						if reviewCalls == 1 {
+							writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
+							return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, SpendUnaccounted: true}, nil
+						}
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					case !codingTurnDone:
+						codingTurnDone = true
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, SpendUnaccounted: true}, nil
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, WorkerExitNormal, result.Error)
+		}
+		want := codingTurnsUnaccounted + 2
+		if result.UnaccountedTurns != want {
+			t.Errorf("WorkerResult.UnaccountedTurns = %d, want %d", result.UnaccountedTurns, want)
+		}
+	})
+
+	t.Run("a review turn's non-timeout error still counts its result", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.SelfReview = config.SelfReviewConfig{Enabled: true, MaxIterations: 1}
+
+		figureF := domain.TokenUsage{InputTokens: 30, OutputTokens: 10, TotalTokens: 40}
+		startFn, _ := captureWorkspacePath()
+		var codingTurnDone bool
+		ec := newExitCapture()
+
+		const codingTurnsUnaccounted = 0
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					switch {
+					case isSelfReviewTurnPrompt(params.Prompt):
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnFailed, SpendUnaccounted: true, Usage: figureF}, errors.New("review turn failed")
+					case !codingTurnDone:
+						codingTurnDone = true
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q (error: %v)", result.ExitKind, WorkerExitNormal, result.Error)
+		}
+		want := codingTurnsUnaccounted + 1
+		if result.UnaccountedTurns != want {
+			t.Errorf("WorkerResult.UnaccountedTurns = %d, want %d", result.UnaccountedTurns, want)
+		}
+		if result.Usage != figureF {
+			t.Errorf("WorkerResult.Usage = %+v, want %+v", result.Usage, figureF)
 		}
 	})
 }

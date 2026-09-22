@@ -612,9 +612,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	// foldRelayedEvent is the only code that folds a relayed event into the
-	// worker mirror; both the main-turn and self-review relays call it for
-	// every event, so the mirror covers every turn. A rejected measurement
-	// reports false so the caller skips the state-file write.
+	// worker mirror. A rejected measurement reports false so the caller
+	// skips the state-file write.
 	foldRelayedEvent := func(event domain.AgentEvent) (measurementArrived bool) {
 		measurementArrived = event.Type == domain.EventTokenUsage || hasUsage(event.Usage)
 		if measurementArrived && !admitMeasurement() {
@@ -1098,20 +1097,57 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
 
+	publishWorkerState := func(turn int) error {
+		if mcpConfigPath == "" {
+			return nil
+		}
+		return writeWorkerState(wsResult.Path, workerState{
+			TurnNumber: turn,
+			MaxTurns:   maxTurns,
+			Attempt:    attempt,
+			StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+		}.withTokens(localUsage, localMeasured))
+	}
+
+	relayTurnEvent := func(event domain.AgentEvent) {
+		// Defensive copy in the worker goroutine, before the event crosses
+		// the goroutine boundary, so the orchestrator never iterates a map
+		// the adapter may still mutate.
+		if event.RateLimits != nil {
+			event.RateLimits = maps.Clone(event.RateLimits)
+		}
+		event.Usage = applyUsageOffset(event.Usage, verificationSpend)
+		if foldRelayedEvent(event) {
+			if err := publishWorkerState(turnNumber); err != nil {
+				logger.Warn("failed to write status state file on token event", slog.Any("error", err))
+			}
+		}
+		if event.Type == domain.EventSessionStarted && event.SessionID != "" {
+			acceptedSessionID = event.SessionID
+			writeDispatchIdentity(acceptedSessionID)
+		}
+		deps.OnEvent(issue.ID, event)
+	}
+
+	// An adapter may report a session's only measurement here rather than
+	// through an event; on the last turn no later write would carry it, so
+	// the file would keep denying a measurement that exists.
+	handleTurnResult := func(result domain.TurnResult) {
+		result.Usage = applyUsageOffset(result.Usage, verificationSpend)
+		if foldTurnResult(result) {
+			if err := publishWorkerState(turnNumber); err != nil {
+				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))
+			}
+		}
+	}
+
 	// pendingSoftStopReason holds the recognized status token once a
 	// post-turn read admits one, so the single post-loop teardown can report
 	// it after self-review has had a chance to run.
 	var pendingSoftStopReason string
 
-	if mcpConfigPath != "" {
-		if err := writeWorkerState(wsResult.Path, workerState{
-			TurnNumber: 0,
-			MaxTurns:   maxTurns,
-			Attempt:    attempt,
-			StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-		}.withTokens(localUsage, localMeasured)); err != nil {
-			logger.Warn("failed to write status state file at session start", slog.Any("error", err))
-		}
+	if err := publishWorkerState(0); err != nil {
+		logger.Warn("failed to write status state file at session start", slog.Any("error", err))
 	}
 
 	for {
@@ -1209,67 +1245,21 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 		writeDispatchIdentity(acceptedSessionID)
 
-		if mcpConfigPath != "" {
-			if err := writeWorkerState(wsResult.Path, workerState{
-				TurnNumber: turnNumber,
-				MaxTurns:   maxTurns,
-				Attempt:    attempt,
-				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-			}.withTokens(localUsage, localMeasured)); err != nil {
-				logger.Warn("failed to write status state file at turn start",
-					slog.Int("turn_number", turnNumber),
-					slog.Any("error", err),
-				)
-			}
+		if err := publishWorkerState(turnNumber); err != nil {
+			logger.Warn("failed to write status state file at turn start",
+				slog.Int("turn_number", turnNumber),
+				slog.Any("error", err),
+			)
 		}
 
 		turnResult, err := runBoundedTurn(ctx, deps.AgentAdapter, session, domain.RunTurnParams{
-			Prompt: rendered,
-			Issue:  issue,
-			OnEvent: func(event domain.AgentEvent) {
-				// Defensive copy in the worker goroutine, before the event
-				// crosses the goroutine boundary, so the orchestrator never
-				// iterates a map the adapter may still mutate.
-				if event.RateLimits != nil {
-					event.RateLimits = maps.Clone(event.RateLimits)
-				}
-				event.Usage = applyUsageOffset(event.Usage, verificationSpend)
-				measurementArrived := foldRelayedEvent(event)
-				if measurementArrived && mcpConfigPath != "" {
-					if err := writeWorkerState(wsResult.Path, workerState{
-						TurnNumber: turnNumber,
-						MaxTurns:   maxTurns,
-						Attempt:    attempt,
-						StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-					}.withTokens(localUsage, localMeasured)); err != nil {
-						logger.Warn("failed to write status state file on token event", slog.Any("error", err))
-					}
-				}
-				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
-					acceptedSessionID = event.SessionID
-					writeDispatchIdentity(acceptedSessionID)
-				}
-				deps.OnEvent(issue.ID, event)
-			},
+			Prompt:  rendered,
+			Issue:   issue,
+			OnEvent: relayTurnEvent,
 		}, cfg.Agent.TurnTimeoutMS, logger, slog.Int("turn_number", turnNumber))
 		cancelledAtEnding = ctx.Err() != nil
 
-		turnResult.Usage = applyUsageOffset(turnResult.Usage, verificationSpend)
-		resultCarriesMeasurement := foldTurnResult(turnResult)
-
-		// An adapter may report a session's only measurement here rather
-		// than through an event; on the last turn no later write would carry
-		// it, so the file would keep denying a measurement that exists.
-		if resultCarriesMeasurement && mcpConfigPath != "" {
-			if err := writeWorkerState(wsResult.Path, workerState{
-				TurnNumber: turnNumber,
-				MaxTurns:   maxTurns,
-				Attempt:    attempt,
-				StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-			}.withTokens(localUsage, localMeasured)); err != nil {
-				logger.Warn("failed to write status state file after turn result", slog.Any("error", err))
-			}
-		}
+		handleTurnResult(turnResult)
 
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
@@ -1417,22 +1407,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			WorkspacePath: wsResult.Path,
 			Config:        reviewCfg.SelfReview,
 			AgentAdapter:  deps.AgentAdapter,
-			OnEvent: func(issueID string, event domain.AgentEvent) {
-				// Defensive copy in the worker goroutine, before the event
-				// crosses the goroutine boundary, so the orchestrator never
-				// iterates a map the adapter may still mutate.
-				if event.RateLimits != nil {
-					event.RateLimits = maps.Clone(event.RateLimits)
-				}
-				event.Usage = applyUsageOffset(event.Usage, verificationSpend)
-				foldRelayedEvent(event)
-				if event.Type == domain.EventSessionStarted && event.SessionID != "" {
-					acceptedSessionID = event.SessionID
-					writeDispatchIdentity(acceptedSessionID)
-				}
-				deps.OnEvent(issueID, event)
+			OnEvent: func(_ string, event domain.AgentEvent) {
+				relayTurnEvent(event)
 			},
-			OnProgress: deps.OnProgress,
+			OnTurnResult: handleTurnResult,
+			OnProgress:   deps.OnProgress,
 			OnTurnStarted: func() {
 				turnsStarted++
 				writeDispatchIdentity(acceptedSessionID)
