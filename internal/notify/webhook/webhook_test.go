@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -268,14 +269,30 @@ func TestWebhook_Send_Non2xxReturnsClassifiedError(t *testing.T) {
 	}
 }
 
+func connectionDroppingURL(t *testing.T) string {
+	t.Helper()
+	// Held open for the whole test: a closed port can be reused by a parallel test's server.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return "http://" + ln.Addr().String()
+}
+
 func TestWebhook_Send_TransportFailureReturnsClassifiedError(t *testing.T) {
 	t.Parallel()
 
-	// Use a server that is immediately closed so the transport fails.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	srv.Close()
-
-	n, err := newNotifier(map[string]any{"url": srv.URL})
+	n, err := newNotifier(map[string]any{"url": connectionDroppingURL(t)})
 	if err != nil {
 		t.Fatalf("newNotifier: %v", err)
 	}
