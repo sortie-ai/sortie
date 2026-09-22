@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -131,6 +132,36 @@ func TestKillProcessGroupReportingLeftover_ReapedFailOpenEntry(t *testing.T) {
 	}
 	if leftover {
 		t.Error("leftover = true, want false (no Job Object, so no membership was read)")
+	}
+}
+
+func TestQueryImageBaseName_ReadsNameOfExitedProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command("cmd.exe", "/C", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	pid, err := dwordPID(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		_ = cmd.Wait()
+		t.Fatalf("OpenProcess(%d) error = %v", pid, err)
+	}
+	defer func() { _ = windows.CloseHandle(handle) }()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	got, err := queryImageBaseName(handle)
+	if err != nil {
+		t.Fatalf("queryImageBaseName(exited cmd.exe) error = %v, want its image name", err)
+	}
+	if !strings.EqualFold(got, "cmd.exe") {
+		t.Errorf("queryImageBaseName(exited cmd.exe) = %q, want %q", got, "cmd.exe")
 	}
 }
 

@@ -282,13 +282,18 @@ func isProcessInJob(process, job windows.Handle) (bool, error) {
 	return result != 0, nil
 }
 
+// x/sys/windows v0.48.0 does not bind GetProcessImageFileNameW.
+var procGetProcessImageFileName = windows.NewLazySystemDLL("kernel32.dll").NewProc("K32GetProcessImageFileNameW")
+
+// Not QueryFullProcessImageName: it fails for a process still exiting, so
+// an exiting console host would go unnamed and count as running.
 func queryImageBaseName(process windows.Handle) (string, error) {
 	buf := make([]uint16, windows.MAX_PATH)
-	size := uint32(windows.MAX_PATH)
-	if err := windows.QueryFullProcessImageName(process, 0, &buf[0], &size); err != nil {
-		return "", fmt.Errorf("QueryFullProcessImageName: %w", err)
+	n, _, callErr := procGetProcessImageFileName.Call(uintptr(process), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf))) //nolint:gosec // G103: GetProcessImageFileNameW's LPWSTR out-parameter has no typed x/sys/windows alternative
+	if n == 0 {
+		return "", fmt.Errorf("GetProcessImageFileName: %w", callErr)
 	}
-	return filepath.Base(windows.UTF16ToString(buf[:size])), nil
+	return filepath.Base(windows.UTF16ToString(buf[:n])), nil
 }
 
 func jobHasRunningMember(job windows.Handle) (bool, error) {
