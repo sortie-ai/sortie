@@ -642,7 +642,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
         state = schedule_retry(state, issue_id, 1, {
           identifier: running_entry.identifier,
           delay_type: continuation,
-          session_id: running_entry.session_id
+          session_id: worker_result.session_id or running_entry.session_id
         })
       else:
         claim_protected_for_incumbent = true  # deferred to incumbent, claim stays
@@ -663,7 +663,7 @@ on_worker_exit(issue_id, reason, worker_result, state):
         state = schedule_retry(state, issue_id, 1, {
           identifier: running_entry.identifier,
           delay_type: continuation,
-          session_id: running_entry.session_id
+          session_id: worker_result.session_id or running_entry.session_id
         })
       # else: the retry slot (Section 7.5) is occupied, so this exit
       # defers to the incumbent instead of scheduling a continuation.
