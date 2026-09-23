@@ -156,11 +156,8 @@ func TestDecideSubcommandSupersededPin(t *testing.T) {
 		if row == "" {
 			t.Fatalf("runDecide(superseded pin).Body missing a table row for a newer release:\n%s", dec.Body)
 		}
-		if !strings.Contains(row, "unchanged") {
-			t.Errorf("row %q does not report meta.json unchanged", row)
-		}
-		if !strings.Contains(row, "changed") {
-			t.Errorf("row %q does not report schema.json changed", row)
+		if !strings.HasSuffix(row, "| unchanged | changed |") {
+			t.Errorf("row %q does not report meta.json unchanged and schema.json changed", row)
 		}
 	}
 }
