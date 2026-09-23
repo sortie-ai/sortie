@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Post the new issue
+      - name: Post new issue
         continue-on-error: true
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}

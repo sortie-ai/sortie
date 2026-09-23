@@ -240,7 +240,7 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Publish hosted GitLab coordinates
+      - name: Publish GitLab coordinates
         if: ${{ matrix.hosted }}
         env:
           HOSTED_TOKEN: ${{ secrets.SORTIE_GITLAB_TOKEN }}
@@ -269,7 +269,7 @@ jobs:
 
           exit 0
 
-      - name: Boot and provision the containerized instance
+      - name: Provision container
         if: ${{ matrix.provision_script != '' }}
         run: ${{ matrix.provision_script }} "${{ matrix.container_image }}"
 
@@ -334,7 +334,7 @@ jobs:
             echo "outcome=success" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Decide nightly incident state
+      - name: Decide incident state
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CICDBOT_TOKEN }}
@@ -353,7 +353,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: scripts/nightly-issue.sh decide
 
-      - name: Fail job on integration failure
+      - name: Report integration failure
         if: steps.check.outputs.outcome == 'failure'
         env:
           ADAPTER: ${{ matrix.adapter }}
@@ -377,7 +377,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run the hook stress harness
+      - name: Run hook stress
         env:
           SORTIE_HOOKSTRESS_TEST: "1"
         run: go test -v -count=1 -timeout 15m ./internal/workspace/...
@@ -396,7 +396,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Post the nightly outcome
+      - name: Post nightly outcome
         # A notification failure must not redden a nightly whose tests passed.
         continue-on-error: true
         env:
