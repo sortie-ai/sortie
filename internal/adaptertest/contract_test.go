@@ -2638,18 +2638,18 @@ func contractEnclosingFuncName(file *ast.File, pos token.Pos) string {
 var contractAnchorSortieDirSites = []contractSiteEntry{
 	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "handoffEvidencePathspecs", reason: "Git pathspec"},
 	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "GenerateMCPConfig", reason: "returned path"},
-	{importPath: "github.com/sortie-ai/sortie/internal/agent/mcpconfig", name: "Parse", reason: "location check (D6)"},
+	{importPath: "github.com/sortie-ai/sortie/internal/agent/mcpconfig", name: "Parse", reason: "location check"},
 	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "RunWorkerAttempt", reason: "exported summary path"},
-	{importPath: "github.com/sortie-ai/sortie/tools/qualify/probe", name: "writeToolServerMCPConfig", reason: "fixture path (D6)"},
+	{importPath: "github.com/sortie-ai/sortie/tools/qualify/probe", name: "writeToolServerMCPConfig", reason: "fixture path"},
 }
 
 // contractWorkdirSites pairs each exec.Cmd.Dir assignment rule WORKDIR
-// permits with the table B check that precedes it.
+// permits with the workspace verification that precedes it.
 var contractWorkdirSites = []contractSiteEntry{
-	{importPath: "github.com/sortie-ai/sortie/internal/agent/agentcore", name: "LaunchTarget.BindWorkspace", reason: "table B check"},
-	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "GitCommand", reason: "table B check"},
-	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "RunHook", reason: "table B check"},
-	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "runSingleVerification", reason: "table B check"},
+	{importPath: "github.com/sortie-ai/sortie/internal/agent/agentcore", name: "LaunchTarget.BindWorkspace", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "GitCommand", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "RunHook", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "runSingleVerification", reason: "workspace verified before launch"},
 }
 
 // contractAnchorOwner is the package rule ANCHOR directs every .sortie
