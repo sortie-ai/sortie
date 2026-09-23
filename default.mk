@@ -28,6 +28,8 @@ GO      ?= go
 LINTER  ?= golangci-lint
 SHELLCHECK ?= shellcheck
 
+ACP_VERSION ?= 1.23.0
+
 # golangci-lint resolves build constraints the same way the compiler does, so a
 # run only ever analyses the files that survive for the current GOOS: every
 # _windows.go file is invisible to a run on Linux, and vice versa.  The lint

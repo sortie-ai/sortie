@@ -4,7 +4,7 @@ Working notes for anyone changing Sortie's Agent Client Protocol adapter in `int
 
 ## Pinned schema artifact
 
-The generated wire types in `internal/agent/clientprotocol/wire_gen.go` come from the stable schema artifact published under tag `schema-v1.21.0`, resolving to commit `272bf799f35a258c6a4107a0410ed361e83683d3`. That tag and commit are the provenance for every wire shape the adapter package assumes; a change to either is a pin move, not a routine edit.
+The generated wire types in `internal/agent/clientprotocol/wire_gen.go` come from the stable schema artifact published under tag `schema-v1.23.0`, resolving to commit `6d08f412a7a1370d3cc9a124e3be3d6acf92641e`. That tag and commit are the provenance for every wire shape the adapter package assumes; a change to either is a pin move, not a routine edit. The pinned schema also carries an optional tool `name` on a tool call and its update; the adapter reports the tool kind in its place and does not read that field.
 
 ## Runtimes observed
 

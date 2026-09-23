@@ -88,7 +88,7 @@ fmt-check: ## Show formatting drift without rewriting any file
 generate-check: ## Verify wire_gen.go matches what the generator emits, without touching the tree
 	@tmp=$$(mktemp "$${TMPDIR:-/tmp}/wire_gen_check.XXXXXX") && \
 	trap 'rm -f "$$tmp"' EXIT && \
-	$(GO) run ./internal/agent/clientprotocol/schemagen internal/agent/clientprotocol/testdata/schema-v1.21.0 "$$tmp" && \
+	$(GO) run ./internal/agent/clientprotocol/schemagen internal/agent/clientprotocol/testdata/schema-v$(ACP_VERSION) "$$tmp" && \
 	if ! cmp -s "$$tmp" internal/agent/clientprotocol/wire_gen.go; then \
 		printf '$(RED)internal/agent/clientprotocol/wire_gen.go is stale$(RESET)\n'; \
 		cmp "$$tmp" internal/agent/clientprotocol/wire_gen.go; \
