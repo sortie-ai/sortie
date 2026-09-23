@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sortie now verifies the agent's credential before it starts work on an issue, on every agent kind, locally and on `worker.ssh_hosts`. A credential the agent cannot use stops the run before any work with an error naming the credential, and the run is retried. Stored logins now pass on `kiro` and `copilot-cli`, which previously required an API key or token variable. The check costs one short model request per run.
   ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
 
+- A new `agent.token_warning_percent` setting warns before `agent.max_tokens` stops a run: set it to a percentage of the ceiling, and a run that reaches it logs one warning and reports the condition through the `cost_budget` tool, so the agent can wrap up or hand off and the operator can raise the ceiling before the run is stopped. Leaving it unset changes nothing.
+  ([#1070](https://github.com/sortie-ai/sortie/issues/1070))
+
 ### Changed
 
 - Workflows that use the `copilot-cli` agent kind now need GitHub Copilot CLI 1.0.51 or later.
