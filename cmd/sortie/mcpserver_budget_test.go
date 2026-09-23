@@ -234,7 +234,7 @@ func executeBudgetTool(t *testing.T, tool domain.AgentTool) costBudgetResult {
 }
 
 // TestMCPServerBudget covers the dispatch-to-response path end to end,
-// per P8: no dispatch ID or session ID is supplied by hand at any seam.
+// with no dispatch ID or session ID supplied by hand at any seam.
 // It dispatches a real [orchestrator.Orchestrator] against a migrated
 // [persistence.Store], reads the dispatch ID and every other tool
 // parameter out of the [MCPConfigParams]-generated mcp.json the worker

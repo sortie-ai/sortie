@@ -26,7 +26,7 @@ git clone https://github.com/sortie-ai/sortie.git
 cd sortie
 make test    # runs all tests with -race
 make build   # compiles to ./sortie
-make lint    # golangci-lint
+make lint    # golangci-lint and comment style of changed files
 make fmt     # gofmt + goimports
 ```
 

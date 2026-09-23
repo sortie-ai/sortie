@@ -49,7 +49,7 @@ type githubIssueType struct {
 	Name string `json:"name"`
 }
 
-// githubPR is a marker struct — its mere presence (non-nil pointer)
+// githubPR is a marker struct: its mere presence (non-nil pointer)
 // indicates the list entry is a pull request, not an issue.
 type githubPR struct{}
 

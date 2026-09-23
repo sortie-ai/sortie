@@ -441,7 +441,7 @@ func TestRunJobDrain(t *testing.T) {
 		groupDrainBound = 200 * time.Millisecond
 		terminateJobObjectFunc = func(windows.Handle, uint32) error { return nil }
 
-		// runJobDrain itself never calls scanSurvivorsFunc: D2's survivor
+		// runJobDrain itself never calls scanSurvivorsFunc: the survivor
 		// scan is drainCaptureJob's own step, exercised separately by
 		// TestDrainCaptureJob_TeardownRecordAndSurvivorScan.
 		result := runJobDrain(job)
@@ -935,7 +935,7 @@ func newCaptureTestHeldMember(t *testing.T, job windows.Handle) *exec.Cmd {
 }
 
 // TestDrainCaptureJob_TeardownRecordAndSurvivorScan pins drainCaptureJob's
-// D2 step: it scans the process list only when the drain leaves the job
+// survivor scan: it scans the process list only when the drain leaves the job
 // unsettled, which TestRunJobDrain cannot exercise because runJobDrain
 // itself never calls scanSurvivorsFunc.
 func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
@@ -957,11 +957,11 @@ func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
 		spy := &captureWinLogSpy{}
 		logger := slog.New(spy)
 
-		// drainCaptureJob closes job (D3); no further cleanup needed.
+		// drainCaptureJob closes job; no further cleanup needed.
 		drainCaptureJob(uintptr(job), cmd, time.Now(), 0, logger)
 
 		if scanCalls != 1 {
-			t.Errorf("scanSurvivorsFunc call count = %d, want 1 (D2 must scan when the drain leaves an active process)", scanCalls)
+			t.Errorf("scanSurvivorsFunc call count = %d, want 1 (the survivor scan must run when the drain leaves an active process)", scanCalls)
 		}
 		record, ok := latestCaptureTeardownRecord(spy, 0)
 		if !ok {
@@ -991,7 +991,7 @@ func TestDrainCaptureJob_TeardownRecordAndSurvivorScan(t *testing.T) {
 		drainCaptureJob(uintptr(job), cmd, time.Now(), 0, logger)
 
 		if scanCalls != 0 {
-			t.Errorf("scanSurvivorsFunc call count = %d, want 0 (D2 must not scan once the job has settled)", scanCalls)
+			t.Errorf("scanSurvivorsFunc call count = %d, want 0 (the survivor scan must not run once the job has settled)", scanCalls)
 		}
 		record, ok := latestCaptureTeardownRecord(spy, 0)
 		if !ok {

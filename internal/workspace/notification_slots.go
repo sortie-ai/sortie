@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 const notificationSlotsDir = "notification_slots"
@@ -34,27 +36,21 @@ func ReserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 		return nil, false, fmt.Errorf("dispatch id %q is not a valid workspace key", dispatchID)
 	}
 
-	root, err := os.OpenRoot(workspacePath)
+	sortieRoot, err := workspacekit.OpenSortieDir(workspacePath, false)
 	if err != nil {
-		return nil, false, fmt.Errorf("open workspace root: %w", err)
+		return nil, false, fmt.Errorf("open sortie directory: %w", err)
 	}
-	defer root.Close() //nolint:errcheck // The root is only read from and created under here, so a close failure leaves nothing to recover.
+	defer sortieRoot.Close() //nolint:errcheck // the handle is not needed once the slots directory is open
 
-	if err := requireRealDirectory(root, sortieDir); err != nil {
-		return nil, false, fmt.Errorf("%s directory: %w", sortieDir, err)
+	slotsRoot, err := workspacekit.OpenSubdir(sortieRoot, notificationSlotsDir, true)
+	if err != nil {
+		return nil, false, fmt.Errorf("%s directory: %w", notificationSlotsDir, err)
 	}
-
-	slotsDir := sortieDir + "/" + notificationSlotsDir
-	if mkdirErr := root.Mkdir(slotsDir, 0o750); mkdirErr != nil && !errors.Is(mkdirErr, fs.ErrExist) {
-		return nil, false, fmt.Errorf("create %s directory: %w", slotsDir, mkdirErr)
-	}
-	if err := requireRealDirectory(root, slotsDir); err != nil {
-		return nil, false, fmt.Errorf("%s directory: %w", slotsDir, err)
-	}
+	defer slotsRoot.Close() //nolint:errcheck // the handle is not needed once the claim loop returns
 
 	for n := 1; n <= limit; n++ {
-		name := slotsDir + "/" + dispatchID + "-" + strconv.Itoa(n)
-		f, createErr := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		name := dispatchID + "-" + strconv.Itoa(n)
+		f, createErr := slotsRoot.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if createErr == nil {
 			_ = f.Close() //nolint:errcheck // The exclusive create is the claim; a close failure does not undo it.
 			return releaseNotificationSlot(workspacePath, name, logger), true, nil
@@ -65,29 +61,12 @@ func ReserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 		// Windows reports an exclusive create over an existing directory as
 		// EISDIR rather than ErrExist; a stat confirms occupancy regardless
 		// of what already sits at name.
-		if _, statErr := root.Lstat(name); statErr == nil {
+		if _, statErr := slotsRoot.Lstat(name); statErr == nil {
 			continue
 		}
 		return nil, false, fmt.Errorf("create notification slot %q: %w", name, createErr)
 	}
 	return nil, false, nil
-}
-
-// requireRealDirectory returns an error unless name resolves, inside
-// root, to a directory that is not a symbolic link. An absent name
-// surfaces the underlying stat error unchanged.
-func requireRealDirectory(root *os.Root, name string) error {
-	info, err := root.Lstat(name)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symbolic link", name)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", name)
-	}
-	return nil
 }
 
 // releaseNotificationSlot returns the release closure [ReserveNotificationSlot]
@@ -109,26 +88,17 @@ func releaseNotificationSlot(workspacePath, name string, logger *slog.Logger) fu
 // removeNotificationSlot removes the regular file at name after applying
 // the same containment and symlink checks [ReserveNotificationSlot] uses.
 func removeNotificationSlot(workspacePath, name string) error {
-	root, err := os.OpenRoot(workspacePath)
+	sortieRoot, err := workspacekit.OpenSortieDir(workspacePath, false)
 	if err != nil {
-		return fmt.Errorf("open workspace root: %w", err)
+		return fmt.Errorf("open sortie directory: %w", err)
 	}
-	defer root.Close() //nolint:errcheck // The root is only read from and removed under here, so a close failure leaves nothing to recover.
+	defer sortieRoot.Close() //nolint:errcheck // the handle is not needed once the slots directory is open
 
-	if err := requireRealDirectory(root, sortieDir); err != nil {
-		return fmt.Errorf("%s directory: %w", sortieDir, err)
-	}
-	slotsDir := sortieDir + "/" + notificationSlotsDir
-	if err := requireRealDirectory(root, slotsDir); err != nil {
-		return fmt.Errorf("%s directory: %w", slotsDir, err)
-	}
-
-	info, err := root.Lstat(name)
+	slotsRoot, err := workspacekit.OpenSubdir(sortieRoot, notificationSlotsDir, false)
 	if err != nil {
-		return fmt.Errorf("stat notification slot %q: %w", name, err)
+		return fmt.Errorf("%s directory: %w", notificationSlotsDir, err)
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("notification slot %q is not a regular file", name)
-	}
-	return root.Remove(name)
+	defer slotsRoot.Close() //nolint:errcheck // the handle is not needed once the removal returns
+
+	return workspacekit.RemoveFile(slotsRoot, name)
 }

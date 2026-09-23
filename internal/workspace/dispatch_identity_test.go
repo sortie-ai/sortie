@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 func slogCapture() (*slog.Logger, func() string) {
@@ -16,9 +19,19 @@ func slogCapture() (*slog.Logger, func() string) {
 	return slog.New(h), func() string { return buf.String() }
 }
 
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires elevated privileges on Windows")
+		}
+		t.Fatalf("Symlink(%q, %q): %v", target, link, err)
+	}
+}
+
 func createSortieDir(t *testing.T, ws string) {
 	t.Helper()
-	if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
+	if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
 		t.Fatalf("Mkdir(.sortie): %v", err)
 	}
 }
@@ -26,7 +39,7 @@ func createSortieDir(t *testing.T, ws string) {
 // Bypasses WriteSortieFile to create invalid dispatch-record fixtures.
 func writeRawDispatchRecord(t *testing.T, ws string, data []byte) {
 	t.Helper()
-	dir := filepath.Join(ws, sortieDir)
+	dir := filepath.Join(ws, workspacekit.SortieDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("MkdirAll(.sortie): %v", err)
 	}
@@ -39,7 +52,7 @@ func TestWriteDispatchIdentity_RoundTrip(t *testing.T) {
 	t.Parallel()
 
 	ws := t.TempDir()
-	if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
+	if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
 		t.Fatalf("Mkdir(.sortie): %v", err)
 	}
 
@@ -48,7 +61,7 @@ func TestWriteDispatchIdentity_RoundTrip(t *testing.T) {
 		t.Fatalf("WriteDispatchIdentity: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(ws, sortieDir, dispatchIdentityFile))
+	data, err := os.ReadFile(filepath.Join(ws, workspacekit.SortieDir, dispatchIdentityFile))
 	if err != nil {
 		t.Fatalf("ReadFile(dispatch.json): %v", err)
 	}
@@ -115,7 +128,7 @@ func TestReadDispatchSessionID_SilentEmptyCases(t *testing.T) {
 	t.Run("absent record", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
+		if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
 			t.Fatalf("Mkdir(.sortie): %v", err)
 		}
 		logger, getLog := slogCapture()
@@ -198,7 +211,7 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
 		target := t.TempDir()
-		mustSymlink(t, target, filepath.Join(ws, sortieDir))
+		mustSymlink(t, target, filepath.Join(ws, workspacekit.SortieDir))
 
 		logger, getLog := slogCapture()
 		got := ReadDispatchSessionID(ws, "D1", logger)
@@ -211,14 +224,14 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 	t.Run("symlink at record", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
+		if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
 			t.Fatalf("Mkdir(.sortie): %v", err)
 		}
 		target := filepath.Join(t.TempDir(), "elsewhere.json")
 		if err := os.WriteFile(target, []byte(`{"dispatch_id":"D1","session_id":"S1"}`), 0o600); err != nil {
 			t.Fatalf("WriteFile(target): %v", err)
 		}
-		mustSymlink(t, target, filepath.Join(ws, sortieDir, dispatchIdentityFile))
+		mustSymlink(t, target, filepath.Join(ws, workspacekit.SortieDir, dispatchIdentityFile))
 
 		logger, getLog := slogCapture()
 		got := ReadDispatchSessionID(ws, "D1", logger)
@@ -231,7 +244,7 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 	t.Run("directory at record path", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(ws, sortieDir, dispatchIdentityFile), 0o750); err != nil {
+		if err := os.MkdirAll(filepath.Join(ws, workspacekit.SortieDir, dispatchIdentityFile), 0o750); err != nil {
 			t.Fatalf("MkdirAll(record as directory): %v", err)
 		}
 
@@ -277,7 +290,7 @@ func TestReadDispatchSessionID_RejectedCasesWarn(t *testing.T) {
 	t.Run("not directory at .sortie handled via regular file case above", func(t *testing.T) {
 		t.Parallel()
 		ws := t.TempDir()
-		if err := os.WriteFile(filepath.Join(ws, sortieDir), []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(ws, workspacekit.SortieDir), []byte("x"), 0o600); err != nil {
 			t.Fatalf("WriteFile(.sortie as file): %v", err)
 		}
 		logger, getLog := slogCapture()
@@ -316,7 +329,7 @@ func TestReadDispatchSessionID_NilLoggerDoesNotPanic(t *testing.T) {
 
 	ws := t.TempDir()
 	target := t.TempDir()
-	mustSymlink(t, target, filepath.Join(ws, sortieDir))
+	mustSymlink(t, target, filepath.Join(ws, workspacekit.SortieDir))
 
 	got := ReadDispatchSessionID(ws, "D1", nil)
 	if got != "" {

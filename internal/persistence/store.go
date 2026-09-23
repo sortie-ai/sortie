@@ -66,7 +66,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 
 // OpenReadOnly opens an existing SQLite database at the given path in
 // read-only mode by appending ?mode=ro to the DSN. It does not set WAL
-// journal mode or run migrations — the database is assumed to be already
+// journal mode or run migrations; the database is assumed to be already
 // initialized by the orchestrator's [Open] + [Store.Migrate] sequence.
 // Write operations on the returned [Store] will fail at the driver level
 // with an SQLITE_READONLY error.

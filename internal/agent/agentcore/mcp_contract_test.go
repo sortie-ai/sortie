@@ -16,8 +16,8 @@ import (
 // than assuming the literal identifier "registry".
 const mcpContractRegistryImportPath = "github.com/sortie-ai/sortie/internal/registry"
 
-// mcpConfigPathIdentifier is the bare identifier rules Y2 and Y3 look
-// for across a package's non-test files. Files feeding the check are
+// mcpConfigPathIdentifier is the bare identifier the injection rules
+// look for across a package's non-test files. Files feeding the check are
 // parsed without comments, so a doc comment naming the field, as
 // kiro's and opencode's package godoc both do, is never a reference.
 const mcpConfigPathIdentifier = "MCPConfigPath"
@@ -202,7 +202,7 @@ func mcpRegistrationFacts(fset *token.FileSet, files []*ast.File) (registers boo
 	return registers, declared, pos
 }
 
-// checkMCPContractPackage evaluates rules Y1, Y2, and Y3 against pkg,
+// checkMCPContractPackage evaluates the MCP injection rules against pkg,
 // honoring the allowlist entries in mcpContractAllowlist. A package
 // this walk never observes registering an agent kind draws no
 // violation, since only a registering package can declare a
@@ -328,7 +328,7 @@ func TestCheckMCPContractPackage_DetectsViolations(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name:    "Y1: a kind registered through plain Register declares nothing",
+			name:    "a kind registered through plain Register declares nothing",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -341,7 +341,7 @@ func init() {
 			wantCount: 1,
 		},
 		{
-			name:    "Y1: a RegisterWithMeta literal omitting MCPInjection declares nothing",
+			name:    "a RegisterWithMeta literal omitting MCPInjection declares nothing",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -356,7 +356,7 @@ func init() {
 			wantCount: 1,
 		},
 		{
-			name:    "Y1: a literal spelling out the zero value is still undeclared",
+			name:    "a literal spelling out the zero value is still undeclared",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -371,7 +371,7 @@ func init() {
 			wantCount: 1,
 		},
 		{
-			name:    "Y2: declares unsupported but a non-test file references MCPConfigPath",
+			name:    "declares unsupported but a non-test file references MCPConfigPath",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -390,7 +390,7 @@ func start(params domain.StartSessionParams) string {
 			wantCount: 1,
 		},
 		{
-			name:    "Y3: declares supported but no non-test file ever references MCPConfigPath",
+			name:    "declares supported but no non-test file ever references MCPConfigPath",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -410,7 +410,7 @@ func init() {
 			// Without this fixture, nothing stops a later rewrite from
 			// parsing comments and taking kiro's and opencode's package
 			// godoc with it.
-			name:    "Y2 negative: a comment-only mention of MCPConfigPath is not a reference",
+			name:    "a comment-only mention of MCPConfigPath is not a reference",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -448,7 +448,7 @@ func useParams(params domain.StartSessionParams) []string {
 			// A field named MCPConfigPath is a declaration, not a read.
 			// The package hands nothing to the agent process, so an
 			// unsupported declaration is not in breach.
-			name:    "Y2 negative: declaring a field of the same name is not a read",
+			name:    "declaring a field of the same name is not a read",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -469,7 +469,7 @@ type sessionParams struct {
 		{
 			// The mirror of the case above: a declaration must not let a
 			// package claim supported without ever reading the path.
-			name:    "Y3: declaring a field of the same name does not satisfy supported",
+			name:    "declaring a field of the same name does not satisfy supported",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -490,7 +490,7 @@ type sessionParams struct {
 		{
 			// Assigning to the field on a by-value parameter writes to a
 			// local copy and hands nothing over, so it is not a read.
-			name:    "Y2 negative: writing the field is not a read",
+			name:    "writing the field is not a read",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -513,7 +513,7 @@ func start(params domain.StartSessionParams) {
 		},
 		{
 			// The mirror: a write must not let a package claim supported.
-			name:    "Y3: writing the field does not satisfy supported",
+			name:    "writing the field does not satisfy supported",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -537,7 +537,7 @@ func start(params domain.StartSessionParams) {
 		{
 			// A read on the right-hand side of an assignment is still a
 			// read; only the target of one is excluded.
-			name:    "Y3: reading the field on an assignment right-hand side satisfies supported",
+			name:    "reading the field on an assignment right-hand side satisfies supported",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -563,7 +563,7 @@ func start(params domain.StartSessionParams) string {
 		{
 			// A range clause with "=" assigns to existing lvalues, so a
 			// selector used as its target is written, not read.
-			name:    "Y2 negative: a range-assignment target is not a read",
+			name:    "a range-assignment target is not a read",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -586,7 +586,7 @@ func start(params domain.StartSessionParams, xs []string) {
 			wantCount: 0,
 		},
 		{
-			name:    "Y3: a range-assignment target does not satisfy supported",
+			name:    "a range-assignment target does not satisfy supported",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -611,7 +611,7 @@ func start(params domain.StartSessionParams, xs []string) {
 		{
 			// A single-target range clause assigns to the key, which is
 			// the other of the two branches a range target can take.
-			name:    "Y2 negative: a range key target is not a read",
+			name:    "a range key target is not a read",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -634,7 +634,7 @@ func start(params domain.StartSessionParams, xs map[string]int) {
 			wantCount: 0,
 		},
 		{
-			name:    "Y3: a range key target does not satisfy supported",
+			name:    "a range key target does not satisfy supported",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -658,7 +658,7 @@ func start(params domain.StartSessionParams, xs map[string]int) {
 		},
 		{
 			// Ranging over the field reads it; only a target is excluded.
-			name:    "Y3: ranging over the field is a read",
+			name:    "ranging over the field is a read",
 			dirName: "fixture",
 			src: `package fixture
 
@@ -717,7 +717,7 @@ func helper() string {
 
 // TestCheckMCPContractPackage_AllowlistedPackageDrawsNoViolation pins
 // that a package named in mcpContractAllowlist is exempt from every
-// rule, even one whose fixture would otherwise trip Y1.
+// rule, even one whose fixture would otherwise declare no injection.
 func TestCheckMCPContractPackage_AllowlistedPackageDrawsNoViolation(t *testing.T) {
 	t.Parallel()
 

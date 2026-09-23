@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // MaxHookOutputBytes is the maximum number of bytes retained from a
@@ -166,21 +168,12 @@ func validateParams(params HookParams) error {
 		}
 	}
 
-	info, err := os.Stat(params.Dir)
-	if err != nil {
+	if err := workspacekit.VerifyDir(params.Dir); err != nil {
 		return &HookError{
 			Op:       "validate",
 			Script:   truncateScript(params.Script),
 			ExitCode: -1,
 			Err:      fmt.Errorf("dir %q: %w", params.Dir, err),
-		}
-	}
-	if !info.IsDir() {
-		return &HookError{
-			Op:       "validate",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Err:      fmt.Errorf("dir %q: not a directory", params.Dir),
 		}
 	}
 

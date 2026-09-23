@@ -23,6 +23,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 func TestRunMCPServer_Help_ReturnsZero(t *testing.T) {
@@ -129,7 +130,9 @@ func TestMCPServer_StatusTool_Dispatch(t *testing.T) {
 	})
 
 	reg := domain.NewToolRegistry()
-	reg.Register(status.New(dir))
+	reg.Register(status.New(func(name string, maxBytes int64) ([]byte, error) {
+		return workspacekit.ReadSortieFile(dir, name, maxBytes)
+	}))
 
 	input := buildMCPRequest(t, "tools/call", 1, map[string]any{
 		"name":      "sortie_status",

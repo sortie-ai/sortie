@@ -12,14 +12,14 @@ import (
 )
 
 // seededFailingTargetURL is the target_url the provisioning script attaches to
-// the failing status on the review PR head. The D3 reconciliation asserts it
+// the failing status on the review PR head. The status read test asserts it
 // round-trips to the failing check run's DetailsURL, proving the per-status
 // field name. The committed provisioning script hard-codes the same value.
 const seededFailingTargetURL = "https://ci.example.com/build/12345"
 
 // manyStatusCount is the number of distinct-context statuses the provisioning
 // script seeds on the pagination-probe commit. It exceeds DEFAULT_PAGING_NUM
-// (30) and MAX_RESPONSE_ITEMS (50), so the D4 reconciliation proves whether the
+// (30) and MAX_RESPONSE_ITEMS (50), so the pagination probe proves whether the
 // single-GET combined-status read truncates. The committed provisioning script
 // seeds the same count.
 const manyStatusCount = 51
@@ -299,7 +299,7 @@ func TestIntegration_FetchCIStatus(t *testing.T) {
 	defer cancel()
 
 	// Commit A (the PR head) carries the small determinate status set, so the
-	// failing entry is always on page one, decoupled from the D4 probe commit.
+	// failing entry is always on page one, decoupled from the pagination-probe commit.
 	merge, err := adapter.GetMergeability(ctx, prNumber, owner, repo)
 	if err != nil {
 		t.Fatalf("GetMergeability(PR #%d): %v", prNumber, err)

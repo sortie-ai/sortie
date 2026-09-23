@@ -1,10 +1,11 @@
 package agentcore
 
 import (
-	"os"
+	"errors"
 	"path/filepath"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // ResolveWorkspace validates path for use as an agent workspace directory.
@@ -32,19 +33,18 @@ func ResolveWorkspace(path string) (string, *domain.AgentError) {
 		}
 	}
 
-	fi, err := os.Stat(absPath)
-	if err != nil {
-		return "", &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path does not exist",
-			Err:     err,
+	if err := workspacekit.VerifyDir(absPath); err != nil {
+		message := "workspace path does not exist"
+		switch {
+		case errors.Is(err, workspacekit.ErrLink):
+			message = "workspace path is a symbolic link"
+		case errors.Is(err, workspacekit.ErrNotDirectory):
+			message = "workspace path is not a directory"
 		}
-	}
-
-	if !fi.IsDir() {
 		return "", &domain.AgentError{
 			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path is not a directory",
+			Message: message,
+			Err:     err,
 		}
 	}
 

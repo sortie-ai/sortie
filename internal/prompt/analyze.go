@@ -219,7 +219,7 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 	// Dot-context misuse inside range/with. The early return is
 	// intentional: when dot is redefined, the entire expression is
 	// suspect, so sub-field validation is skipped. Emitting both would
-	// be noise — the operator must fix the dot reference first, which
+	// be noise; the operator must fix the dot reference first, which
 	// may change the sub-field chain entirely.
 	if scopeDepth > 0 && isTopLevel {
 		expr := "." + strings.Join(ident, ".")
@@ -278,7 +278,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 	topKey := ident[0]
 	schema := templateFieldSchema[topKey]
 
-	// Scalar top-level key (e.g. "attempt") — any sub-field is invalid.
+	// Scalar top-level key (e.g. "attempt"): any sub-field is invalid.
 	if schema == nil && len(ident) >= 2 {
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownField,

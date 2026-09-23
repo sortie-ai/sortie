@@ -782,7 +782,8 @@ const NotesConformancePrefix = "Product conformance: "
 const NotesScopeStatement = "Windows live qualification is unobserved"
 
 // NotesSections returns the required section headings, matched as an ordered
-// subsequence; the document's H1, which names the runtime, is unconstrained.
+// subsequence; the document's top-level heading, which names the runtime, is
+// unconstrained.
 func NotesSections() []string {
 	return []string{
 		"## Entry points",

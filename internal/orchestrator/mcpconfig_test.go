@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -833,6 +835,23 @@ func TestGenerateMCPConfig_SymlinkContainment(t *testing.T) {
 			t.Errorf(".sortie symlink target directory gained entries: %v, want none", entries)
 		}
 	})
+}
+
+// TestGenerateMCPConfig_AbsentWorkspaceIsAnError proves GenerateMCPConfig no
+// longer recreates a missing workspace directory: it fails instead of
+// producing an empty tree for the agent to run in.
+func TestGenerateMCPConfig_AbsentWorkspaceIsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	_, err := GenerateMCPConfig(mcpParams(dir))
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("GenerateMCPConfig(absent workspace) = %v, want wrapping fs.ErrNotExist", err)
+	}
+	if _, statErr := os.Lstat(dir); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("Lstat(workspace) = %v, want fs.ErrNotExist (no directory created)", statErr)
+	}
 }
 
 func TestCollectSortieEnv(t *testing.T) {

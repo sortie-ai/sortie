@@ -62,7 +62,7 @@ func TestETagCache_LookupMiss_AfterEviction(t *testing.T) {
 	c.entries["/path/a"] = e
 	c.mu.Unlock()
 
-	c.put("/path/b", "etag-b", "state-b") // capacity reached → evicts /path/a
+	c.put("/path/b", "etag-b", "state-b") // capacity reached -> evicts /path/a
 
 	if _, _, ok := c.lookup("/path/a"); ok {
 		t.Error("lookup(/path/a) = hit, want miss (evicted)")

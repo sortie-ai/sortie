@@ -155,6 +155,39 @@ func TestStartSessionCancelledLaunchContextSignalsGracefully(t *testing.T) {
 	waitForFile(t, evidencePath)
 }
 
+func TestStartSessionLocalWorkspaceIsSymlink(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	_, err := startTestSession(context.Background(), &ClientProtocolAdapter{}, domain.StartSessionParams{
+		WorkspacePath: link,
+		AgentConfig:   domain.AgentConfig{Command: "/nonexistent/sortie-clientprotocol-fixture"},
+	})
+	if err == nil {
+		t.Fatal("startSession(linked workspace) error = nil, want non-nil")
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrInvalidWorkspaceCwd {
+		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrInvalidWorkspaceCwd)
+	}
+
+	entries, readErr := os.ReadDir(target)
+	if readErr != nil {
+		t.Fatalf("ReadDir(target): %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("link target gained entries %v, want none (no subprocess started)", entries)
+	}
+}
+
 // stderrThenExitScript writes marker to stderr and exits without answering
 // stdin, so initialize fails against a closed connection rather than a timeout.
 func stderrThenExitScript(marker string) string {

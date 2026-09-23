@@ -9,16 +9,18 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 func TestReadDispatchSessionID_FIFOAtRecordPath(t *testing.T) {
 	t.Parallel()
 
 	ws := t.TempDir()
-	if err := os.Mkdir(filepath.Join(ws, sortieDir), 0o750); err != nil {
+	if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
 		t.Fatalf("Mkdir(.sortie): %v", err)
 	}
-	fifoPath := filepath.Join(ws, sortieDir, dispatchIdentityFile)
+	fifoPath := filepath.Join(ws, workspacekit.SortieDir, dispatchIdentityFile)
 	if err := unix.Mkfifo(fifoPath, 0o600); err != nil {
 		t.Skipf("Mkfifo unavailable in this test environment: %v", err)
 	}

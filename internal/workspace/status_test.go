@@ -16,6 +16,19 @@ func captureLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// assertLogMessageAndSymlinkError fails the test unless log contains both
+// wantMsg (the slog message) and the symbolic-link error text logged
+// alongside it.
+func assertLogMessageAndSymlinkError(t *testing.T, log, wantMsg string) {
+	t.Helper()
+	if !strings.Contains(log, wantMsg) {
+		t.Errorf("log = %q, want to contain %q", log, wantMsg)
+	}
+	if !strings.Contains(log, "is a symbolic link") {
+		t.Errorf("log = %q, want the logged error to contain %q", log, "is a symbolic link")
+	}
+}
+
 // writeStatusFile creates <wsPath>/.sortie/status with the given content.
 func writeStatusFile(t *testing.T, wsPath string, content []byte) {
 	t.Helper()
@@ -157,7 +170,7 @@ func TestReadStatusFile(t *testing.T) {
 			setup: func(t *testing.T, wsPath string) {
 				writeStatusFile(t, wsPath, []byte("\nblocked"))
 			},
-			// Empty first line after TrimSpace → StatusNone silently (no warn).
+			// Empty first line after TrimSpace: StatusNone silently (no warn).
 			want:    StatusNone,
 			wantLog: "",
 		},
@@ -173,7 +186,7 @@ func TestReadStatusFile(t *testing.T) {
 			setup: func(t *testing.T, wsPath string) {
 				writeStatusFile(t, wsPath, []byte("\r\nblocked"))
 			},
-			// \r before \n; TrimSpace removes \r → empty token → StatusNone silently.
+			// \r before \n; TrimSpace removes \r, leaving an empty token, so StatusNone silently.
 			want:    StatusNone,
 			wantLog: "",
 		},
@@ -270,9 +283,7 @@ func TestReadStatusFile_SymlinkAtDotSortie(t *testing.T) {
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (symlink escape)", got, StatusNone)
 	}
-	if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
-		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
-	}
+	assertLogMessageAndSymlinkError(t, logBuf.String(), "failed to open .sortie/status")
 }
 
 func TestReadStatusFile_SymlinkAtStatusFile(t *testing.T) {
@@ -299,9 +310,7 @@ func TestReadStatusFile_SymlinkAtStatusFile(t *testing.T) {
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (status symlink escape)", got, StatusNone)
 	}
-	if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
-		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
-	}
+	assertLogMessageAndSymlinkError(t, logBuf.String(), "failed to open .sortie/status")
 }
 
 func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
@@ -329,9 +338,7 @@ func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (intra-workspace symlink must be rejected)", got, StatusNone)
 	}
-	if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
-		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
-	}
+	assertLogMessageAndSymlinkError(t, logBuf.String(), "failed to open .sortie/status")
 }
 
 func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
@@ -344,8 +351,8 @@ func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
 	wsPath := t.TempDir()
 	writeStatusFile(t, wsPath, []byte("blocked\n"))
 	dotSortiePath := filepath.Join(wsPath, ".sortie")
-	// Removing all permissions from .sortie prevents os.Lstat from traversing
-	// into it, causing isSymlink(".sortie/status") to fail with EACCES.
+	// Removing all permissions from .sortie prevents opening status inside
+	// it, so the underlying open fails with EACCES.
 	if err := os.Chmod(dotSortiePath, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -360,8 +367,8 @@ func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
 		t.Errorf("ReadStatusFile() = %q, want %q", got, StatusNone)
 	}
 	log := logBuf.String()
-	if !strings.Contains(log, "failed to stat") {
-		t.Errorf("log = %q, want to contain %q", log, "failed to stat")
+	if !strings.Contains(log, "failed to open .sortie/status") {
+		t.Errorf("log = %q, want to contain %q", log, "failed to open .sortie/status")
 	}
 	if !strings.Contains(log, "level=WARN") {
 		t.Errorf("log = %q, want level=WARN", log)
@@ -452,9 +459,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(outsideStatus); err != nil {
 			t.Errorf("outside status file was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
-		}
+		assertLogMessageAndSymlinkError(t, logBuf.String(), "status file cleanup failed")
 	})
 
 	t.Run("status is symlink outside workspace skips cleanup", func(t *testing.T) {
@@ -481,9 +486,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(outsideFile); err != nil {
 			t.Errorf("outside file was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
-		}
+		assertLogMessageAndSymlinkError(t, logBuf.String(), "status file cleanup failed")
 	})
 
 	t.Run("nil logger no panic", func(t *testing.T) {
@@ -519,9 +522,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(realFile); err != nil {
 			t.Errorf("intra-workspace symlink target was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
-		}
+		assertLogMessageAndSymlinkError(t, logBuf.String(), "status file cleanup failed")
 	})
 
 	t.Run("dot-sortie is symlink inside workspace skips cleanup", func(t *testing.T) {
@@ -553,9 +554,7 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(realStatus); err != nil {
 			t.Errorf("target status file was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
-		}
+		assertLogMessageAndSymlinkError(t, logBuf.String(), "status file cleanup failed")
 	})
 
 	t.Run("remove fails logs warn", func(t *testing.T) {

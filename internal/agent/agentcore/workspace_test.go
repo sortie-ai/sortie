@@ -61,9 +61,10 @@ func TestResolveWorkspace(t *testing.T) {
 			wantMsg:  "workspace path is not a directory",
 		},
 		{
-			name:      "symlink to valid directory",
-			path:      symlink,
-			wantNoErr: true,
+			name:     "symlink to valid directory",
+			path:     symlink,
+			wantKind: domain.ErrInvalidWorkspaceCwd,
+			wantMsg:  "workspace path is a symbolic link",
 		},
 	}
 

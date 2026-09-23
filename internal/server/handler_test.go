@@ -1065,7 +1065,7 @@ func TestToStateResponse(t *testing.T) {
 
 		fptr := func(v float64) *float64 { return &v }
 
-		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 → $21
+		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 -> $21
 		snap := orchestrator.RuntimeSnapshotResult{
 			GeneratedAt: time.Now().UTC(),
 			Running: []orchestrator.SnapshotRunningEntry{

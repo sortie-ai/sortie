@@ -9,8 +9,8 @@
 // Unlike the Jira adapter, this adapter stores both activeStates and
 // terminalStates. Jira has native workflow states that the adapter
 // reads directly, so it needs only activeStates for candidate
-// filtering. GitHub has no native workflow states — only open and
-// closed — so the adapter must derive Sortie states entirely from
+// filtering. GitHub has no native workflow states, only open and
+// closed, so the adapter must derive Sortie states entirely from
 // labels. This requires knowledge of both active and terminal state
 // sets for the label-state derivation fallback, FetchIssuesByStates
 // open/closed routing, and TransitionIssue close/reopen decisions.
@@ -460,7 +460,7 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 	// Partition requested states into open-fetch vs closed-search.
 	// Non-terminal states (active and unknown) route through the issues
 	// endpoint (state=open). An unknown state label on a closed issue
-	// will not be found — this is intentional: only configured terminal
+	// will not be found; this is intentional: only configured terminal
 	// states warrant the closed-issue search path.
 	var requestedTerminal []string
 	needOpenFetch := false

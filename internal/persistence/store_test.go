@@ -1803,15 +1803,15 @@ func TestLoadRetryEntriesForRecovery_Mixed(t *testing.T) {
 		t.Fatalf("got %d entries, want 3", len(pending))
 	}
 
-	// Past entry (DueAtMs=1000, nowMs=5000) → 0.
+	// Past entry (DueAtMs=1000, nowMs=5000) -> 0.
 	if pending[0].RemainingMs != 0 {
 		t.Errorf("pending[0].RemainingMs = %d, want 0", pending[0].RemainingMs)
 	}
-	// Exact-now entry (DueAtMs=5000, nowMs=5000) → 0.
+	// Exact-now entry (DueAtMs=5000, nowMs=5000) -> 0.
 	if pending[1].RemainingMs != 0 {
 		t.Errorf("pending[1].RemainingMs = %d, want 0", pending[1].RemainingMs)
 	}
-	// Future entry (DueAtMs=9000, nowMs=5000) → 4000.
+	// Future entry (DueAtMs=9000, nowMs=5000) -> 4000.
 	if pending[2].RemainingMs != 4000 {
 		t.Errorf("pending[2].RemainingMs = %d, want 4000", pending[2].RemainingMs)
 	}
@@ -2205,7 +2205,7 @@ func TestPing_ClosedStore(t *testing.T) {
 
 // TestUpsertSessionMetadata_ExtendedFields verifies that the new
 // CacheReadTokens, ModelName, and APIRequestCount fields survive a
-// round-trip through Upsert → Load.
+// round-trip through Upsert -> Load.
 func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
 	t.Parallel()
 

@@ -2210,7 +2210,7 @@ func TestValidateDispatchConfig_WorkspaceRootWritable(t *testing.T) {
 		wantOK        bool
 		wantChecks    []string
 		noChecks      []string
-		checkMessages map[string]string // check name → expected substring in Message
+		checkMessages map[string]string // check name -> expected substring in Message
 	}{
 		{
 			name: "writable directory",

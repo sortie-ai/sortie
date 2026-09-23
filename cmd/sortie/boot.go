@@ -244,7 +244,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		blockerResolver = resolver
 	}
 
-	// Transfer ownership of mgr to the caller — suppress the deferred Stop.
+	// Transfer ownership of mgr to the caller; suppress the deferred Stop.
 	mgrStarted = false
 
 	return bootResult{

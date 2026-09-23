@@ -71,7 +71,7 @@ func Load(path string) (Workflow, error) {
 	if !ok {
 		if parsed == nil {
 			// Empty or comment-only YAML between delimiters. Treat as empty
-			// config rather than an error — this matches the behavior of
+			// config rather than an error; this matches the behavior of
 			// Hugo, Jekyll, and Astro for files like "---\n---\n".
 			config = make(map[string]any)
 		} else {

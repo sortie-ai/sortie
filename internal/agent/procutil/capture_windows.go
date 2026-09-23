@@ -258,14 +258,14 @@ type jobTeardown struct {
 // tree still alive after its drain returned. Only a test replaces it.
 var scanSurvivorsFunc = scanSurvivors
 
-// drainCaptureJob runs D1 to D3 of the capture sequence: it drains job
-// (D1, skipped when job is zero, meaning assignment never produced
-// one), reads its member list and probes the direct child identified by
-// cmd.Process, scanning the process list for survivors only when there
-// is no Job Object, the drain ended with an active process, or a drain
-// query failed (D2), logs the teardown record, and closes job (D3).
-// startedAt is the moment cmd.Start returned, for the root probe's
-// PID-reuse guard; waitMS is the reap duration the caller measured.
+// drainCaptureJob drains job (skipped when job is zero, meaning
+// assignment never produced one), reads its member list and probes the
+// direct child identified by cmd.Process, scanning the process list for
+// survivors only when there is no Job Object, the drain ended with an
+// active process, or a drain query failed, logs the teardown record,
+// and closes job. startedAt is the moment cmd.Start returned, for the
+// root probe's PID-reuse guard; waitMS is the reap duration the caller
+// measured.
 func drainCaptureJob(job uintptr, cmd *exec.Cmd, startedAt time.Time, waitMS int64, logger *slog.Logger) {
 	jobHandle := windows.Handle(job)
 	hasJob := jobHandle != 0

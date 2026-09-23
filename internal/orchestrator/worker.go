@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workspace"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // WorkerExitKind classifies how the worker attempt terminated.
@@ -79,7 +79,7 @@ func writeWorkerState(workspacePath string, state workerState) error {
 	if err != nil {
 		return fmt.Errorf("marshal worker state: %w", err)
 	}
-	return workspace.WriteSortieFile(workspacePath, "state.json", data)
+	return workspacekit.WriteSortieFile(workspacePath, "state.json", data)
 }
 
 // WorkerResult is the terminal outcome of a single worker attempt,
@@ -1463,13 +1463,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		default:
 			selfReviewStatus = "error"
 		}
-		reviewSummaryPath := filepath.Join(wsResult.Path, ".sortie", "review_summary.md")
-		sortieDirInfo, dirErr := os.Lstat(filepath.Join(wsResult.Path, ".sortie"))
-		if dirErr == nil && sortieDirInfo.Mode()&os.ModeSymlink == 0 && sortieDirInfo.IsDir() {
-			summaryInfo, sumErr := os.Lstat(reviewSummaryPath)
-			if sumErr == nil && summaryInfo.Mode()&os.ModeSymlink == 0 && summaryInfo.Mode().IsRegular() {
-				selfReviewSummaryPath = reviewSummaryPath
-			}
+		if f, summaryErr := workspacekit.OpenSortieFile(wsResult.Path, "review_summary.md"); summaryErr == nil {
+			_ = f.Close() //nolint:errcheck // the handle only confirms the summary is readable; nothing is read from it here
+			selfReviewSummaryPath = filepath.Join(wsResult.Path, workspacekit.SortieDir, "review_summary.md")
 		}
 	}
 

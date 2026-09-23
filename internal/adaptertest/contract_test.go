@@ -110,7 +110,13 @@ const (
 	ruleCAPTURE   contractRule = "CAPTURE"
 	ruleSINK      contractRule = "SINK"
 	ruleREAPER    contractRule = "REAPER"
+	ruleANCHOR    contractRule = "ANCHOR"
+	ruleWORKDIR   contractRule = "WORKDIR"
 )
+
+// contractWorkspacekitImportPath is resolved per file so an aliased or
+// dot import cannot evade rule ANCHOR.
+const contractWorkspacekitImportPath = "github.com/sortie-ai/sortie/internal/workspacekit"
 
 const (
 	contractTrackerFamilyPath = "github.com/sortie-ai/sortie/internal/tracker"
@@ -185,9 +191,14 @@ var contractAllowlist = map[string]map[contractRule]string{
 	},
 	"probe": {
 		ruleCAPTURE: "test-support package that cmd/sortie does not link",
+		ruleWORKDIR: "test-support package that cmd/sortie does not link",
 	},
 	"e2e": {
 		ruleCAPTURE: "test-support package that cmd/sortie does not link",
+		ruleWORKDIR: "test-support package that cmd/sortie does not link",
+	},
+	"workspacekit": {
+		ruleANCHOR: "owns the workspace-anchoring mechanism",
 	},
 }
 
@@ -2561,8 +2572,263 @@ func contractWalkCaptureAndTeardown(t *testing.T, fset *token.FileSet) []contrac
 	return walked
 }
 
+// contractSiteEntry names one package import path and one function or
+// method name inside it that rule ANCHOR's SortieDir arm or rule WORKDIR
+// exempts, paired with the reason it earns the exemption. A method's name
+// carries its receiver type, e.g. "LaunchTarget.BindWorkspace", so it does
+// not collide with an unrelated function of the same bare name.
+type contractSiteEntry struct {
+	importPath string
+	name       string
+	reason     string
+}
+
+// contractSiteAllows reports whether sites names importPath paired with
+// funcName.
+func contractSiteAllows(sites []contractSiteEntry, importPath, funcName string) bool {
+	if funcName == "" {
+		return false
+	}
+	for _, s := range sites {
+		if s.importPath == importPath && s.name == funcName {
+			return true
+		}
+	}
+	return false
+}
+
+// contractFuncQualifiedName returns fn's site-table name: "Type.Method"
+// for a method, the bare function name otherwise.
+func contractFuncQualifiedName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	recvType := fn.Recv.List[0].Type
+	if star, ok := recvType.(*ast.StarExpr); ok {
+		recvType = star.X
+	}
+	ident, ok := recvType.(*ast.Ident)
+	if !ok {
+		return fn.Name.Name
+	}
+	return ident.Name + "." + fn.Name.Name
+}
+
+// contractEnclosingFuncName returns the site-table name of the top-level
+// function or method declaration in file whose body contains pos, or ""
+// when pos sits outside every declared function (a package-level var or
+// const).
+func contractEnclosingFuncName(file *ast.File, pos token.Pos) string {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if pos >= fn.Body.Pos() && pos <= fn.Body.End() {
+			return contractFuncQualifiedName(fn)
+		}
+	}
+	return ""
+}
+
+// contractAnchorSortieDirSites exempts rule ANCHOR's string-literal and
+// workspacekit.SortieDir arms, never its os.OpenRoot arm, for the
+// functions that legitimately build a .sortie-relative path outside
+// workspacekit.
+var contractAnchorSortieDirSites = []contractSiteEntry{
+	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "handoffEvidencePathspecs", reason: "Git pathspec"},
+	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "GenerateMCPConfig", reason: "returned path"},
+	{importPath: "github.com/sortie-ai/sortie/internal/agent/mcpconfig", name: "Parse", reason: "location check"},
+	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "RunWorkerAttempt", reason: "exported summary path"},
+	{importPath: "github.com/sortie-ai/sortie/tools/qualify/probe", name: "writeToolServerMCPConfig", reason: "fixture path"},
+}
+
+// contractWorkdirSites pairs each exec.Cmd.Dir assignment rule WORKDIR
+// permits with the workspace verification that precedes it.
+var contractWorkdirSites = []contractSiteEntry{
+	{importPath: "github.com/sortie-ai/sortie/internal/agent/agentcore", name: "LaunchTarget.BindWorkspace", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "GitCommand", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/workspace", name: "RunHook", reason: "workspace verified before launch"},
+	{importPath: "github.com/sortie-ai/sortie/internal/orchestrator", name: "runSingleVerification", reason: "workspace verified before launch"},
+}
+
+// contractAnchorOwner is the package rule ANCHOR directs every .sortie
+// access through.
+const contractAnchorOwner = "workspacekit"
+
+// contractHoldsSortieDirElement reports whether value holds ".sortie" as
+// a whole path element: preceded by value's start, "/", or "\", and
+// followed by value's end, "/", or "\". A prose sentence such as "mkdir
+// -p .sortie" fails the boundary on both sides and is left legal.
+func contractHoldsSortieDirElement(value string) bool {
+	const needle = ".sortie"
+	for start := 0; ; {
+		found := strings.Index(value[start:], needle)
+		if found < 0 {
+			return false
+		}
+		pos := start + found
+		before := byte(0)
+		if pos > 0 {
+			before = value[pos-1]
+		}
+		after := byte(0)
+		if end := pos + len(needle); end < len(value) {
+			after = value[end]
+		}
+		boundaryBefore := pos == 0 || before == '/' || before == '\\'
+		boundaryAfter := pos+len(needle) == len(value) || after == '/' || after == '\\'
+		if boundaryBefore && boundaryAfter {
+			return true
+		}
+		start = pos + 1
+	}
+}
+
+// checkContractAnchorFile reports every rule ANCHOR violation in file: a
+// reference to os.OpenRoot, a string literal holding ".sortie" as a
+// whole path element, and a reference to workspacekit.SortieDir, each
+// outside contractAnchorSortieDirSites for the string-literal and
+// SortieDir arms. A dot import of "os" or workspacekit is reported at
+// the import, since a reference reached through it binds no local
+// identifier this checker could otherwise see.
+func checkContractAnchorFile(fset *token.FileSet, file *ast.File, importPath string) []contractViolation {
+	var violations []contractViolation
+
+	for _, imp := range file.Imports {
+		if imp.Name == nil || imp.Name.Name != "." {
+			continue
+		}
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		switch path {
+		case "os":
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports os; an OpenRoot reference reached through it evades rule ANCHOR",
+			})
+		case contractWorkspacekitImportPath:
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports " + contractWorkspacekitImportPath + "; a SortieDir reference reached through it evades rule ANCHOR",
+			})
+		}
+	}
+
+	osName := resolveContractImportName(file, "os")
+	kitName := resolveContractImportName(file, contractWorkspacekitImportPath)
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.SelectorExpr:
+			ident, ok := node.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch {
+			case osName != "" && ident.Name == osName && node.Sel.Name == "OpenRoot":
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(node.Pos()),
+					text: "calls os.OpenRoot directly; open .sortie only through " + contractAnchorOwner,
+				})
+			case kitName != "" && ident.Name == kitName && node.Sel.Name == "SortieDir":
+				if !contractSiteAllows(contractAnchorSortieDirSites, importPath, contractEnclosingFuncName(file, node.Pos())) {
+					violations = append(violations, contractViolation{
+						pos:  fset.Position(node.Pos()),
+						text: "references " + contractAnchorOwner + ".SortieDir outside its site table",
+					})
+				}
+			}
+		case *ast.BasicLit:
+			if node.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(node.Value)
+			if err != nil || !contractHoldsSortieDirElement(value) {
+				return true
+			}
+			if !contractSiteAllows(contractAnchorSortieDirSites, importPath, contractEnclosingFuncName(file, node.Pos())) {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(node.Pos()),
+					text: "string literal holds \".sortie\" as a path element; reach it through " + contractAnchorOwner + ".SortieDir",
+				})
+			}
+		}
+		return true
+	})
+
+	return violations
+}
+
+// checkContractWorkdirFile reports every rule WORKDIR violation in file:
+// an assignment to a selector named Dir outside contractWorkdirSites, and
+// a composite literal of type exec.Cmd carrying key Dir anywhere. Only a
+// file meeting checkContractCaptureFile's hasCmd condition is scanned; a
+// Dir key in a non-exec.Cmd composite literal, such as
+// workspace.HookParams, is not flagged.
+func checkContractWorkdirFile(fset *token.FileSet, file *ast.File, importPath string, idx *contractCmdIndex) []contractViolation {
+	var violations []contractViolation
+
+	execName := resolveContractImportName(file, "os/exec")
+	osName := resolveContractImportName(file, "os")
+	syscallName := resolveContractImportName(file, "syscall")
+	winName := resolveContractImportName(file, "golang.org/x/sys/windows")
+	procName := resolveContractImportName(file, contractProcutilImportPath)
+	importsCmdProducer := false
+	for _, path := range contractFileImportAliases(file) {
+		if idx.producerPaths[path] {
+			importsCmdProducer = true
+			break
+		}
+	}
+	if execName == "" && osName == "" && syscallName == "" && winName == "" && procName == "" && !importsCmdProducer {
+		return violations
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Dir" {
+					continue
+				}
+				if contractSiteAllows(contractWorkdirSites, importPath, contractEnclosingFuncName(file, sel.Pos())) {
+					continue
+				}
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(sel.Pos()),
+					text: "assigns a Dir selector outside rule WORKDIR's site table; verify the workspace path immediately before this launch",
+				})
+			}
+		case *ast.CompositeLit:
+			sel, ok := node.Type.(*ast.SelectorExpr)
+			if !ok || execName == "" || sel.Sel.Name != "Cmd" {
+				return true
+			}
+			ident, ok := sel.X.(*ast.Ident)
+			if !ok || ident.Name != execName {
+				return true
+			}
+			if compositeLitKeyValue(node, "Dir") == nil {
+				return true
+			}
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(node.Pos()),
+				text: "exec.Cmd composite literal carries key Dir; assign it only through a checked launcher",
+			})
+		}
+		return true
+	})
+
+	return violations
+}
+
 // TestContractCaptureAndTeardown walks every non-test Go file under cmd/
-// and internal/ and fails on rules CAPTURE, SINK, TEARDOWN, and REAPER.
+// and internal/ and fails on rules CAPTURE, SINK, TEARDOWN, REAPER,
+// ANCHOR, and WORKDIR.
 func TestContractCaptureAndTeardown(t *testing.T) {
 	fset := token.NewFileSet()
 	walked := contractWalkCaptureAndTeardown(t, fset)
@@ -2584,6 +2850,20 @@ func TestContractCaptureAndTeardown(t *testing.T) {
 		if !contractExempt(w.pkg.dirName, ruleREAPER) {
 			for _, file := range w.pkg.files {
 				for _, v := range checkContractReaperLogger(fset, file) {
+					t.Errorf("%s: %s", v.pos, v.text)
+				}
+			}
+		}
+		if !contractExempt(w.pkg.dirName, ruleANCHOR) {
+			for _, file := range w.pkg.files {
+				for _, v := range checkContractAnchorFile(fset, file, w.pkg.importPath) {
+					t.Errorf("%s: %s", v.pos, v.text)
+				}
+			}
+		}
+		if !contractExempt(w.pkg.dirName, ruleWORKDIR) {
+			for _, file := range w.pkg.files {
+				for _, v := range checkContractWorkdirFile(fset, file, w.pkg.importPath, idx) {
 					t.Errorf("%s: %s", v.pos, v.text)
 				}
 			}
@@ -4598,6 +4878,10 @@ func TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent(t *testing.T) {
 	contractCheckWideRuleAllowlist(t, ruleTEARDOWN, found)
 	contractCheckWideRuleEvaluated(t, ruleREAPER, walked)
 	contractCheckWideRuleAllowlist(t, ruleREAPER, found)
+	contractCheckWideRuleEvaluated(t, ruleANCHOR, walked)
+	contractCheckWideRuleAllowlist(t, ruleANCHOR, found)
+	contractCheckWideRuleEvaluated(t, ruleWORKDIR, walked)
+	contractCheckWideRuleAllowlist(t, ruleWORKDIR, found)
 }
 
 // TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks
@@ -4606,7 +4890,7 @@ func TestContractCaptureAndTeardownRule_AppliesAndStaysCurrent(t *testing.T) {
 // package-level contractAllowlist a concurrent fixture test reads, so
 // neither runs in parallel.
 func TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks(t *testing.T) {
-	for _, rule := range []contractRule{ruleCAPTURE, ruleSINK, ruleTEARDOWN, ruleREAPER} {
+	for _, rule := range []contractRule{ruleCAPTURE, ruleSINK, ruleTEARDOWN, ruleREAPER, ruleANCHOR, ruleWORKDIR} {
 		t.Run(string(rule)+": zero files evaluated under a required root", func(t *testing.T) {
 			walked := []contractWalkedPackage{
 				{pkg: contractPackage{dirName: "fixture", importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture"}},
@@ -4636,6 +4920,544 @@ func TestContractCaptureAndTeardownRule_StalenessGuardCatchesRealBreaks(t *testi
 				t.Fatalf("staleness guard recorded no failure for an allowlist entry naming a directory absent from the walk, want at least one")
 			}
 		})
+	}
+}
+
+// contractWalkHasFunc reports whether walked holds a function or method
+// declaration named name in the package at importPath.
+func contractWalkHasFunc(walked []contractWalkedPackage, importPath, name string) bool {
+	for _, w := range walked {
+		if w.pkg.importPath != importPath {
+			continue
+		}
+		for _, file := range w.pkg.files {
+			for _, decl := range file.Decls {
+				if fn, ok := decl.(*ast.FuncDecl); ok && contractFuncQualifiedName(fn) == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// contractCheckSiteTableFunctionsExist reports, for each entry in sites,
+// when the walk holds no function or method matching its importPath and
+// name.
+func contractCheckSiteTableFunctionsExist(r contractIdentityReporter, ruleName string, sites []contractSiteEntry, walked []contractWalkedPackage) {
+	for _, entry := range sites {
+		if !contractWalkHasFunc(walked, entry.importPath, entry.name) {
+			r.Errorf("rule %s site table entry %s.%s names no function or method the walk found, want a live site", ruleName, entry.importPath, entry.name)
+		}
+	}
+}
+
+// contractCheckAnchorSitesContainConstruct reports, for each
+// contractAnchorSortieDirSites entry, when checkContractAnchorFile finds no
+// violation at that site once the entry's exemption is removed: a site
+// whose construct is gone no longer needs the exemption it holds.
+func contractCheckAnchorSitesContainConstruct(r contractIdentityReporter, walked []contractWalkedPackage) {
+	fset := token.NewFileSet()
+	original := contractAnchorSortieDirSites
+	defer func() { contractAnchorSortieDirSites = original }()
+
+	for _, entry := range original {
+		contractAnchorSortieDirSites = slices.DeleteFunc(slices.Clone(original), func(e contractSiteEntry) bool { return e == entry })
+
+		fires := false
+		for _, w := range walked {
+			if w.pkg.importPath != entry.importPath {
+				continue
+			}
+			for _, file := range w.pkg.files {
+				if len(checkContractAnchorFile(fset, file, w.pkg.importPath)) > 0 {
+					fires = true
+				}
+			}
+		}
+		if !fires {
+			r.Errorf("removing the ANCHOR exemption for %s.%s reported no violation, want its construct still present", entry.importPath, entry.name)
+		}
+	}
+}
+
+// contractCheckWorkdirSitesContainConstruct is contractCheckAnchorSitesContainConstruct
+// for contractWorkdirSites and checkContractWorkdirFile.
+func contractCheckWorkdirSitesContainConstruct(r contractIdentityReporter, walked []contractWalkedPackage) {
+	fset := token.NewFileSet()
+	idx, _ := contractBuildModuleCmdIndex(walked)
+	original := contractWorkdirSites
+	defer func() { contractWorkdirSites = original }()
+
+	for _, entry := range original {
+		contractWorkdirSites = slices.DeleteFunc(slices.Clone(original), func(e contractSiteEntry) bool { return e == entry })
+
+		fires := false
+		for _, w := range walked {
+			if w.pkg.importPath != entry.importPath {
+				continue
+			}
+			for _, file := range w.pkg.files {
+				if len(checkContractWorkdirFile(fset, file, w.pkg.importPath, idx)) > 0 {
+					fires = true
+				}
+			}
+		}
+		if !fires {
+			r.Errorf("removing the WORKDIR exemption for %s.%s reported no violation, want its construct still present", entry.importPath, entry.name)
+		}
+	}
+}
+
+// TestContractAnchorWorkdirSiteTables_AppliesAndStaysCurrent guards the
+// ANCHOR and WORKDIR site tables against going stale: each entry must name a
+// function or method the walk still finds, and removing its exemption must
+// still surface the violation it exempts.
+func TestContractAnchorWorkdirSiteTables_AppliesAndStaysCurrent(t *testing.T) {
+	fset := token.NewFileSet()
+	walked := contractWalkCaptureAndTeardown(t, fset)
+
+	contractCheckSiteTableFunctionsExist(t, string(ruleANCHOR), contractAnchorSortieDirSites, walked)
+	contractCheckSiteTableFunctionsExist(t, string(ruleWORKDIR), contractWorkdirSites, walked)
+	contractCheckAnchorSitesContainConstruct(t, walked)
+	contractCheckWorkdirSitesContainConstruct(t, walked)
+}
+
+// TestContractAnchorWorkdirSiteTables_StalenessGuardCatchesRealBreaks proves
+// the checks TestContractAnchorWorkdirSiteTables_AppliesAndStaysCurrent
+// performs can fail, not just pass. No subtest runs in parallel: each
+// mutates a package-level site table a concurrent fixture test also reads.
+func TestContractAnchorWorkdirSiteTables_StalenessGuardCatchesRealBreaks(t *testing.T) {
+	t.Run("a site entry names no function the walk found", func(t *testing.T) {
+		walked := []contractWalkedPackage{
+			{pkg: contractPackage{dirName: "fixture", importPath: "example.com/ghost"}},
+		}
+		sites := []contractSiteEntry{{importPath: "example.com/ghost", name: "Missing", reason: "test"}}
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckSiteTableFunctionsExist(reporter, string(ruleANCHOR), sites, walked)
+
+		if len(reporter.errors) == 0 {
+			t.Fatal("staleness guard recorded no failure for a site entry naming a function the walk did not find, want at least one")
+		}
+	})
+
+	t.Run("an ANCHOR site entry no longer contains its construct", func(t *testing.T) {
+		fset := token.NewFileSet()
+		const src = `package fixture
+
+func Clean() string { return "nothing to see here" }
+`
+		file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		walked := []contractWalkedPackage{{pkg: contractPackage{
+			dirName:    "fixture",
+			importPath: "example.com/fixture",
+			files:      []*ast.File{file},
+		}}}
+
+		original := contractAnchorSortieDirSites
+		contractAnchorSortieDirSites = []contractSiteEntry{{importPath: "example.com/fixture", name: "Clean", reason: "test"}}
+		t.Cleanup(func() { contractAnchorSortieDirSites = original })
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckAnchorSitesContainConstruct(reporter, walked)
+
+		if len(reporter.errors) == 0 {
+			t.Fatal("staleness guard recorded no failure for an ANCHOR site entry whose construct is gone, want at least one")
+		}
+	})
+
+	t.Run("a WORKDIR site entry no longer contains its construct", func(t *testing.T) {
+		fset := token.NewFileSet()
+		const src = `package fixture
+
+import "os/exec"
+
+func Clean(cmd *exec.Cmd) {
+	cmd.Env = nil
+}
+`
+		file, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse fixture: %v", err)
+		}
+		walked := []contractWalkedPackage{{pkg: contractPackage{
+			dirName:    "fixture",
+			importPath: "example.com/fixture",
+			files:      []*ast.File{file},
+		}}}
+
+		original := contractWorkdirSites
+		contractWorkdirSites = []contractSiteEntry{{importPath: "example.com/fixture", name: "Clean", reason: "test"}}
+		t.Cleanup(func() { contractWorkdirSites = original })
+
+		reporter := &contractStalenessFakeReporter{}
+		contractCheckWorkdirSitesContainConstruct(reporter, walked)
+
+		if len(reporter.errors) == 0 {
+			t.Fatal("staleness guard recorded no failure for a WORKDIR site entry whose construct is gone, want at least one")
+		}
+	})
+}
+
+// TestCheckContractAnchor_DetectsViolations pins rule ANCHOR against inline
+// fixtures, so a regression is caught even when every real call site
+// complies.
+func TestCheckContractAnchor_DetectsViolations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		importPath string
+		src        string
+		wantCount  int
+		wantSubstr string
+	}{
+		{
+			name:       "a direct os.OpenRoot call is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import "os"
+
+func openWorkspace(path string) (*os.Root, error) {
+	return os.OpenRoot(path)
+}
+`,
+			wantCount:  1,
+			wantSubstr: "calls os.OpenRoot directly",
+		},
+		{
+			name:       "a .sortie path literal outside the site table is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import "path/filepath"
+
+func statusPath(ws string) string {
+	return filepath.Join(ws, ".sortie", "status")
+}
+`,
+			wantCount:  1,
+			wantSubstr: "string literal holds",
+		},
+		{
+			name:       "a .sortie substring with no path boundary is legal",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+const suffix = "runtime.sortiex"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a workspacekit.SortieDir reference outside the site table is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import "github.com/sortie-ai/sortie/internal/workspacekit"
+
+func sortiePath(ws string) string {
+	return ws + "/" + workspacekit.SortieDir
+}
+`,
+			wantCount:  1,
+			wantSubstr: "outside its site table",
+		},
+		{
+			name:       "a dot-imported os evades no check and is rejected at the import",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import . "os"
+
+func openWorkspace(path string) (*Root, error) {
+	return OpenRoot(path)
+}
+`,
+			wantCount:  1,
+			wantSubstr: "dot-imports os",
+		},
+		{
+			name:       "a dot-imported workspacekit is rejected at the import",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import . "github.com/sortie-ai/sortie/internal/workspacekit"
+
+func sortiePath(ws string) string {
+	return ws + "/" + SortieDir
+}
+`,
+			wantCount:  1,
+			wantSubstr: "dot-imports " + contractWorkspacekitImportPath,
+		},
+		{
+			name:       "the handoffEvidencePathspecs site is exempt for its own package",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import "github.com/sortie-ai/sortie/internal/workspacekit"
+
+func handoffEvidencePathspecs(rel string) []string {
+	return []string{rel + "/" + workspacekit.SortieDir}
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "the same site.SortieDir reference is rejected outside its own package",
+			importPath: "github.com/sortie-ai/sortie/internal/orchestrator",
+			src: `package orchestrator
+
+import "github.com/sortie-ai/sortie/internal/workspacekit"
+
+func handoffEvidencePathspecs(rel string) []string {
+	return []string{rel + "/" + workspacekit.SortieDir}
+}
+`,
+			wantCount:  1,
+			wantSubstr: "outside its site table",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			got := checkContractAnchorFile(fset, file, tt.importPath)
+
+			if len(got) != tt.wantCount {
+				t.Errorf("checkContractAnchorFile() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
+			}
+			if tt.wantSubstr != "" && !slices.ContainsFunc(got, func(v contractViolation) bool {
+				return strings.Contains(v.text, tt.wantSubstr)
+			}) {
+				t.Errorf("violations = %+v, want one containing %q", got, tt.wantSubstr)
+			}
+		})
+	}
+}
+
+// TestCheckContractAnchor_SiteTableSitesHold proves every contractAnchorSortieDirSites
+// entry actually suppresses the violation it names, at its own site.
+func TestCheckContractAnchor_SiteTableSitesHold(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	walked := contractWalkCaptureAndTeardown(t, fset)
+
+	for _, entry := range contractAnchorSortieDirSites {
+		t.Run(entry.importPath+"."+entry.name, func(t *testing.T) {
+			t.Parallel()
+
+			var checked bool
+			for _, w := range walked {
+				if w.pkg.importPath != entry.importPath {
+					continue
+				}
+				for _, file := range w.pkg.files {
+					for _, v := range checkContractAnchorFile(fset, file, w.pkg.importPath) {
+						if strings.Contains(v.text, "outside its site table") {
+							t.Errorf("%s still reports a site-table violation despite its exemption: %s", entry.name, v.text)
+						}
+					}
+					checked = true
+				}
+			}
+			if !checked {
+				t.Fatalf("no walked file found for import path %q", entry.importPath)
+			}
+		})
+	}
+}
+
+// TestCheckContractAnchor_AllowlistEntriesHold proves every whole-rule
+// ANCHOR allowlist entry is exempt.
+func TestCheckContractAnchor_AllowlistEntriesHold(t *testing.T) {
+	t.Parallel()
+
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleANCHOR]; !exempt {
+			continue
+		}
+		if !contractExempt(dirName, ruleANCHOR) {
+			t.Errorf("contractExempt(%q, ruleANCHOR) = false, want true", dirName)
+		}
+	}
+}
+
+// TestCheckContractWorkdir_DetectsViolations pins rule WORKDIR against
+// inline fixtures, so a regression is caught even when every real launch
+// site complies.
+func TestCheckContractWorkdir_DetectsViolations(t *testing.T) {
+	t.Parallel()
+
+	idx, _ := contractBuildModuleCmdIndex(nil)
+
+	tests := []struct {
+		name       string
+		importPath string
+		src        string
+		wantCount  int
+		wantSubstr string
+	}{
+		{
+			name:       "a Dir assignment outside the site table is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import "os/exec"
+
+func run(cmd *exec.Cmd, dir string) {
+	cmd.Dir = dir
+}
+`,
+			wantCount:  1,
+			wantSubstr: "assigns a Dir selector outside rule WORKDIR's site table",
+		},
+		{
+			name:       "an exec.Cmd composite literal carrying Dir is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import "os/exec"
+
+func build(dir string) *exec.Cmd {
+	return &exec.Cmd{Path: "git", Dir: dir}
+}
+`,
+			wantCount:  1,
+			wantSubstr: "exec.Cmd composite literal carries key Dir",
+		},
+		{
+			name:       "a Dir key in a non-exec.Cmd composite literal is legal",
+			importPath: "github.com/sortie-ai/sortie/internal/workspace",
+			src: `package workspace
+
+import "os/exec"
+
+type HookParams struct {
+	Dir string
+}
+
+func build(dir string) HookParams {
+	_ = exec.Command
+	return HookParams{Dir: dir}
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a file with no cmd producer import is untouched",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+type thing struct{ Dir string }
+
+func run(t *thing, dir string) {
+	t.Dir = dir
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "the BindWorkspace site is exempt for its own package and method",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/agentcore",
+			src: `package agentcore
+
+import "os/exec"
+
+type LaunchTarget struct{ WorkspacePath string }
+
+func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) error {
+	cmd.Dir = t.WorkspacePath
+	return nil
+}
+`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			got := checkContractWorkdirFile(fset, file, tt.importPath, idx)
+
+			if len(got) != tt.wantCount {
+				t.Errorf("checkContractWorkdirFile() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
+			}
+			if tt.wantSubstr != "" && !slices.ContainsFunc(got, func(v contractViolation) bool {
+				return strings.Contains(v.text, tt.wantSubstr)
+			}) {
+				t.Errorf("violations = %+v, want one containing %q", got, tt.wantSubstr)
+			}
+		})
+	}
+}
+
+// TestCheckContractWorkdir_SiteTableSitesHold proves every contractWorkdirSites
+// entry actually suppresses the violation it names, at its own site.
+func TestCheckContractWorkdir_SiteTableSitesHold(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	walked := contractWalkCaptureAndTeardown(t, fset)
+	idx, _ := contractBuildModuleCmdIndex(walked)
+
+	for _, entry := range contractWorkdirSites {
+		t.Run(entry.importPath+"."+entry.name, func(t *testing.T) {
+			t.Parallel()
+
+			var checked bool
+			for _, w := range walked {
+				if w.pkg.importPath != entry.importPath {
+					continue
+				}
+				for _, file := range w.pkg.files {
+					for _, v := range checkContractWorkdirFile(fset, file, w.pkg.importPath, idx) {
+						if strings.Contains(v.text, "outside rule WORKDIR's site table") {
+							t.Errorf("%s still reports a site-table violation despite its exemption: %s", entry.name, v.text)
+						}
+					}
+					checked = true
+				}
+			}
+			if !checked {
+				t.Fatalf("no walked file found for import path %q", entry.importPath)
+			}
+		})
+	}
+}
+
+// TestCheckContractWorkdir_AllowlistEntriesHold proves every whole-rule
+// WORKDIR allowlist entry is exempt.
+func TestCheckContractWorkdir_AllowlistEntriesHold(t *testing.T) {
+	t.Parallel()
+
+	for dirName, reasons := range contractAllowlist {
+		if _, exempt := reasons[ruleWORKDIR]; !exempt {
+			continue
+		}
+		if !contractExempt(dirName, ruleWORKDIR) {
+			t.Errorf("contractExempt(%q, ruleWORKDIR) = false, want true", dirName)
+		}
 	}
 }
 

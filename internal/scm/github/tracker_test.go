@@ -493,7 +493,7 @@ func TestNewGitHubAdapter_HandoffStateExtraction(t *testing.T) {
 func TestFetchCandidateIssues_FiltersPullRequests(t *testing.T) {
 	t.Parallel()
 
-	// issues.json contains: backlog issue (#1), PR (#2, filtered), in-progress (#3), done (#4, non-active).
+	// issues.json contains: backlog issue (1), PR (2, filtered), in-progress (3), done (4, non-active).
 	fixture := loadFixture(t, "issues.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -507,7 +507,7 @@ func TestFetchCandidateIssues_FiltersPullRequests(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
 
-	// Issues 1 (backlog) and 3 (in-progress) pass. PR #2 filtered. #4 (done=terminal) filtered.
+	// Issues 1 (backlog) and 3 (in-progress) pass. PR 2 filtered. Issue 4 (done=terminal) filtered.
 	if len(issues) != 2 {
 		t.Fatalf("len = %d, want 2 (PR and non-active filtered)", len(issues))
 	}
@@ -559,7 +559,7 @@ func TestFetchCandidateIssues_CommentsNil(t *testing.T) {
 func TestFetchCandidateIssues_NonNilEmptySlice(t *testing.T) {
 	t.Parallel()
 
-	// Empty response → non-nil empty slice, not nil.
+	// Empty response -> non-nil empty slice, not nil.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("[]")) //nolint:errcheck // test helper
@@ -582,7 +582,7 @@ func TestFetchCandidateIssues_NonNilEmptySlice(t *testing.T) {
 func TestFetchCandidateIssues_MultiLabelWarnCarriesIssueIdentifier(t *testing.T) {
 	t.Parallel()
 
-	// #9 carries both "backlog" and "in-progress", two configured
+	// Issue 9 carries both "backlog" and "in-progress", two configured
 	// active-state labels.
 	const twoLabels = `[{"id":900,"number":9,"title":"Two state labels","body":null,"state":"open","html_url":"u",
 		"labels":[{"name":"backlog"},{"name":"in-progress"}],"assignees":[],"type":null,"pull_request":null,
@@ -809,7 +809,7 @@ func TestFetchIssueByID_FullPopulation(t *testing.T) {
 		t.Errorf("Assignee = %q, want alice", issue.Assignee)
 	}
 
-	// Blockers from blockers.json: one blocker (#5).
+	// Blockers from blockers.json: one blocker (5).
 	if len(issue.BlockedBy) != 1 {
 		t.Fatalf("BlockedBy len = %d, want 1", len(issue.BlockedBy))
 	}
@@ -817,7 +817,7 @@ func TestFetchIssueByID_FullPopulation(t *testing.T) {
 		t.Errorf("BlockedBy[0].Identifier = %q, want 5", issue.BlockedBy[0].Identifier)
 	}
 
-	// Parent from parent.json: #7.
+	// Parent from parent.json: 7.
 	if issue.Parent == nil {
 		t.Fatal("Parent is nil, want non-nil")
 	}
@@ -947,7 +947,7 @@ func TestFetchIssueByID_ParentNotFound_Degrades(t *testing.T) {
 		t.Errorf("BlockedBy len = %d, want 0", len(issue.BlockedBy))
 	}
 
-	// 404 on parent → nil.
+	// 404 on parent -> nil.
 	if issue.Parent != nil {
 		t.Errorf("Parent = %v, want nil on 404", issue.Parent)
 	}
@@ -1034,7 +1034,7 @@ func TestFetchIssuesByStates_ActiveStatesUsesIssuesEndpoint(t *testing.T) {
 		t.Errorf("state param = %q, want open", gotState)
 	}
 
-	// Only backlog issue (#1) should be in result.
+	// Only backlog issue (1) should be in result.
 	if len(issues) != 1 {
 		t.Fatalf("len = %d, want 1 (backlog only)", len(issues))
 	}
@@ -1126,7 +1126,7 @@ func TestFetchIssuesByStates_Dedup(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	// Request both active ("backlog") and terminal ("done"); issue #1 matches both.
+	// Request both active ("backlog") and terminal ("done"); issue 1 matches both.
 	issues, err := a.FetchIssuesByStates(context.Background(), []string{"backlog", "done"})
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates: %v", err)
@@ -1416,7 +1416,7 @@ func newTransitionServer(t *testing.T, number int, currentLabel, nativeState str
 func TestTransitionIssue_LabelSwap(t *testing.T) {
 	t.Parallel()
 
-	// Current: "backlog" (active), native: open → Target: "review" (active).
+	// Current: "backlog" (active), native: open -> Target: "review" (active).
 	// Expected: DELETE backlog, POST review, no PATCH.
 	ts := newTransitionServer(t, 1, "backlog", "open")
 
@@ -1439,7 +1439,7 @@ func TestTransitionIssue_LabelSwap(t *testing.T) {
 func TestTransitionIssue_CloseOnTerminal(t *testing.T) {
 	t.Parallel()
 
-	// Current: "in-progress" (active), native: open → Target: "done" (terminal).
+	// Current: "in-progress" (active), native: open -> Target: "done" (terminal).
 	// Expected: DELETE in-progress, POST done, PATCH close.
 	ts := newTransitionServer(t, 5, "in-progress", "open")
 
@@ -1462,7 +1462,7 @@ func TestTransitionIssue_CloseOnTerminal(t *testing.T) {
 func TestTransitionIssue_ReopenOnActive(t *testing.T) {
 	t.Parallel()
 
-	// Current: "done" (terminal), native: closed → Target: "review" (active).
+	// Current: "done" (terminal), native: closed -> Target: "review" (active).
 	// Expected: DELETE done, POST review, PATCH reopen.
 	ts := newTransitionServer(t, 8, "done", "closed")
 
@@ -1485,7 +1485,7 @@ func TestTransitionIssue_ReopenOnActive(t *testing.T) {
 func TestTransitionIssue_IdempotentNoOp(t *testing.T) {
 	t.Parallel()
 
-	// Current label already matches target → no label API calls.
+	// Current label already matches target -> no label API calls.
 	ts := newTransitionServer(t, 3, "review", "open")
 
 	a := mustAdapter(t, validConfig(ts.srv.URL))
@@ -1504,7 +1504,7 @@ func TestTransitionIssue_IdempotentNoOp(t *testing.T) {
 func TestTransitionIssue_PartialFailure_AddLabel(t *testing.T) {
 	t.Parallel()
 
-	// DELETE succeeds, POST fails → error returned.
+	// DELETE succeeds, POST fails -> error returned.
 	// On retry, DELETE is 404 (already removed) and POST should succeed.
 	ts := newTransitionServer(t, 2, "backlog", "open")
 	ts.postFailWith = http.StatusInternalServerError
@@ -1638,7 +1638,7 @@ func TestTransitionIssue_UnknownStateWithHandoffConfigured(t *testing.T) {
 func TestTransitionIssue_PartialFailure_Close(t *testing.T) {
 	t.Parallel()
 
-	// DELETE and POST succeed, PATCH close fails → error returned.
+	// DELETE and POST succeed, PATCH close fails -> error returned.
 	ts := newTransitionServer(t, 6, "review", "open")
 	ts.patchFailWith = http.StatusInternalServerError
 
@@ -1667,7 +1667,7 @@ func TestTransitionIssue_LabelURLEncoding(t *testing.T) {
 	})
 	mux.HandleFunc("/repos/owner/repo/issues/1/labels/", func(w http.ResponseWriter, r *http.Request) {
 		// EscapedPath() returns the percent-encoded form, confirming the label
-		// was properly URL-encoded before sending (spaces → %20).
+		// was properly URL-encoded before sending (spaces -> %20).
 		deletedLabelPath = r.URL.EscapedPath()
 		w.WriteHeader(http.StatusOK)
 	})
@@ -1908,7 +1908,7 @@ func TestFetchIssueByID_NonNotFoundError(t *testing.T) {
 func TestFetchIssueByID_BlockerAPIError(t *testing.T) {
 	t.Parallel()
 
-	// blockers endpoint returns 500 (not 404) → error propagated.
+	// blockers endpoint returns 500 (not 404) -> error propagated.
 	issueFix := loadFixture(t, "issue.json")
 
 	mux := http.NewServeMux()
@@ -1931,7 +1931,7 @@ func TestFetchIssueByID_BlockerAPIError(t *testing.T) {
 func TestFetchIssueByID_ParentAPIError(t *testing.T) {
 	t.Parallel()
 
-	// parent endpoint returns 500 (not 404) → error propagated.
+	// parent endpoint returns 500 (not 404) -> error propagated.
 	issueFix := loadFixture(t, "issue.json")
 
 	mux := http.NewServeMux()
@@ -1984,8 +1984,8 @@ func TestFetchIssuesByStates_OpenPagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates open pagination: %v", err)
 	}
-	// issues.json: #1 backlog + #3 in-progress (2 non-PR active issues, #4 done is filtered out).
-	// issues_page2.json: #5 review (1 issue).
+	// issues.json: 1 backlog + 3 in-progress (2 non-PR active issues, 4 done is filtered out).
+	// issues_page2.json: 5 review (1 issue).
 	if len(issues) != 3 {
 		t.Errorf("len = %d, want 3 across 2 pages", len(issues))
 	}
@@ -2116,7 +2116,7 @@ func TestFetchIssuesByStates_ContextCancelledDuringTerminal(t *testing.T) {
 func TestFetchIssueStatesByIDs_SkipsPullRequest(t *testing.T) {
 	t.Parallel()
 
-	// API returns a PR for the requested identifier → it must be omitted from the result map.
+	// API returns a PR for the requested identifier -> it must be omitted from the result map.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		// pull_request:{} marks this as a PR.
@@ -2150,7 +2150,7 @@ func TestFetchIssueStatesByIdentifiers_Error(t *testing.T) {
 func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
 	t.Parallel()
 
-	// 500 from comments endpoint → ErrTrackerTransport (not wrapped as NotFound).
+	// 500 from comments endpoint -> ErrTrackerTransport (not wrapped as NotFound).
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -2164,7 +2164,7 @@ func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
 func TestTransitionIssue_GetIssueError(t *testing.T) {
 	t.Parallel()
 
-	// GET issue returns 500 → error propagated; not a NotFound.
+	// GET issue returns 500 -> error propagated; not a NotFound.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -2178,7 +2178,7 @@ func TestTransitionIssue_GetIssueError(t *testing.T) {
 func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 	t.Parallel()
 
-	// DELETE existing label returns 404 (already removed) → treated as no-op; POST still executes.
+	// DELETE existing label returns 404 (already removed) -> treated as no-op; POST still executes.
 	var postCount atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
@@ -2630,7 +2630,7 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
-	// Only issue #1 (backlog) appears; PR (#2) filtered, done (#3) non-active.
+	// Only issue 1 (backlog) appears; PR (2) filtered, done (3) non-active.
 	if len(candidates) != 1 {
 		t.Fatalf("FetchCandidateIssues: got %d issues, want 1 (only backlog)", len(candidates))
 	}

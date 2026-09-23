@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sortie-ai/sortie/internal/workspace"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // resolveToolServerBinary returns the absolute, symlink-free path to the
@@ -162,13 +162,14 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		merged = parsed
 	}
 
-	dir := filepath.Join(params.WorkspacePath, ".sortie")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return "", fmt.Errorf("creating .sortie directory: %w", err)
+	sortieDir, err := workspacekit.OpenSortieDir(params.WorkspacePath, true)
+	if err != nil {
+		return "", fmt.Errorf("open .sortie directory: %w", err)
 	}
+	defer sortieDir.Close() //nolint:errcheck // the handle is not needed once both files are written
 
 	// Restore this rule when an agent or hook removes it between runs.
-	if err := workspace.WriteSortieFile(params.WorkspacePath, ".gitignore", []byte("*\n")); err != nil {
+	if err := workspacekit.ReplaceFile(sortieDir, ".gitignore", []byte("*\n")); err != nil {
 		return "", fmt.Errorf("writing .sortie gitignore: %w", err)
 	}
 
@@ -177,11 +178,11 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		return "", fmt.Errorf("marshalling MCP config: %w", err)
 	}
 
-	if err := workspace.WriteSortieFile(params.WorkspacePath, "mcp.json", encoded); err != nil {
+	if err := workspacekit.ReplaceFile(sortieDir, "mcp.json", encoded); err != nil {
 		return "", fmt.Errorf("writing MCP config file: %w", err)
 	}
 
-	return filepath.Join(dir, "mcp.json"), nil
+	return filepath.Join(params.WorkspacePath, workspacekit.SortieDir, "mcp.json"), nil
 }
 
 // CollectSortieEnv scans the process environment and returns all

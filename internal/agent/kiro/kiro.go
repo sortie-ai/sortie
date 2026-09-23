@@ -216,7 +216,10 @@ func checkCredential(ctx context.Context, target agentcore.LaunchTarget, stopGra
 	canaryCtx, cancel := context.WithTimeout(ctx, agentcore.CredentialExchangeBound)
 	defer cancel()
 
-	cmd := target.AuxiliaryCommand(canaryCtx, []string{"whoami"}, nil, nil)
+	cmd, agentErr := target.AuxiliaryCommand(canaryCtx, []string{"whoami"}, nil, nil)
+	if agentErr != nil {
+		return agentErr
+	}
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{})
 
 	if target.RemoteCommand != "" && startErr == nil && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
@@ -252,7 +255,10 @@ func listWorkspaceConversations(ctx context.Context, target agentcore.LaunchTarg
 	defer cancel()
 
 	var out bytes.Buffer
-	cmd := target.AuxiliaryCommand(listCtx, []string{"chat", "--list-sessions", "-f", "json"}, nil, nil)
+	cmd, agentErr := target.AuxiliaryCommand(listCtx, []string{"chat", "--list-sessions", "-f", "json"}, nil, nil)
+	if agentErr != nil {
+		return nil, agentErr
+	}
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{Stdout: &out})
 	if startErr != nil {
 		return nil, startErr
@@ -322,7 +328,10 @@ func deleteConversation(ctx context.Context, target agentcore.LaunchTarget, id s
 	delCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := target.AuxiliaryCommand(delCtx, []string{"chat", "--delete-session", id, "--session-source", "v1"}, nil, nil)
+	cmd, agentErr := target.AuxiliaryCommand(delCtx, []string{"chat", "--delete-session", id, "--session-source", "v1"}, nil, nil)
+	if agentErr != nil {
+		return agentErr
+	}
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{})
 	if startErr != nil {
 		return startErr

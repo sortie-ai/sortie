@@ -48,8 +48,10 @@ vet: ## Run go vet on all packages
 	$(GO) vet ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint for every target platform (LINT_GOOS=windows ...)
+lint: ## Run golangci-lint for every target platform (LINT_GOOS=windows ...) and check changed comments
 	@failed=''; \
+	printf '$(BOLD)comments: changed files$(RESET)\n'; \
+	scripts/comments.sh || failed="$$failed comments"; \
 	for goos in $(LINT_GOOS); do \
 		printf '$(BOLD)golangci-lint: GOOS=%s$(RESET)\n' "$$goos"; \
 		GOOS=$$goos $(LINTER) run ./... || failed="$$failed $$goos"; \

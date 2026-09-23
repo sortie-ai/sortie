@@ -612,7 +612,7 @@ func TestReconcileBotReviewComments_FingerprintChurn(t *testing.T) {
 
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	// New fingerprint != stored dispatched fingerprint → must dispatch.
+	// New fingerprint != stored dispatched fingerprint -> must dispatch.
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry still present after fingerprint churn dispatch; want consumed")
 	}
@@ -648,7 +648,7 @@ func TestReconcileBotReviewComments_UnchangedDispatchedFingerprint(t *testing.T)
 
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	// Same dispatched fingerprint → re-enqueue, no dispatch.
+	// Same dispatched fingerprint -> re-enqueue, no dispatch.
 	if _, ok := state.PendingReactions[rkey]; !ok {
 		t.Error("PendingReactions entry dropped for same dispatched fingerprint; want re-enqueued")
 	}
@@ -911,7 +911,7 @@ func TestEscalateBotReviewFailure_EmptyEscalation(t *testing.T) {
 	tracker := &reviewTrackerStub{}
 	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
 	params.BotReviewConfig = BotReviewReactionConfig{
-		Escalation:           "", // empty → comment branch
+		Escalation:           "", // empty -> comment branch
 		MaxContinuationTurns: 5,
 		PollIntervalMS:       60000,
 	}
@@ -1346,7 +1346,7 @@ func TestEscalateBotReviewFailure_LabelDefaultsWhenEmpty(t *testing.T) {
 	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
 	params.BotReviewConfig = BotReviewReactionConfig{
 		Escalation:           "label",
-		EscalationLabel:      "", // empty → defaults to needs-human
+		EscalationLabel:      "", // empty -> defaults to needs-human
 		MaxContinuationTurns: 5,
 		PollIntervalMS:       60000,
 	}

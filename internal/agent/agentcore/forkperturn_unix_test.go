@@ -400,14 +400,14 @@ func TestForkPerTurnSession_DescendantHoldsStderrOnly(t *testing.T) {
 
 // TestForkPerTurnSession_InGroupDescendantHoldsStdout drives
 // writePgidScript's in-group descendant through a cancelled RunTurn and
-// asserts property P5 (the descendant is dead once the turn returns)
-// and that the group kill releases the stdout reader before
-// sess.drainGrace can fire, so no abandonment record is emitted. This is
-// the unabandoned half of property P7's comparison against
+// asserts that the descendant is dead once the turn returns and that the
+// group kill releases the stdout reader before sess.drainGrace can fire,
+// so no abandonment record is emitted. This is the unabandoned half of
+// the comparison against
 // TestForkPerTurnSession_EscapedDescendantHoldsStdout: both scripts spawn
 // a descendant that inherits the standard-output handle and both turns
-// are ended by the same context cancellation, so an identical disposition
-// and error between the two is what P7 requires.
+// are ended by the same context cancellation, so the two must end with
+// an identical disposition and error.
 func TestForkPerTurnSession_InGroupDescendantHoldsStdout(t *testing.T) {
 	t.Parallel()
 
@@ -461,12 +461,11 @@ func TestForkPerTurnSession_InGroupDescendantHoldsStdout(t *testing.T) {
 // TestForkPerTurnSession_EscapedDescendantHoldsStdout drives
 // writeEscapedPgidScript's setsid descendant, which survives the group
 // kill and keeps holding the standard-output handle open, through a
-// cancelled RunTurn. It asserts property P1 (the turn publishes within
+// cancelled RunTurn. It asserts that the turn publishes within
 // sess.drainGrace, measured from the reap rather than from the turn's
-// start), property P3 (the abandonment record fires exactly once), and,
-// together with TestForkPerTurnSession_InGroupDescendantHoldsStdout,
-// property P7 (the same disposition and error as the identical
-// unabandoned turn).
+// start, that the abandonment record fires exactly once, and, together
+// with TestForkPerTurnSession_InGroupDescendantHoldsStdout, that it ends
+// with the same disposition and error as the identical unabandoned turn.
 func TestForkPerTurnSession_EscapedDescendantHoldsStdout(t *testing.T) {
 	t.Parallel()
 

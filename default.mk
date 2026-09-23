@@ -11,15 +11,11 @@
 # The directory that contains this file, which is also the repository root.
 TOP := $(dir $(lastword $(MAKEFILE_LIST)))
 
-# ── Project metadata ──────────────────────────────────────────────────────────
-
 MODULE := github.com/sortie-ai/sortie
 BIN    := sortie
 
 .DEFAULT_GOAL := help
 
-# ── Versioning ────────────────────────────────────────────────────────────────
-#
 # Derived from the nearest reachable git tag, with any leading "v" stripped so
 # a local build reports the same string as a released binary.  Falls back to
 # "dev" in shallow clones, detached HEADs without tags, or non-git directories.
@@ -28,14 +24,10 @@ VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/n
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%d)
 
-# ── Go toolchain ──────────────────────────────────────────────────────────────
-
 GO      ?= go
 LINTER  ?= golangci-lint
 SHELLCHECK ?= shellcheck
 
-# ── Lint target platforms ─────────────────────────────────────────────────────
-#
 # golangci-lint resolves build constraints the same way the compiler does, so a
 # run only ever analyses the files that survive for the current GOOS: every
 # _windows.go file is invisible to a run on Linux, and vice versa.  The lint
@@ -54,8 +46,6 @@ SHELLCHECK ?= shellcheck
 
 LINT_GOOS ?= linux darwin windows
 
-# ── Build flags ───────────────────────────────────────────────────────────────
-#
 # -trimpath   strips local file-system paths for reproducible builds.
 # -s -w       strip the symbol table and DWARF info to shrink the binary.
 # -X          embeds the version string at link time.
@@ -67,13 +57,9 @@ LDFLAGS    := -s -w \
     -X main.Date=$(DATE)
 BUILDFLAGS ?= -trimpath $(GOFLAGS)
 
-# ── Test and coverage ─────────────────────────────────────────────────────────
-
 COVERAGE_OUT  ?= coverage.out
 COVERAGE_HTML  = $(COVERAGE_OUT:.out=.html)
 
-# ── Color / formatting ────────────────────────────────────────────────────────
-#
 # Honors three opt-out signals:
 #   NO_COLOR  - set to any value to disable (https://no-color.org/)
 #   CI        - set to any value (most CI/CD platforms set this automatically)

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 func assertReserveRefusedNoSlot(t *testing.T, workspacePath, target string) {
@@ -40,7 +42,7 @@ func TestReserveNotificationSlot_DirectoryPermissionsDenyCreate(t *testing.T) {
 
 	ws := t.TempDir()
 	createSortieDir(t, ws)
-	slotsPath := filepath.Join(ws, sortieDir, notificationSlotsDir)
+	slotsPath := filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir)
 	if err := os.Mkdir(slotsPath, 0o750); err != nil {
 		t.Fatalf("Mkdir(notification_slots): %v", err)
 	}
@@ -72,7 +74,7 @@ func TestReserveNotificationSlot_DotSortieIsSymlink(t *testing.T) {
 		if err := os.Mkdir(target, 0o750); err != nil {
 			t.Fatalf("Mkdir(target): %v", err)
 		}
-		if err := os.Symlink(target, filepath.Join(ws, sortieDir)); err != nil {
+		if err := os.Symlink(target, filepath.Join(ws, workspacekit.SortieDir)); err != nil {
 			t.Fatalf("Symlink(.sortie): %v", err)
 		}
 
@@ -84,7 +86,7 @@ func TestReserveNotificationSlot_DotSortieIsSymlink(t *testing.T) {
 
 		ws := t.TempDir()
 		target := t.TempDir()
-		if err := os.Symlink(target, filepath.Join(ws, sortieDir)); err != nil {
+		if err := os.Symlink(target, filepath.Join(ws, workspacekit.SortieDir)); err != nil {
 			t.Fatalf("Symlink(.sortie): %v", err)
 		}
 
@@ -104,7 +106,7 @@ func TestReserveNotificationSlot_NotificationSlotsIsSymlink(t *testing.T) {
 		if err := os.Mkdir(target, 0o750); err != nil {
 			t.Fatalf("Mkdir(target): %v", err)
 		}
-		if err := os.Symlink(target, filepath.Join(ws, sortieDir, notificationSlotsDir)); err != nil {
+		if err := os.Symlink(target, filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir)); err != nil {
 			t.Fatalf("Symlink(notification_slots): %v", err)
 		}
 
@@ -117,7 +119,7 @@ func TestReserveNotificationSlot_NotificationSlotsIsSymlink(t *testing.T) {
 		ws := t.TempDir()
 		createSortieDir(t, ws)
 		target := t.TempDir()
-		if err := os.Symlink(target, filepath.Join(ws, sortieDir, notificationSlotsDir)); err != nil {
+		if err := os.Symlink(target, filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir)); err != nil {
 			t.Fatalf("Symlink(notification_slots): %v", err)
 		}
 

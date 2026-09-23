@@ -165,7 +165,11 @@ func auxiliaryCommand(ctx context.Context, state *sessionState, args []string) (
 	if err != nil {
 		return nil, err
 	}
-	return state.target.AuxiliaryCommand(ctx, args, nil, env, sortedEnvVars(managedEnv)...), nil
+	cmd, agentErr := state.target.AuxiliaryCommand(ctx, args, nil, env, sortedEnvVars(managedEnv)...)
+	if agentErr != nil {
+		return nil, agentErr
+	}
+	return cmd, nil
 }
 
 // sortedEnvVars converts managed into a name-sorted slice of

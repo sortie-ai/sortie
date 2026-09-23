@@ -1106,7 +1106,7 @@ func TestManager_PromptTemplateByID_KnownRuleTemplate(t *testing.T) {
 // invariant that the per-rule template index is keyed by the canonical,
 // EvalSymlinks-resolved absolute path, even when the workflow file is
 // reached through a symlinked workflow directory. Windows CI runners
-// surfaced this contract via 8.3 short-name paths (RUNNER~1 → long
+// surfaced this contract via 8.3 short-name paths (RUNNER~1 -> long
 // form); creating an explicit symlink reproduces the same canonical-
 // vs-raw drift on Linux and macOS so the regression is caught on every
 // supported runner. Skips gracefully on hosts where os.Symlink is

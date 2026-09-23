@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workspace"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // SessionToolParams contains the inputs that determine a session's tools.
@@ -96,7 +97,9 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	}
 
 	if params.WorkspacePath != "" {
-		reg.Register(status.New(params.WorkspacePath))
+		reg.Register(status.New(func(name string, maxBytes int64) ([]byte, error) {
+			return workspacekit.ReadSortieFile(params.WorkspacePath, name, maxBytes)
+		}))
 	}
 
 	if params.DBPath != "" && params.IssueID != "" {

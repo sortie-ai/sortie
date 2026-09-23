@@ -75,7 +75,7 @@ type Manager struct {
 }
 
 // NewManager creates a [Manager] for the workflow file at path. It
-// performs a synchronous initial load — if the file cannot be loaded or
+// performs a synchronous initial load; if the file cannot be loaded or
 // the config is invalid, NewManager returns an error so the caller can
 // fail startup. The logger is used for reload diagnostics. Options are
 // applied after construction; see [WithValidateFunc].
@@ -176,7 +176,7 @@ func (m *Manager) currentLogger() *slog.Logger {
 }
 
 // SetLogger replaces the logger used for reload diagnostics and watcher
-// errors. Safe for concurrent use — the file-watcher goroutine may be
+// errors. Safe for concurrent use; the file-watcher goroutine may be
 // running. A nil argument is treated as [slog.Default]. After return,
 // all subsequent log calls from the watcher use the new logger.
 func (m *Manager) SetLogger(logger *slog.Logger) {

@@ -177,10 +177,24 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 	}
 }
 
+// BindWorkspace re-verifies t.WorkspacePath and, on success, sets cmd.Dir to
+// it. On failure cmd.Dir is left empty and the verification error is
+// returned; the caller must not start cmd.
+func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
+	absPath, agentErr := ResolveWorkspace(t.WorkspacePath)
+	if agentErr != nil {
+		return agentErr
+	}
+	cmd.Dir = absPath
+	return nil
+}
+
 // AuxiliaryCommand builds a one-shot runtime subcommand run in the
 // workspace, locally or over ssh like the session itself. A nil env
-// means os.Environ(); stdin may be nil.
-func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin io.Reader, env []string, carried ...sshutil.EnvVar) *exec.Cmd {
+// means os.Environ(); stdin may be nil. Returns a non-nil
+// [*domain.AgentError] and a nil *[exec.Cmd] when the workspace path fails
+// re-verification immediately before launch.
+func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin io.Reader, env []string, carried ...sshutil.EnvVar) (*exec.Cmd, *domain.AgentError) {
 	var cmd *exec.Cmd
 	if t.RemoteCommand == "" {
 		allArgs := append(slices.Clone(t.Args), args...)
@@ -191,13 +205,15 @@ func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin
 		cmd = exec.CommandContext(ctx, t.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 		cmd.Stdin = prependPreamble(launch.StdinReader(), stdin)
 	}
-	cmd.Dir = t.WorkspacePath
+	if agentErr := t.BindWorkspace(cmd); agentErr != nil {
+		return nil, agentErr
+	}
 	if env != nil {
 		cmd.Env = env
 	} else {
 		cmd.Env = os.Environ()
 	}
-	return cmd
+	return cmd, nil
 }
 
 func prependPreamble(preamble, stdin io.Reader) io.Reader {

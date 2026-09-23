@@ -29,8 +29,8 @@ type WorkflowError struct {
 }
 
 // Error returns a human-readable description of the failure. For parse
-// errors the message includes a hint about the most common cause — a
-// missing closing delimiter — to aid operator debugging.
+// errors the message includes a hint about the most common cause, a
+// missing closing delimiter, to aid operator debugging.
 func (e *WorkflowError) Error() string {
 	switch e.Kind {
 	case ErrMissingFile:

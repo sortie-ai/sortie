@@ -1677,7 +1677,7 @@ func TestRecoverPendingReactions_RecreatesBotReviewAfterRestart(t *testing.T) {
 }
 
 // TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse verifies that
-// BotReviewReactionConfigured=false → no bot-review entry is reconstructed, even
+// BotReviewReactionConfigured=false -> no bot-review entry is reconstructed, even
 // with full PR metadata present.
 func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T) {
 	t.Parallel()

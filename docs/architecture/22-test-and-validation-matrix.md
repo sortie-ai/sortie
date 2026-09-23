@@ -49,6 +49,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `before_remove` hook runs on cleanup and failures/timeouts are ignored
 - Workspace path sanitization and root containment invariants are enforced before agent launch
 - Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths
+- A workspace directory swapped for a symbolic link after preparation refuses every `.sortie` write, read, and removal for that workspace and leaves the link's target unchanged
+- Every workspace launch, including a per-turn or auxiliary one, refuses a linked workspace path and starts no subprocess
 - Hook environment variables (`SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`, `SORTIE_WORKSPACE`, `SORTIE_ATTEMPT`) are set correctly
 - The periodic sweep excludes workspace keys held by running entries and scheduled retries, and keys held by a pending reaction entry whose kind pins its workspace, while a non-pinning kind leaves its key a candidate
 - Within one sweep pass the terminal check runs before the age bound, and a key removed by the terminal check is not re-evaluated by the age bound

@@ -135,7 +135,7 @@ func TestParseDotEnv(t *testing.T) {
 		{
 			name:    "unmatched quotes not stripped",
 			content: "SORTIE_KEY=\"unmatched\n",
-			// No closing quote on one line → quote is not stripped, so value is `"unmatched`
+			// No closing quote on one line -> quote is not stripped, so value is `"unmatched`
 			want: map[string]string{"SORTIE_KEY": "\"unmatched"},
 		},
 		{

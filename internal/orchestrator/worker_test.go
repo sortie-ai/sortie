@@ -5032,6 +5032,80 @@ func TestRunWorkerAttempt_WriteWorkerState_SymlinkContainment(t *testing.T) {
 	}
 }
 
+// syncWorkerLogBuffer is a bytes.Buffer guarded by a mutex, safe to read
+// once RunWorkerAttempt's own logging goroutine has finished.
+type syncWorkerLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncWorkerLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncWorkerLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestRunWorkerAttempt_WorkspaceReplacedBySymlinkRefusesWrites(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	target := t.TempDir()
+	if err := os.Mkdir(filepath.Join(target, ".sortie"), 0o750); err != nil {
+		t.Fatalf("Mkdir(target/.sortie): %v", err)
+	}
+	var logBuf syncWorkerLogBuffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				if err := os.RemoveAll(params.WorkspacePath); err != nil {
+					t.Fatalf("RemoveAll(workspace): %v", err)
+				}
+				mustSymlink(t, target, params.WorkspacePath)
+				return domain.Session{ID: "sess-1"}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 logger,
+		WorkflowPath:           "/fake/WORKFLOW.md",
+		DispatchID:             "D1",
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	entries, err := os.ReadDir(filepath.Join(target, ".sortie"))
+	if err != nil {
+		t.Fatalf("ReadDir(target/.sortie): %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("link target's .sortie gained entries %v, want none (a swapped workspace refuses every .sortie write)", entries)
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "failed to write dispatch identity record") {
+		t.Errorf("log output = %q, want a warning about the refused dispatch identity write", logged)
+	}
+	if !strings.Contains(logged, "failed to write status state file") {
+		t.Errorf("log output = %q, want a warning about the refused state write", logged)
+	}
+}
+
 func TestRunWorkerAttempt_UsageArrivalNoneDiscardsFigures(t *testing.T) {
 	t.Parallel()
 

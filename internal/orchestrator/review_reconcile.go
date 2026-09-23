@@ -145,7 +145,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			reviewData.LastEventAt = maxTime
 		}
 
-		// No actionable comments — re-enqueue with poll interval delay.
+		// No actionable comments; re-enqueue with poll interval delay.
 		if len(actionable) == 0 {
 			// The episode closes while the entry keeps watching, so the
 			// comment set a run answered for no longer describes

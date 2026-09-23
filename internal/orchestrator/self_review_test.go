@@ -397,6 +397,26 @@ func TestReadReviewVerdict_OversizedFile(t *testing.T) {
 	}
 }
 
+func TestReadReviewVerdict_LinkedSortieDirYieldsRefusalReasonNotAbsent(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	target := t.TempDir()
+	mustSymlink(t, target, filepath.Join(wsPath, ".sortie"))
+
+	verdict, _, parseErr := readReviewVerdict(wsPath)
+
+	if verdict != nil {
+		t.Error("verdict should be nil when .sortie is a symlink")
+	}
+	if !strings.HasPrefix(parseErr, "refusing to read verdict file:") {
+		t.Errorf("parseErr = %q, want prefix %q", parseErr, "refusing to read verdict file:")
+	}
+	if parseErr == "verdict file not found" {
+		t.Error("parseErr equals the absent-file reason, want the refusal reason")
+	}
+}
+
 func TestReadReviewVerdict_SymlinkRejection(t *testing.T) {
 	t.Parallel()
 
@@ -412,8 +432,8 @@ func TestReadReviewVerdict_SymlinkRejection(t *testing.T) {
 	if verdict != nil {
 		t.Error("verdict should be nil when .sortie is a symlink")
 	}
-	if !strings.Contains(parseErr, "symlink") {
-		t.Errorf("parseErr = %q, want to contain %q", parseErr, "symlink")
+	if !strings.Contains(parseErr, "symbolic link") {
+		t.Errorf("parseErr = %q, want to contain %q", parseErr, "symbolic link")
 	}
 }
 
@@ -937,6 +957,90 @@ func TestGenerateDiff_NoGit(t *testing.T) {
 
 	if err == nil {
 		t.Error("generateWorkspaceDiff with non-git dir: expected error, got nil")
+	}
+}
+
+func TestRunSingleVerification_LinkedWorkspaceRefusedBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	mustSymlink(t, target, link)
+	marker := filepath.Join(target, "marker")
+
+	result := runSingleVerification(context.Background(), "touch "+marker, link, 5000, discardLogger(), &reviewMetricsCount{})
+
+	if result.ExitCode != -1 {
+		t.Errorf("ExitCode = %d, want -1", result.ExitCode)
+	}
+	if result.ExecutionError == "" {
+		t.Error("ExecutionError is empty, want a verification error")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("marker file exists, want the verification command never to start")
+	}
+}
+
+func TestSelfReviewLoop_VerdictCleanupKeepsLinkedFileAndWarns(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	target := t.TempDir()
+	planted := filepath.Join(target, "review_verdict.json")
+	if err := os.WriteFile(planted, []byte(`{"verdict":"pass","summary":"planted"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(planted): %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(wsPath, ".sortie"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.sortie): %v", err)
+	}
+	linkPath := filepath.Join(wsPath, ".sortie", "review_verdict.json")
+	mustSymlink(t, planted, linkPath)
+
+	cfg := selfReviewCfg()
+	cfg.MaxIterations = 1
+
+	var logBuf syncWorkerLogBuffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	m := &reviewMetricsCount{}
+	turns := 0
+	adapter := &verdictWriter{wsPath: wsPath}
+
+	meta, _, _, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+		Session:        domain.Session{ID: "sess"},
+		Issue:          selfReviewIssue(),
+		WorkspacePath:  wsPath,
+		Config:         cfg,
+		AgentAdapter:   adapter,
+		OnEvent:        func(_ string, _ domain.AgentEvent) {},
+		Logger:         logger,
+		Metrics:        m,
+		TurnsCompleted: &turns,
+	})
+
+	if meta == nil {
+		t.Fatal("meta = nil, want non-nil")
+	}
+	if meta.FinalVerdict == "pass" {
+		t.Errorf("FinalVerdict = %q, want not pass: the linked verdict is refused, never read", meta.FinalVerdict)
+	}
+
+	fi, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Fatalf("Lstat(review_verdict.json): %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("review_verdict.json is no longer a symlink, want it kept in place")
+	}
+	plantedData, err := os.ReadFile(planted)
+	if err != nil {
+		t.Fatalf("ReadFile(planted): %v", err)
+	}
+	if !strings.Contains(string(plantedData), "planted") {
+		t.Errorf("planted verdict content = %q, want unchanged", plantedData)
+	}
+
+	if !strings.Contains(logBuf.String(), "self-review verdict cleanup failed") {
+		t.Errorf("log output = %q, want a warning about the refused verdict cleanup", logBuf.String())
 	}
 }
 

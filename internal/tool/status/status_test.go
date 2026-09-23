@@ -3,28 +3,22 @@ package status
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"errors"
 	"testing"
 	"time"
 )
 
-// writeStateFile creates <dir>/.sortie/state.json containing the JSON
-// encoding of sf. Fails the test immediately on any I/O error.
-func writeStateFile(t *testing.T, dir string, sf stateFile) {
+func stubReader(data []byte, err error) func(name string, maxBytes int64) ([]byte, error) {
+	return func(string, int64) ([]byte, error) { return data, err }
+}
+
+func stateFileReader(t *testing.T, sf stateFile) func(name string, maxBytes int64) ([]byte, error) {
 	t.Helper()
-	dotSortie := filepath.Join(dir, ".sortie")
-	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", dotSortie, err)
-	}
 	data, err := json.Marshal(sf)
 	if err != nil {
 		t.Fatalf("json.Marshal stateFile: %v", err)
 	}
-	dst := filepath.Join(dotSortie, "state.json")
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		t.Fatalf("WriteFile(%q): %v", dst, err)
-	}
+	return stubReader(data, nil)
 }
 
 // executeOK calls Execute and fails the test if either the Go error is
@@ -53,8 +47,6 @@ func dataFields(t *testing.T, m map[string]any) map[string]any {
 	return d
 }
 
-// assertSuccessEnvelope asserts that m has success==true and a "data" key, and
-// that no payload field is present at the top level.
 func assertSuccessEnvelope(t *testing.T, m map[string]any) {
 	t.Helper()
 	if m["success"] != true {
@@ -65,8 +57,6 @@ func assertSuccessEnvelope(t *testing.T, m map[string]any) {
 	}
 }
 
-// assertFailureEnvelope asserts that m has success==false, an "error" object
-// with the expected kind, and returns the error object.
 func assertFailureEnvelope(t *testing.T, m map[string]any, wantKind string) map[string]any {
 	t.Helper()
 	if m["success"] != false {
@@ -82,43 +72,55 @@ func assertFailureEnvelope(t *testing.T, m map[string]any, wantKind string) map[
 	return errObj
 }
 
-// executeFailure calls Execute, asserts a nil Go error, and returns the
-// decoded envelope. Does not assert on success/failure shape.
-func executeFailure(t *testing.T, tool *StatusTool) map[string]any {
-	t.Helper()
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("Execute: unexpected Go error: %v", err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(out, &m); err != nil {
-		t.Fatalf("unmarshal response %q: %v", out, err)
-	}
-	return m
+func TestNew_PanicsOnNilReader(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Error("New(nil) did not panic, want a panic")
+		}
+	}()
+	New(nil)
 }
 
 func TestStatusTool_Name(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	tool := New(dir)
+	tool := New(stubReader(nil, errors.New("unused")))
 	if got := tool.Name(); got != "sortie_status" {
 		t.Errorf("Name() = %q, want %q", got, "sortie_status")
+	}
+}
+
+func TestStatusTool_Execute_CallsReaderWithStateFileName(t *testing.T) {
+	t.Parallel()
+
+	var gotName string
+	var gotMaxBytes int64
+	reader := func(name string, maxBytes int64) ([]byte, error) {
+		gotName, gotMaxBytes = name, maxBytes
+		return nil, errors.New("boom")
+	}
+
+	New(reader).Execute(context.Background(), json.RawMessage(`{}`)) //nolint:errcheck // only the reader call is under test
+
+	if gotName != "state.json" {
+		t.Errorf("readSortieFile name = %q, want %q", gotName, "state.json")
+	}
+	if gotMaxBytes != maxStateFileBytes {
+		t.Errorf("readSortieFile maxBytes = %d, want %d", gotMaxBytes, maxStateFileBytes)
 	}
 }
 
 func TestStatusTool_CorrectTurnAndBudget(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber: 3,
 		MaxTurns:   20,
 		Attempt:    nil,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	tool := New(dir)
+	}))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -133,7 +135,6 @@ func TestStatusTool_CorrectTurnAndBudget(t *testing.T) {
 		t.Errorf("data.turns_remaining = %v, want 17", d["turns_remaining"])
 	}
 
-	// nil Attempt → JSON null: key present but value nil.
 	if attempt, exists := d["attempt"]; !exists {
 		t.Error("data.attempt key missing from response")
 	} else if attempt != nil {
@@ -164,14 +165,13 @@ func TestStatusTool_AttemptNullAndInteger(t *testing.T) {
 
 	t.Run("nil_attempt_is_json_null", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
-		writeStateFile(t, dir, stateFile{
+		tool := New(stateFileReader(t, stateFile{
 			TurnNumber: 1,
 			MaxTurns:   10,
 			Attempt:    nil,
 			StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-		})
-		m := executeOK(t, New(dir))
+		}))
+		m := executeOK(t, tool)
 		assertSuccessEnvelope(t, m)
 		d := dataFields(t, m)
 		if attempt, exists := d["attempt"]; !exists {
@@ -183,14 +183,13 @@ func TestStatusTool_AttemptNullAndInteger(t *testing.T) {
 
 	t.Run("integer_attempt_is_preserved", func(t *testing.T) {
 		t.Parallel()
-		dir := t.TempDir()
-		writeStateFile(t, dir, stateFile{
+		tool := New(stateFileReader(t, stateFile{
 			TurnNumber: 1,
 			MaxTurns:   10,
 			Attempt:    new(2),
 			StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-		})
-		m := executeOK(t, New(dir))
+		}))
+		m := executeOK(t, tool)
 		assertSuccessEnvelope(t, m)
 		d := dataFields(t, m)
 		got, ok := d["attempt"].(float64)
@@ -206,8 +205,7 @@ func TestStatusTool_AttemptNullAndInteger(t *testing.T) {
 func TestStatusTool_TokenCounts(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber:      5,
 		MaxTurns:        20,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
@@ -216,9 +214,7 @@ func TestStatusTool_TokenCounts(t *testing.T) {
 		TotalTokens:     new(int64(18000)),
 		CacheReadTokens: new(int64(2000)),
 		TokensMeasured:  true,
-	})
-
-	tool := New(dir)
+	}))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -248,17 +244,12 @@ func TestStatusTool_TokenCounts(t *testing.T) {
 
 // TestStatusTool_TokenCounts_GenuineZero proves the third state the
 // tokens_measured qualifier exists to distinguish: a session that has
-// measured usage but accumulated no tokens yet reports zero numbers,
-// not a null, beside tokens_measured: true. A gate that treats a
-// zero-valued figure as absent would collapse this into the
-// unmeasured shape TestStatusTool_ExplicitlyUnmeasuredStateFile locks
-// down, erasing the distinction between "measured zero" and "never
-// measured".
+// measured usage but accumulated no tokens yet reports zero numbers, not a
+// null, beside tokens_measured: true.
 func TestStatusTool_TokenCounts_GenuineZero(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber:      1,
 		MaxTurns:        20,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
@@ -267,9 +258,7 @@ func TestStatusTool_TokenCounts_GenuineZero(t *testing.T) {
 		TotalTokens:     new(int64(0)),
 		CacheReadTokens: new(int64(0)),
 		TokensMeasured:  true,
-	})
-
-	tool := New(dir)
+	}))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -296,14 +285,11 @@ func TestStatusTool_TokenCounts_GenuineZero(t *testing.T) {
 func TestStatusTool_TurnsRemainingFloor(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber: 21,
 		MaxTurns:   20,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	tool := New(dir)
+	}))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -311,9 +297,6 @@ func TestStatusTool_TurnsRemainingFloor(t *testing.T) {
 	remaining, ok := d["turns_remaining"].(float64)
 	if !ok {
 		t.Fatalf("data.turns_remaining = %v (%T), want float64", d["turns_remaining"], d["turns_remaining"])
-	}
-	if remaining < 0 {
-		t.Errorf("data.turns_remaining = %v, want >= 0 (floored at zero)", remaining)
 	}
 	if remaining != 0 {
 		t.Errorf("data.turns_remaining = %v, want 0 when turn_number > max_turns", remaining)
@@ -325,14 +308,11 @@ func TestStatusTool_TurnsRemainingFloor(t *testing.T) {
 func TestStatusTool_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber: 1,
 		MaxTurns:   5,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	tool := New(dir)
+	}))
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: unexpected Go error: %v", err)
@@ -352,7 +332,6 @@ func TestStatusTool_SuccessEnvelopeShape(t *testing.T) {
 	if _, ok := top["data"]; !ok {
 		t.Error("Execute success missing key \"data\"")
 	}
-	// Payload fields must NOT appear at the top level.
 	for _, payloadKey := range []string{"turn_number", "max_turns", "turns_remaining", "tokens", "session_duration_seconds"} {
 		if _, exists := top[payloadKey]; exists {
 			t.Errorf("Execute success has payload key %q at top level, want it under data", payloadKey)
@@ -360,21 +339,29 @@ func TestStatusTool_SuccessEnvelopeShape(t *testing.T) {
 	}
 }
 
-// TestStatusTool_MissingStateFile asserts that a missing state file returns
-// success==false, error.kind=="state_unavailable", a non-empty error.message,
-// and a nil Go error.
-func TestStatusTool_MissingStateFile(t *testing.T) {
+// TestStatusTool_ReaderErrorMapsToStateUnavailable asserts that every
+// reader-level failure, whatever its cause, maps to success==false,
+// error.kind=="state_unavailable", and a nil Go error.
+func TestStatusTool_ReaderErrorMapsToStateUnavailable(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	tool := New(dir)
+	readerErr := errors.New("workspace path is a symbolic link")
+	tool := New(stubReader(nil, readerErr))
 
-	m := executeFailure(t, tool)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: unexpected Go error: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal response %q: %v", out, err)
+	}
 	errObj := assertFailureEnvelope(t, m, "state_unavailable")
 
+	want := "state file unavailable: " + readerErr.Error()
 	msg, _ := errObj["message"].(string)
-	if msg == "" {
-		t.Error("error.message is empty for missing state file, want non-empty")
+	if msg != want {
+		t.Errorf("error.message = %q, want %q", msg, want)
 	}
 }
 
@@ -383,22 +370,21 @@ func TestStatusTool_MissingStateFile(t *testing.T) {
 func TestStatusTool_MalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	dotSortie := filepath.Join(dir, ".sortie")
-	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	tool := New(stubReader([]byte(`{not valid json`), nil))
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: unexpected Go error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), []byte(`{not valid json`), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal response %q: %v", out, err)
 	}
-
-	tool := New(dir)
-	m := executeFailure(t, tool)
 	errObj := assertFailureEnvelope(t, m, "state_malformed")
 
 	msg, _ := errObj["message"].(string)
-	if msg == "" {
-		t.Error("error.message is empty for malformed JSON, want non-empty")
+	want := "state file malformed: "
+	if len(msg) < len(want) || msg[:len(want)] != want {
+		t.Errorf("error.message = %q, want prefix %q", msg, want)
 	}
 }
 
@@ -408,46 +394,23 @@ func TestStatusTool_MalformedJSON(t *testing.T) {
 func TestStatusTool_InvalidStartedAt(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	dotSortie := filepath.Join(dir, ".sortie")
-	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
 	state := []byte(`{"turn_number":1,"max_turns":10,"started_at":"not-a-timestamp"}`)
-	if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), state, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	tool := New(stubReader(state, nil))
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: unexpected Go error: %v", err)
 	}
-
-	tool := New(dir)
-	m := executeFailure(t, tool)
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatalf("unmarshal response %q: %v", out, err)
+	}
 	errObj := assertFailureEnvelope(t, m, "state_malformed")
 
 	msg, _ := errObj["message"].(string)
-	if msg == "" {
-		t.Error("error.message is empty for invalid started_at, want non-empty")
+	want := "state file has invalid started_at: "
+	if len(msg) < len(want) || msg[:len(want)] != want {
+		t.Errorf("error.message = %q, want prefix %q", msg, want)
 	}
-}
-
-// TestStatusTool_OversizedStateFile asserts that a state file that exceeds the
-// size limit returns success==false, error.kind=="state_unavailable", and a nil
-// Go error.
-func TestStatusTool_OversizedStateFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	dotSortie := filepath.Join(dir, ".sortie")
-	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	bigContent := make([]byte, maxStateFileBytes+1)
-	if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), bigContent, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	tool := New(dir)
-	m := executeFailure(t, tool)
-	assertFailureEnvelope(t, m, "state_unavailable")
 }
 
 // TestStatusTool_FailureEnvelopeShape pins the failure-envelope contract: top-level keys
@@ -455,8 +418,7 @@ func TestStatusTool_OversizedStateFile(t *testing.T) {
 func TestStatusTool_FailureEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	tool := New(dir) // no state file → state_unavailable failure
+	tool := New(stubReader(nil, errors.New("absent")))
 
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
@@ -489,99 +451,16 @@ func TestStatusTool_FailureEnvelopeShape(t *testing.T) {
 	}
 }
 
-// TestStatusTool_ErrorMessageExactStrings asserts that every failure site
-// emits the exact message string the tool produced before this change.
-func TestStatusTool_ErrorMessageExactStrings(t *testing.T) {
-	t.Parallel()
-
-	t.Run("missing_file_message", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		tool := New(dir)
-		m := executeFailure(t, tool)
-		errObj := assertFailureEnvelope(t, m, "state_unavailable")
-		msg, _ := errObj["message"].(string)
-		want := "state file unavailable: "
-		if len(msg) < len(want) || msg[:len(want)] != want {
-			t.Errorf("error.message = %q, want prefix %q", msg, want)
-		}
-	})
-
-	t.Run("malformed_json_message", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		dotSortie := filepath.Join(dir, ".sortie")
-		if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), []byte(`{bad`), 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		tool := New(dir)
-		m := executeFailure(t, tool)
-		errObj := assertFailureEnvelope(t, m, "state_malformed")
-		msg, _ := errObj["message"].(string)
-		want := "state file malformed: "
-		if len(msg) < len(want) || msg[:len(want)] != want {
-			t.Errorf("error.message = %q, want prefix %q", msg, want)
-		}
-	})
-
-	t.Run("oversized_message", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		dotSortie := filepath.Join(dir, ".sortie")
-		if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		bigContent := make([]byte, maxStateFileBytes+1)
-		if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), bigContent, 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		tool := New(dir)
-		m := executeFailure(t, tool)
-		errObj := assertFailureEnvelope(t, m, "state_unavailable")
-		msg, _ := errObj["message"].(string)
-		if msg != "state file exceeds size limit" {
-			t.Errorf("error.message = %q, want %q", msg, "state file exceeds size limit")
-		}
-	})
-
-	t.Run("invalid_started_at_message", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		dotSortie := filepath.Join(dir, ".sortie")
-		if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		state := []byte(`{"turn_number":1,"max_turns":10,"started_at":"not-valid"}`)
-		if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), state, 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		tool := New(dir)
-		m := executeFailure(t, tool)
-		errObj := assertFailureEnvelope(t, m, "state_malformed")
-		msg, _ := errObj["message"].(string)
-		want := "state file has invalid started_at: "
-		if len(msg) < len(want) || msg[:len(want)] != want {
-			t.Errorf("error.message = %q, want prefix %q", msg, want)
-		}
-	})
-}
-
 // TestStatusTool_EmptyJSONInput asserts that {} input with a valid state file
 // succeeds and data carries turn_number.
 func TestStatusTool_EmptyJSONInput(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber: 1,
 		MaxTurns:   5,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	tool := New(dir)
+	}))
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute({}): unexpected Go error: %v", err)
@@ -600,14 +479,13 @@ func TestStatusTool_EmptyJSONInput(t *testing.T) {
 }
 
 // TestStatusTool_ExplicitlyUnmeasuredStateFile asserts that a state file
-// whose tokens_measured flag decodes false returns
-// tokens_measured false and all four tokens members null, inside a
-// success envelope, never a failure envelope.
+// whose tokens_measured flag decodes false returns tokens_measured false and
+// all four tokens members null, inside a success envelope, never a failure
+// envelope.
 func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber:      2,
 		MaxTurns:        10,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
@@ -616,9 +494,7 @@ func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
 		TotalTokens:     new(int64(1500)),
 		CacheReadTokens: new(int64(200)),
 		TokensMeasured:  false,
-	})
-
-	tool := New(dir)
+	}))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -639,21 +515,15 @@ func TestStatusTool_ExplicitlyUnmeasuredStateFile(t *testing.T) {
 	}
 }
 
-// TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember asserts
-// that a state file written by a binary from before the
-// token figures gained their qualifier carries four numbers and no
-// tokens_measured member at all. Decoding it leaves TokensMeasured at
-// its Go zero value, false, so the tool nulls the four figures rather
-// than publishing them under an absent qualifier, and produces no
-// failure envelope for a file that decodes cleanly.
+// TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember asserts that
+// a state file written by a binary from before the token figures gained
+// their qualifier carries four numbers and no tokens_measured member at all.
+// Decoding it leaves TokensMeasured at its Go zero value, false, so the tool
+// nulls the four figures rather than publishing them under an absent
+// qualifier.
 func TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	dotSortie := filepath.Join(dir, ".sortie")
-	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
 	preChangeState := []byte(`{
 		"turn_number": 4,
 		"max_turns": 10,
@@ -663,11 +533,7 @@ func TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember(t *testing.T)
 		"total_tokens": 1500,
 		"cache_read_tokens": 200
 	}`)
-	if err := os.WriteFile(filepath.Join(dotSortie, "state.json"), preChangeState, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	tool := New(dir)
+	tool := New(stubReader(preChangeState, nil))
 	m := executeOK(t, tool)
 	assertSuccessEnvelope(t, m)
 	d := dataFields(t, m)
@@ -693,14 +559,11 @@ func TestStatusTool_PreChangeStateFile_MissingTokensMeasuredMember(t *testing.T)
 func TestStatusTool_NullInput(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeStateFile(t, dir, stateFile{
+	tool := New(stateFileReader(t, stateFile{
 		TurnNumber: 1,
 		MaxTurns:   5,
 		StartedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	tool := New(dir)
+	}))
 	out, err := tool.Execute(context.Background(), json.RawMessage(`null`))
 	if err != nil {
 		t.Fatalf("Execute(null): unexpected Go error: %v", err)

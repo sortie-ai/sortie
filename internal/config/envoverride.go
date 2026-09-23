@@ -41,7 +41,7 @@ type envOverride struct {
 	EnvVar  string                    // e.g. "SORTIE_TRACKER_KIND"
 	Section string                    // empty string = top-level field
 	Field   string                    // dotted for nested (e.g. "comments.on_dispatch")
-	Coerce  func(string) (any, error) // string→typed coercion; error fails startup
+	Coerce  func(string) (any, error) // string->typed coercion; error fails startup
 }
 
 // envOverrides is the curated registry of environment variable overrides.
@@ -95,7 +95,7 @@ var envOverrides = []envOverride{
 // expansion). Returns an error on .env parse failures or type coercion
 // failures.
 func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
-	// Resolve dotenv path: CLI flag → env var → empty (no loading).
+	// Resolve dotenv path: CLI flag -> env var -> empty (no loading).
 	dotenvPath := getDotEnvPath()
 	if dotenvPath == "" {
 		dotenvPath = os.Getenv("SORTIE_ENV_FILE")

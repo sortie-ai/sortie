@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -837,7 +839,7 @@ func TestForkPerTurnSession(t *testing.T) {
 		}
 		sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
 
-		// First call: cmd.Start() fails → s.turns must stay 0.
+		// First call: cmd.Start() fails, so s.turns must stay 0.
 		_, err := sess.RunTurn(context.Background(), "p", func(domain.AgentEvent) {})
 		if err == nil {
 			t.Fatal("RunTurn() with invalid command returned nil error")
@@ -897,4 +899,39 @@ func TestForkPerTurnSession_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 			t.Errorf("%s: EventTurnCompleted not emitted; got %v", tc.name, *events)
 		}
 	}
+}
+
+func TestForkPerTurnSession_RunTurn_LinkedWorkspaceRefusedBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	scriptDir := t.TempDir()
+	script := agenttest.FakeRuntime(t, scriptDir, "agent", agenttest.OutputScenario, agenttest.Output{})
+
+	linkTarget := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(linkTarget, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires elevated privileges on Windows")
+		}
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	target := newTestTarget(link, script)
+	sess := NewForkPerTurnSession(target, noopHooks(), slog.Default(), 0)
+
+	emit, events := sinkEvents()
+	result, err := sess.RunTurn(context.Background(), "p", emit)
+
+	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
+	if hasEventType(*events, domain.EventSessionStarted) {
+		t.Errorf("RunTurn(linked workspace) emitted session_started; want none, got %v", *events)
+	}
+	if result.SessionID != "" {
+		t.Errorf("RunTurn(linked workspace) result.SessionID = %q, want empty", result.SessionID)
+	}
+
+	if !sess.mu.TryLock() {
+		t.Fatal("session mutex is still held after a bind failure, want it released")
+	}
+	sess.mu.Unlock()
 }

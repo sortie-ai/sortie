@@ -545,7 +545,7 @@ func TestFinish(t *testing.T) {
 			Attempt:          1,
 			AfterRun:         `echo -n "$SORTIE_SELF_REVIEW_STATUS" > "` + out + `"`,
 			HookTimeoutMS:    5000,
-			SelfReviewStatus: "", // empty → "disabled"
+			SelfReviewStatus: "", // empty -> "disabled"
 		})
 
 		data, err := os.ReadFile(out)
@@ -1083,7 +1083,7 @@ func TestCleanupByPath_HookOutputLogging(t *testing.T) {
 	})
 }
 
-// TestLifecycleFullSequence exercises the complete Prepare → Finish → Cleanup
+// TestLifecycleFullSequence exercises the complete Prepare -> Finish -> Cleanup
 // sequence with real hook scripts writing marker files at each stage.
 func TestLifecycleFullSequence(t *testing.T) {
 	t.Parallel()

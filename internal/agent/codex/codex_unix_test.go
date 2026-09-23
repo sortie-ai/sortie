@@ -450,9 +450,8 @@ func TestStartSession_CancelSignalsProcessGroup(t *testing.T) {
 // then answers one turn/start call (id 4, the next identifier
 // jsonrpc.Conn allocates after the handshake's three calls) and starts a
 // setsid grandchild that inherits standard output and exits without
-// waiting for it. Property P12 uses it to drive a real turn whose
-// runtime exits while an escaped descendant still holds the output
-// handle.
+// waiting for it, to drive a real turn whose runtime exits while an
+// escaped descendant still holds the output handle.
 func writeFakeAppServerScriptEscapedTurn(t *testing.T, dir, pidFile string) string {
 	t.Helper()
 	content := fmt.Sprintf(`read -r _init_req
@@ -473,7 +472,7 @@ exit 0
 }
 
 // TestStartSession_ReleaseEndsTurnWhenEscapedDescendantHoldsOutput
-// covers property P12: a session whose runtime exits while an escaped
+// asserts that a session whose runtime exits while an escaped
 // descendant holds the output handle publishes the turn's outcome and
 // completes StopSession within the injected CodexAdapter.drainGrace
 // bound, leaving no goroutine of the session running.

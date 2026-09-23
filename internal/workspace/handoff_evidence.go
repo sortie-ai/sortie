@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // ErrNotGitWorkspace identifies a workspace that cannot provide a Git
@@ -72,6 +73,9 @@ func inspectHandoffEvidenceState(ctx context.Context, workspacePath string) (str
 	absPath, err := filepath.Abs(workspacePath)
 	if err != nil {
 		return "", zero, fmt.Errorf("resolve workspace path: %w", err)
+	}
+	if err := workspacekit.VerifyDir(absPath); err != nil {
+		return "", zero, fmt.Errorf("verify workspace directory: %w", err)
 	}
 	absPath, err = filepath.EvalSymlinks(absPath)
 	if err != nil {
@@ -141,9 +145,9 @@ func inspectHandoffEvidenceState(ctx context.Context, workspacePath string) (str
 
 func handoffEvidencePathspecs(relWorkspace string) []string {
 	relWorkspace = filepath.ToSlash(filepath.Clean(relWorkspace))
-	dotSortie := ".sortie"
+	dotSortie := workspacekit.SortieDir
 	if relWorkspace != "." {
-		dotSortie = relWorkspace + "/.sortie"
+		dotSortie = relWorkspace + "/" + workspacekit.SortieDir
 	}
 	return []string{
 		".",
@@ -188,25 +192,32 @@ func hashUntrackedFile(dst io.Writer, path string) error {
 	}
 }
 
-// GitCommand returns a git command for args that runs in dir. On
-// Windows it disables the filesystem monitor: a monitor daemon a query
-// starts stays in the launch's process containment and ends at the
-// reap, so it would answer no later query, and every later query would
-// start another one for nothing. On Linux and macOS the monitor
-// detaches from the launch and keeps running, so the operator's own
-// setting is left alone there.
-func GitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
+// GitCommand returns a git command for args that runs in dir, once dir
+// verifies as a real, unswapped directory. On Windows it disables the
+// filesystem monitor: a monitor daemon a query starts stays in the
+// launch's process containment and ends at the reap, so it would answer
+// no later query, and every later query would start another one for
+// nothing. On Linux and macOS the monitor detaches from the launch and
+// keeps running, so the operator's own setting is left alone there.
+func GitCommand(ctx context.Context, dir string, args ...string) (*exec.Cmd, error) {
+	if err := workspacekit.VerifyDir(dir); err != nil {
+		return nil, fmt.Errorf("verify git working directory: %w", err)
+	}
+
 	argv := args
 	if runtime.GOOS == "windows" {
 		argv = append([]string{"-c", "core.fsmonitor=false"}, args...)
 	}
 	cmd := exec.CommandContext(ctx, "git", argv...) //nolint:gosec // executable is the fixed git binary; only its argument vector varies
 	cmd.Dir = dir
-	return cmd
+	return cmd, nil
 }
 
 func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := GitCommand(ctx, dir, args...)
+	cmd, err := GitCommand(ctx, dir, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 
 	var stdout, stderr bytes.Buffer

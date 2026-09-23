@@ -30,7 +30,11 @@ func deleteVerificationSession(ctx context.Context, target agentcore.LaunchTarge
 	stdinReader, stdin := io.Pipe()
 	defer func() { _ = stdinReader.Close() }() //nolint:errcheck // best-effort cleanup once the command exits
 
-	cmd := target.AuxiliaryCommand(deadlineCtx, []string{"--server", "--stdio"}, stdinReader, nil)
+	cmd, agentErr := target.AuxiliaryCommand(deadlineCtx, []string{"--server", "--stdio"}, stdinReader, nil)
+	if agentErr != nil {
+		logger.Warn("failed to delete credential verification session", slog.Any("error", agentErr))
+		return
+	}
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(stopGraceMS))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

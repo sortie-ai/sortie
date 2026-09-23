@@ -31,13 +31,13 @@ type AgentTool interface {
 	// a structured JSON result. The returned [json.RawMessage] is
 	// always a structured response for the agent. The error return
 	// is reserved for internal failures (nil adapter, marshal
-	// failure) — domain-level errors are encoded in the JSON result.
+	// failure); domain-level errors are encoded in the JSON result.
 	Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)
 }
 
 // ToolRegistry holds the set of tools available to agent sessions.
 // Safe for concurrent reads after construction. Do not call [Register]
-// after passing the registry to the orchestrator — concurrent
+// after passing the registry to the orchestrator; concurrent
 // Register + Get is a data race.
 type ToolRegistry struct {
 	tools map[string]AgentTool

@@ -726,8 +726,8 @@ func TestFetchCandidateIssues(t *testing.T) {
 	t.Run("pagination to exhaustion, PR guard, terminal filter, and ascending resort", func(t *testing.T) {
 		t.Parallel()
 
-		page1 := loadFixture(t, "issues_candidates_page1.json") // #8 backlog, #6 PR
-		page2 := loadFixture(t, "issues_candidates_page2.json") // #1 backlog, #3 done, #2 in-progress
+		page1 := loadFixture(t, "issues_candidates_page1.json") // 8 backlog, 6 PR
+		page2 := loadFixture(t, "issues_candidates_page2.json") // 1 backlog, 3 done, 2 in-progress
 
 		var srvURL string
 		var calls atomic.Int32
@@ -758,8 +758,8 @@ func TestFetchCandidateIssues(t *testing.T) {
 			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
 
-		// #6 (pull request) and #3 (done, terminal) are filtered out; #8, #1,
-		// #2 remain, re-sorted ascending by CreatedAt regardless of page order.
+		// Issue 6 (pull request) and 3 (done, terminal) are filtered out; 8, 1,
+		// 2 remain, re-sorted ascending by CreatedAt regardless of page order.
 		if len(issues) != 3 {
 			t.Fatalf("len = %d, want 3 (pull request and terminal issue filtered)", len(issues))
 		}
@@ -809,7 +809,7 @@ func TestFetchCandidateIssues(t *testing.T) {
 	t.Run("multi-label WARN carries issue_identifier, not issue_index", func(t *testing.T) {
 		t.Parallel()
 
-		// #9 carries both "backlog" and "in-progress", two configured
+		// Issue 9 carries both "backlog" and "in-progress", two configured
 		// active-state labels.
 		const twoLabels = `[{"id":9009,"number":9,"title":"Two state labels","body":null,"state":"open","ref":"",
 			"html_url":"https://git.example.com/acme/widgets/issues/9",
@@ -919,7 +919,7 @@ func TestFetchCandidateIssues(t *testing.T) {
 			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
 
-		// #1 (backlog) and #2 (in-progress) are active; #3 (done) is terminal
+		// Issues 1 (backlog) and 2 (in-progress) are active; 3 (done) is terminal
 		// and is filtered client-side regardless of the server-side filter.
 		if len(issues) != 2 {
 			t.Fatalf("len = %d, want 2 (active-state issues only)", len(issues))

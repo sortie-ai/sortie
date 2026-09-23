@@ -16,7 +16,7 @@ import (
 // ResolveAgentSettings is caught regardless of the local import alias.
 const extensionsConfigImportPath = "github.com/sortie-ai/sortie/internal/config"
 
-// extensionsX1Allowlist names the internal/config functions permitted
+// extensionsIndexAllowlist names the internal/config functions permitted
 // to index the extensions field or an identifier named extensions.
 // Membership is verified against the tree, not copied from the source
 // spec: ExtensionSection, ExtensionValue, and SetExtensionSection own
@@ -28,7 +28,7 @@ const extensionsConfigImportPath = "github.com/sortie-ai/sortie/internal/config"
 // never extensions itself, so it can never trip the rule below, but it
 // stays listed because it is the function the field's own godoc names
 // as an owner of kind-scoped reads.
-var extensionsX1Allowlist = map[string]bool{
+var extensionsIndexAllowlist = map[string]bool{
 	"ExtensionSection":        true,
 	"ExtensionValue":          true,
 	"SetExtensionSection":     true,
@@ -65,7 +65,7 @@ func resolveExtensionsImportName(file *ast.File, importPath string) string {
 }
 
 // isExtensionsIndexBase reports whether expr is the base of an index
-// expression that X1 forbids outside the allow-list: the extensions
+// expression that the contract forbids outside the allow-list: the extensions
 // field selector, or a bare identifier named extensions. Enclosing
 // parentheses are stripped first, since the parser wraps a
 // parenthesized expression in a node of its own and the shape the rule
@@ -93,16 +93,16 @@ func isAgentKindSelector(expr ast.Expr) bool {
 	return ok && inner.Sel.Name == "Agent"
 }
 
-// checkExtensionsX1 appends a violation for every index expression
+// checkExtensionsIndexing appends a violation for every index expression
 // inside file whose base is the extensions field selector or an
 // identifier named extensions, in a function outside
-// extensionsX1Allowlist. The caller restricts this check to
-// internal/config's own non-test files, per X1's scope.
-func checkExtensionsX1(fset *token.FileSet, file *ast.File) []extensionsViolation {
+// extensionsIndexAllowlist. The caller restricts this check to
+// internal/config's own non-test files.
+func checkExtensionsIndexing(fset *token.FileSet, file *ast.File) []extensionsViolation {
 	var violations []extensionsViolation
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || extensionsX1Allowlist[fn.Name.Name] {
+		if !ok || fn.Body == nil || extensionsIndexAllowlist[fn.Name.Name] {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -120,12 +120,12 @@ func checkExtensionsX1(fset *token.FileSet, file *ast.File) []extensionsViolatio
 	return violations
 }
 
-// checkExtensionsX2X3 appends a violation for every call inside file
-// that breaks X2 (a non-literal argument to ExtensionSection or
-// ExtensionValue) or X3 (a ResolveAgentSettings call whose kind
-// argument is a selector ending in Agent.Kind). Both rules apply
+// checkExtensionsCallArgs appends a violation for every call inside file
+// that passes a non-literal argument to ExtensionSection or
+// ExtensionValue, or a kind argument ending in Agent.Kind to
+// ResolveAgentSettings. Both rules apply
 // anywhere in the two walked roots, not only inside internal/config.
-func checkExtensionsX2X3(fset *token.FileSet, file *ast.File) []extensionsViolation {
+func checkExtensionsCallArgs(fset *token.FileSet, file *ast.File) []extensionsViolation {
 	configIdent := resolveExtensionsImportName(file, extensionsConfigImportPath)
 
 	var violations []extensionsViolation
@@ -166,7 +166,7 @@ func checkExtensionsX2X3(fset *token.FileSet, file *ast.File) []extensionsViolat
 	return violations
 }
 
-// checkResolveAgentSettingsKind reports X3 for a single
+// checkResolveAgentSettingsKind reports a violation for a single
 // ResolveAgentSettings call whose kind argument (the second parameter)
 // is a selector expression ending in Agent.Kind.
 func checkResolveAgentSettingsKind(fset *token.FileSet, call *ast.CallExpr) []extensionsViolation {
@@ -183,11 +183,10 @@ func checkResolveAgentSettingsKind(fset *token.FileSet, call *ast.CallExpr) []ex
 // and cmd/, skipping testdata directories, and fails when any file
 // breaks the closed access-path invariant this work establishes: a
 // direct index of the extensions map outside internal/config's own
-// allow-listed owner functions (X1), a call to ExtensionSection or
-// ExtensionValue whose section name is not a string literal (X2), or a
+// allow-listed owner functions, a call to ExtensionSection or
+// ExtensionValue whose section name is not a string literal, or a
 // call to ResolveAgentSettings whose kind argument reaches for the
-// configuration's default kind instead of the session's frozen one
-// (X3).
+// configuration's default kind instead of the session's frozen one.
 func TestExtensionsContract(t *testing.T) {
 	fset := token.NewFileSet()
 	internalConfigDir := filepath.Join("..", "config")
@@ -230,9 +229,9 @@ func TestExtensionsContract(t *testing.T) {
 
 			var violations []extensionsViolation
 			if filepath.Dir(path) == internalConfigDir {
-				violations = append(violations, checkExtensionsX1(fset, file)...)
+				violations = append(violations, checkExtensionsIndexing(fset, file)...)
 			}
-			violations = append(violations, checkExtensionsX2X3(fset, file)...)
+			violations = append(violations, checkExtensionsCallArgs(fset, file)...)
 			for _, v := range violations {
 				t.Errorf("%s: %s", v.pos, v.text)
 			}
@@ -260,7 +259,7 @@ func TestExtensionsContract_DetectsViolations(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name: "X1: a function outside the allow-list indexes extensions directly",
+			name: "a function outside the allow-list indexes extensions directly",
 			src: `package fixture
 
 func leakExtensions(extensions map[string]any) any {
@@ -270,7 +269,7 @@ func leakExtensions(extensions map[string]any) any {
 			wantCount: 1,
 		},
 		{
-			name: "X2: ExtensionSection called with a variable argument instead of a string literal",
+			name: "ExtensionSection called with a variable argument instead of a string literal",
 			src: `package fixture
 
 func readSection(cfg ServiceConfig, name string) map[string]any {
@@ -280,7 +279,7 @@ func readSection(cfg ServiceConfig, name string) map[string]any {
 			wantCount: 1,
 		},
 		{
-			name: "X3: ResolveAgentSettings called with a selector ending in Agent.Kind",
+			name: "ResolveAgentSettings called with a selector ending in Agent.Kind",
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/config"
@@ -333,8 +332,8 @@ func readSection(cfg ServiceConfig) map[string]any {
 				t.Fatalf("parser.ParseFile: %v", err)
 			}
 
-			got := checkExtensionsX1(fset, file)
-			got = append(got, checkExtensionsX2X3(fset, file)...)
+			got := checkExtensionsIndexing(fset, file)
+			got = append(got, checkExtensionsCallArgs(fset, file)...)
 			if len(got) != tt.wantCount {
 				t.Errorf("got %d violations, want %d: %+v", len(got), tt.wantCount, got)
 			}

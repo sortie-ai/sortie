@@ -185,9 +185,10 @@ type StartSessionParams struct {
 	// SSHHost is non-empty.
 	SSHEnvNames []string
 
-	// MCPConfigPath, when non-empty, is the absolute merged MCP config
-	// path adapters inject via their MCP config CLI flag. When empty,
-	// adapters use the operator-configured mcp_config passthrough.
+	// MCPConfigPath, when non-empty, names a file directly inside the
+	// workspace's .sortie directory: the absolute merged MCP config path
+	// adapters inject via their MCP config CLI flag. When empty, adapters
+	// use the operator-configured mcp_config passthrough.
 	MCPConfigPath string
 
 	// CredentialVerification marks a session that carries only the

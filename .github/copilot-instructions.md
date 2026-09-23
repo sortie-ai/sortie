@@ -7,9 +7,9 @@
 ```
 cmd/sortie → internal/* (wiring only)
 server → domain, orchestrator
-orchestrator → domain, config, persistence, workspace, registry, prompt, workflow, logging, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
+orchestrator → domain, config, persistence, workspace, workspacekit, registry, prompt, workflow, logging, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
 workflow → config, prompt
-workspace → domain, config, persistence, agent/procutil
+workspace → domain, config, persistence, agent/procutil, workspacekit
 persistence → domain, config
 registry → domain, typeutil
 tracker/*, scm/*, agent/*, notify/* → domain, registry, logging, trackermetrics, *kit/*util, packages under their own family root that register no kind; no cross-adapter imports
@@ -18,7 +18,7 @@ adaptertest → domain, registry, scm/scmcore
 tool/* → domain, tool/toolresult
 config, prompt → domain, maputil
 httpkit, issuekit, trackermetrics → domain, typeutil
-domain, maputil, typeutil, logging → no internal deps
+domain, maputil, typeutil, logging, workspacekit → no internal deps
 ```
 
 ## 2. Concurrency safety
@@ -32,6 +32,8 @@ domain, maputil, typeutil, logging → no internal deps
 - Containment of workspace paths under `workspace.root` after absolute normalization; no escape symlinks.
 - Issue identifiers sanitized to `[A-Za-z0-9._-]` before use as a directory name.
 - Verify `cmd.Dir == workspace_path` before launching an agent subprocess.
+- Re-verify the workspace path immediately before every workspace-launched subprocess starts (Invariant 9), not only at session start.
+- Every `.sortie` read, write, and removal routes through `workspacekit`, never a bare path or a local `os.Root`.
 
 ## 4. Persistence (SQLite)
 

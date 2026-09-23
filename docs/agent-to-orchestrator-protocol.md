@@ -86,7 +86,7 @@ Where:
 - `.sortie/` is a reserved directory namespace within the per-issue workspace.
 - `status` is the canonical filename.
 
-The `.sortie/` directory is not created by the orchestrator. The agent creates it as needed.
+The orchestrator creates `.sortie/` when it writes the dispatch's tool-server configuration; an agent creates it when absent.
 
 Relative to the agent's working directory (which MUST equal the per-issue workspace path per [architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants), Invariant 1), the file path is:
 
@@ -296,14 +296,14 @@ In the worker lifecycle ([architecture Section 16.5](architecture/21-reference-a
 4. Agent session start.
 5. First turn.
 
-The cleanup operation MUST apply the same symlink rejection as the read path (Section 7.2): before deleting, verify via `Lstat` that neither `.sortie/` nor `status` is a symbolic link. If a symlink is detected, log a warning and skip the deletion — do not follow the link.
+The cleanup operation MUST apply the same rejection as the read path (Section 7.2): the workspace directory, `.sortie/`, and `status` are each verified as a real, unswapped entry of the expected type before the removal proceeds. A link, a wrong entry type, or an entry replaced while it is being opened, at any of the three, skips the deletion with a logged warning rather than following it.
 
 A deletion that fails because the file is already absent, or because the `.sortie/` directory does not exist, is ignored without a log entry. Any other removal error is logged at warn level and ignored.
 
 ```
 function pre_dispatch_cleanup(workspace_path):
     status_path = workspace_path / ".sortie" / "status"
-    if any component of status_path is a symlink (Lstat check):
+    if the workspace directory, .sortie/, or status fails verification as a real, unswapped entry of the expected type:
         log_warn("symlink detected in .sortie path, skipping cleanup", workspace_path)
         return
     err = remove(status_path)
@@ -311,7 +311,7 @@ function pre_dispatch_cleanup(workspace_path):
         log_warn("status file cleanup failed", workspace_path, err)
 ```
 
-The orchestrator applies this same removal at three further points during a run. On admission to the self-review phase (Section 2.3.2), the file is removed for the recognized status value that admitted the run, immediately before the phase's first review turn, so the phase's own first read does not observe the value that admitted it. Inside the phase, the file is removed again after each review turn and after each fix turn, whenever the value read there is recognized (Section 2.3.5). Every one of these removals applies the same `Lstat` symlink rejection and the same tolerance of failure as the pre-dispatch removal; a failed removal does not prevent the phase from running and does not change the run's exit.
+The orchestrator applies this same removal at three further points during a run. On admission to the self-review phase (Section 2.3.2), the file is removed for the recognized status value that admitted the run, immediately before the phase's first review turn, so the phase's own first read does not observe the value that admitted it. Inside the phase, the file is removed again after each review turn and after each fix turn, whenever the value read there is recognized (Section 2.3.5). Every one of these removals applies the same rejection and the same tolerance of failure as the pre-dispatch removal; a failed removal does not prevent the phase from running and does not change the run's exit.
 
 The table below states, for each point at which the orchestrator reads or removes the file, whether it removes the file for each of the three recognized values and for the unrecognized-or-absent case:
 
@@ -521,9 +521,9 @@ A malicious or malfunctioning agent that writes `blocked` to every workspace wil
 
 The `.sortie/status` file resides within the per-issue workspace directory, which is itself contained under `workspace.root` ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants)). The orchestrator reads only this specific path. No user-controlled input influences the path construction beyond the issue identifier, which is sanitized to `[A-Za-z0-9._-]`.
 
-The orchestrator MUST NOT follow symbolic links when reading the status file. A symlink at the status file path, the `.sortie/` directory, or any intermediate component MUST be treated as a read error (Section 2.6): log a warning, treat as absent.
+The orchestrator MUST NOT follow symbolic links when reading the status file. A link, a wrong entry type, or an entry replaced while it is being opened, at the workspace directory, the `.sortie/` directory, or the status file itself, MUST be treated as a read error (Section 2.6): log a warning, treat as absent.
 
-This requirement extends the workspace safety model ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants)) into the `.sortie/` namespace. Existing workspace path validation covers the workspace root and per-issue directory; the symlink check here adds coverage for files created by the agent inside the workspace. Implementation requires `Lstat` checks on the path components leading to the status file.
+This requirement extends the workspace safety model ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants)) into the `.sortie/` namespace. Existing workspace path validation covers the workspace root and per-issue directory; the check here adds coverage for files created by the agent inside the workspace, verified through a handle rather than a point-in-time stat.
 
 ### 7.3 Denial of service
 
@@ -582,8 +582,8 @@ An implementation conforms to this specification if it satisfies all of the foll
 5. The orchestrator deletes `.sortie/status` at four points: before each new dispatch; at the moment it acts on a recognized value that admits the run to the self-review phase; after each review turn inside the phase, when the value read is recognized; and after each fix turn inside the phase, when the value read is recognized. All four are per Section 3.4.
 6. The orchestrator never writes to `.sortie/status`, and its only removals of the file are the four named in item 5. In particular: the read after a coding turn removes nothing, for any recognized value, on any deployment (Section 3.2, Section 3.4); and a recognized value read at that point, when the run is not admitted to the self-review phase, remains in the file at teardown (Section 8.3).
 7. The status file does not trigger tracker state transitions per Section 3.6.
-8. Symbolic links at any path component are treated as read errors per Section 7.2.
-9. Every removal named in item 5, not the pre-dispatch cleanup alone, applies the same `Lstat` symlink rejection, and every one tolerates a failed removal without changing the run's control flow, per Section 3.4.
+8. A link, a wrong entry type, or an entry replaced while being opened, at the workspace directory, the `.sortie/` directory, or the status file, is treated as a read error per Section 7.2.
+9. Every removal named in item 5, not the pre-dispatch cleanup alone, applies the same rejection, and every one tolerates a failed removal without changing the run's control flow, per Section 3.4.
 10. The orchestrator parks the issue on `blocked` where the dispatch drives issue state, and holds it out of dispatch until it observes a release per Section 2.3.1 and Section 3.5.
 
 ## References
