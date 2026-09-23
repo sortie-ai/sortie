@@ -412,13 +412,24 @@ jobs:
 
           if [ "${INTEGRATION}" = "success" ] && [ "${HOOK_STRESS}" = "success" ]; then
             printf 'Nightly passed. Integration and Windows hook stress are both green.\n' >message.txt
+            scripts/discord-notify.sh <message.txt
           else
-            {
-              printf 'Nightly needs attention.\n'
-              printf 'Integration: %s\n' "${INTEGRATION}"
-              printf 'Windows hook stress: %s\n' "${HOOK_STRESS}"
-              printf '<%s>\n' "${RUN_URL}"
-            } >message.txt
+            jq -n \
+              --arg integration "${INTEGRATION}" \
+              --arg hook_stress "${HOOK_STRESS}" \
+              --arg url "${RUN_URL}" \
+              '[["Integration", $integration], ["Windows hook stress", $hook_stress]]
+              | map(select(.[1] != "success")) as $unfinished
+              | any($unfinished[]; .[1] == "failure") as $failed
+              | {
+                  title: (if $failed then "🔴 Nightly failed" else "⚪ Nightly did not finish" end),
+                  color: (if $failed then 15548997 else 9807270 end),
+                  description: (
+                    [$unfinished[] | "\(if .[1] == "failure" then "❌" else "⚪" end) \(.[0]): \(.[1])"]
+                    + ["", "[Open the run →](\($url))"]
+                    | join("\n")
+                  ),
+                  timestamp: (now | todate)
+                }' >embed.json
+            scripts/discord-notify.sh --embed <embed.json
           fi
-
-          scripts/discord-notify.sh <message.txt
