@@ -4,7 +4,9 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT_DIR=$(CDPATH='' cd -- "${SCRIPT_DIR}/../.." && pwd)
-EXTRACTED_SCRIPT="${REPO_ROOT_DIR}/scripts/nightly-issue.sh"
+SCRIPT="${REPO_ROOT_DIR}/scripts/nightly-issue.sh"
+# An intentional change to a recorded gh call updates these files.
+EXPECTED_DIR="${SCRIPT_DIR}/testdata/nightly-issue"
 
 fail() {
 	printf '%s\n' "$1" >&2
@@ -63,12 +65,6 @@ printf '{"action":"%s","body":"%s","summary":"summary","annotation":""}\n' "$NIT
 EOF
 chmod +x "$tmp/bin/nite"
 
-mkdir -p "$tmp/merge-base/lib"
-git -C "$REPO_ROOT_DIR" show 133c462f:scripts/nightly-issue.sh >"$tmp/merge-base/nightly-issue.sh"
-chmod +x "$tmp/merge-base/nightly-issue.sh"
-cp "${REPO_ROOT_DIR}/scripts/lib/common.sh" "$tmp/merge-base/lib/common.sh"
-MERGE_BASE_SCRIPT="$tmp/merge-base/nightly-issue.sh"
-
 run_revision() {
 	_script=$1
 	_gh_log=$2
@@ -96,12 +92,11 @@ check_action() {
 	ISSUES_JSON=$2
 	NITE_FORCE_ACTION=$3
 
-	run_revision "$MERGE_BASE_SCRIPT" "$tmp/merge-base.gh.log" "$tmp/merge-base.bodies.log"
-	run_revision "$EXTRACTED_SCRIPT" "$tmp/extracted.gh.log" "$tmp/extracted.bodies.log"
+	run_revision "$SCRIPT" "$tmp/gh.log" "$tmp/bodies.log"
 
-	diff "$tmp/merge-base.gh.log" "$tmp/extracted.gh.log" >"$tmp/diff.out" 2>&1 ||
+	diff "${EXPECTED_DIR}/${_name}.gh.txt" "$tmp/gh.log" >"$tmp/diff.out" 2>&1 ||
 		fail "gh argument vectors differ for NITE action ${_name}: $(cat "$tmp/diff.out")"
-	diff "$tmp/merge-base.bodies.log" "$tmp/extracted.bodies.log" >"$tmp/diff.out" 2>&1 ||
+	diff "${EXPECTED_DIR}/${_name}.bodies.txt" "$tmp/bodies.log" >"$tmp/diff.out" 2>&1 ||
 		fail "gh -F body=@<path> file contents differ for NITE action ${_name}: $(cat "$tmp/diff.out")"
 }
 
@@ -115,4 +110,4 @@ check_action close "$open_row" close
 check_action reopen "$closed_row" reopen
 check_action none '[]' none
 
-grep -q '=== call ===' "$tmp/extracted.gh.log" || fail "no gh calls were recorded for the none action"
+grep -q '=== call ===' "$tmp/gh.log" || fail "no gh calls were recorded for the none action"

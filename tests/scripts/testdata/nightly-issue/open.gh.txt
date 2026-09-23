@@ -1,0 +1,63 @@
+=== call ===
+api
+repos/sortie-ai/sortie/actions/runs/42
+--jq
+.workflow_id
+=== call ===
+api
+repos/sortie-ai/sortie/actions/workflows/7/runs?status=completed&branch=main&per_page=10&exclude_pull_requests=true
+=== call ===
+api
+repos/sortie-ai/sortie/issues?state=all&labels=ci-nightly&sort=created&direction=desc&per_page=100&page=1
+=== call ===
+label
+create
+ci-nightly
+--color
+D73A4A
+--description
+Nightly integration test failures
+--force
+=== call ===
+label
+create
+area:agent-adapter
+--color
+0E8A16
+--description
+Agent interface, Claude Code adapter, Copilot adapter, mock
+--force
+=== call ===
+api
+repos/sortie-ai/sortie
+--jq
+.node_id
+=== call ===
+api
+repos/sortie-ai/sortie/labels/ci-nightly
+--jq
+.node_id
+=== call ===
+api
+repos/sortie-ai/sortie/labels/area%3Aagent-adapter
+--jq
+.node_id
+=== call ===
+api
+graphql
+-f
+query=mutation($repository: ID!, $title: String!, $body: String!, $type: ID!, $labels: [ID!]!) { createIssue(input: {repositoryId: $repository, title: $title, body: $body, issueTypeId: $type, labelIds: $labels}) { issue { number } } }
+-f
+repository=REPO_NODE_ID
+-f
+title=Nightly integration failure: Example
+-F
+body=@<BODYFILE>
+-f
+type=IT_test
+-f
+labels[]=LABEL_NODE_ID
+-f
+labels[]=LABEL_NODE_ID
+--jq
+.data.createIssue.issue.number
