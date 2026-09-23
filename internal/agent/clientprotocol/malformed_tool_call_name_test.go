@@ -72,7 +72,7 @@ func runPropertyThirteenTests(t *testing.T, repoRoot, overlayPath string) (exitC
 	}
 	args = append(args, "-run", malformedToolCallNameTestRun, "-count=1", "./internal/agent/clientprotocol")
 
-	cmd := exec.Command("go", args...)
+	cmd := exec.CommandContext(t.Context(), "go", args...)
 	cmd.Dir = repoRoot
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
