@@ -9,6 +9,8 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=scripts/lib/common.sh
 . "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=scripts/lib/github-issue.sh
+. "${SCRIPT_DIR}/lib/github-issue.sh"
 
 readonly CI_LABEL_NAME="ci-nightly"
 readonly CI_LABEL_COLOR="D73A4A"
@@ -65,72 +67,11 @@ resolve_area_label() {
 	esac
 }
 
-ensure_label() {
-	gh label create "$1" --color "$2" --description "$3" --force >/dev/null 2>&1 || true
-}
-
-label_node_id() {
-	_lni_name=$(printf '%s' "$1" | jq -sRr @uri)
-	gh api "repos/${GITHUB_REPOSITORY}/labels/${_lni_name}" --jq .node_id
-}
-
 provision_labels() {
 	ensure_label "$CI_LABEL_NAME" "$CI_LABEL_COLOR" "$CI_LABEL_DESCRIPTION"
 	if [ -n "$AREA_LABEL_NAME" ]; then
 		ensure_label "$AREA_LABEL_NAME" "$AREA_LABEL_COLOR" "$AREA_LABEL_DESCRIPTION"
 	fi
-}
-
-create_issue() {
-	_repository_id=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .node_id)
-	_ci_label_id=$(label_node_id "$CI_LABEL_NAME")
-	set -- -f "labels[]=${_ci_label_id}"
-	if [ -n "$AREA_LABEL_NAME" ]; then
-		_area_label_id=$(label_node_id "$AREA_LABEL_NAME")
-		set -- "$@" -f "labels[]=${_area_label_id}"
-	fi
-
-	gh api graphql \
-		-f query='mutation($repository: ID!, $title: String!, $body: String!, $type: ID!, $labels: [ID!]!) { createIssue(input: {repositoryId: $repository, title: $title, body: $body, issueTypeId: $type, labelIds: $labels}) { issue { number } } }' \
-		-f repository="$_repository_id" \
-		-f title="$TITLE" \
-		-F body="@${BODY_FILE}" \
-		-f type="$TEST_ISSUE_TYPE_ID" \
-		"$@" \
-		--jq .data.createIssue.issue.number
-}
-
-set_test_type() {
-	_stt_number=$1
-	_stt_issue_id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${_stt_number}" --jq .node_id)
-	gh api graphql \
-		-f query='mutation($issue: ID!, $type: ID!) { updateIssue(input: {id: $issue, issueTypeId: $type}) { issue { number } } }' \
-		-f issue="$_stt_issue_id" \
-		-f type="$TEST_ISSUE_TYPE_ID" >/dev/null
-}
-
-# list_nightly_incidents lists every issue labeled ci-nightly, newest
-# created first, paginated to exhaustion, appending
-# "<number>\t<state>\t<title>" per issue to out_file. It uses the
-# issues REST route rather than the search route: the search index lags
-# issue creation by an unbounded interval, and a durable incident that a
-# search misses would file as a duplicate. It returns non-zero on a
-# non-zero gh exit, leaving out_file holding whatever earlier pages
-# already wrote.
-list_nightly_incidents() {
-	_lni_out=$1
-	: >"$_lni_out"
-	_lni_page=1
-	while :; do
-		_lni_page_json=$(gh api "repos/${GITHUB_REPOSITORY}/issues?state=all&labels=${CI_LABEL_NAME}&sort=created&direction=desc&per_page=100&page=${_lni_page}") || return 1
-		printf '%s' "$_lni_page_json" | jq -r \
-			'.[] | select(.pull_request == null) | "\(.number)\t\(.state)\t\(.title)"' >>"$_lni_out"
-		_lni_count=$(printf '%s' "$_lni_page_json" | jq -r 'length')
-		if [ "$_lni_count" -lt 100 ]; then
-			return 0
-		fi
-		_lni_page=$((_lni_page + 1))
-	done
 }
 
 # fetch_run_history lists the last MONITOR_LOOKBACK completed runs of
@@ -250,7 +191,7 @@ decide() {
 	INCIDENT_STATE=absent
 	INCIDENT_NUMBER=0
 	INCIDENTS_FILE=$(mktemp "${TMPDIR:-/tmp}/sortie-nightly-incidents.XXXXXX")
-	if ! list_nightly_incidents "$INCIDENTS_FILE"; then
+	if ! list_labeled_issues "$CI_LABEL_NAME" "$INCIDENTS_FILE"; then
 		INCIDENT_READ=0
 	fi
 	_match_line=$(awk -F'\t' -v t="$TITLE" '$3 == t { print $1"\t"$2 }' "$INCIDENTS_FILE" | sort -t "$(printf '\t')" -k1,1rn | head -n1)
@@ -309,7 +250,11 @@ decide() {
 		provision_labels
 		BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/sortie-nightly-issue.XXXXXX")
 		printf '%s' "$_body" >"$BODY_FILE"
-		_number=$(create_issue)
+		if [ -n "$AREA_LABEL_NAME" ]; then
+			_number=$(create_issue "$TITLE" "$BODY_FILE" "$TEST_ISSUE_TYPE_ID" "$CI_LABEL_NAME" "$AREA_LABEL_NAME")
+		else
+			_number=$(create_issue "$TITLE" "$BODY_FILE" "$TEST_ISSUE_TYPE_ID" "$CI_LABEL_NAME")
+		fi
 		rm -f "$BODY_FILE"
 		printf 'Created issue #%s\n' "$_number"
 		;;
@@ -327,7 +272,7 @@ decide() {
 		if [ -n "$AREA_LABEL_NAME" ]; then
 			gh issue edit "$INCIDENT_NUMBER" --add-label "$AREA_LABEL_NAME" >/dev/null
 		fi
-		set_test_type "$INCIDENT_NUMBER"
+		set_issue_type "$INCIDENT_NUMBER" "$TEST_ISSUE_TYPE_ID"
 		;;
 	none) ;;
 	*)

@@ -22,13 +22,13 @@ import (
 // This file validates the generated wire types, the messages the
 // adapter itself writes (strict direction), and the messages the
 // adapter reads from captured fixtures (weak direction) against
-// the pinned schema artifact under testdata/schema-v1.21.0/. It runs
-// without executing the generator: it reads wire_gen.go's own
-// definition-to-Go-type mapping table rather than restating it.
+// the pinned schema artifact. It runs without executing the generator:
+// it reads wire_gen.go's own definition-to-Go-type mapping table rather
+// than restating it.
 
 // schemaAssetsDir is the directory holding the pinned schema artifact
 // and its provenance file, relative to this package's own directory.
-const schemaAssetsDir = "testdata/schema-v1.21.0"
+const schemaAssetsDir = "testdata/schema-v1.23.0"
 
 // assertProvenance asserts that every asset line PROVENANCE.txt records
 // (the form "<path> <byte-count> sha256:<hex>") matches the file it

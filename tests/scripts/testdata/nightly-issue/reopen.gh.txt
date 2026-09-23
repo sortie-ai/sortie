@@ -1,0 +1,41 @@
+=== call ===
+api
+repos/sortie-ai/sortie/actions/runs/42
+--jq
+.workflow_id
+=== call ===
+api
+repos/sortie-ai/sortie/actions/workflows/7/runs?status=completed&branch=main&per_page=10&exclude_pull_requests=true
+=== call ===
+api
+repos/sortie-ai/sortie/issues?state=all&labels=ci-nightly&sort=created&direction=desc&per_page=100&page=1
+=== call ===
+issue
+reopen
+99
+=== call ===
+issue
+comment
+99
+--body
+canned incident body
+=== call ===
+issue
+edit
+99
+--add-label
+area:agent-adapter
+=== call ===
+api
+repos/sortie-ai/sortie/issues/99
+--jq
+.node_id
+=== call ===
+api
+graphql
+-f
+query=mutation($issue: ID!, $type: ID!) { updateIssue(input: {id: $issue, issueTypeId: $type}) { issue { number } } }
+-f
+issue=ISSUE_NODE_ID
+-f
+type=IT_test

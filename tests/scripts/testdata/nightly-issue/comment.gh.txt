@@ -1,0 +1,17 @@
+=== call ===
+api
+repos/sortie-ai/sortie/actions/runs/42
+--jq
+.workflow_id
+=== call ===
+api
+repos/sortie-ai/sortie/actions/workflows/7/runs?status=completed&branch=main&per_page=10&exclude_pull_requests=true
+=== call ===
+api
+repos/sortie-ai/sortie/issues?state=all&labels=ci-nightly&sort=created&direction=desc&per_page=100&page=1
+=== call ===
+issue
+comment
+99
+--body
+canned incident body

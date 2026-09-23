@@ -111,12 +111,12 @@ func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bo
 		}
 	case sessionUpdateToolCall:
 		event.kind = updateToolCall
-		if err := json.Unmarshal(raw, &event.toolCallBegin); err != nil {
+		if err := json.Unmarshal(dropMalformedToolCallName(raw), &event.toolCallBegin); err != nil {
 			return event, false
 		}
 	case sessionUpdateToolCallUpdate:
 		event.kind = updateToolCallUpdate
-		if err := json.Unmarshal(raw, &event.toolCallUpdate); err != nil {
+		if err := json.Unmarshal(dropMalformedToolCallName(raw), &event.toolCallUpdate); err != nil {
 			return event, false
 		}
 	case sessionUpdatePlan:
@@ -140,4 +140,27 @@ func parseSessionUpdate(raw json.RawMessage) (event sessionUpdateEvent, found bo
 	}
 
 	return event, true
+}
+
+// dropMalformedToolCallName drops a wrong-typed "name" member so it decodes
+// as absent rather than failing the tool call that carries it.
+func dropMalformedToolCallName(object json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(object, &fields); err != nil {
+		return object
+	}
+	name, present := fields["name"]
+	if !present {
+		return object
+	}
+	trimmed := bytes.TrimSpace(name)
+	if len(trimmed) > 0 && (trimmed[0] == '"' || string(trimmed) == "null") {
+		return object
+	}
+	delete(fields, "name")
+	adapted, err := json.Marshal(fields)
+	if err != nil {
+		return object
+	}
+	return adapted
 }

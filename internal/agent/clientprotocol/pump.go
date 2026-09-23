@@ -946,7 +946,7 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 	}
 
 	var params requestPermissionRequest
-	if err := json.Unmarshal(msg.Params, &params); err != nil {
+	if err := json.Unmarshal(dropMalformedToolCallNameFromParams(msg.Params), &params); err != nil {
 		params = requestPermissionRequest{}
 	}
 
@@ -968,6 +968,25 @@ func (p *pumpState) handlePermissionRequest(msg *jsonrpc.Message) {
 	if posture.EndAttempt {
 		p.latchOrBeginEndAttempt("")
 	}
+}
+
+// dropMalformedToolCallNameFromParams drops a wrong-typed "name" from raw's
+// "toolCall" member and substitutes the result back in.
+func dropMalformedToolCallNameFromParams(raw json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return raw
+	}
+	toolCall, present := fields["toolCall"]
+	if !present {
+		return raw
+	}
+	fields["toolCall"] = dropMalformedToolCallName(toolCall)
+	adapted, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	return adapted
 }
 
 // reportUncallableToolDelivery reports, once per session, that a session which
