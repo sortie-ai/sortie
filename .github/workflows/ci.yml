@@ -218,8 +218,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Maintainer tooling under tools/ is not supported on Windows.
       - name: Run tests
-        run: go test -count=1 ./...
+        shell: bash
+        run: go test -count=1 $(go list ./... | grep -v '/tools/')
 
       - name: Test workspace verbosely
         run: go test -v -count=1 ./internal/workspace/...
