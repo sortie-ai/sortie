@@ -409,7 +409,7 @@ When `agent.kind` requires a local subprocess:
   - `agent.command` is split on whitespace. The first token is resolved to an executable path using the host's `PATH` lookup rules: a token containing a path separator is used as given, and any other token is searched for on `PATH`, which yields an absolute path. The remaining tokens become a fixed argument prefix inserted before any per-turn arguments (for example, `codex app-server` resolves `codex` and yields `app-server` as a prefix argument).
   - POSIX and Windows: the adapter execs the resolved binary directly with that argument vector. No shell is involved in local invocation. On Windows the subprocess additionally receives `CREATE_NEW_PROCESS_GROUP` so it can be signaled independently of the orchestrator.
   - When the worker runs remotely over SSH, `agent.command` is instead passed through unsplit and unresolved as the command the remote shell executes; a shell is involved only on that path. See [Appendix A. SSH Worker Extension (Optional)](27-appendix-a-ssh-worker-extension.md) for the remote execution model.
-- Working directory: workspace path
+- Working directory: workspace path, verified immediately before every launch, per Invariant 9
 - Stdout/stderr: separate streams
 
 Process group isolation:

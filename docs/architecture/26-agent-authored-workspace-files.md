@@ -46,6 +46,6 @@ JSON schema:
 Safety rules:
 
 - Maximum file size: 65536 bytes (64 KB). Oversized files are rejected.
-- Symlink protection: both `.sortie/` and `.sortie/review_verdict.json` are checked via `Lstat` before reading. If either is a symbolic link, the file is rejected. This follows the same pattern as `.sortie/status` (Section 21.1).
+- Symlink protection: the read goes through the workspace directory and `.sortie/` under Invariant 7. A link, a wrong entry type, or an entry replaced while it is being opened, at either directory or at the file, rejects the file with a warn record. This follows the same pattern as `.sortie/status` (Section 21.1).
 - Missing or invalid verdict content on a non-final iteration is treated as `"iterate"`. Missing or invalid verdict content on the final iteration does not count as `"pass"`; the run ends with no final verdict recorded and `CapReached=true`.
 
