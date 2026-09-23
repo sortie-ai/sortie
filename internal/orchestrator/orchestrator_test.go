@@ -5799,6 +5799,44 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 	})
 }
 
+func TestHandleTick_TokenWarningThreshold(t *testing.T) {
+	t.Parallel()
+
+	t.Run("derived from the tick's config beside MaxTokens", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		wm.config.Agent.TokenWarningPercent = 80
+		store := &stubStore{}
+		state := NewState(60000, 10, 0, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		if state.MaxTokens != 1000 {
+			t.Fatalf("state.MaxTokens = %d, want 1000", state.MaxTokens)
+		}
+		if state.TokenWarningThreshold != 800 {
+			t.Errorf("state.TokenWarningThreshold = %d, want 800 (cfg.Agent.TokenWarningThreshold())", state.TokenWarningThreshold)
+		}
+	})
+
+	t.Run("absent token_warning_percent leaves the threshold at zero", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{}
+		state := NewState(60000, 10, 0, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		if state.TokenWarningThreshold != 0 {
+			t.Errorf("state.TokenWarningThreshold = %d, want 0", state.TokenWarningThreshold)
+		}
+	})
+}
+
 func TestHandleTick_BudgetLogRecord(t *testing.T) {
 	t.Parallel()
 
@@ -6550,6 +6588,142 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 			t.Errorf("UpsertSessionMetadata calls = %d, want 2 (failed write not throttled)", len(writes))
 		}
 	})
+
+	t.Run("a pending write bypasses the throttle and clears on success", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+		entry.LastMetadataWrite = time.Now().UTC()
+		entry.MetadataWritePending = true
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		if writes := store.sessionWrites(); len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1: a pending write bypasses the throttle", len(writes))
+		}
+		if entry.MetadataWritePending {
+			t.Error("RunningEntry.MetadataWritePending = true after a successful write, want false")
+		}
+	})
+
+	t.Run("a failing pending write still bypasses the throttle but leaves MetadataWritePending set", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{upsertSessionMetadataErr: fmt.Errorf("disk full")}
+		o, entry := incrementalWriteOrchestrator(t, store)
+		entry.LastMetadataWrite = time.Now().UTC()
+		entry.MetadataWritePending = true
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		if writes := store.sessionWrites(); len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1: a pending write bypasses the throttle even on failure", len(writes))
+		}
+		if !entry.MetadataWritePending {
+			t.Error("RunningEntry.MetadataWritePending = false after a failed write, want true: still owed")
+		}
+	})
+
+	t.Run("no pending write stays throttled within the interval", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+		entry.LastMetadataWrite = time.Now().UTC()
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		if writes := store.sessionWrites(); len(writes) != 0 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 0: no write owed, still within the throttle interval", len(writes))
+		}
+	})
+}
+
+// tokenWarningApplyEventOrchestrator returns an orchestrator and running
+// entry set up for a single issue whose token warning threshold and
+// ceiling are both configurable, for applyAgentEvent-level assertions.
+func tokenWarningApplyEventOrchestrator(t *testing.T, maxTokens, warningThreshold int) (*Orchestrator, *RunningEntry) {
+	t.Helper()
+	state := NewState(60000, 10, maxTokens, nil, AgentTotals{})
+	state.TokenWarningThreshold = warningThreshold
+	entry := &RunningEntry{
+		Identifier:   "ISS-APPLY-ident",
+		Issue:        domain.Issue{ID: "id-apply", Identifier: "ISS-APPLY-ident"},
+		UsageArrival: registry.UsageArrivalIncremental,
+	}
+	state.Running["id-apply"] = entry
+	tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+	return budgetOrchestrator(state, budgetTickConfig(0), &stubStore{}, tracker), entry
+}
+
+// TestApplyAgentEvent_TokenWarningOrderedBeforeCeilingStop covers a figure
+// that crosses both the warning threshold and the ceiling in the same
+// event: the warning record must land before enforceInFlightTokenCeiling
+// invokes TokenCeilingCancelFunc for that figure.
+func TestApplyAgentEvent_TokenWarningOrderedBeforeCeilingStop(t *testing.T) {
+	t.Parallel()
+
+	o, entry := tokenWarningApplyEventOrchestrator(t, 100, 80)
+	var warnedBeforeCancel bool
+	entry.TokenCeilingCancelFunc = func() { warnedBeforeCancel = entry.TokenWarningReached }
+
+	msg := agentEventMsg{IssueID: "id-apply", Event: domain.AgentEvent{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{TotalTokens: 150}}}
+	o.applyAgentEvent(context.Background(), msg, true)
+
+	if !entry.TokenWarningReached {
+		t.Fatal("entry.TokenWarningReached = false, want true (150 crosses the 80 threshold)")
+	}
+	if entry.TokenCeilingStopRequest == nil {
+		t.Fatal("entry.TokenCeilingStopRequest = nil, want non-nil (150 also crosses the 100 ceiling)")
+	}
+	if !warnedBeforeCancel {
+		t.Error("TokenCeilingCancelFunc observed TokenWarningReached = false, want the warning recorded before the ceiling cancels the run")
+	}
+}
+
+// TestApplyAgentEvent_EnforceCeilingFalseSuppressesTokenWarning covers the
+// drain path, which applies queued events for an exiting run with
+// enforceCeiling false: a figure that would otherwise cross the threshold
+// must not warn, since that run can no longer be interrupted.
+func TestApplyAgentEvent_EnforceCeilingFalseSuppressesTokenWarning(t *testing.T) {
+	t.Parallel()
+
+	o, entry := tokenWarningApplyEventOrchestrator(t, 100, 80)
+
+	msg := agentEventMsg{IssueID: "id-apply", Event: domain.AgentEvent{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{TotalTokens: 150}}}
+	o.applyAgentEvent(context.Background(), msg, false)
+
+	if entry.TokenWarningReached {
+		t.Error("entry.TokenWarningReached = true, want false: enforceCeiling false must suppress the warning evaluation")
+	}
+	if entry.TokenCeilingStopRequest != nil {
+		t.Error("entry.TokenCeilingStopRequest = non-nil, want nil: enforceCeiling false must suppress the ceiling evaluation")
+	}
+}
+
+// TestApplyAgentEvent_NoThresholdConfiguredMatchesPriorBehavior covers the
+// disabled threshold: applyAgentEvent's only observable effects are then
+// HandleAgentEvent's own state and the incremental metadata write, so the
+// sequence of events an absent or zero token_warning_percent produces
+// stays byte-for-byte what it was before this feature existed.
+func TestApplyAgentEvent_NoThresholdConfiguredMatchesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
+	o, entry := tokenWarningApplyEventOrchestrator(t, 0, 0)
+
+	msg := agentEventMsg{IssueID: "id-apply", Event: domain.AgentEvent{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{TotalTokens: 150}}}
+	o.applyAgentEvent(context.Background(), msg, true)
+
+	if entry.TokenWarningReached {
+		t.Error("entry.TokenWarningReached = true, want false: no threshold configured")
+	}
+	if entry.MetadataWritePending {
+		t.Error("entry.MetadataWritePending = true, want false: no threshold configured")
+	}
+	if entry.AgentTotalTokens != 150 {
+		t.Errorf("entry.AgentTotalTokens = %d, want 150 (HandleAgentEvent's own accounting is unaffected)", entry.AgentTotalTokens)
+	}
 }
 
 func TestDrainRunningWorkers_SelfReviewProgressUpdatesRunningEntry(t *testing.T) {

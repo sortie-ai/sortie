@@ -1042,6 +1042,40 @@ func TestDispatchIssue(t *testing.T) {
 		}
 	})
 
+	t.Run("WorkerDone is open at dispatch and closes once the worker context is cancelled", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		workerStarted := make(chan struct{})
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-WD"), nil, "", func(ctx context.Context, _ domain.Issue, _ *int) {
+			close(workerStarted)
+			<-ctx.Done()
+			close(workerDone)
+		})
+		<-workerStarted
+
+		entry := s.Running["ISS-WD"]
+		if entry.WorkerDone == nil {
+			t.Fatal("RunningEntry.WorkerDone = nil, want non-nil")
+		}
+		select {
+		case <-entry.WorkerDone:
+			t.Fatal("RunningEntry.WorkerDone already closed before cancellation")
+		default:
+		}
+
+		entry.CancelFunc()
+		<-workerDone
+
+		select {
+		case <-entry.WorkerDone:
+		case <-time.After(time.Second):
+			t.Fatal("RunningEntry.WorkerDone did not close within 1 second of cancellation")
+		}
+	})
+
 	t.Run("StartedAt is recent UTC", func(t *testing.T) {
 		t.Parallel()
 

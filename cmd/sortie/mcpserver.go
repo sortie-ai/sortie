@@ -128,18 +128,19 @@ func sessionToolParamsFromEnv(getenv func(string) string, cfg config.ServiceConf
 		}
 	}
 	return SessionToolParams{
-		TrackerAdapter: trackerAdapter,
-		Project:        cfg.Tracker.Project,
-		WorkspacePath:  getenv("SORTIE_WORKSPACE"),
-		DBPath:         getenv("SORTIE_DB_PATH"),
-		IssueID:        getenv("SORTIE_ISSUE_ID"),
-		Identifier:     getenv("SORTIE_ISSUE_IDENTIFIER"),
-		DispatchID:     getenv("SORTIE_DISPATCH_ID"),
-		Attempt:        attempt,
-		AgentKind:      getenv("SORTIE_SESSION_AGENT_KIND"),
-		MaxTokens:      cfg.Agent.MaxTokens,
-		MaxSessions:    cfg.Agent.MaxSessions,
-		Notifications:  cfg.Notifications.Backends,
+		TrackerAdapter:        trackerAdapter,
+		Project:               cfg.Tracker.Project,
+		WorkspacePath:         getenv("SORTIE_WORKSPACE"),
+		DBPath:                getenv("SORTIE_DB_PATH"),
+		IssueID:               getenv("SORTIE_ISSUE_ID"),
+		Identifier:            getenv("SORTIE_ISSUE_IDENTIFIER"),
+		DispatchID:            getenv("SORTIE_DISPATCH_ID"),
+		Attempt:               attempt,
+		AgentKind:             getenv("SORTIE_SESSION_AGENT_KIND"),
+		MaxTokens:             cfg.Agent.MaxTokens,
+		MaxSessions:           cfg.Agent.MaxSessions,
+		TokenWarningThreshold: cfg.Agent.TokenWarningThreshold(),
+		Notifications:         cfg.Notifications.Backends,
 	}
 }
 

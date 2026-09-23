@@ -257,6 +257,13 @@ type AgentConfig struct {
 	// event loop for the run already in flight. 0 means unlimited.
 	MaxTokens int
 
+	// TokenWarningPercent is the percentage of MaxTokens, 0 to 99,
+	// at which the event loop warns that the ceiling is near. 0
+	// disables the warning threshold. Call [AgentConfig.TokenWarningThreshold]
+	// to convert this to a token count; no other code performs that
+	// conversion.
+	TokenWarningPercent int
+
 	// MaxConsecutiveAbsences bounds how many runs in a row may be
 	// observed to have produced no evidence of work before the issue
 	// is parked. It is not an effort budget: any run that produces
@@ -267,6 +274,19 @@ type AgentConfig struct {
 	// deployment that wants no absence checking sets
 	// tracker.handoff_evidence to off instead.
 	MaxConsecutiveAbsences int
+}
+
+// TokenWarningThreshold returns the token count at which the warning
+// threshold fires: the least integer not below MaxTokens times
+// TokenWarningPercent divided by 100. It returns 0, disabling the
+// warning, when MaxTokens or TokenWarningPercent is not positive.
+func (a AgentConfig) TokenWarningThreshold() int {
+	if a.MaxTokens <= 0 || a.TokenWarningPercent <= 0 {
+		return 0
+	}
+	q := a.MaxTokens / 100
+	r := a.MaxTokens % 100
+	return q*a.TokenWarningPercent + (r*a.TokenWarningPercent+99)/100
 }
 
 // ExtensionBlockPresence reports what the front matter carries under a
@@ -1000,6 +1020,17 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		}
 	}
 
+	tokenWarningPercent, err := coerceIntField(m, "token_warning_percent", "agent.token_warning_percent")
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	if tokenWarningPercent < 0 || tokenWarningPercent > 99 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.token_warning_percent",
+			Message: "must be between 0 and 99",
+		}
+	}
+
 	// max_consecutive_absences: unlike max_sessions and max_tokens, 0
 	// is rejected rather than read as unlimited, so a presence test
 	// is required to tell an absent key (which defaults to 3) apart
@@ -1035,6 +1066,7 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		MaxConcurrentByState:   byState,
 		MaxSessions:            maxSessions,
 		MaxTokens:              maxTokens,
+		TokenWarningPercent:    tokenWarningPercent,
 		MaxConsecutiveAbsences: maxConsecutiveAbsences,
 	}, nil
 }

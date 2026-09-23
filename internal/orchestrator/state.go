@@ -248,6 +248,21 @@ type RunningEntry struct {
 	// TokenCeilingQueryWarned latches once the ceiling's confirming read
 	// has failed and been reported for this run.
 	TokenCeilingQueryWarned bool
+
+	// WorkerDone is the Done() channel of the worker context
+	// [DispatchIssue] creates. Nil only in test fixtures that bypass
+	// DispatchIssue, where a non-blocking receive reads it as open.
+	WorkerDone <-chan struct{}
+
+	// TokenWarningReached latches once the token warning record has
+	// been emitted for this run. Set once, never cleared.
+	TokenWarningReached bool
+
+	// MetadataWritePending is true when an incremental session_metadata
+	// write is owed ahead of [sessionMetadataWriteInterval], set by the
+	// token warning reaching its threshold and cleared once that write
+	// succeeds.
+	MetadataWritePending bool
 }
 
 // RetryEntry holds the runtime state for a pending retry. IssueID,
@@ -747,6 +762,11 @@ type State struct {
 	// ceiling, refreshed on every poll tick. 0 means unlimited. Written
 	// only on the event-loop goroutine.
 	MaxTokens int
+
+	// TokenWarningThreshold mirrors config.Agent.TokenWarningThreshold()
+	// for the in-flight token warning, refreshed on every poll tick. 0
+	// disables the warning. Written only on the event-loop goroutine.
+	TokenWarningThreshold int
 
 	// Running maps issue ID to the live session entry. Only the event loop
 	// may mutate this map.

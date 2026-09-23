@@ -358,6 +358,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		br.cfg.Agent.MaxConcurrentByState,
 		totals,
 	)
+	state.TokenWarningThreshold = br.cfg.Agent.TokenWarningThreshold()
 	orchestrator.PopulateRetries(state, pendingRetries, br.logger)
 
 	parkedRows, err := store.ListParkedIssues(ctx)
@@ -793,14 +794,15 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// connection is not needed beyond construction.
 	sessionToolFunc := func(ctx context.Context, issueID, workspacePath string) (*domain.ToolRegistry, error) {
 		sessionTools, err := BuildSessionToolRegistry(ctx, br.logger, SessionToolParams{
-			TrackerAdapter: br.trackerAdapter,
-			Project:        br.cfg.Tracker.Project,
-			DBPath:         dbPath,
-			MaxTokens:      br.cfg.Agent.MaxTokens,
-			MaxSessions:    br.cfg.Agent.MaxSessions,
-			Notifications:  br.cfg.Notifications.Backends,
-			IssueID:        issueID,
-			WorkspacePath:  workspacePath,
+			TrackerAdapter:        br.trackerAdapter,
+			Project:               br.cfg.Tracker.Project,
+			DBPath:                dbPath,
+			MaxTokens:             br.cfg.Agent.MaxTokens,
+			MaxSessions:           br.cfg.Agent.MaxSessions,
+			TokenWarningThreshold: br.mgr.Config().Agent.TokenWarningThreshold(),
+			Notifications:         br.cfg.Notifications.Backends,
+			IssueID:               issueID,
+			WorkspacePath:         workspacePath,
 		})
 		if err != nil {
 			return nil, err

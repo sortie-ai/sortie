@@ -423,6 +423,9 @@ func applyQueued[T any](ch <-chan T, apply func(T)) {
 // only when enforceCeiling is true, evaluates the in-flight token ceiling.
 func (o *Orchestrator) applyAgentEvent(ctx context.Context, msg agentEventMsg, enforceCeiling bool) {
 	HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
+	if enforceCeiling {
+		evaluateTokenWarning(o.state, msg.IssueID, msg.Event, o.logger)
+	}
 	o.maybeWriteIncrementalMetadata(ctx, msg.IssueID, msg.Event)
 	if enforceCeiling {
 		enforceInFlightTokenCeiling(ctx, o.state, msg.IssueID, msg.Event, o.store, o.logger)
@@ -663,6 +666,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
 	o.state.MaxTokens = cfg.Agent.MaxTokens
+	o.state.TokenWarningThreshold = cfg.Agent.TokenWarningThreshold()
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	warnings := o.applyWorkerConfig(cfg)
@@ -1067,18 +1071,21 @@ func (o *Orchestrator) activateReconstructedRetries() {
 const drainExitMargin = 30 * time.Second
 
 // sessionMetadataWriteInterval bounds how often the event loop writes an
-// in-flight session's token totals: at most one incremental write per issue
-// per interval, so the advisory cost reading trails live spend by at most
-// one interval plus whatever accrued since the last token_usage event.
+// in-flight session's token totals when no write is owed: at most one
+// incremental write per issue per interval, so the advisory cost reading
+// trails live spend by at most one interval plus whatever accrued since
+// the last token_usage event. A pending write, set when a usage figure
+// reaches [State.TokenWarningThreshold], bypasses this bound.
 const sessionMetadataWriteInterval = 2 * time.Second
 
 // maybeWriteIncrementalMetadata persists a running session's token totals
 // when an event carries non-zero usage, or a token_usage event carries a
-// measurement of zero, and the per-issue throttle has elapsed. Widening the
-// gate to the token_usage type makes a row exist exactly when the session
-// has reported a measurement, including a zero. A no-op for an event with
-// neither signal, an unknown issue, an arrival of none, or while throttled.
-// Must run on the single-writer event loop.
+// measurement of zero, and either a write is owed or the per-issue
+// throttle has elapsed. Widening the gate to the token_usage type makes a
+// row exist exactly when the session has reported a measurement,
+// including a zero. A no-op for an event with neither signal, an unknown
+// issue, an arrival of none, or while throttled with no write owed. Must
+// run on the single-writer event loop.
 func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueID string, event domain.AgentEvent) {
 	if !hasUsage(event.Usage) && event.Type != domain.EventTokenUsage {
 		return
@@ -1091,7 +1098,7 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 		return
 	}
 	now := time.Now().UTC()
-	if !entry.LastMetadataWrite.IsZero() && now.Sub(entry.LastMetadataWrite) < sessionMetadataWriteInterval {
+	if !entry.MetadataWritePending && !entry.LastMetadataWrite.IsZero() && now.Sub(entry.LastMetadataWrite) < sessionMetadataWriteInterval {
 		return
 	}
 
@@ -1125,6 +1132,7 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 		return
 	}
 	entry.LastMetadataWrite = now
+	entry.MetadataWritePending = false
 }
 
 // refreshParkedIssues evaluates the release rule against this tick's

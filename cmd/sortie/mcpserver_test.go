@@ -546,7 +546,7 @@ func TestSessionToolParamsFromEnv(t *testing.T) {
 
 	cfg := config.ServiceConfig{
 		Tracker: config.TrackerConfig{Project: "PROJ"},
-		Agent:   config.AgentConfig{MaxTokens: 1000, MaxSessions: 5},
+		Agent:   config.AgentConfig{MaxTokens: 1000, MaxSessions: 5, TokenWarningPercent: 80},
 	}
 	tracker := &stubTrackerAdapter{}
 
@@ -581,6 +581,9 @@ func TestSessionToolParamsFromEnv(t *testing.T) {
 	}
 	if params.MaxSessions != 5 {
 		t.Errorf("MaxSessions = %d, want 5", params.MaxSessions)
+	}
+	if want := cfg.Agent.TokenWarningThreshold(); params.TokenWarningThreshold != want {
+		t.Errorf("TokenWarningThreshold = %d, want %d (cfg.Agent.TokenWarningThreshold())", params.TokenWarningThreshold, want)
 	}
 	if params.TrackerAdapter != tracker {
 		t.Error("TrackerAdapter does not equal the adapter passed in")

@@ -753,3 +753,290 @@ func TestHandleWorkerExit_CeilingMeasuredNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestReachTokenWarning_LatchesOncePerRun(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+	state := NewState(5000, 4, 100, nil, AgentTotals{})
+	state.TokenWarningThreshold = 50
+	entry := &RunningEntry{Identifier: "ISS-LATCH-ident", IssueTokensCompleted: 60}
+	state.Running["ISS-LATCH"] = entry
+
+	first := reachTokenWarning(state, "ISS-LATCH", entry, logger)
+	second := reachTokenWarning(state, "ISS-LATCH", entry, logger)
+
+	if !first {
+		t.Fatal("reachTokenWarning() first call = false, want true (60 >= 50)")
+	}
+	if second {
+		t.Error("reachTokenWarning() second call = true, want false: already latched")
+	}
+	if got := strings.Count(lb.String(), "token warning threshold reached"); got != 1 {
+		t.Errorf(`log contains %d "token warning threshold reached" records, want 1`, got)
+	}
+}
+
+// TestFreezeIssueTokenBaselineThenEvaluateTokenWarning_LatchesAcrossDispatchAndUsage
+// covers a run whose completed sum alone crosses the threshold at dispatch
+// and whose next usage figure crosses it again: the latch set by the
+// dispatch-time read must suppress the later event-loop record too.
+func TestFreezeIssueTokenBaselineThenEvaluateTokenWarning_LatchesAcrossDispatchAndUsage(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+	state := NewState(5000, 4, 100, nil, AgentTotals{})
+	state.TokenWarningThreshold = 50
+	state.Running["ISS-CROSS"] = &RunningEntry{
+		Identifier:   "ISS-CROSS-ident",
+		AgentKind:    "mock",
+		UsageArrival: registry.UsageArrivalIncremental,
+	}
+	store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 60}}}}
+
+	freezeIssueTokenBaseline(context.Background(), state, "ISS-CROSS", store, logger)
+
+	entry := state.Running["ISS-CROSS"]
+	if !entry.TokenWarningReached {
+		t.Fatal("entry.TokenWarningReached = false after the dispatch baseline crossed the threshold, want true")
+	}
+
+	usageEvent := domain.AgentEvent{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{TotalTokens: 40}}
+	HandleAgentEvent(state, "ISS-CROSS", usageEvent, logger, &spyMetrics{})
+	evaluateTokenWarning(state, "ISS-CROSS", usageEvent, logger)
+
+	if got := strings.Count(lb.String(), "token warning threshold reached"); got != 1 {
+		t.Errorf(`log contains %d "token warning threshold reached" records across dispatch and a later usage figure, want 1`, got)
+	}
+}
+
+func TestReachTokenWarning_NoRecordConditions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(state *State, entry *RunningEntry)
+	}{
+		{
+			name:  "threshold disabled",
+			setup: func(state *State, _ *RunningEntry) { state.TokenWarningThreshold = 0 },
+		},
+		{
+			name:  "figure below threshold",
+			setup: func(state *State, _ *RunningEntry) { state.TokenWarningThreshold = 200 },
+		},
+		{
+			name: "ceiling stop already decided for this run",
+			setup: func(state *State, entry *RunningEntry) {
+				state.TokenWarningThreshold = 50
+				entry.TokenCeilingStopRequest = &TokenCeilingStopRequest{}
+			},
+		},
+		{
+			name: "worker context already done",
+			setup: func(state *State, entry *RunningEntry) {
+				state.TokenWarningThreshold = 50
+				done := make(chan struct{})
+				close(done)
+				entry.WorkerDone = done
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lb, logger := textLogger()
+			state := NewState(5000, 4, 100, nil, AgentTotals{})
+			entry := &RunningEntry{Identifier: "ISS-SILENT-ident", IssueTokensCompleted: 100}
+			state.Running["ISS-SILENT"] = entry
+			tt.setup(state, entry)
+
+			if reached := reachTokenWarning(state, "ISS-SILENT", entry, logger); reached {
+				t.Error("reachTokenWarning() = true, want false")
+			}
+			if entry.TokenWarningReached {
+				t.Error("entry.TokenWarningReached = true, want false")
+			}
+			if strings.Contains(lb.String(), "token warning threshold reached") {
+				t.Errorf("log contains the warning record, want none:\n%s", lb.String())
+			}
+		})
+	}
+}
+
+func TestEvaluateTokenWarning_NoRecordConditions(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-EVAL"
+	usageEvent := domain.AgentEvent{Type: domain.EventTokenUsage, Usage: domain.TokenUsage{TotalTokens: 500}}
+
+	tests := []struct {
+		name  string
+		event domain.AgentEvent
+		setup func(state *State)
+	}{
+		{
+			name:  "event carries no usage component",
+			event: domain.AgentEvent{Type: domain.EventNotification},
+			setup: func(state *State) {
+				state.Running[issueID] = &RunningEntry{Identifier: issueID + "-ident", UsageArrival: registry.UsageArrivalIncremental, IssueTokensCompleted: 100}
+			},
+		},
+		{
+			name:  "issue not in Running",
+			event: usageEvent,
+			setup: func(_ *State) {},
+		},
+		{
+			name:  "arrival does not admit figures",
+			event: usageEvent,
+			setup: func(state *State) {
+				state.Running[issueID] = &RunningEntry{Identifier: issueID + "-ident", UsageArrival: registry.UsageArrivalNone, IssueTokensCompleted: 100}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			lb, logger := textLogger()
+			state := NewState(5000, 4, 100, nil, AgentTotals{})
+			state.TokenWarningThreshold = 50
+			tt.setup(state)
+
+			evaluateTokenWarning(state, issueID, tt.event, logger)
+
+			if entry, ok := state.Running[issueID]; ok && entry.TokenWarningReached {
+				t.Error("entry.TokenWarningReached = true, want false")
+			}
+			if strings.Contains(lb.String(), "token warning threshold reached") {
+				t.Errorf("log contains the warning record, want none:\n%s", lb.String())
+			}
+		})
+	}
+}
+
+func TestFreezeIssueTokenBaseline_NoWarningConditions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("arrival reports no figure emits no warning despite a baseline above the threshold", func(t *testing.T) {
+		t.Parallel()
+
+		lb, logger := textLogger()
+		state := NewState(5000, 4, 100, nil, AgentTotals{})
+		state.TokenWarningThreshold = 50
+		state.Running["ISS-NOFIG"] = &RunningEntry{
+			Identifier:   "ISS-NOFIG-ident",
+			AgentKind:    "mock",
+			UsageArrival: registry.UsageArrivalNone,
+		}
+		store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 90}}}}
+
+		freezeIssueTokenBaseline(context.Background(), state, "ISS-NOFIG", store, logger)
+
+		if state.Running["ISS-NOFIG"].TokenWarningReached {
+			t.Error("entry.TokenWarningReached = true, want false (arrival reports no figure)")
+		}
+		if strings.Contains(lb.String(), "token warning threshold reached") {
+			t.Errorf("log contains the warning record, want none:\n%s", lb.String())
+		}
+	})
+
+	t.Run("baseline read failure emits no warning", func(t *testing.T) {
+		t.Parallel()
+
+		lb, logger := textLogger()
+		state := NewState(5000, 4, 100, nil, AgentTotals{})
+		state.TokenWarningThreshold = 50
+		state.Running["ISS-FAILBASE"] = &RunningEntry{
+			Identifier:   "ISS-FAILBASE-ident",
+			AgentKind:    "mock",
+			UsageArrival: registry.UsageArrivalIncremental,
+		}
+		store := &fakeTokenStore{responses: []tokenStoreResponse{{err: errors.New("db unavailable")}}}
+
+		freezeIssueTokenBaseline(context.Background(), state, "ISS-FAILBASE", store, logger)
+
+		if state.Running["ISS-FAILBASE"].TokenWarningReached {
+			t.Error("entry.TokenWarningReached = true, want false (baseline read failed)")
+		}
+		if strings.Contains(lb.String(), "token warning threshold reached") {
+			t.Errorf("log contains the warning record, want none:\n%s", lb.String())
+		}
+	})
+}
+
+// TestFreezeIssueTokenBaseline_DispatchTimeReach covers a run whose
+// completed sum alone reaches the threshold at dispatch: the record must
+// fire from the baseline read, and MetadataWritePending must stay false
+// since freezeIssueTokenBaseline owes no incremental write of its own.
+func TestFreezeIssueTokenBaseline_DispatchTimeReach(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+	state := NewState(5000, 4, 100, nil, AgentTotals{})
+	state.TokenWarningThreshold = 50
+	state.Running["ISS-DISPATCH-REACH"] = &RunningEntry{
+		Identifier:   "ISS-DISPATCH-REACH-ident",
+		AgentKind:    "mock",
+		UsageArrival: registry.UsageArrivalIncremental,
+	}
+	store := &fakeTokenStore{responses: []tokenStoreResponse{{usage: persistence.IssueTokenUsage{TotalTokens: 60}}}}
+
+	freezeIssueTokenBaseline(context.Background(), state, "ISS-DISPATCH-REACH", store, logger)
+
+	entry := state.Running["ISS-DISPATCH-REACH"]
+	if !entry.TokenWarningReached {
+		t.Fatal("entry.TokenWarningReached = false, want true: the completed sum alone reaches the threshold at dispatch")
+	}
+	if entry.MetadataWritePending {
+		t.Error("entry.MetadataWritePending = true, want false: freezeIssueTokenBaseline owes no incremental write")
+	}
+	if got := strings.Count(lb.String(), "token warning threshold reached"); got != 1 {
+		t.Errorf(`log contains %d "token warning threshold reached" records, want 1`, got)
+	}
+}
+
+// TestReachTokenWarning_RecordAttributes pins the warning record's
+// attributes to the spec's derivation table so a field rename or a
+// swapped value is caught here rather than downstream.
+func TestReachTokenWarning_RecordAttributes(t *testing.T) {
+	t.Parallel()
+
+	lb, logger := textLogger()
+	state := NewState(5000, 4, 500, nil, AgentTotals{})
+	state.TokenWarningThreshold = 300
+	entry := &RunningEntry{
+		Identifier:           "ISS-ATTR-ident",
+		SessionID:            "sess-attr",
+		IssueTokensCompleted: 200,
+		AgentTotalTokens:     150,
+	}
+	state.Running["ISS-ATTR"] = entry
+
+	if reached := reachTokenWarning(state, "ISS-ATTR", entry, logger); !reached {
+		t.Fatal("reachTokenWarning() = false, want true (200+150 >= 300)")
+	}
+
+	line := lineWith(t, lb.String(), "token warning threshold reached")
+	for _, want := range []string{
+		"issue_id=ISS-ATTR",
+		"issue_identifier=ISS-ATTR-ident",
+		"session_id=sess-attr",
+		"used_tokens=350",
+		"warning_tokens=300",
+		"budget_tokens=500",
+		"issue_tokens_completed=200",
+		"session_tokens=150",
+		"ceiling_setting=agent.max_tokens",
+		"warning_setting=agent.token_warning_percent",
+		"level=WARN",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("record is missing %s:\n%s", want, line)
+		}
+	}
+}
