@@ -63,7 +63,7 @@ func writeOverlay(t *testing.T, dir string, replace map[string]string) string {
 	return writeScratchFile(t, dir, "overlay.json", encoded)
 }
 
-func runPropertyThirteenTests(t *testing.T, repoRoot, overlayPath string) (exitCode int, output string) {
+func runMalformedNameTests(t *testing.T, repoRoot, overlayPath string) (exitCode int, output string) {
 	t.Helper()
 
 	args := []string{"test"}
@@ -104,31 +104,31 @@ func TestMalformedToolCallNameOverlayNegativeControl(t *testing.T) {
 	unadaptedPumpPath := writeScratchFile(t, scratch, "pump.go", unadaptedPump)
 	preMoveWireGenPath := writeScratchFile(t, scratch, "wire_gen.go", preMoveWireGen)
 
-	t.Run("adaptation removed, pin moved: property 13 fails", func(t *testing.T) {
+	t.Run("adaptation removed, pin moved: malformed-name tests fail", func(t *testing.T) {
 		overlay := writeOverlay(t, t.TempDir(), map[string]string{
 			parsePath: unadaptedParsePath,
 			pumpPath:  unadaptedPumpPath,
 		})
-		code, output := runPropertyThirteenTests(t, repoRoot, overlay)
+		code, output := runMalformedNameTests(t, repoRoot, overlay)
 		if code == 0 {
-			t.Errorf("go test with the adaptation removed exited 0, want a nonzero exit proving the adaptation guards the property:\n%s", output)
+			t.Errorf("go test with the adaptation removed exited 0, want a nonzero exit proving the adaptation guards malformed names:\n%s", output)
 		}
 	})
 
-	t.Run("adaptation removed, pre-move wire_gen: property 13 passes as it did before the move", func(t *testing.T) {
+	t.Run("adaptation removed, pre-move wire_gen: malformed-name tests pass", func(t *testing.T) {
 		overlay := writeOverlay(t, t.TempDir(), map[string]string{
 			parsePath:   unadaptedParsePath,
 			pumpPath:    unadaptedPumpPath,
 			wireGenPath: preMoveWireGenPath,
 		})
-		code, output := runPropertyThirteenTests(t, repoRoot, overlay)
+		code, output := runMalformedNameTests(t, repoRoot, overlay)
 		if code != 0 {
 			t.Errorf("go test with the adaptation removed and the pre-move wire_gen.go exited %d, want 0:\n%s", code, output)
 		}
 	})
 
-	t.Run("adaptation and pin move together: property 13 passes", func(t *testing.T) {
-		code, output := runPropertyThirteenTests(t, repoRoot, "")
+	t.Run("adaptation and pin move together: malformed-name tests pass", func(t *testing.T) {
+		code, output := runMalformedNameTests(t, repoRoot, "")
 		if code != 0 {
 			t.Errorf("go test against the committed tree exited %d, want 0:\n%s", code, output)
 		}
