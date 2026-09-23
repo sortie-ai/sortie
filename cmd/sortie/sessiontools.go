@@ -59,6 +59,10 @@ type SessionToolParams struct {
 	// cost_budget.
 	MaxSessions int
 
+	// TokenWarningThreshold is the agent.token_warning_percent threshold,
+	// in tokens, reported by cost_budget. 0 omits the warning fields.
+	TokenWarningThreshold int
+
 	// Notifications are the configured notifier backends. At least one
 	// backend that resolves to a valid constructed backend gates
 	// notify_operator.
@@ -111,7 +115,7 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 		} else {
 			store = openedStore
 			reg.Register(history.New(buildHistoryQuery(store), params.IssueID))
-			reg.Register(budget.New(buildBudgetQuery(store), params.IssueID, params.DispatchID, params.MaxTokens, params.MaxSessions))
+			reg.Register(budget.New(buildBudgetQuery(store), params.IssueID, params.DispatchID, params.MaxTokens, params.MaxSessions, params.TokenWarningThreshold))
 		}
 	}
 

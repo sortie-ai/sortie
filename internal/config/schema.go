@@ -96,6 +96,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "max_concurrent_agents_by_state", Type: FieldMap},
 			{Name: "max_sessions", Type: FieldInt},
 			{Name: "max_tokens", Type: FieldInt},
+			{Name: "token_warning_percent", Type: FieldInt},
 			{Name: "max_consecutive_absences", Type: FieldInt},
 			{Name: "stop_grace_ms", Type: FieldInt},
 		},
@@ -169,7 +170,7 @@ var staticKnownExtensionKeys = map[string]bool{
 // FrontMatterWarning represents a single advisory diagnostic from
 // front matter static analysis. These do not affect runtime behavior.
 type FrontMatterWarning struct {
-	Check   string // "unknown_key", "unknown_sub_key", "type_mismatch", or "unresolved_extension_var"
+	Check   string // "unknown_key", "unknown_sub_key", "type_mismatch", "unresolved_extension_var", or "ineffective_setting"
 	Field   string // dotted path to the offending key
 	Message string // operator-friendly description
 }
@@ -372,8 +373,24 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	// leaf indicates the variable was set; a resolved empty leaf is the
 	// warning trigger.
 	warnings = checkUnresolvedExtensionVars(warnings, cfg)
+	warnings = checkIneffectiveTokenWarningSetting(warnings, cfg)
 
 	return warnings
+}
+
+// checkIneffectiveTokenWarningSetting emits an ineffective_setting
+// warning when agent.token_warning_percent is configured but
+// agent.max_tokens is 0, since the warning threshold derives from the
+// ceiling and never fires while the ceiling is unset.
+func checkIneffectiveTokenWarningSetting(warnings []FrontMatterWarning, cfg ServiceConfig) []FrontMatterWarning {
+	if cfg.Agent.TokenWarningPercent <= 0 || cfg.Agent.MaxTokens != 0 {
+		return warnings
+	}
+	return append(warnings, FrontMatterWarning{
+		Check:   "ineffective_setting",
+		Field:   "agent.token_warning_percent",
+		Message: "has no effect while agent.max_tokens is 0",
+	})
 }
 
 // checkUnresolvedExtensionVars iterates the pre-resolution snapshot

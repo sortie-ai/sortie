@@ -365,6 +365,35 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantChecks: []string{"unknown_sub_key"},
 			wantFields: []string{"agent.typo_field"},
 		},
+		{
+			name: "agent token_warning_percent is a known sub-key",
+			raw: map[string]any{
+				"agent": map[string]any{"kind": "mock", "token_warning_percent": 80},
+			},
+			cfg:       ServiceConfig{Agent: AgentConfig{Kind: "mock"}},
+			wantCount: 0,
+		},
+		{
+			name:        "ineffective_setting fires when token_warning_percent is set and max_tokens is 0",
+			raw:         map[string]any{},
+			cfg:         ServiceConfig{Agent: AgentConfig{TokenWarningPercent: 80, MaxTokens: 0}},
+			wantCount:   1,
+			wantChecks:  []string{"ineffective_setting"},
+			wantFields:  []string{"agent.token_warning_percent"},
+			wantMsgSubs: []string{"has no effect while agent.max_tokens is 0"},
+		},
+		{
+			name:      "ineffective_setting does not fire when max_tokens is set",
+			raw:       map[string]any{},
+			cfg:       ServiceConfig{Agent: AgentConfig{TokenWarningPercent: 80, MaxTokens: 1000}},
+			wantCount: 0,
+		},
+		{
+			name:      "ineffective_setting does not fire when token_warning_percent is 0",
+			raw:       map[string]any{},
+			cfg:       ServiceConfig{Agent: AgentConfig{TokenWarningPercent: 0, MaxTokens: 0}},
+			wantCount: 0,
+		},
 
 		{
 			name: "tracker section is scalar not map",

@@ -210,6 +210,14 @@ Fields:
   - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
   - Changes are re-applied at runtime: a lowered ceiling reaches a run already in flight from the next poll tick onward, and it affects future retry timer evaluations.
   - Reaching the ceiling also posts one comment on the issue naming the token budget and `agent.max_tokens` as the setting that raises it, stating whether a session was stopped in flight.
+  - `token_warning_percent`, below, warns before this ceiling stops a run.
+- `token_warning_percent` (integer)
+  - Default: `0` (off).
+  - Must be between `0` and `99`; rejected as a configuration error at parse time otherwise. It is never validated against `agent.max_tokens`, so lowering the ceiling can never make this field reject a reload.
+  - The warning threshold, in tokens, is this percentage of `agent.max_tokens`, rounded up to the nearest whole token. It has no effect while `agent.max_tokens` is `0`.
+  - Evaluated on the event loop, against the same live per-issue figure the ceiling reads, ahead of the ceiling's own evaluation. Once a run's figure reaches the threshold, one warning is logged for that run and the running session's `cost_budget` tool result reports the condition, so the agent can wrap up or hand off before the ceiling stops the run.
+  - Overridable through `SORTIE_AGENT_TOKEN_WARNING_PERCENT`.
+  - Changes are re-applied at runtime: a run already in flight that has not yet reached the previous threshold is evaluated against the new one from its next usage figure, and a run dispatched after the reload is evaluated against the new value from dispatch.
 - `max_consecutive_absences` (integer)
   - Default: `3`.
   - Bounds how many runs in a row may be observed to have produced no evidence of work before the issue is parked. Any run that produces evidence of work resets the count to zero.

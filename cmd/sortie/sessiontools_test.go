@@ -197,6 +197,84 @@ func TestBuildSessionToolRegistry_AllToolsPresent(t *testing.T) {
 	assertContainsAll(t, "tools/list", mcpNames, want)
 }
 
+// TestBuildSessionToolRegistry_TokenWarningThreshold verifies that
+// SessionToolParams.TokenWarningThreshold reaches the registered
+// cost_budget tool's behavior, and that a zero value produces a
+// pre-change byte-identical result.
+func TestBuildSessionToolRegistry_TokenWarningThreshold(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "warning.db")
+	seedDB(t, dbPath)
+
+	baseParams := SessionToolParams{
+		TrackerAdapter: &stubTrackerAdapter{},
+		Project:        "TESTPROJ",
+		WorkspacePath:  tmpDir,
+		DBPath:         dbPath,
+		IssueID:        "issue-warning",
+		MaxTokens:      1000,
+		MaxSessions:    10,
+	}
+
+	executeCostBudget := func(t *testing.T, params SessionToolParams) map[string]any {
+		t.Helper()
+		result, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+		if err != nil {
+			t.Fatalf("BuildSessionToolRegistry: %v", err)
+		}
+		t.Cleanup(func() { closeResult(t, result) })
+
+		tool, ok := result.Registry.Get("cost_budget")
+		if !ok {
+			t.Fatal("cost_budget tool not registered")
+		}
+		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("cost_budget Execute: %v", err)
+		}
+		var top map[string]any
+		if err := json.Unmarshal(out, &top); err != nil {
+			t.Fatalf("unmarshal cost_budget response %q: %v", out, err)
+		}
+		data, ok := top["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("cost_budget data = %T, want map", top["data"])
+		}
+		return data
+	}
+
+	t.Run("non-zero threshold reaches the cost_budget tool", func(t *testing.T) {
+		t.Parallel()
+
+		params := baseParams
+		params.TokenWarningThreshold = 800
+
+		data := executeCostBudget(t, params)
+
+		got, ok := data["warning_tokens"].(float64)
+		if !ok || int64(got) != 800 {
+			t.Errorf("cost_budget data.warning_tokens = %v, want 800", data["warning_tokens"])
+		}
+	})
+
+	t.Run("zero threshold produces a pre-change byte-identical result", func(t *testing.T) {
+		t.Parallel()
+
+		params := baseParams
+		params.TokenWarningThreshold = 0
+
+		data := executeCostBudget(t, params)
+
+		for _, key := range []string{"warning_tokens", "warning_reached"} {
+			if _, present := data[key]; present {
+				t.Errorf("cost_budget data has key %q, want absent when TokenWarningThreshold is 0", key)
+			}
+		}
+	})
+}
+
 // TestBuildSessionToolRegistry_GatingPreserved verifies that unset gates
 // remove the corresponding tools from the built registry.
 func TestBuildSessionToolRegistry_GatingPreserved(t *testing.T) {

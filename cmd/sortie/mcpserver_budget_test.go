@@ -131,28 +131,24 @@ func (a *budgetE2EAgent) RunTurn(ctx context.Context, session domain.Session, pa
 		return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted, UsageMeasured: true}, nil
 	}
 
-	select {
-	case total := <-a.emitUsage:
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTokenUsage,
-			Timestamp: time.Now().UTC(),
-			Usage:     domain.TokenUsage{TotalTokens: total},
-		})
-	case <-ctx.Done():
-		return domain.TurnResult{}, ctx.Err()
+	for {
+		select {
+		case total := <-a.emitUsage:
+			params.OnEvent(domain.AgentEvent{
+				Type:      domain.EventTokenUsage,
+				Timestamp: time.Now().UTC(),
+				Usage:     domain.TokenUsage{TotalTokens: total},
+			})
+		case <-a.proceedTurn:
+			return domain.TurnResult{
+				SessionID:     session.ID,
+				ExitReason:    domain.EventTurnCompleted,
+				UsageMeasured: true,
+			}, nil
+		case <-ctx.Done():
+			return domain.TurnResult{}, ctx.Err()
+		}
 	}
-
-	select {
-	case <-a.proceedTurn:
-	case <-ctx.Done():
-		return domain.TurnResult{}, ctx.Err()
-	}
-
-	return domain.TurnResult{
-		SessionID:     session.ID,
-		ExitReason:    domain.EventTurnCompleted,
-		UsageMeasured: true,
-	}, nil
 }
 
 func (a *budgetE2EAgent) StopSession(_ context.Context, _ domain.Session) error { return nil }
@@ -210,8 +206,10 @@ func waitForSessionMetadataTotal(t *testing.T, store *persistence.Store, issueID
 // costBudgetResult decodes the fields of cost_budget's response this
 // test asserts on.
 type costBudgetResult struct {
-	UsedTokens         int64 `json:"used_tokens"`
-	UsedTokensComplete bool  `json:"used_tokens_complete"`
+	UsedTokens         int64  `json:"used_tokens"`
+	UsedTokensComplete bool   `json:"used_tokens_complete"`
+	WarningTokens      *int64 `json:"warning_tokens"`
+	WarningReached     *bool  `json:"warning_reached"`
 }
 
 func executeBudgetTool(t *testing.T, tool domain.AgentTool) costBudgetResult {
@@ -433,6 +431,193 @@ func TestMCPServerBudget(t *testing.T) {
 	}
 	if !after.UsedTokensComplete {
 		t.Error("after the usage event: used_tokens_complete = false, want true")
+	}
+
+	close(agent.proceedTurn)
+}
+
+// TestMCPServerBudget_WarningThreshold covers the token-warning-percent
+// dispatch-to-response path end to end. It mirrors TestMCPServerBudget's
+// harness with a threshold configured below the ceiling: a live figure
+// that stays under the threshold reports warning_reached false, and a
+// second figure arriving quickly after the first (well inside
+// sessionMetadataWriteInterval of the incremental write it triggered)
+// still reaches session_metadata and reports warning_reached true on the
+// very next cost_budget call, proving the write reached the database
+// despite the throttle window.
+func TestMCPServerBudget_WarningThreshold(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "budget-warning-e2e.db")
+
+	rw, err := persistence.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := rw.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	const issueID = "budget-warning-e2e-issue"
+	const identifier = "BUDGET-WARN-E2E-1"
+
+	tracker := &budgetE2ETracker{issueID: issueID, identifier: identifier}
+	agent := newBudgetE2EAgent()
+
+	cfg := config.ServiceConfig{
+		Polling:   config.PollingConfig{IntervalMS: 20},
+		Workspace: config.WorkspaceConfig{Root: tmpDir},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Tracker: config.TrackerConfig{
+			Kind:            fixtureBudgetTrackerKind,
+			ActiveStates:    []string{"todo"},
+			TerminalStates:  []string{"done"},
+			HandoffState:    "done",
+			HandoffEvidence: config.HandoffEvidenceOff,
+		},
+		Agent: config.AgentConfig{
+			Kind:                fixtureBudgetAgentKind,
+			MaxTurns:            1,
+			MaxConcurrentAgents: 1,
+			ReadTimeoutMS:       5000,
+			TurnTimeoutMS:       30000,
+			StopGraceMS:         5000,
+			MaxTokens:           100000,
+			TokenWarningPercent: 1,
+		},
+	}
+
+	tmpl, err := prompt.Parse("do {{ .issue.identifier }}", "test", 0)
+	if err != nil {
+		t.Fatalf("prompt.Parse: %v", err)
+	}
+	wm := &budgetE2EWorkflowManager{
+		config:   cfg,
+		template: tmpl,
+		absPath:  filepath.Join(tmpDir, "WORKFLOW.md"),
+	}
+
+	state := orchestrator.NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, cfg.Agent.MaxTokens, nil, orchestrator.AgentTotals{})
+	state.TokenWarningThreshold = cfg.Agent.TokenWarningThreshold()
+	if state.TokenWarningThreshold != 1000 {
+		t.Fatalf("setup: cfg.Agent.TokenWarningThreshold() = %d, want 1000", state.TokenWarningThreshold)
+	}
+
+	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
+		State:           state,
+		Logger:          slog.New(slog.DiscardHandler),
+		TrackerAdapter:  tracker,
+		WorkflowManager: wm,
+		Store:           rw,
+		DBPath:          dbPath,
+		PreflightParams: orchestrator.PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      func() config.ServiceConfig { return cfg },
+			TrackerRegistry: registry.Trackers,
+			AgentRegistry:   registry.Agents,
+		},
+		AgentAdapterByKind: func(kind string) (domain.AgentAdapter, error) {
+			if kind == fixtureBudgetAgentKind {
+				return agent, nil
+			}
+			return nil, fmt.Errorf("unexpected agent kind %q", kind)
+		},
+	})
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		o.Run(runCtx)
+		close(runDone)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runDone
+	})
+
+	var startParams domain.StartSessionParams
+	select {
+	case startParams = <-agent.started:
+	case <-time.After(15 * time.Second):
+		t.Fatal("StartSession was not called within 15 seconds")
+	}
+
+	rawMCP, err := os.ReadFile(startParams.MCPConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", startParams.MCPConfigPath, err)
+	}
+	var mcpConfig struct {
+		McpServers map[string]struct {
+			Env map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(rawMCP, &mcpConfig); err != nil {
+		t.Fatalf("unmarshal %q: %v", startParams.MCPConfigPath, err)
+	}
+	mcpEntry, ok := mcpConfig.McpServers["sortie-tools"]
+	if !ok {
+		t.Fatalf("mcp.json %q has no sortie-tools entry", startParams.MCPConfigPath)
+	}
+
+	getenv := func(key string) string { return mcpEntry.Env[key] }
+	params := sessionToolParamsFromEnv(getenv, cfg, tracker)
+	if params.TokenWarningThreshold != 1000 {
+		t.Fatalf("sessionToolParamsFromEnv().TokenWarningThreshold = %d, want 1000", params.TokenWarningThreshold)
+	}
+
+	reg, err := BuildSessionToolRegistry(ctx, slog.New(slog.DiscardHandler), params)
+	if err != nil {
+		t.Fatalf("BuildSessionToolRegistry: %v", err)
+	}
+	t.Cleanup(func() {
+		if reg.Store != nil {
+			if err := reg.Store.Close(); err != nil {
+				t.Errorf("close session tool registry store: %v", err)
+			}
+		}
+	})
+
+	costBudget, ok := reg.Registry.Get("cost_budget")
+	if !ok {
+		t.Fatal("cost_budget tool not registered")
+	}
+
+	agent.emitUsage <- 600
+	meta1 := waitForSessionMetadataTotal(t, reg.Store, issueID, 600, 15*time.Second)
+	if meta1.DispatchID != params.DispatchID {
+		t.Fatalf("session_metadata.dispatch_id = %q, want %q", meta1.DispatchID, params.DispatchID)
+	}
+
+	below := executeBudgetTool(t, costBudget)
+	if below.UsedTokens != 600 {
+		t.Errorf("below the threshold: used_tokens = %d, want 600", below.UsedTokens)
+	}
+	if below.WarningTokens == nil || *below.WarningTokens != 1000 {
+		t.Errorf("below the threshold: warning_tokens = %v, want 1000", below.WarningTokens)
+	}
+	if below.WarningReached == nil || *below.WarningReached {
+		t.Errorf("below the threshold: warning_reached = %v, want false", below.WarningReached)
+	}
+
+	// This figure crosses the threshold and arrives well inside
+	// sessionMetadataWriteInterval of the write above: only the pending
+	// write bypassing the throttle lets it reach session_metadata at all.
+	agent.emitUsage <- 1100
+	waitForSessionMetadataTotal(t, reg.Store, issueID, 1100, 15*time.Second)
+
+	above := executeBudgetTool(t, costBudget)
+	if above.UsedTokens != 1100 {
+		t.Errorf("at the threshold: used_tokens = %d, want 1100", above.UsedTokens)
+	}
+	if above.WarningReached == nil || !*above.WarningReached {
+		t.Errorf("at the threshold: warning_reached = %v, want true", above.WarningReached)
 	}
 
 	close(agent.proceedTurn)

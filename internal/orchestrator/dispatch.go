@@ -718,6 +718,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 		StartedAt:              time.Now().UTC(),
 		CancelFunc:             cancelFn,
 		TokenCeilingCancelFunc: tokenCeilingCancelFn,
+		WorkerDone:             workerCtx.Done(),
 		SSHHost:                sshHost,
 	}
 

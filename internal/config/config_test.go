@@ -1190,6 +1190,70 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "agent.max_tokens")
 	})
 
+	t.Run("TokenWarningPercent/DefaultIsZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.TokenWarningPercent", 0, cfg.Agent.TokenWarningPercent)
+	})
+
+	t.Run("TokenWarningPercent/ExplicitZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": 0},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.TokenWarningPercent", 0, cfg.Agent.TokenWarningPercent)
+	})
+
+	t.Run("TokenWarningPercent/InRange", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": 80},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.TokenWarningPercent", 80, cfg.Agent.TokenWarningPercent)
+	})
+
+	t.Run("TokenWarningPercent/NegativeRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": -1},
+		})
+		assertConfigErrorField(t, err, "agent.token_warning_percent")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be between 0 and 99", ce.Message)
+	})
+
+	t.Run("TokenWarningPercent/AboveRangeRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": 100},
+		})
+		assertConfigErrorField(t, err, "agent.token_warning_percent")
+		var ce *ConfigError
+		errors.As(err, &ce)
+		assertStringEqual(t, "ConfigError.Message", "must be between 0 and 99", ce.Message)
+	})
+
+	t.Run("TokenWarningPercent/IndependentOfMaxTokens", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": 99, "max_tokens": 0},
+		})
+		if err != nil {
+			t.Fatalf("token_warning_percent above an unset max_tokens must not error: %v", err)
+		}
+		assertIntEqual(t, "Agent.TokenWarningPercent", 99, cfg.Agent.TokenWarningPercent)
+	})
+
 	t.Run("InProgressState/Absent", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
@@ -1528,6 +1592,38 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "reactions.ci.escalation_label")
 	})
+}
+
+func TestAgentConfig_TokenWarningThreshold(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		maxTokens           int
+		tokenWarningPercent int
+		want                int
+	}{
+		{name: "2000000 tokens at 80 percent", maxTokens: 2000000, tokenWarningPercent: 80, want: 1600000},
+		{name: "150 tokens at 80 percent", maxTokens: 150, tokenWarningPercent: 80, want: 120},
+		{name: "7 tokens at 50 percent", maxTokens: 7, tokenWarningPercent: 50, want: 4},
+		{name: "101 tokens at 99 percent", maxTokens: 101, tokenWarningPercent: 99, want: 100},
+		{name: "threshold equal to the ceiling", maxTokens: 1, tokenWarningPercent: 99, want: 1},
+		{name: "max_tokens zero disables the threshold", maxTokens: 0, tokenWarningPercent: 80, want: 0},
+		{name: "percent zero disables the threshold", maxTokens: 1000000, tokenWarningPercent: 0, want: 0},
+		{name: "both zero disables the threshold", maxTokens: 0, tokenWarningPercent: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := AgentConfig{MaxTokens: tt.maxTokens, TokenWarningPercent: tt.tokenWarningPercent}
+			if got := a.TokenWarningThreshold(); got != tt.want {
+				t.Errorf("AgentConfig{MaxTokens: %d, TokenWarningPercent: %d}.TokenWarningThreshold() = %d, want %d",
+					tt.maxTokens, tt.tokenWarningPercent, got, tt.want)
+			}
+		})
+	}
 }
 
 // TestReactionsTriage asserts that triage is accepted on exactly the
@@ -2515,6 +2611,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		t.Setenv("SORTIE_AGENT_MAX_RETRY_BACKOFF_MS", "99999")
 		t.Setenv("SORTIE_AGENT_MAX_SESSIONS", "3")
 		t.Setenv("SORTIE_AGENT_MAX_TOKENS", "750000")
+		t.Setenv("SORTIE_AGENT_TOKEN_WARNING_PERCENT", "80")
 
 		cfg, err := NewServiceConfig(map[string]any{})
 		if err != nil {
@@ -2528,6 +2625,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		assertIntEqual(t, "Agent.MaxRetryBackoffMS", 99999, cfg.Agent.MaxRetryBackoffMS)
 		assertIntEqual(t, "Agent.MaxSessions", 3, cfg.Agent.MaxSessions)
 		assertIntEqual(t, "Agent.MaxTokens", 750000, cfg.Agent.MaxTokens)
+		assertIntEqual(t, "Agent.TokenWarningPercent", 80, cfg.Agent.TokenWarningPercent)
 	})
 
 	t.Run("MaxTokensOverrideBeatsFrontMatter", func(t *testing.T) {
@@ -2539,6 +2637,23 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 			t.Fatalf("NewServiceConfig: %v", err)
 		}
 		assertIntEqual(t, "Agent.MaxTokens", 200000, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("TokenWarningPercentOverrideBeatsFrontMatter", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_TOKEN_WARNING_PERCENT", "90")
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"token_warning_percent": 50},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.TokenWarningPercent", 90, cfg.Agent.TokenWarningPercent)
+	})
+
+	t.Run("TokenWarningPercentOverrideOutOfRangeFailsConfigConstruction", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_TOKEN_WARNING_PERCENT", "100")
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "agent.token_warning_percent", "must be between 0 and 99")
 	})
 
 	t.Run("MaxTokensDynamicReload", func(t *testing.T) {

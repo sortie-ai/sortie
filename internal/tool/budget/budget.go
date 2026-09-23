@@ -54,6 +54,7 @@ type BudgetTool struct {
 	runningDispatchID string
 	budgetTokens      int
 	budgetSessions    int
+	warningTokens     int
 }
 
 // costBudgetResponse is the JSON result of the cost_budget tool. The field
@@ -66,14 +67,22 @@ type costBudgetResponse struct {
 	BudgetSessions     int    `json:"budget_sessions"`
 	UnmeasuredSessions int    `json:"unmeasured_sessions"`
 	UsedTokensComplete bool   `json:"used_tokens_complete"`
+
+	// WarningTokens and WarningReached are present only while a warning
+	// threshold is in force, so a deployment that leaves it unset gets
+	// byte-identical results to before the threshold existed.
+	WarningTokens  *int64 `json:"warning_tokens,omitempty"`
+	WarningReached *bool  `json:"warning_reached,omitempty"`
 }
 
 // New returns a [BudgetTool] for the given issue and running dispatch.
 // budgetTokens and budgetSessions are the configured ceilings, where 0
-// means unlimited. An empty runningDispatchID contributes no
-// running-session spend and makes used_tokens_complete false. New panics
-// if query is nil or issueID is empty.
-func New(query BudgetQueryFunc, issueID string, runningDispatchID string, budgetTokens int, budgetSessions int) *BudgetTool {
+// means unlimited. warningTokens is the configured warning threshold,
+// where 0 omits the warning fields from the result and the description.
+// An empty runningDispatchID contributes no running-session spend and
+// makes used_tokens_complete false. New panics if query is nil or
+// issueID is empty.
+func New(query BudgetQueryFunc, issueID string, runningDispatchID string, budgetTokens int, budgetSessions int, warningTokens int) *BudgetTool {
 	if query == nil {
 		panic("budget.New: query must not be nil")
 	}
@@ -86,18 +95,26 @@ func New(query BudgetQueryFunc, issueID string, runningDispatchID string, budget
 		runningDispatchID: runningDispatchID,
 		budgetTokens:      budgetTokens,
 		budgetSessions:    budgetSessions,
+		warningTokens:     warningTokens,
 	}
 }
 
 func (t *BudgetTool) Name() string { return "cost_budget" }
 
 func (t *BudgetTool) Description() string {
-	return "Returns cumulative token spend for the current issue and the remaining token " +
+	desc := "Returns cumulative token spend for the current issue and the remaining token " +
 		"budget. Use this to decide whether to skip an expensive step, return partial work, " +
 		"or hand off before the token ceiling stops this run in flight or blocks a further " +
 		"session. A false used_tokens_complete means some sessions could not be measured, a " +
 		"turn spent an amount that was never fully reported, or the running session's spend " +
 		"is not included yet, so used_tokens is a lower bound."
+	if t.warningTokens == 0 {
+		return desc
+	}
+	return desc + " A warning threshold is set below the token ceiling: warning_tokens is " +
+		"that threshold, and warning_reached is true once used_tokens has reached it. When " +
+		"warning_reached is true, wrap up or hand off the work in progress before the " +
+		"ceiling stops this run."
 }
 
 // InputSchema returns the JSON Schema for cost_budget input; the tool
@@ -127,7 +144,7 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 	usedTokensComplete := usage.UnmeasuredSessions == 0 && usage.UnaccountedTurns == 0 &&
 		t.runningDispatchID != "" && usage.RunningMeasured
 
-	return toolresult.Success(costBudgetResponse{
+	response := costBudgetResponse{
 		UsedTokens:         usedTokens,
 		BudgetTokens:       int64(t.budgetTokens),
 		RemainingTokens:    remaining,
@@ -135,5 +152,13 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 		BudgetSessions:     t.budgetSessions,
 		UnmeasuredSessions: usage.UnmeasuredSessions,
 		UsedTokensComplete: usedTokensComplete,
-	})
+	}
+	if t.warningTokens > 0 {
+		warningTokens := int64(t.warningTokens)
+		warningReached := usedTokens >= warningTokens
+		response.WarningTokens = &warningTokens
+		response.WarningReached = &warningReached
+	}
+
+	return toolresult.Success(response)
 }

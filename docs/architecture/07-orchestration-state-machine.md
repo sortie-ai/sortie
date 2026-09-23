@@ -92,7 +92,7 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 
 - `Agent Update Event`
   - Update live session fields, token counters, and rate limits.
-  - Every agent update and self-review progress message a worker delivered before its exit is applied before that exit is handled, so no message from one run is applied after its exit or to a later run of the same issue. A usage figure applied this way for a run whose exit is being handled or already waiting is not evaluated against the in-flight token ceiling, because that run has already ended; the run's recorded total carries the figure to the next dispatch decision.
+  - Every agent update and self-review progress message a worker delivered before its exit is applied before that exit is handled, so no message from one run is applied after its exit or to a later run of the same issue. A usage figure applied this way for a run whose exit is being handled or already waiting is evaluated against neither the in-flight token ceiling nor the token warning threshold, because that run has already ended; the run's recorded total carries the figure to the next dispatch decision.
 
 - `Retry Timer Fired`
   - Re-fetch active candidates and attempt re-dispatch, or release claim if no longer eligible.

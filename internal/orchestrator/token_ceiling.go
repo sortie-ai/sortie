@@ -82,6 +82,9 @@ func freezeIssueTokenBaseline(ctx context.Context, state *State, issueID string,
 		return
 	}
 	entry.IssueTokensCompleted = usage.TotalTokens
+	if entry.UsageArrival.ReportsAnyFigure() {
+		reachTokenWarning(state, issueID, entry, logger)
+	}
 }
 
 // enforceInFlightTokenCeiling requests a stop of the run when the issue's
@@ -137,6 +140,69 @@ func enforceInFlightTokenCeiling(ctx context.Context, state *State, issueID stri
 	}
 
 	requestTokenCeilingStop(entry, ceiling, &usage, tokenSumConfirmedRead)
+}
+
+// evaluateTokenWarning evaluates the token warning threshold for one
+// usage-bearing event, ahead of the ceiling's own evaluation. A
+// reaching figure owes an incremental [sessionMetadataWriteInterval]
+// write, recorded on entry so [Orchestrator.maybeWriteIncrementalMetadata]
+// bypasses the throttle for it.
+//
+// Must run on the single-writer event loop, after [HandleAgentEvent]
+// has applied the event's usage delta.
+func evaluateTokenWarning(state *State, issueID string, event domain.AgentEvent, logger *slog.Logger) {
+	if !hasUsage(event.Usage) {
+		return
+	}
+	entry, ok := state.Running[issueID]
+	if !ok {
+		return
+	}
+	if !admitsUsageFigures(entry.UsageArrival) {
+		return
+	}
+	if reachTokenWarning(state, issueID, entry, logger) {
+		entry.MetadataWritePending = true
+	}
+}
+
+// reachTokenWarning reports whether entry's live per-issue figure has
+// just reached state.TokenWarningThreshold, latching entry so the
+// record is emitted at most once per run. Returns false when the
+// threshold is disabled, already latched, the ceiling has already
+// decided to stop this run, or the run's worker context is done: none
+// of these runs can still be interrupted by the ceiling, so a warning
+// would send the operator after a run that is already ending.
+func reachTokenWarning(state *State, issueID string, entry *RunningEntry, logger *slog.Logger) bool {
+	threshold := state.TokenWarningThreshold
+	if threshold <= 0 || entry.TokenWarningReached {
+		return false
+	}
+	if entry.TokenCeilingStopRequest != nil {
+		return false
+	}
+	select {
+	case <-entry.WorkerDone:
+		return false
+	default:
+	}
+	used := entry.IssueTokensCompleted + entry.AgentTotalTokens
+	if used < int64(threshold) {
+		return false
+	}
+
+	entry.TokenWarningReached = true
+	log := issueTokenCeilingLogger(logger, issueID, entry)
+	log.Warn("token warning threshold reached",
+		slog.Int64("used_tokens", used),
+		slog.Int("warning_tokens", threshold),
+		slog.Int("budget_tokens", state.MaxTokens),
+		slog.Int64("issue_tokens_completed", entry.IssueTokensCompleted),
+		slog.Int64("session_tokens", entry.AgentTotalTokens),
+		slog.String("ceiling_setting", ceilingSettingByBudgetReason[budgetReasonToken]),
+		slog.String("warning_setting", "agent.token_warning_percent"),
+	)
+	return true
 }
 
 // sum_source values for the stop record. A confirmed read carries an exact
