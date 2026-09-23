@@ -24,6 +24,7 @@ test: ## Run tests with the race detector (PKG=./path/to/pkg  RUN=TestFoo)
 .PHONY: test-shell
 test-shell: ## Run shell integration tests
 	sh tests/scripts/nightly-issue.sh
+	sh tests/scripts/protocol-pin.sh
 
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage and print per-package percentages
