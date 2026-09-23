@@ -208,6 +208,56 @@ func TestPermissionRequestSelectsRefusingOption(t *testing.T) {
 	}
 }
 
+func TestPermissionRequestMalformedToolCallNameSelectsRefusingOption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		toolCallJSON string
+	}{
+		{"a JSON number", `{"toolCallId":"tc-1","title":"do a thing","name":42}`},
+		{"a JSON object", `{"toolCallId":"tc-1","title":"do a thing","name":{"foo":"bar"}}`},
+		{"a JSON array", `{"toolCallId":"tc-1","title":"do a thing","name":[1,2,3]}`},
+		{"a JSON boolean", `{"toolCallId":"tc-1","title":"do a thing","name":true}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, outPr, inPw := newTestSession(t, domain.AgentConfig{ReadTimeoutMS: 2000}, clientProtocolMaxLineBytes)
+			out := newOutboundReader(outPr)
+			markSessionKnown(state)
+
+			var events []domain.AgentEvent
+			outcomeCh := runTurnAsync(state, domain.RunTurnParams{Prompt: "do something", OnEvent: collectEvents(&events)})
+
+			promptID := out.awaitMethod(t, methodSessionPrompt)
+
+			sendLine(t, inPw, fmt.Sprintf(
+				`{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"sess-test","options":[{"kind":"reject_once","name":"reject","optionId":"reject-id"}],"toolCall":%s}}`,
+				tt.toolCallJSON))
+
+			respLine := out.next(t)
+			assertRawID(t, respLine, `"perm-1"`)
+			resp := decodeResponse(t, respLine)
+			if resp.Result.Outcome.Outcome != outcomeSelected || resp.Result.Outcome.OptionID != "reject-id" {
+				t.Errorf("permission reply = %+v, want outcome %q with optionId %q", resp.Result.Outcome, outcomeSelected, "reject-id")
+			}
+
+			respondLine(t, inPw, promptID, promptResponse{StopReason: stopReasonEndTurn})
+
+			outcome := awaitOutcome(t, outcomeCh)
+			if outcome.err != nil {
+				t.Fatalf("RunTurn() error = %v, want nil: a malformed toolCall.name must not end the attempt", outcome.err)
+			}
+			if outcome.result.ExitReason != domain.EventTurnCompleted {
+				t.Errorf("RunTurn() ExitReason = %q, want %q", outcome.result.ExitReason, domain.EventTurnCompleted)
+			}
+		})
+	}
+}
+
 // permissionRequestLine builds a session/request_permission wire line
 // naming id and options, for a session already marked known under
 // "sess-test".

@@ -3,10 +3,13 @@ package clientprotocol
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -101,6 +104,131 @@ func TestHandshake_ErrorQuotesData(t *testing.T) {
 				}
 			case <-time.After(awaitTimeout):
 				t.Fatalf("timed out waiting for %s to return", tt.method)
+			}
+		})
+	}
+}
+
+func toolCallJSON(nameJSON string) string {
+	extra := ""
+	if nameJSON != "" {
+		extra = `,"name":` + nameJSON
+	}
+	return fmt.Sprintf(`{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"Read a file","kind":"read","status":"pending"%s}`, extra)
+}
+
+func toolCallUpdateJSON(nameJSON string) string {
+	extra := ""
+	if nameJSON != "" {
+		extra = `,"name":` + nameJSON
+	}
+	return fmt.Sprintf(`{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","title":"Read a file"%s}`, extra)
+}
+
+func TestParseSessionUpdateMalformedToolCallName(t *testing.T) {
+	t.Parallel()
+
+	dropped := []struct {
+		name     string
+		nameJSON string
+	}{
+		{"a JSON number", `42`},
+		{"a JSON object", `{"foo":"bar"}`},
+		{"a JSON array", `[1,2,3]`},
+		{"a JSON boolean", `true`},
+	}
+	kept := []struct {
+		name     string
+		nameJSON string
+	}{
+		{"a JSON string", `"custom-tool"`},
+		{"JSON null", `null`},
+	}
+
+	for _, variant := range []struct {
+		name  string
+		build func(nameJSON string) string
+	}{
+		{"tool_call", toolCallJSON},
+		{"tool_call_update", toolCallUpdateJSON},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			t.Parallel()
+
+			baseline := variant.build("")
+			wantEvent, wantFound := parseSessionUpdate(json.RawMessage(baseline))
+			if !wantFound {
+				t.Fatalf("parseSessionUpdate(%s) found = false, want true", baseline)
+			}
+
+			for _, tt := range dropped {
+				t.Run(tt.name+" decodes as if name were absent", func(t *testing.T) {
+					t.Parallel()
+
+					raw := variant.build(tt.nameJSON)
+					gotEvent, gotFound := parseSessionUpdate(json.RawMessage(raw))
+					if gotFound != wantFound {
+						t.Fatalf("parseSessionUpdate(%s) found = %v, want %v", raw, gotFound, wantFound)
+					}
+					if !reflect.DeepEqual(gotEvent, wantEvent) {
+						t.Errorf("parseSessionUpdate(%s) = %+v, want %+v (same as no name at all)", raw, gotEvent, wantEvent)
+					}
+				})
+			}
+
+			for _, tt := range kept {
+				t.Run(tt.name+" decodes unchanged", func(t *testing.T) {
+					t.Parallel()
+
+					raw := variant.build(tt.nameJSON)
+					_, gotFound := parseSessionUpdate(json.RawMessage(raw))
+					if gotFound != wantFound {
+						t.Fatalf("parseSessionUpdate(%s) found = %v, want %v", raw, gotFound, wantFound)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestToolCallLifecycleSurvivesMalformedName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		toolCallName       string
+		toolCallUpdateName string
+	}{
+		{"malformed name on tool_call", `{"nested":true}`, ""},
+		{"malformed name on tool_call_update", "", `[1,2,3]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tracker := agentcore.NewToolTracker()
+
+			beginRaw := toolCallJSON(tt.toolCallName)
+			beginEvent, found := parseSessionUpdate(json.RawMessage(beginRaw))
+			if !found {
+				t.Fatalf("parseSessionUpdate(%s) found = false, want true", beginRaw)
+			}
+			if got := applySessionUpdate(tracker, beginEvent); got.hasEvent {
+				t.Fatalf("applySessionUpdate(tool_call) = %+v, want hasEvent=false", got)
+			}
+
+			updateRaw := toolCallUpdateJSON(tt.toolCallUpdateName)
+			updateEvent, found := parseSessionUpdate(json.RawMessage(updateRaw))
+			if !found {
+				t.Fatalf("parseSessionUpdate(%s) found = false, want true", updateRaw)
+			}
+			got := applySessionUpdate(tracker, updateEvent)
+			if !got.hasEvent || got.event.Type != domain.EventToolResult {
+				t.Fatalf("applySessionUpdate(tool_call_update) = %+v, want a tool_result event", got)
+			}
+			if got.event.ToolName != "read" {
+				t.Errorf("applySessionUpdate(tool_call_update) ToolName = %q, want %q: the call's kind, not its malformed name", got.event.ToolName, "read")
 			}
 		})
 	}
