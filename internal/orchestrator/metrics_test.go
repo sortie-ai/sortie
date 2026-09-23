@@ -338,7 +338,7 @@ func TestUpdateGauges(t *testing.T) {
 	if len(spy.retryingSessions) != 1 || spy.retryingSessions[0] != 1 {
 		t.Errorf("SetRetryingSessions calls = %v, want [1]", spy.retryingSessions)
 	}
-	// MaxConcurrentAgents=4, Running=2 → available=2
+	// MaxConcurrentAgents=4, Running=2 -> available=2
 	if len(spy.availableSlots) != 1 || spy.availableSlots[0] != 2 {
 		t.Errorf("SetAvailableSlots calls = %v, want [2]", spy.availableSlots)
 	}
@@ -346,7 +346,7 @@ func TestUpdateGauges(t *testing.T) {
 	if len(spy.activeSessionElapsed) != 1 || spy.activeSessionElapsed[0] != 90 {
 		t.Errorf("SetActiveSessionsElapsed calls = %v, want [90]", spy.activeSessionElapsed)
 	}
-	// No SSH hosts configured → no SetSSHHostUsage calls.
+	// No SSH hosts configured -> no SetSSHHostUsage calls.
 	if len(spy.sshHostUsage) != 0 {
 		t.Errorf("SetSSHHostUsage calls = %v, want empty (local mode)", spy.sshHostUsage)
 	}

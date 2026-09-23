@@ -75,8 +75,8 @@ func checkNoToolModuleImports(r toolModuleImportsReporter, fset *token.FileSet, 
 	return parsed
 }
 
-// TestNoRootModuleImportOfToolModule is P2: no file in the root module
-// imports any tools/qualify package. Verified by inspecting import
+// TestNoRootModuleImportOfToolModule asserts that no file in the root
+// module imports any tools/qualify package. Verified by inspecting import
 // declarations directly, so the check holds regardless of whether a go.work
 // file exists on the machine running it.
 func TestNoRootModuleImportOfToolModule(t *testing.T) {

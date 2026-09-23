@@ -596,7 +596,7 @@ func TestRunServerShutdownError(t *testing.T) {
 		t.Fatalf("dial %s: %v", addr, dialErr)
 	}
 	defer conn.Close() //nolint:errcheck // best-effort cleanup
-	//nolint:errcheck // test write — errors are unrecoverable here
+	//nolint:errcheck // test write; errors are unrecoverable here
 	conn.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n"))
 
 	// Give the server goroutine time to register the connection as active.

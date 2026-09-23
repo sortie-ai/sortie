@@ -2388,7 +2388,7 @@ func TestLabelCatalogPagination(t *testing.T) {
 	})
 }
 
-// query_filter labels diagnostic (W1, W2, wildcard exemptions).
+// query_filter labels diagnostic (absent labels, repeats, wildcard exemptions).
 //
 // NewGitLabAdapter takes its logger from slog.Default(), so every subtest
 // here calls swapDefaultLogger and none of them, nor this function itself,

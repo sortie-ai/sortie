@@ -315,8 +315,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	br.logger.Info("sortie starting", logAttrs...)
 
-	// --- Database open, migrate, and recovery ---
-
 	workflowDir := filepath.Dir(br.path)
 	dbPath := resolveDBPath(br.cfg.DBPath, workflowDir)
 	br.logger.Info("database path resolved", slog.String("db_path", dbPath))
@@ -376,8 +374,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		orchestrator.PopulateBudgetHoldNotices(state, budgetHoldNoticeRows, br.logger)
 	}
 
-	// --- Agent adapter construction ---
-
 	agentCtor, err := registry.Agents.Get(br.cfg.Agent.Kind)
 	if err != nil {
 		br.logger.Error("unknown agent kind", slog.String("kind", br.cfg.Agent.Kind), slog.Any("error", err))
@@ -412,8 +408,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}()
 	agentAdapterByKind := makeAgentAdapterByKind(agentAdapterCache)
 
-	// --- Startup terminal workspace cleanup ---
-
 	keys, err := workspace.ListWorkspaceKeys(br.cfg.Workspace.Root)
 	if err != nil {
 		br.logger.Warn("failed to list workspace keys, skipping cleanup", slog.Any("error", err))
@@ -445,8 +439,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			}
 		}
 	}
-
-	// --- Orchestrator construction and event loop ---
 
 	br.logger.Info("sortie started")
 

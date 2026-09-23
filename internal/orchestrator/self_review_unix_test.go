@@ -30,8 +30,8 @@ func mustSelfReviewGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// TestGenerateWorkspaceDiff_HeldDescendantHoldingOutput pins P9 for L6:
-// with a held descendant holding the output of the git diff invocations
+// TestGenerateWorkspaceDiff_HeldDescendantHoldingOutput pins that, with
+// a held descendant holding the output of the git diff invocations
 // generateWorkspaceDiff makes, the call returns within its timer with
 // the diff text.
 func TestGenerateWorkspaceDiff_HeldDescendantHoldingOutput(t *testing.T) {
@@ -89,8 +89,8 @@ func TestGenerateWorkspaceDiff_HeldDescendantHoldingOutput(t *testing.T) {
 	}
 }
 
-// TestGenerateWorkspaceDiff_IntentToAddReapsHeldDescendant pins P9 for
-// L11: generateWorkspaceDiff's git add --intent-to-add call runs
+// TestGenerateWorkspaceDiff_IntentToAddReapsHeldDescendant covers
+// generateWorkspaceDiff's git add --intent-to-add call, which runs
 // through RunCapture with an empty CaptureParams, so it captures no
 // output and TestGenerateWorkspaceDiff_HeldDescendantHoldingOutput
 // cannot observe it. What it can assert is that the reap still
@@ -156,7 +156,7 @@ exec "%s" "$@"
 }
 
 // TestRunSingleVerification_HeldDescendantSucceedsAndLogsLeftoverRecord
-// pins P11: a verification command that prints a line, backgrounds a
+// pins that a verification command that prints a line, backgrounds a
 // held descendant holding standard output, and exits 0 returns within
 // 2s with ExitCode 0, an empty ExecutionError, TimedOut false, and the
 // printed line in Stdout, the descendant is gone, and exactly one

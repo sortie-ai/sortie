@@ -138,9 +138,10 @@ func runCapturePeriodicWriter(_ []string, p capturePeriodicWriterParams) int {
 }
 
 // captureSignalChildParams configures the procutil.capture-signal-child
-// scenario used by P7 and P19: a direct child that either traps or
-// ignores SIGTERM, optionally starts a held descendant sharing its
-// output, and signals readiness once its setup is complete.
+// scenario used by the SIGTERM trap and group-kill tests: a direct
+// child that either traps or ignores SIGTERM, optionally starts a held
+// descendant sharing its output, and signals readiness once its setup
+// is complete.
 type captureSignalChildParams struct {
 	// TrapSIGTERM arms a handler that prints Marker and exits 0 on the
 	// first SIGTERM it receives.
@@ -264,7 +265,7 @@ func waitCaptureResult(t *testing.T, c *Capture, timeout time.Duration) CaptureR
 	}
 }
 
-// TestCapture_EscapedDescendantHoldingBothStreams pins P1: an escaped
+// TestCapture_EscapedDescendantHoldingBothStreams pins that an escaped
 // descendant holding both streams makes Wait return within its timer
 // with WaitErr nil, OutputComplete false, the direct child's own bytes
 // collected, and one WARN record carrying exactly command and
@@ -325,7 +326,7 @@ func TestCapture_EscapedDescendantHoldingBothStreams(t *testing.T) {
 	}
 }
 
-// TestCapture_HeldDescendantHoldingBothStreams pins P2: a held
+// TestCapture_HeldDescendantHoldingBothStreams pins that a held
 // descendant is reached by the reap's group termination, so Wait
 // returns quickly with OutputComplete true, no WARN, and the
 // descendant gone.
@@ -374,7 +375,7 @@ func TestCapture_HeldDescendantHoldingBothStreams(t *testing.T) {
 	assertCaptureProcessGone(t, childPID, 3*time.Second)
 }
 
-// TestCapture_SealedSinkDiscardsChunksAfterWaitReturns pins P5: once
+// TestCapture_SealedSinkDiscardsChunksAfterWaitReturns pins that once
 // Wait has returned, a caller's writer receives no further chunk, even
 // though the reader goroutine for an abandoned stream is still running
 // (its close, through the test-replaced seam, never actually
@@ -424,7 +425,7 @@ func TestCapture_SealedSinkDiscardsChunksAfterWaitReturns(t *testing.T) {
 	}
 }
 
-// TestRunCapture_SIGTERMTrapMarkerCollected pins P7: RunCapture on a
+// TestRunCapture_SIGTERMTrapMarkerCollected pins that RunCapture on a
 // direct child that traps SIGTERM, with its handler armed before it
 // reports readiness, collects the marker the handler prints under an
 // expiring context.
@@ -508,7 +509,7 @@ func TestStartCapture_CleanupFailureLogsExactlyOneRecord(t *testing.T) {
 	}
 }
 
-// TestSetGroupKill_CancellationSendsSIGKILLNotGraceful pins P19:
+// TestSetGroupKill_CancellationSendsSIGKILLNotGraceful pins that
 // SetGroupKill's cancellation terminates the group with SIGKILL at
 // once, with no catchable signal first, so a direct child that ignores
 // SIGTERM (and a held descendant that holds nothing back) still dies

@@ -696,7 +696,7 @@ func TestReconcileCIStatus_CancelledWithFailure_StillSpendsRetry(t *testing.T) {
 func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	t.Parallel()
 
-	// ReactionAttempts starts at 0; maxRetries=2 → no escalation after increment to 1.
+	// ReactionAttempts starts at 0; maxRetries=2 -> no escalation after increment to 1.
 	state := stateWithPendingReaction(t, "ISS-CI-5", "feature/break", 1)
 	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
@@ -795,7 +795,7 @@ func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 	t.Parallel()
 
-	// ReactionAttempts at 2; after increment → 3 > maxRetries(2) → escalate.
+	// ReactionAttempts at 2; after increment -> 3 > maxRetries(2) -> escalate.
 	state := stateWithPendingReaction(t, "ISS-CI-6", "feature/broken", 3)
 	state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)] = 2
 	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
@@ -1208,7 +1208,7 @@ func TestEscalateCIFailure_LabelTracksTrackerOps(t *testing.T) {
 	gate := make(chan struct{})
 	tracker := &blockingCITracker{addLabelGate: gate}
 
-	// ReactionAttempts=2 with maxRetries=2 means next increment (→3) exceeds
+	// ReactionAttempts=2 with maxRetries=2 means next increment (->3) exceeds
 	// the limit and triggers escalation.
 	state := stateWithPendingReaction(t, "ESC-WG-1", "main/broken", 3)
 	state.ReactionAttempts[ReactionKey("ESC-WG-1", ReactionKindCI)] = 2
@@ -2022,7 +2022,7 @@ func TestReconcileCIStatus_OneHeadReadOneEpochTransitionOneStatusFetchPerTick(t 
 func TestReconcileCIStatus_Failing_DoesNotMarkDispatched(t *testing.T) {
 	t.Parallel()
 
-	// ReactionAttempts=0 → under maxRetries=2, so handleCIFailure schedules retry.
+	// ReactionAttempts=0 -> under maxRetries=2, so handleCIFailure schedules retry.
 	state := stateWithPendingReaction(t, "ISS-FP-5", "main", 1)
 	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}
 	metrics := newCIMetricsSpy()
@@ -2136,7 +2136,7 @@ func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
 func TestEscalateCIFailure_FingerprintSurvivesEscalation(t *testing.T) {
 	t.Parallel()
 
-	// ReactionAttempts=2, maxRetries=2 → next increment (→3) triggers escalation.
+	// ReactionAttempts=2, maxRetries=2 -> next increment (->3) triggers escalation.
 	state := stateWithPendingReaction(t, "ISS-FP-6", "main", 3)
 	state.ReactionAttempts[ReactionKey("ISS-FP-6", ReactionKindCI)] = 2
 	store := &ciReconcileStore{getFingerprintResult: ciDefaultHead}

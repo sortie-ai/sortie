@@ -20,8 +20,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 )
 
-// exportHeldDescendantScenario names the fake opencode binary L4's
-// fixture uses: on an "export" invocation it starts an already-built
+// exportHeldDescendantScenario names the fake opencode binary the
+// export query test uses: on an "export" invocation it starts an already-built
 // descendant inheriting its own standard output and standard error,
 // records the descendant's pid, then prints the configured fixture
 // body and exits 0.
@@ -45,8 +45,8 @@ func runExportHeldDescendant(args []string, p exportHeldDescendantParams) int {
 	return 0
 }
 
-// modelsHeldDescendantScenario names the fake opencode binary L5's
-// fixture uses: on a "models" invocation it starts an already-built
+// modelsHeldDescendantScenario names the fake opencode binary the
+// models query test uses: on a "models" invocation it starts an already-built
 // descendant the same way, then prints a two-line catalog and exits 0.
 const modelsHeldDescendantScenario = "opencode.models-held-descendant"
 
@@ -119,8 +119,8 @@ func pollOpencodeWinPIDAndAssertGone(t *testing.T, path string) {
 	t.Errorf("descendant %d still running after 3s, want gone", pid)
 }
 
-// TestQueryExportUsage_HeldDescendantHoldingOutput pins P9 for L4 on
-// the Windows job: with a held descendant holding the export query's
+// TestQueryExportUsage_HeldDescendantHoldingOutput covers the export
+// query on the Windows job: with a held descendant holding the export query's
 // output, queryExportUsage returns within its timer with the export's
 // usage, and the descendant is gone.
 func TestQueryExportUsage_HeldDescendantHoldingOutput(t *testing.T) {
@@ -167,8 +167,8 @@ func TestQueryExportUsage_HeldDescendantHoldingOutput(t *testing.T) {
 	pollOpencodeWinPIDAndAssertGone(t, pidPath)
 }
 
-// TestQueryModelNotFound_HeldDescendantHoldingOutput pins P9 for L5 on
-// the Windows job: with a held descendant holding the models query's
+// TestQueryModelNotFound_HeldDescendantHoldingOutput covers the models
+// query on the Windows job: with a held descendant holding the models query's
 // output, queryModelNotFound returns within its timer reporting the
 // configured model present in the catalog (ok false), and the
 // descendant is gone.

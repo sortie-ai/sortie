@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// TestInbox_PutNeverWaitsAndOrderHolds covers P1: a large volume of
+// TestInbox_PutNeverWaitsAndOrderHolds asserts that a large volume of
 // puts with no taker return promptly, and concurrent producers each
 // keep their own put order once one consumer drains the inbox.
 func TestInbox_PutNeverWaitsAndOrderHolds(t *testing.T) {
@@ -96,7 +96,7 @@ func TestInbox_PutNeverWaitsAndOrderHolds(t *testing.T) {
 	})
 }
 
-// TestInbox_ReadyReflectsQueuedOrClosed covers P2: across randomized
+// TestInbox_ReadyReflectsQueuedOrClosed asserts that across randomized
 // put, take, and close interleavings, Ready holds a value exactly when
 // an item is queued or the inbox is closed, and a receive from Ready
 // followed by one Take yields either an item or ok == false with the
@@ -165,7 +165,7 @@ func TestInbox_ReadyReflectsQueuedOrClosed(t *testing.T) {
 	}
 }
 
-// TestInbox_CloseTakesQueuedThenRefusesLater covers P3: repeated Close
+// TestInbox_CloseTakesQueuedThenRefusesLater asserts that repeated Close
 // calls do not panic, items put before Close are taken in order, and a
 // value put after Close is never taken.
 func TestInbox_CloseTakesQueuedThenRefusesLater(t *testing.T) {
@@ -192,7 +192,7 @@ func TestInbox_CloseTakesQueuedThenRefusesLater(t *testing.T) {
 	}
 }
 
-// TestInbox_TakeReleasesStorage covers P4: after Take, the inbox
+// TestInbox_TakeReleasesStorage asserts that after Take, the inbox
 // references no taken item, and retained storage stays low both in
 // steady state and after a burst fully drains.
 func TestInbox_TakeReleasesStorage(t *testing.T) {
@@ -291,7 +291,7 @@ func extractRequestID(t *testing.T, line []byte) int64 {
 	return wire.ID
 }
 
-// TestInbox_ReaderNeverWaits covers P5: a Conn running on io.Pipe with
+// TestInbox_ReaderNeverWaits asserts that a Conn running on io.Pipe with
 // an inbox nobody takes from lets each pipe write return once the
 // reader has read it, so a burst delivered while a Call is outstanding
 // does not stop that Call's own response from arriving. The negative
@@ -419,7 +419,7 @@ func TestInbox_ReaderNeverWaits(t *testing.T) {
 	})
 }
 
-// TestInbox_StreamEndDeliveredLast covers P6: on a read error,
+// TestInbox_StreamEndDeliveredLast asserts that on a read error,
 // KindStreamEnd is taken after every earlier message, and Done closes
 // only once it was put.
 func TestInbox_StreamEndDeliveredLast(t *testing.T) {

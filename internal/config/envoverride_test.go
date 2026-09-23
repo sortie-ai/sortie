@@ -717,7 +717,7 @@ func TestApplyEnvOverrides(t *testing.T) {
 
 		orig := getDotEnvPath()
 		t.Cleanup(func() { SetDotEnvPath(orig) })
-		SetDotEnvPath(file1) // CLI flag value → should give "jira"
+		SetDotEnvPath(file1) // CLI flag value -> should give "jira"
 
 		raw := map[string]any{}
 		_, err := applyEnvOverrides(raw)

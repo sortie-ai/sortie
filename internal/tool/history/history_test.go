@@ -179,7 +179,7 @@ func TestHistoryTool_Execute_EntriesReturned(t *testing.T) {
 		t.Fatalf("len(data.entries) = %d, want 3", len(rawEntries))
 	}
 
-	// entries[0]: succeeded, nil error → JSON null.
+	// entries[0]: succeeded, nil error -> JSON null.
 	e0, ok := rawEntries[0].(map[string]any)
 	if !ok {
 		t.Fatalf("data.entries[0] is not an object: %T", rawEntries[0])
@@ -191,7 +191,7 @@ func TestHistoryTool_Execute_EntriesReturned(t *testing.T) {
 		t.Errorf("data.entries[0].error = %v, want null", e0["error"])
 	}
 
-	// entries[1]: failed, non-nil error → JSON string under data.entries[i].error.
+	// entries[1]: failed, non-nil error -> JSON string under data.entries[i].error.
 	e1, ok := rawEntries[1].(map[string]any)
 	if !ok {
 		t.Fatalf("data.entries[1] is not an object: %T", rawEntries[1])

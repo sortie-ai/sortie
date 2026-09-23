@@ -841,8 +841,8 @@ func TestOrchestratorTick_SSHPassEnvFieldsUpdateOnReload(t *testing.T) {
 
 // TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists asserts the
 // SSHEnvNamesFunc closure joins a kind's registry-declared names with
-// the operator's listed names minus the disallowed set: listed [L, K1, D],
-// disallowed [K2, D], kind declaring [K1, K2] yields [K1, L].
+// the operator's listed names, drops every disallowed name from both
+// sources, and keeps a name that is both declared and listed only once.
 func TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists(t *testing.T) {
 	t.Parallel()
 

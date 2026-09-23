@@ -36,8 +36,8 @@ func assertSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) {
 
 // reviewsAndCommentsHandler builds an httptest handler that serves review
 // and comment fixtures from the testdata directory. It handles:
-//   - GET .../reviews → reviewsFixture (no Link header)
-//   - GET .../pulls/{number}/comments → commentsFixture (no Link header)
+//   - GET .../reviews -> reviewsFixture (no Link header)
+//   - GET .../pulls/{number}/comments -> commentsFixture (no Link header)
 //
 // The legacy review-scoped comments route is intentionally not served: it
 // omits line fields in GitHub's live response.

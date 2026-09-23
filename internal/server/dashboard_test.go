@@ -351,7 +351,7 @@ func TestBuildDashboardData(t *testing.T) {
 	t.Run("available slots clamped to zero", func(t *testing.T) {
 		t.Parallel()
 
-		// slotFunc returns 1 but 2 running → clamped to 0.
+		// slotFunc returns 1 but 2 running -> clamped to 0.
 		data := buildDashboardData(snap, "v1", startedAt, func() int { return 1 }, now, nil)
 		if data.AvailableSlots != 0 {
 			t.Errorf("AvailableSlots = %d, want 0", data.AvailableSlots)
@@ -1636,7 +1636,7 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 	snap := orchestrator.RuntimeSnapshotResult{
 		GeneratedAt: now,
 		Running: []orchestrator.SnapshotRunningEntry{
-			// StartedAt ascending → R0 is index 0, R1 is index 1 after sort.
+			// StartedAt ascending -> MT-R0 is index 0, MT-R1 is index 1 after sort.
 			{IssueID: "id-r0", Identifier: "MT-R0", State: "In Progress", StartedAt: now.Add(-5 * time.Minute)},
 			{IssueID: "id-r1", Identifier: "MT-R1", State: "In Progress", StartedAt: now.Add(-3 * time.Minute)},
 		},
@@ -1741,7 +1741,7 @@ func TestBuildDashboardData_TokenRates(t *testing.T) {
 	t.Run("with rates and matching AgentKind computes aggregate cost", func(t *testing.T) {
 		t.Parallel()
 
-		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 → $21
+		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 -> $21
 		snap := orchestrator.RuntimeSnapshotResult{
 			GeneratedAt: now,
 			Running: []orchestrator.SnapshotRunningEntry{
@@ -2002,7 +2002,7 @@ func TestHandleDashboard_WithoutTokenRates(t *testing.T) {
 		},
 	}
 
-	// No TokenRates set → the Est. Cost row still renders, per the
+	// No TokenRates set -> the Est. Cost row still renders, per the
 	// usageEstCostRow rates-unconfigured arm, but with the dash.
 	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
 

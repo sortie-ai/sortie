@@ -364,7 +364,7 @@ func TestReconcileStalled_NoStalls(t *testing.T) {
 	}}
 	params := defaultReconcileParams(t, store, tracker)
 	params.StallTimeoutMS = 60_000
-	// Now = reconcileBaseTime; entry started 30s ago → not stalled.
+	// Now = reconcileBaseTime; entry started 30s ago -> not stalled.
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
@@ -498,7 +498,7 @@ func TestReconcileStalled_ViaStartedAtFallback(t *testing.T) {
 
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	cc := &cancelCounter{}
-	// LastAgentTimestamp is zero → falls back to StartedAt.
+	// LastAgentTimestamp is zero -> falls back to StartedAt.
 	state.Running["ISSUE-1"] = &RunningEntry{
 		Identifier: "ISSUE-1-ident",
 		StartedAt:  reconcileBaseTime.Add(-90 * time.Second), // 90s ago > 60s threshold
@@ -841,7 +841,7 @@ func TestReconcileTrackerState_OmittedIssueKeptRunning(t *testing.T) {
 
 	ReconcileRunningIssues(state, params)
 
-	// ISSUE-2 omitted from response → no action taken.
+	// ISSUE-2 omitted from response -> no action taken.
 	if cc.count != 0 {
 		t.Errorf("CancelFunc called for omitted issue %d times, want 0", cc.count)
 	}

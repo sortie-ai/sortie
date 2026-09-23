@@ -173,13 +173,14 @@ func TestOwnedPipes_CloseIdempotent(t *testing.T) {
 }
 
 // TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing is the
-// negative control for property P6: it reproduces StartWithOwnedPipes's
-// pipe wiring locally, minus the parent write-end close the real
-// function performs immediately after a successful cmd.Start, and shows
-// that a caller's read on the standard-output pipe does not reach end of
-// file within a short bounded wait even though the subprocess it feeds
-// has already exited. The real StartWithOwnedPipes does not have this
-// problem, which the second half of this test confirms.
+// negative control for the parent write-end close: it reproduces
+// StartWithOwnedPipes's pipe wiring locally, minus the parent write-end
+// close the real function performs immediately after a successful
+// cmd.Start, and shows that a caller's read on the standard-output pipe
+// does not reach end of file within a short bounded wait even though
+// the subprocess it feeds has already exited. The real
+// StartWithOwnedPipes does not have this problem, which the second half
+// of this test confirms.
 func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 	t.Parallel()
 
@@ -259,13 +260,14 @@ func TestStartWithOwnedPipes_ParentWriteEndCloseIsLoadBearing(t *testing.T) {
 }
 
 // TestOwnedPipes_DeferredCloseAfterStderrBoundIsLoadBearing is the
-// procutil half of property P9: closing the standard-error read end
-// before a StderrCollector built over it has drained a descendant's late
-// write loses those lines, with no marker and no record, which is why
-// the shared skeleton and opencode defer OwnedPipes.Close until after
-// the collector's own bound has run rather than closing eagerly. The
-// clientprotocol half of this property, where close_pipes moves ahead of
-// drain_stderr_and_reap, is covered at that package's own level.
+// procutil half of the deferred-close check: closing the standard-error
+// read end before a StderrCollector built over it has drained a
+// descendant's late write loses those lines, with no marker and no
+// record, which is why the shared skeleton and opencode defer
+// OwnedPipes.Close until after the collector's own bound has run rather
+// than closing eagerly. The clientprotocol half of this check, where
+// close_pipes moves ahead of drain_stderr_and_reap, is covered at that
+// package's own level.
 func TestOwnedPipes_DeferredCloseAfterStderrBoundIsLoadBearing(t *testing.T) {
 	t.Parallel()
 

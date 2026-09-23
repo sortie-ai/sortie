@@ -154,7 +154,7 @@ type Server struct {
 var _ orchestrator.Observer = (*Server)(nil)
 
 // New creates a [Server] with all API routes registered on an internal
-// [http.ServeMux]. Does not start listening — call
+// [http.ServeMux]. Does not start listening; call
 // [Server.ListenAndServe].
 func New(params Params) *Server {
 	if params.SnapshotFn == nil {

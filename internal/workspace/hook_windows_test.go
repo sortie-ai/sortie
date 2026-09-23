@@ -211,10 +211,10 @@ func latestWindowsHookTeardownRecord(spy *windowsHookLogSpy, from int, dir strin
 }
 
 // TestRunHook_HeldBackgroundProcessSucceedsWithSettledTeardown pins
-// P13: a script that echoes a line and starts a background process
-// holding the output, then exits 0, makes RunHook return within 3s
-// with the line and no error, logs no CaptureAbandonedWarning record,
-// and the teardown record takes the Debug arm.
+// that a script that echoes a line and starts a background process
+// holding the output, then exits 0, makes RunHook return within 3s with
+// the line and no error, logs no CaptureAbandonedWarning record, and
+// the teardown record takes the Debug arm.
 func TestRunHook_HeldBackgroundProcessSucceedsWithSettledTeardown(t *testing.T) {
 	spy := installWindowsHookLogSpy(t)
 
@@ -251,8 +251,8 @@ func TestRunHook_HeldBackgroundProcessSucceedsWithSettledTeardown(t *testing.T) 
 	// The Debug arm requires an empty Survivors slice among its other
 	// conditions, so checking it here on top of the message would be
 	// vacuous: it cannot distinguish a scan that ran and found nothing
-	// from a scan D2 skipped entirely. Whether the scan itself runs
-	// only when the job is left unsettled is proven directly in
+	// from a scan that was skipped entirely. Whether the scan itself
+	// runs only when the job is left unsettled is proven directly in
 	// procutil, the package that owns the scanSurvivorsFunc seam this
 	// package has no access to.
 	if record.Msg != "subprocess tree settled" {
@@ -264,7 +264,8 @@ func TestRunHook_HeldBackgroundProcessSucceedsWithSettledTeardown(t *testing.T) 
 }
 
 // runHookHelperParams configures the workspace.run-hook-helper
-// scenario P23 drives from a process with no console of its own.
+// scenario TestRunHook_DetachedHelperReportsTerminatedLeftovers drives
+// from a process with no console of its own.
 type runHookHelperParams struct {
 	Script     string
 	Dir        string
@@ -317,7 +318,7 @@ func init() {
 	fakeScenarios["workspace.run-hook-helper"] = agenttest.Typed(runHookHelperScenario)
 }
 
-// TestRunHook_DetachedHelperReportsTerminatedLeftovers pins P23: run
+// TestRunHook_DetachedHelperReportsTerminatedLeftovers pins that, run
 // from a helper process with no console of its own (DETACHED_PROCESS),
 // a script that leaves a background process running makes RunHook
 // report TerminatedLeftovers true; a script that exits cleanly reports

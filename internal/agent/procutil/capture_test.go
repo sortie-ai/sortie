@@ -82,7 +82,7 @@ func TestStartCapture_SameWriterSharesOnePipeInWriteOrder(t *testing.T) {
 	}
 }
 
-// TestCapture_NonZeroExitReportsExitErrorWithOutputCollected pins P3:
+// TestCapture_NonZeroExitReportsExitErrorWithOutputCollected pins that
 // a non-zero exit is reported as an *exec.ExitError carrying the exit
 // code, and the subprocess's output is still collected.
 func TestCapture_NonZeroExitReportsExitErrorWithOutputCollected(t *testing.T) {
@@ -113,7 +113,7 @@ func TestCapture_NonZeroExitReportsExitErrorWithOutputCollected(t *testing.T) {
 	}
 }
 
-// TestCapture_AbandonedStreamClosesThroughAsyncSeam pins P6: Wait
+// TestCapture_AbandonedStreamClosesThroughAsyncSeam pins that Wait
 // closes an abandoned stream through the closeWithoutWaiting seam
 // (which, per its own contract, returns at once regardless of whether
 // the underlying close ever completes) rather than a direct synchronous
@@ -187,6 +187,6 @@ func TestCapture_AbandonedStreamClosesThroughAsyncSeam(t *testing.T) {
 	select {
 	case <-invoked:
 	default:
-		t.Error("closeWithoutWaiting was never invoked for the abandoned stream, want W6 to close it through the seam rather than a direct synchronous close")
+		t.Error("closeWithoutWaiting was never invoked for the abandoned stream, want Wait to close it through the seam rather than a direct synchronous close")
 	}
 }

@@ -95,7 +95,7 @@ is_bot() {
 	printf '%s\n' "$BOT_LOGINS" | grep -qxF -- "$1"
 }
 
-# "#12" alone, "#12, #13, and #14" for several.
+# One number alone; several as a comma list ending in "and".
 join_pull_requests() {
 	_jpr_total=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
 	_jpr_index=0

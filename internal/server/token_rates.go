@@ -167,7 +167,7 @@ func activeCostTotal(running []orchestrator.SnapshotRunningEntry, tokenRates Tok
 // FormatCost formats a USD cost value as a string with two decimal places.
 // Values >= 1000 receive comma thousand separators (e.g. "$1,234.56").
 // Rounding is performed on the integer-cents representation to avoid
-// float splitting artifacts near boundaries (e.g. 999.999 → "$1,000.00").
+// float splitting artifacts near boundaries (e.g. 999.999 -> "$1,000.00").
 func FormatCost(v float64) string {
 	cents := int64(math.Round(v * 100))
 	dollars := cents / 100

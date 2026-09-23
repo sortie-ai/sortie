@@ -2347,7 +2347,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 
 	t.Run("APIKeyDollarNotExpanded", func(t *testing.T) {
 		// A dollar + numeric prefix would be truncated by os.ExpandEnv
-		// (e.g. "tok$5abc" → "tok" if $5 is treated as a variable reference).
+		// (e.g. "tok$5abc" -> "tok" if $5 is treated as a variable reference).
 		// The env override layer must preserve literal dollar signs.
 		t.Setenv("SORTIE_TRACKER_API_KEY", "tok$5abc")
 		cfg, err := NewServiceConfig(map[string]any{})
@@ -2423,7 +2423,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 	})
 
 	t.Run("CommentsOnCompletionOverrideFalse", func(t *testing.T) {
-		// Override an existing YAML true → false via env.
+		// Override an existing YAML true -> false via env.
 		t.Setenv("SORTIE_TRACKER_COMMENTS_ON_COMPLETION", "false")
 		cfg, err := NewServiceConfig(map[string]any{
 			"tracker": map[string]any{
@@ -3280,7 +3280,7 @@ func TestPopulateCIFeedbackFromReactions(t *testing.T) {
 }
 
 // TestCIFailureMigration verifies the full precedence logic for the
-// reactions.ci_failure → CIFeedback migration path through NewServiceConfig.
+// reactions.ci_failure -> CIFeedback migration path through NewServiceConfig.
 func TestCIFailureMigration(t *testing.T) {
 	t.Parallel()
 

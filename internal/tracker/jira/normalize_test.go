@@ -188,7 +188,7 @@ func TestNormalizeSearchIssue_BlockerExtraction(t *testing.T) {
 				{
 					Type: jiraLinkType{Name: "Blocks"},
 				},
-				// Blocker with nil status fields → state ""
+				// Blocker with nil status fields -> state ""
 				{
 					Type:        jiraLinkType{Name: "Blocks"},
 					InwardIssue: &jiraLinkedIssue{ID: "5", Key: "X-5"},
@@ -316,7 +316,7 @@ func TestUnmarshalADF(t *testing.T) {
 func TestNormalizeSearchIssue_EmptyLabelsSlice(t *testing.T) {
 	t.Parallel()
 
-	// Empty labels array from Jira (not nil) → non-nil empty slice
+	// Empty labels array from Jira (not nil) -> non-nil empty slice
 	ji := jiraIssue{
 		ID:  "1",
 		Key: "X-1",

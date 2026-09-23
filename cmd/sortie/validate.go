@@ -71,7 +71,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	// wf.Config is the post-env-override raw map. Sole ownership — safe to read.
+	// wf.Config is the post-env-override raw map. Sole ownership, so safe to read.
 	var warningDiags []validateDiag
 	for _, w := range config.ValidateFrontMatter(wf.Config, cfg) {
 		msg := w.Message

@@ -11,8 +11,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// TestDecideTurn_Rows pins every row of the seven-row decision table
-// (R1 through R7) against a representative TurnEvidence, asserting the
+// TestDecideTurn_Rows pins every row of the decision table against a
+// representative TurnEvidence, asserting the
 // full TurnDisposition the table produces for each.
 func TestDecideTurn_Rows(t *testing.T) {
 	t.Parallel()
@@ -27,7 +27,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 		wantErrorMessage string
 	}{
 		{
-			name:             "R1 terminal cancelled with message",
+			name:             "terminal cancelled with message",
 			ev:               TurnEvidence{Terminal: TerminalCancelled, TerminalMessage: "context cancelled"},
 			wantRow:          RowTerminalCancelled,
 			wantExitReason:   domain.EventTurnCancelled,
@@ -36,7 +36,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "context cancelled",
 		},
 		{
-			name:             "R2 terminal failure with kind and message",
+			name:             "terminal failure with kind and message",
 			ev:               TurnEvidence{Terminal: TerminalFailure, TerminalErrorKind: domain.ErrResponseError, TerminalMessage: "auth rejected"},
 			wantRow:          RowTerminalFailure,
 			wantExitReason:   domain.EventTurnFailed,
@@ -45,7 +45,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "auth rejected",
 		},
 		{
-			name:             "R3 terminal success carries message on event only",
+			name:             "terminal success carries message on event only",
 			ev:               TurnEvidence{Terminal: TerminalSuccess, TerminalMessage: "All done."},
 			wantRow:          RowTerminalSuccess,
 			wantExitReason:   domain.EventTurnCompleted,
@@ -54,7 +54,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "",
 		},
 		{
-			name:             "R4 no exit observed",
+			name:             "no exit observed",
 			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: false},
 			wantRow:          RowNoExitObserved,
 			wantExitReason:   domain.EventTurnFailed,
@@ -63,7 +63,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "runtime reported no turn outcome",
 		},
 		{
-			name:             "R5 non-zero exit differs between event and error message",
+			name:             "non-zero exit differs between event and error message",
 			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 7},
 			wantRow:          RowNonZeroExit,
 			wantExitReason:   domain.EventTurnFailed,
@@ -72,7 +72,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "exit code 7",
 		},
 		{
-			name:             "R6 zero work with no detail",
+			name:             "zero work with no detail",
 			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkAbsent},
 			wantRow:          RowZeroWork,
 			wantExitReason:   domain.EventTurnFailed,
@@ -81,7 +81,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "agent exited without producing output",
 		},
 		{
-			name:             "R7 work present completes",
+			name:             "work present completes",
 			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkPresent},
 			wantRow:          RowWorkPresent,
 			wantExitReason:   domain.EventTurnCompleted,
@@ -90,7 +90,7 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantErrorMessage: "",
 		},
 		{
-			name:             "R8 work unobservable reports the fixed no-signal message",
+			name:             "work unobservable reports the fixed no-signal message",
 			ev:               TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkUnobservable},
 			wantRow:          RowWorkUnobservable,
 			wantExitReason:   domain.EventTurnFailed,

@@ -112,7 +112,7 @@ func ComputePath(root, identifier string) (PathResult, error) {
 				Err:  err,
 			}
 		}
-		// Root does not exist yet — fall back to the cleaned absolute
+		// Root does not exist yet; fall back to the cleaned absolute
 		// path so callers can create the workspace root on demand.
 		resolvedRoot = filepath.Clean(absRoot)
 	}
@@ -195,7 +195,7 @@ func Ensure(root, identifier string) (EnsureResult, error) {
 		}
 	}
 
-	// Path already exists — verify it is a directory.
+	// Path already exists; verify it is a directory.
 	fi, statErr := os.Lstat(pr.Path)
 	if statErr != nil {
 		return EnsureResult{}, &PathError{
@@ -210,7 +210,7 @@ func Ensure(root, identifier string) (EnsureResult, error) {
 		return EnsureResult{Key: pr.Key, Path: pr.Path}, nil
 	}
 
-	// Non-directory entry at workspace path — hard error.
+	// Non-directory entry at workspace path is a hard error.
 	return EnsureResult{}, &PathError{
 		Op:         "conflict",
 		Root:       root,

@@ -703,7 +703,7 @@ func TestHandleAgentEvent_CacheReadTokens_Delta(t *testing.T) {
 		t.Errorf("after 1st: AgentTotals.CacheReadTokens = %d, want 500", state.AgentTotals.CacheReadTokens)
 	}
 
-	// Second report: cumulative 800 → delta +300.
+	// Second report: cumulative 800 -> delta +300.
 	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -717,7 +717,7 @@ func TestHandleAgentEvent_CacheReadTokens_Delta(t *testing.T) {
 		t.Errorf("after 2nd: AgentTotals.CacheReadTokens = %d, want 800", state.AgentTotals.CacheReadTokens)
 	}
 
-	// Duplicate report: 800 again → zero delta.
+	// Duplicate report: 800 again -> zero delta.
 	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -728,7 +728,7 @@ func TestHandleAgentEvent_CacheReadTokens_Delta(t *testing.T) {
 		t.Errorf("after dup: CacheReadTokens = %d, want 800 (no double-count)", entry.CacheReadTokens)
 	}
 
-	// Regression: 600 → delta clamped to zero, baseline stays at 800.
+	// Regression: 600 -> delta clamped to zero, baseline stays at 800.
 	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -770,7 +770,7 @@ func TestHandleAgentEvent_ModelTracking(t *testing.T) {
 		t.Errorf("RequestsByModel[sonnet] = %d, want 1", entry.RequestsByModel["claude-sonnet-4-20250514"])
 	}
 
-	// Second report with empty model → falls back to last-known.
+	// Second report with empty model -> falls back to last-known.
 	HandleAgentEvent(state, "MOD-1", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
@@ -824,7 +824,7 @@ func TestHandleAgentEvent_APIRequestCount(t *testing.T) {
 		t.Errorf("after non-token events: APIRequestCount = %d, want 0", entry.APIRequestCount)
 	}
 
-	// Three token_usage events → count 3.
+	// Three token_usage events -> count 3.
 	for i := range 3 {
 		HandleAgentEvent(state, "ARC-1", domain.AgentEvent{
 			Type:      domain.EventTokenUsage,

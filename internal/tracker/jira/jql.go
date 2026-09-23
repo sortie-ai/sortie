@@ -44,7 +44,7 @@ func buildStatesFetchJQL(project string, states []string, queryFilter string) st
 	return jql
 }
 
-// queryFilter is intentionally omitted — these issues already passed
+// queryFilter is intentionally omitted; these issues already passed
 // filtering at dispatch time.
 func buildKeyINJQL(keys []string) string {
 	quoted := make([]string, len(keys))

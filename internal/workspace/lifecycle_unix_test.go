@@ -12,7 +12,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
-// TestPrepare_LeftoverProcessLogsOneRecord pins P22: a before_run hook
+// TestPrepare_LeftoverProcessLogsOneRecord pins that a before_run hook
 // that exits on its own while leaving a background process in its tree
 // makes Prepare return no error and log exactly one
 // LeftoversTerminatedMessage record carrying hook and workspace; a

@@ -103,7 +103,7 @@ type TrackerAdapter interface {
 	// may return ctx.Err() directly (e.g. [context.Canceled] or
 	// [context.DeadlineExceeded]) instead of a [*TrackerError].
 	//
-	// All errors are non-fatal — the orchestrator logs WARN and continues.
+	// All errors are non-fatal; the orchestrator logs WARN and continues.
 	CommentIssue(ctx context.Context, issueID string, text string) error
 
 	// AddLabel adds a label to the specified issue. Used for CI failure

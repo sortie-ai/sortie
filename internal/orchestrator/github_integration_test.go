@@ -194,7 +194,7 @@ func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 }
 
 // TestGitHubIntegration_FullDispatchCycle verifies the full orchestrator
-// dispatch cycle with the real GitHub adapter: poll → dispatch mock agent →
+// dispatch cycle with the real GitHub adapter: poll -> dispatch mock agent ->
 // handoff transition (label swap, issue left open).
 func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	skipUnlessGitHubE2E(t)

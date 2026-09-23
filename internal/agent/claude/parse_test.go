@@ -742,7 +742,7 @@ func TestEmitToolResult_ParallelToolUse(t *testing.T) {
 	now := time.Now().UTC()
 	events := collectToolEvents(t, ev, tracker, now)
 
-	// No tool_result blocks → no EventToolResult events.
+	// No tool_result blocks -> no EventToolResult events.
 	if len(events) != 0 {
 		t.Errorf("collectToolEvents() = %d events, want 0", len(events))
 	}

@@ -38,16 +38,16 @@ var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 // call to support test scenarios that modify the fixture between
 // operations. State mutations via [FileAdapter.TransitionIssue] are
 // stored in an in-memory override map layered on top of disk reads.
-// Overrides are not persisted to disk — they exist only for the
+// Overrides are not persisted to disk; they exist only for the
 // lifetime of the adapter instance. Safe for concurrent use.
 type FileAdapter struct {
 	path         string
 	activeStates map[string]bool
 
 	mu               sync.RWMutex
-	overrides        map[string]string           // issue ID → overridden state
-	commentOverrides map[string][]domain.Comment // issue ID → appended comments
-	labelOverrides   map[string]string           // issue ID → label to merge into raw.Labels
+	overrides        map[string]string           // issue ID -> overridden state
+	commentOverrides map[string][]domain.Comment // issue ID -> appended comments
+	labelOverrides   map[string]string           // issue ID -> label to merge into raw.Labels
 	metrics          domain.Metrics              // nil-safe: check before calling
 }
 

@@ -201,13 +201,13 @@ resolve_install_dir() {
         return
     fi
 
-    # Root (e.g. Docker) → /usr/local/bin, the FHS standard for local binaries.
+    # Root (e.g. Docker) -> /usr/local/bin, the FHS standard for local binaries.
     if [ "$(id -u)" -eq 0 ]; then
         printf '%s' "/usr/local/bin"
         return
     fi
 
-    # Non-root → ~/.local/bin (XDG convention, same as pip, mise, pipx).
+    # Non-root -> ~/.local/bin (XDG convention, same as pip, mise, pipx).
     printf '%s' "${HOME}/.local/bin"
 }
 

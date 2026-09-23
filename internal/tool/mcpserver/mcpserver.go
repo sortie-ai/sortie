@@ -136,7 +136,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	for {
 		if !scanner.Scan() {
 			if scanner.Err() == nil {
-				return nil // EOF — clean shutdown
+				return nil // EOF, clean shutdown
 			}
 			return fmt.Errorf("reading stdin: %w", scanner.Err())
 		}
@@ -161,7 +161,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 
 		// Messages without an ID are notifications or malformed requests.
-		// Either way, no response is possible — skip silently.
+		// Either way, no response is possible; skip silently.
 		if req.ID == nil || string(req.ID) == "null" {
 			continue
 		}

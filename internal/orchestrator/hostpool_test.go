@@ -122,7 +122,7 @@ func TestAcquireHost_PreferredAtCapacityFallsBack(t *testing.T) {
 	hp := NewHostPool([]string{"a", "b"}, 1)
 	hp.AcquireHost("ISS-0", "a") // "a" is now at capacity
 
-	// Prefer "a", but it's full → should fall back to "b".
+	// Prefer "a", but it's full -> should fall back to "b".
 	host, ok := hp.AcquireHost("ISS-1", "a")
 	if !ok || host != "b" {
 		t.Errorf("AcquireHost(ISS-1, preferred=a) = (%q, %v), want (\"b\", true)", host, ok)
@@ -805,7 +805,7 @@ func TestAcquireHost_PreferredNotConfigured(t *testing.T) {
 
 	hp.Update([]string{"a"}, 2)
 
-	// Prefer "b", but it is no longer configured → fall back to "a".
+	// Prefer "b", but it is no longer configured -> fall back to "a".
 	host, ok := hp.AcquireHost("ISS-1", "b")
 	if !ok || host != "a" {
 		t.Errorf("AcquireHost(ISS-1, preferred=b) = (%q, %v), want (\"a\", true)", host, ok)

@@ -451,7 +451,7 @@ func TestReconcileMergeConflicts_DedupSameHead(t *testing.T) {
 	// to model the next reconcile pass over a still-pending entry.
 	state.PendingReactions[rkey] = newMergeConflictPending("MC-DEDUP", 10)
 
-	// Tick 2: same head, already dispatched → dedup branch, no re-dispatch,
+	// Tick 2: same head, already dispatched -> dedup branch, no re-dispatch,
 	// no re-increment.
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 
@@ -494,7 +494,7 @@ func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 	params := mergeConflictParams(store, scm, nil)
 	params.NowFunc = func() time.Time { return now }
 
-	// Tick 1: head H1 dirty → dispatch, attempts becomes 1.
+	// Tick 1: the first head is dirty -> dispatch, attempts becomes 1.
 	head = "H1"
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	if metrics.checks["dispatched"] != 1 {
@@ -504,9 +504,10 @@ func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 		t.Fatalf("after tick 1: ReactionAttempts = %d, want 1", state.ReactionAttempts[rkey])
 	}
 
-	// Tick 2: head H2 clean → branch N1 resets the episode. A worker exit
-	// re-seeds the slot and frees the tick-1 retry entry; advance the
-	// clock past the poll interval so the re-enqueued entry is due.
+	// Tick 2: the second head is clean -> the clean-head branch resets the
+	// episode. A worker exit re-seeds the slot and frees the tick-1 retry
+	// entry; advance the clock past the poll interval so the re-enqueued entry
+	// is due.
 	head = "H2-clean"
 	now = now.Add(2 * time.Minute)
 	CancelRetry(state, "MC-REARM")
@@ -522,8 +523,8 @@ func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 		t.Fatal("after tick 2: fingerprint present, want deleted")
 	}
 
-	// Tick 3: head H3 dirty (a new independent conflict) on a later poll of
-	// the N1-re-enqueued entry → fresh dispatch, attempts becomes 1 again.
+	// Tick 3: the third head is dirty (a new independent conflict) on a later
+	// poll of the re-enqueued entry -> fresh dispatch, attempts becomes 1 again.
 	head = "H3"
 	now = now.Add(2 * time.Minute)
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
@@ -555,7 +556,7 @@ func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 	}}
 	params := mergeConflictParams(store, scm, tracker)
 
-	// Tick 1: head H1 dirty → dispatch, attempts == 1 (1 > 1 false).
+	// Tick 1: the first head is dirty -> dispatch, attempts == 1 (1 > 1 false).
 	head = "H1"
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	if state.ReactionAttempts[rkey] != 1 {
@@ -565,7 +566,7 @@ func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 		t.Fatalf("after tick 1: dispatched = %d, want 1", metrics.checks["dispatched"])
 	}
 
-	// The agent rebased to a NEW head H2 that is still dirty. A worker exit
+	// The agent rebased to a NEW head that is still dirty. A worker exit
 	// frees the tick-1 retry entry and re-seeds the slot; run tick 2.
 	head = "H2"
 	CancelRetry(state, issueID)
@@ -577,7 +578,7 @@ func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 	if scm.calls != 2 {
 		t.Errorf("GetMergeability calls = %d, want 2 (read NOT skipped on tick 2)", scm.calls)
 	}
-	// Strict over-limit: attempts 2, 2 > 1 true → escalate. The counter is
+	// Strict over-limit: attempts 2, 2 > 1 true -> escalate. The counter is
 	// deleted on the escalation exit (episodic reset), so it is ABSENT.
 	if _, ok := state.ReactionAttempts[rkey]; ok {
 		t.Errorf("ReactionAttempts[%s] present after escalation = %d, want absent (episodic reset)", rkey, state.ReactionAttempts[rkey])
@@ -620,14 +621,14 @@ func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 	}}
 	params := mergeConflictParams(store, scm, tracker)
 
-	// Tick 1: H1 dirty → dispatch, attempts 1.
+	// Tick 1: the first head is dirty -> dispatch, attempts 1.
 	head = "H1"
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	if state.ReactionAttempts[rkey] != 1 {
 		t.Fatalf("after tick 1: ReactionAttempts = %d, want 1", state.ReactionAttempts[rkey])
 	}
 
-	// Tick 2: still-dirty new head H2 → attempts 2, 2 > 1 → escalate, counter
+	// Tick 2: a still-dirty new head -> attempts 2, 2 > 1 -> escalate, counter
 	// deleted. A worker exit frees the tick-1 retry entry before this tick.
 	head = "H2"
 	CancelRetry(state, issueID)
@@ -645,11 +646,11 @@ func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 	// observation between the escalation and the next conflict.
 	state.PendingReactions[rkey] = newMergeConflictPending(issueID, 88)
 
-	// Tick 3: a NEW dirty head H3 → because the escalation reset the counter,
-	// attempts goes to 1 (not 2), 1 > 1 is false, so the orchestrator
+	// Tick 3: a NEW dirty third head -> because the escalation reset the
+	// counter, attempts goes to 1 (not 2), 1 > 1 is false, so the orchestrator
 	// DISPATCHES fresh rather than escalating. Without the escalation-time
-	// counter reset, the counter would still read 2 and H3 would escalate at
-	// attempts 3 with zero rebase dispatches.
+	// counter reset, the counter would still read 2 and the third head would
+	// escalate at attempts 3 with zero rebase dispatches.
 	head = "H3"
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
@@ -748,8 +749,8 @@ func TestReconcileMergeConflicts_CrossKindIsolation(t *testing.T) {
 		t.Errorf("ReactionAttempts[merge] = %d, want 1 (untouched)", state.ReactionAttempts[mergeKey])
 	}
 
-	// Sibling fingerprints untouched (merge-conflict only deletes its own
-	// kind on N1/escalation, and this tick dispatches, deleting none).
+	// Sibling fingerprints untouched (merge-conflict only deletes its own kind
+	// on a clean head or escalation, and this tick dispatches, deleting none).
 	if !store.has(issueID, ReactionKindCI) {
 		t.Error("ci fingerprint deleted by merge-conflict dispatch; want untouched")
 	}

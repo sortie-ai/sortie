@@ -618,8 +618,8 @@ func TestTruncateScript(t *testing.T) {
 	}
 }
 
-// TestRunHook_HeldAndNullRedirectedBackgroundProcessesTerminated pins
-// P12: a script that prints a line, backgrounds a held descendant
+// TestRunHook_HeldAndNullRedirectedBackgroundProcessesTerminated covers
+// a script that prints a line, backgrounds a held descendant
 // holding the hook's output, and backgrounds a second process whose
 // output is redirected away, then exits 0. RunHook returns within 2s
 // with the line and no error, logs no CaptureAbandonedWarning record,

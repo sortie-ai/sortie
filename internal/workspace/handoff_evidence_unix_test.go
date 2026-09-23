@@ -36,7 +36,7 @@ func fakeGitOnPath(t *testing.T, body string) {
 }
 
 // TestCaptureHandoffEvidenceBaseline_HeldDescendantHoldingOutput pins
-// P9 for L8: with a held descendant holding the output of every git
+// that, with a held descendant holding the output of every git
 // invocation the inspection makes, CaptureHandoffEvidenceBaseline
 // returns within its timer with a computed fingerprint, and the last
 // descendant is gone.
@@ -87,7 +87,7 @@ func TestCaptureHandoffEvidenceBaseline_HeldDescendantHoldingOutput(t *testing.T
 }
 
 // TestCompareHandoffEvidenceBaseline_EscapedDescendantYieldsIncompleteOutputError
-// pins P10: an escaped descendant holding the standard output of one
+// pins that an escaped descendant holding the standard output of one
 // git invocation makes CompareHandoffEvidenceBaseline return an error
 // containing "output did not complete", because runGit's OutputComplete
 // check is the one outcome rule that consults it.

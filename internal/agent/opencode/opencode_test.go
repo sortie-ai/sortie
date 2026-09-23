@@ -2515,15 +2515,15 @@ exit 0
 	return writeOpenCodeScript(t, dir, body)
 }
 
-// TestRunTurn_DescendantHoldsStdout drives the two scripts above through
-// the normal waitCh/postExitC completion path (never through cancellation
-// or StopSession) and asserts properties P1, P3, P5, and P7: the
-// in-group descendant is dead once the turn returns and no abandonment
-// record fires, because the reaper's unconditional group kill releases
-// the reader before sessionState.drainGrace can fire; the escaped
-// descendant survives, the turn still publishes within that bound, and
-// exactly one abandonment record is emitted; and both variants publish
-// the identical disposition and error.
+// TestRunTurn_DescendantHoldsStdout drives the two scripts above
+// through the normal waitCh/postExitC completion path (never through
+// cancellation or StopSession) and asserts that the in-group descendant
+// is dead once the turn returns and no abandonment record fires,
+// because the reaper's unconditional group kill releases the reader
+// before sessionState.drainGrace can fire; the escaped descendant
+// survives, the turn still publishes within that bound, and exactly one
+// abandonment record is emitted; and both variants publish the
+// identical disposition and error.
 func TestRunTurn_DescendantHoldsStdout(t *testing.T) {
 	t.Parallel()
 
@@ -2584,19 +2584,19 @@ func TestRunTurn_DescendantHoldsStdout(t *testing.T) {
 		elapsed := time.Since(start)
 
 		if elapsed > 3*time.Second {
-			t.Errorf("RunTurn() took %v, want well under 3s (property P1: bounded by sessionState.drainGrace)", elapsed)
+			t.Errorf("RunTurn() took %v, want well under 3s (bounded by sessionState.drainGrace)", elapsed)
 		}
 
 		if got := abandonmentWarnCount(spy); got != 1 {
-			t.Errorf("abandonment WARN count = %d, want exactly 1 (property P3)", got)
+			t.Errorf("abandonment WARN count = %d, want exactly 1", got)
 		}
 
 		if result.ExitReason != domain.EventTurnFailed {
-			t.Errorf("ExitReason = %q, want %q (same disposition as the unabandoned in-group variant, property P7)", result.ExitReason, domain.EventTurnFailed)
+			t.Errorf("ExitReason = %q, want %q (same disposition as the unabandoned in-group variant)", result.ExitReason, domain.EventTurnFailed)
 		}
 		var agentErr *domain.AgentError
 		if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q} (property P7)", err, domain.ErrTurnFailed)
+			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q} (same error as the unabandoned in-group variant)", err, domain.ErrTurnFailed)
 		}
 	})
 }
@@ -2651,12 +2651,13 @@ exit 0
 	}
 }
 
-// TestRunTurn_ContextCancellationArm_BoundedDrain exercises property P8
-// on opencode's context-cancellation early-return arm: with a descendant
-// holding the standard-output handle, the turn still publishes within
-// sessionState.drainGrace and emits exactly one abandonment record; with
-// no descendant, or one that dies with the group, it publishes without
-// spending the bound and without the record.
+// TestRunTurn_ContextCancellationArm_BoundedDrain exercises the bounded
+// drain on opencode's context-cancellation early-return arm: with a
+// descendant holding the standard-output handle, the turn still
+// publishes within sessionState.drainGrace and emits exactly one
+// abandonment record; with no descendant, or one that dies with the
+// group, it publishes without spending the bound and without the
+// record.
 func TestRunTurn_ContextCancellationArm_BoundedDrain(t *testing.T) {
 	t.Parallel()
 
@@ -2771,8 +2772,8 @@ sleep 3600
 	}
 }
 
-// TestRunTurn_SessionMismatchArm_BoundedDrain exercises property P8 on
-// opencode's session-mismatch early-return arm: with an escaped
+// TestRunTurn_SessionMismatchArm_BoundedDrain exercises the bounded
+// drain on opencode's session-mismatch early-return arm: with an escaped
 // descendant holding the standard-output handle, the mismatch turn still
 // publishes within sessionState.drainGrace and emits exactly one
 // abandonment record.
@@ -2825,8 +2826,8 @@ sleep 3600
 	}
 }
 
-// TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit covers guarantee
-// O12 and the second half of property P8: agent.read_timeout_ms is
+// TestRunTurn_ReadTimeoutDoesNotFireAfterObservedExit asserts that an
+// observed exit disarms the read timer: agent.read_timeout_ms is
 // configured shorter than the injected sessionState.drainGrace, and the
 // subprocess exits without ever emitting a JSON event while an escaped
 // descendant holds the output handle. The published disposition must be
@@ -2863,14 +2864,14 @@ esac
 
 	var agentErr *domain.AgentError
 	if errors.As(runErr, &agentErr) && agentErr.Kind == domain.ErrResponseTimeout {
-		t.Fatalf("RunTurn() reported ErrResponseTimeout, want the exit-based disposition (guarantee O12): err = %v", runErr)
+		t.Fatalf("RunTurn() reported ErrResponseTimeout, want the exit-based disposition: err = %v", runErr)
 	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q (exit 0, no output at all)", result.ExitReason, domain.EventTurnFailed)
 	}
 }
 
-// writeOpenCodeLatchMoveScript builds the fixture the P8 latch-move case
+// writeOpenCodeLatchMoveScript builds the fixture the latch-move case
 // needs: a direct child that writes one standard-error line, writes
 // nothing to standard output, and exits; and an escaped descendant that
 // inherits the standard-output handle alone (never standard error too),

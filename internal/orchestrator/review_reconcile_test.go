@@ -629,7 +629,7 @@ func TestReconcileReviewComments_FingerprintMatchDispatched(t *testing.T) {
 
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
 
-	// Already dispatched → re-enqueue but do not call MarkReactionDispatched.
+	// Already dispatched -> re-enqueue but do not call MarkReactionDispatched.
 	if _, ok := state.PendingReactions[rkey]; !ok {
 		t.Error("PendingReactions entry dropped for already-dispatched fingerprint; want re-enqueued")
 	}
@@ -728,7 +728,7 @@ func TestReconcileReviewComments_DebounceElapsed_Dispatches(t *testing.T) {
 	state := stateWithReviewReaction(t, "ISS-R-10", 10)
 	rkey := ReactionKey("ISS-R-10", ReactionKindReview)
 
-	// Comment submitted 120 seconds ago; debounce window is 30s → elapsed.
+	// Comment submitted 120 seconds ago; debounce window is 30s -> elapsed.
 	comments := []domain.ReviewComment{
 		{ID: "400", Body: "old enough", SubmittedAt: reviewBaseTime.Add(-120 * time.Second)},
 	}

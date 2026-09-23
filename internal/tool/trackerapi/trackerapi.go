@@ -215,7 +215,7 @@ func (t *TrackerAPITool) transitionIssue(ctx context.Context, issueID, targetSta
 }
 
 // isInProject is a defense-in-depth check using identifier prefix.
-// It is NOT the primary access control — the TrackerAdapter's own
+// It is NOT the primary access control; the TrackerAdapter's own
 // project scoping (JQL filter, API endpoint) is the primary control.
 // This check catches edge cases where an agent passes an issue ID
 // from another project that the API key happens to have access to.

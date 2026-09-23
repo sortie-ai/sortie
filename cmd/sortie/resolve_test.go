@@ -300,12 +300,12 @@ func TestRunDatabaseRelativePath(t *testing.T) {
 }
 
 // toSnakeCase converts a PascalCase field name to snake_case, handling
-// acronyms like "MS", "API", "ID" correctly: APIKey → api_key,
-// TurnTimeoutMS → turn_timeout_ms, MaxConcurrentByState → max_concurrent_by_state.
+// acronyms like "MS", "API", "ID" correctly: APIKey -> api_key,
+// TurnTimeoutMS -> turn_timeout_ms, MaxConcurrentByState -> max_concurrent_by_state.
 
 // toSnakeCase converts a PascalCase field name to snake_case, handling
-// acronyms like "MS", "API", "ID" correctly: APIKey → api_key,
-// TurnTimeoutMS → turn_timeout_ms, MaxConcurrentByState → max_concurrent_by_state.
+// acronyms like "MS", "API", "ID" correctly: APIKey -> api_key,
+// TurnTimeoutMS -> turn_timeout_ms, MaxConcurrentByState -> max_concurrent_by_state.
 func toSnakeCase(s string) string {
 	var b strings.Builder
 	runes := []rune(s)
