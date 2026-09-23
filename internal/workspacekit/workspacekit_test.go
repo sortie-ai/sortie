@@ -619,7 +619,7 @@ func TestIsPlainMode(t *testing.T) {
 // verifying Lstat and the open, is refused on Linux and macOS because the
 // comparison catches the swap, and accepted on Windows because a
 // non-reparse-point directory's identity there is not settled until the
-// comparison runs (D1 accepts this platform split).
+// comparison runs.
 func TestOpenDir_SeamDrivenRealDirectorySwapChanged(t *testing.T) {
 	ws := t.TempDir()
 	swapped := t.TempDir()
@@ -635,11 +635,15 @@ func TestOpenDir_SeamDrivenRealDirectorySwapChanged(t *testing.T) {
 	}
 	t.Cleanup(func() { seam = original })
 
-	_, err := openDir(ws)
+	root, err := openDir(ws)
+	if root != nil {
+		// Windows refuses to remove a directory that still has an open handle.
+		root.Close() //nolint:errcheck // test cleanup
+	}
 
 	if runtime.GOOS == "windows" {
 		if err != nil {
-			t.Errorf("openDir(swapped directory) on windows = %v, want nil (D1)", err)
+			t.Errorf("openDir(swapped directory) on windows = %v, want nil", err)
 		}
 		return
 	}
