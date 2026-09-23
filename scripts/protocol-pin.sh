@@ -35,10 +35,12 @@ fetch_releases() {
 	printf '[]' >"$_fr_out"
 	_fr_page=1
 	while :; do
-		_fr_page_json=$(gh api "repos/${PUBLISHER_REPO}/releases?per_page=100&page=${_fr_page}") || return 1
-		jq -n --argjson acc "$(cat "$_fr_out")" --argjson page "$_fr_page_json" '$acc + $page' >"${_fr_out}.next"
-		mv "${_fr_out}.next" "$_fr_out"
-		_fr_count=$(printf '%s' "$_fr_page_json" | jq 'length')
+		# A release page is larger than the per-argument limit, so pages
+		# travel through files, never through jq arguments.
+		gh api "repos/${PUBLISHER_REPO}/releases?per_page=100&page=${_fr_page}" >"${_fr_out}.page" || return 1
+		jq -s '.[0] + .[1]' "$_fr_out" "${_fr_out}.page" >"${_fr_out}.next" || return 1
+		mv "${_fr_out}.next" "$_fr_out" || return 1
+		_fr_count=$(jq 'length' "${_fr_out}.page") || return 1
 		if [ "$_fr_count" -lt 100 ]; then
 			return 0
 		fi

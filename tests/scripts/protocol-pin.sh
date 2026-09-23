@@ -55,8 +55,12 @@ build_fixture_repo "$ROOT_123" "schema-v1.23.0" "6d08f412a7a1370d3cc9a124e3be3d6
 
 REPORT_TITLE=$("$tmp/bin/protocolpin" locate -repo-root "$ROOT_121" | jq -r .title)
 
-RELEASES_FILE="${REPO_ROOT_DIR}/tools/protocolpin/testdata/releases.json"
-[ -f "$RELEASES_FILE" ] || fail "fixture not found: ${RELEASES_FILE}"
+FIXTURE_RELEASES="${REPO_ROOT_DIR}/tools/protocolpin/testdata/releases.json"
+[ -f "$FIXTURE_RELEASES" ] || fail "fixture not found: ${FIXTURE_RELEASES}"
+# Real release notes push one page past the per-argument limit; the
+# padding reproduces that size.
+RELEASES_FILE="$tmp/releases.json"
+jq '.[0].body = ("x" * 200000)' "$FIXTURE_RELEASES" >"$RELEASES_FILE"
 
 mkdir "$tmp/bin-fault"
 cat >"$tmp/bin-fault/protocolpin" <<'EOF'
