@@ -11,9 +11,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
-	"os"
+	"path/filepath"
 	"slices"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // Transport identifies how a server communicates with the agent
@@ -146,8 +149,17 @@ func Parse(path string) ([]Server, error) {
 	if path == "" {
 		return nil, &Error{Kind: ErrorUnreadable, Path: path, Err: fmt.Errorf("path is empty")}
 	}
+	if filepath.Base(filepath.Dir(path)) != workspacekit.SortieDir {
+		return nil, &Error{Kind: ErrorUnreadable, Path: path, Err: fmt.Errorf("path is not inside a %s directory", workspacekit.SortieDir)}
+	}
 
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: path is the caller-supplied generated config location
+	f, err := workspacekit.OpenSortieFile(filepath.Dir(filepath.Dir(path)), filepath.Base(path))
+	if err != nil {
+		return nil, &Error{Kind: ErrorUnreadable, Path: path, Err: err}
+	}
+	defer f.Close() //nolint:errcheck // read-only file; close error is not actionable after data is read
+
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		return nil, &Error{Kind: ErrorUnreadable, Path: path, Err: err}
 	}

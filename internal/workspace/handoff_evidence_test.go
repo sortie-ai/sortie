@@ -182,12 +182,40 @@ func TestHandoffEvidenceNonGitWorkspace(t *testing.T) {
 	}
 }
 
-// TestGitCommand_DisablesFilesystemMonitorOnlyOnWindows pins P20:
-// GitCommand disables Git's filesystem monitor only on Windows, and
-// otherwise passes args through unchanged; Dir is always set to dir.
+func TestCaptureHandoffEvidenceBaseline_LinkedWorkspaceRefused(t *testing.T) {
+	target := newHandoffEvidenceGitWorkspace(t)
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	mustSymlink(t, target, link)
+
+	_, err := CaptureHandoffEvidenceBaseline(context.Background(), link)
+	if err == nil {
+		t.Fatalf("CaptureHandoffEvidenceBaseline(%q) error = nil, want non-nil", link)
+	}
+	if errors.Is(err, ErrNotGitWorkspace) {
+		t.Errorf("CaptureHandoffEvidenceBaseline(%q) error = %v, want a verification error rather than ErrNotGitWorkspace", link, err)
+	}
+}
+
+func TestGitCommand_LinkedWorkspaceRefused(t *testing.T) {
+	target := newHandoffEvidenceGitWorkspace(t)
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	mustSymlink(t, target, link)
+
+	cmd, err := GitCommand(context.Background(), link, "status")
+	if err == nil {
+		t.Fatalf("GitCommand(%q) error = nil, want non-nil", link)
+	}
+	if cmd != nil {
+		t.Errorf("GitCommand(%q) cmd = %v, want nil", link, cmd)
+	}
+}
+
 func TestGitCommand_DisablesFilesystemMonitorOnlyOnWindows(t *testing.T) {
 	dir := t.TempDir()
-	cmd := GitCommand(context.Background(), dir, "status")
+	cmd, err := GitCommand(context.Background(), dir, "status")
+	if err != nil {
+		t.Fatalf("GitCommand: %v", err)
+	}
 
 	if cmd.Dir != dir {
 		t.Errorf("Dir = %q, want %q", cmd.Dir, dir)

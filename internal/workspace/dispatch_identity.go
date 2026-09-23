@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"log/slog"
-	"os"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 const dispatchIdentityFile = "dispatch.json"
@@ -25,7 +26,7 @@ func WriteDispatchIdentity(workspacePath string, identity DispatchIdentity) erro
 	if err != nil {
 		return fmt.Errorf("marshal dispatch identity: %w", err)
 	}
-	return WriteSortieFile(workspacePath, dispatchIdentityFile, data)
+	return workspacekit.WriteSortieFile(workspacePath, dispatchIdentityFile, data)
 }
 
 // ReadDispatchSessionID returns the session ID for dispatchID, or an empty
@@ -50,69 +51,24 @@ func ReadDispatchSessionID(workspacePath, dispatchID string, logger *slog.Logger
 		logger.Warn("dispatch identity record unusable", attrs...)
 	}
 
-	root, err := os.OpenRoot(workspacePath)
+	content, err := workspacekit.ReadSortieFile(workspacePath, dispatchIdentityFile, maxDispatchIdentityBytes)
 	if err != nil {
-		warn("unreadable", err)
-		return ""
-	}
-	defer root.Close() //nolint:errcheck // A read-only root has no actionable close error.
-
-	dirInfo, err := root.Lstat(sortieDir)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return ""
-	case err != nil:
-		warn("unreadable", err)
-		return ""
-	case dirInfo.Mode()&os.ModeSymlink != 0:
-		warn("symlink", nil)
-		return ""
-	case !dirInfo.IsDir():
-		warn("not_directory", nil)
-		return ""
-	}
-
-	recordPath := sortieDir + "/" + dispatchIdentityFile
-	fileInfo, err := root.Lstat(recordPath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return ""
-	case err != nil:
-		warn("unreadable", err)
-		return ""
-	case fileInfo.Mode()&os.ModeSymlink != 0:
-		warn("symlink", nil)
-		return ""
-	case !fileInfo.Mode().IsRegular():
-		warn("not_regular", nil)
-		return ""
-	}
-
-	f, err := root.OpenFile(recordPath, os.O_RDONLY|nonBlockingReadFlag, 0)
-	if err != nil {
-		warn("unreadable", err)
-		return ""
-	}
-	defer f.Close() //nolint:errcheck // Data is already read when this deferred close runs.
-
-	openedInfo, err := f.Stat()
-	if err != nil {
-		warn("unreadable", err)
-		return ""
-	}
-	if !openedInfo.Mode().IsRegular() {
-		warn("not_regular", nil)
-		return ""
-	}
-
-	limited := io.LimitReader(f, maxDispatchIdentityBytes+1)
-	content, err := io.ReadAll(limited)
-	if err != nil {
-		warn("unreadable", err)
-		return ""
-	}
-	if len(content) > maxDispatchIdentityBytes {
-		warn("oversized", nil)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return ""
+		case errors.Is(err, workspacekit.ErrLink):
+			warn("symlink", nil)
+		case errors.Is(err, workspacekit.ErrNotDirectory):
+			warn("not_directory", nil)
+		case errors.Is(err, workspacekit.ErrNotPlainFile):
+			warn("not_regular", nil)
+		case errors.Is(err, workspacekit.ErrChanged):
+			warn("changed", nil)
+		case errors.Is(err, workspacekit.ErrTooLarge):
+			warn("oversized", nil)
+		default:
+			warn("unreadable", err)
+		}
 		return ""
 	}
 

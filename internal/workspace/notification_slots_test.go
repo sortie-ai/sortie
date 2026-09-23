@@ -10,11 +10,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 func readNotificationSlotNames(t *testing.T, workspacePath, dispatchID string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(workspacePath, sortieDir, notificationSlotsDir))
+	entries, err := os.ReadDir(filepath.Join(workspacePath, workspacekit.SortieDir, notificationSlotsDir))
 	if err != nil {
 		t.Fatalf("ReadDir(notification_slots): %v", err)
 	}
@@ -150,7 +152,7 @@ func TestReserveNotificationSlot_Refusal(t *testing.T) {
 			name: "dot sortie is a regular file",
 			setup: func(t *testing.T) (string, string) {
 				ws := t.TempDir()
-				if err := os.WriteFile(filepath.Join(ws, sortieDir), []byte("x"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(ws, workspacekit.SortieDir), []byte("x"), 0o600); err != nil {
 					t.Fatalf("WriteFile(.sortie): %v", err)
 				}
 				return ws, "dispatch-1"
@@ -161,7 +163,7 @@ func TestReserveNotificationSlot_Refusal(t *testing.T) {
 			setup: func(t *testing.T) (string, string) {
 				ws := t.TempDir()
 				createSortieDir(t, ws)
-				if err := os.WriteFile(filepath.Join(ws, sortieDir, notificationSlotsDir), []byte("x"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir), []byte("x"), 0o600); err != nil {
 					t.Fatalf("WriteFile(notification_slots): %v", err)
 				}
 				return ws, "dispatch-1"
@@ -194,7 +196,7 @@ func TestReserveNotificationSlot_ExistingDirectoryCountsAsOccupied(t *testing.T)
 
 	ws := t.TempDir()
 	createSortieDir(t, ws)
-	slotsPath := filepath.Join(ws, sortieDir, notificationSlotsDir)
+	slotsPath := filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir)
 	if err := os.MkdirAll(slotsPath, 0o750); err != nil {
 		t.Fatalf("MkdirAll(notification_slots): %v", err)
 	}
@@ -238,7 +240,7 @@ func TestReserveNotificationSlot_ReleaseFreesTheSlotForReuse(t *testing.T) {
 		t.Fatalf("ReserveNotificationSlot(first) = reserved=%v err=%v, want reserved=true err=nil", reserved, err)
 	}
 
-	slotPath := filepath.Join(ws, sortieDir, notificationSlotsDir, dispatchID+"-1")
+	slotPath := filepath.Join(ws, workspacekit.SortieDir, notificationSlotsDir, dispatchID+"-1")
 	if _, err := os.Lstat(slotPath); err != nil {
 		t.Fatalf("Lstat(%q) before release = %v, want the slot file to exist", slotPath, err)
 	}

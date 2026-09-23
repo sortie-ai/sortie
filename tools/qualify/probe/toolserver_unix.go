@@ -14,6 +14,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 
 	"github.com/sortie-ai/sortie/tools/qualify/profile"
 )
@@ -44,7 +45,11 @@ type mcpToolServerParams struct {
 // declaring one stdio server at scriptPath and returns its path.
 func writeToolServerMCPConfig(t *testing.T, dir, scriptPath string) string {
 	t.Helper()
-	path := filepath.Join(dir, "mcp.json")
+	sortieDir := filepath.Join(dir, workspacekit.SortieDir)
+	if err := os.Mkdir(sortieDir, 0o750); err != nil && !os.IsExist(err) {
+		t.Fatalf("create %s: %v", sortieDir, err)
+	}
+	path := filepath.Join(sortieDir, "mcp.json")
 	content := fmt.Sprintf(`{"mcpServers":{%q:{"type":"stdio","command":%q,"args":[]}}}`, toolServerName, scriptPath)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write induction MCP configuration %s: %v", path, err)

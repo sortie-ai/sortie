@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,6 +15,25 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+func TestAuxiliaryCommand_SuccessYieldsNilError(t *testing.T) {
+	t.Parallel()
+
+	state := &sessionState{
+		target: agentcore.LaunchTarget{
+			Command:       "/usr/bin/opencode",
+			WorkspacePath: t.TempDir(),
+		},
+	}
+
+	cmd, err := auxiliaryCommand(context.Background(), state, []string{"session", "list"})
+	if err != nil {
+		t.Fatalf("auxiliaryCommand() error = %v, want nil", err)
+	}
+	if cmd == nil {
+		t.Fatal("auxiliaryCommand() cmd = nil, want non-nil")
+	}
+}
 
 // envLookup returns the value for key in an env []string slice.
 func envLookup(env []string, key string) (string, bool) {

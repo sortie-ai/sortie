@@ -168,6 +168,31 @@ func TestStartSession_WorkspaceIsFile(t *testing.T) {
 	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
 }
 
+func TestStartSession_WorkspaceIsSymlink(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	_, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: link,
+		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
+	})
+	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
+
+	entries, readErr := os.ReadDir(target)
+	if readErr != nil {
+		t.Fatalf("ReadDir(target): %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("link target gained entries %v, want none (no subprocess started)", entries)
+	}
+}
+
 func TestStartSession_BinaryNotFound(t *testing.T) {
 	t.Parallel()
 

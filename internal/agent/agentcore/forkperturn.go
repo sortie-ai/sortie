@@ -247,8 +247,16 @@ func (s *ForkPerTurnSession) RunTurn(
 		cmd = exec.CommandContext(cmdCtx, s.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	procutil.SetGroupCancel(cmd, s.stopGrace)
-	cmd.Dir = s.target.WorkspacePath
 	cmd.Env = os.Environ()
+
+	if bindErr := s.target.BindWorkspace(cmd); bindErr != nil {
+		usage, measured := s.hooks.GetUsage()
+		return domain.TurnResult{
+			SessionID:     s.hooks.GetSessionID(),
+			Usage:         usage,
+			UsageMeasured: measured,
+		}, bindErr
+	}
 
 	// Lock before starting the pipes and the process together, so a Stop
 	// arriving in a reopened window cannot read s.proc == nil and miss

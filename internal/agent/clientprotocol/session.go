@@ -253,7 +253,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
-		cmd.Dir = target.WorkspacePath
+		if bindErr := target.BindWorkspace(cmd); bindErr != nil {
+			return domain.Session{}, bindErr
+		}
 	}
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	procutil.SetGroupCancel(cmd, grace)

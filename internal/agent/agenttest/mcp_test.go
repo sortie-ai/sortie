@@ -8,16 +8,22 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // writeGeneratedMCPConfig writes a real generated MCP config file
-// declaring the given servers to a fresh temp directory, and returns
-// its path. The translated branch reads this file from disk, unlike
-// the other three dispositions, which compare the path alone.
+// declaring the given servers to a fresh temp directory's .sortie
+// subdirectory, and returns its path. The translated branch reads
+// this file from disk, unlike the other three dispositions, which
+// compare the path alone.
 func writeGeneratedMCPConfig(t *testing.T, content string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "mcp.json")
+	dir := filepath.Join(t.TempDir(), workspacekit.SortieDir)
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatalf("Mkdir(%q): %v", dir, err)
+	}
+	path := filepath.Join(dir, "mcp.json")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}

@@ -17,8 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -75,20 +73,20 @@ type tokens struct {
 // StatusTool implements [domain.AgentTool] for the sortie_status tool.
 // Construct via [New]; it is safe for concurrent use after construction.
 type StatusTool struct {
-	stateFilePath string
+	readSortieFile func(name string, maxBytes int64) ([]byte, error)
 }
 
-// New returns a [StatusTool] that reads session state from the
-// .sortie/state.json file inside workspacePath.
+// New returns a [StatusTool] that reads session state through
+// readSortieFile, which resolves a name inside the session workspace's
+// .sortie directory and returns at most maxBytes of its content.
 //
-// workspacePath must be an absolute path to the session workspace
-// directory. New panics if workspacePath is empty (programming error).
-func New(workspacePath string) *StatusTool {
-	if workspacePath == "" {
-		panic("status.New: workspacePath must not be empty")
+// New panics if readSortieFile is nil (programming error).
+func New(readSortieFile func(name string, maxBytes int64) ([]byte, error)) *StatusTool {
+	if readSortieFile == nil {
+		panic("status.New: readSortieFile must not be nil")
 	}
 	return &StatusTool{
-		stateFilePath: filepath.Join(workspacePath, ".sortie", "state.json"),
+		readSortieFile: readSortieFile,
 	}
 }
 
@@ -117,18 +115,7 @@ func (t *StatusTool) InputSchema() json.RawMessage {
 // unreadable, or contains invalid JSON. The Go error return is non-nil
 // only for internal marshal failures.
 func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
-	fi, err := os.Lstat(t.stateFilePath)
-	if err != nil {
-		return toolresult.Failure("state_unavailable", "state file unavailable: "+err.Error())
-	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return toolresult.Failure("state_unavailable", "state file is a symlink")
-	}
-	if fi.Size() > maxStateFileBytes {
-		return toolresult.Failure("state_unavailable", "state file exceeds size limit")
-	}
-
-	data, err := os.ReadFile(t.stateFilePath)
+	data, err := t.readSortieFile("state.json", maxStateFileBytes)
 	if err != nil {
 		return toolresult.Failure("state_unavailable", "state file unavailable: "+err.Error())
 	}

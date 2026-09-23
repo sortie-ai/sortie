@@ -3,6 +3,7 @@ package kiro
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
@@ -723,6 +725,54 @@ func TestStartSession_InvalidWorkspace(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "kiro-cli"},
 	})
 	requireAgentError(t, err, domain.ErrInvalidWorkspaceCwd)
+}
+
+func TestCheckCredential_SuccessYieldsNilError(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	cli := newKiroCLI(t, t.TempDir(), chatParams{})
+	target := agentcore.LaunchTarget{Command: cli, WorkspacePath: ws}
+
+	if agentErr := checkCredential(context.Background(), target, 5000); agentErr != nil {
+		t.Fatalf("checkCredential() error = %v, want nil", agentErr)
+	}
+}
+
+func TestListWorkspaceConversations_SuccessYieldsNilError(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	listing := []kiroSessionListGroup{{
+		Cwd:      ws,
+		Sessions: []kiroSessionListing{{SessionID: "abc", Source: "classic", Title: "t"}},
+	}}
+	data, err := json.Marshal(listing)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	cli := newKiroCLI(t, t.TempDir(), chatParams{Stdout: string(data)})
+	target := agentcore.LaunchTarget{Command: cli, WorkspacePath: ws}
+
+	sessions, err := listWorkspaceConversations(context.Background(), target, 5*time.Second, 5000)
+	if err != nil {
+		t.Fatalf("listWorkspaceConversations() error = %v, want nil", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("listWorkspaceConversations() returned %d sessions, want 1", len(sessions))
+	}
+}
+
+func TestDeleteConversation_SuccessYieldsNilError(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	cli := newKiroCLI(t, t.TempDir(), chatParams{})
+	target := agentcore.LaunchTarget{Command: cli, WorkspacePath: ws}
+
+	if err := deleteConversation(context.Background(), target, "abc", 5*time.Second, 5000); err != nil {
+		t.Fatalf("deleteConversation() error = %v, want nil", err)
+	}
 }
 
 // The whoami guard accepts any key, so a refused credential surfaces

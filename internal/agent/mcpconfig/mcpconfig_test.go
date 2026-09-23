@@ -4,15 +4,22 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // writeConfig writes content to a "mcp.json" file inside a fresh
-// temp directory and returns its path.
+// workspace's .sortie directory and returns its path.
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "mcp.json")
+	dir := filepath.Join(t.TempDir(), workspacekit.SortieDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", dir, err)
+	}
+	path := filepath.Join(dir, "mcp.json")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
@@ -261,7 +268,7 @@ func TestParse_UnreadablePath(t *testing.T) {
 		path string
 	}{
 		{"empty path", ""},
-		{"missing file", filepath.Join(t.TempDir(), "does-not-exist.json")},
+		{"missing file", filepath.Join(t.TempDir(), workspacekit.SortieDir, "does-not-exist.json")},
 	}
 
 	for _, tt := range tests {
@@ -273,5 +280,50 @@ func TestParse_UnreadablePath(t *testing.T) {
 				t.Errorf("Error.Kind = %q, want %q", parseErr.Kind, ErrorUnreadable)
 			}
 		})
+	}
+}
+
+func TestParse_PathOutsideSortieDirIsRejected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+
+	parseErr := mustParseError(t, path)
+	if parseErr.Kind != ErrorUnreadable {
+		t.Errorf("Error.Kind = %q, want %q", parseErr.Kind, ErrorUnreadable)
+	}
+}
+
+func TestParse_LinkedWorkspaceDirYieldsErrLink(t *testing.T) {
+	t.Parallel()
+
+	target := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(target, workspacekit.SortieDir), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	mcpPath := filepath.Join(target, workspacekit.SortieDir, "mcp.json")
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires elevated privileges on Windows")
+		}
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	path := filepath.Join(link, workspacekit.SortieDir, "mcp.json")
+	parseErr := mustParseError(t, path)
+	if parseErr.Kind != ErrorUnreadable {
+		t.Errorf("Error.Kind = %q, want %q", parseErr.Kind, ErrorUnreadable)
+	}
+	if !errors.Is(parseErr, workspacekit.ErrLink) {
+		t.Errorf("Error = %v, want wrapping workspacekit.ErrLink", parseErr)
 	}
 }

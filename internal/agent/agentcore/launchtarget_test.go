@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -338,6 +340,47 @@ func TestLaunchTarget_SSHOptions(t *testing.T) {
 	})
 }
 
+func TestLaunchTarget_BindWorkspace(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid workspace sets Dir", func(t *testing.T) {
+		t.Parallel()
+		ws := t.TempDir()
+		target := LaunchTarget{WorkspacePath: ws}
+		cmd := exec.Command("true")
+
+		if agentErr := target.BindWorkspace(cmd); agentErr != nil {
+			t.Fatalf("BindWorkspace() error = %v, want nil", agentErr)
+		}
+		if cmd.Dir != ws {
+			t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, ws)
+		}
+	})
+
+	t.Run("linked workspace leaves Dir empty and returns an error", func(t *testing.T) {
+		t.Parallel()
+		linkTarget := t.TempDir()
+		link := filepath.Join(t.TempDir(), "workspace-link")
+		if err := os.Symlink(linkTarget, link); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Skip("symlink creation requires elevated privileges on Windows")
+			}
+			t.Fatalf("Symlink: %v", err)
+		}
+		target := LaunchTarget{WorkspacePath: link}
+		cmd := exec.Command("true")
+
+		agentErr := target.BindWorkspace(cmd)
+
+		if agentErr == nil {
+			t.Fatal("BindWorkspace(linked workspace) error = nil, want non-nil")
+		}
+		if cmd.Dir != "" {
+			t.Errorf("cmd.Dir = %q, want empty on a bind failure", cmd.Dir)
+		}
+	})
+}
+
 func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
 	t.Parallel()
 
@@ -349,7 +392,10 @@ func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
 	}
 	stdin := strings.NewReader("aux-stdin")
 
-	cmd := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, stdin, []string{"A=1"})
+	cmd, agentErr := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, stdin, []string{"A=1"})
+	if agentErr != nil {
+		t.Fatalf("AuxiliaryCommand() error = %v, want nil", agentErr)
+	}
 
 	wantArgs := []string{target.Command, "app-server", "whoami"}
 	if cmd.Path != target.Command || !slices.Equal(cmd.Args, wantArgs) {
@@ -365,8 +411,38 @@ func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
 		t.Errorf("AuxiliaryCommand().Stdin = %v, want the passed-in reader", cmd.Stdin)
 	}
 
-	if nilEnv := target.AuxiliaryCommand(context.Background(), nil, nil, nil); !slices.Equal(nilEnv.Env, os.Environ()) {
+	nilEnv, agentErr := target.AuxiliaryCommand(context.Background(), nil, nil, nil)
+	if agentErr != nil {
+		t.Fatalf("AuxiliaryCommand(env=nil) error = %v, want nil", agentErr)
+	}
+	if !slices.Equal(nilEnv.Env, os.Environ()) {
 		t.Errorf("AuxiliaryCommand(env=nil).Env = %v, want os.Environ()", nilEnv.Env)
+	}
+}
+
+func TestLaunchTarget_AuxiliaryCommand_LinkedWorkspaceRefused(t *testing.T) {
+	t.Parallel()
+
+	linkTarget := t.TempDir()
+	link := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(linkTarget, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation requires elevated privileges on Windows")
+		}
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	target := LaunchTarget{
+		Command:       "/usr/bin/agent",
+		WorkspacePath: link,
+	}
+
+	cmd, agentErr := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, nil, nil)
+	if agentErr == nil {
+		t.Fatal("AuxiliaryCommand(linked workspace) error = nil, want non-nil")
+	}
+	if cmd != nil {
+		t.Errorf("AuxiliaryCommand(linked workspace) cmd = %v, want nil", cmd)
 	}
 }
 
@@ -382,7 +458,10 @@ func TestLaunchTarget_AuxiliaryCommand_Remote(t *testing.T) {
 		SSHEnvNames:   []string{"AUX_CARRIED_VAR"},
 	}
 
-	cmd := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, strings.NewReader("aux-stdin"), nil)
+	cmd, agentErr := target.AuxiliaryCommand(context.Background(), []string{"whoami"}, strings.NewReader("aux-stdin"), nil)
+	if agentErr != nil {
+		t.Fatalf("AuxiliaryCommand() error = %v, want nil", agentErr)
+	}
 
 	joined := strings.Join(cmd.Args, " ")
 	if !strings.Contains(joined, "cd --") || strings.Index(joined, "cd --") > strings.Index(joined, "kiro-cli") {

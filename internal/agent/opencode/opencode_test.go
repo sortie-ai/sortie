@@ -24,6 +24,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // writeOpenCodeScript writes an executable shell script named fake-opencode
@@ -238,7 +239,11 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 
 	write := func(t *testing.T, content string) string {
 		t.Helper()
-		path := filepath.Join(t.TempDir(), "mcp.json")
+		dir := filepath.Join(t.TempDir(), workspacekit.SortieDir)
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			t.Fatalf("Mkdir() error = %v", err)
+		}
+		path := filepath.Join(dir, "mcp.json")
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
@@ -334,6 +339,43 @@ func TestRunTurn_ClosedSession(t *testing.T) {
 	}
 	if agentErr.Kind != domain.ErrResponseError {
 		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrResponseError)
+	}
+}
+
+func TestRunTurn_LinkedWorkspaceRefusedBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "marker")
+	script := writeOpenCodeScript(t, t.TempDir(), "#!/bin/sh\ntouch "+marker+"\n")
+
+	session := mustStartSession(t, a, tmpDir, script)
+
+	if err := os.RemoveAll(tmpDir); err != nil {
+		t.Fatalf("RemoveAll(workspace): %v", err)
+	}
+	linkTarget := t.TempDir()
+	if err := os.Symlink(linkTarget, tmpDir); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	_, err := a.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "work",
+		OnEvent: func(_ domain.AgentEvent) {},
+	})
+	if err == nil {
+		t.Fatal("RunTurn(linked workspace) error = nil, want non-nil")
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrInvalidWorkspaceCwd {
+		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrInvalidWorkspaceCwd)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Error("marker file exists, want the subprocess never to start")
 	}
 }
 

@@ -106,7 +106,7 @@ func TestRunHook(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 
-		// EvalSymlinks handles /tmp → /private/tmp on macOS.
+		// EvalSymlinks handles /tmp -> /private/tmp on macOS.
 		realDir, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			t.Fatalf("EvalSymlinks(%q): %v", dir, err)
@@ -124,6 +124,27 @@ func TestRunHook(t *testing.T) {
 		got := strings.TrimSpace(result.Output)
 		if got != realDir {
 			t.Errorf("pwd output = %q, want %q", got, realDir)
+		}
+	})
+
+	t.Run("workspace path is a symbolic link", func(t *testing.T) {
+		t.Parallel()
+
+		target := t.TempDir()
+		marker := filepath.Join(target, "marker")
+		link := filepath.Join(t.TempDir(), "workspace-link")
+		mustSymlink(t, target, link)
+
+		_, err := RunHook(context.Background(), HookParams{
+			Script:    "touch " + marker,
+			Dir:       link,
+			Env:       map[string]string{},
+			TimeoutMS: 5000,
+		})
+
+		assertHookErrorOp(t, err, "validate")
+		if _, statErr := os.Stat(marker); statErr == nil {
+			t.Errorf("marker file %q exists, want the hook process never to start", marker)
 		}
 	})
 
@@ -673,7 +694,7 @@ func assertHookProcessGone(t *testing.T, pid int) {
 	t.Errorf("process %d still answers signal 0, want it gone", pid)
 }
 
-// TestRunHook_XDGRuntimeDirAndDBusAddressInherited pins P21: a hook
+// TestRunHook_XDGRuntimeDirAndDBusAddressInherited pins that a hook
 // receives XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS from the
 // parent process with their exact values, so it can reach a systemd
 // user manager, while an unrelated variable stays excluded.

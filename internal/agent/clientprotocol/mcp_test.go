@@ -6,13 +6,19 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/mcpconfig"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // writeMCPConfig writes a generated MCP configuration file declaring
-// one stdio server, and returns its path.
+// one stdio server under a fresh temp directory's .sortie subdirectory,
+// and returns its path.
 func writeMCPConfig(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "mcp.json")
+	dir := filepath.Join(t.TempDir(), workspacekit.SortieDir)
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatalf("Mkdir(%q): %v", dir, err)
+	}
+	path := filepath.Join(dir, "mcp.json")
 	content := `{"mcpServers":{"sortie-tools":{"type":"stdio","command":"/usr/local/bin/sortie","args":["mcp-server"],"env":{"SORTIE_ISSUE_ID":"abc-123"}}}}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)

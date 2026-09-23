@@ -236,7 +236,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		cmd = exec.CommandContext(ctx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS))
-	cmd.Dir = state.target.WorkspacePath
+	if bindErr := state.target.BindWorkspace(cmd); bindErr != nil {
+		state.mu.Unlock()
+		return domain.TurnResult{}, bindErr
+	}
 	cmd.Env = env
 	cmd.Stdin = launch.StdinReader()
 
