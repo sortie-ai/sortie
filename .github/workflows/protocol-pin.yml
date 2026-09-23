@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://www.schemastore.org/github-workflow.json
+name: Protocol schema pin
+
+on:
+  schedule:
+    - cron: "47 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: protocol-pin
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Review schema pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build protocolpin
+        run: go build -o "$RUNNER_TEMP/protocolpin" ./tools/protocolpin
+
+      - name: Report drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPO_ROOT: ${{ github.workspace }}
+          PROTOCOLPIN_BIN: ${{ runner.temp }}/protocolpin
+          TASK_ISSUE_TYPE_ID: IT_kwDOEAsIKM4B55_0
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
+        run: scripts/protocol-pin.sh report
