@@ -36,8 +36,8 @@ jobs:
           ISSUE_URL: ${{ github.event.issue.html_url }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           ISSUE_AUTHOR_URL: ${{ github.event.issue.user.html_url }}
+          ISSUE_AUTHOR_AVATAR: ${{ github.event.issue.user.avatar_url }}
           ISSUE_LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
-          ISSUE_CREATED_AT: ${{ github.event.issue.created_at }}
         run: |
           if [ -z "${DISCORD_WEBHOOK}" ]; then
             echo "::warning::DISCORD_WEBHOOK_CI is not configured; skipping"
@@ -50,14 +50,13 @@ jobs:
             --arg url "${ISSUE_URL}" \
             --arg author "${ISSUE_AUTHOR}" \
             --arg author_url "${ISSUE_AUTHOR_URL}" \
+            --arg author_avatar "${ISSUE_AUTHOR_AVATAR}" \
             --argjson labels "${ISSUE_LABELS}" \
-            --arg created_at "${ISSUE_CREATED_AT}" \
             '{
-              author: {name: "\($author) opened a new issue", url: $author_url},
-              title: "#\($number) · \($title)",
+              author: {name: $author, url: $author_url, icon_url: $author_avatar},
+              title: "\($title) #\($number)",
               url: $url,
-              color: 3447003,
-              timestamp: $created_at
+              color: 3447003
             }
             + if $labels == [] then {} else {description: ($labels | join(" · "))} end' \
             >embed.json

@@ -401,6 +401,9 @@ jobs:
         continue-on-error: true
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_CI }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           INTEGRATION: ${{ needs.integration.result }}
           HOOK_STRESS: ${{ needs.hook-stress.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -414,22 +417,42 @@ jobs:
             printf 'Nightly passed. Integration and Windows hook stress are both green.\n' >message.txt
             scripts/discord-notify.sh <message.txt
           else
+            # Without the job list the summary still names the failed groups.
+            if ! gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped") | {name, url: .html_url, conclusion}]' \
+              >jobs.json; then
+              echo '[]' >jobs.json
+            fi
+
             jq -n \
               --arg integration "${INTEGRATION}" \
               --arg hook_stress "${HOOK_STRESS}" \
               --arg url "${RUN_URL}" \
-              '[["Integration", $integration], ["Windows hook stress", $hook_stress]]
-              | map(select(.[1] != "success")) as $unfinished
-              | any($unfinished[]; .[1] == "failure") as $failed
+              --slurpfile jobs jobs.json \
+              '(if $jobs[0] == [] then
+                  [["Integration", $integration], ["Windows hook stress", $hook_stress]]
+                  | map(select(.[1] != "success") | {name: .[0], conclusion: .[1]})
+                else
+                  $jobs[0] | map(.name |= ltrimstr("Integration: "))
+                end
+                | map(.failed = (.conclusion == "failure" or .conclusion == "timed_out"))) as $checks
+              | ($checks | map(select(.failed)) | length) as $failed
               | {
-                  title: (if $failed then "🔴 Nightly failed" else "⚪ Nightly did not finish" end),
-                  color: (if $failed then 15548997 else 9807270 end),
-                  description: (
-                    [$unfinished[] | "\(if .[1] == "failure" then "❌" else "⚪" end) \(.[0]): \(.[1])"]
-                    + ["", "[Open the run →](\($url))"]
-                    | join("\n")
+                  title: (
+                    if $failed == 1 then "1 nightly check failed"
+                    elif $failed > 1 then "\($failed) nightly checks failed"
+                    else "Nightly didn’t finish" end
                   ),
-                  timestamp: (now | todate)
+                  url: $url,
+                  color: (if $failed > 0 then 15548997 else 9807270 end),
+                  description: (
+                    $checks
+                    | map(
+                        (if .url then "[\(.name)](\(.url))" else .name end)
+                        + (if $failed > 0 and (.failed | not) then " (didn’t finish)" else "" end)
+                      )
+                    | join("\n")
+                  )
                 }' >embed.json
             scripts/discord-notify.sh --embed <embed.json
           fi
