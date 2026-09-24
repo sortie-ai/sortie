@@ -400,6 +400,61 @@ func TestNativeSurfaceStatesNoExtensionReading(T *testing.T) {
 	}
 }
 
+func TestNotApplicableHumanInputDropsOutOfParityAndConformance(T *testing.T) {
+	T.Parallel()
+
+	sessionID := evidencetest.FixtureSession(evidence.SurfaceProtocol, "permission")
+	protocolObservation := evidence.Observation{
+		Grade:        evidence.GradeNotApplicable,
+		Outcome:      evidence.OutcomeNotApplicable,
+		Detail:       "the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose",
+		SessionID:    sessionID,
+		EvidencePath: evidence.SemanticEvidencePath(evidence.SurfaceProtocol),
+	}
+
+	tests := []struct {
+		name          string
+		nativeGrade   evidence.Grade
+		nativeOutcome evidence.Outcome
+		wantStanding  Standing
+	}{
+		{"native surfaces grade gap", evidence.GradeGap, evidence.OutcomePass, StandingSatisfied},
+		{"native surfaces grade usable", evidence.GradeUsable, evidence.OutcomePass, StandingSatisfied},
+		{"native surfaces grade not_observed", evidence.GradeNotObserved, evidence.OutcomeFixtureInductionFailed, StandingUnmeasured},
+	}
+
+	for _, tc := range tests {
+		T.Run(tc.name, func(T *testing.T) {
+			T.Parallel()
+
+			fixture := evidencetest.NewFixture(evidencetest.FixtureQualified)
+			fixture.Finalize()
+			if err := fixture.SetSemanticObservation(evidence.SurfaceProtocol, evidence.CapabilityRetryClassification, evidence.CaseHumanInput, protocolObservation); err != nil {
+				T.Fatalf("SetSemanticObservation(protocol human_input) error = %v, want nil", err)
+			}
+			for _, surface := range []evidence.Surface{evidence.SurfaceNativeJSON, evidence.SurfaceNativeStreamJSON} {
+				obs := evidence.Observation{Grade: tc.nativeGrade, Outcome: tc.nativeOutcome, Detail: "human_input case set for the not_applicable comparison control"}
+				if tc.nativeGrade != evidence.GradeNotObserved {
+					obs.SessionID = evidencetest.FixtureSession(surface, "human-input")
+					obs.EvidencePath = evidence.SemanticEvidencePath(surface)
+				}
+				if err := fixture.SetSemanticObservation(surface, evidence.CapabilityRetryClassification, evidence.CaseHumanInput, obs); err != nil {
+					T.Fatalf("SetSemanticObservation(%s human_input) error = %v, want nil", surface, err)
+				}
+			}
+
+			report := publishedReport(T, fixture.Records, caseLevelProfile())
+			row := rowFor(report, evidence.CapabilityRetryClassification)
+			if row.Standing != tc.wantStanding {
+				T.Errorf("retry_classification standing = %s (cause %q), want %s", row.Standing, row.Cause, tc.wantStanding)
+			}
+			if row.Conformance != StandingSatisfied || row.ConformanceCause != "" {
+				T.Errorf("retry_classification conformance = %s (cause %q), want satisfied with no cause: a not_applicable human_input carries no obligation", row.Conformance, row.ConformanceCause)
+			}
+		})
+	}
+}
+
 func TestConformanceCauseAccountsOnlyItsOwnCapability(T *testing.T) {
 	T.Parallel()
 

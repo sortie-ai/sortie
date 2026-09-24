@@ -2,6 +2,36 @@ package evidence
 
 import "testing"
 
+func TestDeriveBaselineGrade(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		classifications []Grade
+		want            Grade
+	}{
+		{
+			name:            "usable survives every excluded classification",
+			classifications: []Grade{GradeUsable, GradeDeclaredGap, GradeNotApplicable, GradeNotInducible},
+			want:            GradeUsable,
+		},
+		{
+			name:            "an all-excluded set derives not_observed",
+			classifications: []Grade{GradeNotApplicable},
+			want:            GradeNotObserved,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := DeriveBaselineGrade(tt.classifications); got != tt.want {
+				t.Errorf("DeriveBaselineGrade(%v) = %s, want %s", tt.classifications, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeriveBaselineOutcome(t *testing.T) {
 	t.Parallel()
 

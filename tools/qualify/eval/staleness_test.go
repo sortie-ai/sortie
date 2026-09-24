@@ -365,6 +365,107 @@ func rewriteProvenance(t *testing.T, dir string, measurement *evidence.Measureme
 	measurement.ProvenanceDigest = &digest
 }
 
+// recomputeBaselineAfterFlip rewrites surface's capability baseline record in
+// records to what checkDerivedBaselines requires, once one of its case
+// records has been rewritten in place.
+func recomputeBaselineAfterFlip(t *testing.T, records []evidence.Record, surface evidence.Surface, capability evidence.Capability) {
+	t.Helper()
+
+	var classes []evidence.Grade
+	var contributing []evidence.Outcome
+	for _, caseID := range evidence.CapabilityCases[capability] {
+		for i := range records {
+			rec := &records[i]
+			if rec.Scenario != evidence.ScenarioSemanticProbe || rec.Surface != surface || rec.Capability != capability ||
+				rec.SemanticCase == nil || *rec.SemanticCase != caseID {
+				continue
+			}
+			classes = append(classes, evidence.BaselineClassification(rec.Grade, rec.Detail))
+			contributing = append(contributing, rec.Outcome)
+			break
+		}
+	}
+	grade := evidence.DeriveBaselineGrade(classes)
+	outcome := evidence.DeriveBaselineOutcome(grade, contributing)
+
+	for i := range records {
+		if evidence.MatchBaseline(surface, capability)(&records[i]) {
+			records[i].Grade = grade
+			records[i].Outcome = outcome
+			return
+		}
+	}
+	t.Fatalf("no %s %s baseline record to recompute", surface, capability)
+}
+
+// flipFirstUsableSemanticRecordToNotObserved rewrites, in the staged evidence
+// file at dir, a usable semantic record to its not-observed shape and
+// re-points measurement at the rewritten provenance, so a control can force a
+// fresh unobserved row without depending on one already present in the
+// tracked corpus. The candidate is chosen so its protocol session, if any,
+// keeps another non-final record referencing it after the flip; picking the
+// session's only reference would orphan its runtime identity record and fail
+// checkIdentityCoverage instead of exercising the drop this test pins.
+func flipFirstUsableSemanticRecordToNotObserved(t *testing.T, dir string, measurement *evidence.Measurement) {
+	t.Helper()
+
+	evidencePath := filepath.Join(dir, chainFixtureEvidence)
+	records, err := evidence.ReadEvidenceFile(evidencePath)
+	if err != nil {
+		t.Fatalf("read the staged evidence: %v", err)
+	}
+
+	sessionRefs := map[string]int{}
+	for _, rec := range records {
+		if rec.Scenario != evidence.ScenarioRuntimeIdentity && rec.Surface == evidence.SurfaceProtocol && rec.SessionID != nil {
+			sessionRefs[*rec.SessionID]++
+		}
+	}
+
+	target := -1
+	for i, rec := range records {
+		if rec.Scenario != evidence.ScenarioSemanticProbe || rec.Grade != evidence.GradeUsable {
+			continue
+		}
+		if rec.SessionID != nil && sessionRefs[*rec.SessionID] < 2 {
+			continue
+		}
+		target = i
+		break
+	}
+	if target < 0 {
+		t.Fatal("the staged evidence carries no usable semantic record whose session survives the flip")
+	}
+	surface, capability := records[target].Surface, records[target].Capability
+	records[target].Grade = evidence.GradeNotObserved
+	records[target].Outcome = evidence.OutcomeFixtureInductionFailed
+	records[target].SessionID = nil
+	records[target].EvidencePath = nil
+	records[target].Detail = "flipped for the dropped-unobserved-row control"
+
+	recomputeBaselineAfterFlip(t, records, surface, capability)
+
+	lines := make([]string, len(records))
+	for i, rec := range records {
+		line, err := evidence.MarshalRecord(rec)
+		if err != nil {
+			t.Fatalf("marshal the flipped evidence record: %v", err)
+		}
+		lines[i] = string(line)
+	}
+	if err := os.WriteFile(evidencePath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write the flipped evidence: %v", err)
+	}
+
+	digest, err := stalenessFileSHA256(evidencePath)
+	if err != nil {
+		t.Fatalf("stalenessFileSHA256(%s) error = %v, want nil", evidencePath, err)
+	}
+	rewriteProvenance(t, dir, measurement, func(document map[string]json.RawMessage) {
+		document["evidence_digest"] = json.RawMessage(strconv.Quote(digest))
+	})
+}
+
 func TestMeasurementChainProblems(t *testing.T) {
 	t.Parallel()
 
@@ -423,13 +524,39 @@ func TestMeasurementChainProblems(t *testing.T) {
 		},
 		{
 			name: "a measurement dropping an unobserved row the evidence yields is reported",
-			breakLink: func(t *testing.T, _ string, measurement *evidence.Measurement) string {
+			breakLink: func(t *testing.T, dir string, measurement *evidence.Measurement) string {
 				t.Helper()
-				if len(measurement.Expectation.Unobserved) == 0 {
-					t.Fatal("the staged measurement carries no unobserved row to drop")
+				root, err := profile.CheckoutRoot()
+				if err != nil {
+					t.Fatalf("CheckoutRoot() error = %v, want nil", err)
 				}
-				dropped := measurement.Expectation.Unobserved[0]
-				measurement.Expectation.Unobserved = measurement.Expectation.Unobserved[1:]
+				p, err := profile.Load(root, chainFixtureProfile)
+				if err != nil {
+					t.Fatalf("Load(%q, %q) error = %v, want nil", root, chainFixtureProfile, err)
+				}
+
+				before := measurement.Expectation.Unobserved
+				flipFirstUsableSemanticRecordToNotObserved(t, dir, measurement)
+
+				regraded, err := regradedExpectation(dir, p)
+				if err != nil {
+					t.Fatalf("regradedExpectation(%s) error = %v, want nil", dir, err)
+				}
+				var dropped string
+				for _, entry := range regraded.Unobserved {
+					if !slices.Contains(before, entry) {
+						dropped = entry
+						break
+					}
+				}
+				if dropped == "" {
+					t.Fatal("flipping a semantic record to not_observed yielded no new unobserved row")
+				}
+
+				measurement.Expectation = regraded
+				measurement.Expectation.Unobserved = slices.DeleteFunc(slices.Clone(regraded.Unobserved), func(entry string) bool {
+					return entry == dropped
+				})
 				return "yields unobserved row " + strconv.Quote(dropped)
 			},
 		},
