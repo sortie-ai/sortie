@@ -157,7 +157,7 @@ tidy-tools: ## Tidy the tool module's go.sum
 
 .PHONY: qualify-live
 qualify-live: ## Drive a live capture (spends provider quota; opt-in gated)
-	cd tools/qualify && $(GO) test -count=1 -run TestProbe ./probe/...
+	cd tools/qualify && $(GO) test -count=1 -timeout 0 -v -run '^TestQualificationProfile$$' ./probe/...
 
 .PHONY: qualify-report
 qualify-report: ## Re-derive a report from a saved capture directory and render it (CAPTURE_DIR=path PROFILE=path)
