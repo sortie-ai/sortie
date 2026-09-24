@@ -241,6 +241,9 @@ func compareRecognizerEntry(index map[recordKey][]evidence.Record, p profile.Run
 	if err != nil {
 		return false, err
 	}
+	if rec.Grade == evidence.GradeDeclaredGap && rec.Outcome == evidence.OutcomeNotProducible && evidence.ObservationUnproduced(got) {
+		return truncated, nil
+	}
 	return truncated, compareObservation(rec, got)
 }
 

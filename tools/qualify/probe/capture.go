@@ -62,10 +62,10 @@ func declarableSurfaceUnproduced(collected collectedObservations, measured []evi
 			continue
 		}
 		obs, ok := collected.semantic[surface][caseID]
-		if !ok || obs.Grade != evidence.GradeNotObserved || obs.SessionID == "" {
+		if !ok || obs.SessionID == "" {
 			return false
 		}
-		if obs.Outcome != evidence.OutcomeFixtureInductionFailed {
+		if !evidence.ObservationUnproduced(obs) {
 			return false
 		}
 	}

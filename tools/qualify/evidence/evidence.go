@@ -1181,11 +1181,12 @@ func BaselineClassification(grade Grade, detail string) Grade {
 }
 
 // DeriveBaselineGrade derives one capability's baseline grade from its case
-// classifications, after dropping every declared_gap and not_inducible entry.
+// classifications, after dropping every declared_gap, not_inducible, and
+// not_applicable entry.
 func DeriveBaselineGrade(classifications []Grade) Grade {
 	remaining := make([]Grade, 0, len(classifications))
 	for _, c := range classifications {
-		if c == GradeDeclaredGap || c == GradeNotInducible {
+		if c == GradeDeclaredGap || c == GradeNotInducible || c == GradeNotApplicable {
 			continue
 		}
 		remaining = append(remaining, c)
@@ -1394,8 +1395,17 @@ var observationAdmission = map[Grade][]Outcome{
 		OutcomeNotObserved, OutcomePrerequisiteFailed,
 		OutcomeFixtureInductionFailed, OutcomeRuntimeFailed,
 	},
-	GradeDeclaredGap:  {OutcomeNotProducible},
-	GradeNotInducible: {OutcomeNotInducible},
+	GradeDeclaredGap:   {OutcomeNotProducible},
+	GradeNotInducible:  {OutcomeNotInducible},
+	GradeNotApplicable: {OutcomeNotApplicable},
+}
+
+// ObservationUnproduced reports whether obs is the shape a declared_gap
+// declaration stands in for: a case that ran but produced nothing, excluding
+// a launch that failed outright.
+func ObservationUnproduced(obs Observation) bool {
+	return obs.Grade == GradeNotApplicable ||
+		(obs.Grade == GradeNotObserved && obs.Outcome == OutcomeFixtureInductionFailed)
 }
 
 // CheckObservationAdmitted rejects a zero-value Outcome and any grade-outcome

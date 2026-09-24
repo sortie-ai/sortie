@@ -140,6 +140,9 @@ func conclusionsFromRecords(records []evidence.Record, verdict evidence.Verdict,
 			case evidence.GradeNotInducible:
 				conclusions.Excluded = append(conclusions.Excluded,
 					fmt.Sprintf("%s %s: %s", rec.Capability, semantic.Case, notInducibleAccount(rec.Detail)))
+			case evidence.GradeNotApplicable:
+				conclusions.Excluded = append(conclusions.Excluded,
+					fmt.Sprintf("%s %s: not applicable on %s: %s", rec.Capability, semantic.Case, rec.Surface, rec.Detail))
 			}
 		case evidence.RowToken:
 			path := "(no token-bearing path)"
