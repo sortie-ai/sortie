@@ -59,9 +59,17 @@ Three classes of difference were open when this record was written, and none bel
 
 - **Verifying a credential before the first session.** Parity means a workflow whose runtime cannot authenticate fails before the first turn, with the credential named as the cause rather than the transport.
 - **Carrying configured credentials into a remote launch.** Parity means a runtime launched over SSH receives what the operator configured for it, with the local launch unchanged.
-- **What `sortie validate` refuses offline.** Parity means the offline verdict refuses the configuration mistakes a hand-written route refuses, without the generic kind holding a table of any runtime's flags.
+- **What `sortie validate` refuses offline.** Parity is judged by the capability an operator would lose, not by the surviving route repeating every offline check of the removed one: a refusal that guards against a failure the surviving route cannot reach does not block removal. A runtime that rejects its own arguments is reported before the first turn with its exit status and its own error output, never as a credential failure.
 
 Each is stated as the capability required rather than the deficiency observed, so closing one changes what is true of the code and nothing here. They are a floor, not a ceiling: the condition compares two routes for one pair, and a difference found later blocks removal exactly as these do.
+
+### The invocation of a protocol-driven route
+
+On a generic protocol-driven kind the runtime invocation stays one opaque command string. The kind gains no field naming a runtime's switch and no offline check beyond those every kind performs. Judging a switch, a model or a trust posture offline would take a table of every runtime's switches, which a kind that launches any runtime does not hold. Only the runtime can judge its own arguments, so what the operator is owed is the runtime's own account of what it rejected.
+
+**Typed runtime-neutral fields**, such as a model applied through the protocol's session configuration or an explicit argument list, were rejected. No such value is verifiable offline: whether it is valid is known only once the runtime reports what it accepts, and the runtime's own switches already work inside the command string.
+
+**Workflow-declared properties**, such as tool calls being pre-authorized, with a configuration contradicting one refused offline, were rejected. The failure they would guard against, a runtime waiting on an approval nobody can give, does not occur on this route, because this project answers every permission request inside the protocol. A missing trust switch costs a refused tool call, reported at run time.
 
 ### The staged path out
 
@@ -105,6 +113,7 @@ Two things reopen the policy rather than apply it. The first is a pair whose con
 - **The duplication is paid every release until parity.** Two routes to one runtime means two documented surfaces, two test suites, and a change to shared behavior landing in both.
 - **The condition carries no date, and nothing forces the last difference closed.** A hand-written route can outlive its usefulness while each difference stays open on its own merits.
 - **Compensating above the transport moves cost rather than removing it.** A helper written to reach parity is code this project owns, and the obligation to retire it once the protocol carries the capability is unenforced.
+- **A mistake in a protocol runtime's command string surfaces at launch, not offline.** `sortie validate` accepts a misspelled switch or an unknown model on a generic kind; the runtime reports it when it starts.
 - **A standing policy is applied by whoever moves a runtime.** Nothing checks that a move was documented or that a removal met the condition, so the policy holds only while it is read.
 
 ## Confirmation
