@@ -596,8 +596,6 @@ type permissionLaunchSignals struct {
 	sessionID           string
 }
 
-// A continuable refusal lets the turn carry on and never lowers
-// human_input; a request addressed to a person ends the attempt.
 func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, humanInput evidence.Observation) {
 	switch {
 	case sig.noOptionNotice && sig.endedRequiringInput:
@@ -624,13 +622,20 @@ func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, hum
 		policy = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomePrerequisiteFailed, Detail: "no refusal was answered", SessionID: sig.sessionID}
 	}
 
+	humanInputPath := evidence.SemanticEvidencePath(evidence.SurfaceProtocol)
 	switch {
-	case sig.endedRequiringInput && !refusalAnswered:
-		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the turn ended requiring human input with no permission request to attribute it to", SessionID: sig.sessionID, EvidencePath: evidence.SemanticEvidencePath(evidence.SurfaceProtocol)}
-	case refusalAnswered:
-		humanInput = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "this posture induced a permission request, which is not a request addressed to a person, so no human-input case was induced", SessionID: sig.sessionID}
+	case sig.endedRequiringInput && sig.noOptionNotice:
+		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the request offered no refusing option and the attempt ended requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
+	case sig.endedRequiringInput && sig.continuableNotice:
+		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "a continuable refusal was transmitted and the attempt still ended requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
+	case sig.endedRequiringInput:
+		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the turn ended requiring human input with no permission request to attribute it to", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	case sig.turnFailed:
 		humanInput = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeRuntimeFailed, Detail: "the turn did not complete, so no human-input case was induced", SessionID: sig.sessionID}
+	case sig.noOptionNotice:
+		humanInput = evidence.Observation{Grade: evidence.GradeGap, Outcome: evidence.OutcomePass, Detail: "the request offered no refusing option and the turn went on without ending requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
+	case sig.continuableNotice:
+		humanInput = evidence.Observation{Grade: evidence.GradeNotApplicable, Outcome: evidence.OutcomeNotApplicable, Detail: "the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	default:
 		humanInput = evidence.Observation{Grade: evidence.GradeNotObserved, Outcome: evidence.OutcomeFixtureInductionFailed, Detail: "no request of either class was raised under this posture", SessionID: sig.sessionID}
 	}

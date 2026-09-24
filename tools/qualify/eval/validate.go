@@ -273,7 +273,7 @@ func comparableCaseGrades(records []evidence.Record, p profile.RuntimeProfile, c
 				continue
 			}
 			switch grade {
-			case evidence.GradeDeclaredGap:
+			case evidence.GradeDeclaredGap, evidence.GradeNotApplicable:
 				continue
 			case evidence.GradeNotInducible:
 				if p.CaseExclusion(surface, capability, caseID) == evidence.ExclusionSurfaceSilent {
@@ -766,8 +766,13 @@ func (v *setValidation) ClassifyRecords() error {
 		}
 		v.counts[class]++
 
-		if rec.Outcome == evidence.OutcomeNotApplicable && class == evidence.RowSemantic {
-			return fmt.Errorf("record %d: verdict not_applicable is invalid for a semantic probe", rec.Sequence)
+		if (rec.Grade == evidence.GradeNotApplicable || rec.Outcome == evidence.OutcomeNotApplicable) && class == evidence.RowSemantic {
+			admitted := rec.Surface == evidence.SurfaceProtocol &&
+				rec.Capability == evidence.CapabilityRetryClassification &&
+				rec.SemanticCase != nil && *rec.SemanticCase == evidence.CaseHumanInput
+			if !admitted {
+				return fmt.Errorf("record %d: not_applicable is invalid for surface %s capability %s case %v", rec.Sequence, rec.Surface, rec.Capability, rec.SemanticCase)
+			}
 		}
 		if err := CheckOutcomeGradePairing(rec); err != nil {
 			return fmt.Errorf("record %d: %w", rec.Sequence, err)
@@ -1019,6 +1024,9 @@ func (v *setValidation) checkSessionRelation(rec *evidence.Record, class evidenc
 		}
 		if rec.Grade == evidence.GradeDeclaredGap && rec.SessionID == nil {
 			return fmt.Errorf("declared_gap record must carry its own session_id")
+		}
+		if rec.Grade == evidence.GradeNotApplicable && rec.SessionID == nil {
+			return fmt.Errorf("not_applicable record must carry its own session_id")
 		}
 		if rec.Grade == evidence.GradeNotInducible && rec.SessionID != nil {
 			return fmt.Errorf("not_inducible record must carry a null session_id")
@@ -1422,7 +1430,7 @@ func (v *setValidation) checkDerivedBaselines() error {
 					class := evidence.BaselineClassification(rec.Grade, rec.Detail)
 					classes = append(classes, class)
 					contributing = append(contributing, rec.Outcome)
-					if class != evidence.GradeDeclaredGap && class != evidence.GradeNotInducible {
+					if class != evidence.GradeDeclaredGap && class != evidence.GradeNotInducible && class != evidence.GradeNotApplicable {
 						allExcluded = false
 					}
 				}

@@ -2,11 +2,11 @@
 
 Working notes for anyone dealing with Kiro CLI through Sortie, on either of the two routes that reach it: the native `kiro` kind in `internal/agent/kiro`, and the generic Agent Client Protocol kind in `internal/agent/clientprotocol`. The one thing that decides whether Sortie's own tools reach the agent at all, the two shapes a credential problem takes, and what an exit code does not tell you here.
 
-Eligibility: unmeasured
+Eligibility: qualified
 
 Product conformance: not_qualified
 
-The two answers are computed separately and diverge here. No load-bearing row puts the protocol surface below the richest measured native reference, and retry classification is unmeasured on that surface, so whether the protocol route can stand in for the native one has no answer yet. Product conformance does have one: the effective adapter does not meet the token-accounting obligation, and nothing outside the protocol supplies it, so that capability does not work for the operator whichever route they take.
+The two answers are computed separately and diverge here. Every load-bearing row was measured, and none puts the protocol surface below the richest measured native reference, so the protocol route can stand in for the native one. Product conformance does not hold: the effective adapter does not meet the token-accounting obligation, and nothing outside the protocol supplies it, so that capability does not work for the operator whichever route they take.
 
 This file is validated against the tracked measurement under `tools/qualify/probe/testdata/kiro-cli/`, so an edit to a grade row below reddens the staleness gate until a fresh run replaces that artifact.
 
@@ -32,7 +32,7 @@ Where other runtimes on this transport spell trust and asking posture as two sep
 
 ## Load-bearing capability observations
 
-No row blocks transport parity: session continuation grades usable on both routes, so an operator moving from native to protocol loses nothing that was measured. Token accounting blocks product conformance without blocking parity, because both routes miss it equally, and a shortfall both routes share costs nothing in moving between them while still meaning the capability does not work. Retry classification is unmeasured on the protocol surface, and that is what leaves transport parity without an answer.
+No row blocks transport parity: session continuation grades usable on both routes, so an operator moving from native to protocol loses nothing that was measured. Token accounting blocks product conformance without blocking parity, because both routes miss it equally, and a shortfall both routes share costs nothing in moving between them while still meaning the capability does not work.
 
 The credential decides whether Sortie's tools arrive, and this is the single most important thing on this page. Authenticating with `KIRO_API_KEY` starts sessions, runs turns and continues sessions correctly, and silently carries none of Sortie's tools. The runtime's backend refuses to serve a governance profile for the key, and the runtime responds by disabling MCP entirely for the session: `Failed to get governance config from API - MCP disabled, web tools disabled` in its own log, plus a vendor-namespaced `governance_disabled` notification on the wire. The declared server is never started, the model is never offered the tool, and the turn completes normally while answering that it has no such tool. Nothing on the wire and nothing in Sortie's own output marks this as a failure, which makes it the most expensive way to get this integration wrong: the route is chosen for the tools, and it silently delivers everything except them.
 
@@ -46,10 +46,12 @@ Token accounting has no source here, on either surface. The runtime reports spen
 
 Two cases are declared rather than measured, on both surfaces: a turn ending in `runtime_refusal` and a retry classified as a `non_retryable_refusal`. This runtime never produces either outcome; a request built to trigger one instead completes the turn normally, so the case is recorded as `outcome_never_produced` rather than graded from an attempt that failed to reach it.
 
-Retry classification does not read the same way on the two surfaces. On the protocol surface it is not observed rather than failing: the posture that asks induces a continuable permission request, which is not a request addressed to a person, so no human-input case was induced at all. Permission handling graded usable on the same run, which is what that request actually is. On the raw native stream the case was induced and the row grades a gap, because a recognized terminal ended the turn even though the probe's own marker file, which shows the block was reached, is present.
+Retry classification does not read the same way on the two surfaces. On the protocol surface the human-input case is excluded as not applicable, and the row grades usable on the cases that remain. The exclusion rests on the consent request the asking-posture launch raised and the client refused inside the protocol: the request offered a refusing option, the refusal was answered there, and the turn went on. It does not cover a question addressed to a person. Permission handling graded usable on the same run, which is what that request actually is. On the raw native stream the case was induced and the row grades a gap, because a recognized terminal ended the turn even though the probe's own marker file, which shows the block was reached, is present.
+
+The `unknown_outcome` case has no deterministic inducer on either surface, so it stays unmeasured and leaves retry classification without a product-conformance answer, as `limit_reached` does for turn disposition.
 
 - protocol turn_disposition: Observed: usable
-- protocol retry_classification: Not observed: not_observed
+- protocol retry_classification: Observed: usable
 - protocol token_ceiling: Observed: gap
 - protocol tool_server_delivery: Observed: usable
 - protocol session_continuation: Observed: usable
@@ -59,7 +61,7 @@ Retry classification does not read the same way on the two surfaces. On the prot
 - native_stream_json token_ceiling: Observed: gap
 - native_stream_json session_continuation: Observed: usable
 
-One row above is not graded from an observation: protocol retry classification stands at not observed, because the case that would decide it was never induced. Two of the six cases excluded below are excluded while keeping their obligation, which is a different thing from being forgiven: a case that was induced and that the surface then reported no outcome for counts against that surface rather than passing for free.
+Two of the cases excluded below are excluded while keeping their obligation, which is a different thing from being forgiven: a case that was induced and that the surface then reported no outcome for counts against that surface rather than passing for free.
 
 Permission handling was measured under the posture that asks, which for this runtime means the same launch with its single trust-and-posture switch taken back out. The runtime raises the request, Sortie's unattended posture refuses it, the refusal is accepted, and nothing is left pending when the turn ends. The consequence for a real run is the one the transport notes already state: under a posture that asks, a declared tool is delivered and still never called.
 
@@ -105,6 +107,7 @@ Tool servers declared in the session-creation request are merged over whatever t
 
 ## Excluded capability cases
 
+- retry_classification human_input: not applicable on protocol: the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose
 - retry_classification non_retryable_refusal: declared outcome_never_produced
 - retry_classification unknown_outcome: no deterministic inducer, so neither the condition nor the surface's account of it was established
 - turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation
@@ -113,8 +116,6 @@ Tool servers declared in the session-creation request are merged over whatever t
 - turn_disposition runtime_refusal: declared outcome_never_produced
 
 ## Unobserved surfaces
-
-- protocol retry_classification human_input: fixture_induction_failed
 
 Windows live qualification is unobserved.
 

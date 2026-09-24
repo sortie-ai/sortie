@@ -425,6 +425,74 @@ func TestRunTokenInventoryZeroPathCountMismatch(t *testing.T) {
 	}
 }
 
+// declaredGapRefusalIndex publishes one native_json runtime_refusal record as
+// a declared gap, the coordinate both compareRecognizerEntry subtests
+// re-derive against.
+func declaredGapRefusalIndex() map[recordKey][]evidence.Record {
+	rec := evidence.Record{
+		Surface: evidence.SurfaceNativeJSON,
+		InputID: evidence.InputDispositionRuntimeRefusal,
+		Grade:   evidence.GradeDeclaredGap,
+		Outcome: evidence.OutcomeNotProducible,
+		Detail:  "the runtime documents no refusal status this recognizer can key on",
+	}
+	return map[recordKey][]evidence.Record{
+		{surface: evidence.SurfaceNativeJSON, input: evidence.InputDispositionRuntimeRefusal}: {rec},
+	}
+}
+
+func refusalRecognizerEntry(stdout string) evidence.JournalEntry {
+	return evidence.JournalEntry{
+		Surface:    "native_json",
+		Case:       "runtime_refusal",
+		Derivation: evidence.DerivationRecognizer,
+		Launch: &evidence.LaunchRecord{
+			Outcome: evidence.LaunchOutcomeCompleted,
+		},
+		Streams: &evidence.StreamCapture{
+			Stdout:    stdout,
+			Retention: evidence.StreamRetentionFull,
+		},
+	}
+}
+
+func TestCompareRecognizerEntryAgainstDeclaredGap(t *testing.T) {
+	t.Parallel()
+
+	index := declaredGapRefusalIndex()
+
+	t.Run("accepts a re-derivation that reproduces no observation", func(t *testing.T) {
+		t.Parallel()
+
+		entry := refusalRecognizerEntry(`{"response":{}}`)
+
+		_, err := compareRecognizerEntry(index, profile.RuntimeProfile{}, entry)
+		if err != nil {
+			t.Fatalf("compareRecognizerEntry(...) error = %v, want nil: a declared_gap record accepts a re-derivation that produced nothing", err)
+		}
+	})
+
+	t.Run("rejects a re-derivation that produces something", func(t *testing.T) {
+		t.Parallel()
+
+		p := profile.RuntimeProfile{
+			Recognizers: map[evidence.Surface]profile.Recognizer{
+				evidence.SurfaceNativeJSON: {
+					Locator:      profile.TerminalLocator{Mode: "first_value"},
+					StatusMember: "status",
+					StatusCases:  map[string]evidence.Case{"refused": evidence.CaseRuntimeRefusal},
+				},
+			},
+		}
+		entry := refusalRecognizerEntry(`{"status":"refused"}`)
+
+		_, err := compareRecognizerEntry(index, p, entry)
+		if err == nil {
+			t.Fatal("compareRecognizerEntry(...) = _, nil, want rejection: the re-derivation produced a usable observation against a declared_gap record")
+		}
+	})
+}
+
 func TestRun(t *testing.T) {
 	t.Parallel()
 
