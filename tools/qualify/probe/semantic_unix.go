@@ -626,6 +626,8 @@ func gradePermissionLaunch(sig permissionLaunchSignals) (permission, policy, hum
 	switch {
 	case sig.endedRequiringInput && sig.noOptionNotice:
 		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the request offered no refusing option and the attempt ended requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
+	case sig.endedRequiringInput && sig.continuableNotice:
+		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "a continuable refusal was transmitted and the attempt still ended requiring human input", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	case sig.endedRequiringInput:
 		humanInput = evidence.Observation{Grade: evidence.GradeUsable, Outcome: evidence.OutcomePass, Detail: "the turn ended requiring human input with no permission request to attribute it to", SessionID: sig.sessionID, EvidencePath: humanInputPath}
 	case sig.turnFailed:

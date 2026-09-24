@@ -222,7 +222,7 @@ func TestGradePermissionLaunchAllRows(t *testing.T) {
 			wantPolicyOutcome:     evidence.OutcomePass,
 			wantHumanInputGrade:   evidence.GradeUsable,
 			wantHumanInputOutcome: evidence.OutcomePass,
-			wantHumanInputDetail:  "the turn ended requiring human input with no permission request to attribute it to",
+			wantHumanInputDetail:  "a continuable refusal was transmitted and the attempt still ended requiring human input",
 			wantEvidencePath:      true,
 		},
 		{
@@ -272,8 +272,8 @@ func TestGradePermissionLaunchAllRows(t *testing.T) {
 	for _, tc := range tests {
 		seenRows[tc.wantHumanInputDetail] = true
 	}
-	if len(seenRows) != 6 {
-		t.Fatalf("the table's human-input details cover %d distinct rows, want 6", len(seenRows))
+	if len(seenRows) != 7 {
+		t.Fatalf("the table's human-input details cover %d distinct rows, want 7", len(seenRows))
 	}
 
 	for _, tc := range tests {
