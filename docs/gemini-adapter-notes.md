@@ -4,9 +4,9 @@ Working notes for anyone dealing with Gemini CLI through Sortie's generic Agent 
 
 Eligibility: not_qualified
 
-Product conformance: unmeasured
+Product conformance: not_qualified
 
-The two answers are computed separately and diverge here. The protocol surface is below the richest measured native reference on one load-bearing row, token accounting, so the protocol route would cost an operator something the native route gave them. Product conformance has no answer at all: the human-input case of retry classification was never induced on the protocol surface, and no run crossed a finite token ceiling, so two load-bearing obligations stand unmeasured and whether the effective adapter meets them is unknown rather than settled either way.
+The two answers are computed separately and both fall on token accounting. The protocol surface is below the richest measured native reference on that row, so the protocol route would cost an operator something the native route gave them. Product conformance does not hold: the protocol surface resolves no token-bearing path, its extension block is present but not admitted, and nothing outside the protocol supplies a figure, so the effective adapter does not meet the token-accounting obligation.
 
 ## Where to get the volatile facts
 
@@ -18,16 +18,16 @@ Gemini has no adapter package, no registered kind, no adapter metadata, and no i
 
 ## Load-bearing capability observations
 
-One row carries the eligibility verdict, token accounting. Product conformance has no verdict because of a different row, retry classification, whose human-input case is unmeasured on the protocol surface. Session continuation carries neither verdict: it works on every surface measured.
+One row carries both verdicts, token accounting. Retry classification blocks neither, but it has no product-conformance answer: its `unknown_outcome` case has no deterministic inducer on any surface, so that case stays unmeasured. Session continuation carries neither verdict: it works on every surface measured.
 
 Session continuation works on every surface, and the protocol route is no weaker than either native one. The recall turn runs in the seed's own session, the session id comes back unchanged, and the model returns what the seed asked it to remember. What is expensive on this runtime is getting the load to succeed at all, which the protocol-specific section below covers; once it does, the session's content is there.
 
-Retry classification is not measured on the protocol surface rather than failing on it. The asking posture induces a continuable permission request, which is not a request addressed to a person, so no human-input case is induced and the row stands at not observed. That posture is what Sortie's own contract asks a runtime for, so the unmeasured row is not a shortfall in itself. Both native surfaces have no terminal vocabulary for the outcome at all.
+Retry classification does not read the same way on the protocol and native surfaces. On the protocol surface the human-input case is excluded as not applicable, and the row grades usable on the cases that remain. The exclusion rests on the consent request the asking-posture launch raised and the client refused inside the protocol: the request offered a refusing option, the refusal was answered there, and the turn went on. It does not cover a question addressed to a person. Both native surfaces have no terminal vocabulary for the human-input outcome at all.
 
-Token accounting is a real shortfall on the protocol route. The protocol surface resolves no token-bearing path. The prompt result does carry an extension block, and it carries input and output counts, but it omits cache-read, reasoning, and tool counters and is not admitted to a budget, so it is a presence signal and a lower bound rather than the accounting figure. Sortie's own adapter reaches past the wire for this runtime and does come back with a figure for the turn, which is why the turn reports as measured even though the wire block alone could not raise that flag. Both native surfaces resolve their token paths instead: the JSON surface reports prompt, cached, candidate, thought, and tool counts per model, and the streaming JSON surface reports its own flatter cached, input, output, and total counts. No run on any surface crossed a finite ceiling, so ceiling enforcement itself stays unverified: what is established is that the counts are there to read, not that a ceiling built on them would stop a turn and hold it stopped.
+Token accounting is a real shortfall on the protocol route. The protocol surface resolves no token-bearing path. The prompt result does carry an extension block, and it carries input and output counts, but it omits cache-read, reasoning, and tool counters and is not admitted to a budget, so it is a presence signal and a lower bound rather than the accounting figure. Both native surfaces resolve their token paths instead: the JSON surface reports prompt, cached, candidate, thought, and tool counts per model, and the streaming JSON surface reports its own flatter cached, input, output, and total counts. No run on any surface crossed a finite ceiling, so ceiling enforcement itself stays unverified: what is established is that the counts are there to read, not that a ceiling built on them would stop a turn and hold it stopped.
 
 - protocol turn_disposition: Observed: usable
-- protocol retry_classification: Not observed: not_observed
+- protocol retry_classification: Observed: usable
 - protocol token_ceiling: Observed: gap
 - protocol tool_server_delivery: Observed: usable
 - protocol session_continuation: Observed: usable
@@ -80,6 +80,7 @@ Our own teardown outruns a graceful exit. For a local launch, Sortie's own teard
 ## Excluded capability cases
 
 - retry_classification human_input: induced, and the surface reported no outcome (terminal_vocabulary_closed), so the case keeps its obligation
+- retry_classification human_input: not applicable on protocol: the request offered a refusing option and was answered inside the protocol, so the turn went on and no human-input outcome arose
 - retry_classification non_retryable_refusal: declared outcome_never_produced
 - retry_classification unknown_outcome: no deterministic inducer, so neither the condition nor the surface's account of it was established
 - turn_disposition cancellation: induced, and the surface reported no outcome (terminal_written_at_exit_only), so the case keeps its obligation
@@ -88,7 +89,5 @@ Our own teardown outruns a graceful exit. For a local launch, Sortie's own teard
 - turn_disposition runtime_refusal: declared outcome_never_produced
 
 ## Unobserved surfaces
-
-- protocol retry_classification human_input: fixture_induction_failed
 
 Windows live qualification is unobserved.
