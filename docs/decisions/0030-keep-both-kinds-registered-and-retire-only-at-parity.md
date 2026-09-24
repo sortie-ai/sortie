@@ -59,7 +59,7 @@ Three classes of difference were open when this record was written, and none bel
 
 - **Verifying a credential before the first session.** Parity means a workflow whose runtime cannot authenticate fails before the first turn, with the credential named as the cause rather than the transport.
 - **Carrying configured credentials into a remote launch.** Parity means a runtime launched over SSH receives what the operator configured for it, with the local launch unchanged.
-- **What `sortie validate` refuses offline.** Parity is judged by the capability an operator would lose, not by the surviving route repeating every offline check of the removed one: a refusal that guards against a failure the surviving route cannot reach does not block removal. A runtime that rejects its own arguments is reported before the first turn with its exit status and its own error output, never as a credential failure.
+- **What `sortie validate` refuses offline.** Parity is judged by the capability an operator would lose, not by the surviving route repeating every offline check of the removed one: a refusal that guards against a failure the surviving route cannot reach does not block removal. A protocol runtime that rejects its own arguments by exiting before it answers its handshake is reported before the first turn with its exit status and its own error output, never as a credential failure.
 
 Each is stated as the capability required rather than the deficiency observed, so closing one changes what is true of the code and nothing here. They are a floor, not a ceiling: the condition compares two routes for one pair, and a difference found later blocks removal exactly as these do.
 
