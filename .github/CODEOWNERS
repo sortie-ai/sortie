@@ -6,7 +6,7 @@
 /go.sum @cicdbot
 
 # GitHub Actions workflows - bot + human
-/.github/workflows/ @cicdbot @sergeyklay
+/.github/workflows/ @cicdbot @sergeyklay @serghei-dev
 
 # CI/CD config - humans only
 /.github/dependabot.yml @sergeyklay @serghei-dev
