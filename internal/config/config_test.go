@@ -4718,6 +4718,18 @@ func TestNewServiceConfig_RegistersReactionExtraLeafUnderAcceptedKey(t *testing.
 	requireConfigMasked(t, value)
 }
 
+func TestNewServiceConfig_RegistersExtensionSectionLeafUnderAcceptedKey(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"codex": map[string]any{"env": map[string]any{"OPENAI_API_KEY": value}},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
 func TestNewServiceConfig_ReactionExtraLeafUnderRejectedKeyStaysReadable(t *testing.T) {
 	t.Parallel()
 
