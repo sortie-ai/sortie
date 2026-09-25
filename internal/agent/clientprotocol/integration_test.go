@@ -496,3 +496,43 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		credentialtest.RequireUnverified(t, err)
 	})
 }
+
+func TestIntegration_EarlyExit(t *testing.T) {
+	skipUnlessClientProtocolIntegration(t)
+
+	adapter, err := NewClientProtocolAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
+	}
+	unknownSwitchConfig := domain.AgentConfig{
+		Command:       os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND") + " --sortie-unknown-switch",
+		TurnTimeoutMS: 300000,
+		ReadTimeoutMS: 30000,
+	}
+
+	t.Run("verification session with an unknown switch", func(t *testing.T) {
+		params := domain.StartSessionParams{
+			WorkspacePath: gitInitWorkspace(t),
+			AgentConfig:   unknownSwitchConfig,
+		}
+		if _, err := credentialtest.VerifyLive(adapter, params); err == nil {
+			t.Skip("configured runtime accepted --sortie-unknown-switch, so it cannot exercise the early-exit report")
+		} else {
+			credentialtest.RequireEarlyExitReport(t, err)
+		}
+	})
+
+	t.Run("working session with an unknown switch", func(t *testing.T) {
+		params := domain.StartSessionParams{
+			WorkspacePath: gitInitWorkspace(t),
+			AgentConfig:   unknownSwitchConfig,
+		}
+		session, err := adapter.StartSession(context.Background(), params)
+		if err == nil {
+			_ = adapter.StopSession(context.Background(), session)
+			t.Skip("configured runtime accepted --sortie-unknown-switch, so it cannot exercise the early-exit report")
+		} else {
+			credentialtest.RequireEarlyExitReport(t, err)
+		}
+	})
+}

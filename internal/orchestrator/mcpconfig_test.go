@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -9,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // mcpParams returns a valid MCPConfigParams with the given workspace path.
@@ -490,6 +494,90 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Errorf("error = %q, want to contain %q", err.Error(), "writing .sortie gitignore")
 		}
 	})
+}
+
+func TestGenerateMCPConfig_RegistersToolServerCredentials(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no operator config: sortie-tools env registered", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		envValue := mcpconfigSecret(t)
+
+		p := mcpParams(dir)
+		p.ProcessEnv = map[string]string{"SORTIE_TEST_TOKEN": envValue}
+
+		if _, err := GenerateMCPConfig(p); err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		if got := redact.Mask(envValue); got == envValue {
+			t.Errorf("env value under a secret-named key stayed unmasked: %q", got)
+		}
+	})
+
+	t.Run("operator config: env, headers, and url userinfo registered from every server", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		envValue := mcpconfigSecret(t)
+		headerValue := mcpconfigSecret(t)
+		user := mcpconfigSecret(t)
+		pass := mcpconfigSecret(t)
+		plainValue := mcpconfigSecret(t)
+
+		operatorConfig := map[string]any{
+			"mcpServers": map[string]any{
+				"operator-service": map[string]any{
+					"type":    "stdio",
+					"command": "/usr/bin/op-tool",
+					"env": map[string]any{
+						"API_TOKEN":     envValue,
+						"EXAMPLE_LABEL": plainValue,
+					},
+					"headers": map[string]any{
+						"Authorization": "Bearer " + headerValue,
+					},
+					"url": "https://" + user + ":" + pass + "@example.com/mcp",
+				},
+			},
+		}
+		operatorPath := filepath.Join(dir, "operator-mcp.json")
+		data, _ := json.Marshal(operatorConfig)
+		if err := os.WriteFile(operatorPath, data, 0o644); err != nil {
+			t.Fatalf("WriteFile operator config: %v", err)
+		}
+
+		p := mcpParams(dir)
+		p.OperatorMCPConfigPath = operatorPath
+
+		if _, err := GenerateMCPConfig(p); err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		if got := redact.Mask(envValue); got == envValue {
+			t.Errorf("env[\"API_TOKEN\"] stayed unmasked: %q", got)
+		}
+		if got := redact.Mask(plainValue); got != plainValue {
+			t.Errorf("env[\"EXAMPLE_LABEL\"] (a non-secret-named key) was masked: %q, want unchanged", got)
+		}
+		if got := redact.Mask(headerValue); got == headerValue {
+			t.Errorf("headers[\"Authorization\"] bare token stayed unmasked: %q", got)
+		}
+		if got := redact.Mask(user + ":" + pass); got == user+":"+pass {
+			t.Errorf("url userinfo stayed unmasked: %q", got)
+		}
+	})
+}
+
+func mcpconfigSecret(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return "mcpconfig-secret-" + hex.EncodeToString(buf)
 }
 
 func TestGenerateMCPConfig_Attempt(t *testing.T) {

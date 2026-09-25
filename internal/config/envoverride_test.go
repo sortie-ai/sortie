@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -768,4 +769,72 @@ func TestNewServiceConfig_NoChangeStateEnvOverrideValidated(t *testing.T) {
 	if errors.As(err, &ce) && !strings.Contains(ce.Message, "must equal tracker.handoff_state or name a member of tracker.terminal_states") {
 		t.Errorf("ConfigError.Message = %q, want the R-12 rejection message", ce.Message)
 	}
+}
+
+func TestDotEnvEntries(t *testing.T) {
+	// Not parallel: mutates the package-level dotenvPathOverride and the
+	// process environment.
+	orig := getDotEnvPath()
+	t.Cleanup(func() { SetDotEnvPath(orig) })
+
+	t.Run("no path set returns nil", func(t *testing.T) {
+		SetDotEnvPath("")
+		t.Setenv("SORTIE_ENV_FILE", "")
+
+		if got := DotEnvEntries(); got != nil {
+			t.Errorf("DotEnvEntries() = %v, want nil when no path is set", got)
+		}
+	})
+
+	t.Run("missing file returns nil", func(t *testing.T) {
+		SetDotEnvPath(t.TempDir() + "/does_not_exist.env")
+
+		if got := DotEnvEntries(); got != nil {
+			t.Errorf("DotEnvEntries() = %v, want nil for a missing file", got)
+		}
+	})
+
+	t.Run("returns the file's current SORTIE_ NAME=value entries", func(t *testing.T) {
+		path := writeDotEnvFile(t, "SORTIE_TRACKER_API_KEY=first-value\nSORTIE_AGENT_KIND=codex\nSOME_OTHER_VAR=other\n")
+		SetDotEnvPath(path)
+
+		got := DotEnvEntries()
+		want := map[string]bool{
+			"SORTIE_TRACKER_API_KEY=first-value": false,
+			"SORTIE_AGENT_KIND=codex":            false,
+		}
+		if len(got) != len(want) {
+			t.Fatalf("DotEnvEntries() = %v, want %d entries (a non-SORTIE_ entry is not a config override and stays out)", got, len(want))
+		}
+		for _, entry := range got {
+			if _, ok := want[entry]; !ok {
+				t.Errorf("DotEnvEntries() contains unexpected entry %q", entry)
+			}
+			want[entry] = true
+		}
+		for entry, seen := range want {
+			if !seen {
+				t.Errorf("DotEnvEntries() missing entry %q", entry)
+			}
+		}
+	})
+
+	t.Run("reads the file fresh on every call", func(t *testing.T) {
+		path := writeDotEnvFile(t, "SORTIE_TRACKER_API_KEY=before\n")
+		SetDotEnvPath(path)
+
+		before := DotEnvEntries()
+		if len(before) != 1 || before[0] != "SORTIE_TRACKER_API_KEY=before" {
+			t.Fatalf("DotEnvEntries() before rewrite = %v, want [\"SORTIE_TRACKER_API_KEY=before\"]", before)
+		}
+
+		if err := os.WriteFile(path, []byte("SORTIE_TRACKER_API_KEY=after\n"), 0o600); err != nil {
+			t.Fatalf("os.WriteFile: %v", err)
+		}
+
+		after := DotEnvEntries()
+		if len(after) != 1 || after[0] != "SORTIE_TRACKER_API_KEY=after" {
+			t.Errorf("DotEnvEntries() after rewrite = %v, want [\"SORTIE_TRACKER_API_KEY=after\"]", after)
+		}
+	})
 }

@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // scanFixtureLines reads non-empty lines from a testdata/ fixture file.
@@ -730,35 +728,6 @@ func TestSummarizeAssistantMessage(t *testing.T) {
 			got := summarizeAssistantMessage(tt.data)
 			if got != tt.want {
 				t.Errorf("summarizeAssistantMessage() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		s      string
-		maxLen int
-		want   string
-	}{
-		{"empty string", "", 10, ""},
-		{"short string within limit", "hello", 10, "hello"},
-		{"exact length not truncated", "hello", 5, "hello"},
-		{"one over limit gets ellipsis", "hello!", 5, "hello…"},
-		{"unicode two-byte runes counted by rune", "héllo", 4, "héll…"},
-		{"multibyte CJK runes", "日本語テスト", 3, "日本語…"},
-		{"single rune truncated to zero is just ellipsis", "ab", 1, "a…"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := typeutil.TruncateRunes(tt.s, tt.maxLen)
-			if got != tt.want {
-				t.Errorf("TruncateRunes(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
 			}
 		})
 	}

@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +20,101 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
+
+func selfReviewTestSecret(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return "self-review-secret-" + hex.EncodeToString(buf)
+}
+
+func TestCappedWriter_RetainsUpToMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	w := &cappedWriter{max: 10}
+	if _, err := w.Write([]byte("0123456789ABCDEFGHIJ")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if got, want := w.String(), "0123456789"; got != want {
+		t.Errorf("String() = %q, want %q (excess silently discarded)", got, want)
+	}
+}
+
+func TestCappedWriter_WriteAlwaysReportsFullLength(t *testing.T) {
+	t.Parallel()
+
+	w := &cappedWriter{max: 4}
+	p := []byte("far more than the cap")
+	n, err := w.Write(p)
+	if err != nil {
+		t.Fatalf("Write() error = %v, want nil", err)
+	}
+	if n != len(p) {
+		t.Errorf("Write() = %d, want %d", n, len(p))
+	}
+}
+
+func TestCappedWriter_MasksAValueStraddlingTheCap(t *testing.T) {
+	t.Parallel()
+
+	value := selfReviewTestSecret(t)
+	redact.Add("test.cappedWriter straddle", value)
+
+	// cappedWriter retains the head, so the cap must land inside the
+	// value's own raw byte span (after a short prefix, not after enough
+	// padding to already exhaust the cap) to straddle it.
+	prefix := "abcd"
+	w := &cappedWriter{max: len(prefix) + len(value)/2}
+	if _, err := w.Write([]byte(prefix)); err != nil {
+		t.Fatalf("Write(prefix) error = %v", err)
+	}
+	if _, err := w.Write([]byte(value)); err != nil {
+		t.Fatalf("Write(value) error = %v", err)
+	}
+
+	got := w.String()
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("String() = %q, want it to start with %q", got, prefix)
+	}
+	if !strings.Contains(got, redact.Marker) {
+		t.Fatalf("String() = %q, want it to contain %q", got, redact.Marker)
+	}
+	if strings.Contains(got, value) {
+		t.Fatalf("String() = %q, leaked the full value straddling the cap", got)
+	}
+	if head := value[:len(value)/2]; strings.Contains(got, head) {
+		t.Fatalf("String() = %q, leaked a byte run %q from the value straddling the cap", got, head)
+	}
+}
+
+func TestCappedWriter_MasksAValueSplitAcrossWrites(t *testing.T) {
+	t.Parallel()
+
+	value := selfReviewTestSecret(t)
+	redact.Add("test.cappedWriter split write", value)
+
+	w := &cappedWriter{max: 4096}
+	half := len(value) / 2
+	if _, err := w.Write([]byte("start-" + value[:half])); err != nil {
+		t.Fatalf("Write(first half) error = %v", err)
+	}
+	if _, err := w.Write([]byte(value[half:] + "-end")); err != nil {
+		t.Fatalf("Write(second half) error = %v", err)
+	}
+
+	got := w.String()
+	if strings.Contains(got, value) {
+		t.Fatalf("String() = %q, still contains a value split across two Write calls", got)
+	}
+	if !strings.Contains(got, redact.Marker) {
+		t.Errorf("String() = %q, want it to contain %q", got, redact.Marker)
+	}
+}
 
 // writeVerdictFile writes a ReviewVerdict as JSON to <wsPath>/.sortie/review_verdict.json.
 func writeVerdictFile(t *testing.T, wsPath string, verdict domain.ReviewVerdict) {

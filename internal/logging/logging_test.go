@@ -2,13 +2,22 @@ package logging_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
+
+func fixedLogRecord() slog.Record {
+	r := slog.NewRecord(time.Date(2024, 3, 5, 12, 30, 0, 0, time.UTC), slog.LevelInfo, "plain startup message", 0)
+	r.AddAttrs(slog.String("workspace", "/tmp/example"))
+	return r
+}
 
 func TestParseLevel(t *testing.T) {
 	t.Parallel()
@@ -83,6 +92,80 @@ func TestSetup(t *testing.T) {
 	logger.Debug("should be filtered")
 	if buf.Len() != 0 {
 		t.Errorf("Setup(LevelInfo) wrote DEBUG message via returned logger: %q, want empty", buf.String())
+	}
+}
+
+func TestSetup_MasksRegisteredValueInTextFormat(t *testing.T) {
+	// Not parallel: mutates the process-wide slog default.
+	value := "logging-secret-text-format"
+	redact.Add("test.logging text format", value)
+
+	var buf bytes.Buffer
+	logger := logging.Setup(&buf, slog.LevelInfo, logging.FormatText)
+	logger.Info("startup", slog.String("token", value))
+
+	got := buf.String()
+	if strings.Contains(got, value) {
+		t.Fatalf("Setup(FormatText) logged the registered value: %q", got)
+	}
+	if !strings.Contains(got, redact.Marker) {
+		t.Errorf("Setup(FormatText) output = %q, want it to contain %q", got, redact.Marker)
+	}
+}
+
+func TestSetup_MasksRegisteredValueInJSONFormat(t *testing.T) {
+	// Not parallel: mutates the process-wide slog default.
+	value := "logging-secret-json-format"
+	redact.Add("test.logging json format", value)
+
+	var buf bytes.Buffer
+	logger := logging.Setup(&buf, slog.LevelInfo, logging.FormatJSON)
+	logger.Info("startup", slog.String("token", value))
+
+	var record map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", buf.String(), err)
+	}
+	got, _ := record["token"].(string)
+	if got != redact.Marker {
+		t.Errorf("record[\"token\"] = %q, want %q", got, redact.Marker)
+	}
+}
+
+func TestSetup_RecordWithNoRegisteredValueIsByteIdentical(t *testing.T) {
+	// Not parallel: mutates the process-wide slog default.
+	tests := []struct {
+		name   string
+		format logging.Format
+	}{
+		{name: "text format", format: logging.FormatText},
+		{name: "json format", format: logging.FormatJSON},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var masked bytes.Buffer
+			maskedLogger := logging.Setup(&masked, slog.LevelInfo, tt.format)
+			if err := maskedLogger.Handler().Handle(context.Background(), fixedLogRecord()); err != nil {
+				t.Fatalf("Handle() error = %v, want nil", err)
+			}
+
+			var unmasked bytes.Buffer
+			opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+			var unmaskedHandler slog.Handler
+			if tt.format == logging.FormatJSON {
+				unmaskedHandler = slog.NewJSONHandler(&unmasked, opts)
+			} else {
+				unmaskedHandler = slog.NewTextHandler(&unmasked, opts)
+			}
+			if err := unmaskedHandler.Handle(context.Background(), fixedLogRecord()); err != nil {
+				t.Fatalf("Handle() error = %v, want nil", err)
+			}
+
+			if got, want := masked.String(), unmasked.String(); got != want {
+				t.Errorf("Setup(%s) record with no registered value = %q, want byte-identical to %q (no ReplaceAttr)", tt.format, got, want)
+			}
+		})
 	}
 }
 

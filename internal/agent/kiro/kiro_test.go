@@ -61,6 +61,23 @@ const chatScenario = "kiro-chat"
 type chatParams struct {
 	WhoamiExitCode int
 
+	// WhoamiStdout and WhoamiStderr, when non-empty, replace the
+	// default "Authenticated with API key" line whoami prints on exit
+	// 0, or the empty output it prints on a non-zero exit. Set
+	// WhoamiStdout to a JSON line such as `{"account":null}` to drive
+	// the no-account answer.
+	WhoamiStdout string
+	WhoamiStderr string
+
+	// WhoamiHangMS, when positive, sleeps that many milliseconds
+	// before whoami exits, so a test can cancel the context mid-call.
+	WhoamiHangMS int
+
+	// WhoamiArgsLogPath, when non-empty, appends the whoami
+	// invocation's argument list to the named file, so a test can
+	// confirm which flags checkCredential launched it with.
+	WhoamiArgsLogPath string
+
 	// Stdout, Stderr and ExitCode are replayed verbatim for any
 	// invocation other than "whoami".
 	Stdout   string
@@ -81,11 +98,24 @@ type chatParams struct {
 
 func runChat(args []string, p chatParams) int {
 	if len(args) > 0 && args[0] == "whoami" {
-		if p.WhoamiExitCode != 0 {
-			return p.WhoamiExitCode
+		if p.WhoamiArgsLogPath != "" {
+			f, err := os.OpenFile(p.WhoamiArgsLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err == nil {
+				_, _ = fmt.Fprintln(f, strings.Join(args, " "))
+				_ = f.Close()
+			}
 		}
-		fmt.Print("Authenticated with API key\n")
-		return 0
+		if p.WhoamiHangMS > 0 {
+			time.Sleep(time.Duration(p.WhoamiHangMS) * time.Millisecond)
+		}
+		switch {
+		case p.WhoamiStdout != "" || p.WhoamiStderr != "":
+			fmt.Print(p.WhoamiStdout)
+			fmt.Fprint(os.Stderr, p.WhoamiStderr)
+		case p.WhoamiExitCode == 0:
+			fmt.Print("Authenticated with API key\n")
+		}
+		return p.WhoamiExitCode
 	}
 
 	stdout := p.Stdout
@@ -646,27 +676,48 @@ func TestStartSession_CredentialVerificationGuard(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	tests := []struct {
-		name           string
-		whoamiExitCode int
-		wantErr        bool
-		wantMessage    string
+		name        string
+		params      chatParams
+		wantErr     bool
+		wantReport  bool
+		wantKind    domain.AgentErrorKind
+		wantMessage string
+		wantStatus  string
+		wantOutput  string
 	}{
 		{
-			name:           "exit 0 passes regardless of output content",
-			whoamiExitCode: 0,
+			name:   "exit 0 passes regardless of output content",
+			params: chatParams{WhoamiExitCode: 0},
 		},
 		{
-			name:           "non-zero exit fails with the exit status in the message",
-			whoamiExitCode: 1,
-			wantErr:        true,
-			wantMessage:    "the agent runtime reports no usable credential: whoami exited with status 1",
+			name:        "no-account JSON on exit 1 yields the credential verdict whatever surrounds it",
+			params:      chatParams{WhoamiExitCode: 1, WhoamiStdout: "noise before\n{\"account\":null}\nnoise after\n"},
+			wantErr:     true,
+			wantKind:    domain.ErrCredentialUnverified,
+			wantMessage: "the agent runtime reports no usable credential: whoami reports no signed-in account",
+		},
+		{
+			name:       "exit 2 usage error yields the early-exit report",
+			params:     chatParams{WhoamiExitCode: 2, WhoamiStderr: "error: unrecognized subcommand\n"},
+			wantErr:    true,
+			wantReport: true,
+			wantStatus: "exit status 2",
+			wantOutput: "error: unrecognized subcommand",
+		},
+		{
+			name:       "exit 1 with no no-account line yields the early-exit report, not the old credential verdict",
+			params:     chatParams{WhoamiExitCode: 1, WhoamiStderr: "boom\n"},
+			wantErr:    true,
+			wantReport: true,
+			wantStatus: "exit status 1",
+			wantOutput: "boom",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// t.Setenv is incompatible with t.Parallel.
-			bin := newKiroCLI(t, t.TempDir(), chatParams{WhoamiExitCode: tt.whoamiExitCode})
+			bin := newKiroCLI(t, t.TempDir(), tt.params)
 			adapter, err := NewKiroAdapter(map[string]any{})
 			if err != nil {
 				t.Fatalf("NewKiroAdapter: %v", err)
@@ -684,7 +735,25 @@ func TestStartSession_CredentialVerificationGuard(t *testing.T) {
 				}
 				return
 			}
-			requireAgentError(t, err, domain.ErrCredentialUnverified)
+
+			if tt.wantReport {
+				requireAgentError(t, err, domain.ErrPortExit)
+				var agentErr *domain.AgentError
+				errors.As(err, &agentErr)
+				var earlyExitErr *agentcore.EarlyExitError
+				if !errors.As(agentErr.Err, &earlyExitErr) {
+					t.Fatalf("StartSession() error = %v, chain does not hold an *agentcore.EarlyExitError", agentErr)
+				}
+				if earlyExitErr.Status() != tt.wantStatus {
+					t.Errorf("EarlyExitError.Status() = %q, want %q", earlyExitErr.Status(), tt.wantStatus)
+				}
+				if !strings.Contains(earlyExitErr.Output(), tt.wantOutput) {
+					t.Errorf("EarlyExitError.Output() = %q, want it to contain %q", earlyExitErr.Output(), tt.wantOutput)
+				}
+				return
+			}
+
+			requireAgentError(t, err, tt.wantKind)
 			var agentErr *domain.AgentError
 			if errors.As(err, &agentErr) && agentErr.Message != tt.wantMessage {
 				t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, tt.wantMessage)
@@ -734,7 +803,7 @@ func TestCheckCredential_SuccessYieldsNilError(t *testing.T) {
 	cli := newKiroCLI(t, t.TempDir(), chatParams{})
 	target := agentcore.LaunchTarget{Command: cli, WorkspacePath: ws}
 
-	if agentErr := checkCredential(context.Background(), target, 5000); agentErr != nil {
+	if agentErr := checkCredential(context.Background(), target, 5000, slog.Default()); agentErr != nil {
 		t.Fatalf("checkCredential() error = %v, want nil", agentErr)
 	}
 }

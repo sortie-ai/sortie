@@ -10,7 +10,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -438,33 +437,6 @@ func TestRawEventSummary(t *testing.T) {
 			got := tt.ev.summary()
 			if got != tt.want {
 				t.Errorf("summary() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		input  string
-		maxLen int
-		want   string
-	}{
-		{"short string", "hello", 10, "hello"},
-		{"exact length", "hello", 5, "hello"},
-		{"over limit", "hello world", 5, "hello…"},
-		{"unicode safe", "日本語テスト", 3, "日本語…"},
-		{"empty string", "", 5, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := typeutil.TruncateRunes(tt.input, tt.maxLen)
-			if got != tt.want {
-				t.Errorf("TruncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}

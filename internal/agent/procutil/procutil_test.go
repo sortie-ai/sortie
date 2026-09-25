@@ -934,3 +934,124 @@ func TestStderrCollector_FinishAndCollect_LateCallerSharesRemainder(t *testing.T
 		t.Errorf("FinishAndCollect(%v) arriving at grace/2 took %v for its own elapsed time, want well under a full grace (the wait is shared, not paid twice)", grace, elapsed)
 	}
 }
+
+func TestStderrCollector_LastLines(t *testing.T) {
+	t.Parallel()
+
+	makeInput := func(n int) string {
+		var sb strings.Builder
+		for i := range n {
+			fmt.Fprintf(&sb, "line%d\n", i+1)
+		}
+		return sb.String()
+	}
+
+	tests := []struct {
+		name         string
+		n            int
+		wantOmitted  bool
+		wantLastFive []string
+	}{
+		{
+			name:        "exactly at cap, nothing dropped",
+			n:           10,
+			wantOmitted: false,
+		},
+		{
+			name:         "all fit in head, nothing dropped",
+			n:            3,
+			wantOmitted:  false,
+			wantLastFive: nil,
+		},
+		{
+			name:         "one over cap, tail section alone",
+			n:            11,
+			wantOmitted:  true,
+			wantLastFive: []string{"line7", "line8", "line9", "line10", "line11"},
+		},
+		{
+			name:         "large overage, tail section alone",
+			n:            25,
+			wantOmitted:  true,
+			wantLastFive: []string{"line21", "line22", "line23", "line24", "line25"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := NewStderrCollector(strings.NewReader(makeInput(tt.n)), slog.Default(), WithMaxLines(10))
+			lines, omitted := c.LastLines()
+
+			if omitted != tt.wantOmitted {
+				t.Errorf("LastLines() omitted = %v, want %v", omitted, tt.wantOmitted)
+			}
+			if slices.Contains(lines, fmt.Sprintf(droppedMarkerFmt, tt.n-10)) {
+				t.Errorf("LastLines() = %v, must never carry the dropped-lines marker", lines)
+			}
+			if tt.wantLastFive == nil {
+				if tt.n <= 10 && len(lines) != tt.n {
+					t.Errorf("LastLines() = %v, want all %d retained lines", lines, tt.n)
+				}
+				return
+			}
+			if len(lines) != len(tt.wantLastFive) {
+				t.Fatalf("LastLines() = %v, want exactly the tail section %v", lines, tt.wantLastFive)
+			}
+			for i, want := range tt.wantLastFive {
+				if lines[i] != want {
+					t.Errorf("LastLines()[%d] = %q, want %q", i, lines[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestStderrCollector_LastLines_AbandonAppendsMarkerAndStaysOmitted(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, slog.Default(), WithMaxLines(4))
+
+	for _, line := range []string{"one", "two", "three", "four", "five", "six"} {
+		if _, err := pw.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("pw.Write(%q): %v", line, err)
+		}
+	}
+	// The pipe's write end stays open, so the drain never reaches EOF;
+	// this bounded wait only gives the drain goroutine time to have
+	// applied the line cap (and recorded a drop) to everything already
+	// written above before Abandon runs.
+	c.WaitDone(200 * time.Millisecond)
+	c.Abandon(50 * time.Millisecond)
+
+	lines, omitted := c.LastLines()
+	if !omitted {
+		t.Error("LastLines() omitted = false after a collector that dropped lines was abandoned, want true")
+	}
+	if len(lines) == 0 || lines[len(lines)-1] != AbandonedMarker {
+		t.Errorf("LastLines() = %v, want it to end with AbandonedMarker after abandonment", lines)
+	}
+}
+
+func TestStderrCollector_LastLines_NeverCarriesDroppedMarkerEvenWhenAbandoned(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c := NewStderrCollector(pr, slog.Default())
+
+	if _, err := pw.Write([]byte("only line\n")); err != nil {
+		t.Fatalf("pw.Write: %v", err)
+	}
+	c.Abandon(10 * time.Millisecond)
+
+	lines, _ := c.LastLines()
+	for _, line := range lines {
+		if strings.HasPrefix(line, "[") && strings.Contains(line, "line") && strings.Contains(line, "dropped") {
+			t.Errorf("LastLines() = %v, carries the dropped-lines marker Lines uses", lines)
+		}
+	}
+}

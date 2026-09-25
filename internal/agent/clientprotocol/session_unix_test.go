@@ -421,9 +421,15 @@ func TestStartSessionHandshakeAbandonedByEscapedDescendantFailsWithPortExit(t *t
 	if agentErr.Kind != domain.ErrPortExit {
 		t.Errorf("startSession() error kind = %q, want %q", agentErr.Kind, domain.ErrPortExit)
 	}
-	const wantMessage = "agent connection ended before responding"
-	if agentErr.Message != wantMessage {
-		t.Errorf("startSession() error message = %q, want %q", agentErr.Message, wantMessage)
+	var earlyExitErr *agentcore.EarlyExitError
+	if !errors.As(agentErr.Err, &earlyExitErr) {
+		t.Fatalf("startSession() error = %v, chain does not hold an *agentcore.EarlyExitError", agentErr)
+	}
+	if earlyExitErr.Status() != "exit status 7" {
+		t.Errorf("EarlyExitError.Status() = %q, want %q", earlyExitErr.Status(), "exit status 7")
+	}
+	if !strings.Contains(earlyExitErr.Output(), marker) {
+		t.Errorf("EarlyExitError.Output() = %q, want it to contain %q", earlyExitErr.Output(), marker)
 	}
 	if elapsed > 10*time.Second {
 		t.Errorf("startSession() took %v, want well under the 30s handshake timeout it would have hit without the release", elapsed)
@@ -698,9 +704,15 @@ func TestStartSessionSSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T) {
 	if agentErr.Kind != domain.ErrPortExit {
 		t.Errorf("startSession() error kind = %q, want %q (never the agent-not-found category)", agentErr.Kind, domain.ErrPortExit)
 	}
-	const wantMessage = "agent connection ended before responding"
-	if agentErr.Message != wantMessage {
-		t.Errorf("startSession() error message = %q, want %q", agentErr.Message, wantMessage)
+	var earlyExitErr *agentcore.EarlyExitError
+	if !errors.As(agentErr.Err, &earlyExitErr) {
+		t.Fatalf("startSession() error = %v, chain does not hold an *agentcore.EarlyExitError", agentErr)
+	}
+	if earlyExitErr.Status() != "exit status 1" {
+		t.Errorf("EarlyExitError.Status() = %q, want %q", earlyExitErr.Status(), "exit status 1")
+	}
+	if !strings.Contains(earlyExitErr.Output(), ddMissingMessage) {
+		t.Errorf("EarlyExitError.Output() = %q, want it to contain %q", earlyExitErr.Output(), ddMissingMessage)
 	}
 
 	output := buf.String()

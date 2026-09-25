@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -2250,8 +2253,8 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 		if len(tracker.commentCalls) != 1 {
 			t.Fatalf("CommentIssue called %d times, want 1", len(tracker.commentCalls))
 		}
-		if !strings.Contains(tracker.commentCalls[0].Text, "Session: S1") {
-			t.Errorf("completion comment = %q, want it to carry session %q", tracker.commentCalls[0].Text, "S1")
+		if strings.Contains(tracker.commentCalls[0].Text, "S1") || strings.Contains(tracker.commentCalls[0].Text, "Session") {
+			t.Errorf("completion comment = %q, want no session identifier (the run history and retry entry carry it instead)", tracker.commentCalls[0].Text)
 		}
 	})
 }
@@ -5015,63 +5018,51 @@ func TestBuildCompletionComment(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		sessionID      string
 		elapsed        time.Duration
 		turnsCompleted int
 		retryScheduled bool
-		wantContains   []string
-		wantAbsent     []string
+		want           string
 	}{
 		{
 			name:           "completed no retry",
-			sessionID:      "ses-abc",
 			elapsed:        90 * time.Second,
 			turnsCompleted: 5,
 			retryScheduled: false,
-			wantContains:   []string{"Sortie session completed.", "ses-abc", "1m30s", "5"},
-			wantAbsent:     []string{"re-queuing"},
+			want:           "Sortie session completed.\nDuration: 1m30s\nTurns: 5",
 		},
 		{
 			name:           "completed with re-queuing",
-			sessionID:      "ses-def",
 			elapsed:        90 * time.Second,
 			turnsCompleted: 3,
 			retryScheduled: true,
-			wantContains:   []string{"Sortie session completed (re-queuing).", "ses-def", "3"},
-		},
-		{
-			name:           "empty session ID replaced with unknown",
-			sessionID:      "",
-			elapsed:        10 * time.Second,
-			turnsCompleted: 1,
-			retryScheduled: false,
-			wantContains:   []string{"unknown"},
+			want:           "Sortie session completed (re-queuing).\nDuration: 1m30s\nTurns: 3",
 		},
 		{
 			name:           "sub-second elapsed truncated to zero",
-			sessionID:      "ses-xyz",
 			elapsed:        500 * time.Millisecond,
 			turnsCompleted: 0,
 			retryScheduled: false,
-			wantContains:   []string{"0s"},
+			want:           "Sortie session completed.\nDuration: 0s\nTurns: 0",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildCompletionComment(tt.sessionID, tt.elapsed, tt.turnsCompleted, tt.retryScheduled)
-			for _, want := range tt.wantContains {
-				if !strings.Contains(got, want) {
-					t.Errorf("buildCompletionComment() missing %q\ngot: %q", want, got)
-				}
-			}
-			for _, absent := range tt.wantAbsent {
-				if strings.Contains(got, absent) {
-					t.Errorf("buildCompletionComment() should not contain %q\ngot: %q", absent, got)
-				}
+			got := buildCompletionComment(tt.elapsed, tt.turnsCompleted, tt.retryScheduled)
+			if got != tt.want {
+				t.Errorf("buildCompletionComment(%v, %d, %v) = %q, want %q", tt.elapsed, tt.turnsCompleted, tt.retryScheduled, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildCompletionComment_NeverCarriesASessionIdentifier(t *testing.T) {
+	t.Parallel()
+
+	got := buildCompletionComment(90*time.Second, 5, false)
+	if strings.Contains(got, "Session") {
+		t.Errorf("buildCompletionComment() = %q, want no session-identifier line", got)
 	}
 }
 
@@ -5080,70 +5071,46 @@ func TestBuildFailureComment(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		sessionID      string
 		elapsed        time.Duration
-		exitErr        error
 		retryScheduled bool
 		nextAttempt    int
-		wantContains   []string
+		want           string
 	}{
 		{
 			name:           "failure with retry scheduled",
-			sessionID:      "ses-xyz",
 			elapsed:        45 * time.Second,
-			exitErr:        errors.New("process killed"),
 			retryScheduled: true,
 			nextAttempt:    2,
-			wantContains:   []string{"Sortie session failed.", "ses-xyz", "45s", "process killed", "Retry: yes (attempt 2)"},
+			want:           "Sortie session failed.\nDuration: 45s\nRetry: yes (attempt 2)",
 		},
 		{
 			name:           "failure no retry",
-			sessionID:      "ses-abc",
 			elapsed:        30 * time.Second,
-			exitErr:        errors.New("binary not found"),
 			retryScheduled: false,
 			nextAttempt:    0,
-			wantContains:   []string{"Sortie session failed.", "ses-abc", "binary not found", "Retry: no"},
-		},
-		{
-			name:           "nil error reports unknown error",
-			sessionID:      "ses-def",
-			elapsed:        10 * time.Second,
-			exitErr:        nil,
-			retryScheduled: false,
-			nextAttempt:    0,
-			wantContains:   []string{"Sortie session failed.", "unknown error"},
-		},
-		{
-			name:           "empty session ID replaced with unknown",
-			sessionID:      "",
-			elapsed:        5 * time.Second,
-			exitErr:        errors.New("crash"),
-			retryScheduled: false,
-			nextAttempt:    0,
-			wantContains:   []string{"unknown"},
-		},
-		{
-			name:           "long error message is truncated",
-			sessionID:      "ses-long",
-			elapsed:        1 * time.Second,
-			exitErr:        errors.New(strings.Repeat("x", 300)),
-			retryScheduled: false,
-			nextAttempt:    0,
-			wantContains:   []string{"..."},
+			want:           "Sortie session failed.\nDuration: 30s\nRetry: no (not retryable)",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildFailureComment(tt.sessionID, tt.elapsed, tt.exitErr, tt.retryScheduled, tt.nextAttempt)
-			for _, want := range tt.wantContains {
-				if !strings.Contains(got, want) {
-					t.Errorf("buildFailureComment() missing %q\ngot: %q", want, got)
-				}
+			got := buildFailureComment(tt.elapsed, tt.retryScheduled, tt.nextAttempt)
+			if got != tt.want {
+				t.Errorf("buildFailureComment(%v, %v, %d) = %q, want %q", tt.elapsed, tt.retryScheduled, tt.nextAttempt, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildFailureComment_NeverCarriesErrorTextOrSessionIdentifier(t *testing.T) {
+	t.Parallel()
+
+	got := buildFailureComment(45*time.Second, true, 2)
+	for _, forbidden := range []string{"Error:", "Session", "process killed", "unknown error"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("buildFailureComment() = %q, must not contain %q", got, forbidden)
+		}
 	}
 }
 
@@ -5187,8 +5154,8 @@ func TestHandleWorkerExit_CommentOnNormalExit(t *testing.T) {
 	if !strings.Contains(tracker.commentCalls[0].Text, "Sortie session completed.") {
 		t.Errorf("completion comment missing headline\ngot: %q", tracker.commentCalls[0].Text)
 	}
-	if !strings.Contains(tracker.commentCalls[0].Text, "ses-cmt1") {
-		t.Errorf("completion comment missing session ID\ngot: %q", tracker.commentCalls[0].Text)
+	if strings.Contains(tracker.commentCalls[0].Text, "ses-cmt1") || strings.Contains(tracker.commentCalls[0].Text, "Session") {
+		t.Errorf("completion comment carries a session identifier\ngot: %q", tracker.commentCalls[0].Text)
 	}
 
 	spy.mu.Lock()
@@ -5257,8 +5224,10 @@ func TestHandleWorkerExit_CommentOnErrorExit(t *testing.T) {
 	if !strings.Contains(tracker.commentCalls[0].Text, "Sortie session failed.") {
 		t.Errorf("failure comment missing headline\ngot: %q", tracker.commentCalls[0].Text)
 	}
-	if !strings.Contains(tracker.commentCalls[0].Text, "ses-cmt3") {
-		t.Errorf("failure comment missing session ID\ngot: %q", tracker.commentCalls[0].Text)
+	for _, forbidden := range []string{"ses-cmt3", "Session", "turn timed out", "Error:"} {
+		if strings.Contains(tracker.commentCalls[0].Text, forbidden) {
+			t.Errorf("failure comment must not contain %q\ngot: %q", forbidden, tracker.commentCalls[0].Text)
+		}
 	}
 
 	spy.mu.Lock()
@@ -5392,7 +5361,7 @@ func TestHandleWorkerExit_CommentNilTrackerAdapterSafe(t *testing.T) {
 	}
 }
 
-func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
+func TestHandleWorkerExit_CommentNeverCarriesEitherSessionID(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
@@ -5418,11 +5387,8 @@ func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
 		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
 	}
 	text := tracker.commentCalls[0].Text
-	if !strings.Contains(text, "result-ses") {
-		t.Errorf("comment text should contain result.SessionID %q\ngot: %q", "result-ses", text)
-	}
-	if strings.Contains(text, "entry-ses") {
-		t.Errorf("comment text should not contain entry.SessionID %q\ngot: %q", "entry-ses", text)
+	if strings.Contains(text, "result-ses") || strings.Contains(text, "entry-ses") || strings.Contains(text, "Session") {
+		t.Errorf("comment text carries a session identifier, want neither result.SessionID nor entry.SessionID present\ngot: %q", text)
 	}
 }
 
@@ -5650,15 +5616,16 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 		text := tracker.commentCalls[0].Text
 		for _, want := range []string{
 			"agent signaled: blocked",
-			"ses-ss5",
 			"Turns: 2",
 		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("soft-stop comment missing %q\ngot: %q", want, text)
 			}
 		}
-		if strings.Contains(text, "re-queuing") {
-			t.Errorf("soft-stop comment should not contain %q\ngot: %q", "re-queuing", text)
+		for _, absent := range []string{"re-queuing", "ses-ss5", "Session"} {
+			if strings.Contains(text, absent) {
+				t.Errorf("soft-stop comment should not contain %q\ngot: %q", absent, text)
+			}
 		}
 	})
 
@@ -6197,80 +6164,58 @@ func TestBuildSoftStopComment(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		sessionID      string
 		elapsed        time.Duration
 		turnsCompleted int
 		reason         string
-		wantContains   []string
-		wantAbsent     []string
+		want           string
 	}{
 		{
 			name:           "blocked reason",
-			sessionID:      "ses-abc",
 			elapsed:        60 * time.Second,
 			turnsCompleted: 3,
 			reason:         "blocked",
-			wantContains: []string{
-				"Sortie session completed (agent signaled: blocked).",
-				"ses-abc",
-				"1m0s",
-				"Turns: 3",
-			},
+			want:           "Sortie session completed (agent signaled: blocked).\nDuration: 1m0s\nTurns: 3",
 		},
 		{
 			name:           "needs-human-review reason",
-			sessionID:      "ses-xyz",
 			elapsed:        90 * time.Second,
 			turnsCompleted: 5,
 			reason:         "needs-human-review",
-			wantContains: []string{
-				"agent signaled: needs-human-review",
-				"ses-xyz",
-				"1m30s",
-				"Turns: 5",
-			},
-		},
-		{
-			name:           "empty session ID replaced with unknown",
-			sessionID:      "",
-			elapsed:        10 * time.Second,
-			turnsCompleted: 1,
-			reason:         "blocked",
-			wantContains:   []string{"unknown"},
+			want:           "Sortie session completed (agent signaled: needs-human-review).\nDuration: 1m30s\nTurns: 5",
 		},
 		{
 			name:           "sub-second elapsed truncated",
-			sessionID:      "ses-short",
 			elapsed:        500 * time.Millisecond,
 			turnsCompleted: 0,
 			reason:         "blocked",
-			wantContains:   []string{"0s"},
+			want:           "Sortie session completed (agent signaled: blocked).\nDuration: 0s\nTurns: 0",
 		},
 		{
 			name:           "not re-queuing",
-			sessionID:      "ses-def",
 			elapsed:        30 * time.Second,
 			turnsCompleted: 2,
 			reason:         "blocked",
-			wantAbsent:     []string{"re-queuing"},
+			want:           "Sortie session completed (agent signaled: blocked).\nDuration: 30s\nTurns: 2",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildSoftStopComment(tt.sessionID, tt.elapsed, tt.turnsCompleted, tt.reason)
-			for _, want := range tt.wantContains {
-				if !strings.Contains(got, want) {
-					t.Errorf("buildSoftStopComment() missing %q\ngot: %q", want, got)
-				}
-			}
-			for _, absent := range tt.wantAbsent {
-				if strings.Contains(got, absent) {
-					t.Errorf("buildSoftStopComment() should not contain %q\ngot: %q", absent, got)
-				}
+			got := buildSoftStopComment(tt.elapsed, tt.turnsCompleted, tt.reason)
+			if got != tt.want {
+				t.Errorf("buildSoftStopComment(%v, %d, %q) = %q, want %q", tt.elapsed, tt.turnsCompleted, tt.reason, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildSoftStopComment_NeverCarriesASessionIdentifier(t *testing.T) {
+	t.Parallel()
+
+	got := buildSoftStopComment(60*time.Second, 3, "blocked")
+	if strings.Contains(got, "Session") {
+		t.Errorf("buildSoftStopComment() = %q, want no session-identifier line", got)
 	}
 }
 
@@ -6635,6 +6580,130 @@ func TestHandleWorkerExit_ReviewMetadata_Persisted(t *testing.T) {
 	if got.CapReached {
 		t.Error("ReviewMetadata.CapReached = true, want false")
 	}
+}
+
+func TestHandleWorkerExit_ReviewMetadata_MasksRegisteredValue(t *testing.T) {
+	t.Parallel()
+
+	value := exitTestSecret(t)
+	redact.Add("test.exit review metadata", value)
+
+	store := &mockExitStore{}
+	state := exitState(t, "RM-MASK-1", nil)
+	params := defaultExitParams(t, store)
+
+	meta := &domain.ReviewMetadata{
+		Enabled:      true,
+		FinalVerdict: "verification failed, credential " + value,
+	}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "RM-MASK-1",
+		Identifier:     "RM-MASK-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		ReviewMetadata: meta,
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	rh := store.runHistories[0]
+	if rh.ReviewMetadata == nil {
+		t.Fatal("RunHistory.ReviewMetadata = nil, want non-nil JSON string")
+	}
+	if strings.Contains(*rh.ReviewMetadata, value) {
+		t.Fatalf("persisted ReviewMetadata JSON leaked the registered value: %s", *rh.ReviewMetadata)
+	}
+	if !strings.Contains(*rh.ReviewMetadata, redact.Marker) {
+		t.Errorf("persisted ReviewMetadata JSON = %s, want it to contain %q", *rh.ReviewMetadata, redact.Marker)
+	}
+}
+
+func TestHandleWorkerExit_RunHistoryErrorMasksRegisteredValue(t *testing.T) {
+	t.Parallel()
+
+	value := exitTestSecret(t)
+	redact.Add("test.exit run history error", value)
+
+	store := &mockExitStore{}
+	state := exitState(t, "ERR-MASK-1", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "ERR-MASK-1",
+		Identifier:   "ERR-MASK-1-ident",
+		ExitKind:     WorkerExitError,
+		Error:        &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "failed with credential " + value},
+		AgentAdapter: "mock",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	rh := store.runHistories[0]
+	if rh.Error == nil {
+		t.Fatal("RunHistory.Error = nil, want non-nil")
+	}
+	if strings.Contains(*rh.Error, value) {
+		t.Fatalf("RunHistory.Error leaked the registered value: %q", *rh.Error)
+	}
+	if !strings.Contains(*rh.Error, redact.Marker) {
+		t.Errorf("RunHistory.Error = %q, want it to contain %q", *rh.Error, redact.Marker)
+	}
+}
+
+func TestHandleWorkerExit_RetryEntryErrorMasksRegisteredValue(t *testing.T) {
+	t.Parallel()
+
+	value := exitTestSecret(t)
+	redact.Add("test.exit retry entry error", value)
+
+	store := &mockExitStore{}
+	state := exitState(t, "RETRY-MASK-1", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "RETRY-MASK-1",
+		Identifier:   "RETRY-MASK-1-ident",
+		ExitKind:     WorkerExitError,
+		Error:        &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out with credential " + value},
+		AgentAdapter: "mock",
+	}, params)
+
+	retryEntry, ok := state.RetryAttempts["RETRY-MASK-1"]
+	if !ok {
+		t.Fatal("retry not scheduled, want an in-memory RetryEntry")
+	}
+	if strings.Contains(retryEntry.Error, value) {
+		t.Fatalf("in-memory RetryEntry.Error leaked the registered value: %q", retryEntry.Error)
+	}
+	if !strings.Contains(retryEntry.Error, redact.Marker) {
+		t.Errorf("in-memory RetryEntry.Error = %q, want it to contain %q", retryEntry.Error, redact.Marker)
+	}
+
+	if len(store.retryEntries) != 1 {
+		t.Fatalf("SaveRetryEntry called %d times, want 1", len(store.retryEntries))
+	}
+	persisted := store.retryEntries[0]
+	if persisted.Error == nil {
+		t.Fatal("persisted RetryEntry.Error = nil, want non-nil")
+	}
+	if strings.Contains(*persisted.Error, value) {
+		t.Fatalf("persisted RetryEntry.Error leaked the registered value: %q", *persisted.Error)
+	}
+	if !strings.Contains(*persisted.Error, redact.Marker) {
+		t.Errorf("persisted RetryEntry.Error = %q, want it to contain %q", *persisted.Error, redact.Marker)
+	}
+}
+
+func exitTestSecret(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return "exit-secret-" + hex.EncodeToString(buf)
 }
 
 func TestHandleWorkerExit_ReviewMetadata_Nil(t *testing.T) {
