@@ -27,8 +27,8 @@ Recommended additional hardening:
 ### 15.3 Secret Handling
 
 - Support `$VAR` indirection in workflow config.
-- Do not log API tokens or secret env values.
 - Validate presence of secrets without printing them.
+- Every log record and every runtime-derived text Sortie stores or shows an operator has each secret value it holds replaced by a fixed marker. The values are those Sortie holds under a name that marks a credential (its environment variables and environment file, configuration keys, and the environment entries and headers of the tool servers it hands a runtime), the tracker API key, the credentials in a URL's userinfo, and notification endpoint URLs, which grant access to whoever holds them. A value too short to mask is named in a warning, never shown. Matching is exact, and every bound that cuts such text applies after masking. A value Sortie never held, one it holds under a name no convention marks as a credential, or one its producer transforms before printing it, is outside what masking recognizes.
 
 ### 15.4 Hook Script Safety
 

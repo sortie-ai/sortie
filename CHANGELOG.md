@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workflows that use the `copilot-cli` agent kind now need GitHub Copilot CLI 1.0.51 or later.
   ([#1047](https://github.com/sortie-ai/sortie/issues/1047))
 
+- The comment posted when a session starts (`tracker.comments.on_dispatch`) now reads only "Sortie session started.", without the session and workspace lines that always read `pending`, the agent kind, or the attempt count. The comments posted when a session ends (`tracker.comments.on_completion`, `tracker.comments.on_failure`) no longer show the agent's session identifier, and the failure comment no longer quotes the error; it gives the duration and whether the issue will be retried, and the cause stays available in the log, the run history, and the dashboard.
+  ([#1125](https://github.com/sortie-ai/sortie/issues/1125))
+
 ### Fixed
 
 - A run that ends having reported no token usage, while `agent.max_tokens` is set, now says so in the log, naming the agent kind and the ceiling the run could not be held to. Before this, only an agent kind that declares up front that it never reports token usage drew a warning, so a kind that declares figures do arrive while the runtime it starts reports none left the ceiling doing nothing and said nothing about it. The dashboard no longer describes such a session as not having reported its tokens yet: once the point its agent reports at has passed with nothing counted, the session's Tokens row reads "not reported", and the footer counts the session among those running an agent that reports no token usage rather than among those still to report.
@@ -51,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A workspace directory replaced by a symbolic link no longer redirects Sortie's workspace files, hooks, or agent launches to the link's target; the affected step now fails instead. A workspace directory removed before the agent starts now fails that dispatch attempt instead of being recreated empty.
   ([#1121](https://github.com/sortie-ai/sortie/issues/1121))
+
+- A coding agent that exits right after Sortie starts it, such as on a misspelled switch in `agent.command`, now fails the run before any work with its exit status and the end of what it printed to standard error, instead of being reported as a lost connection or a credential problem. This covers the `agent-client-protocol` and `codex` agent kinds and the credential check the `kiro` kind runs before work starts.
+  ([#1125](https://github.com/sortie-ai/sortie/issues/1125))
+
+- Credentials no longer appear in the log, the run history, the retry list, or the dashboard when an agent, a hook, or a verification command prints them. Every value Sortie knows to be a credential, from its environment, its configuration including the `.env` file, and the tool servers it hands an agent, now shows as `[redacted]`; one too short to hide is instead named in a warning.
+  ([#1125](https://github.com/sortie-ai/sortie/issues/1125))
 
 ### Migrations
 
