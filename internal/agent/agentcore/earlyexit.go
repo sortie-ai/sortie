@@ -19,7 +19,7 @@ import (
 const EarlyExitCaptureBytes = 64 * 1024
 
 const (
-	earlyExitMessage       = "the agent runtime exited before the session started"
+	earlyExitMessage       = "the agent runtime exited before responding"
 	earlyExitNoOutput      = "no standard-error output"
 	earlyExitOmittedMarker = "[earlier output omitted] "
 	earlyExitSeparator     = " | "
@@ -99,6 +99,42 @@ func ExitedEarly(target LaunchTarget, result procutil.CaptureResult) EarlyExit {
 		incomplete: !result.OutputComplete,
 		remote:     target.RemoteCommand != "",
 		grace:      procutil.DefaultDrainGrace,
+	}
+}
+
+// OutputWatch observes, for one turn, whether its runtime has written
+// a line of readable text on standard output yet. The zero value has
+// observed nothing.
+type OutputWatch struct {
+	seen bool
+}
+
+// Observe records line as the turn's response once
+// trimSpace(sanitize(string(line))) is non-empty. It does nothing once
+// w has already observed a response.
+func (w *OutputWatch) Observe(line []byte) {
+	if w.seen {
+		return
+	}
+	if trimSpace(sanitize(string(line))) != "" {
+		w.seen = true
+	}
+}
+
+// ExitedBeforeOutput returns the zero EarlyExit once w has observed a
+// response, and an observed one carrying waitErr otherwise. The exit
+// status recorded in waitErr plays no part in this decision: a runtime
+// that never wrote a readable line has not responded, whatever status
+// it exited with.
+func (w *OutputWatch) ExitedBeforeOutput(target LaunchTarget, waitErr error) EarlyExit {
+	if w.seen {
+		return EarlyExit{}
+	}
+	return EarlyExit{
+		observed: true,
+		waitErr:  waitErr,
+		remote:   target.RemoteCommand != "",
+		grace:    procutil.DefaultDrainGrace,
 	}
 }
 

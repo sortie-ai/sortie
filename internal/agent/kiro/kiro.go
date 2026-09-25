@@ -182,10 +182,10 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		},
 		GetUsage:     func() (domain.TokenUsage, bool) { return domain.TokenUsage{}, false },
 		GetSessionID: func() string { return state.sessionID },
-		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
+		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			creditsSeen := classifyStderr(stderrLines)
 
-			ev := agentcore.TurnEvidence{ExitObserved: true, ExitCode: exitCode}
+			ev := agentcore.TurnEvidence{ExitObserved: true, ExitCode: exitCode, EarlyExit: earlyExit}
 			ev.Work, ev.WorkDetail = state.work.Report()
 
 			if exitCode == 0 && creditsSeen {

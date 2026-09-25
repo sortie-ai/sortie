@@ -1,9 +1,11 @@
 package agentcore
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -137,6 +139,13 @@ type TurnEvidence struct {
 	// it MUST NOT interpolate stderr, stdout, a file path, or any other
 	// runtime value.
 	WorkDetail string
+
+	// EarlyExit is the report for a turn whose runtime exited before
+	// responding, built only by [EarlyExit.Report], else nil. Consulted
+	// only when Terminal is TerminalAbsent and ExitObserved is true, and
+	// only as a report this package itself built; any other value is
+	// ignored and a later row decides.
+	EarlyExit *domain.AgentError
 }
 
 // DispositionRow identifies the decision-table row that produced a
@@ -186,6 +195,12 @@ const (
 	// TerminalAbsent, the process exited 0, and the adapter reported no
 	// work evidence at all.
 	RowWorkUnobservable
+
+	// RowExitedBeforeOutput is the row selected when Terminal is
+	// TerminalAbsent, a process exit was observed, and EarlyExit carries
+	// a report this package itself built for a runtime that exited
+	// before responding.
+	RowExitedBeforeOutput
 )
 
 // TurnDisposition is the normalized outcome of one turn.
@@ -229,7 +244,7 @@ type TurnMeta struct {
 
 // DecideTurn returns the normalized disposition for one agent turn. It is
 // pure: no I/O, no logging, no emission, no state. Every TurnEvidence value
-// maps to exactly one of ten rows, evaluated in order and returned on the
+// maps to exactly one of eleven rows, evaluated in order and returned on the
 // first match.
 //
 // A positive terminal report is authoritative: when Terminal is
@@ -305,6 +320,19 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 			ErrorKind:    domain.ErrPortExit,
 			EventMessage: "runtime reported no turn outcome",
 			ErrorMessage: "runtime reported no turn outcome",
+		}
+	}
+
+	if ev.EarlyExit != nil {
+		var earlyExitErr *EarlyExitError
+		if errors.As(ev.EarlyExit, &earlyExitErr) || errors.Is(ev.EarlyExit, sshutil.ErrConnectionFailed) {
+			return TurnDisposition{
+				Row:          RowExitedBeforeOutput,
+				ExitReason:   domain.EventTurnFailed,
+				ErrorKind:    ev.EarlyExit.Kind,
+				EventMessage: ev.EarlyExit.Message,
+				ErrorMessage: ev.EarlyExit.Message,
+			}
 		}
 	}
 
@@ -404,6 +432,9 @@ func FinalizeTurn(
 
 	if disposition.ErrorKind == "" {
 		return result, nil
+	}
+	if disposition.Row == RowExitedBeforeOutput {
+		return result, ev.EarlyExit
 	}
 	return result, &domain.AgentError{
 		Kind:    disposition.ErrorKind,

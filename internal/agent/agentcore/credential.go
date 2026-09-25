@@ -109,6 +109,9 @@ func isTerminalVerificationError(err error) bool {
 	if errors.Is(err, sshutil.ErrConnectionFailed) {
 		return true
 	}
+	if _, isEarlyExit := errors.AsType[*EarlyExitError](err); isEarlyExit {
+		return true
+	}
 	var agentErr *domain.AgentError
 	if !errors.As(err, &agentErr) {
 		return false
