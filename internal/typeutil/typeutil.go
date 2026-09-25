@@ -6,7 +6,6 @@ package typeutil
 import (
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // ExtractStringSlice converts a loosely-typed value to []string.
@@ -30,17 +29,6 @@ func ExtractStringSlice(v any) []string {
 	default:
 		return nil
 	}
-}
-
-// TruncateRunes returns s if it contains maxLen or fewer runes. When s
-// exceeds maxLen runes, the first maxLen runes are returned with a "…"
-// (U+2026) suffix. maxLen must be non-negative.
-func TruncateRunes(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxLen]) + "…"
 }
 
 // TypeFault reports one configuration value whose YAML type is not the

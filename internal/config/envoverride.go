@@ -171,6 +171,32 @@ func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
 	return envKeys, nil
 }
 
+// DotEnvEntries returns the "NAME=value" entries of the .env file at
+// the path [applyEnvOverrides] resolves (the path [SetDotEnvPath] set,
+// falling back to SORTIE_ENV_FILE), read fresh on every call. It
+// returns nil when no path is set, or the file is missing or does not
+// parse.
+func DotEnvEntries() []string {
+	path := getDotEnvPath()
+	if path == "" {
+		path = os.Getenv("SORTIE_ENV_FILE")
+	}
+	if path == "" {
+		return nil
+	}
+
+	pairs, err := parseDotEnv(path)
+	if err != nil || len(pairs) == 0 {
+		return nil
+	}
+
+	entries := make([]string, 0, len(pairs))
+	for k, v := range pairs {
+		entries = append(entries, k+"="+v)
+	}
+	return entries
+}
+
 // ensureSubMap ensures m[key] is a map[string]any and returns it. If
 // the existing value is nil or absent, a fresh empty map is created and
 // assigned. If the existing value is a non-map type, it is replaced and

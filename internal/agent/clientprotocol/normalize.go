@@ -7,7 +7,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/typeutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // reasoningBlockMessage and planUpdateMessage are the compile-time
@@ -56,7 +56,7 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 			event: domain.AgentEvent{
 				Type:      domain.EventNotification,
 				Timestamp: now,
-				Message:   typeutil.TruncateRunes(text, messageTruncateLimit),
+				Message:   redact.Truncate(text, messageTruncateLimit),
 			},
 			hasEvent: true,
 		}
@@ -98,7 +98,7 @@ func applySessionUpdate(tracker *agentcore.ToolTracker, ev sessionUpdateEvent) n
 					ToolName:       name,
 					ToolDurationMS: durationMS,
 					ToolError:      *ev.toolCallUpdate.Status == toolCallStatusFailed,
-					Message:        typeutil.TruncateRunes(title, messageTruncateLimit),
+					Message:        redact.Truncate(title, messageTruncateLimit),
 				},
 				hasEvent: true,
 			}
@@ -195,7 +195,7 @@ func stopReasonEvidence(reason stopReason) agentcore.TurnEvidence {
 		return agentcore.TurnEvidence{
 			Terminal:          agentcore.TerminalFailure,
 			TerminalErrorKind: domain.ErrTurnOutcomeUnknown,
-			TerminalMessage: typeutil.TruncateRunes(
+			TerminalMessage: redact.Truncate(
 				fmt.Sprintf("agent reported an unrecognized stop reason: %q", string(reason)),
 				messageTruncateLimit,
 			),

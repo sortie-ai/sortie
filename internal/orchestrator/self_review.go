@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/workspace"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
@@ -57,23 +59,50 @@ type RunSelfReviewParams struct {
 const maxVerdictFileBytes = 65536
 
 // cappedWriter captures up to max bytes of written data, silently
-// discarding excess. Write always reports the full input length so the
+// discarding excess, after masking every registered secret value in
+// the stream. Write always reports the full input length so the
 // writing subprocess never blocks on a full pipe buffer.
 type cappedWriter struct {
-	buf strings.Builder
-	max int
+	buf        strings.Builder
+	max        int
+	masker     *redact.Writer
+	maskerOnce sync.Once
+}
+
+func (w *cappedWriter) ensureMasker() {
+	w.maskerOnce.Do(func() {
+		w.masker = redact.NewWriter(&cappedWriterSink{w: w})
+	})
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
-	if w.buf.Len() < w.max {
-		remaining := min(w.max-w.buf.Len(), len(p))
-		w.buf.Write(p[:remaining])
+	w.ensureMasker()
+	if _, err := w.masker.Write(p); err != nil {
+		return 0, err
 	}
 	return len(p), nil
 }
 
+// String flushes the masker so a registered value straddling the cap
+// is masked before the cap sees it, then returns the retained text.
 func (w *cappedWriter) String() string {
+	w.ensureMasker()
+	_ = w.masker.Flush() // the underlying sink never returns an error
 	return w.buf.String()
+}
+
+// cappedWriterSink applies cappedWriter's byte cap to already-masked
+// bytes, so the retention decision never sees raw, unmasked input.
+type cappedWriterSink struct {
+	w *cappedWriter
+}
+
+func (s *cappedWriterSink) Write(p []byte) (int, error) {
+	if s.w.buf.Len() < s.w.max {
+		remaining := min(s.w.max-s.w.buf.Len(), len(p))
+		s.w.buf.Write(p[:remaining])
+	}
+	return len(p), nil
 }
 
 func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffBytes int) (diff string, originalSize int, truncated bool, err error) {

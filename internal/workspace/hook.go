@@ -1,13 +1,12 @@
 package workspace
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
@@ -70,53 +69,15 @@ func truncateScript(s string) string {
 	return s[:maxScriptDisplayLen] + "..."
 }
 
-// limitedBuffer retains the last max bytes written to it, dropping the
-// earliest bytes once the total exceeds max. It implements [io.Writer]
-// for use as a hook capture's combined-output sink and is safe for
-// concurrent use.
-type limitedBuffer struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	max       int
-	truncated bool
-}
-
-// Write appends p and, once the retained content exceeds max, discards
-// the earliest bytes so only the most recent max bytes remain. It
-// always returns len(p), nil, and is safe for concurrent use.
-func (lb *limitedBuffer) Write(p []byte) (int, error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	// A single write larger than the cap overwrites the whole retained
-	// window, so keep only its last max bytes rather than growing the
-	// buffer to hold all of p and trimming afterward.
-	if len(p) > lb.max {
-		lb.buf.Reset()
-		lb.buf.Write(p[len(p)-lb.max:]) //nolint:errcheck // bytes.Buffer.Write never returns an error
-		lb.truncated = true
-		return len(p), nil
+// formatHookOutput returns buf's retained bytes, prefixed with a
+// one-line truncation marker naming [MaxHookOutputBytes] when buf
+// discarded earlier output.
+func formatHookOutput(buf *procutil.TailBuffer) string {
+	retained := string(buf.Bytes())
+	if !buf.Truncated() {
+		return retained
 	}
-
-	lb.buf.Write(p) //nolint:errcheck // bytes.Buffer.Write never returns an error
-	if overflow := lb.buf.Len() - lb.max; overflow > 0 {
-		lb.buf.Next(overflow)
-		lb.truncated = true
-	}
-	return len(p), nil
-}
-
-// String returns the retained tail of the written bytes. When earlier
-// bytes were dropped, the tail is prefixed with a one-line marker
-// reporting the number of bytes shown.
-func (lb *limitedBuffer) String() string {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	if !lb.truncated {
-		return lb.buf.String()
-	}
-	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n%s", lb.max, lb.buf.String())
+	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n%s", MaxHookOutputBytes, retained)
 }
 
 // hookEnv builds a restricted environment for the hook subprocess.

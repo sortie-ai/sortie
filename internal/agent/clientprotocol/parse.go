@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
-	"github.com/sortie-ai/sortie/internal/typeutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // quoteJSONRPCError renders e for display only; no behavior may depend
@@ -18,7 +18,7 @@ func quoteJSONRPCError(e *jsonrpc.Error) string {
 	if data := formatErrorData(e.Data); data != "" {
 		text += ": " + data
 	}
-	return typeutil.TruncateRunes(text, messageTruncateLimit)
+	return redact.Truncate(text, messageTruncateLimit)
 }
 
 func formatErrorData(data json.RawMessage) string {

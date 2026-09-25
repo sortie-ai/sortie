@@ -37,11 +37,10 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
-	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -139,7 +138,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 	var verificationBefore []kiroSessionListing
 	var verificationBeforeListed bool
 	if params.CredentialVerification {
-		if authErr := checkCredential(ctx, target, params.AgentConfig.StopGraceMS); authErr != nil {
+		if authErr := checkCredential(ctx, target, params.AgentConfig.StopGraceMS, baseLogger); authErr != nil {
 			return domain.Session{}, authErr
 		}
 		listing, listErr := listWorkspaceConversations(ctx, target, agentcore.AuxiliaryTimeout(params.AgentConfig), params.AgentConfig.StopGraceMS)
@@ -175,7 +174,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 				emit(domain.AgentEvent{
 					Type:      domain.EventNotification,
 					Timestamp: time.Now().UTC(),
-					Message:   typeutil.TruncateRunes(text, 500),
+					Message:   redact.Truncate(text, 500),
 					AgentPID:  pid,
 				})
 			}
@@ -209,22 +208,25 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 	}, nil
 }
 
-// checkCredential runs "kiro-cli whoami" because a headless chat under a
-// missing or invalid credential either hangs on interactive login or exits
-// 0 with empty output. The generous bound covers a token refresh.
-func checkCredential(ctx context.Context, target agentcore.LaunchTarget, stopGraceMS int) *domain.AgentError {
+// checkCredential runs "kiro-cli whoami --format json" because a headless
+// chat under a missing or invalid credential either hangs on interactive
+// login or exits 0 with empty output. It decides on the runtime's own
+// structured answer, never on the exit status alone: only an answer
+// naming no signed-in account is a credential problem. Any other
+// failing exit is a start failure, reported through the shared
+// early-exit report. The generous bound covers a token refresh.
+func checkCredential(ctx context.Context, target agentcore.LaunchTarget, stopGraceMS int, logger *slog.Logger) *domain.AgentError {
 	canaryCtx, cancel := context.WithTimeout(ctx, agentcore.CredentialExchangeBound)
 	defer cancel()
 
-	cmd, agentErr := target.AuxiliaryCommand(canaryCtx, []string{"whoami"}, nil, nil)
+	stdout := procutil.NewTailBuffer(agentcore.EarlyExitCaptureBytes)
+	stderr := procutil.NewTailBuffer(agentcore.EarlyExitCaptureBytes)
+
+	cmd, agentErr := target.AuxiliaryCommand(canaryCtx, []string{"whoami", "--format", "json"}, nil, nil)
 	if agentErr != nil {
 		return agentErr
 	}
-	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{})
-
-	if target.RemoteCommand != "" && startErr == nil && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
-		return agentcore.ConnectionFailedError()
-	}
+	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(stopGraceMS), procutil.CaptureParams{Stdout: stdout, Stderr: stderr})
 
 	switch {
 	case startErr != nil:
@@ -232,11 +234,56 @@ func checkCredential(ctx context.Context, target agentcore.LaunchTarget, stopGra
 	case errors.Is(canaryCtx.Err(), context.DeadlineExceeded):
 		reason := fmt.Sprintf("whoami did not finish within %d ms", agentcore.CredentialExchangeBound.Milliseconds())
 		return agentcore.CredentialAbsentError(reason, canaryCtx.Err())
-	case result.WaitErr != nil:
+	case canaryCtx.Err() != nil:
+		if result.WaitErr == nil {
+			return nil
+		}
 		reason := fmt.Sprintf("whoami exited with status %d", procutil.ExtractExitCode(result.WaitErr))
 		return agentcore.CredentialAbsentError(reason, result.WaitErr)
+	case result.WaitErr == nil:
+		return nil
+	}
+
+	if answersNoAccount(noAccountCheckBytes(stdout)) {
+		return agentcore.CredentialAbsentError("whoami reports no signed-in account", result.WaitErr)
+	}
+
+	return agentcore.ExitedEarly(target, result).Report(stderr.Collector(logger))
+}
+
+// noAccountCheckBytes returns stdout's retained bytes for
+// [answersNoAccount], dropping the first line when a discard may have
+// cut it, so a fragment never decodes as a false no-account answer.
+func noAccountCheckBytes(stdout *procutil.TailBuffer) []byte {
+	data := stdout.Bytes()
+	if !stdout.Truncated() {
+		return data
+	}
+	if _, rest, found := bytes.Cut(data, []byte{'\n'}); found {
+		return rest
 	}
 	return nil
+}
+
+// answersNoAccount reports whether any line of stdout decodes as a JSON
+// object whose only member is "account" set to null, the runtime's own
+// verdict that no credential is signed in.
+func answersNoAccount(stdout []byte) bool {
+	for line := range bytes.SplitSeq(stdout, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(line, &obj); err != nil {
+			continue
+		}
+		raw, ok := obj["account"]
+		if ok && len(obj) == 1 && string(bytes.TrimSpace(raw)) == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 type kiroSessionListing struct {

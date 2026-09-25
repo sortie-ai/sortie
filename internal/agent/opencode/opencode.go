@@ -33,8 +33,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -335,7 +335,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				resetTimer(readTimer, readTimeout)
 			}
 
-			plainText := typeutil.TruncateRunes(parsed.PlainText, 500)
+			plainText := redact.Truncate(parsed.PlainText, 500)
 			emit(domain.AgentEvent{
 				Type:      domain.EventMalformed,
 				Timestamp: time.Now().UTC(),
@@ -396,7 +396,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				return domain.TurnResult{}, nil, false
 			}
 			runtime.work.ObserveAssistantOutput()
-			agentcore.EmitNotification(emit, typeutil.TruncateRunes(part.Text, 500))
+			agentcore.EmitNotification(emit, redact.Truncate(part.Text, 500))
 
 		case "reasoning":
 			if _, err := parseReasoningPart(rawEvent.Part); err != nil {
@@ -423,7 +423,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				ToolName:       part.Tool,
 				ToolDurationMS: toolDuration(part.State.Time),
 				ToolError:      strings.EqualFold(part.State.Status, "error"),
-				Message:        typeutil.TruncateRunes(part.State.Error, 500),
+				Message:        redact.Truncate(part.State.Error, 500),
 			})
 
 		case "step_finish":

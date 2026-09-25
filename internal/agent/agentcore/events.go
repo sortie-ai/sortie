@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/typeutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // EmitSessionStarted emits an EventSessionStarted event with the given agent
@@ -84,7 +84,7 @@ func EmitMalformed(emit func(domain.AgentEvent), line []byte) {
 	emit(domain.AgentEvent{
 		Type:      domain.EventMalformed,
 		Timestamp: time.Now().UTC(),
-		Message:   typeutil.TruncateRunes(string(line), 500),
+		Message:   redact.Truncate(string(line), 500),
 	})
 }
 

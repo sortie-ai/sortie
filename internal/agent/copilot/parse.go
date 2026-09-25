@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sortie-ai/sortie/internal/typeutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // rawEvent is the intermediate representation of a Copilot CLI JSONL
@@ -200,7 +200,7 @@ func completionFailureMessage(summary string) string {
 	if summary == "" {
 		return "agent reported the task complete without success"
 	}
-	return typeutil.TruncateRunes(summary, 500)
+	return redact.Truncate(summary, 500)
 }
 
 // summarizeAssistantMessage produces a human-readable summary from an
@@ -208,7 +208,7 @@ func completionFailureMessage(summary string) string {
 // 200 runes; otherwise tool requests are listed by name.
 func summarizeAssistantMessage(data assistantMessageData) string {
 	if data.Content != "" {
-		return typeutil.TruncateRunes(strings.TrimSpace(data.Content), 200)
+		return redact.Truncate(strings.TrimSpace(data.Content), 200)
 	}
 	if len(data.ToolRequests) > 0 {
 		names := make([]string, len(data.ToolRequests))

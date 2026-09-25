@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -409,7 +410,8 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		runHistory.CacheReadTokens = 0
 	}
 	if workerResult.ReviewMetadata != nil {
-		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)
+		masked := maskedReviewMetadata(*workerResult.ReviewMetadata)
+		data, marshalErr := json.Marshal(masked)
 		if marshalErr != nil {
 			log.Warn("failed to marshal review metadata", slog.Any("error", marshalErr))
 		} else {
@@ -1180,7 +1182,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 				var errMsg string
 				if workerResult.Error != nil {
-					errMsg = "worker exited: " + workerResult.Error.Error()
+					errMsg = redact.Mask("worker exited: " + workerResult.Error.Error())
 				}
 
 				ScheduleRetry(state, ScheduleRetryParams{
@@ -1238,10 +1240,6 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	var commentText string
 	var lifecycle string
 
-	sessionID = workerResult.SessionID
-	if sessionID == "" {
-		sessionID = entry.SessionID
-	}
 	runDuration := max(now.Sub(entry.StartedAt), 0)
 
 	// A deferral leaves work queued exactly as a scheduled retry does, so the
@@ -1252,14 +1250,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	case WorkerExitNormal:
 		if evidenceWithheld {
 			if params.CommentsConfig.OnFailure {
-				commentText = buildFailureComment(sessionID, runDuration, evidenceErr, retryPending, nextAttempt)
+				commentText = buildFailureComment(runDuration, retryPending, nextAttempt)
 				lifecycle = "failure"
 			}
 		} else if params.CommentsConfig.OnCompletion {
 			if workerResult.SoftStop {
-				commentText = buildSoftStopComment(sessionID, runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
+				commentText = buildSoftStopComment(runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
 			} else {
-				commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryPending)
+				commentText = buildCompletionComment(runDuration, workerResult.TurnsCompleted, retryPending)
 			}
 			lifecycle = "completion"
 		}
@@ -1267,7 +1265,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// No comment on cancellation.
 	default:
 		if params.CommentsConfig.OnFailure {
-			commentText = buildFailureComment(sessionID, runDuration, workerResult.Error, retryPending, nextAttempt)
+			commentText = buildFailureComment(runDuration, retryPending, nextAttempt)
 			lifecycle = "failure"
 		}
 	}
@@ -1371,7 +1369,39 @@ func errorStringPtr(err error) *string {
 	if err == nil {
 		return nil
 	}
-	return new(err.Error())
+	return new(redact.Mask(err.Error()))
+}
+
+// maskedReviewMetadata returns a copy of m with every string field
+// masked, so a registered value a verification command or the agent's
+// own review text printed cannot reach the persisted run history.
+func maskedReviewMetadata(m domain.ReviewMetadata) domain.ReviewMetadata {
+	m.FinalVerdict = redact.Mask(m.FinalVerdict)
+
+	iterations := make([]domain.ReviewIterationRecord, len(m.Iterations))
+	for i, iteration := range m.Iterations {
+		iteration.Verdict = redact.Mask(iteration.Verdict)
+		iteration.VerdictRaw = redact.Mask(iteration.VerdictRaw)
+		iteration.VerdictParseError = redact.Mask(iteration.VerdictParseError)
+
+		results := make([]domain.VerificationResult, len(iteration.VerificationResults))
+		for j, result := range iteration.VerificationResults {
+			results[j] = domain.VerificationResult{
+				Command:        redact.Mask(result.Command),
+				ExitCode:       result.ExitCode,
+				Stdout:         redact.Mask(result.Stdout),
+				Stderr:         redact.Mask(result.Stderr),
+				DurationMS:     result.DurationMS,
+				TimedOut:       result.TimedOut,
+				ExecutionError: redact.Mask(result.ExecutionError),
+			}
+		}
+		iteration.VerificationResults = results
+		iterations[i] = iteration
+	}
+	m.Iterations = iterations
+
+	return m
 }
 
 func stringPtr(s string) *string {
@@ -1383,44 +1413,33 @@ func stringPtr(s string) *string {
 
 // buildCompletionComment returns the tracker comment for a normal exit.
 // retryScheduled distinguishes "completed (re-queuing)" from "completed".
-func buildCompletionComment(sessionID string, elapsed time.Duration, turnsCompleted int, retryScheduled bool) string {
-	if sessionID == "" {
-		sessionID = "unknown"
-	}
+// The comment carries no session identifier: a reader of the issue
+// cannot act on it, and a public issue would publish it.
+func buildCompletionComment(elapsed time.Duration, turnsCompleted int, retryScheduled bool) string {
 	headline := "Sortie session completed."
 	if retryScheduled {
 		headline = "Sortie session completed (re-queuing)."
 	}
-	return fmt.Sprintf("%s\nSession: %s\nDuration: %s\nTurns: %d",
-		headline, sessionID, elapsed.Truncate(time.Second).String(), turnsCompleted)
+	return fmt.Sprintf("%s\nDuration: %s\nTurns: %d",
+		headline, elapsed.Truncate(time.Second).String(), turnsCompleted)
 }
 
-// buildFailureComment returns the tracker comment for an error exit.
-func buildFailureComment(sessionID string, elapsed time.Duration, exitErr error, retryScheduled bool, nextAttempt int) string {
-	if sessionID == "" {
-		sessionID = "unknown"
-	}
-	errStr := "unknown error"
-	if exitErr != nil {
-		errStr = exitErr.Error()
-		if len(errStr) > 200 {
-			errStr = errStr[:200] + "..."
-		}
-	}
-	retryLine := "Retry: no — not retryable"
+// buildFailureComment returns the tracker comment for an error exit. It
+// carries neither the error text nor the session identifier: the issue
+// may be public, and the cause stays in the log, the run history, and
+// the dashboard.
+func buildFailureComment(elapsed time.Duration, retryScheduled bool, nextAttempt int) string {
+	retryLine := "Retry: no (not retryable)"
 	if retryScheduled {
 		retryLine = fmt.Sprintf("Retry: yes (attempt %d)", nextAttempt)
 	}
-	return fmt.Sprintf("Sortie session failed.\nSession: %s\nDuration: %s\nError: %s\n%s",
-		sessionID, elapsed.Truncate(time.Second).String(), errStr, retryLine)
+	return fmt.Sprintf("Sortie session failed.\nDuration: %s\n%s",
+		elapsed.Truncate(time.Second).String(), retryLine)
 }
 
 // buildSoftStopComment returns the tracker comment for an exit triggered by
 // a recognized A2O status signal.
-func buildSoftStopComment(sessionID string, elapsed time.Duration, turnsCompleted int, reason string) string {
-	if sessionID == "" {
-		sessionID = "unknown"
-	}
-	return fmt.Sprintf("Sortie session completed (agent signaled: %s).\nSession: %s\nDuration: %s\nTurns: %d",
-		reason, sessionID, elapsed.Truncate(time.Second).String(), turnsCompleted)
+func buildSoftStopComment(elapsed time.Duration, turnsCompleted int, reason string) string {
+	return fmt.Sprintf("Sortie session completed (agent signaled: %s).\nDuration: %s\nTurns: %d",
+		reason, elapsed.Truncate(time.Second).String(), turnsCompleted)
 }

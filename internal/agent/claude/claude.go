@@ -19,8 +19,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -342,11 +342,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				}
 				if lastResult.Subtype == "success" && !lastResult.IsError {
 					ev.Terminal = agentcore.TerminalSuccess
-					ev.TerminalMessage = typeutil.TruncateRunes(lastResult.Result, 500)
+					ev.TerminalMessage = redact.Truncate(lastResult.Result, 500)
 				} else {
 					ev.Terminal = agentcore.TerminalFailure
 					if strings.TrimSpace(lastResult.Result) != "" {
-						ev.TerminalMessage = typeutil.TruncateRunes(lastResult.Result, 500)
+						ev.TerminalMessage = redact.Truncate(lastResult.Result, 500)
 					} else {
 						ev.TerminalMessage = lastResult.Subtype
 					}
@@ -549,7 +549,7 @@ func processToolBlocks(
 			msg := "tool_result: " + toolName
 			if block.IsError {
 				if errText := toolResultText(block); errText != "" {
-					msg = truncateToolError(stripClaudeMarkup(errText), maxToolErrorLen)
+					msg = truncateToolError(redact.Mask(stripClaudeMarkup(errText)), maxToolErrorLen)
 				}
 			}
 			onEvent(domain.AgentEvent{

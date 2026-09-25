@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // Format controls the output encoding of the process-wide logger.
@@ -35,7 +37,7 @@ const (
 // rather than calling [slog.Default] afterward to avoid a race when multiple
 // goroutines call Setup concurrently.
 func Setup(w io.Writer, level slog.Level, format Format) *slog.Logger {
-	opts := &slog.HandlerOptions{Level: level}
+	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: redact.ReplaceAttr}
 	var handler slog.Handler
 	if format == FormatJSON {
 		handler = slog.NewJSONHandler(w, opts)

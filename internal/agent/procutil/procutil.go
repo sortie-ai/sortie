@@ -407,6 +407,36 @@ func (c *StderrCollector) Lines() []string {
 	}
 }
 
+// LastLines blocks until the drain goroutine finishes or the collector
+// is abandoned, whichever comes first, like [StderrCollector.Lines],
+// and returns the retained lines without the dropped-lines marker
+// Lines inserts: the tail section alone when a line was discarded and
+// the tail holds one, every retained line otherwise, followed by
+// [AbandonedMarker] exactly when Lines would append it.
+//
+// omitted reports whether the collector discarded a line, read under
+// the same lock as lines. Unlike [StderrCollector.Dropped], it does
+// not reset to false once the collector has been abandoned.
+func (c *StderrCollector) LastLines() (lines []string, omitted bool) {
+	select {
+	case <-c.done:
+	case <-c.abandoned:
+	}
+
+	c.mu.Lock()
+	lines, omitted = c.lastLinesLocked()
+	c.mu.Unlock()
+
+	select {
+	case <-c.done:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.lastLinesLocked()
+	default:
+		return append(lines, AbandonedMarker), omitted
+	}
+}
+
 // linesLocked assembles the collected lines from head, tail, and the
 // dropped-line marker. Callers must hold mu.
 func (c *StderrCollector) linesLocked() []string {
@@ -433,6 +463,46 @@ func (c *StderrCollector) linesLocked() []string {
 	}
 
 	return result
+}
+
+// tailLinesLocked returns the tail section alone, in chronological
+// order, with no head lines and no dropped-lines marker. Callers must
+// hold mu.
+func (c *StderrCollector) tailLinesLocked() []string {
+	if c.tailFull {
+		result := make([]string, 0, c.tailCap)
+		result = append(result, c.tail[c.tailPos:]...)
+		result = append(result, c.tail[:c.tailPos]...)
+		return result
+	}
+	if c.tailPos == 0 {
+		return nil
+	}
+	result := make([]string, c.tailPos)
+	copy(result, c.tail[:c.tailPos])
+	return result
+}
+
+// allLinesLocked returns every retained line, head and tail, with no
+// dropped-lines marker. Callers must hold mu.
+func (c *StderrCollector) allLinesLocked() []string {
+	tail := c.tailLinesLocked()
+	if len(c.head) == 0 && len(tail) == 0 {
+		return nil
+	}
+	result := make([]string, len(c.head), len(c.head)+len(tail))
+	copy(result, c.head)
+	return append(result, tail...)
+}
+
+// lastLinesLocked assembles [StderrCollector.LastLines]'s result.
+// Callers must hold mu.
+func (c *StderrCollector) lastLinesLocked() (lines []string, omitted bool) {
+	omitted = c.dropped > 0
+	if tail := c.tailLinesLocked(); omitted && len(tail) > 0 {
+		return tail, omitted
+	}
+	return c.allLinesLocked(), omitted
 }
 
 // Dropped blocks until the drain goroutine finishes or the collector is

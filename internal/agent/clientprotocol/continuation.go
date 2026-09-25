@@ -61,7 +61,7 @@ func sendNegativeControl(ctx context.Context, state *sessionState) (negativeCont
 	defer cancel()
 
 	resp, err := state.conn.Call(callCtx, negativeControlMethod, struct{}{})
-	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		return negativeControlVerdict{}, agentErr
 	}
 	if resp.Error != nil {
@@ -138,7 +138,7 @@ func resolveLoad(ctx context.Context, state *sessionState, resumeID, cwd string,
 	resp, err := state.conn.Call(callCtx, methodSessionLoad, loadSessionRequest{
 		Cwd: cwd, MCPServers: servers, SessionID: sessionId(resumeID),
 	})
-	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		if agentErr.Kind != domain.ErrResponseTimeout {
 			return "", agentErr
 		}
@@ -181,7 +181,7 @@ func resolveResume(ctx context.Context, state *sessionState, resumeID, cwd strin
 	resp, err := state.conn.Call(callCtx, methodSessionResume, resumeSessionRequest{
 		Cwd: cwd, MCPServers: wireServers, SessionID: sessionId(resumeID),
 	})
-	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		if agentErr.Kind != domain.ErrResponseTimeout {
 			return "", agentErr
 		}
