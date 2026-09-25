@@ -494,6 +494,156 @@ func TestFinalizeTurn_WorkUnobservableLogsWarn(t *testing.T) {
 	}
 }
 
+// TestDecideTurn_RowExitedBeforeOutput pins RowExitedBeforeOutput: an
+// EarlyExit chaining an *EarlyExitError or sshutil.ErrConnectionFailed
+// selects it with ErrorKind and both messages taken from EarlyExit,
+// exactly when Terminal is TerminalAbsent and ExitObserved is true; a
+// hand-built *domain.AgentError chaining neither is ignored and a
+// later row decides.
+func TestDecideTurn_RowExitedBeforeOutput(t *testing.T) {
+	t.Parallel()
+
+	earlyExitReport := &domain.AgentError{
+		Kind:    domain.ErrPortExit,
+		Message: "the agent runtime exited before responding: exit status 1",
+		Err:     &EarlyExitError{status: "exit status 1", output: "boom"},
+	}
+	sshReport := ConnectionFailedError()
+	handBuilt := &domain.AgentError{
+		Kind:    domain.ErrPortExit,
+		Message: "the agent runtime exited before responding: exit status 1",
+	}
+
+	tests := []struct {
+		name    string
+		ev      TurnEvidence
+		wantRow DispositionRow
+	}{
+		{
+			name:    "EarlyExit chaining *EarlyExitError selects the row",
+			ev:      TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 1, EarlyExit: earlyExitReport},
+			wantRow: RowExitedBeforeOutput,
+		},
+		{
+			name:    "EarlyExit wrapping sshutil.ErrConnectionFailed selects the row",
+			ev:      TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 255, EarlyExit: sshReport},
+			wantRow: RowExitedBeforeOutput,
+		},
+		{
+			name:    "a hand-built AgentError chaining neither is ignored",
+			ev:      TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 1, EarlyExit: handBuilt},
+			wantRow: RowNonZeroExit,
+		},
+		{
+			name:    "nil EarlyExit falls through to the exit-code rows",
+			ev:      TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 0, Work: WorkPresent},
+			wantRow: RowWorkPresent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := DecideTurn(tt.ev)
+			if got.Row != tt.wantRow {
+				t.Fatalf("DecideTurn(%+v).Row = %v, want %v", tt.ev, got.Row, tt.wantRow)
+			}
+			if tt.wantRow != RowExitedBeforeOutput {
+				return
+			}
+			if got.ExitReason != domain.EventTurnFailed {
+				t.Errorf("DecideTurn(%+v).ExitReason = %q, want %q", tt.ev, got.ExitReason, domain.EventTurnFailed)
+			}
+			if got.ErrorKind != tt.ev.EarlyExit.Kind {
+				t.Errorf("DecideTurn(%+v).ErrorKind = %q, want %q", tt.ev, got.ErrorKind, tt.ev.EarlyExit.Kind)
+			}
+			if got.EventMessage != tt.ev.EarlyExit.Message {
+				t.Errorf("DecideTurn(%+v).EventMessage = %q, want %q", tt.ev, got.EventMessage, tt.ev.EarlyExit.Message)
+			}
+			if got.ErrorMessage != tt.ev.EarlyExit.Message {
+				t.Errorf("DecideTurn(%+v).ErrorMessage = %q, want %q", tt.ev, got.ErrorMessage, tt.ev.EarlyExit.Message)
+			}
+		})
+	}
+}
+
+// TestDecideTurn_RowExitedBeforeOutput_RanksBelowTerminalReports pins
+// that a runtime's own outcome report outranks the row: a terminal
+// report selects its own row even when EarlyExit also carries a report
+// agentcore built.
+func TestDecideTurn_RowExitedBeforeOutput_RanksBelowTerminalReports(t *testing.T) {
+	t.Parallel()
+
+	earlyExitReport := &domain.AgentError{
+		Kind:    domain.ErrPortExit,
+		Message: "the agent runtime exited before responding: exit status 0",
+		Err:     &EarlyExitError{status: "exit status 0"},
+	}
+
+	got := DecideTurn(TurnEvidence{
+		Terminal:        TerminalSuccess,
+		TerminalMessage: "credits trailer observed",
+		ExitObserved:    true,
+		EarlyExit:       earlyExitReport,
+	})
+
+	if got.Row != RowTerminalSuccess {
+		t.Errorf("DecideTurn().Row = %v, want %v (the runtime's own report outranks EarlyExit)", got.Row, RowTerminalSuccess)
+	}
+	if got.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("DecideTurn().ExitReason = %q, want %q", got.ExitReason, domain.EventTurnCompleted)
+	}
+}
+
+// TestFinalizeTurn_RowExitedBeforeOutputLogsNoWarnOfItsOwn pins that
+// FinalizeTurn logs no record of its own for RowExitedBeforeOutput,
+// unlike RowZeroWork, RowWorkUnobservable, RowHumanInputRequired, and
+// RowTerminalIncomplete, and that it emits exactly one turn_failed
+// event carrying EarlyExit's message and returns EarlyExit itself, so
+// the chain still holds the *EarlyExitError.
+func TestFinalizeTurn_RowExitedBeforeOutputLogsNoWarnOfItsOwn(t *testing.T) {
+	// No t.Parallel(): installs a global slog default, matching every
+	// other test in this package that installs the log spy.
+	spy := agenttest.InstallLogSpy(t)
+
+	earlyExitReport := &domain.AgentError{
+		Kind:    domain.ErrPortExit,
+		Message: "the agent runtime exited before responding: exit status 1",
+		Err:     &EarlyExitError{status: "exit status 1", output: "boom"},
+	}
+	ev := TurnEvidence{Terminal: TerminalAbsent, ExitObserved: true, ExitCode: 1, EarlyExit: earlyExitReport}
+
+	var events []domain.AgentEvent
+	result, err := FinalizeTurn(func(e domain.AgentEvent) { events = append(events, e) }, nil, ev, TurnMeta{})
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("FinalizeTurn().result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	if err != earlyExitReport {
+		t.Errorf("FinalizeTurn() error = %v, want the same *domain.AgentError EarlyExit carried", err)
+	}
+
+	var failedCount int
+	for _, e := range events {
+		if e.Type == domain.EventTurnFailed {
+			failedCount++
+			if e.Message != earlyExitReport.Message {
+				t.Errorf("turn_failed Message = %q, want %q", e.Message, earlyExitReport.Message)
+			}
+		}
+	}
+	if failedCount != 1 {
+		t.Errorf("turn_failed event count = %d, want 1", failedCount)
+	}
+
+	for _, e := range spy.Entries() {
+		if e.Level == slog.LevelWarn {
+			t.Errorf("FinalizeTurn() logged an unexpected WARN record for RowExitedBeforeOutput: %+v", e)
+		}
+	}
+}
+
 // terminalReportValues parses disposition.go's own source and returns
 // every value declared in the TerminalReport const block that starts at
 // TerminalAbsent. Every value in that block is required to be an

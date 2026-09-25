@@ -309,7 +309,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		},
 		GetUsage:     func() (domain.TokenUsage, bool) { return state.acc.Snapshot(), state.usageMeasured },
 		GetSessionID: func() string { return state.claudeSessionID },
-		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
+		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 			usage := state.acc.Snapshot()
 
 			// A recognized request that only a person could answer, observed
@@ -330,6 +330,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			ev := agentcore.TurnEvidence{
 				ExitObserved: true,
 				ExitCode:     exitCode,
+				EarlyExit:    earlyExit,
 			}
 			ev.Work, ev.WorkDetail = state.work.Report()
 

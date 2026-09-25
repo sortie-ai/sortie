@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,11 +26,14 @@ const OutputScenario = "agenttest.output"
 
 // Output parameterizes [OutputScenario]: the runtime writes Stdout, then
 // Stderr, and exits with ExitCode, or stays alive until killed when Hang is set.
+// When WhenArg is non-empty, this behavior runs only for a launch whose
+// arguments include it; any other launch writes nothing and exits 0.
 type Output struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
 	Hang     bool
+	WhenArg  string
 }
 
 type fakeConfig struct {
@@ -214,7 +218,10 @@ func runScenario(config []byte, scenarios map[string]Scenario) int {
 	return run(os.Args[1:], cfg.Params)
 }
 
-func writeOutput(_ []string, out Output) int {
+func writeOutput(args []string, out Output) int {
+	if out.WhenArg != "" && !slices.Contains(args, out.WhenArg) {
+		return Output{}.Run()
+	}
 	return out.Run()
 }
 

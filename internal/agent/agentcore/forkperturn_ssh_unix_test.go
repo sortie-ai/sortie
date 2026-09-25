@@ -190,7 +190,7 @@ func TestForkPerTurnSession_SSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T)
 	}
 
 	hooks := noopHooks()
-	hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ []string) (domain.TurnResult, *domain.AgentError) {
+	hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, exitCode int, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 		return FinalizeTurn(emit, slog.Default(), TurnEvidence{ExitObserved: true, ExitCode: exitCode}, TurnMeta{})
 	}
 	spy := &agenttest.LogSpy{}
@@ -212,6 +212,40 @@ func TestForkPerTurnSession_SSH_NoDDEndsAsPortExitNotAgentNotFound(t *testing.T)
 	lines := agenttest.RequireWarnLines(t, spy, "SSH_NoDD")
 	if !slices.Contains(lines, ddMissingMessage) {
 		t.Errorf("WARN agent stderr lines = %v, want one equal to the guard's message %q", lines, ddMissingMessage)
+	}
+}
+
+// TestForkPerTurnSession_SSH_RemoteExitTwoYieldsEarlyExitReport pins
+// that a remote exit relayed by ssh that is not OpenSSH's own
+// connection-failure status yields the early-exit report, not
+// agentcore.ConnectionFailedError, and the report's chain carries no
+// sshutil.ErrConnectionFailed.
+func TestForkPerTurnSession_SSH_RemoteExitTwoYieldsEarlyExitReport(t *testing.T) {
+	t.Parallel()
+
+	target := &LaunchTarget{
+		Command:       agenttest.WriteScript(t, t.TempDir(), "ssh", "exit 2\n"),
+		SSHHost:       "user@stand-in-host",
+		WorkspacePath: t.TempDir(),
+		RemoteCommand: "irrelevant-remote-command",
+	}
+	sess := NewForkPerTurnSession(target, hooksWithEarlyExitDisposition(), slog.Default(), 0)
+
+	emit, _ := sinkEvents()
+	_, err := sess.RunTurn(context.Background(), "p", emit)
+
+	if errors.Is(err, sshutil.ErrConnectionFailed) {
+		t.Fatalf("RunTurn() error = %v, wraps sshutil.ErrConnectionFailed, want the early-exit report instead", err)
+	}
+	requireAgentError(t, err, domain.ErrPortExit)
+	var agentErr *domain.AgentError
+	errors.As(err, &agentErr)
+	var earlyExitErr *EarlyExitError
+	if !errors.As(agentErr.Err, &earlyExitErr) {
+		t.Fatalf("AgentError.Err = %v, want an *EarlyExitError", agentErr.Err)
+	}
+	if earlyExitErr.Status() != "exit status 2" {
+		t.Errorf("EarlyExitError.Status() = %q, want %q", earlyExitErr.Status(), "exit status 2")
 	}
 }
 
@@ -243,7 +277,7 @@ func TestForkPerTurnSession_SSH_Exit255(t *testing.T) {
 			hooks.ParseLine = func(line []byte, _ func(domain.AgentEvent), _ string) (any, error) {
 				return string(line), nil
 			}
-			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, _ int, _ []string) (domain.TurnResult, *domain.AgentError) {
+			hooks.OnFinalize = func(emit func(domain.AgentEvent), _ any, _ int, _ []string, _ *domain.AgentError) (domain.TurnResult, *domain.AgentError) {
 				EmitTurnFailed(emit, "exit code 255", 0, domain.TokenUsage{})
 				return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "exit code 255"}
 			}

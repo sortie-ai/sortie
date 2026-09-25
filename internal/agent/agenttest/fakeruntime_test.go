@@ -92,6 +92,70 @@ func TestFakeRuntime(t *testing.T) {
 	}
 }
 
+func TestFakeRuntime_WhenArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		params     agenttest.Output
+		args       []string
+		wantStdout string
+		wantStderr string
+		wantCode   int
+	}{
+		{
+			name:       "launch carrying the named argument replays the configured output",
+			params:     agenttest.Output{Stdout: "out\n", Stderr: "err\n", ExitCode: 7, WhenArg: "--sortie-unknown-switch"},
+			args:       []string{"--sortie-unknown-switch"},
+			wantStdout: "out\n",
+			wantStderr: "err\n",
+			wantCode:   7,
+		},
+		{
+			name:   "launch not carrying the named argument writes nothing and exits 0",
+			params: agenttest.Output{Stdout: "out\n", Stderr: "err\n", ExitCode: 7, WhenArg: "--sortie-unknown-switch"},
+			args:   []string{"--version"},
+		},
+		{
+			name:       "empty WhenArg keeps the unconditional behavior",
+			params:     agenttest.Output{Stdout: "out\n", Stderr: "err\n", ExitCode: 7},
+			args:       []string{"--version"},
+			wantStdout: "out\n",
+			wantStderr: "err\n",
+			wantCode:   7,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := agenttest.FakeRuntime(t, t.TempDir(), "runtime", agenttest.OutputScenario, tt.params)
+			cmd := exec.Command(path, tt.args...) //nolint:gosec // path is a fake runtime under t.TempDir()
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+			code := 0
+			var exitErr *exec.ExitError
+			if err := cmd.Run(); errors.As(err, &exitErr) {
+				code = exitErr.ExitCode()
+			} else if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if stdout.String() != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantStdout)
+			}
+			if stderr.String() != tt.wantStderr {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tt.wantStderr)
+			}
+			if code != tt.wantCode {
+				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+		})
+	}
+}
+
 func TestFakeRuntime_Hang(t *testing.T) {
 	t.Parallel()
 

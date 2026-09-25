@@ -78,7 +78,8 @@ type ForkPerTurnHooks struct {
 	// subprocess exit state. The skeleton calls OnFinalize after the
 	// subprocess has exited following the scan loop, for every ending it
 	// has not already classified as a stdout scan error, a cancellation,
-	// exit code 127, or a signal, so a non-zero exit code reaches it.
+	// an ssh connection failure, exit code 127, or a signal, so a
+	// non-zero exit code reaches it.
 	//
 	// emit is the per-turn event callback passed to RunTurn. OnFinalize
 	// MUST use this to emit the terminal event (EventTurnCompleted or
@@ -91,11 +92,15 @@ type ForkPerTurnHooks struct {
 	// collected from the stderr pipe by the time the skeleton's bounded
 	// drain ended, which runs after the reap rather than before it; a
 	// drain that hit its bound reports the abandonment marker instead.
+	// earlyExit is non-nil exactly when the turn's process exited on its
+	// own, Stop did not signal it, and no readable line reached standard
+	// output; the adapter MUST copy it onto [TurnEvidence.EarlyExit] in
+	// the evidence it finalizes.
 	//
 	// The skeleton calls [procutil.EmitWarnLines] automatically when
 	// OnFinalize returns a non-nil *[domain.AgentError]. The adapter MUST
 	// NOT call [procutil.EmitWarnLines] inside OnFinalize.
-	OnFinalize func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError)
+	OnFinalize func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string, earlyExit *domain.AgentError) (domain.TurnResult, *domain.AgentError)
 
 	// EmitSessionStartID, when non-nil, causes the skeleton to call
 	// [EmitSessionStarted] immediately after cmd.Start() succeeds and
@@ -130,9 +135,10 @@ type ForkPerTurnSession struct {
 	// only from RunTurn's goroutine; not protected by mu.
 	turns int
 
-	mu     sync.Mutex
-	proc   *os.Process
-	waitCh chan struct{}
+	mu           sync.Mutex
+	proc         *os.Process
+	waitCh       chan struct{}
+	stopSignaled bool // guarded by mu; whether Stop signaled the current turn's process
 
 	// drainGrace bounds the wait for the stderr drain before each
 	// cmd.Wait call. Set by NewForkPerTurnSession; overridden only by
@@ -201,7 +207,7 @@ func (s *ForkPerTurnSession) SetLogger(logger *slog.Logger) {
 }
 
 // RunTurn executes one agent turn. It forks a subprocess, scans its
-// stdout via the ten-armed decision tree, and returns the outcome.
+// stdout via the eleven-armed decision tree, and returns the outcome.
 //
 // ctx controls the turn lifetime. Cancellation triggers a graceful
 // shutdown (SIGTERM to the process group) followed by the session's
@@ -321,6 +327,7 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	s.turns = prospectiveTurn
 	s.proc = cmd.Process
+	s.stopSignaled = false
 	s.waitCh = make(chan struct{})
 	localWaitCh := s.waitCh
 	pidStr := strconv.Itoa(cmd.Process.Pid)
@@ -335,7 +342,9 @@ func (s *ForkPerTurnSession) RunTurn(
 	reaper := procutil.StartReaper(cmd, s.logger)
 
 	var lastParsed any
+	var output OutputWatch
 	parseLine := func(line []byte) {
+		output.Observe(line)
 		result, parseErr := s.hooks.ParseLine(line, emit, pidStr)
 		if parseErr != nil {
 			EmitMalformed(emit, line)
@@ -464,37 +473,6 @@ loop:
 
 	exitCode := procutil.ExtractExitCode(waitErr)
 
-	if exitCode == 127 {
-		procutil.EmitWarnLines(stderrLines, s.logger)
-		usage, measured := s.hooks.GetUsage()
-		EmitTurnFailed(emit, "agent binary not found", 0, usage)
-		result := domain.TurnResult{
-			SessionID:     s.hooks.GetSessionID(),
-			ExitReason:    domain.EventTurnFailed,
-			Usage:         usage,
-			UsageMeasured: measured,
-		}
-		return result, &domain.AgentError{
-			Kind:    domain.ErrAgentNotFound,
-			Message: "exit code 127",
-		}
-	}
-
-	if procutil.WasSignaled(waitErr) {
-		usage, measured := s.hooks.GetUsage()
-		EmitTurnCancelled(emit, "killed by signal", usage)
-		result := domain.TurnResult{
-			SessionID:     s.hooks.GetSessionID(),
-			ExitReason:    domain.EventTurnCancelled,
-			Usage:         usage,
-			UsageMeasured: measured,
-		}
-		return result, &domain.AgentError{
-			Kind:    domain.ErrTurnCancelled,
-			Message: "killed by signal",
-		}
-	}
-
 	sshFailed := s.target.RemoteCommand != "" && sshutil.ConnectionFailed(exitCode)
 	if ConnectionFailedForRequest(sshFailed, lastParsed != nil) {
 		usage, measured := s.hooks.GetUsage()
@@ -508,11 +486,55 @@ loop:
 		return result, ConnectionFailedError()
 	}
 
+	s.mu.Lock()
+	stopSignaled := s.stopSignaled
+	s.mu.Unlock()
+
+	// An exit Sortie itself caused by signaling the process through Stop
+	// is never reported as the runtime's own early exit.
+	var earlyExit *domain.AgentError
+	if !stopSignaled {
+		earlyExit = output.ExitedBeforeOutput(*s.target, waitErr).Report(stderrCollector)
+	}
+
+	if earlyExit == nil {
+		if exitCode == 127 {
+			procutil.EmitWarnLines(stderrLines, s.logger)
+			usage, measured := s.hooks.GetUsage()
+			EmitTurnFailed(emit, "agent binary not found", 0, usage)
+			result := domain.TurnResult{
+				SessionID:     s.hooks.GetSessionID(),
+				ExitReason:    domain.EventTurnFailed,
+				Usage:         usage,
+				UsageMeasured: measured,
+			}
+			return result, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "exit code 127",
+			}
+		}
+
+		if procutil.WasSignaled(waitErr) {
+			usage, measured := s.hooks.GetUsage()
+			EmitTurnCancelled(emit, "killed by signal", usage)
+			result := domain.TurnResult{
+				SessionID:     s.hooks.GetSessionID(),
+				ExitReason:    domain.EventTurnCancelled,
+				Usage:         usage,
+				UsageMeasured: measured,
+			}
+			return result, &domain.AgentError{
+				Kind:    domain.ErrTurnCancelled,
+				Message: "killed by signal",
+			}
+		}
+	}
+
 	// The explicit nil check prevents a typed-nil *domain.AgentError from
 	// becoming a non-nil error interface on the success path. The
 	// skeleton calls EmitWarnLines when agentErr is non-nil, so
 	// OnFinalize must not call it.
-	result, agentErr := s.hooks.OnFinalize(emit, lastParsed, exitCode, stderrLines)
+	result, agentErr := s.hooks.OnFinalize(emit, lastParsed, exitCode, stderrLines, earlyExit)
 	if agentErr != nil {
 		procutil.EmitWarnLines(stderrLines, s.logger)
 		return result, agentErr
@@ -536,6 +558,9 @@ func (s *ForkPerTurnSession) Stop(ctx context.Context) error {
 	proc := s.proc
 	waitCh := s.waitCh
 	s.proc = nil
+	if proc != nil {
+		s.stopSignaled = true
+	}
 	s.mu.Unlock()
 
 	if proc == nil {

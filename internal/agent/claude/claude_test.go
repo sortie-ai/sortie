@@ -1207,11 +1207,10 @@ func TestRunTurn_NonZeroExit(t *testing.T) {
 		t.Errorf("ExitReason = %q", result.ExitReason)
 	}
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     1,
-		Work:         agentcore.WorkAbsent,
-	}, result, err)
+	const wantMessage = "the agent runtime exited before responding: exit status 1"
+	if agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
 }
 
 func TestRunTurn_Exit127(t *testing.T) {
@@ -1238,8 +1237,8 @@ func TestRunTurn_Exit127(t *testing.T) {
 	if !errors.As(err, &agentErr) {
 		t.Fatalf("error type = %T, want *domain.AgentError", err)
 	}
-	if agentErr.Kind != domain.ErrAgentNotFound {
-		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrAgentNotFound)
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrPortExit)
 	}
 }
 
@@ -2802,8 +2801,8 @@ func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
 	var agentErr *domain.AgentError
-	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound {
-		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrAgentNotFound)
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrPortExit)
 	}
 
 	warnLines := agenttest.RequireWarnLines(t, spy, "exit code 127")

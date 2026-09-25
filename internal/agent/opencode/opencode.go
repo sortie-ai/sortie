@@ -93,6 +93,7 @@ type turnRuntime struct {
 	reapedCh        chan struct{}
 	reader          *procutil.StdoutReader
 	stderrCollector *procutil.StderrCollector
+	output          agentcore.OutputWatch
 	firstJSONSeen   bool
 	turnFinished    bool
 	terminalError   *rawRunError
@@ -322,6 +323,8 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	// line arriving in either place is processed identically. done
 	// reports that the turn's own result is ready to return.
 	handleLine := func(line []byte) (domain.TurnResult, error, bool) {
+		runtime.output.Observe(line)
+
 		event, parseErr := parseRunEvent(line)
 		var parsed parsedLine
 		if parseErr != nil {
@@ -653,6 +656,10 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		Cause:        exit.err,
 	}
 	ev.Work, ev.WorkDetail = runtime.work.Report()
+
+	if ctx.Err() == nil && !state.isClosed() {
+		ev.EarlyExit = runtime.output.ExitedBeforeOutput(state.target, exit.err).Report(runtime.stderrCollector)
+	}
 
 	sshFailed := state.target.RemoteCommand != "" && sshutil.ConnectionFailed(exit.exitCode)
 	hasTerminalResult := runtime.terminalOutcome == domain.EventTurnFailed || runtime.turnFinished

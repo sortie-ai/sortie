@@ -541,7 +541,7 @@ func TestRunTurn_ExitCode127(t *testing.T) {
 		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
 	})
 
-	requireAgentError(t, err, domain.ErrAgentNotFound)
+	requireAgentError(t, err, domain.ErrPortExit)
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for exit code 127")
 	}
@@ -556,7 +556,7 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 	state.target.Command = fakeCopilotBinaryWithOutput(t, "", 1)
 
 	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
 	})
 
@@ -565,11 +565,11 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 		t.Error("EventTurnFailed not delivered for non-zero exit")
 	}
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     1,
-		Work:         agentcore.WorkAbsent,
-	}, result, err)
+	var agentErr *domain.AgentError
+	const wantMessage = "the agent runtime exited before responding: exit status 1"
+	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
 }
 
 func TestRunTurn_NoOutputExitZero(t *testing.T) {
@@ -587,17 +587,16 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for no-output exit 0")
 	}
 
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     0,
-		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no message from the agent and no tool call",
-	}, result, err)
+	var agentErr *domain.AgentError
+	const wantMessage = "the agent runtime exited before responding: exit status 0"
+	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
 }
 
 // TestRunTurn_SingleSignalNoTerminalCompletes drives a stream carrying
@@ -744,7 +743,7 @@ func TestRunTurn_SecondTurnFailsAfterFirstTurnBothSignals(t *testing.T) {
 	if result2.ExitReason != domain.EventTurnFailed {
 		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn with both signals must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 }
 
 func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
@@ -799,7 +798,7 @@ func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 
 	warnLines := agenttest.RequireWarnLines(t, spy, "agent exited without producing output")
 	found := false
@@ -1147,8 +1146,8 @@ func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
 	var agentErr *domain.AgentError
-	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound {
-		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrAgentNotFound)
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrPortExit)
 	}
 
 	warnLines := agenttest.RequireWarnLines(t, spy, "exit code 127")
@@ -1834,7 +1833,7 @@ func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
 	if result2.ExitReason != domain.EventTurnFailed {
 		t.Errorf("RunTurn(second).ExitReason = %q, want %q (per-turn work predicate must not carry the first turn's output forward)", result2.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 }
 
 // TestRunTurn_PremiumRequestsLoggedOnce pins the premium_requests side

@@ -2101,9 +2101,11 @@ printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id"
 }
 
 // TestRunTurn_ExitZeroNoJSONEventAtAll pins an emptier variant of the
-// no-output case: the process exits 0 having emitted nothing parseable
-// at all. It routes to the same zero-work row rather than letting the
-// adapter pre-classify a bare exit 0 as a success.
+// no-output case: the process exits 0 having written nothing readable
+// on standard output at all, so it fails with the early-exit report
+// rather than letting the adapter pre-classify a bare exit 0 as a
+// success or reach the zero-work row a readable-but-empty transcript
+// would.
 func TestRunTurn_ExitZeroNoJSONEventAtAll(t *testing.T) {
 	t.Parallel()
 
@@ -2121,10 +2123,10 @@ exit 0`)
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
 	var agentErr *domain.AgentError
-	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
-		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrPortExit)
 	}
-	const wantMessage = "agent exited without producing output: no message from the agent and no tool call"
+	const wantMessage = "the agent runtime exited before responding: exit status 0"
 	if agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
@@ -2133,13 +2135,6 @@ exit 0`)
 	if len(failedEvents) != 1 {
 		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
 	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     0,
-		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no message from the agent and no tool call",
-	}, result, err)
 }
 
 // TestRunTurn_NonZeroExitNoTerminalReport pins the non-zero-exit

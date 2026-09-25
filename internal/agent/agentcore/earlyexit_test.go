@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -196,7 +197,7 @@ func TestEarlyExit_Report_BuildsPortExitWithStatusAndOutput(t *testing.T) {
 	if got == nil || got.Kind != domain.ErrPortExit {
 		t.Fatalf("Report() = %v, want a port_exit *domain.AgentError", got)
 	}
-	wantMessage := "the agent runtime exited before the session started: exit status 2"
+	wantMessage := "the agent runtime exited before responding: exit status 2"
 	if got.Message != wantMessage {
 		t.Errorf("Report() Message = %q, want %q", got.Message, wantMessage)
 	}
@@ -300,6 +301,37 @@ func TestEarlyExit_Report_IncompleteAppendsAbandonedMarker(t *testing.T) {
 	}
 }
 
+// TestEarlyExit_Report_SecondFinishAndCollectDoesNotWait pins that once
+// a collector's own FinishAndCollect call has already resolved, a
+// second call inside Report, such as the early-exit computation's own,
+// returns immediately rather than paying a further grace, per
+// [procutil.StderrCollector.FinishAndCollect]'s sync.Once guard.
+func TestEarlyExit_Report_SecondFinishAndCollectDoesNotWait(t *testing.T) {
+	t.Parallel()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() = %v", err)
+	}
+	stderr := procutil.NewStderrCollector(r, nil)
+
+	const drainDelay = 150 * time.Millisecond
+	time.AfterFunc(drainDelay, func() { _ = w.Close() })
+
+	// The first call actually waits out the drain, so there is a real
+	// wait for a bug to double.
+	stderr.FinishAndCollect(5 * time.Second)
+
+	e := EarlyExit{observed: true, grace: 5 * time.Second}
+	start := time.Now()
+	_ = e.Report(stderr)
+	elapsed := time.Since(start)
+
+	if elapsed > drainDelay {
+		t.Errorf("Report() took %v after FinishAndCollect already resolved, want well under the drain delay %v, want no additional wait toward the 5s grace", elapsed, drainDelay)
+	}
+}
+
 func TestEarlyExit_Report_RepeatedCallsProduceEqualErrors(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +351,117 @@ func TestEarlyExit_Report_RepeatedCallsProduceEqualErrors(t *testing.T) {
 	if firstErr.Status() != secondErr.Status() || firstErr.Output() != secondErr.Output() {
 		t.Errorf("Report() produced different EarlyExitError content across calls: %+v vs %+v", firstErr, secondErr)
 	}
+}
+
+func TestOutputWatch_Observe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		lines    [][]byte
+		wantSeen bool
+	}{
+		{name: "readable line sets seen", lines: [][]byte{[]byte("hello")}, wantSeen: true},
+		{name: "empty line is not a response", lines: [][]byte{[]byte("")}, wantSeen: false},
+		{name: "whitespace-only line is not a response", lines: [][]byte{[]byte("   \t  ")}, wantSeen: false},
+		{name: "escape-sequence-only line is not a response", lines: [][]byte{[]byte("\x1b[31m\x1b[0m")}, wantSeen: false},
+		{name: "an unreadable line then a readable one sets seen", lines: [][]byte{[]byte(""), []byte("ok")}, wantSeen: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var w OutputWatch
+			for _, line := range tt.lines {
+				w.Observe(line)
+			}
+			if w.seen != tt.wantSeen {
+				t.Errorf("OutputWatch.Observe(%q) seen = %v, want %v", tt.lines, w.seen, tt.wantSeen)
+			}
+		})
+	}
+}
+
+func TestOutputWatch_Observe_DoesNothingOnceSeen(t *testing.T) {
+	t.Parallel()
+
+	var w OutputWatch
+	w.Observe([]byte("first response"))
+	w.Observe([]byte(""))
+
+	if !w.seen {
+		t.Fatal("OutputWatch.seen = false after a readable line, want true")
+	}
+}
+
+func TestOutputWatch_ExitedBeforeOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		seen       bool
+		waitErr    error
+		target     LaunchTarget
+		wantZero   bool
+		wantRemote bool
+	}{
+		{name: "seen returns the zero value regardless of exit status", seen: true, wantZero: true},
+		{name: "unseen exit status 0 is observed", seen: false, waitErr: nil},
+		{name: "unseen exit status 127 is observed", seen: false, waitErr: exitErrorWithCode(t, 127)},
+		{name: "unseen signal death is observed", seen: false, waitErr: exitErrorWithCode(t, -1)},
+		{name: "unseen remote target marks remote", seen: false, target: LaunchTarget{RemoteCommand: "codex app-server"}, wantRemote: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := OutputWatch{seen: tt.seen}
+			got := w.ExitedBeforeOutput(tt.target, tt.waitErr)
+
+			if tt.wantZero {
+				if got != (EarlyExit{}) {
+					t.Errorf("ExitedBeforeOutput() = %+v, want the zero EarlyExit", got)
+				}
+				return
+			}
+			if !got.observed {
+				t.Error("ExitedBeforeOutput() observed = false, want true")
+			}
+			if got.remote != tt.wantRemote {
+				t.Errorf("ExitedBeforeOutput() remote = %v, want %v", got.remote, tt.wantRemote)
+			}
+			if got.grace != procutil.DefaultDrainGrace {
+				t.Errorf("ExitedBeforeOutput() grace = %v, want %v", got.grace, procutil.DefaultDrainGrace)
+			}
+			if !errors.Is(got.waitErr, tt.waitErr) && got.waitErr != tt.waitErr {
+				t.Errorf("ExitedBeforeOutput() waitErr = %v, want %v", got.waitErr, tt.waitErr)
+			}
+		})
+	}
+}
+
+// exitErrorWithCode runs a fake runtime exiting with code and returns
+// the resulting *exec.ExitError, so a table case can exercise a real
+// wait error rather than a hand-built stand-in.
+func exitErrorWithCode(t *testing.T, code int) error {
+	t.Helper()
+	if code < 0 {
+		cmd := earlyExitCmd(t, agenttest.Output{Hang: true})
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("cmd.Start() = %v", err)
+		}
+		if err := cmd.Process.Kill(); err != nil {
+			t.Fatalf("Process.Kill() = %v", err)
+		}
+		return cmd.Wait()
+	}
+	cmd := earlyExitCmd(t, agenttest.Output{ExitCode: code})
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	return cmd.Wait()
 }
 
 func TestRender(t *testing.T) {
