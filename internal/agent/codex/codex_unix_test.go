@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -177,15 +178,14 @@ func TestStartSession_SSH_CarriesEnvironmentVariable(t *testing.T) {
 	}
 }
 
-// TestStartSession_SSH_NoDDEndsAsHandshakeFailed asserts that a remote
-// host without dd fails StartSession as response_error /
-// "handshake failed: <cause>", per the category this launch shape
-// selects for a lost connection, and never confuses it with a missing
-// agent binary.
+// TestStartSession_SSH_NoDDEndsAsPortExit asserts that a remote host
+// without dd fails StartSession as port_exit, the shared early-exit
+// report carrying the guard's own exit status and standard error, and
+// never confuses it with a missing agent binary.
 //
 // Not run with t.Parallel(): it pins CODEX_API_KEY via t.Setenv, and
 // sets PATH and the carried variable the same way.
-func TestStartSession_SSH_NoDDEndsAsHandshakeFailed(t *testing.T) {
+func TestStartSession_SSH_NoDDEndsAsPortExit(t *testing.T) {
 	t.Setenv("CODEX_API_KEY", "")
 
 	tmpDir := t.TempDir()
@@ -212,15 +212,24 @@ func TestStartSession_SSH_NoDDEndsAsHandshakeFailed(t *testing.T) {
 		SSHEnvNames:   []string{carriedName},
 	})
 
+	const ddMissingMessage = "sortie: dd is required on the remote host to receive environment variables"
+
 	var agentErr *domain.AgentError
 	if !errors.As(err, &agentErr) {
 		t.Fatalf("StartSession() error = %v (%T), want a non-nil *domain.AgentError", err, err)
 	}
-	if agentErr.Kind != domain.ErrResponseError {
-		t.Errorf("StartSession() error kind = %q, want %q (never the agent-not-found category)", agentErr.Kind, domain.ErrResponseError)
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("StartSession() error kind = %q, want %q (never the agent-not-found category)", agentErr.Kind, domain.ErrPortExit)
 	}
-	if !strings.HasPrefix(agentErr.Message, "handshake failed:") {
-		t.Errorf("StartSession() error message = %q, want a %q prefix", agentErr.Message, "handshake failed:")
+	var earlyExitErr *agentcore.EarlyExitError
+	if !errors.As(agentErr.Err, &earlyExitErr) {
+		t.Fatalf("StartSession() error = %v, chain does not hold an *agentcore.EarlyExitError", agentErr)
+	}
+	if earlyExitErr.Status() != "exit status 1" {
+		t.Errorf("EarlyExitError.Status() = %q, want %q", earlyExitErr.Status(), "exit status 1")
+	}
+	if !strings.Contains(earlyExitErr.Output(), ddMissingMessage) {
+		t.Errorf("EarlyExitError.Output() = %q, want it to contain %q", earlyExitErr.Output(), ddMissingMessage)
 	}
 
 	if _, statErr := os.Stat(capturePath); statErr == nil {

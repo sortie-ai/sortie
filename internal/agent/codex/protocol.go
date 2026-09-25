@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -13,6 +14,39 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/jsonrpc"
 	"github.com/sortie-ai/sortie/internal/logging"
 )
+
+// errConnectionLost is the sentinel a startup handshake step's returned
+// error carries, recoverable with errors.Is, when the app-server
+// connection ended without answering: a Call or Notify failure that is
+// neither a cancelled nor an elapsed context, or the login wait seeing
+// the inbox close or a scanner error.
+var errConnectionLost = errors.New("codex: connection lost during startup")
+
+// connectionLossErr wraps a handshake step's own error so errors.Is
+// recognizes errConnectionLost while Error() renders exactly the
+// wrapped error's own text: a caller that falls through to today's
+// transport message, because the runtime stayed alive past the
+// observation grace, must see it unchanged.
+type connectionLossErr struct {
+	err error
+}
+
+func (e *connectionLossErr) Error() string        { return e.err.Error() }
+func (e *connectionLossErr) Unwrap() error        { return e.err }
+func (e *connectionLossErr) Is(target error) bool { return target == errConnectionLost }
+
+// wrapConnectionLoss marks err as a connection loss unless it is a
+// cancelled or elapsed context, which are not: the caller already
+// knows why the request ended in either case.
+func wrapConnectionLoss(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &connectionLossErr{err: err}
+}
 
 // initializeHandshake sends the initialize request and initialized
 // notification per the app-server protocol.
@@ -45,14 +79,14 @@ func initializeHandshake(ctx context.Context, state *sessionState) error {
 	defer cancel()
 	resp, err := state.conn.Call(callCtx, "initialize", params)
 	if err != nil {
-		return fmt.Errorf("initialize: %w", err)
+		return wrapConnectionLoss(fmt.Errorf("initialize: %w", err))
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("initialize error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
 	}
 
 	if err := state.conn.Notify("initialized", map[string]any{}); err != nil {
-		return fmt.Errorf("initialized notification: %w", err)
+		return wrapConnectionLoss(fmt.Errorf("initialized notification: %w", err))
 	}
 	return nil
 }
@@ -66,7 +100,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 	defer cancel()
 	resp, err := state.conn.Call(readCtx, "account/read", map[string]any{"refreshToken": false})
 	if err != nil {
-		return fmt.Errorf("account/read: %w", err)
+		return wrapConnectionLoss(fmt.Errorf("account/read: %w", err))
 	}
 	if resp.Error != nil {
 		return fmt.Errorf("account/read error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
@@ -96,7 +130,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 	})
 	loginCancel()
 	if err != nil {
-		return fmt.Errorf("account/login/start: %w", err)
+		return wrapConnectionLoss(fmt.Errorf("account/login/start: %w", err))
 	}
 	if loginResp.Error != nil {
 		text := loginResp.Error.Message
@@ -117,10 +151,10 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, logger *slog
 		case <-state.inbox.Ready():
 			msg, ok := state.inbox.Take()
 			if !ok {
-				return fmt.Errorf("unexpected EOF waiting for login")
+				return wrapConnectionLoss(fmt.Errorf("unexpected EOF waiting for login"))
 			}
 			if msg.Kind == jsonrpc.KindStreamEnd {
-				return fmt.Errorf("scanner error waiting for login: %w", msg.Err)
+				return wrapConnectionLoss(fmt.Errorf("scanner error waiting for login: %w", msg.Err))
 			}
 			if msg.Kind == jsonrpc.KindMalformed {
 				continue
@@ -183,7 +217,7 @@ func startThread(ctx context.Context, state *sessionState, pt passthroughConfig,
 	resp, callErr := state.conn.Call(callCtx, "thread/start", params)
 	cancel()
 	if callErr != nil {
-		return "", "", fmt.Errorf("thread/start: %w", callErr)
+		return "", "", wrapConnectionLoss(fmt.Errorf("thread/start: %w", callErr))
 	}
 	if resp.Error != nil {
 		return "", "", fmt.Errorf("thread/start error: code=%d message=%s", resp.Error.Code, resp.Error.Message)
@@ -240,7 +274,7 @@ func resumeThread(ctx context.Context, state *sessionState, threadID string) (mo
 		"threadId": threadID,
 	})
 	if callErr != nil {
-		return "", fmt.Errorf("thread/resume: %w", callErr)
+		return "", wrapConnectionLoss(fmt.Errorf("thread/resume: %w", callErr))
 	}
 	if resp.Error != nil {
 		return "", fmt.Errorf("thread/resume error: code=%d message=%s", resp.Error.Code, resp.Error.Message)

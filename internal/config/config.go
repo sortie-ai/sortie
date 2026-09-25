@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/maputil"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -642,6 +643,8 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 
 	preResolution := resolveExtensionEnvRefs(extensions)
 
+	registerConfigSecrets(tracker, reactions, notifications, extensions)
+
 	return ServiceConfig{
 		Tracker:                 tracker,
 		Polling:                 polling,
@@ -657,6 +660,66 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		extensionsPreResolution: preResolution,
 		Notifications:           notifications,
 	}, nil
+}
+
+// registerConfigSecrets registers every resolved credential a
+// [ServiceConfig] load carries with [internal/redact], so a log record,
+// a stored row, or a runtime-derived text can mask it later. Call it
+// once every value has its final, environment-resolved form.
+func registerConfigSecrets(tracker TrackerConfig, reactions map[string]ReactionConfig, notifications NotificationsConfig, extensions map[string]any) {
+	redact.Add("tracker.api_key", tracker.APIKey)
+	redact.AddURLCredentials("tracker.endpoint", tracker.Endpoint)
+
+	for kind, reaction := range reactions {
+		if len(reaction.Extra) == 0 {
+			continue
+		}
+		registerCredentialLeaves(fmt.Sprintf("reactions.%s.extra", kind), reaction.Extra, false)
+	}
+
+	for i, backend := range notifications.Backends {
+		if len(backend.Config) == 0 {
+			continue
+		}
+		registerCredentialLeaves(fmt.Sprintf("notifications[%d]", i), backend.Config, true)
+	}
+
+	registerCredentialLeaves("", extensions, false)
+}
+
+// registerCredentialLeaves walks m at any depth, registering each
+// string leaf, and each string held directly in a list, under its own
+// key through [redact.AddNamed]. When registerURLsWhole holds, a
+// string leaf carrying "://" is also registered whole through
+// [redact.Add], because a notification endpoint grants access to
+// whoever holds it. An empty source names each leaf by its key path
+// from m alone.
+func registerCredentialLeaves(source string, m map[string]any, registerURLsWhole bool) {
+	for key, v := range m {
+		path := key
+		if source != "" {
+			path = source + "." + key
+		}
+		switch value := v.(type) {
+		case string:
+			registerCredentialString(path, key, value, registerURLsWhole)
+		case map[string]any:
+			registerCredentialLeaves(path, value, registerURLsWhole)
+		case []any:
+			for _, elem := range value {
+				if s, ok := elem.(string); ok {
+					registerCredentialString(path, key, s, registerURLsWhole)
+				}
+			}
+		}
+	}
+}
+
+func registerCredentialString(path, key, value string, registerURLsWhole bool) {
+	redact.AddNamed(path, key, value)
+	if registerURLsWhole && strings.Contains(value, "://") {
+		redact.Add(path, value)
+	}
 }
 
 func buildTrackerConfig(m map[string]any, envKeys map[string]bool) (TrackerConfig, error) {

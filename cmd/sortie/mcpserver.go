@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
@@ -58,6 +59,7 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	}
 
 	logger := logging.Setup(stderr, slog.LevelInfo, logging.FormatText)
+	redact.AddEnviron(os.Environ())
 
 	wf, err := workflow.Load(*workflowFlag)
 	if err != nil {

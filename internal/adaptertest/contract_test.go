@@ -76,6 +76,8 @@ var contractBanTable = map[string]string{
 	"release":                "procutil.StartOutputRelease",
 	"buildSSHRemoteCmd":      "registry.AgentMeta.CredentialEnv",
 	"buildSSHRemoteCommand":  "agentcore.LaunchTarget.SSHOptions",
+	"truncateRunes":          "redact.Truncate",
+	"TruncateRunes":          "redact.Truncate",
 }
 
 // contractTrackerAdapterMethods are the tracker operation methods rule
@@ -112,6 +114,7 @@ const (
 	ruleREAPER    contractRule = "REAPER"
 	ruleANCHOR    contractRule = "ANCHOR"
 	ruleWORKDIR   contractRule = "WORKDIR"
+	ruleHANDLER   contractRule = "HANDLER"
 )
 
 // contractWorkspacekitImportPath is resolved per file so an aliased or
@@ -129,6 +132,10 @@ const (
 	contractNotifyFamilyPath = "github.com/sortie-ai/sortie/internal/notify"
 	contractInternalPrefix   = "github.com/sortie-ai/sortie/internal/"
 )
+
+// contractLoggingImportPath is the one package rule HANDLER lets build
+// its own log/slog handler and write to the process's standard streams.
+const contractLoggingImportPath = "github.com/sortie-ai/sortie/internal/logging"
 
 // contractFamilyRoots is the ban surface both the adapter-to-adapter arm
 // of contractImportBanReason and the core-import rule match against.
@@ -507,9 +514,9 @@ const contractCaptureDotImportReason = "which this rule cannot resolve a bound i
 // (discards, caps, or grows in memory); a type absent here is presumed to
 // block until rule SINK is extended to admit it.
 var contractBoundedSinkTypes = map[string]string{
-	"bytes.Buffer":  "grows in memory and never blocks on Write",
-	"limitedBuffer": "drops the earliest bytes once its cap is exceeded",
-	"cappedWriter":  "discards bytes past its cap and always reports success",
+	"bytes.Buffer":        "grows in memory and never blocks on Write",
+	"procutil.TailBuffer": "drops the earliest bytes once its cap is exceeded",
+	"cappedWriter":        "discards bytes past its cap and always reports success",
 }
 
 // contractSinkTypeOwner is the map rule SINK directs a caller to extend
@@ -803,37 +810,68 @@ func contractExprIsCmdBound(execName string, idx *contractCmdIndex, importPath s
 }
 
 // contractSinkTypeName returns the contractBoundedSinkTypes key a type
-// expression names ("bytes.Buffer" for the file's bytes import, else the
-// bare identifier), or "" for an unrecognized type, which is then treated
+// expression names ("bytes.Buffer" for the file's bytes import,
+// "procutil.TailBuffer" for the file's procutil import, else the bare
+// identifier), or "" for an unrecognized type, which is then treated
 // as unbounded.
-func contractSinkTypeName(bytesName string, expr ast.Expr) string {
+func contractSinkTypeName(bytesName, procName string, expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
 		return e.Name
 	case *ast.SelectorExpr:
-		if ident, ok := e.X.(*ast.Ident); ok && bytesName != "" && ident.Name == bytesName && e.Sel.Name == "Buffer" {
+		ident, ok := e.X.(*ast.Ident)
+		if !ok {
+			return ""
+		}
+		if bytesName != "" && ident.Name == bytesName && e.Sel.Name == "Buffer" {
 			return "bytes.Buffer"
+		}
+		if procName != "" && ident.Name == procName && e.Sel.Name == "TailBuffer" {
+			return "procutil.TailBuffer"
 		}
 	}
 	return ""
 }
 
+// contractIsNewTailBufferCall reports whether expr calls
+// procName.NewTailBuffer, the constructor [contractBoundedSinkTypes]
+// admits "procutil.TailBuffer" through.
+func contractIsNewTailBufferCall(procName string, expr ast.Expr) bool {
+	if procName == "" {
+		return false
+	}
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == procName && sel.Sel.Name == "NewTailBuffer"
+}
+
 // contractSinkTypeFromValue returns the contractBoundedSinkTypes key for a
-// value that constructs a sink directly, looking through a leading
-// address-of so both "T{}" and "&T{}" resolve to T. It returns "" when
-// expr is not a composite literal.
-func contractSinkTypeFromValue(bytesName string, expr ast.Expr) string {
+// value that constructs a sink directly: a procName.NewTailBuffer call, or
+// a composite literal, looking through a leading address-of so both "T{}"
+// and "&T{}" resolve to T. It returns "" when expr matches neither form.
+func contractSinkTypeFromValue(bytesName, procName string, expr ast.Expr) string {
+	if contractIsNewTailBufferCall(procName, expr) {
+		return "procutil.TailBuffer"
+	}
 	lit, ok := unwrapCompositeLit(expr)
 	if !ok {
 		return ""
 	}
-	return contractSinkTypeName(bytesName, lit.Type)
+	return contractSinkTypeName(bytesName, procName, lit.Type)
 }
 
 // contractCollectSinkVarTypes maps every local variable fn binds to a
-// recognized sink type (by "var x T", "var x T = ...", "x := T{...}", or
-// "x := &T{...}") to that type's contractBoundedSinkTypes key.
-func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]string {
+// recognized sink type (by "var x T", "var x T = ...", "x := T{...}",
+// "x := &T{...}", or "x := procName.NewTailBuffer(...)") to that type's
+// contractBoundedSinkTypes key.
+func contractCollectSinkVarTypes(bytesName, procName string, fn *ast.FuncDecl) map[string]string {
 	sinkTypes := map[string]string{}
 	if fn.Body == nil {
 		return sinkTypes
@@ -851,7 +889,7 @@ func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]
 					continue
 				}
 				if vs.Type != nil {
-					if typeName := contractSinkTypeName(bytesName, vs.Type); typeName != "" {
+					if typeName := contractSinkTypeName(bytesName, procName, vs.Type); typeName != "" {
 						for _, name := range vs.Names {
 							sinkTypes[name.Name] = typeName
 						}
@@ -861,7 +899,7 @@ func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]
 					if i >= len(vs.Names) {
 						continue
 					}
-					if typeName := contractSinkTypeFromValue(bytesName, val); typeName != "" {
+					if typeName := contractSinkTypeFromValue(bytesName, procName, val); typeName != "" {
 						sinkTypes[vs.Names[i].Name] = typeName
 					}
 				}
@@ -875,7 +913,7 @@ func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]
 				if !ok {
 					continue
 				}
-				if typeName := contractSinkTypeFromValue(bytesName, rhs); typeName != "" {
+				if typeName := contractSinkTypeFromValue(bytesName, procName, rhs); typeName != "" {
 					sinkTypes[ident.Name] = typeName
 				}
 			}
@@ -889,7 +927,7 @@ func contractCollectSinkVarTypes(bytesName string, fn *ast.FuncDecl) map[string]
 // resolves to via sinkTypes, and whether expr is the literal nil (which
 // [procutil.CaptureParams] accepts). An expression it cannot resolve
 // reports "", false and is treated as unbounded.
-func contractResolveSinkType(bytesName string, sinkTypes map[string]string, expr ast.Expr) (typeName string, isNil bool) {
+func contractResolveSinkType(bytesName, procName string, sinkTypes map[string]string, expr ast.Expr) (typeName string, isNil bool) {
 	switch e := expr.(type) {
 	case *ast.Ident:
 		if e.Name == "nil" {
@@ -904,11 +942,16 @@ func contractResolveSinkType(bytesName string, sinkTypes map[string]string, expr
 		case *ast.Ident:
 			return sinkTypes[x.Name], false
 		case *ast.CompositeLit:
-			return contractSinkTypeName(bytesName, x.Type), false
+			return contractSinkTypeName(bytesName, procName, x.Type), false
 		}
 		return "", false
 	case *ast.CompositeLit:
-		return contractSinkTypeName(bytesName, e.Type), false
+		return contractSinkTypeName(bytesName, procName, e.Type), false
+	case *ast.CallExpr:
+		if contractIsNewTailBufferCall(procName, e) {
+			return "procutil.TailBuffer", false
+		}
+		return "", false
 	}
 	return "", false
 }
@@ -930,14 +973,14 @@ func contractIsCaptureParamsLit(procName string, lit *ast.CompositeLit) bool {
 // checkContractCaptureSinkFields reports a rule SINK violation for each of
 // lit's Stdout and Stderr fields that is set and resolves, via sinkTypes,
 // to neither nil nor a contractBoundedSinkTypes type.
-func checkContractCaptureSinkFields(fset *token.FileSet, lit *ast.CompositeLit, bytesName string, sinkTypes map[string]string) []contractViolation {
+func checkContractCaptureSinkFields(fset *token.FileSet, lit *ast.CompositeLit, bytesName, procName string, sinkTypes map[string]string) []contractViolation {
 	var violations []contractViolation
 	for _, field := range [2]string{"Stdout", "Stderr"} {
 		value := compositeLitKeyValue(lit, field)
 		if value == nil {
 			continue
 		}
-		typeName, isNil := contractResolveSinkType(bytesName, sinkTypes, value)
+		typeName, isNil := contractResolveSinkType(bytesName, procName, sinkTypes, value)
 		if isNil {
 			continue
 		}
@@ -1030,13 +1073,13 @@ func checkContractCaptureFile(fset *token.FileSet, file *ast.File, importPath, d
 		cmdNames, procNames := contractCollectBoundNames(execName, osName, idx, importPath, aliasPaths, fn)
 		var sinkTypes map[string]string
 		if checkSinks {
-			sinkTypes = contractCollectSinkVarTypes(bytesName, fn)
+			sinkTypes = contractCollectSinkVarTypes(bytesName, procName, fn)
 		}
 
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			if checkSinks {
 				if lit, ok := n.(*ast.CompositeLit); ok && contractIsCaptureParamsLit(procName, lit) {
-					violations = append(violations, checkContractCaptureSinkFields(fset, lit, bytesName, sinkTypes)...)
+					violations = append(violations, checkContractCaptureSinkFields(fset, lit, bytesName, procName, sinkTypes)...)
 					return true
 				}
 			}
@@ -2762,6 +2805,189 @@ func checkContractAnchorFile(fset *token.FileSet, file *ast.File, importPath str
 	return violations
 }
 
+// contractPackageImportsTesting reports whether any non-test file in
+// files imports "testing", the signal rule HANDLER reads to exempt a
+// test-support package (one that builds a logger or a fake writer for
+// tests to use) from a rule that otherwise targets production code.
+func contractPackageImportsTesting(files []*ast.File) bool {
+	for _, file := range files {
+		if resolveContractImportName(file, "testing") != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// contractPackageDeclares reports whether any file in files declares a
+// top-level function or package-level variable or constant named name,
+// the check rule HANDLER's print/println arm uses to leave a package's
+// own identically-named declaration alone.
+func contractPackageDeclares(files []*ast.File, name string) bool {
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil && d.Name.Name == name {
+					return true
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, n := range vs.Names {
+						if n.Name == name {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// contractIsDiscardHandlerArg reports whether call's sole argument is
+// slogName.DiscardHandler, the one slog.New argument rule HANDLER
+// admits in production code.
+func contractIsDiscardHandlerArg(slogName string, call *ast.CallExpr) bool {
+	if len(call.Args) != 1 {
+		return false
+	}
+	sel, ok := call.Args[0].(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == slogName && sel.Sel.Name == "DiscardHandler"
+}
+
+// checkContractHandlerFile reports every rule HANDLER violation in
+// file: production code, outside internal/logging and outside a
+// test-support package (one whose non-test files import "testing"),
+// that builds its own log/slog handler, imports the standard log
+// package, or, outside package main, writes directly to the process's
+// standard streams. A dot import of log/slog, os, or fmt is reported
+// at the import, since a reference reached through it binds no local
+// identifier this checker could otherwise see.
+func checkContractHandlerFile(fset *token.FileSet, file *ast.File, importPath string, packageDeclaresPrint, packageDeclaresPrintln bool) []contractViolation {
+	if importPath == contractLoggingImportPath {
+		return nil
+	}
+
+	var violations []contractViolation
+
+	for _, imp := range file.Imports {
+		if imp.Name == nil || imp.Name.Name != "." {
+			continue
+		}
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		switch path {
+		case "log/slog":
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports log/slog, which this rule cannot resolve a handler call through; import it by name",
+			})
+		case "os":
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports os, which this rule cannot resolve a standard-stream reference through; import it by name",
+			})
+		case "fmt":
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports fmt, which this rule cannot resolve a Print call through; import it by name",
+			})
+		case "log":
+			violations = append(violations, contractViolation{
+				pos:  fset.Position(imp.Pos()),
+				text: "dot-imports the standard log package; log records must go through log/slog so redact.ReplaceAttr masks them",
+			})
+		}
+	}
+
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != "log" {
+			continue
+		}
+		violations = append(violations, contractViolation{
+			pos:  fset.Position(imp.Pos()),
+			text: "imports the standard log package; log records must go through log/slog so redact.ReplaceAttr masks them",
+		})
+	}
+
+	slogName := resolveContractImportName(file, "log/slog")
+	osName := resolveContractImportName(file, "os")
+	fmtName := resolveContractImportName(file, "fmt")
+	isMain := file.Name.Name == "main"
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				switch {
+				case slogName != "" && ident.Name == slogName &&
+					(sel.Sel.Name == "NewTextHandler" || sel.Sel.Name == "NewJSONHandler" || sel.Sel.Name == "SetDefault"):
+					violations = append(violations, contractViolation{
+						pos:  fset.Position(node.Pos()),
+						text: "calls " + slogName + "." + sel.Sel.Name + " directly; production code reaches the process-wide handler only through internal/logging.Setup",
+					})
+				case slogName != "" && ident.Name == slogName && sel.Sel.Name == "New":
+					if !contractIsDiscardHandlerArg(slogName, node) {
+						violations = append(violations, contractViolation{
+							pos:  fset.Position(node.Pos()),
+							text: "calls " + slogName + ".New with a handler other than " + slogName + ".DiscardHandler; production code reaches the process-wide handler only through internal/logging.Setup",
+						})
+					}
+				case !isMain && fmtName != "" && ident.Name == fmtName &&
+					(sel.Sel.Name == "Print" || sel.Sel.Name == "Printf" || sel.Sel.Name == "Println"):
+					violations = append(violations, contractViolation{
+						pos:  fset.Position(node.Pos()),
+						text: "calls " + fmtName + "." + sel.Sel.Name + " outside package main; write through log/slog, not the process's standard streams",
+					})
+				}
+				return true
+			}
+			if !isMain {
+				if ident, ok := node.Fun.(*ast.Ident); ok {
+					if (ident.Name == "print" && !packageDeclaresPrint) || (ident.Name == "println" && !packageDeclaresPrintln) {
+						violations = append(violations, contractViolation{
+							pos:  fset.Position(node.Pos()),
+							text: "calls the predeclared " + ident.Name + " outside package main; write through log/slog, not the process's standard streams",
+						})
+					}
+				}
+			}
+		case *ast.SelectorExpr:
+			if isMain {
+				return true
+			}
+			ident, ok := node.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if osName != "" && ident.Name == osName && (node.Sel.Name == "Stdout" || node.Sel.Name == "Stderr") {
+				violations = append(violations, contractViolation{
+					pos:  fset.Position(node.Pos()),
+					text: "names " + osName + "." + node.Sel.Name + " outside package main; write through log/slog, not the process's standard streams",
+				})
+			}
+		}
+		return true
+	})
+
+	return violations
+}
+
 // checkContractWorkdirFile reports every rule WORKDIR violation in file:
 // an assignment to a selector named Dir outside contractWorkdirSites, and
 // a composite literal of type exec.Cmd carrying key Dir anywhere. Only a
@@ -2864,6 +3090,17 @@ func TestContractCaptureAndTeardown(t *testing.T) {
 		if !contractExempt(w.pkg.dirName, ruleWORKDIR) {
 			for _, file := range w.pkg.files {
 				for _, v := range checkContractWorkdirFile(fset, file, w.pkg.importPath, idx) {
+					t.Errorf("%s: %s", v.pos, v.text)
+				}
+			}
+		}
+		inHandlerScope := strings.HasPrefix(w.pkg.importPath, contractInternalPrefix) ||
+			strings.HasPrefix(w.pkg.importPath, "github.com/sortie-ai/sortie/cmd")
+		if inHandlerScope && !contractExempt(w.pkg.dirName, ruleHANDLER) && !contractPackageImportsTesting(w.pkg.files) {
+			declaresPrint := contractPackageDeclares(w.pkg.files, "print")
+			declaresPrintln := contractPackageDeclares(w.pkg.files, "println")
+			for _, file := range w.pkg.files {
+				for _, v := range checkContractHandlerFile(fset, file, w.pkg.importPath, declaresPrint, declaresPrintln) {
 					t.Errorf("%s: %s", v.pos, v.text)
 				}
 			}
@@ -3978,12 +4215,12 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 )
 
-type limitedBuffer struct{ max int }
+type cappedWriter struct{ max int }
 
-func (lb *limitedBuffer) Write(p []byte) (int, error) { return len(p), nil }
+func (w *cappedWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func run(cmd *exec.Cmd) error {
-	buf := &limitedBuffer{max: 1024}
+	buf := &cappedWriter{max: 1024}
 	_, startErr := procutil.StartCapture(cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
 	return startErr
 }

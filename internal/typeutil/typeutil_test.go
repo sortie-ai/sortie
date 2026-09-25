@@ -3,7 +3,6 @@ package typeutil
 import (
 	"testing"
 	"time"
-	"unicode/utf8"
 )
 
 func TestExtractStringSlice(t *testing.T) {
@@ -54,48 +53,6 @@ func TestExtractStringSlice(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestTruncateRunes(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		s      string
-		maxLen int
-		want   string
-	}{
-		{name: "empty string", s: "", maxLen: 10, want: ""},
-		{name: "below limit", s: "hello", maxLen: 10, want: "hello"},
-		{name: "exact limit not truncated", s: "hello", maxLen: 5, want: "hello"},
-		{name: "above limit gets ellipsis", s: "hello world", maxLen: 5, want: "hello…"},
-		{name: "multi-byte CJK runes counted correctly", s: "日本語テスト", maxLen: 3, want: "日本語…"},
-		{name: "emoji counted as single rune", s: "ab🎉cd", maxLen: 3, want: "ab🎉…"},
-		{name: "maxLen zero returns ellipsis", s: "abc", maxLen: 0, want: "…"},
-		{name: "unicode two-byte runes", s: "héllo", maxLen: 4, want: "héll…"},
-		{name: "result rune count is maxLen plus one", s: repeatString("x", 20), maxLen: 5, want: repeatString("x", 5) + "…"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := TruncateRunes(tt.s, tt.maxLen)
-			if got != tt.want {
-				t.Errorf("TruncateRunes(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
-			}
-			if utf8.RuneCountInString(got) > tt.maxLen+1 {
-				t.Errorf("TruncateRunes(%q, %d): rune count %d exceeds maxLen+1", tt.s, tt.maxLen, utf8.RuneCountInString(got))
-			}
-		})
-	}
-}
-
-func repeatString(s string, n int) string {
-	result := make([]byte, len(s)*n)
-	for i := range n {
-		copy(result[i*len(s):], s)
-	}
-	return string(result)
 }
 
 func TestIntFrom(t *testing.T) {

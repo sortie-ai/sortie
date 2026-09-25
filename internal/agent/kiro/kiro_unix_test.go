@@ -5,6 +5,7 @@ package kiro
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,7 +69,7 @@ func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 	target := agentcore.LaunchTarget{Command: binPath, WorkspacePath: dir}
 
 	start := time.Now()
-	agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()))
+	agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()), slog.Default())
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("checkCredential() took %v, want within 3s", elapsed)
 	}

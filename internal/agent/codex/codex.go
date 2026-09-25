@@ -28,8 +28,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -170,6 +170,18 @@ func connectionFailureErr(state *sessionState) *domain.AgentError {
 		return nil
 	}
 	return agentcore.ConnectionFailedError()
+}
+
+// earlyExitObservation records the shared early-exit observation for a
+// startup handshake step's error, or the zero value when err carries
+// no [errConnectionLost] sentinel. Call it before state.closeConn and
+// killOnError, so the reaper it reads has not yet been signalled by
+// either.
+func earlyExitObservation(ctx context.Context, err error, target agentcore.LaunchTarget, state *sessionState) agentcore.EarlyExit {
+	if !errors.Is(err, errConnectionLost) {
+		return agentcore.EarlyExit{}
+	}
+	return agentcore.ObserveEarlyExit(ctx, target, state.reaper, state.drainGrace)
 }
 
 // closeConn closes state.conn when it is non-nil, tolerating a
@@ -538,8 +550,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	})
 
 	if err := initializeHandshake(ctx, state); err != nil {
+		observation := earlyExitObservation(ctx, err, target, state)
 		state.closeConn()
 		killOnError()
+		if report := observation.Report(state.stderrCollector); report != nil {
+			return domain.Session{}, report
+		}
 		if sshErr := connectionFailureErr(state); sshErr != nil {
 			return domain.Session{}, sshErr
 		}
@@ -551,11 +567,17 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 
 	if err := authenticateIfNeeded(ctx, state, logger); err != nil {
-		state.closeConn()
-		killOnError()
 		var agentErr *domain.AgentError
 		if ok := isAgentError(err, &agentErr); ok {
+			state.closeConn()
+			killOnError()
 			return domain.Session{}, agentErr
+		}
+		observation := earlyExitObservation(ctx, err, target, state)
+		state.closeConn()
+		killOnError()
+		if report := observation.Report(state.stderrCollector); report != nil {
+			return domain.Session{}, report
 		}
 		if sshErr := connectionFailureErr(state); sshErr != nil {
 			return domain.Session{}, sshErr
@@ -577,8 +599,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 				slog.Any("error", resumeErr))
 			tid, startedModel, startErr := startThread(ctx, state, a.passthrough, logger)
 			if startErr != nil {
+				observation := earlyExitObservation(ctx, startErr, target, state)
 				state.closeConn()
 				killOnError()
+				if report := observation.Report(state.stderrCollector); report != nil {
+					return domain.Session{}, report
+				}
 				if sshErr := connectionFailureErr(state); sshErr != nil {
 					return domain.Session{}, sshErr
 				}
@@ -597,8 +623,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	} else {
 		tid, startedModel, startErr := startThread(ctx, state, a.passthrough, logger)
 		if startErr != nil {
+			observation := earlyExitObservation(ctx, startErr, target, state)
 			state.closeConn()
 			killOnError()
+			if report := observation.Report(state.stderrCollector); report != nil {
+				return domain.Session{}, report
+			}
 			if sshErr := connectionFailureErr(state); sshErr != nil {
 				return domain.Session{}, sshErr
 			}
@@ -957,7 +987,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					})
 				}
 				if item.Type == "agentMessage" && item.Text != "" {
-					agentcore.EmitNotification(params.OnEvent, typeutil.TruncateRunes(item.Text, 200))
+					agentcore.EmitNotification(params.OnEvent, redact.Truncate(item.Text, 200))
 				}
 
 			case "item/agentMessage/delta", "item/commandExecution/outputDelta":

@@ -5,6 +5,7 @@ package kiro
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +111,7 @@ func TestCheckCredential_HeldDescendantHoldingOutput(t *testing.T) {
 	done := make(chan outcome, 1)
 	start := time.Now()
 	go func() {
-		agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()))
+		agentErr := checkCredential(context.Background(), target, int(procutil.DefaultStopGrace.Milliseconds()), slog.Default())
 		done <- outcome{agentErr}
 	}()
 

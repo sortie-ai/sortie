@@ -6,6 +6,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -56,6 +57,8 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	if entry.SessionID != "" {
 		log = logging.WithSession(log, entry.SessionID)
 	}
+
+	event.Message = redact.Mask(event.Message)
 
 	// Always record the most-recently-processed event type.
 	entry.LastAgentEvent = event.Type

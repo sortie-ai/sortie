@@ -7,18 +7,21 @@
 ```
 cmd/sortie → internal/* (wiring only)
 server → domain, orchestrator
-orchestrator → domain, config, persistence, workspace, workspacekit, registry, prompt, workflow, logging, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
+orchestrator → domain, config, persistence, workspace, workspacekit, registry, prompt, workflow, logging, redact, adapter-family packages that register no kind (scm/scmcore, agent/procutil); kind packages only via registry
 workflow → config, prompt
 workspace → domain, config, persistence, agent/procutil, workspacekit
 persistence → domain, config
 registry → domain, typeutil
-tracker/*, scm/*, agent/*, notify/* → domain, registry, logging, trackermetrics, *kit/*util, packages under their own family root that register no kind; no cross-adapter imports
+tracker/*, scm/*, agent/*, notify/* → domain, registry, logging, redact, trackermetrics, *kit/*util, packages under their own family root that register no kind; no cross-adapter imports
 blockers → domain, registry
 adaptertest → domain, registry, scm/scmcore
 tool/* → domain, tool/toolresult
-config, prompt → domain, maputil
+config → domain, maputil, redact
+prompt → domain, maputil
 httpkit, issuekit, trackermetrics → domain, typeutil
-domain, maputil, typeutil, logging, workspacekit → no internal deps
+logging → redact
+redact → httpkit
+domain, maputil, typeutil, workspacekit → no internal deps
 ```
 
 ## 2. Concurrency safety

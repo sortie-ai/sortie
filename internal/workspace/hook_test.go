@@ -5,6 +5,8 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // hookLogBuffer is a bytes.Buffer guarded by a mutex, for capturing
@@ -59,10 +62,11 @@ func requireHookError(t *testing.T, err error) *HookError {
 	return he
 }
 
-// truncationMarker returns the prefix [limitedBuffer.String] adds once it
-// has discarded the earliest bytes to stay within max.
-func truncationMarker(max int) string {
-	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n", max)
+// truncationMarker returns the prefix [formatHookOutput] adds once the
+// underlying [procutil.TailBuffer] has discarded earlier output to stay
+// within [MaxHookOutputBytes].
+func truncationMarker() string {
+	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n", MaxHookOutputBytes)
 }
 
 func TestRunHook(t *testing.T) {
@@ -251,7 +255,7 @@ func TestRunHook(t *testing.T) {
 			}
 		}
 
-		marker := truncationMarker(MaxHookOutputBytes)
+		marker := truncationMarker()
 		if !strings.HasPrefix(output, marker) {
 			t.Errorf("Output prefix = %q, want %q", output[:min(len(output), len(marker))], marker)
 		}
@@ -281,7 +285,7 @@ func TestRunHook(t *testing.T) {
 			}
 			t.Errorf("Output tail = %q, want it to contain %q", tail, finalLine)
 		}
-		marker := truncationMarker(MaxHookOutputBytes)
+		marker := truncationMarker()
 		if !strings.HasPrefix(he.Output, marker) {
 			t.Errorf("Output prefix = %q, want %q", he.Output[:min(len(he.Output), len(marker))], marker)
 		}
@@ -483,85 +487,86 @@ func TestRunHook_RestrictedEnv(t *testing.T) {
 	})
 }
 
-func TestLimitedBuffer(t *testing.T) {
+func TestFormatHookOutput(t *testing.T) {
 	t.Parallel()
 
 	t.Run("write within limit", func(t *testing.T) {
 		t.Parallel()
 
-		lb := &limitedBuffer{max: 256}
+		buf := procutil.NewTailBuffer(256)
 		data := bytes.Repeat([]byte("x"), 100)
 
-		n, err := lb.Write(data)
+		n, err := buf.Write(data)
 		if err != nil {
 			t.Fatalf("Write() error: %v", err)
 		}
 		if n != 100 {
 			t.Errorf("Write() = %d, want 100", n)
 		}
-		if len(lb.String()) != 100 {
-			t.Errorf("String() length = %d, want 100", len(lb.String()))
+		if got := formatHookOutput(buf); len(got) != 100 {
+			t.Errorf("formatHookOutput() length = %d, want 100", len(got))
 		}
 	})
 
 	t.Run("write exceeds limit", func(t *testing.T) {
 		t.Parallel()
 
-		lb := &limitedBuffer{max: 200}
-		data := bytes.Repeat([]byte("x"), 300)
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
+		data := bytes.Repeat([]byte("x"), MaxHookOutputBytes+100)
 
-		n, err := lb.Write(data)
+		n, err := buf.Write(data)
 		if err != nil {
 			t.Fatalf("Write() error: %v", err)
 		}
-		if n != 300 {
-			t.Errorf("Write() = %d, want 300 (original length)", n)
+		if n != len(data) {
+			t.Errorf("Write() = %d, want %d (original length)", n, len(data))
 		}
 
-		got := lb.String()
-		marker := truncationMarker(lb.max)
+		got := formatHookOutput(buf)
+		marker := truncationMarker()
 		if !strings.HasPrefix(got, marker) {
-			t.Errorf("String() = %q, want prefix %q", got, marker)
+			t.Errorf("formatHookOutput() = %.80q..., want prefix %q", got, marker)
 		}
 		tail := strings.TrimPrefix(got, marker)
-		if want := string(data[len(data)-200:]); tail != want {
-			t.Errorf("String() tail = %q, want last 200 bytes %q", tail, want)
+		if want := string(data[len(data)-MaxHookOutputBytes:]); tail != want {
+			t.Errorf("formatHookOutput() tail length = %d, want %d matching the last %d bytes written", len(tail), len(want), MaxHookOutputBytes)
 		}
 	})
 
 	t.Run("multiple writes with truncation", func(t *testing.T) {
 		t.Parallel()
 
-		lb := &limitedBuffer{max: 200}
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
 
-		n1, _ := lb.Write(bytes.Repeat([]byte("a"), 150))
-		if n1 != 150 {
-			t.Errorf("first Write() = %d, want 150", n1)
+		n1, _ := buf.Write(bytes.Repeat([]byte("a"), MaxHookOutputBytes))
+		if n1 != MaxHookOutputBytes {
+			t.Errorf("first Write() = %d, want %d", n1, MaxHookOutputBytes)
 		}
 
-		n2, _ := lb.Write(bytes.Repeat([]byte("b"), 150))
+		n2, _ := buf.Write(bytes.Repeat([]byte("b"), 150))
 		if n2 != 150 {
 			t.Errorf("second Write() = %d, want 150", n2)
 		}
 
-		// Retained tail is the last 200 bytes: 50 'a' followed by 150 'b',
-		// inverting the former head-retention expectation.
-		marker := truncationMarker(lb.max)
-		want := marker + strings.Repeat("a", 50) + strings.Repeat("b", 150)
-		if got := lb.String(); got != want {
-			t.Errorf("String() = %q, want %q", got, want)
+		// Retained tail is the last MaxHookOutputBytes bytes: the first
+		// write's 'a's, minus the 150 bytes the second write's 'b's
+		// pushed out, followed by all 150 'b's.
+		marker := truncationMarker()
+		want := marker + strings.Repeat("a", MaxHookOutputBytes-150) + strings.Repeat("b", 150)
+		if got := formatHookOutput(buf); got != want {
+			t.Errorf("formatHookOutput() length = %d, want %d matching the expected tail window", len(got), len(want))
 		}
 	})
 
 	t.Run("write after limit reached", func(t *testing.T) {
 		t.Parallel()
 
-		lb := &limitedBuffer{max: 100}
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
 
-		lb.Write(bytes.Repeat([]byte("x"), 100)) //nolint:errcheck // test setup
-		snapshot := lb.String()
+		buf.Write(bytes.Repeat([]byte("x"), MaxHookOutputBytes)) //nolint:errcheck // test setup
+		snapshot := formatHookOutput(buf)
 
-		n, err := lb.Write([]byte("more data"))
+		n, err := buf.Write([]byte("more data"))
 		if err != nil {
 			t.Fatalf("Write() error: %v", err)
 		}
@@ -570,16 +575,81 @@ func TestLimitedBuffer(t *testing.T) {
 		}
 
 		// Tail-retention shifts the window: the write past the limit
-		// discards the earliest bytes, so String() now differs from the
-		// pre-write snapshot and ends with what was just written.
-		got := lb.String()
+		// discards the earliest bytes, so the formatted output now
+		// differs from the pre-write snapshot and ends with what was
+		// just written.
+		got := formatHookOutput(buf)
 		if got == snapshot {
-			t.Error("String() unchanged after writing past limit, want it to reflect the shifted tail")
+			t.Error("formatHookOutput() unchanged after writing past limit, want it to reflect the shifted tail")
 		}
 		if !strings.HasSuffix(got, "more data") {
-			t.Errorf("String() = %q, want suffix %q", got, "more data")
+			t.Errorf("formatHookOutput() = %.80q..., want suffix %q", got, "more data")
 		}
 	})
+
+	t.Run("no truncation is byte-identical with no prefix", func(t *testing.T) {
+		t.Parallel()
+
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
+		buf.Write([]byte("plain hook output, no secrets")) //nolint:errcheck // test setup
+
+		if got, want := formatHookOutput(buf), "plain hook output, no secrets"; got != want {
+			t.Errorf("formatHookOutput() = %q, want %q (byte-identical, no truncation marker)", got, want)
+		}
+	})
+
+	t.Run("registered value masked", func(t *testing.T) {
+		t.Parallel()
+
+		value := "hook-secret-" + randomHookTestSuffix(t)
+		redact.Add("test.hook registered value", value)
+
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
+		buf.Write([]byte("script printed " + value)) //nolint:errcheck // test setup
+
+		got := formatHookOutput(buf)
+		if strings.Contains(got, value) {
+			t.Fatalf("formatHookOutput() = %q, leaked the registered value", got)
+		}
+		if !strings.Contains(got, redact.Marker) {
+			t.Errorf("formatHookOutput() = %q, want it to contain %q", got, redact.Marker)
+		}
+	})
+
+	t.Run("registered value straddling the retention cut is masked", func(t *testing.T) {
+		t.Parallel()
+
+		// The retention cut lands inside the value's raw byte span only
+		// when the value itself is longer than MaxHookOutputBytes, so the
+		// filler tail makes the value straddle the boundary rather than
+		// fitting entirely inside the kept tail.
+		value := "hook-straddle-" + randomHookTestSuffix(t) + strings.Repeat("V", MaxHookOutputBytes)
+		redact.Add("test.hook straddling value", value)
+
+		buf := procutil.NewTailBuffer(MaxHookOutputBytes)
+		buf.Write([]byte("prefix-")) //nolint:errcheck // test setup
+		buf.Write([]byte(value))     //nolint:errcheck // test setup
+
+		got := formatHookOutput(buf)
+		if !strings.Contains(got, redact.Marker) {
+			t.Fatalf("formatHookOutput() = %q, want it to contain %q", got, redact.Marker)
+		}
+		if strings.Contains(got, value) {
+			t.Fatalf("formatHookOutput() = %q, leaked the full value straddling the retention cut", got)
+		}
+		if tail := value[len(value)-64:]; strings.Contains(got, tail) {
+			t.Fatalf("formatHookOutput() = %q, leaked a byte run %q from the value's tail", got, tail)
+		}
+	})
+}
+
+func randomHookTestSuffix(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return hex.EncodeToString(buf)
 }
 
 func TestTruncateScript(t *testing.T) {

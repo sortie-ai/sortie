@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -29,8 +30,9 @@ type credentialEnvIssue struct {
 // lookup, in the given order, and returns one credentialEnvIssue per
 // kind that is not registered, whose CredentialEnv is undeclared, that
 // declares a name failing sshutil.IsEnvName, that declares a name
-// sshutil reserves for the SSH carrier, or that declares a name more
-// than once.
+// sshutil reserves for the SSH carrier, that declares a name
+// redact.IsSecretName rejects, or that declares a name more than
+// once.
 func checkCredentialEnvCoverage(kinds []string, lookup func(kind string) (registry.AgentMeta, bool)) []credentialEnvIssue {
 	var issues []credentialEnvIssue
 	for _, kind := range kinds {
@@ -51,6 +53,8 @@ func checkCredentialEnvCoverage(kinds []string, lookup func(kind string) (regist
 				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q, which fails sshutil.IsEnvName", name)})
 			case sshutil.IsReservedEnvName(name):
 				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q, which sshutil reserves", name)})
+			case !redact.IsSecretName(name):
+				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q, which fails redact.IsSecretName", name)})
 			case seen[name]:
 				issues = append(issues, credentialEnvIssue{kind: kind, reason: fmt.Sprintf("declares %q more than once", name)})
 			default:
@@ -85,21 +89,24 @@ func TestEveryAgentKindHasCredentialEnvCoverage(t *testing.T) {
 // completeness mechanism itself can fail: a fixture kind whose lookup
 // returns the zero CredentialEnv is reported, one declaring a name
 // that fails sshutil.IsEnvName is reported, one declaring a name
-// sshutil reserves is reported, one declaring the same name twice is
-// reported, and a kind declaring valid, non-repeating names is not.
+// sshutil reserves is reported, one declaring a name redact.IsSecretName
+// rejects is reported, one declaring the same name twice is reported,
+// and a kind declaring valid, non-repeating names is not.
 func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 	t.Parallel()
 
 	lookup := func(kind string) (registry.AgentMeta, bool) {
 		switch kind {
 		case "declared-ok-fixture":
-			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("GOOD_NAME")}, true
+			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("GOOD_API_KEY")}, true
 		case "undeclared-fixture":
 			return registry.AgentMeta{}, true
 		case "invalid-name-fixture":
 			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("1BAD")}, true
 		case "reserved-name-fixture":
 			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("_sortie_complete")}, true
+		case "not-a-secret-name-fixture":
+			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("GOOD_NAME")}, true
 		case "duplicate-name-fixture":
 			return registry.AgentMeta{CredentialEnv: registry.DeclareCredentialEnv("DUP", "DUP")}, true
 		default:
@@ -107,7 +114,7 @@ func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 		}
 	}
 
-	kinds := []string{"declared-ok-fixture", "undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "duplicate-name-fixture", "unregistered-fixture"}
+	kinds := []string{"declared-ok-fixture", "undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "not-a-secret-name-fixture", "duplicate-name-fixture", "unregistered-fixture"}
 	issues := checkCredentialEnvCoverage(kinds, lookup)
 
 	byKind := make(map[string]bool, len(issues))
@@ -118,7 +125,7 @@ func TestCheckCredentialEnvCoverage_NegativeControl(t *testing.T) {
 	if byKind["declared-ok-fixture"] {
 		t.Error("declared-ok-fixture reported an issue, want none: it declares one valid, non-repeating name")
 	}
-	for _, wantReported := range []string{"undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "duplicate-name-fixture", "unregistered-fixture"} {
+	for _, wantReported := range []string{"undeclared-fixture", "invalid-name-fixture", "reserved-name-fixture", "not-a-secret-name-fixture", "duplicate-name-fixture", "unregistered-fixture"} {
 		if !byKind[wantReported] {
 			t.Errorf("%s reported no issue, want one", wantReported)
 		}

@@ -2,14 +2,26 @@ package orchestrator
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+func eventTestSecret(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return "event-secret-" + hex.EncodeToString(buf)
+}
 
 // newStateWithEntry returns a *State containing a single RunningEntry under
 // issueID. Helpers call this to avoid repetitive setup in every test.
@@ -77,8 +89,55 @@ func TestHandleAgentEvent_BasicFields(t *testing.T) {
 	}
 }
 
-// TestHandleAgentEvent_SessionStarted verifies that EventSessionStarted
-// populates SessionID and AgentPID on the entry.
+func TestHandleAgentEvent_MasksRegisteredValueInLastAgentMessage(t *testing.T) {
+	t.Parallel()
+
+	value := eventTestSecret(t)
+	redact.Add("test.event last agent message", value)
+
+	state, entry := newStateWithEntry("MASK-1")
+
+	HandleAgentEvent(state, "MASK-1", domain.AgentEvent{
+		Type:      domain.EventNotification,
+		Timestamp: time.Now().UTC(),
+		Message:   "carrying credential " + value,
+	}, slog.Default(), nil)
+
+	if strings.Contains(entry.LastAgentMessage, value) {
+		t.Fatalf("LastAgentMessage = %q, leaked the registered value", entry.LastAgentMessage)
+	}
+	if !strings.Contains(entry.LastAgentMessage, redact.Marker) {
+		t.Errorf("LastAgentMessage = %q, want it to contain %q", entry.LastAgentMessage, redact.Marker)
+	}
+}
+
+func TestHandleAgentEvent_MasksRegisteredValueInToolCallCompletedRecord(t *testing.T) {
+	t.Parallel()
+
+	value := eventTestSecret(t)
+	redact.Add("test.event tool call completed", value)
+
+	var buf bytes.Buffer
+	logger := debugLogger(t, &buf)
+	state, _ := newStateWithEntry("MASK-2")
+
+	HandleAgentEvent(state, "MASK-2", domain.AgentEvent{
+		Type:      domain.EventToolResult,
+		Timestamp: time.Now().UTC(),
+		ToolName:  "Bash",
+		ToolError: true,
+		Message:   "failed reading credential " + value,
+	}, logger, nil)
+
+	out := buf.String()
+	if strings.Contains(out, value) {
+		t.Fatalf("tool call completed record leaked the registered value:\n%s", out)
+	}
+	if !strings.Contains(out, redact.Marker) {
+		t.Errorf("tool call completed record = %q, want it to contain %q", out, redact.Marker)
+	}
+}
+
 func TestHandleAgentEvent_SessionStarted(t *testing.T) {
 	t.Parallel()
 

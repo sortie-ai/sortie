@@ -50,7 +50,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	// the tree rather than signalling gracefully first.
 	procutil.SetGroupKill(cmd)
 
-	buf := &limitedBuffer{max: MaxHookOutputBytes}
+	buf := procutil.NewTailBuffer(MaxHookOutputBytes)
 	capture, startErr := procutil.StartCapture(cmd, procutil.CaptureParams{Stdout: buf, Stderr: buf})
 
 	var (
@@ -71,7 +71,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		endedOnItsOwn = !procutil.StoppedByCancellation(waitErr)
 		leftover = result.TerminatedLeftovers && endedOnItsOwn
 	}
-	output := buf.String()
+	output := formatHookOutput(buf)
 
 	if startErr == nil && waitErr == nil {
 		return HookResult{Output: output, TerminatedLeftovers: leftover}, nil

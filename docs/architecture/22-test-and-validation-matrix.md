@@ -289,6 +289,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - A turn whose subprocess standard-output handle is held open by a surviving descendant still ends within the adapter's own bound, naming the runtime's exit, rather than reaching the orchestrator's stall timeout
 - Each kind that launches a runtime carries the shared credential-verification conformance assertion (§10.9), driven against a working, a refused, and, for every kind requiring an agent command, an SSH connection-failure case; registry-enumerated completeness fails, naming the kind, when any registered kind lacks a runnable test calling that assertion
 - Each gated live suite, its own environment variable set, adds a working-credential case and, when its credential-override coordinate is set, a refused-credential case proving the run ends before any working session with `credential_unverified` and no retryable kind is reported that way
+- Each kind whose runtime speaks a startup handshake it can exit before answering carries the shared early-exit conformance assertion, driven against a verification session, a working session, and a working session through a stand-in `ssh`; registry-enumerated completeness, keyed on a package's own call to the persistent JSON-RPC connection constructor, fails, naming the kind, when such a kind lacks a runnable test calling that assertion
+- Each gated live suite for such a kind adds a case appending an unknown switch to the configured command, proving the run ends before any working session with the shared early-exit report; the `kiro` live suite also adds a no-login case proving the guard's credential verdict rests on the runtime's own structured answer, not a changed exit-status convention
 
 ### 17.6 Observability
 
@@ -300,6 +302,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - If humanized event summaries are implemented, they cover key agent event classes without changing orchestrator behavior
 - An unmeasured run is distinguishable from a zero-consumption run in the persisted row, in both `sortie stats` output forms, on the dashboard, and in the `cost_budget` result; an unmeasured run creates no Prometheus series
 - A running row's `turn_count` equals the number of agent turns its worker has started, self-review turns included, whether the agent kind emits `session_started` on every turn, only on its first turn, or never
+- Every record a logger `Setup` builds is masked in both formats, holding `[redacted]` for a registered secret value and staying byte-identical when none is present; a contract test fails production code that builds its own `log/slog` handler or writes directly to the process's standard streams outside `internal/logging` and `package main`; the run history, retry entries, and the running-session view carry masked text for a registered value a worker error, an agent event message, or a review document held
 
 ### 17.7 CLI and Host Lifecycle
 

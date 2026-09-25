@@ -2,7 +2,9 @@ package kiro_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,4 +149,58 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		_, err := credentialtest.VerifyLive(adapter, params(t))
 		credentialtest.RequireUnverified(t, err)
 	})
+}
+
+// TestIntegration_NoLoginCredentialVerification runs the guard against
+// a home directory with no stored login and no KIRO_API_KEY, proving
+// the runtime's no-account answer, not a changed exit-status
+// convention, is what the guard reads. It needs no credential: whoami
+// without a stored login answers at once, so the device-login hang
+// skipIfNotEnabled otherwise guards against does not apply here.
+func TestIntegration_NoLoginCredentialVerification(t *testing.T) {
+	if os.Getenv("SORTIE_KIRO_TEST") != "1" {
+		t.Skip("set SORTIE_KIRO_TEST=1 to run kiro integration tests")
+	}
+
+	adapter := mustNewAdapter(t)
+
+	t.Setenv("KIRO_API_KEY", "")
+
+	emptyRoot := t.TempDir()
+	for _, name := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		t.Setenv(name, emptyRoot)
+	}
+
+	sessionParams := domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
+	}
+
+	_, err := credentialtest.VerifyLive(adapter, sessionParams)
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrCredentialUnverified {
+		t.Fatalf("VerifyCredential() error = %v, want a credential_unverified *domain.AgentError", err)
+	}
+	if !strings.Contains(agentErr.Message, "whoami reports no signed-in account") {
+		t.Errorf("error message = %q, want it to contain %q", agentErr.Message, "whoami reports no signed-in account")
+	}
+}
+
+func TestIntegration_EarlyExit(t *testing.T) {
+	skipIfNotEnabled(t)
+
+	adapter := mustNewAdapter(t)
+	params := domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig: domain.AgentConfig{
+			Command:       integrationCommand() + " --sortie-unknown-switch",
+			ReadTimeoutMS: 30000,
+		},
+	}
+
+	if _, err := credentialtest.VerifyLive(adapter, params); err == nil {
+		t.Skip("configured runtime accepted --sortie-unknown-switch, so it cannot exercise the early-exit report")
+	} else {
+		credentialtest.RequireEarlyExitReport(t, err)
+	}
 }

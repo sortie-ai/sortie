@@ -105,6 +105,11 @@ type sessionState struct {
 	// nil when none did. Set once before the pump starts; the pump is its only
 	// user afterward, apart from teardown's release of it.
 	reader usageReader
+
+	// earlyExit is translateCallError's observation of whether the runtime
+	// exited on its own before this start's connection loss, recorded on the
+	// StartSession goroutine and read by startSession's two failure branches.
+	earlyExit agentcore.EarlyExit
 }
 
 // pumpItem is either a message the connection's reader delivered or a control
@@ -352,6 +357,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	if agentErr != nil {
 		teardownOnFailure()
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
+		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
+			return domain.Session{}, report
+		}
 		return domain.Session{}, agentErr
 	}
 
@@ -377,6 +385,9 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	if agentErr != nil {
 		teardownOnFailure()
 		procutil.EmitWarnLines(state.stderrCollector.Lines(), state.logger)
+		if report := state.earlyExit.Report(state.stderrCollector); report != nil {
+			return domain.Session{}, report
+		}
 		return domain.Session{}, agentErr
 	}
 	switch {
@@ -428,10 +439,7 @@ func doInitialize(ctx context.Context, state *sessionState) (*initializeResponse
 	}
 
 	resp, err := state.conn.Call(callCtx, methodInitialize, req)
-	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
-		if state.credentialVerification && agentErr.Kind == domain.ErrPortExit && !errors.Is(agentErr.Err, sshutil.ErrConnectionFailed) {
-			return nil, agentcore.CredentialUnverifiedError("agent connection ended before responding", agentErr.Err)
-		}
+	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		return nil, agentErr
 	}
 	if resp.Error != nil {
@@ -465,7 +473,7 @@ func doNewSession(ctx context.Context, state *sessionState, cwd string, servers 
 
 	req := newSessionRequest{Cwd: cwd, MCPServers: servers}
 	resp, err := state.conn.Call(callCtx, methodSessionNew, req)
-	if agentErr := translateCallError(state, err, callCtx); agentErr != nil {
+	if agentErr := translateCallError(state, err, callCtx, ctx); agentErr != nil {
 		return nil, agentErr
 	}
 	if resp.Error != nil {
@@ -488,13 +496,18 @@ func doNewSession(ctx context.Context, state *sessionState, cwd string, servers 
 // translateCallError maps a jsonrpc.Conn.Call failure to the normalized failure
 // table: a timeout against callCtx's own deadline is response_timeout, and every
 // other failure is port_exit, the loss of the subprocess.
-func translateCallError(state *sessionState, err error, callCtx context.Context) *domain.AgentError {
+//
+// startCtx is the context startSession itself received, not callCtx's own
+// deadline; a non-timeout failure records the shared early-exit observation
+// under it, for startSession's failure branches to report.
+func translateCallError(state *sessionState, err error, callCtx context.Context, startCtx context.Context) *domain.AgentError {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) && callCtx.Err() == context.DeadlineExceeded {
 		return &domain.AgentError{Kind: domain.ErrResponseTimeout, Message: "timed out waiting for a response", Err: err}
 	}
+	state.earlyExit = agentcore.ObserveEarlyExit(startCtx, state.target, state.reaper, state.drainGrace)
 	if state.sshConnectionFailed() {
 		return agentcore.ConnectionFailedError()
 	}

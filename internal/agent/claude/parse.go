@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/typeutil"
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 // rawEvent is the intermediate representation of a Claude Code JSONL
@@ -203,7 +203,7 @@ func summarizeAssistant(event rawEvent) string {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
-				parts = append(parts, typeutil.TruncateRunes(b.Text, 200))
+				parts = append(parts, redact.Truncate(b.Text, 200))
 			}
 		case "tool_use":
 			parts = append(parts, fmt.Sprintf("[tool: %s]", b.Name))

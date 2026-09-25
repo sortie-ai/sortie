@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/redact"
 )
 
 func TestNewServiceConfig(t *testing.T) {
@@ -4626,4 +4630,146 @@ func TestSetExtensionSection(t *testing.T) {
 			t.Error("host survived the replacement, want the section replaced wholesale")
 		}
 	})
+}
+
+func randomConfigSecret(t *testing.T) string {
+	t.Helper()
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return "config-secret-" + hex.EncodeToString(buf)
+}
+
+func requireConfigMasked(t *testing.T, value string) {
+	t.Helper()
+	if got := redact.Mask(value); got == value {
+		t.Errorf("redact.Mask(%q) = %q, want it masked", value, got)
+	}
+}
+
+func requireConfigUnmasked(t *testing.T, value string) {
+	t.Helper()
+	if got := redact.Mask(value); got != value {
+		t.Errorf("redact.Mask(%q) = %q, want it unchanged", value, got)
+	}
+}
+
+func TestNewServiceConfig_RegistersTrackerAPIKeyFromFrontMatter(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{"api_key": value},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersTrackerAPIKeyFromDollarVarReference(t *testing.T) {
+	// Not parallel: mutates the process environment via t.Setenv.
+	value := randomConfigSecret(t)
+	t.Setenv("SORTIE_CONFIG_TEST_TRACKER_KEY", value)
+
+	if _, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{"api_key": "$SORTIE_CONFIG_TEST_TRACKER_KEY"},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersTrackerAPIKeyFromEnvOverride(t *testing.T) {
+	// Not parallel: mutates the process environment via t.Setenv.
+	value := randomConfigSecret(t)
+	t.Setenv("SORTIE_TRACKER_API_KEY", value)
+
+	if _, err := NewServiceConfig(map[string]any{}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersTrackerEndpointURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	user := randomConfigSecret(t)
+	pass := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"tracker": map[string]any{"endpoint": "https://" + user + ":" + pass + "@example.com"},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, user+":"+pass)
+}
+
+func TestNewServiceConfig_RegistersReactionExtraLeafUnderAcceptedKey(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"reactions": map[string]any{
+			"ci": map[string]any{"extra_token": value},
+		},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersExtensionSectionLeafUnderAcceptedKey(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"codex": map[string]any{"env": map[string]any{"OPENAI_API_KEY": value}},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_ReactionExtraLeafUnderRejectedKeyStaysReadable(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"reactions": map[string]any{
+			"ci": map[string]any{"auth": map[string]any{"username": value}},
+		},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigUnmasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersNotificationBackendConfigLeafUnderAcceptedKey(t *testing.T) {
+	t.Parallel()
+
+	value := randomConfigSecret(t)
+	if _, err := NewServiceConfig(map[string]any{
+		"notifications": []any{
+			map[string]any{"kind": "webhook", "api_token": value},
+		},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, value)
+}
+
+func TestNewServiceConfig_RegistersNotificationBackendURLWhole(t *testing.T) {
+	t.Parallel()
+
+	user := randomConfigSecret(t)
+	pass := randomConfigSecret(t)
+	url := "https://" + user + ":" + pass + "@example.com/hook"
+	if _, err := NewServiceConfig(map[string]any{
+		"notifications": []any{
+			map[string]any{"kind": "webhook", "webhook_url": url},
+		},
+	}); err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	requireConfigMasked(t, url)
 }

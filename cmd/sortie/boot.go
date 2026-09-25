@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
@@ -146,6 +147,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 		effectiveFormat = parsedFmt
 	}
 	logger := logging.Setup(p.stderr, effectiveLevel, effectiveFormat)
+	redact.AddEnviron(os.Environ())
 
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
@@ -204,6 +206,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 	}
 	if needResetup {
 		logger = logging.Setup(p.stderr, effectiveLevel, effectiveFormat)
+		redact.AddEnviron(os.Environ())
 		mgr.SetLogger(logger)
 	}
 

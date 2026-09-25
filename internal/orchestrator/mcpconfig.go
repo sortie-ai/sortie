@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
@@ -162,6 +163,8 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		merged = parsed
 	}
 
+	registerToolServerCredentials(merged)
+
 	sortieDir, err := workspacekit.OpenSortieDir(params.WorkspacePath, true)
 	if err != nil {
 		return "", fmt.Errorf("open .sortie directory: %w", err)
@@ -183,6 +186,45 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	}
 
 	return filepath.Join(params.WorkspacePath, workspacekit.SortieDir, "mcp.json"), nil
+}
+
+// registerToolServerCredentials registers every credential merged's
+// "mcpServers" entries carry with [internal/redact], so a launch that
+// hands a runtime this document has already made its values maskable
+// before the file is written: each string member of a server's "env"
+// and "headers" objects under its own name, and a server's "url"
+// userinfo.
+func registerToolServerCredentials(merged map[string]any) {
+	servers, ok := merged["mcpServers"].(map[string]any)
+	if !ok {
+		return
+	}
+	for name, raw := range servers {
+		server, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		registerToolServerNamedStrings(fmt.Sprintf("mcpServers.%s.env", name), server["env"])
+		registerToolServerNamedStrings(fmt.Sprintf("mcpServers.%s.headers", name), server["headers"])
+		if url, ok := server["url"].(string); ok {
+			redact.AddURLCredentials(fmt.Sprintf("mcpServers.%s.url", name), url)
+		}
+	}
+}
+
+func registerToolServerNamedStrings(source string, raw any) {
+	switch m := raw.(type) {
+	case map[string]any:
+		for key, v := range m {
+			if s, ok := v.(string); ok {
+				redact.AddNamed(source+"."+key, key, s)
+			}
+		}
+	case map[string]string:
+		for key, s := range m {
+			redact.AddNamed(source+"."+key, key, s)
+		}
+	}
 }
 
 // CollectSortieEnv scans the process environment and returns all

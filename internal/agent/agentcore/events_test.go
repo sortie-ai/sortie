@@ -180,7 +180,7 @@ func TestEmitMalformed_Truncation(t *testing.T) {
 	})
 
 	runeCount := utf8.RuneCountInString(got.Message)
-	// TruncateRunes appends "…" (1 rune) after 500, so total = 501.
+	// redact.Truncate appends "…" (1 rune) after 500, so total = 501.
 	if runeCount > 501 {
 		t.Errorf("Message rune count = %d, want ≤ 501 after truncation", runeCount)
 	}

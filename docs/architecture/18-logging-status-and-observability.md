@@ -69,6 +69,7 @@ Requirements:
 - Operators must be able to see startup/validation/dispatch failures without attaching a debugger.
 - Sortie may write to one or more sinks.
 - If a configured log sink fails, Sortie continues running when possible and emits an operator-visible warning through any remaining sink.
+- Every sink receives records already masked, as §15.3 states.
 
 ### 13.3 Runtime Snapshot / Monitoring Interface
 

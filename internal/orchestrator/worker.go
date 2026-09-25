@@ -18,6 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workspace"
 	"github.com/sortie-ai/sortie/internal/workspacekit"
@@ -719,8 +720,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// workspace prep. Failure is non-fatal. A dispatch that does not drive
 	// issue state is not a work claim, so it posts none.
 	if cfg.Tracker.Comments.OnDispatch && deps.Posture.DrivesIssueState() {
-		text := buildDispatchComment(agentKind, attemptInt)
-		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, text); err != nil {
+		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, dispatchComment); err != nil {
 			logger.Warn("dispatch comment failed", slog.Any("error", err))
 			deps.Metrics.IncTrackerComments("dispatch", "error")
 		} else {
@@ -1020,6 +1020,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			handoffEvidenceBaseline = &baseline
 		}
 	}
+
+	redact.AddEnviron(config.DotEnvEntries())
 
 	verificationStarted := time.Now()
 	verificationResult, verificationErr := agentcore.VerifyCredential(ctx, deps.AgentAdapter, agentcore.CredentialVerification{
@@ -1658,8 +1660,8 @@ func buildToolAdvertisement(reg *domain.ToolRegistry, project string) string {
 	return sb.String()
 }
 
-// buildDispatchComment returns the tracker comment text for a session
-// dispatch.
-func buildDispatchComment(agentKind string, attempt int) string {
-	return fmt.Sprintf("Sortie session started.\nSession: pending\nAgent: %s\nWorkspace: pending\nAttempt: %d", agentKind, attempt)
-}
+// dispatchComment is the tracker comment text posted on every session
+// dispatch, for every agent kind and every tracker kind alike: a
+// business reader of the issue needs only that a session started, not
+// an internal integration name or a dispatch counter.
+const dispatchComment = "Sortie session started."

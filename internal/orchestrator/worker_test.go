@@ -25,6 +25,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -5294,52 +5295,72 @@ func TestRunWorkerAttempt_UsageArrivalNoneDiscardsFigures(t *testing.T) {
 	})
 }
 
-func TestBuildDispatchComment(t *testing.T) {
+func TestDispatchComment_IsTheFixedHeadline(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name         string
-		agentKind    string
-		attempt      int
-		wantContains []string
-	}{
-		{
-			name:         "first dispatch attempt 1",
-			agentKind:    "claude-code",
-			attempt:      1,
-			wantContains: []string{"Sortie session started.", "claude-code", "Attempt: 1", "Session: pending", "Workspace: pending"},
-		},
-		{
-			name:         "retry attempt 3",
-			agentKind:    "claude-code",
-			attempt:      3,
-			wantContains: []string{"Attempt: 3"},
-		},
-		{
-			name:         "attempt 0 propagated as-is",
-			agentKind:    "mock",
-			attempt:      0,
-			wantContains: []string{"Attempt: 0"},
-		},
-		{
-			name:         "agent kind included verbatim",
-			agentKind:    "mock-agent",
-			attempt:      1,
-			wantContains: []string{"mock-agent"},
-		},
+	const want = "Sortie session started."
+	if dispatchComment != want {
+		t.Errorf("dispatchComment = %q, want %q", dispatchComment, want)
+	}
+	for _, forbidden := range []string{"Session:", "Workspace:", "Attempt:", "Agent:"} {
+		if strings.Contains(dispatchComment, forbidden) {
+			t.Errorf("dispatchComment = %q, must not contain %q", dispatchComment, forbidden)
+		}
+	}
+}
+
+func workerDotEnvSecret(t *testing.T) string {
+	t.Helper()
+	return "worker-dotenv-secret-" + t.Name()
+}
+
+// credentialOrderAgentAdapter observes, at the moment its own
+// StartSession runs the credential-verification session, whether
+// wantMasked is already registered - proving registration order rather
+// than merely that registration happened somewhere in the run.
+type credentialOrderAgentAdapter struct {
+	*mockAgentAdapter
+	wantMasked           string
+	maskedAtVerification atomic.Bool
+}
+
+func (a *credentialOrderAgentAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if params.CredentialVerification && redact.Mask(a.wantMasked) != a.wantMasked {
+		a.maskedAtVerification.Store(true)
+	}
+	return a.mockAgentAdapter.StartSession(ctx, params)
+}
+
+func TestRunWorkerAttempt_RegistersDotEnvCredentialBeforeVerifyCredential(t *testing.T) {
+	// Not parallel: mutates the process environment via t.Setenv.
+	value := workerDotEnvSecret(t)
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("SORTIE_WORKER_TEST_TOKEN="+value+"\n"), 0o600); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+	t.Setenv("SORTIE_ENV_FILE", path)
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	ec := newExitCapture()
+	adapter := &credentialOrderAgentAdapter{mockAgentAdapter: &mockAgentAdapter{}, wantMasked: value}
+
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           adapter,
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Metrics:                &domain.NoopMetrics{},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := buildDispatchComment(tt.agentKind, tt.attempt)
-			for _, want := range tt.wantContains {
-				if !strings.Contains(got, want) {
-					t.Errorf("buildDispatchComment(%q, %d) missing %q\ngot: %q",
-						tt.agentKind, tt.attempt, want, got)
-				}
-			}
-		})
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if !adapter.maskedAtVerification.Load() {
+		t.Error("the .env credential was not yet registered when the credential-verification StartSession ran, want it registered before VerifyCredential")
 	}
 }
 
@@ -5379,8 +5400,8 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		if got := tracker.commentCalls[0].IssueID; got != issue.ID {
 			t.Errorf("CommentIssue IssueID = %q, want %q", got, issue.ID)
 		}
-		if tracker.commentCalls[0].Text == "" {
-			t.Error("CommentIssue Text is empty, want non-empty dispatch comment")
+		if tracker.commentCalls[0].Text != dispatchComment {
+			t.Errorf("CommentIssue Text = %q, want %q", tracker.commentCalls[0].Text, dispatchComment)
 		}
 
 		spy.mu.Lock()
@@ -5399,6 +5420,45 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("IncTrackerComments(\"dispatch\", \"success\") not recorded; got %v", comments)
+		}
+	})
+
+	t.Run("TextIsIdenticalAcrossResolvedAgentKind", func(t *testing.T) {
+		t.Parallel()
+
+		for _, kind := range []string{"claude-code", "codex", "mock-agent"} {
+			t.Run(kind, func(t *testing.T) {
+				t.Parallel()
+
+				tmpDir := t.TempDir()
+				cfg := defaultWorkerConfig(tmpDir)
+				cfg.Tracker.Comments.OnDispatch = true
+
+				tracker := &mockTrackerAdapter{}
+				ec := newExitCapture()
+
+				deps := WorkerDeps{
+					TrackerAdapter:         tracker,
+					AgentAdapter:           &mockAgentAdapter{},
+					AgentKind:              kind,
+					ConfigFunc:             func() config.ServiceConfig { return cfg },
+					PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+					OnEvent:                func(_ string, _ domain.AgentEvent) {},
+					OnExit:                 ec.onExit,
+					Logger:                 discardLogger(),
+					Metrics:                &spyMetrics{},
+				}
+
+				RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+				ec.waitResult(t)
+
+				if len(tracker.commentCalls) != 1 {
+					t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+				}
+				if got := tracker.commentCalls[0].Text; got != dispatchComment {
+					t.Errorf("agent kind %q: CommentIssue Text = %q, want %q (unchanged across agent kind)", kind, got, dispatchComment)
+				}
+			})
 		}
 	})
 
@@ -5494,7 +5554,7 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		}
 	})
 
-	t.Run("AttemptIncludedInCommentText", func(t *testing.T) {
+	t.Run("TextIsTheFixedHeadlineOnARetryDispatch", func(t *testing.T) {
 		t.Parallel()
 
 		tmpDir := t.TempDir()
@@ -5523,8 +5583,112 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		if len(tracker.commentCalls) != 1 {
 			t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
 		}
-		if !strings.Contains(tracker.commentCalls[0].Text, "2") {
-			t.Errorf("CommentIssue Text = %q, want attempt number 2 present", tracker.commentCalls[0].Text)
+		if got := tracker.commentCalls[0].Text; got != dispatchComment {
+			t.Errorf("CommentIssue Text = %q, want %q (unchanged on a retry dispatch)", got, dispatchComment)
+		}
+	})
+
+	t.Run("TextIsIdenticalAcrossTrackerAdapterImplementation", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = true
+
+		tracker := &ciTrackerStub{}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &domain.NoopMetrics{},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		if tracker.commentIssueCalls != 1 {
+			t.Fatalf("CommentIssue call count = %d, want 1", tracker.commentIssueCalls)
+		}
+		if tracker.lastComment != dispatchComment {
+			t.Errorf("CommentIssue text = %q, want %q (unchanged across tracker adapter implementation)", tracker.lastComment, dispatchComment)
+		}
+	})
+
+	t.Run("TextIsIdenticalOnAContinuationDispatch", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = true
+
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &domain.NoopMetrics{},
+			ContinuationContext:    map[string]any{"pr_number": 42},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+		}
+		if got := tracker.commentCalls[0].Text; got != dispatchComment {
+			t.Errorf("CommentIssue Text = %q, want %q (unchanged on a continuation dispatch)", got, dispatchComment)
+		}
+	})
+
+	t.Run("TextIsIdenticalOnADrivingReactionRun", func(t *testing.T) {
+		t.Parallel()
+
+		for _, reactionKind := range []string{ReactionKindCI, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict} {
+			t.Run(reactionKind, func(t *testing.T) {
+				t.Parallel()
+
+				tmpDir := t.TempDir()
+				cfg := defaultWorkerConfig(tmpDir)
+				cfg.Tracker.Comments.OnDispatch = true
+
+				tracker := &mockTrackerAdapter{}
+				ec := newExitCapture()
+
+				deps := WorkerDeps{
+					TrackerAdapter:         tracker,
+					AgentAdapter:           &mockAgentAdapter{},
+					ConfigFunc:             func() config.ServiceConfig { return cfg },
+					PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+					OnEvent:                func(_ string, _ domain.AgentEvent) {},
+					OnExit:                 ec.onExit,
+					Logger:                 discardLogger(),
+					Metrics:                &domain.NoopMetrics{},
+					Posture:                dispatchPostureForReactionKind(reactionKind),
+				}
+
+				RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+				ec.waitResult(t)
+
+				if len(tracker.commentCalls) != 1 {
+					t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+				}
+				if got := tracker.commentCalls[0].Text; got != dispatchComment {
+					t.Errorf("reaction kind %q: CommentIssue Text = %q, want %q", reactionKind, got, dispatchComment)
+				}
+			})
 		}
 	})
 }
