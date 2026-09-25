@@ -3,6 +3,7 @@ package credentialtest
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
@@ -72,6 +73,113 @@ func unverifiedAdapter() domain.AgentAdapter {
 
 func sshFailedAdapter() domain.AgentAdapter {
 	return &scriptedAdapter{runErr: &domain.AgentError{Kind: domain.ErrPortExit, Message: "ssh connection failed", Err: sshutil.ErrConnectionFailed}}
+}
+
+type callTrackingAdapter struct {
+	startErr error
+	runErr   error
+	stopErr  error
+	calls    []string
+}
+
+var _ domain.AgentAdapter = (*callTrackingAdapter)(nil)
+
+func (a *callTrackingAdapter) StartSession(context.Context, domain.StartSessionParams) (domain.Session, error) {
+	a.calls = append(a.calls, "start")
+	if a.startErr != nil {
+		return domain.Session{}, a.startErr
+	}
+	return domain.Session{ID: "sess-working"}, nil
+}
+
+func (a *callTrackingAdapter) RunTurn(context.Context, domain.Session, domain.RunTurnParams) (domain.TurnResult, error) {
+	a.calls = append(a.calls, "run")
+	if a.runErr != nil {
+		return domain.TurnResult{}, a.runErr
+	}
+	return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
+}
+
+func (a *callTrackingAdapter) StopSession(context.Context, domain.Session) error {
+	a.calls = append(a.calls, "stop")
+	return a.stopErr
+}
+
+func TestRunWorkingLive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		adapter   *callTrackingAdapter
+		wantErr   error
+		wantCalls []string
+	}{
+		{
+			name:      "success runs start, run, and stop",
+			adapter:   &callTrackingAdapter{},
+			wantCalls: []string{"start", "run", "stop"},
+		},
+		{
+			name:      "StartSession error skips RunTurn and StopSession",
+			adapter:   &callTrackingAdapter{startErr: errors.New("start failed")},
+			wantErr:   errors.New("start failed"),
+			wantCalls: []string{"start"},
+		},
+		{
+			name:      "RunTurn error is returned and the session is still stopped",
+			adapter:   &callTrackingAdapter{runErr: errors.New("run failed")},
+			wantErr:   errors.New("run failed"),
+			wantCalls: []string{"start", "run", "stop"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := RunWorkingLive(tt.adapter, domain.StartSessionParams{})
+
+			if (err == nil) != (tt.wantErr == nil) {
+				t.Fatalf("RunWorkingLive() error = %v, want error %v", err, tt.wantErr)
+			}
+			if tt.wantErr != nil && err.Error() != tt.wantErr.Error() {
+				t.Errorf("RunWorkingLive() error = %q, want %q", err.Error(), tt.wantErr.Error())
+			}
+			if !slices.Equal(tt.adapter.calls, tt.wantCalls) {
+				t.Errorf("calls = %v, want %v", tt.adapter.calls, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestRequireRefused(t *testing.T) {
+	t.Parallel()
+
+	conforming := newEarlyExitConformingAdapter(t)
+	_, earlyExitErr := conforming.StartSession(context.Background(), domain.StartSessionParams{WorkspacePath: t.TempDir()})
+
+	tests := []struct {
+		name     string
+		err      error
+		wantFail bool
+	}{
+		{name: "credential_unverified is accepted", err: &domain.AgentError{Kind: domain.ErrCredentialUnverified, Message: "refused"}},
+		{name: "an early-exit report is accepted", err: earlyExitErr},
+		{name: "an unrelated error is rejected", err: &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "unrelated"}, wantFail: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stand := new(testing.T)
+			RequireRefused(stand, tt.err)
+
+			if stand.Failed() != tt.wantFail {
+				t.Errorf("RequireRefused(%v) failed = %v, want %v", tt.err, stand.Failed(), tt.wantFail)
+			}
+		})
+	}
 }
 
 func TestAssertCredentialVerification(t *testing.T) {

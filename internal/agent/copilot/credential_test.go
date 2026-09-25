@@ -34,8 +34,10 @@ func TestCredentialVerification(t *testing.T) {
 	const successJSONL = `{"type":"session.task_complete","data":{"summary":"SORTIE_CREDENTIAL_OK","success":true}}
 {"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"verify-ok","exitCode":0,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
 
+	const resultExitOneJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"verify-fail","exitCode":1,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
+
 	verifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", versionAwareScenario, versionAwareParams{Stdout: successJSONL, ExitCode: 0})
-	unverifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", versionAwareScenario, versionAwareParams{ExitCode: 1})
+	unverifiedBin := agenttest.FakeRuntime(t, t.TempDir(), "copilot", versionAwareScenario, versionAwareParams{Stdout: resultExitOneJSONL, ExitCode: 1})
 
 	adapter, err := NewCopilotAdapter(map[string]any{})
 	if err != nil {

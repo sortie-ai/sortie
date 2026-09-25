@@ -283,6 +283,12 @@ func TestOnFinalize_SuccessWithCredits(t *testing.T) {
 	}, result, err)
 }
 
+// TestOnFinalize_AuthFailureLineIsNotClassified pins a working turn's
+// shape, distinct from a verification request: a chat turn that writes
+// only to standard error and exits 0 fails with the early-exit report,
+// not the zero-work row, so the runtime's own auth-failure text is
+// never misread as a credential verdict this package invents on its
+// own.
 func TestOnFinalize_AuthFailureLineIsNotClassified(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -295,7 +301,7 @@ func TestOnFinalize_AuthFailureLineIsNotClassified(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered")
 	}
@@ -306,18 +312,11 @@ func TestOnFinalize_AuthFailureLineIsNotClassified(t *testing.T) {
 		t.Error("state.resumeRequested = true, want false after a failed turn")
 	}
 
-	const wantMessage = "agent exited without producing output: no message from the agent"
+	const wantMessage = "the agent runtime exited before responding: exit status 0"
 	var agentErr *domain.AgentError
 	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     0,
-		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no message from the agent",
-	}, result, err)
 }
 
 func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
@@ -326,8 +325,9 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 
 	// Exit 0 with neither the credits trailer nor the auth-failure line,
 	// and stdout carrying only whitespace: the observer's stricter
-	// trim-then-check threshold means a whitespace-only line is never
-	// work, so a bare exit 0 with nothing behind it is never a success.
+	// trim-then-check threshold means a whitespace-only line is never a
+	// response, so a bare exit 0 with nothing readable behind it fails
+	// with the early-exit report rather than completing.
 	bin := newKiroCLI(t, t.TempDir(), chatParams{Stdout: "   \n", Stderr: "a warning with no markers\n"})
 	adapter, session, state := mustStartSession(t, bin)
 
@@ -336,7 +336,7 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for bare exit 0")
 	}
@@ -344,10 +344,7 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 		t.Error("state.resumeRequested = true, want false after a no-credits turn")
 	}
 
-	// The zero-work message carries the family-wide stem plus the
-	// declared-signal detail, so an operator can grep one string across
-	// every adapter and still see kiro's own signal.
-	const wantMessage = "agent exited without producing output: no message from the agent"
+	const wantMessage = "the agent runtime exited before responding: exit status 0"
 	turnFailed, ok := findEventByType(events, domain.EventTurnFailed)
 	if !ok {
 		t.Fatal("turn_failed event not found")
@@ -359,15 +356,13 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
 		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     0,
-		Work:         agentcore.WorkAbsent,
-		WorkDetail:   "no message from the agent",
-	}, result, err)
 }
 
+// TestOnFinalize_NonZeroExit pins that a turn with no readable stdout
+// that also exits non-zero fails with the early-exit report rather than
+// the plain non-zero-exit row: the row order ranks EarlyExit ahead of
+// ExitCode, so a chat turn's stderr text, not a bare exit code, reaches
+// the operator.
 func TestOnFinalize_NonZeroExit(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -385,26 +380,18 @@ func TestOnFinalize_NonZeroExit(t *testing.T) {
 		t.Error("EventTurnFailed not delivered for non-zero exit")
 	}
 
-	// The non-zero-exit row deliberately uses two different texts: the
-	// event message names the class, the error message names the code.
+	const wantMessage = "the agent runtime exited before responding: exit status 1"
 	turnFailed, ok := findEventByType(events, domain.EventTurnFailed)
 	if !ok {
 		t.Fatal("turn_failed event not found")
 	}
-	if turnFailed.Message != "non-zero exit" {
-		t.Errorf("turn_failed Message = %q, want %q", turnFailed.Message, "non-zero exit")
+	if turnFailed.Message != wantMessage {
+		t.Errorf("turn_failed Message = %q, want %q", turnFailed.Message, wantMessage)
 	}
 	var agentErr *domain.AgentError
-	if errors.As(err, &agentErr) && agentErr.Message != "exit code 1" {
-		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, "exit code 1")
+	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
 	}
-
-	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
-		ExitObserved: true,
-		ExitCode:     1,
-		Work:         agentcore.WorkUnobservable,
-		WorkDetail:   "no credits trailer on stderr",
-	}, result, err)
 }
 
 func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
@@ -586,7 +573,7 @@ func TestOnFinalize_SecondTurnFailsAfterFirstTurnNonBlankStdout(t *testing.T) {
 	if result2.ExitReason != domain.EventTurnFailed {
 		t.Errorf("RunTurn(second).ExitReason = %q, want %q (a first turn's non-blank line must not carry forward)", result2.ExitReason, domain.EventTurnFailed)
 	}
-	requireAgentError(t, err, domain.ErrTurnFailed)
+	requireAgentError(t, err, domain.ErrPortExit)
 }
 
 func TestRunTurn_NilOnEventPanics(t *testing.T) {
@@ -844,12 +831,10 @@ func TestDeleteConversation_SuccessYieldsNilError(t *testing.T) {
 	}
 }
 
-// The whoami guard accepts any key, so a refused credential surfaces
-// only as a turn with no credits trailer.
 func TestCredentialVerification(t *testing.T) {
 	// Not parallel: t.Setenv carries the fake ssh stand-in on PATH.
 	verifiedBin := newKiroCLI(t, t.TempDir(), chatParams{Stderr: creditsLine})
-	unverifiedBin := newKiroCLI(t, t.TempDir(), chatParams{})
+	unverifiedBin := newKiroCLI(t, t.TempDir(), chatParams{WhoamiExitCode: 1, WhoamiStdout: "{\"account\":null}\n"})
 
 	adapter, err := NewKiroAdapter(map[string]any{})
 	if err != nil {
@@ -857,4 +842,36 @@ func TestCredentialVerification(t *testing.T) {
 	}
 
 	credentialtest.AssertCredentialVerification(t, "kiro", credentialtest.RuntimeCases(t, adapter, domain.AgentConfig{}, verifiedBin, unverifiedBin, "kiro-cli"))
+}
+
+// TestVerifyCredential_ChatEarlyExitReport pins that a verification
+// request whose whoami guard passes and whose chat turn writes only to
+// standard error and exits 0, the measured invalid KIRO_API_KEY shape,
+// ends with the early-exit report through agentcore.VerifyCredential,
+// never credential_unverified. This is the one case the registry-wide
+// AssertEarlyExitReport cannot reach, because its conformance switch
+// fails the whoami guard first.
+func TestVerifyCredential_ChatEarlyExitReport(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	bin := newKiroCLI(t, t.TempDir(), chatParams{Stderr: authFailLine})
+	adapter, err := NewKiroAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewKiroAdapter: %v", err)
+	}
+
+	_, verifyErr := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
+		Session: domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   domain.AgentConfig{Command: bin},
+		},
+	})
+
+	credentialtest.RequireEarlyExitReport(t, verifyErr)
+
+	var agentErr *domain.AgentError
+	if errors.As(verifyErr, &agentErr) && agentErr.Kind == domain.ErrCredentialUnverified {
+		t.Errorf("VerifyCredential() error kind = %q, want the early-exit report, never credential_unverified", agentErr.Kind)
+	}
 }

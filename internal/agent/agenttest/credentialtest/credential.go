@@ -164,11 +164,75 @@ func SetRefusedCredential(t *testing.T, envVar string) {
 	}
 }
 
-// RequireUnverified fails t unless err is a credential_unverified
-// [*domain.AgentError].
-func RequireUnverified(t *testing.T, err error) {
+// RunWorkingLive runs a working session against a real runtime:
+// [domain.AgentAdapter.StartSession], then, when it succeeds, one
+// [domain.AgentAdapter.RunTurn] with
+// [agentcore.CredentialVerificationPrompt], both bounded at the turn
+// bound [VerifyLive] uses. A started session is stopped under a fresh
+// 30-second context regardless of the turn's outcome. Returns
+// StartSession's error, else RunTurn's, else nil.
+func RunWorkingLive(adapter domain.AgentAdapter, params domain.StartSessionParams) error {
+	return runWorking(context.Background(), adapter, params, 300*time.Second, 30*time.Second)
+}
+
+// runWorking drives one working session through adapter: StartSession
+// under a context bounded at turnBound, then, when it succeeds, one
+// RunTurn under the same context. A started session is stopped under a
+// fresh context bounded at stopBound regardless of the turn's outcome.
+func runWorking(ctx context.Context, adapter domain.AgentAdapter, params domain.StartSessionParams, turnBound, stopBound time.Duration) error {
+	turnCtx := ctx
+	if turnBound > 0 {
+		var cancel context.CancelFunc
+		turnCtx, cancel = context.WithTimeout(ctx, turnBound)
+		defer cancel()
+	}
+
+	session, startErr := adapter.StartSession(turnCtx, params)
+	if startErr != nil {
+		return startErr
+	}
+
+	defer func() {
+		stopCtx := context.WithoutCancel(ctx)
+		stopCancel := func() {}
+		if stopBound > 0 {
+			stopCtx, stopCancel = context.WithTimeout(stopCtx, stopBound)
+		}
+		defer stopCancel()
+		_ = adapter.StopSession(stopCtx, session)
+	}()
+
+	_, runErr := adapter.RunTurn(turnCtx, session, domain.RunTurnParams{
+		Prompt:  agentcore.CredentialVerificationPrompt,
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	return runErr
+}
+
+// RequireRefused fails t unless err is a credential_unverified
+// [*domain.AgentError] or passes [RequireEarlyExitReport].
+func RequireRefused(t *testing.T, err error) {
 	t.Helper()
-	assertCredentialVerificationOutcome(t, "refused credential", WantUnverified, err)
+
+	probe := &silentReporter{}
+	assertCredentialVerificationOutcome(probe, "refused credential", WantUnverified, err)
+	if !probe.failed {
+		return
+	}
+	requireEarlyExitReport(t, err)
+}
+
+// silentReporter satisfies this package's reporter seams without
+// failing a real *testing.T, so a caller can try one assertion and
+// fall back to another only if the first would have failed.
+type silentReporter struct {
+	failed bool
+}
+
+func (r *silentReporter) Helper() {}
+
+func (r *silentReporter) Errorf(string, ...any) {
+	r.failed = true
 }
 
 // RuntimeCases returns the cases a kind that launches a runtime runs:

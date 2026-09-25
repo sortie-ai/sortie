@@ -493,7 +493,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		credentialtest.SetRefusedCredential(t, "SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
-		credentialtest.RequireUnverified(t, err)
+		credentialtest.RequireRefused(t, err)
 	})
 }
 

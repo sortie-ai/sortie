@@ -55,6 +55,11 @@ func TestVerifyCredential_Verdict(t *testing.T) {
 	notFound := &domain.AgentError{Kind: domain.ErrAgentNotFound, Message: "no binary"}
 	startTimeout := &domain.AgentError{Kind: domain.ErrResponseTimeout, Message: "timed out"}
 	connFailed := ConnectionFailedError()
+	earlyExitReport := &domain.AgentError{
+		Kind:    domain.ErrPortExit,
+		Message: "the agent runtime exited before responding: exit status 1",
+		Err:     &EarlyExitError{status: "exit status 1", output: "boom"},
+	}
 
 	const boundMessage = "the agent runtime did not complete a credential verification request within 20 ms"
 
@@ -114,6 +119,13 @@ func TestVerifyCredential_Verdict(t *testing.T) {
 				return domain.TurnResult{}, connFailed
 			},
 			wantUnchanged: sshutil.ErrConnectionFailed,
+		},
+		{
+			name: "early-exit report returned unchanged",
+			run: func(context.Context, context.CancelFunc) (domain.TurnResult, error) {
+				return domain.TurnResult{}, earlyExitReport
+			},
+			wantUnchanged: earlyExitReport,
 		},
 		{
 			name: "non-retryable kind returned unchanged",

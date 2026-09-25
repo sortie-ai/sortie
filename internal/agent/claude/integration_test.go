@@ -449,7 +449,35 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		credentialtest.SetRefusedCredential(t, "SORTIE_CLAUDE_CREDENTIAL_ENV")
 
 		_, err := credentialtest.VerifyLive(adapter, params(t))
-		credentialtest.RequireUnverified(t, err)
+		credentialtest.RequireRefused(t, err)
+	})
+}
+
+func TestIntegration_EarlyExit(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	adapter, err := NewClaudeCodeAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewClaudeCodeAdapter: %v", err)
+	}
+	unknownSwitchConfig := domain.AgentConfig{Command: integrationCommand(t) + " --sortie-unknown-switch", ReadTimeoutMS: 30000}
+
+	t.Run("verification session with an unknown switch", func(t *testing.T) {
+		params := domain.StartSessionParams{WorkspacePath: t.TempDir(), AgentConfig: unknownSwitchConfig}
+		if _, err := credentialtest.VerifyLive(adapter, params); err == nil {
+			t.Skip("configured runtime accepted --sortie-unknown-switch, so it cannot exercise the early-exit report")
+		} else {
+			credentialtest.RequireEarlyExitReport(t, err)
+		}
+	})
+
+	t.Run("working session with an unknown switch", func(t *testing.T) {
+		params := domain.StartSessionParams{WorkspacePath: t.TempDir(), AgentConfig: unknownSwitchConfig}
+		if err := credentialtest.RunWorkingLive(adapter, params); err == nil {
+			t.Skip("configured runtime accepted --sortie-unknown-switch, so it cannot exercise the early-exit report")
+		} else {
+			credentialtest.RequireEarlyExitReport(t, err)
+		}
 	})
 }
 
