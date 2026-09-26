@@ -46,9 +46,9 @@ func validateSkipPermissions(passthrough map[string]any) []registry.ValidationDi
 	return []registry.ValidationDiag{{
 		Severity: "warning",
 		Check:    "opencode.dangerously_skip_permissions.auto_reject",
-		Message: "opencode.dangerously_skip_permissions is set to false, so the " +
-			"runtime auto-rejects every permissioned tool call and reports each " +
-			"rejection as a warning rather than performing the call",
+		Message: "opencode.dangerously_skip_permissions is set to false, so the runtime refuses every " +
+			"permissioned tool call instead of performing it, and OpenCode 2.x also ends the turn at the " +
+			"first refusal",
 	}}
 }
 

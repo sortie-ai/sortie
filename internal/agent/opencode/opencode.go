@@ -75,13 +75,15 @@ type sessionState struct {
 	// reads it when it builds each turn's own turnRuntime.
 	drainGrace time.Duration
 
-	// mcpConfigContent is the translated MCP configuration document
-	// delivered through the runtime's inline configuration environment
-	// variable on every turn's subprocess. Empty when the session
-	// carries no generated configuration, when that configuration
-	// declares no server, or when the launch target is remote. Set
-	// once in StartSession and never mutated after.
-	mcpConfigContent string
+	// major is the OpenCode major this session drives, detected once by
+	// StartSession and never re-detected or cached anywhere else.
+	major runtimeMajor
+
+	// turnConfigContent is the configuration value every turn carries
+	// through OPENCODE_CONFIG_CONTENT: the 1.x MCP document on major1,
+	// the 2.x inline document on major2. Empty when there is nothing to
+	// carry. Set once in StartSession and never mutated after.
+	turnConfigContent string
 
 	credentialVerification bool
 }
@@ -129,20 +131,22 @@ func NewOpenCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	return &OpenCodeAdapter{passthrough: pt}, nil
 }
 
-// StartSession resolves the launch target and initializes adapter-owned
-// session state without starting an OpenCode subprocess.
-func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+// StartSession resolves the launch target, detects the installed
+// OpenCode major, and initializes adapter-owned session state without
+// starting a turn subprocess. It refuses a major other than 1 or 2, and
+// a passthrough setting that major cannot carry.
+func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, "opencode")
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}
 
-	mcpConfigContent, mcpErr := buildMCPConfigContent(params.MCPConfigPath, target.RemoteCommand != "")
-	if mcpErr != nil {
+	servers, translateErr := translateMCPServers(params.MCPConfigPath, target.RemoteCommand != "")
+	if translateErr != nil {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
-			Message: fmt.Sprintf("translate MCP config: %v", mcpErr),
-			Err:     mcpErr,
+			Message: fmt.Sprintf("translate MCP config: %v", translateErr),
+			Err:     translateErr,
 		}
 	}
 
@@ -151,14 +155,34 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 		agentConfig:            params.AgentConfig,
 		passthrough:            a.passthrough,
 		sessionID:              params.ResumeSessionID,
+		major:                  majorUnknown,
 		baseLogger:             slog.Default().With(slog.String("component", "opencode-adapter")),
 		createdSession:         params.ResumeSessionID == "",
 		runStartedAtMS:         time.Now().UnixMilli(),
 		usage:                  agentcore.NewTurnEndUsage(),
 		drainGrace:             procutil.DefaultDrainGrace,
-		mcpConfigContent:       mcpConfigContent,
 		credentialVerification: params.CredentialVerification,
 	}
+
+	major, majorErr := detectRuntimeMajor(ctx, state)
+	if majorErr != nil {
+		return domain.Session{}, majorErr
+	}
+	state.major = major
+
+	if settingsErr := checkMajorSettings(state.passthrough, state.major); settingsErr != nil {
+		return domain.Session{}, settingsErr
+	}
+
+	turnConfigContent, buildErr := buildTurnConfigContent(state.major, state.passthrough, servers)
+	if buildErr != nil {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrResponseError,
+			Message: "build opencode environment",
+			Err:     buildErr,
+		}
+	}
+	state.turnConfigContent = turnConfigContent
 
 	return domain.Session{
 		ID:       state.sessionID,
@@ -183,7 +207,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		}
 	}
 
-	env, err := buildRunEnv(os.Environ(), a.passthrough)
+	env, err := buildTurnEnv(state)
 	if err != nil {
 		return domain.TurnResult{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -191,9 +215,8 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			Err:     err,
 		}
 	}
-	env = appendMCPConfigEnv(env, state.mcpConfigContent)
 
-	managedEnv, err := buildManagedEnv(a.passthrough)
+	managedEnv, err := buildManagedEnv(a.passthrough, state.major)
 	if err != nil {
 		return domain.TurnResult{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -237,12 +260,12 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 		cmd = exec.CommandContext(ctx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	procutil.SetGroupCancel(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS))
+	cmd.Env = env
 	if bindErr := state.target.BindWorkspace(cmd); bindErr != nil {
 		state.mu.Unlock()
 		return domain.TurnResult{}, bindErr
 	}
-	cmd.Env = env
-	cmd.Stdin = launch.StdinReader()
+	cmd.Stdin = buildTurnStdin(state.major, params.Prompt, launch.StdinReader())
 
 	pipes, err := procutil.StartWithOwnedPipes(cmd, logger)
 	if err != nil {
@@ -323,8 +346,6 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 	// line arriving in either place is processed identically. done
 	// reports that the turn's own result is ready to return.
 	handleLine := func(line []byte) (domain.TurnResult, error, bool) {
-		runtime.output.Observe(line)
-
 		event, parseErr := parseRunEvent(line)
 		var parsed parsedLine
 		if parseErr != nil {
@@ -352,6 +373,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			return domain.TurnResult{}, nil, false
 		}
 
+		runtime.output.Observe(line)
 		runtime.firstJSONSeen = true
 		if readTimeoutC != nil {
 			stopTimer(readTimer)
@@ -614,7 +636,7 @@ func deleteVerificationSession(ctx context.Context, state *sessionState, session
 	deleteCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
-	cmd, buildErr := auxiliaryCommand(deleteCtx, state, []string{"session", "delete", sessionID})
+	cmd, buildErr := auxiliaryCommand(deleteCtx, state, deleteArgs(state.major, sessionID))
 	if buildErr != nil {
 		state.logger().Warn("failed to delete credential verification session", slog.Any("error", buildErr))
 		return
@@ -677,12 +699,13 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		ev.TerminalErrorKind = domain.ErrTurnFailed
 		ev.Cause = nil
 		ev.TerminalMessage = rawRunErrorMessage(runtime.terminalError)
-		if isMaskedServerError(ev.TerminalMessage) {
+		if state.major == major1 && isMaskedServerError(ev.TerminalMessage) {
 			if detail, ok := queryModelNotFound(ctx, state); ok {
 				state.logger().Debug("recovered masked opencode failure detail", slog.String("detail", detail))
 				ev.TerminalMessage = detail
 			}
 		}
+		ev.TerminalMessage += freeTierRefusalClause(runtime.terminalError, state.passthrough)
 		procutil.EmitWarnLines(stderrLines, state.logger())
 
 	case ctx.Err() != nil || state.isClosed():
@@ -888,7 +911,7 @@ func readTimeout(state *sessionState) time.Duration {
 }
 
 func isPermissionWarning(line string) bool {
-	return strings.HasPrefix(strings.TrimSpace(line), "! permission requested:")
+	return strings.HasPrefix(strings.TrimSpace(agentcore.SanitizeLine(line)), "! permission requested:")
 }
 
 func toolDuration(partTime rawPartTime) int64 {
@@ -898,6 +921,9 @@ func toolDuration(partTime rawPartTime) int64 {
 	return partTime.End - partTime.Start
 }
 
+// rawRunErrorMessage returns the first non-empty of runErr's 1.x
+// nested message, its 2.x message, its name, or its 2.x type, falling
+// back to a generic message when none carry text.
 func rawRunErrorMessage(runErr *rawRunError) string {
 	if runErr == nil {
 		return "opencode reported an unknown error"
@@ -907,8 +933,14 @@ func rawRunErrorMessage(runErr *rawRunError) string {
 			return message
 		}
 	}
+	if runErr.Message != "" {
+		return runErr.Message
+	}
 	if runErr.Name != "" {
 		return runErr.Name
+	}
+	if runErr.Type != "" {
+		return runErr.Type
 	}
 	return "opencode reported an unknown error"
 }
