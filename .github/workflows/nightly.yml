@@ -84,9 +84,23 @@ jobs:
             test_path: ./internal/agent/opencode/...
             timeout: 300s
             node: true
-            install: npm install -g opencode-ai
+            install: npm install -g opencode-ai@1
             version_cmd: opencode --version
-            source: "npm: opencode-ai (unpinned, installs latest)"
+            source: "npm: opencode-ai@1 (latest 1.x)"
+            opencode_major: "1"
+
+          - name: OpenCode 2.x
+            adapter: opencode-2
+            kind: agent
+            guard: SORTIE_OPENCODE_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/opencode/...
+            timeout: 300s
+            node: true
+            install: npm install -g @opencode/cli@2
+            version_cmd: opencode --version
+            source: "npm: @opencode/cli@2 (latest 2.x)"
+            opencode_major: "2"
 
           - name: Kiro
             adapter: kiro
@@ -286,6 +300,7 @@ jobs:
           TIMEOUT: ${{ matrix.timeout }}
           SORTIE_CLIENTPROTOCOL_COMMAND: ${{ matrix.clientprotocol_command }}
           SORTIE_CLIENTPROTOCOL_PROFILE: ${{ matrix.clientprotocol_profile }}
+          SORTIE_OPENCODE_MAJOR: ${{ matrix.opencode_major }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |
           # The runner's default bash uses -e; disable it so a failing test is

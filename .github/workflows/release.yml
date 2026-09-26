@@ -434,11 +434,20 @@ jobs:
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/codex/...
 
   test-integration-opencode:
-    name: "Integration: OpenCode"
+    name: "Integration: OpenCode ${{ matrix.major }}.x"
     needs: [lint, test-unit]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - major: "1"
+            install: npm install -g opencode-ai@1
+          - major: "2"
+            install: npm install -g @opencode/cli@2
     env:
       SORTIE_OPENCODE_TEST: "1"
+      SORTIE_OPENCODE_MAJOR: ${{ matrix.major }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -456,7 +465,7 @@ jobs:
           node-version: "24"
 
       - name: Install OpenCode CLI
-        run: npm install -g opencode-ai
+        run: ${{ matrix.install }}
 
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...
