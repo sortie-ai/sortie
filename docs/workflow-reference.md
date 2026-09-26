@@ -2059,24 +2059,26 @@ opencode:
     - bash
 ```
 
-The `opencode` block is forwarded to the OpenCode adapter. The adapter runs `opencode run --format json --dir <workspace>` once per turn, appends `--session <session_id>` when continuing a session, and recovers final token usage with `opencode export --sanitize <session_id>` when the session ID is known. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `opencode.<key>.wrong_type`.
+The `opencode` block is forwarded to the OpenCode adapter, which supports OpenCode 1.x and 2.x and detects which one `agent.command` names by querying its version at the start of each session, refusing a version it cannot read and any major other than 1 or 2. A string key whose YAML value carries another type fails construction and, offline, is reported by `sortie validate` under the check `opencode.<key>.wrong_type`.
+
+On 1.x the adapter runs `opencode run --format json --dir <workspace>` once per turn with the prompt as the final positional argument, appends `--session <session_id>` when continuing a session, and recovers final token usage with `opencode export --sanitize <session_id>` when the session ID is known. On 2.x it runs `opencode run --format json --standalone` with the prompt on standard input instead, and recovers usage with `opencode session export --standalone --sanitize <session_id>`.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model`. OpenCode interprets provider and model selection from this string. |
-| `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent`. Selects the OpenCode agent profile for the turn. |
-| `opencode.variant` | string | _(absent)_ | Value forwarded to `opencode run --variant`. Selects an OpenCode provider-specific variant. |
-| `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command. |
-| `opencode.pure` | boolean | `false` | Adds `--pure` to the run command. |
-| `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`. When `false`, OpenCode headless permission prompts can surface as tool errors instead of auto-approved tool execution. |
-| `opencode.disable_autocompact` | boolean | `true` | Sets `OPENCODE_DISABLE_AUTOCOMPACT`. The adapter always also sets `OPENCODE_AUTO_SHARE=false`, `OPENCODE_DISABLE_AUTOUPDATE=true`, and `OPENCODE_DISABLE_LSP_DOWNLOAD=true`. |
-| `opencode.allowed_tools` | list of strings | `[]` | Builds `OPENCODE_PERMISSION` allow rules. Listed keys become `allow`; known OpenCode permission keys not listed become `deny`. Unknown keys are forwarded unchanged. |
-| `opencode.denied_tools` | list of strings | `[]` | Builds explicit `deny` rules in `OPENCODE_PERMISSION`. |
+| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model` on both majors. On 2.x, a non-empty `opencode.variant` is appended after a `#`. |
+| `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent` on both majors. Selects the OpenCode agent profile for the turn. |
+| `opencode.variant` | string | _(absent)_ | On 1.x, forwarded to `opencode run --variant`. On 2.x, folded into `opencode.model` as a `#`-separated suffix; setting it without `opencode.model`, or with a model that already carries a `#`, fails session start on 2.x. |
+| `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command on both majors. |
+| `opencode.pure` | boolean | `false` | Adds `--pure` to the run command on 1.x. OpenCode 2.x accepts no equivalent switch, so a `true` value fails session start on that major. |
+| `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`, on both majors. When `false`, the runtime refuses every permissioned tool call instead of performing it; OpenCode 2.x also ends the turn at the first refusal. |
+| `opencode.disable_autocompact` | boolean | `true` | On 1.x, sets `OPENCODE_DISABLE_AUTOCOMPACT`; the adapter always also sets `OPENCODE_AUTO_SHARE=false`, `OPENCODE_DISABLE_AUTOUPDATE=true`, and `OPENCODE_DISABLE_LSP_DOWNLOAD=true`. On 2.x, sets the turn's inline configuration document's `compaction.auto` to `false`; the adapter always sets that document's `share` to `disabled` and, in the launch environment, `OPENCODE_DISABLE_AUTOUPDATE=true`. |
+| `opencode.allowed_tools` | list of strings | `[]` | On 1.x, builds `OPENCODE_PERMISSION` allow rules. On 2.x, builds the turn's inline configuration document's `permission` member instead. On both majors, listed keys become `allow`; known OpenCode permission keys not listed become `deny`; unknown keys are forwarded unchanged. |
+| `opencode.denied_tools` | list of strings | `[]` | Builds explicit `deny` rules in the same policy `opencode.allowed_tools` builds, per major. |
 
 **Validation rules:**
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
-- The adapter always removes any inherited `OPENCODE_PERMISSION` value before launching OpenCode. If either tool list is non-empty, it replaces that value with the adapter-managed JSON policy.
+- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one for the detected major.
 
 **Kiro adapter:**
 

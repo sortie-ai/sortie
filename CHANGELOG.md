@@ -2,8 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
@@ -17,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A new `agent.token_warning_percent` setting warns before `agent.max_tokens` stops a run: set it to a percentage of the ceiling, and a run that reaches it logs one warning and reports the condition through the `cost_budget` tool, so the agent can wrap up or hand off and the operator can raise the ceiling before the run is stopped. Leaving it unset changes nothing.
   ([#1070](https://github.com/sortie-ai/sortie/issues/1070))
+
+- The `opencode` agent kind now works with OpenCode 2.x as well as 1.x: Sortie reads the installed version at the start of each session and drives whichever one is configured, stopping the run with an error naming the version when it is neither. On OpenCode 2.x, `opencode.pure` and an `opencode.variant` set without an `opencode.model` are refused the same way.
+  ([#960](https://github.com/sortie-ai/sortie/issues/960))
 
 ### Changed
 
@@ -60,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Credentials no longer appear in the log, the run history, the retry list, or the dashboard when an agent, a hook, or a verification command prints them. Every value Sortie knows to be a credential, from its environment, its configuration including the `.env` file, and the tool servers it hands an agent, now shows as `[redacted]`; one too short to hide is instead named in a warning.
   ([#1125](https://github.com/sortie-ai/sortie/issues/1125))
+
+- On OpenCode's free models, a run whose `opencode.allowed_tools` or `opencode.denied_tools` denies the tools that tier requires was refused every time; the error now names the denied tool instead of carrying only the free tier's own message.
+  ([#960](https://github.com/sortie-ai/sortie/issues/960))
+
+- A tool call the `opencode` runtime refuses because `opencode.dangerously_skip_permissions` is `false` is now reported, where it previously went unnoticed.
+  ([#960](https://github.com/sortie-ai/sortie/issues/960))
+
+- An agent that prints only text Sortie cannot read on standard output, such as its usage text, before it exits is now reported like one that exits before it responds, with its exit status and the end of what it printed to standard error. This covers `claude-code`, `copilot-cli`, and `opencode`.
+  ([#960](https://github.com/sortie-ai/sortie/issues/960))
 
 ### Migrations
 
