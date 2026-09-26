@@ -567,8 +567,8 @@ func TestSanitize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := sanitize(tt.in); got != tt.want {
-				t.Errorf("sanitize(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := SanitizeLine(tt.in); got != tt.want {
+				t.Errorf("SanitizeLine(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

@@ -2989,11 +2989,13 @@ func checkContractHandlerFile(fset *token.FileSet, file *ast.File, importPath st
 }
 
 // checkContractWorkdirFile reports every rule WORKDIR violation in file:
-// an assignment to a selector named Dir outside contractWorkdirSites, and
-// a composite literal of type exec.Cmd carrying key Dir anywhere. Only a
-// file meeting checkContractCaptureFile's hasCmd condition is scanned; a
-// Dir key in a non-exec.Cmd composite literal, such as
-// workspace.HookParams, is not flagged.
+// an assignment to a selector named Dir outside contractWorkdirSites, a
+// composite literal of type exec.Cmd carrying key Dir anywhere, and an
+// assignment to a selector named Env that follows a call to a method
+// named BindWorkspace in the same function. Only a file meeting
+// checkContractCaptureFile's hasCmd condition is scanned; a Dir key in a
+// non-exec.Cmd composite literal, such as workspace.HookParams, is not
+// flagged.
 func checkContractWorkdirFile(fset *token.FileSet, file *ast.File, importPath string, idx *contractCmdIndex) []contractViolation {
 	var violations []contractViolation
 
@@ -3013,21 +3015,46 @@ func checkContractWorkdirFile(fset *token.FileSet, file *ast.File, importPath st
 		return violations
 	}
 
+	bindWorkspaceCalls := map[string]token.Pos{}
+
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
+		case *ast.CallExpr:
+			sel, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "BindWorkspace" {
+				return true
+			}
+			fn := contractEnclosingFuncName(file, node.Pos())
+			if fn == "" {
+				return true
+			}
+			if _, seen := bindWorkspaceCalls[fn]; !seen {
+				bindWorkspaceCalls[fn] = node.Pos()
+			}
 		case *ast.AssignStmt:
 			for _, lhs := range node.Lhs {
 				sel, ok := lhs.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Dir" {
+				if !ok {
 					continue
 				}
-				if contractSiteAllows(contractWorkdirSites, importPath, contractEnclosingFuncName(file, sel.Pos())) {
-					continue
+				switch sel.Sel.Name {
+				case "Dir":
+					if contractSiteAllows(contractWorkdirSites, importPath, contractEnclosingFuncName(file, sel.Pos())) {
+						continue
+					}
+					violations = append(violations, contractViolation{
+						pos:  fset.Position(sel.Pos()),
+						text: "assigns a Dir selector outside rule WORKDIR's site table; verify the workspace path immediately before this launch",
+					})
+				case "Env":
+					fn := contractEnclosingFuncName(file, sel.Pos())
+					if bindPos, called := bindWorkspaceCalls[fn]; called && sel.Pos() > bindPos {
+						violations = append(violations, contractViolation{
+							pos:  fset.Position(sel.Pos()),
+							text: "assigns an Env selector after calling BindWorkspace in the same function; assign Env before the BindWorkspace call so the PWD it sets is not overwritten",
+						})
+					}
 				}
-				violations = append(violations, contractViolation{
-					pos:  fset.Position(sel.Pos()),
-					text: "assigns a Dir selector outside rule WORKDIR's site table; verify the workspace path immediately before this launch",
-				})
 			}
 		case *ast.CompositeLit:
 			sel, ok := node.Type.(*ast.SelectorExpr)
@@ -5619,6 +5646,43 @@ type LaunchTarget struct{ WorkspacePath string }
 func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) error {
 	cmd.Dir = t.WorkspacePath
 	return nil
+}
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "an Env assignment after calling BindWorkspace is rejected",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import "os/exec"
+
+type target struct{}
+
+func (t target) BindWorkspace(cmd *exec.Cmd) error { return nil }
+
+func run(t target, cmd *exec.Cmd, env []string) {
+	t.BindWorkspace(cmd)
+	cmd.Env = env
+}
+`,
+			wantCount:  1,
+			wantSubstr: "assigns an Env selector after calling BindWorkspace in the same function",
+		},
+		{
+			name:       "an Env assignment before calling BindWorkspace is legal",
+			importPath: "github.com/sortie-ai/sortie/internal/agent/fixture",
+			src: `package fixture
+
+import "os/exec"
+
+type target struct{}
+
+func (t target) BindWorkspace(cmd *exec.Cmd) error { return nil }
+
+func run(t target, cmd *exec.Cmd, env []string) {
+	cmd.Env = env
+	t.BindWorkspace(cmd)
 }
 `,
 			wantCount: 0,

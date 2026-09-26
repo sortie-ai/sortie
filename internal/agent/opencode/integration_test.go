@@ -7,14 +7,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
-	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
+	"github.com/sortie-ai/sortie/internal/agent/opencode"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -212,7 +214,7 @@ func TestIntegration_InvalidModelFailure(t *testing.T) {
 			continue
 		}
 		sawTurnFailed = true
-		if strings.Contains(event.Message, "Model not found") {
+		if strings.Contains(event.Message, "Model not found") || strings.Contains(event.Message, "Model unavailable: nonexistent/nonexistent") {
 			sawModelNotFound = true
 		}
 	}
@@ -317,11 +319,30 @@ func TestIntegration_TurnCancellation(t *testing.T) {
 	}
 }
 
+// TestIntegration_PermissionDeepMerge reads the resolved tool-
+// permission document a session's own turns carry, on both majors,
+// with no model request: the operator's own opencode.json must survive
+// the adapter's merge, and the adapter's own entries must win a
+// conflict.
 func TestIntegration_PermissionDeepMerge(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	// Verify that setting OPENCODE_PERMISSION does not replace but merges
-	// with any existing permission config (deep-merge semantics).
+	workspace := t.TempDir()
+	const operatorConfig = `{"permission":{"webfetch":"allow","sortie_probe_operator_key":"ask"}}`
+	if err := os.WriteFile(filepath.Join(workspace, "opencode.json"), []byte(operatorConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(opencode.json): %v", err)
+	}
+
+	toolServerPath := agenttest.FakeRuntime(t, t.TempDir(), "tool-server", agenttest.OutputScenario, agenttest.Output{})
+	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	mcpDoc := fmt.Sprintf(`{"mcpServers":{"sortie-tools":{"type":"stdio","command":%s}}}`, mustJSONString(t, toolServerPath))
+	if err := os.WriteFile(mcpConfigPath, []byte(mcpDoc), 0o600); err != nil {
+		t.Fatalf("WriteFile(mcp.json): %v", err)
+	}
+
 	cfg := integrationConfig()
 	cfg["allowed_tools"] = []any{"read", "glob"}
 
@@ -334,12 +355,188 @@ func TestIntegration_PermissionDeepMerge(t *testing.T) {
 		t.Fatalf("factory(): %v", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := a.StartSession(ctx, domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig: domain.AgentConfig{
+			Command:       integrationCommand(),
+			ReadTimeoutMS: 3 * 60 * 1000,
+		},
+		MCPConfigPath: mcpConfigPath,
+	})
+	if err != nil {
+		t.Fatalf("StartSession(): %v", err)
+	}
+	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
+
+	major, err := opencode.RuntimeMajorForTest(session)
+	if err != nil {
+		t.Fatalf("RuntimeMajorForTest(): %v", err)
+	}
+	shellKey := "bash"
+	if major == 2 {
+		shellKey = "shell"
+	}
+
+	permCtx, permCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer permCancel()
+	effective, raw, err := opencode.EffectivePermissionsForTest(permCtx, session)
+	if err != nil {
+		t.Fatalf("EffectivePermissionsForTest(): %v (raw output: %s)", err, raw)
+	}
+
+	if effective["sortie_probe_operator_key"] != "ask" {
+		t.Errorf("effective[%q] = %q, want %q (the operator's own entry must survive the merge)",
+			"sortie_probe_operator_key", effective["sortie_probe_operator_key"], "ask")
+	}
+	if effective["webfetch"] != "deny" {
+		t.Errorf("effective[%q] = %q, want %q (the adapter's entry must win the conflict)", "webfetch", effective["webfetch"], "deny")
+	}
+	if effective["read"] != "allow" {
+		t.Errorf("effective[%q] = %q, want %q", "read", effective["read"], "allow")
+	}
+	if effective["glob"] != "allow" {
+		t.Errorf("effective[%q] = %q, want %q", "glob", effective["glob"], "allow")
+	}
+	if effective[shellKey] != "deny" {
+		t.Errorf("effective[%q] = %q, want %q", shellKey, effective[shellKey], "deny")
+	}
+}
+
+// TestIntegration_RuntimeMajor asserts the detected runtime major
+// matches the operator's own expectation for the binary under test,
+// catching a shard or leg that silently installs the wrong major.
+func TestIntegration_RuntimeMajor(t *testing.T) {
+	skipIfNotEnabled(t)
+
+	wantStr := os.Getenv("SORTIE_OPENCODE_MAJOR")
+	if wantStr == "" {
+		t.Skip("set SORTIE_OPENCODE_MAJOR=1 or 2 to assert the detected runtime major")
+	}
+	want, convErr := strconv.Atoi(wantStr)
+	if convErr != nil || (want != 1 && want != 2) {
+		t.Fatalf("SORTIE_OPENCODE_MAJOR = %q, want \"1\" or \"2\"", wantStr)
+	}
+
+	a := mustNewAdapter(t)
 	session := mustStartIntegrationSession(t, a)
 	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
 
-	_, result := collectAllEvents(t, a, session, "List files in the current directory")
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("ExitReason = %q, want completed", result.ExitReason)
+	got, err := opencode.RuntimeMajorForTest(session)
+	if err != nil {
+		t.Fatalf("RuntimeMajorForTest(): %v", err)
+	}
+	if got != want {
+		t.Errorf("RuntimeMajorForTest() = %d, want %d (SORTIE_OPENCODE_MAJOR)", got, want)
+	}
+}
+
+// TestIntegration_ToolServerIdentity proves tool-server delivery on
+// both majors without a model call invoking the tool, mirroring
+// internal/agent/claude's TestIntegration_ToolServerIdentity.
+//
+// It does not call agenttest.AssertToolServerIdentity: that helper
+// writes the generated MCP config at <dir>/mcp.json, a path
+// mcpconfig.Parse refuses for a translated-injection adapter, which
+// requires the config to sit under a workspace's own ".sortie"
+// directory. codex and agent-client-protocol, this adapter's fellow
+// translated-injection kinds, do not use the helper for the same
+// reason.
+func TestIntegration_ToolServerIdentity(t *testing.T) {
+	skipIfNotEnabled(t)
+
+	dir := t.TempDir()
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatalf("MkdirAll(workspace): %v", err)
+	}
+
+	const wantDispatchID = "opencode-tool-server-identity"
+	recordingPath := filepath.Join(dir, "recorded.json")
+	runtimePath := agenttest.FakeRuntime(t, dir, "tool-server-recorder", agenttest.RecordedEnvScenario, agenttest.RecordedEnv{
+		Path:  recordingPath,
+		Names: []string{"SORTIE_DISPATCH_ID", "SORTIE_WORKSPACE"},
+	})
+
+	mcpConfigPath := filepath.Join(workspace, ".sortie", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpConfigPath), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	mcpDoc := fmt.Sprintf(`{"mcpServers":{"sortie-tools":{"type":"stdio","command":%s,"env":{"SORTIE_DISPATCH_ID":%s,"SORTIE_WORKSPACE":%s}}}}`,
+		mustJSONString(t, runtimePath), mustJSONString(t, wantDispatchID), mustJSONString(t, workspace))
+	if err := os.WriteFile(mcpConfigPath, []byte(mcpDoc), 0o600); err != nil {
+		t.Fatalf("WriteFile(mcp.json): %v", err)
+	}
+
+	factory, err := registry.Agents.Get("opencode")
+	if err != nil {
+		t.Fatalf("registry.Agents.Get: %v", err)
+	}
+	a, err := factory(integrationConfig())
+	if err != nil {
+		t.Fatalf("factory(): %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sessionDone := make(chan error, 1)
+	go func() {
+		session, startErr := a.StartSession(ctx, domain.StartSessionParams{
+			WorkspacePath: workspace,
+			AgentConfig: domain.AgentConfig{
+				Command:       integrationCommand(),
+				ReadTimeoutMS: 3 * 60 * 1000,
+			},
+			MCPConfigPath: mcpConfigPath,
+		})
+		if startErr != nil {
+			sessionDone <- startErr
+			return
+		}
+		defer func() { _ = a.StopSession(context.Background(), session) }()
+
+		_, runErr := a.RunTurn(ctx, session, domain.RunTurnParams{
+			Prompt:  "Say exactly: hello",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		sessionDone <- runErr
+	}()
+
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if raw, readErr := os.ReadFile(recordingPath); readErr == nil {
+			cancel()
+			<-sessionDone
+			assertRecordedToolServerIdentity(t, raw, wantDispatchID, workspace)
+			return
+		}
+		if !time.Now().Before(deadline) {
+			cancel()
+			runErr := <-sessionDone
+			t.Fatalf("no recording observed within 60s (session error = %v)", runErr)
+		}
+		select {
+		case runErr := <-sessionDone:
+			t.Fatalf("no recording observed before the session returned (error = %v)", runErr)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func assertRecordedToolServerIdentity(t *testing.T, raw []byte, wantDispatchID, wantWorkspace string) {
+	t.Helper()
+
+	var recorded map[string]string
+	if err := json.Unmarshal(raw, &recorded); err != nil {
+		t.Fatalf("decode recorded tool-server environment %q: %v", raw, err)
+	}
+	if recorded["SORTIE_DISPATCH_ID"] != wantDispatchID {
+		t.Errorf("recorded SORTIE_DISPATCH_ID = %q, want %q", recorded["SORTIE_DISPATCH_ID"], wantDispatchID)
+	}
+	if recorded["SORTIE_WORKSPACE"] != wantWorkspace {
+		t.Errorf("recorded SORTIE_WORKSPACE = %q, want %q", recorded["SORTIE_WORKSPACE"], wantWorkspace)
 	}
 }
 

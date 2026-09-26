@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -177,23 +178,64 @@ func (t LaunchTarget) SSHOptions(settings ...sshutil.EnvVar) sshutil.SSHOptions 
 	}
 }
 
-// BindWorkspace re-verifies t.WorkspacePath and, on success, sets cmd.Dir to
-// it. On failure cmd.Dir is left empty and the verification error is
-// returned; the caller must not start cmd.
+// BindWorkspace re-verifies t.WorkspacePath and, on success, sets
+// cmd.Dir to it, sets cmd.Env to os.Environ() when it is nil, and
+// replaces every PWD entry already in cmd.Env with one naming the same
+// verified path, so a subprocess that trusts PWD over its own working
+// directory still lands in the workspace. On failure cmd.Dir and
+// cmd.Env are left untouched and the verification error is returned;
+// the caller must not start cmd.
+//
+// Callers MUST assign cmd.Env before calling BindWorkspace and MUST
+// NOT assign it afterward, so the PWD this sets is never overwritten.
 func (t LaunchTarget) BindWorkspace(cmd *exec.Cmd) *domain.AgentError {
 	absPath, agentErr := ResolveWorkspace(t.WorkspacePath)
 	if agentErr != nil {
 		return agentErr
 	}
 	cmd.Dir = absPath
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = setPWD(cmd.Env, absPath)
 	return nil
+}
+
+// setPWD returns env with every entry named PWD removed (case-
+// insensitively on Windows, exactly elsewhere, matching the platform's
+// own environment-variable name comparison) and exactly one
+// "PWD=value" appended.
+func setPWD(env []string, value string) []string {
+	filtered := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if isPWDEntry(entry) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return append(filtered, "PWD="+value)
+}
+
+// isPWDEntry reports whether entry is an env-slice assignment of PWD,
+// comparing case-insensitively on Windows to match that platform's own
+// environment-variable name resolution.
+func isPWDEntry(entry string) bool {
+	key, _, found := strings.Cut(entry, "=")
+	if !found {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, "PWD")
+	}
+	return key == "PWD"
 }
 
 // AuxiliaryCommand builds a one-shot runtime subcommand run in the
 // workspace, locally or over ssh like the session itself. A nil env
-// means os.Environ(); stdin may be nil. Returns a non-nil
-// [*domain.AgentError] and a nil *[exec.Cmd] when the workspace path fails
-// re-verification immediately before launch.
+// means [BindWorkspace] supplies os.Environ() with PWD replaced; stdin
+// may be nil. Returns a non-nil [*domain.AgentError] and a nil
+// *[exec.Cmd] when the workspace path fails re-verification immediately
+// before launch.
 func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin io.Reader, env []string, carried ...sshutil.EnvVar) (*exec.Cmd, *domain.AgentError) {
 	var cmd *exec.Cmd
 	if t.RemoteCommand == "" {
@@ -205,13 +247,9 @@ func (t LaunchTarget) AuxiliaryCommand(ctx context.Context, args []string, stdin
 		cmd = exec.CommandContext(ctx, t.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 		cmd.Stdin = prependPreamble(launch.StdinReader(), stdin)
 	}
+	cmd.Env = env
 	if agentErr := t.BindWorkspace(cmd); agentErr != nil {
 		return nil, agentErr
-	}
-	if env != nil {
-		cmd.Env = env
-	} else {
-		cmd.Env = os.Environ()
 	}
 	return cmd, nil
 }

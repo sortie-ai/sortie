@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,10 +29,60 @@ import (
 )
 
 // writeOpenCodeScript writes an executable shell script named fake-opencode
-// in dir with the given body and returns its path.
+// in dir with the given body and returns its path. Every script answers a
+// leading --version argument with a fixed 1.x version string before body
+// runs, so a session start against it always detects major1 without
+// disturbing body's own turn-fixture behavior.
 func writeOpenCodeScript(t *testing.T, dir, body string) string {
 	t.Helper()
-	return agenttest.WriteScript(t, dir, "fake-opencode", body)
+	return agenttest.WriteScript(t, dir, "fake-opencode", versionAnsweringScript(body))
+}
+
+// versionAnsweringScript prepends a branch answering a leading --version
+// argument to body, unconditionally.
+func versionAnsweringScript(body string) string {
+	return "case \"$1\" in\n  --version) echo '1.18.32'; exit 0;;\nesac\n" + body
+}
+
+// fakeMinimalRuntime returns the path to a fake opencode binary that
+// answers --version and otherwise exits 0 with no output, for a test
+// that only needs StartSession to succeed and never inspects a turn's
+// subprocess behavior.
+func fakeMinimalRuntime(t *testing.T) string {
+	t.Helper()
+	return writeOpenCodeScript(t, t.TempDir(), "exit 0")
+}
+
+// writeOpenCodeScriptMajor2 is [writeOpenCodeScript]'s major2
+// counterpart: it answers a leading --version argument with a 2.x
+// version string, so a session start against it detects major2.
+func writeOpenCodeScriptMajor2(t *testing.T, dir, body string) string {
+	t.Helper()
+	return agenttest.WriteScript(t, dir, "fake-opencode", "case \"$1\" in\n  --version) echo 'opencode v2.0.18'; exit 0;;\nesac\n"+body)
+}
+
+// writeRunFixtureScriptMajor2 is [writeRunFixtureScript]'s major2
+// counterpart: the usage-recovery invocation is "session export", not
+// "export", so the case match is on the first two arguments.
+func writeRunFixtureScriptMajor2(t *testing.T, dir, fixtureName string) string {
+	t.Helper()
+
+	runPath := filepath.Join(dir, fixtureName)
+	if err := os.WriteFile(runPath, loadFixture(t, fixtureName), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", fixtureName, err)
+	}
+
+	exportPath := filepath.Join(dir, "export.json")
+	if err := os.WriteFile(exportPath, []byte(`{"info":{"id":""},"messages":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(export.json): %v", err)
+	}
+
+	body := `case "$1 $2" in
+  "session export") cat '` + exportPath + `'; exit 0;;
+esac
+cat '` + runPath + `'`
+
+	return writeOpenCodeScriptMajor2(t, dir, body)
 }
 
 // mustStartSession starts a session with the given command or fatals.
@@ -45,6 +96,32 @@ func mustStartSession(t *testing.T, a domain.AgentAdapter, workDir, cmd string) 
 		t.Fatalf("StartSession() error = %v", err)
 	}
 	return session
+}
+
+// mustBuildSSHSessionWithLocalScript builds a session whose SSH-mode
+// target execs script directly in place of the local ssh binary,
+// bypassing StartSession's version query so these tests exercise
+// RunTurn's SSH launch machinery against a local fixture rather than a
+// real network host.
+func mustBuildSSHSessionWithLocalScript(t *testing.T, workDir, script, sshHost string) domain.Session {
+	t.Helper()
+	pt, fault := parsePassthroughConfig(map[string]any{})
+	if fault != nil {
+		t.Fatalf("parsePassthroughConfig() error = %v", fault)
+	}
+	return domain.Session{Internal: &sessionState{
+		target: agentcore.LaunchTarget{
+			Command:       script,
+			WorkspacePath: workDir,
+			RemoteCommand: "opencode",
+			SSHHost:       sshHost,
+		},
+		passthrough: pt,
+		major:       major1,
+		baseLogger:  slog.Default(),
+		usage:       agentcore.NewTurnEndUsage(),
+		drainGrace:  procutil.DefaultDrainGrace,
+	}}
 }
 
 func writeRunFixtureScript(t *testing.T, dir, fixtureName string) string {
@@ -218,7 +295,7 @@ func TestStartSession_ResumeSession(t *testing.T) {
 	resumeID := "ses_resume123"
 	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 		WorkspacePath:   t.TempDir(),
-		AgentConfig:     domain.AgentConfig{Command: "/bin/sh"},
+		AgentConfig:     domain.AgentConfig{Command: fakeMinimalRuntime(t)},
 		ResumeSessionID: resumeID,
 	})
 	if err != nil {
@@ -235,7 +312,9 @@ func TestStartSession_ResumeSession(t *testing.T) {
 }
 
 func TestStartSession_MCPConfigContent(t *testing.T) {
-	t.Parallel()
+	// Not parallel at this level: the "remote launch" case below calls
+	// t.Setenv on its own subtest, which panics if any ancestor called
+	// t.Parallel.
 
 	write := func(t *testing.T, content string) string {
 		t.Helper()
@@ -265,12 +344,22 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			command := fakeMinimalRuntime(t)
+			if tt.sshHost == "" {
+				t.Parallel()
+			} else {
+				// Not parallel: places a fake ssh stand-in first on PATH
+				// through t.Setenv, so the version query never reaches a
+				// real network host.
+				sshDir := t.TempDir()
+				agenttest.FakeRuntime(t, sshDir, "ssh", agenttest.OutputScenario, agenttest.Output{Stdout: "1.18.32\n"})
+				t.Setenv("PATH", sshDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			}
 
 			a, _ := NewOpenCodeAdapter(map[string]any{})
 			session, err := a.StartSession(context.Background(), domain.StartSessionParams{
 				WorkspacePath: t.TempDir(),
-				AgentConfig:   domain.AgentConfig{Command: "/bin/sh"},
+				AgentConfig:   domain.AgentConfig{Command: command},
 				MCPConfigPath: write(t, tt.content),
 				SSHHost:       tt.sshHost,
 			})
@@ -282,8 +371,8 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 			if !ok {
 				t.Fatalf("session.Internal = %T, want *sessionState", session.Internal)
 			}
-			if got := state.mcpConfigContent != ""; got != tt.want {
-				t.Errorf("StartSession() delivered content = %v, want %v (content %q)", got, tt.want, state.mcpConfigContent)
+			if got := state.turnConfigContent != ""; got != tt.want {
+				t.Errorf("StartSession() delivered content = %v, want %v (content %q)", got, tt.want, state.turnConfigContent)
 			}
 		})
 	}
@@ -319,7 +408,7 @@ func TestRunTurn_ClosedSession(t *testing.T) {
 
 	a, _ := NewOpenCodeAdapter(map[string]any{})
 	tmpDir := t.TempDir()
-	session := mustStartSession(t, a, tmpDir, "/bin/sh")
+	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
 	state := session.Internal.(*sessionState)
 	state.mu.Lock()
@@ -384,7 +473,7 @@ func TestRunTurn_ConcurrentRunRejected(t *testing.T) {
 
 	a, _ := NewOpenCodeAdapter(map[string]any{})
 	tmpDir := t.TempDir()
-	session := mustStartSession(t, a, tmpDir, "/bin/sh")
+	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
 	state := session.Internal.(*sessionState)
 	state.mu.Lock()
@@ -470,7 +559,7 @@ func TestStopSession_NoActiveTurn(t *testing.T) {
 
 	a, _ := NewOpenCodeAdapter(map[string]any{})
 	tmpDir := t.TempDir()
-	session := mustStartSession(t, a, tmpDir, "/bin/sh")
+	session := mustStartSession(t, a, tmpDir, fakeMinimalRuntime(t))
 
 	if err := a.StopSession(context.Background(), session); err != nil {
 		t.Fatalf("StopSession() error = %v, want nil", err)
@@ -1357,6 +1446,69 @@ func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
 	}, result, err)
 }
 
+// TestRunTurn_FreeTierRefusalNamesDeniedTools pins that a 1.x free-tier
+// refusal against a policy denying bash names the denied tool in the
+// turn_failed message, appended to the vendor text.
+func TestRunTurn_FreeTierRefusalNamesDeniedTools(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScript(t, tmpDir, "free_tier_refusal.jsonl")
+
+	a, err := NewOpenCodeAdapter(map[string]any{"allowed_tools": []any{"read", "glob"}})
+	if err != nil {
+		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
+	}
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, _ := collectEvents(t, a, session, "work")
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	failed := turnFailedEvents(events)
+	if len(failed) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1; got %v", len(failed), events)
+	}
+	const wantMessage = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode" +
+		"; the opencode.allowed_tools and opencode.denied_tools settings deny bash, a tool the runtime's free tier requires"
+	if failed[0].Message != wantMessage {
+		t.Errorf("turn_failed Message = %q, want %q", failed[0].Message, wantMessage)
+	}
+}
+
+// TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2 is the 2.x
+// counterpart of TestRunTurn_FreeTierRefusalNamesDeniedTools: the same
+// policy and the same denied-tool clause hold against the 2.x error
+// envelope shape.
+func TestRunTurn_FreeTierRefusalNamesDeniedTools_Major2(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScriptMajor2(t, tmpDir, "free_tier_refusal_v2.jsonl")
+
+	a, err := NewOpenCodeAdapter(map[string]any{"allowed_tools": []any{"read", "glob"}})
+	if err != nil {
+		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
+	}
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, _ := collectEvents(t, a, session, "work")
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	failed := turnFailedEvents(events)
+	if len(failed) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1; got %v", len(failed), events)
+	}
+	const wantMessage = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode" +
+		"; the opencode.allowed_tools and opencode.denied_tools settings deny bash, a tool the runtime's free tier requires"
+	if failed[0].Message != wantMessage {
+		t.Errorf("turn_failed Message = %q, want %q", failed[0].Message, wantMessage)
+	}
+}
+
 func TestRunTurn_OversizedStdoutLine(t *testing.T) {
 	t.Parallel()
 
@@ -1495,16 +1647,7 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 		script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
 
 		a, _ := NewOpenCodeAdapter(map[string]any{})
-		session, err := a.StartSession(context.Background(), domain.StartSessionParams{
-			WorkspacePath: tmpDir,
-			AgentConfig:   domain.AgentConfig{Command: "opencode"},
-			SSHHost:       "example.test",
-		})
-		if err != nil {
-			t.Fatalf("StartSession() error = %v", err)
-		}
-		state := session.Internal.(*sessionState)
-		state.target.Command = script
+		session := mustBuildSSHSessionWithLocalScript(t, tmpDir, script, "example.test")
 
 		events, result, err := collectEvents(t, a, session, "work")
 		if err != nil {
@@ -2134,6 +2277,46 @@ exit 0`)
 	failedEvents := turnFailedEvents(events)
 	if len(failedEvents) != 1 {
 		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+}
+
+// TestRunTurn_UnparseableLineDoesNotCountAsResponse pins that a line the
+// JSON decoder rejects never counts as the turn's response, even though
+// the runtime wrote it and exited cleanly: only a line that decodes as
+// a run event satisfies OutputWatch.
+func TestRunTurn_UnparseableLineDoesNotCountAsResponse(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+echo 'Usage: opencode [options]'
+exit 0`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("RunTurn() error = %v, want *domain.AgentError", err)
+	}
+	if _, ok := errors.AsType[*agentcore.EarlyExitError](agentErr.Err); !ok {
+		t.Errorf("RunTurn() error = %v, want a chain carrying an *agentcore.EarlyExitError", err)
+	}
+
+	var malformedCount int
+	for _, e := range events {
+		if e.Type == domain.EventMalformed {
+			malformedCount++
+		}
+	}
+	if malformedCount != 1 {
+		t.Errorf("EventMalformed count = %d, want 1; got %v", malformedCount, events)
 	}
 }
 
@@ -3280,4 +3463,167 @@ func TestRunTurn_LocalLaunchIgnoresSSHEnvNames(t *testing.T) {
 			t.Errorf("%s: subprocess standard input = %q, want empty on a local launch", tc.name, stdin)
 		}
 	}
+}
+
+// newHookTestState builds a sessionState pointing to a local fake
+// runtime, for a test-only hook that reads a session's own auxiliary
+// commands directly rather than through StartSession.
+func newHookTestState(t *testing.T, major runtimeMajor, scriptBody string) *sessionState {
+	t.Helper()
+
+	script := agenttest.WriteScript(t, t.TempDir(), "fake-opencode", scriptBody)
+	pt, fault := parsePassthroughConfig(map[string]any{})
+	if fault != nil {
+		t.Fatalf("parsePassthroughConfig() error = %v", fault)
+	}
+	return &sessionState{
+		target: agentcore.LaunchTarget{
+			Command:       script,
+			WorkspacePath: t.TempDir(),
+		},
+		passthrough: pt,
+		major:       major,
+		baseLogger:  slog.Default(),
+	}
+}
+
+func TestRuntimeMajorForTest(t *testing.T) {
+	t.Parallel()
+
+	t.Run("wrong internal type", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := RuntimeMajorForTest(domain.Session{Internal: "not a sessionState"}); err == nil {
+			t.Fatal("RuntimeMajorForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("major never detected", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := RuntimeMajorForTest(domain.Session{Internal: &sessionState{major: majorUnknown}}); err == nil {
+			t.Fatal("RuntimeMajorForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("detected major is returned", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := RuntimeMajorForTest(domain.Session{Internal: &sessionState{major: major2}})
+		if err != nil {
+			t.Fatalf("RuntimeMajorForTest() error = %v", err)
+		}
+		if got != 2 {
+			t.Errorf("RuntimeMajorForTest() = %d, want 2", got)
+		}
+	})
+}
+
+func TestEffectivePermissionsForTest(t *testing.T) {
+	t.Parallel()
+
+	t.Run("wrong internal type", func(t *testing.T) {
+		t.Parallel()
+
+		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: "not a sessionState"}); err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("major never detected", func(t *testing.T) {
+		t.Parallel()
+
+		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: &sessionState{major: majorUnknown}}); err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("workspace re-verification failure fails the build", func(t *testing.T) {
+		t.Parallel()
+
+		state := &sessionState{
+			target: agentcore.LaunchTarget{
+				Command:       "/usr/bin/opencode",
+				WorkspacePath: filepath.Join(t.TempDir(), "missing"),
+			},
+			major:      major1,
+			baseLogger: slog.Default(),
+		}
+		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("a missing binary fails to start", func(t *testing.T) {
+		t.Parallel()
+
+		state := &sessionState{
+			target: agentcore.LaunchTarget{
+				Command:       filepath.Join(t.TempDir(), "no-such-binary"),
+				WorkspacePath: t.TempDir(),
+			},
+			major:      major1,
+			baseLogger: slog.Default(),
+		}
+		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("a non-zero exit is an error", func(t *testing.T) {
+		t.Parallel()
+
+		state := newHookTestState(t, major1, "exit 1")
+		if _, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state}); err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+	})
+
+	t.Run("output that does not decode is an error", func(t *testing.T) {
+		t.Parallel()
+
+		state := newHookTestState(t, major1, "echo 'not json'")
+		effective, raw, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
+		if err == nil {
+			t.Fatal("EffectivePermissionsForTest() error = nil, want non-nil")
+		}
+		if effective != nil {
+			t.Errorf("EffectivePermissionsForTest() effective = %v, want nil", effective)
+		}
+		if !strings.Contains(string(raw), "not json") {
+			t.Errorf("EffectivePermissionsForTest() raw = %q, want it to carry the command's own output", raw)
+		}
+	})
+
+	t.Run("1.x permission object", func(t *testing.T) {
+		t.Parallel()
+
+		state := newHookTestState(t, major1, `printf '{"permission":{"bash":"deny","read":"allow"}}'`)
+		effective, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
+		if err != nil {
+			t.Fatalf("EffectivePermissionsForTest() error = %v", err)
+		}
+		want := map[string]string{"bash": "deny", "read": "allow"}
+		if !maps.Equal(effective, want) {
+			t.Errorf("EffectivePermissionsForTest() effective = %v, want %v", effective, want)
+		}
+	})
+
+	t.Run("2.x a later document rule overwrites an earlier one", func(t *testing.T) {
+		t.Parallel()
+
+		const doc = `[{"type":"document","info":{"permissions":[{"resource":"*","action":"bash","effect":"allow"}]}},` +
+			`{"type":"document","info":{"permissions":[{"resource":"*","action":"bash","effect":"deny"},{"resource":"*","action":"read","effect":"allow"}]}},` +
+			`{"type":"other","info":{"permissions":[{"resource":"*","action":"webfetch","effect":"allow"}]}}]`
+
+		state := newHookTestState(t, major2, "printf '"+doc+"'")
+		effective, _, err := EffectivePermissionsForTest(context.Background(), domain.Session{Internal: state})
+		if err != nil {
+			t.Fatalf("EffectivePermissionsForTest() error = %v", err)
+		}
+		want := map[string]string{"bash": "deny", "read": "allow"}
+		if !maps.Equal(effective, want) {
+			t.Errorf("EffectivePermissionsForTest() effective = %v, want %v", effective, want)
+		}
+	})
 }

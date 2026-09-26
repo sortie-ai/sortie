@@ -14,5 +14,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewCopilotAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "copilot-cli", adapter, domain.AgentConfig{})
+	credentialtest.AssertEarlyExitReport(t, "copilot-cli", adapter, domain.AgentConfig{}, credentialtest.StructuredOutput)
 }

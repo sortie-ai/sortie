@@ -344,12 +344,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	var lastParsed any
 	var output OutputWatch
 	parseLine := func(line []byte) {
-		output.Observe(line)
 		result, parseErr := s.hooks.ParseLine(line, emit, pidStr)
 		if parseErr != nil {
 			EmitMalformed(emit, line)
 			return
 		}
+		output.Observe(line)
 		if result != nil {
 			lastParsed = result
 		}

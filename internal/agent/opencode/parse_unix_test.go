@@ -104,12 +104,14 @@ func sshStandInEnvPath(t *testing.T, includeDD bool) string {
 	return dir
 }
 
-// writeSSHCaptureScript writes a script that captures carriedName's
-// value and the OPENCODE_AUTO_SHARE managed setting's value, each to
-// its own file, then exits 0.
+// writeSSHCaptureScript writes a script that answers a leading
+// --version argument for StartSession's own version query, and
+// otherwise captures carriedName's value and the OPENCODE_AUTO_SHARE
+// managed setting's value, each to its own file, then exits 0.
 func writeSSHCaptureScript(t *testing.T, dir, carriedName, envCapturePath, settingCapturePath string) string {
 	t.Helper()
-	content := "printf '%s' \"$" + carriedName + "\" > '" + envCapturePath + "'\n" +
+	content := "case \"$1\" in\n  --version) echo '1.18.32'; exit 0;;\nesac\n" +
+		"printf '%s' \"$" + carriedName + "\" > '" + envCapturePath + "'\n" +
 		"printf '%s' \"$OPENCODE_AUTO_SHARE\" > '" + settingCapturePath + "'\n"
 	return agenttest.WriteScript(t, dir, "fake-opencode-ssh", content)
 }

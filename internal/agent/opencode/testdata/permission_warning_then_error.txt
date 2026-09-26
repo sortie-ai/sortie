@@ -1,2 +1,2 @@
-! permission requested: bash; auto-rejecting
-{"type":"tool_use","timestamp":1777197470000,"sessionID":"ses_abc123","part":{"id":"prt_bash_001","messageID":"msg_bash_001","sessionID":"ses_abc123","type":"tool","tool":"bash","callID":"call_bash_001","state":{"status":"error","error":"The user rejected permission to use this specific tool call.","time":{"start":1777197470000,"end":1777197470001}}}}
+[93m[1m! [0mpermission requested: external_directory (/etc/*); auto-rejecting
+{"type":"tool_use","timestamp":1790406117057,"sessionID":"ses_f237ac402ffeZnvVlEoEMjtDC9","part":{"type":"tool","tool":"read","callID":"call_function_dkxmqr3xttp6_1","state":{"status":"error","input":{"filePath":"/etc/hostname"},"error":"The user rejected permission to use this specific tool call.","time":{"start":1790406117008,"end":1790406117021}},"id":"prt_0dc854689001vf65DKA4wpOfM9","sessionID":"ses_f237ac402ffeZnvVlEoEMjtDC9","messageID":"msg_0dc853df0001vF6WCOmMJmKgrB"}}

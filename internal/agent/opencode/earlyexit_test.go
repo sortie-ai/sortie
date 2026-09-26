@@ -14,5 +14,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewOpenCodeAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "opencode", adapter, domain.AgentConfig{})
+	credentialtest.AssertEarlyExitReport(t, "opencode", adapter, domain.AgentConfig{}, credentialtest.StructuredOutput)
 }

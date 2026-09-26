@@ -1039,6 +1039,37 @@ func TestForkPerTurnSession_EarlyExit_ReadableLineKeepsExitCodeOutcome(t *testin
 	}
 }
 
+// TestForkPerTurnSession_EarlyExit_RejectedLineIsNotAResponse pins that
+// a line ParseLine rejects never counts as the turn's response, even
+// though the runtime wrote it and exited cleanly: only a line the
+// adapter's own decoder accepts satisfies OutputWatch.
+func TestForkPerTurnSession_EarlyExit_RejectedLineIsNotAResponse(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := agenttest.FakeRuntime(t, tmpDir, "agent", agenttest.OutputScenario, agenttest.Output{Stdout: "not valid JSON\n"})
+	target := newTestTarget(tmpDir, script)
+	hooks := hooksWithEarlyExitDisposition()
+	hooks.ParseLine = func(line []byte, emit func(domain.AgentEvent), pid string) (any, error) {
+		return nil, errors.New("line is not valid JSON")
+	}
+	sess := NewForkPerTurnSession(target, hooks, slog.Default(), 0)
+
+	emit, events := sinkEvents()
+	_, err := sess.RunTurn(context.Background(), "p", emit)
+
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("RunTurn() error = %v, want *domain.AgentError", err)
+	}
+	if _, ok := errors.AsType[*EarlyExitError](agentErr.Err); !ok {
+		t.Errorf("RunTurn() error = %v, want a chain carrying an *EarlyExitError", err)
+	}
+	if !hasEventType(*events, domain.EventMalformed) {
+		t.Errorf("EventMalformed not emitted for the rejected line; got %v", *events)
+	}
+}
+
 // TestForkPerTurnSession_EarlyExit_StopSignaledSuppressesReport pins
 // that a turn whose process Stop signaled reports today's cancellation
 // outcome, never the early-exit report, even though the runtime wrote

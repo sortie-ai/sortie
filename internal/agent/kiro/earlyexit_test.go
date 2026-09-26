@@ -17,5 +17,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewKiroAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "kiro", adapter, domain.AgentConfig{})
+	credentialtest.AssertEarlyExitReport(t, "kiro", adapter, domain.AgentConfig{}, credentialtest.PlainTextOutput)
 }

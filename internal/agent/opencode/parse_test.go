@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -210,8 +209,8 @@ func TestScanLines(t *testing.T) {
 			t.Fatal("parseRunEvent(plain text) error = nil, want error")
 		}
 		text := string(lines[0])
-		if !strings.HasPrefix(text, "! permission requested:") {
-			t.Errorf("plain text = %q, want prefix %q", text, "! permission requested:")
+		if !isPermissionWarning(text) {
+			t.Errorf("isPermissionWarning(%q) = false, want true", text)
 		}
 	})
 
@@ -441,4 +440,162 @@ func TestQueryExportUsage(t *testing.T) {
 			t.Errorf("usage = %+v, want zero value (no tokens object)", usage)
 		}
 	})
+}
+
+// TestParseSessionExport drives the 2.x export document fixture,
+// mirroring parseExportOutput's 1.x semantics: input sums tokens.input
+// plus both cache figures, output sums tokens.output plus reasoning,
+// and a sinceUnixMS window keeps only messages created at or after it.
+func TestParseSessionExport(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "ses_f23828cc8ffeXAmvklUEWnLCuA"
+	data := loadFixture(t, "export_usage_v2.json")
+
+	t.Run("sinceUnixMS zero sums every kept message", func(t *testing.T) {
+		t.Parallel()
+
+		usage := parseSessionExport(data, sessionID, 0)
+
+		if usage.InputTokens != 13058 {
+			t.Errorf("InputTokens = %d, want 13058", usage.InputTokens)
+		}
+		if usage.OutputTokens != 35 {
+			t.Errorf("OutputTokens = %d, want 35", usage.OutputTokens)
+		}
+		if usage.CacheReadTokens != 7010 {
+			t.Errorf("CacheReadTokens = %d, want 7010", usage.CacheReadTokens)
+		}
+		if usage.TotalTokens != 13093 {
+			t.Errorf("TotalTokens = %d, want 13093", usage.TotalTokens)
+		}
+		if usage.Model != "opencode/big-pickle" {
+			t.Errorf("Model = %q, want %q", usage.Model, "opencode/big-pickle")
+		}
+		if usage.Cost != 0 {
+			t.Errorf("Cost = %v, want 0", usage.Cost)
+		}
+		if !usage.Recovered {
+			t.Error("Recovered = false, want true")
+		}
+	})
+
+	t.Run("a window keeps only messages created at or after it", func(t *testing.T) {
+		t.Parallel()
+
+		usage := parseSessionExport(data, sessionID, 1790405606000)
+
+		if usage.InputTokens != 6560 {
+			t.Errorf("InputTokens = %d, want 6560", usage.InputTokens)
+		}
+		if usage.OutputTokens != 8 {
+			t.Errorf("OutputTokens = %d, want 8", usage.OutputTokens)
+		}
+		if usage.CacheReadTokens != 6523 {
+			t.Errorf("CacheReadTokens = %d, want 6523", usage.CacheReadTokens)
+		}
+	})
+
+	t.Run("a session id mismatch returns zero", func(t *testing.T) {
+		t.Parallel()
+
+		usage := parseSessionExport(data, "ses_different_session", 0)
+		if usage != (exportUsage{}) {
+			t.Errorf("usage = %+v, want zero value for a mismatched session", usage)
+		}
+	})
+}
+
+// loadFreeTierRunError decodes the error member of fixture's one line
+// into a *rawRunError.
+func loadFreeTierRunError(t *testing.T, fixture string) *rawRunError {
+	t.Helper()
+	ev, err := parseRunEvent(loadFixtureLine(t, fixture, 0))
+	if err != nil {
+		t.Fatalf("parseRunEvent(%s): %v", fixture, err)
+	}
+	if ev.Error == nil {
+		t.Fatalf("%s: Error is nil", fixture)
+	}
+	return ev.Error
+}
+
+// TestFreeTierRefusalClause drives freeTierRefusalClause directly
+// against both envelope shapes, proving the denied-tool clause is
+// drawn only when the envelope matches a free-tier refusal and the
+// session's own tool policy denies bash, read, or both.
+func TestFreeTierRefusalClause(t *testing.T) {
+	t.Parallel()
+
+	oneX := loadFreeTierRunError(t, "free_tier_refusal.jsonl")
+	twoX := loadFreeTierRunError(t, "free_tier_refusal_v2.jsonl")
+
+	const wantMessage = "Error from provider (Console): OpenCode's free tier can only be used from within OpenCode"
+	const clauseBash = "; the opencode.allowed_tools and opencode.denied_tools settings deny bash, a tool the runtime's free tier requires"
+	const clauseRead = "; the opencode.allowed_tools and opencode.denied_tools settings deny read, a tool the runtime's free tier requires"
+	const clauseBoth = "; the opencode.allowed_tools and opencode.denied_tools settings deny bash and read, tools the runtime's free tier requires"
+
+	tests := []struct {
+		name   string
+		runErr *rawRunError
+		pt     passthroughConfig
+		want   string
+	}{
+		{name: "1.x denies bash", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"read", "glob"}}, want: clauseBash},
+		{name: "1.x denies bash and read", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"glob"}}, want: clauseBoth},
+		{name: "1.x denies read", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"bash", "glob"}}, want: clauseRead},
+		{name: "1.x denied_tools names bash", runErr: oneX, pt: passthroughConfig{DeniedTools: []string{"bash"}}, want: clauseBash},
+		{name: "1.x allows both required tools", runErr: oneX, pt: passthroughConfig{AllowedTools: []string{"bash", "read"}}, want: ""},
+		{name: "1.x no tool lists configured", runErr: oneX, pt: passthroughConfig{}, want: ""},
+		{name: "1.x wildcard deny is not an exact match", runErr: oneX, pt: passthroughConfig{DeniedTools: []string{"*"}}, want: ""},
+		{
+			name:   "1.x a different gateway error type is not a refusal",
+			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"responseBody": `{"type":"error","error":{"type":"RegionError","message":"unavailable in your region"}}`}},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+		{
+			name:   "1.x without a responseBody is not a refusal",
+			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"message": wantMessage}},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+		{
+			name:   "1.x with a non-JSON responseBody is not a refusal",
+			runErr: &rawRunError{Name: "APIError", Data: map[string]any{"responseBody": "not json"}},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+		{name: "2.x denies bash", runErr: twoX, pt: passthroughConfig{AllowedTools: []string{"read", "glob"}}, want: clauseBash},
+		{name: "2.x denied_tools names read", runErr: twoX, pt: passthroughConfig{DeniedTools: []string{"read"}}, want: clauseRead},
+		{name: "2.x denied_tools names an unmapped alias", runErr: twoX, pt: passthroughConfig{DeniedTools: []string{"shell"}}, want: ""},
+		{
+			name:   "2.x status 401 is not a refusal",
+			runErr: &rawRunError{Type: freeTierAuthType, Status: float64(401), Message: wantMessage},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+		{
+			name:   "2.x type provider.quota is not a refusal",
+			runErr: &rawRunError{Type: "provider.quota", Status: float64(403), Message: wantMessage},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+		{
+			name:   "2.x message without the marker is not a refusal",
+			runErr: &rawRunError{Type: freeTierAuthType, Status: float64(403), Message: "Error from provider (Console): rate limited"},
+			pt:     passthroughConfig{AllowedTools: []string{"read", "glob"}},
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := freeTierRefusalClause(tt.runErr, tt.pt); got != tt.want {
+				t.Errorf("freeTierRefusalClause() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

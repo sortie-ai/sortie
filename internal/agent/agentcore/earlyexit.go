@@ -116,7 +116,7 @@ func (w *OutputWatch) Observe(line []byte) {
 	if w.seen {
 		return
 	}
-	if trimSpace(sanitize(string(line))) != "" {
+	if trimSpace(SanitizeLine(string(line))) != "" {
 		w.seen = true
 	}
 }
@@ -220,7 +220,7 @@ func exitStatus(waitErr error) string {
 func render(lines []string, omittedEarlier bool) string {
 	sanitized := make([]string, len(lines))
 	for i, line := range lines {
-		sanitized[i] = sanitize(line)
+		sanitized[i] = SanitizeLine(line)
 	}
 	masked := redact.Mask(strings.Join(sanitized, "\n"))
 
@@ -257,10 +257,11 @@ func render(lines []string, omittedEarlier bool) string {
 	return out
 }
 
-// sanitize strips ANSI/C1 escape sequences and control characters from
-// line, replacing invalid UTF-8 with U+FFFD and TAB/CR with a space, so
-// a runtime's raw stream never corrupts a stored line.
-func sanitize(line string) string {
+// SanitizeLine strips ANSI/C1 escape sequences and control characters
+// from line, replacing invalid UTF-8 with U+FFFD and TAB/CR with a
+// space, so a runtime's raw stream never corrupts a stored line or a
+// prefix check run against it.
+func SanitizeLine(line string) string {
 	var b strings.Builder
 	b.Grow(len(line))
 

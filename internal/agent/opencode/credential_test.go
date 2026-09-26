@@ -94,16 +94,7 @@ func TestRunTurn_SSHExit255WithoutForkPerTurn(t *testing.T) {
 			script := writeSSHExit255Script(t, tmpDir, tt.runOutput)
 
 			a, _ := NewOpenCodeAdapter(map[string]any{})
-			session, err := a.StartSession(t.Context(), domain.StartSessionParams{
-				WorkspacePath: tmpDir,
-				AgentConfig:   domain.AgentConfig{Command: "opencode"},
-				SSHHost:       "example.test",
-			})
-			if err != nil {
-				t.Fatalf("StartSession() error = %v", err)
-			}
-			state := session.Internal.(*sessionState)
-			state.target.Command = script
+			session := mustBuildSSHSessionWithLocalScript(t, tmpDir, script, "example.test")
 
 			_, result, err := collectEvents(t, a, session, "work")
 
