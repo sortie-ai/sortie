@@ -218,6 +218,9 @@ func TestBuildSessionToolRegistry_TokenWarningThreshold(t *testing.T) {
 		MaxSessions:    10,
 	}
 
+	// The subtests share one database file, and on Windows a second
+	// read-only open racing the first can fail, which silently drops
+	// cost_budget from the registry; they run one at a time for that.
 	executeCostBudget := func(t *testing.T, params SessionToolParams) map[string]any {
 		t.Helper()
 		result, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
@@ -246,8 +249,6 @@ func TestBuildSessionToolRegistry_TokenWarningThreshold(t *testing.T) {
 	}
 
 	t.Run("non-zero threshold reaches the cost_budget tool", func(t *testing.T) {
-		t.Parallel()
-
 		params := baseParams
 		params.TokenWarningThreshold = 800
 
@@ -260,8 +261,6 @@ func TestBuildSessionToolRegistry_TokenWarningThreshold(t *testing.T) {
 	})
 
 	t.Run("zero threshold produces a pre-change byte-identical result", func(t *testing.T) {
-		t.Parallel()
-
 		params := baseParams
 		params.TokenWarningThreshold = 0
 
