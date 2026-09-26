@@ -27,13 +27,17 @@ const OutputScenario = "agenttest.output"
 // Output parameterizes [OutputScenario]: the runtime writes Stdout, then
 // Stderr, and exits with ExitCode, or stays alive until killed when Hang is set.
 // When WhenArg is non-empty, this behavior runs only for a launch whose
-// arguments include it; any other launch writes nothing and exits 0.
+// arguments include it; any other launch writes nothing and exits 0. When
+// Version is non-empty, a launch whose arguments include --version writes
+// it and a newline to standard output and exits 0 instead, whatever else
+// its arguments carry.
 type Output struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
 	Hang     bool
 	WhenArg  string
+	Version  string
 }
 
 type fakeConfig struct {
@@ -219,6 +223,9 @@ func runScenario(config []byte, scenarios map[string]Scenario) int {
 }
 
 func writeOutput(args []string, out Output) int {
+	if out.Version != "" && slices.Contains(args, "--version") {
+		return Output{Stdout: out.Version + "\n"}.Run()
+	}
 	if out.WhenArg != "" && !slices.Contains(args, out.WhenArg) {
 		return Output{}.Run()
 	}

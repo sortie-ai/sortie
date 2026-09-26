@@ -23,6 +23,12 @@ const earlyExitConformanceLine = "error: unexpected argument '--sortie-unknown-s
 // succeeds.
 const earlyExitConformanceSwitch = "--sortie-unknown-switch"
 
+// conformanceRuntimeVersion is what the conformance runtime reports to a
+// version query, so a kind that reads its runtime's version before a
+// launch reaches the launch the case is about instead of failing on the
+// query.
+const conformanceRuntimeVersion = "1.0.0"
+
 // earlyExitConformanceMessage is the exact [*domain.AgentError] message
 // every kind wired to [agentcore.EarlyExit.Report] must produce for the
 // conformance runtime.
@@ -95,6 +101,7 @@ func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapte
 		Stderr:   earlyExitConformanceLine + "\n",
 		ExitCode: 2,
 		WhenArg:  earlyExitConformanceSwitch,
+		Version:  conformanceRuntimeVersion,
 	})
 
 	baseConfig := config
@@ -142,6 +149,7 @@ func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.A
 		Stderr:   earlyExitConformanceLine + "\n",
 		ExitCode: 2,
 		WhenArg:  earlyExitConformanceSwitch,
+		Version:  conformanceRuntimeVersion,
 	})
 
 	unreadableConfig := config
