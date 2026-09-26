@@ -256,6 +256,15 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	reader, readerEnv := selectUsageReader(target)
 	state.reader = reader
 
+	// Every failure below returns without a session, so nothing else releases
+	// what the claim armed.
+	started := false
+	defer func() {
+		if !started {
+			releaseUsageReader(state)
+		}
+	}()
+
 	var cmd *exec.Cmd
 	var launch sshutil.SSHLaunch
 	if remote {
@@ -272,15 +281,6 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	}
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	procutil.SetGroupCancel(cmd, grace)
-
-	// Every failure below returns without a session, so nothing else releases
-	// what the claim armed.
-	started := false
-	defer func() {
-		if !started {
-			releaseUsageReader(state)
-		}
-	}()
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
