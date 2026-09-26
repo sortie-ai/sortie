@@ -357,6 +357,39 @@ func TestLaunchTarget_BindWorkspace(t *testing.T) {
 		}
 	})
 
+	t.Run("existing PWD entry is replaced with the workspace path", func(t *testing.T) {
+		t.Parallel()
+		ws := t.TempDir()
+		target := LaunchTarget{WorkspacePath: ws}
+		cmd := exec.Command("true")
+		cmd.Env = []string{"FOO=bar", "PWD=/some/other/path"}
+
+		if agentErr := target.BindWorkspace(cmd); agentErr != nil {
+			t.Fatalf("BindWorkspace() error = %v, want nil", agentErr)
+		}
+
+		want := []string{"FOO=bar", "PWD=" + ws}
+		if !slices.Equal(cmd.Env, want) {
+			t.Errorf("BindWorkspace().Env = %v, want %v", cmd.Env, want)
+		}
+	})
+
+	t.Run("nil Env becomes os.Environ() plus one PWD entry", func(t *testing.T) {
+		t.Parallel()
+		ws := t.TempDir()
+		target := LaunchTarget{WorkspacePath: ws}
+		cmd := exec.Command("true")
+
+		if agentErr := target.BindWorkspace(cmd); agentErr != nil {
+			t.Fatalf("BindWorkspace() error = %v, want nil", agentErr)
+		}
+
+		want := setPWD(os.Environ(), ws)
+		if !slices.Equal(cmd.Env, want) {
+			t.Errorf("BindWorkspace().Env = %v, want os.Environ() plus PWD=%s", cmd.Env, ws)
+		}
+	})
+
 	t.Run("linked workspace leaves Dir empty and returns an error", func(t *testing.T) {
 		t.Parallel()
 		linkTarget := t.TempDir()
@@ -404,8 +437,8 @@ func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
 	if cmd.Dir != ws {
 		t.Errorf("AuxiliaryCommand().Dir = %q, want %q", cmd.Dir, ws)
 	}
-	if !slices.Equal(cmd.Env, []string{"A=1"}) {
-		t.Errorf("AuxiliaryCommand().Env = %v, want [A=1]", cmd.Env)
+	if want := []string{"A=1", "PWD=" + ws}; !slices.Equal(cmd.Env, want) {
+		t.Errorf("AuxiliaryCommand().Env = %v, want %v", cmd.Env, want)
 	}
 	if cmd.Stdin != stdin {
 		t.Errorf("AuxiliaryCommand().Stdin = %v, want the passed-in reader", cmd.Stdin)
@@ -415,8 +448,8 @@ func TestLaunchTarget_AuxiliaryCommand_Local(t *testing.T) {
 	if agentErr != nil {
 		t.Fatalf("AuxiliaryCommand(env=nil) error = %v, want nil", agentErr)
 	}
-	if !slices.Equal(nilEnv.Env, os.Environ()) {
-		t.Errorf("AuxiliaryCommand(env=nil).Env = %v, want os.Environ()", nilEnv.Env)
+	if want := setPWD(os.Environ(), ws); !slices.Equal(nilEnv.Env, want) {
+		t.Errorf("AuxiliaryCommand(env=nil).Env = %v, want os.Environ() with PWD replaced", nilEnv.Env)
 	}
 }
 

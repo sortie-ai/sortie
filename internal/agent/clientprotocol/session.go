@@ -251,6 +251,11 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 	}
 	state.inbox = jsonrpc.NewInbox[pumpItem]()
 
+	// The reader is chosen before launch because a source needs the launch to
+	// carry its assignments.
+	reader, readerEnv := selectUsageReader(target)
+	state.reader = reader
+
 	var cmd *exec.Cmd
 	var launch sshutil.SSHLaunch
 	if remote {
@@ -258,18 +263,15 @@ func startSession(ctx context.Context, a *ClientProtocolAdapter, params domain.S
 		cmd = exec.CommandContext(ctx, target.Command, launch.Args...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
+	}
+	cmd.Env = append(os.Environ(), readerEnv...)
+	if !remote {
 		if bindErr := target.BindWorkspace(cmd); bindErr != nil {
 			return domain.Session{}, bindErr
 		}
 	}
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	procutil.SetGroupCancel(cmd, grace)
-
-	// The reader is chosen before launch because a source needs the launch to
-	// carry its assignments.
-	reader, readerEnv := selectUsageReader(target)
-	state.reader = reader
-	cmd.Env = append(os.Environ(), readerEnv...)
 
 	// Every failure below returns without a session, so nothing else releases
 	// what the claim armed.

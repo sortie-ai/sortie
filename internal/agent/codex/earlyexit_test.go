@@ -14,5 +14,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewCodexAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "codex", adapter, domain.AgentConfig{})
+	credentialtest.AssertEarlyExitReport(t, "codex", adapter, domain.AgentConfig{}, credentialtest.StructuredOutput)
 }

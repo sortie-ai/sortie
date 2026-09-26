@@ -427,10 +427,10 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	}
 	grace := procutil.StopGrace(state.agentConfig.StopGraceMS)
 	procutil.SetGroupCancel(cmd, grace)
+	cmd.Env = os.Environ()
 	if bindErr := target.BindWorkspace(cmd); bindErr != nil {
 		return domain.Session{}, bindErr
 	}
-	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {

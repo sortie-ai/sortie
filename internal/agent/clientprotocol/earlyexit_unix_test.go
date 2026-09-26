@@ -16,5 +16,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "agent-client-protocol", adapter, domain.AgentConfig{ReadTimeoutMS: 5000})
+	credentialtest.AssertEarlyExitReport(t, "agent-client-protocol", adapter, domain.AgentConfig{ReadTimeoutMS: 5000}, credentialtest.StructuredOutput)
 }

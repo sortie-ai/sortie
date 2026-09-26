@@ -14,5 +14,5 @@ func TestEarlyExitConformance(t *testing.T) {
 		t.Fatalf("NewClaudeCodeAdapter() error = %v", err)
 	}
 
-	credentialtest.AssertEarlyExitReport(t, "claude-code", adapter, domain.AgentConfig{})
+	credentialtest.AssertEarlyExitReport(t, "claude-code", adapter, domain.AgentConfig{}, credentialtest.StructuredOutput)
 }
