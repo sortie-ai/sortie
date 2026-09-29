@@ -32,6 +32,65 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+// QuoteArgv renders argv as one remote shell fragment: every element
+// single-quoted, joined by one space, so the remote shell passes each
+// element as one unexpanded word and never reads the first as an
+// assignment or a reserved word.
+func QuoteArgv(argv []string) string {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = shellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// AppendArgs returns fragment followed by args, placed where
+// [BuildSSHLaunch] places its agentArgs: past the blanks and newlines
+// that end the fragment, and in front of a single unescaped ; or & that
+// ends it. A non-empty argument made only of A-Za-z0-9_@%+=:,./- is
+// written as is; any other argument, the empty one included, is
+// single-quoted. A POSIX shell reading the result passes each argument
+// to the command as one unexpanded word. With no args it returns
+// fragment unchanged.
+func AppendArgs(fragment string, args ...string) string {
+	if len(args) == 0 {
+		return fragment
+	}
+	command, terminator := splitCommandTerminator(fragment)
+	parts := make([]string, 0, len(args)+2)
+	parts = append(parts, command)
+	for _, arg := range args {
+		parts = append(parts, quoteUnlessSafe(arg))
+	}
+	if terminator != "" {
+		parts = append(parts, terminator)
+	}
+	return strings.Join(parts, " ")
+}
+
+// quoteUnlessSafe writes arg as is when it is non-empty and holds only
+// characters no POSIX shell reads specially, and single-quotes it
+// otherwise.
+func quoteUnlessSafe(arg string) string {
+	if arg == "" {
+		return shellQuote(arg)
+	}
+	for _, r := range arg {
+		if !isShellSafeRune(r) {
+			return shellQuote(arg)
+		}
+	}
+	return arg
+}
+
+func isShellSafeRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune("_@%+=:,./-", r)
+}
+
 // SSHOptions configures SSH transport behavior for remote agent
 // execution. Adapters populate this from orchestrator-provided
 // configuration. Zero-value fields select safe defaults.

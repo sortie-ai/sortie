@@ -396,6 +396,31 @@ func TestValidateFrontMatter(t *testing.T) {
 		},
 
 		{
+			name:      "agent.command as a string passes",
+			raw:       map[string]any{"agent": map[string]any{"command": "agent --fast"}},
+			wantCount: 0,
+		},
+		{
+			name:      "agent.command as a list of strings draws no type_mismatch",
+			raw:       map[string]any{"agent": map[string]any{"command": []any{"agent", "a b"}}},
+			wantCount: 0,
+		},
+		{
+			name:       "agent.command as a mapping still draws type_mismatch",
+			raw:        map[string]any{"agent": map[string]any{"command": map[string]any{"run": "agent"}}},
+			wantCount:  1,
+			wantChecks: []string{"type_mismatch"},
+			wantFields: []string{"agent.command"},
+		},
+		{
+			name:       "agent.command as a number still draws type_mismatch",
+			raw:        map[string]any{"agent": map[string]any{"command": 7}},
+			wantCount:  1,
+			wantChecks: []string{"type_mismatch"},
+			wantFields: []string{"agent.command"},
+		},
+
+		{
 			name: "tracker section is scalar not map",
 			raw:  map[string]any{"tracker": "not-a-map"},
 			// Sections iterate alphabetically: agent, hooks, polling, tracker.

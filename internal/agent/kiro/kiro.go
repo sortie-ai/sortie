@@ -46,11 +46,12 @@ import (
 func init() {
 	registry.Agents.RegisterWithMeta("kiro", NewKiroAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
+		DefaultCommand:      defaultCommand,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionUnsupported,
 		UsageArrival:        registry.UsageArrivalNone,
 		UsageAttribution:    registry.UsageAttributionNone,
-		CredentialEnv:       registry.DeclareCredentialEnv("KIRO_API_KEY"),
+		CredentialEnv:       credentialEnv,
 		Deprecation:         &registry.AgentDeprecation{Replacement: "agent-client-protocol"},
 	})
 }
@@ -129,7 +130,7 @@ func NewKiroAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // state. Only a verification session spawns anything here: the whoami
 // guard and a listing of the workspace's conversations.
 func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "kiro-cli")
+	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}

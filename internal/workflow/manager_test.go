@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // validWorkflow returns a minimal valid WORKFLOW.md content with the
@@ -1528,4 +1530,167 @@ func TestManager_WarnsWhenLabelFixTokenMissing(t *testing.T) {
 			t.Errorf("LastLoadError() = %v, want nil", err)
 		}
 	})
+}
+
+func retiredFixtureLookup(kind string) (registry.RetiredAgent, bool) {
+	if kind != "legacy" {
+		return registry.RetiredAgent{}, false
+	}
+	return registry.RetiredAgent{
+		Replacement:   "modern",
+		CredentialEnv: registry.DeclareCredentialEnv(),
+		Convert: func(in registry.AgentConversionInput) (registry.AgentConversion, *registry.AgentConversionFault) {
+			if _, refused := in.Settings["bad"]; refused {
+				return registry.AgentConversion{}, &registry.AgentConversionFault{Key: "bad", Message: "bad is refused"}
+			}
+			return registry.AgentConversion{Command: domain.AgentCommand{Line: strings.TrimSpace(in.Command.Line + " serve")}}, nil
+		},
+	}, true
+}
+
+func modernOnly(kind string) bool { return kind == "modern" }
+
+func retiredWorkflow(agentCommand, legacyBlock string) []byte {
+	return fmt.Appendf(nil, `---
+polling:
+  interval_ms: 5000
+agent:
+  kind: legacy
+  command: %s
+legacy:
+%s
+dispatch:
+  rules:
+    - name: backend
+      match:
+        labels: ["backend"]
+      agent: legacy
+---
+Prompt.
+`, agentCommand, legacyBlock)
+}
+
+func TestManager_WithRetiredAgents_ConvertsAtStartup(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	content := retiredWorkflow("legacy-wrapper", "  model: m1")
+	mustWriteFile(t, path, content)
+
+	mgr, err := NewManager(path, testLogger(), WithRetiredAgents(retiredFixtureLookup), WithAgentKindProbe(modernOnly))
+	if err != nil {
+		t.Fatalf("NewManager() error = %v, want the converted kinds to pass the probe", err)
+	}
+
+	cfg := mgr.Config()
+	if cfg.Agent.Kind != "modern" {
+		t.Errorf("Config().Agent.Kind = %q, want %q", cfg.Agent.Kind, "modern")
+	}
+	if got := cfg.Dispatch.Rules[0].Selection.AgentKind; got != "modern" {
+		t.Errorf("Config().Dispatch.Rules[0].Selection.AgentKind = %q, want %q", got, "modern")
+	}
+	if got := cfg.AgentCommand("modern", false); got.Line != "legacy-wrapper serve" || got.Argv != nil {
+		t.Errorf("Config().AgentCommand(%q, false) = %+v, want the string %q", "modern", got, "legacy-wrapper serve")
+	}
+	if records := cfg.AgentKindConversions(); len(records) != 1 || records[0].Kind != "legacy" {
+		t.Errorf("Config().AgentKindConversions() = %+v, want one record for %q", records, "legacy")
+	}
+	var checks []string
+	for _, advisory := range cfg.Advisories() {
+		checks = append(checks, advisory.Check)
+	}
+	if len(checks) != 1 || checks[0] != "agent.kind.retired" {
+		t.Errorf("Config().Advisories() checks = %v, want [agent.kind.retired]", checks)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !bytes.Equal(written, content) {
+		t.Errorf("workflow file after load = %q, want it untouched", written)
+	}
+}
+
+func TestManager_WithoutRetiredAgents_ConvertsNothing(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	mustWriteFile(t, path, retiredWorkflow("legacy-wrapper", "  model: m1"))
+
+	mgr, err := NewManager(path, testLogger(), WithAgentKindProbe(func(kind string) bool { return kind == "legacy" }))
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	cfg := mgr.Config()
+	if cfg.Agent.Kind != "legacy" {
+		t.Errorf("Config().Agent.Kind = %q, want %q", cfg.Agent.Kind, "legacy")
+	}
+	if records := cfg.AgentKindConversions(); len(records) != 0 {
+		t.Errorf("Config().AgentKindConversions() = %+v, want none", records)
+	}
+}
+
+func TestNewManager_WithRetiredAgents_FaultFailsStartup(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	mustWriteFile(t, path, retiredWorkflow("legacy-wrapper", "  bad: true"))
+
+	_, err := NewManager(path, testLogger(), WithRetiredAgents(retiredFixtureLookup))
+
+	var ce *config.ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("NewManager() error = %v (%T), want *config.ConfigError", err, err)
+	}
+	if ce.Field != "legacy.bad" {
+		t.Errorf("ConfigError.Field = %q, want %q", ce.Field, "legacy.bad")
+	}
+}
+
+func TestManager_ReloadRetainsOnConversionFaultAndMalformedList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   []byte
+		wantField string
+	}{
+		{"conversion fault", retiredWorkflow("legacy-wrapper", "  bad: true"), "legacy.bad"},
+		{"empty command list", retiredWorkflow("[]", "  model: m1"), "agent.command"},
+		{"empty element in the command list", retiredWorkflow(`["legacy-wrapper", ""]`, "  model: m1"), "agent.command[1]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			mustWriteFile(t, path, retiredWorkflow("legacy-wrapper", "  model: m1"))
+			mgr, err := NewManager(path, testLogger(), WithRetiredAgents(retiredFixtureLookup))
+			if err != nil {
+				t.Fatalf("NewManager() error = %v", err)
+			}
+			previous := mgr.Config()
+			previousPrompt := mgr.PromptTemplate()
+			mustWriteFile(t, path, tt.content)
+
+			err = mgr.Reload()
+
+			var ce *config.ConfigError
+			if !errors.As(err, &ce) || ce.Field != tt.wantField {
+				t.Fatalf("Reload() error = %v, want *config.ConfigError with Field %q", err, tt.wantField)
+			}
+			if !errors.Is(mgr.LastLoadError(), err) {
+				t.Errorf("LastLoadError() = %v, want %v", mgr.LastLoadError(), err)
+			}
+			if got := mgr.Config(); got.Agent.Kind != previous.Agent.Kind || len(got.AgentKindConversions()) != len(previous.AgentKindConversions()) {
+				t.Errorf("Config() after the failed reload = kind %q with %d conversions, want the previous %q with %d",
+					got.Agent.Kind, len(got.AgentKindConversions()), previous.Agent.Kind, len(previous.AgentKindConversions()))
+			}
+			if mgr.PromptTemplate() != previousPrompt {
+				t.Error("PromptTemplate() changed after the failed reload, want the previous template")
+			}
+		})
+	}
 }

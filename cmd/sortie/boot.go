@@ -162,6 +162,7 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
+		workflow.WithRetiredAgents(registry.RetiredAgentOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))
 	if err != nil {
 		fmt.Fprintf(p.stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable

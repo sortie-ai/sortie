@@ -547,19 +547,16 @@ type ScheduleRetryParams struct {
 	// retries.
 	ReactionKind string
 
-	// AgentKind is the dispatch-frozen adapter kind. Propagated
-	// verbatim into the new [RetryEntry] so retries reuse the
-	// original adapter without re-running rule resolution.
+	// AgentKind is the adapter kind of the dispatch. Propagated verbatim
+	// into the new [RetryEntry].
 	AgentKind string
 
-	// RuleName is the dispatch-frozen rule name. Propagated verbatim
-	// into the new [RetryEntry] so logs and metrics report the
-	// original matched rule across every retry attempt.
+	// RuleName is the rule name of the dispatch. Propagated verbatim
+	// into the new [RetryEntry].
 	RuleName string
 
-	// TemplateID is the dispatch-frozen template registry key.
-	// Propagated verbatim into the new [RetryEntry] so retries
-	// render the same template as the initial dispatch.
+	// TemplateID is the template registry key of the dispatch.
+	// Propagated verbatim into the new [RetryEntry].
 	TemplateID string
 }
 

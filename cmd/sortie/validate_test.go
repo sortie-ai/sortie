@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -4801,5 +4802,164 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 				t.Errorf("warning Message = %q, want to contain %q", matches[0].Message, tt.wantTextSub)
 			}
 		})
+	}
+}
+
+const retiredValidateKind = "fixture-legacy-agent"
+
+func init() {
+	registry.RetiredAgents.Register(retiredValidateKind, registry.RetiredAgent{
+		Replacement:   "mock",
+		CredentialEnv: registry.DeclareCredentialEnv(),
+		Convert: func(in registry.AgentConversionInput) (registry.AgentConversion, *registry.AgentConversionFault) {
+			if _, refused := in.Settings["bad"]; refused {
+				return registry.AgentConversion{}, &registry.AgentConversionFault{Key: "bad", Message: "bad is refused"}
+			}
+			return registry.AgentConversion{
+				Command:        domain.AgentCommand{Line: "fixture-cli serve"},
+				Args:           []string{"serve"},
+				DefaultCommand: "fixture-cli",
+			}, nil
+		},
+	})
+}
+
+func agentKindWorkflow(agentBlock, extraBlocks string) []byte {
+	return fmt.Appendf(nil, `---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+%s
+file:
+  path: issues.json
+%s---
+Do {{ .issue.title }}.
+`, agentBlock, extraBlocks)
+}
+
+func runValidateJSON(t *testing.T, wfPath string) (int, validateOutput) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v; stderr: %s", stdout.String(), err, stderr.String())
+	}
+	return code, out
+}
+
+func diagChecks(diags []validateDiag) []string {
+	checks := make([]string, len(diags))
+	for i, d := range diags {
+		checks[i] = d.Check
+	}
+	slices.Sort(checks)
+	return checks
+}
+
+func TestValidateRetiredKind_MatchesItsHandConvertedForm(t *testing.T) {
+	dir := filepath.Dir(setupRunDir(t))
+	retiredPath := writeCustomWorkflowFile(t, dir, agentKindWorkflow("  kind: "+retiredValidateKind, ""))
+	convertedPath := filepath.Join(dir, "CONVERTED.md")
+	if err := os.WriteFile(convertedPath, agentKindWorkflow("  kind: mock", ""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("json", func(t *testing.T) {
+		retiredCode, retired := runValidateJSON(t, retiredPath)
+		convertedCode, converted := runValidateJSON(t, convertedPath)
+
+		if retiredCode != convertedCode || retired.Valid != converted.Valid {
+			t.Errorf("retired form exit code %d, valid %v; converted form exit code %d, valid %v; want the same",
+				retiredCode, retired.Valid, convertedCode, converted.Valid)
+		}
+		wantChecks := append(diagChecks(converted.Warnings), "agent.kind.retired")
+		slices.Sort(wantChecks)
+		if got := diagChecks(retired.Warnings); !slices.Equal(got, wantChecks) {
+			t.Errorf("retired form warnings = %v, want the converted form's plus one agent.kind.retired: %v", got, wantChecks)
+		}
+		if slices.Contains(diagChecks(retired.Warnings), "agent.kind.deprecated") {
+			t.Errorf("retired form warnings = %v, want no agent.kind.deprecated", retired.Warnings)
+		}
+	})
+
+	t.Run("text", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+
+		code := run(context.Background(), []string{"validate", retiredPath}, &stdout, &stderr)
+
+		if code != 0 {
+			t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+		if got := strings.Count(stderr.String(), "warning: agent.kind.retired: "); got != 1 {
+			t.Errorf("stderr holds %d agent.kind.retired warnings, want exactly 1: %s", got, stderr.String())
+		}
+		if strings.Contains(stderr.String(), "agent.kind.deprecated") {
+			t.Errorf("stderr = %q, want no agent.kind.deprecated", stderr.String())
+		}
+	})
+}
+
+func TestValidateAgentCommandForms(t *testing.T) {
+	dir := filepath.Dir(setupRunDir(t))
+
+	tests := []struct {
+		name      string
+		command   string
+		wantCheck string
+	}{
+		{name: "list of strings passes", command: `  command: ["/usr/bin/true", "a b"]`},
+		{name: "string passes", command: `  command: /usr/bin/true --flag`},
+		{name: "empty list", command: `  command: []`, wantCheck: "config.agent.command"},
+		{name: "mapping", command: `  command: {run: agent}`, wantCheck: "config.agent.command"},
+		{name: "number", command: `  command: 7`, wantCheck: "config.agent.command"},
+		{name: "empty element zero", command: `  command: ["", "x"]`, wantCheck: "config.agent.command[0]"},
+		{name: "whitespace-only element zero", command: `  command: [" ", "x"]`, wantCheck: "config.agent.command[0]"},
+		{name: "non-string element", command: `  command: ["agent", 5]`, wantCheck: "config.agent.command[1]"},
+		{name: "empty later element", command: `  command: ["agent", ""]`, wantCheck: "config.agent.command[1]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wfPath := writeCustomWorkflowFile(t, dir, agentKindWorkflow("  kind: mock\n"+tt.command, ""))
+
+			code, out := runValidateJSON(t, wfPath)
+
+			if tt.wantCheck == "" {
+				if code != 0 || !out.Valid {
+					t.Fatalf("run(validate) = %d, valid %v, errors %v, want a valid workflow", code, out.Valid, out.Errors)
+				}
+				if slices.Contains(diagChecks(out.Warnings), "type_mismatch") {
+					t.Errorf("warnings = %v, want no type_mismatch", out.Warnings)
+				}
+				return
+			}
+			if code != 1 || out.Valid {
+				t.Fatalf("run(validate) = %d, valid %v, want exit 1 and invalid", code, out.Valid)
+			}
+			if got := diagChecks(out.Errors); !slices.Equal(got, []string{tt.wantCheck}) {
+				t.Errorf("errors = %v, want exactly [%s]", got, tt.wantCheck)
+			}
+		})
+	}
+}
+
+func TestValidateRetiredKind_ConversionFaultReportsTheRetiredKey(t *testing.T) {
+	dir := filepath.Dir(setupRunDir(t))
+	wfPath := writeCustomWorkflowFile(t, dir, agentKindWorkflow("  kind: "+retiredValidateKind, retiredValidateKind+":\n  bad: true\n"))
+
+	code, out := runValidateJSON(t, wfPath)
+
+	if code != 1 || out.Valid {
+		t.Fatalf("run(validate) = %d, valid %v, want exit 1 and invalid", code, out.Valid)
+	}
+	if got, want := diagChecks(out.Errors), []string{"config." + retiredValidateKind + ".bad"}; !slices.Equal(got, want) {
+		t.Errorf("errors = %v, want %v", got, want)
 	}
 }

@@ -37,9 +37,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// defaultCommand is what a session launches when it is given no command.
+const defaultCommand = "opencode"
+
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
+		DefaultCommand:      defaultCommand,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionTranslated,
 		UsageArrival:        registry.UsageArrivalTurnEnd,
@@ -136,7 +140,7 @@ func NewOpenCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // starting a turn subprocess. It refuses a major other than 1 or 2, and
 // a passthrough setting that major cannot carry.
 func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "opencode")
+	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}

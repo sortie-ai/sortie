@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func issueWithLabels(labels ...string) domain.Issue {
@@ -616,6 +618,166 @@ func TestResolutionLayer_String(t *testing.T) {
 			got := tt.layer.String()
 			if got != tt.want {
 				t.Errorf("ResolutionLayer(%d).String() = %q, want %q", tt.layer, got, tt.want)
+			}
+		})
+	}
+}
+
+func retiredFixtureLookup(kind string) (registry.RetiredAgent, bool) {
+	if kind != "legacy" {
+		return registry.RetiredAgent{}, false
+	}
+	return registry.RetiredAgent{
+		Replacement:   "modern",
+		CredentialEnv: registry.DeclareCredentialEnv("LEGACY_KEY"),
+		Convert: func(in registry.AgentConversionInput) (registry.AgentConversion, *registry.AgentConversionFault) {
+			suffix := []string{"serve"}
+			if in.Remote {
+				suffix = append(suffix, "--remote")
+			}
+			base := in.Command
+			if !base.NamesExecutable() {
+				base = domain.AgentCommand{Line: "legacy-cli"}
+			}
+			if len(base.Argv) > 0 {
+				return registry.AgentConversion{Command: domain.AgentCommand{Argv: append(append([]string{}, base.Argv...), suffix...)}, Args: suffix}, nil
+			}
+			return registry.AgentConversion{Command: domain.AgentCommand{Line: base.Line + " " + strings.Join(suffix, " ")}, Args: suffix}, nil
+		},
+	}, true
+}
+
+func convertedConfig(t *testing.T, raw map[string]any) config.ServiceConfig {
+	t.Helper()
+	cfg, err := config.NewServiceConfig(raw, config.WithRetiredAgents(retiredFixtureLookup))
+	if err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	dispatch, err := config.BuildDispatchConfig(raw, t.TempDir(), func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig() error = %v", err)
+	}
+	cfg.SetDispatch(dispatch)
+	return cfg
+}
+
+func backendRuleRaw(agent string) map[string]any {
+	return map[string]any{"name": "backend", "match": map[string]any{"labels": []any{"backend"}}, "agent": agent}
+}
+
+func TestRetrySelection(t *testing.T) {
+	t.Parallel()
+
+	const held = "/prompts/held.md"
+	templateHeld := func(id string) bool { return id == "" || id == held }
+	plainRules := config.DispatchConfig{Rules: []config.DispatchRule{
+		{Name: "docs", Match: config.DispatchMatch{Labels: []string{"docs"}}, Selection: config.DispatchSelection{AgentKind: "kind-b"}},
+		{Name: "held", Match: config.DispatchMatch{Labels: []string{"held"}}, Selection: config.DispatchSelection{AgentKind: "kind-b", TemplateID: held}},
+	}}
+
+	tests := []struct {
+		name   string
+		cfg    config.ServiceConfig
+		frozen DispatchResolution
+		issue  domain.Issue
+		want   DispatchResolution
+	}{
+		{
+			name:   "reachable rule kind with a held template keeps the frozen selection",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen: DispatchResolution{AgentKind: "kind-b", TemplateID: held, RuleName: "held"},
+			issue:  issueWithLabels("unrelated"),
+			want:   DispatchResolution{AgentKind: "kind-b", TemplateID: held, RuleName: "held"},
+		},
+		{
+			name:   "default kind with a changed command keeps the frozen selection",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a", Command: "changed-command"}, Dispatch: plainRules},
+			frozen: DispatchResolution{AgentKind: "kind-a"},
+			issue:  issueWithLabels("docs"),
+			want:   DispatchResolution{AgentKind: "kind-a"},
+		},
+		{
+			name: "kind only a rule reaches after agent.kind moved keeps the frozen selection",
+			cfg: config.ServiceConfig{
+				Agent: config.AgentConfig{Kind: "kind-b"},
+				Dispatch: config.DispatchConfig{Rules: []config.DispatchRule{
+					{Name: "old-work", Match: config.DispatchMatch{Labels: []string{"old"}}, Selection: config.DispatchSelection{AgentKind: "kind-a"}},
+				}},
+			},
+			frozen: DispatchResolution{AgentKind: "kind-a", RuleName: "old-work"},
+			issue:  issueWithLabels("unrelated"),
+			want:   DispatchResolution{AgentKind: "kind-a", RuleName: "old-work"},
+		},
+		{
+			name:   "kind the configuration does not name routes the issue afresh",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen: DispatchResolution{AgentKind: "kind-gone", RuleName: "old-work"},
+			issue:  issueWithLabels("docs"),
+			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+		},
+		{
+			name:   "kind the configuration does not name falls back to the default kind when no rule matches",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen: DispatchResolution{AgentKind: "kind-gone", TemplateID: held, RuleName: "old-work"},
+			issue:  issueWithLabels("unrelated"),
+			want:   DispatchResolution{AgentKind: "kind-a"},
+		},
+		{
+			name:   "template that is not held routes the issue afresh",
+			cfg:    config.ServiceConfig{Agent: config.AgentConfig{Kind: "kind-a"}, Dispatch: plainRules},
+			frozen: DispatchResolution{AgentKind: "kind-b", TemplateID: "/prompts/renamed.md", RuleName: "held"},
+			issue:  issueWithLabels("docs"),
+			want:   DispatchResolution{AgentKind: "kind-b", RuleName: "docs"},
+		},
+		{
+			name: "retired kind with a conversion record moves to its replacement with the frozen template and rule",
+			cfg: convertedConfig(t, map[string]any{
+				"agent":    map[string]any{"kind": "kind-a"},
+				"dispatch": map[string]any{"rules": []any{backendRuleRaw("legacy")}},
+			}),
+			frozen: DispatchResolution{AgentKind: "legacy", TemplateID: held, RuleName: "backend"},
+			issue:  issueWithLabels("unrelated"),
+			want:   DispatchResolution{AgentKind: "modern", TemplateID: held, RuleName: "backend"},
+		},
+		{
+			name: "retired kind whose replacement is the default kind moves to it",
+			cfg: convertedConfig(t, map[string]any{
+				"agent": map[string]any{"kind": "legacy"},
+			}),
+			frozen: DispatchResolution{AgentKind: "legacy"},
+			issue:  issueWithLabels("unrelated"),
+			want:   DispatchResolution{AgentKind: "modern"},
+		},
+		{
+			name: "retired kind with an unheld template routes the issue afresh",
+			cfg: convertedConfig(t, map[string]any{
+				"agent":    map[string]any{"kind": "kind-a"},
+				"dispatch": map[string]any{"rules": []any{backendRuleRaw("legacy")}},
+			}),
+			frozen: DispatchResolution{AgentKind: "legacy", TemplateID: "/prompts/renamed.md", RuleName: "backend"},
+			issue:  issueWithLabels("backend"),
+			want:   DispatchResolution{AgentKind: "modern", RuleName: "backend"},
+		},
+		{
+			name: "retired kind hand-migrated away routes the issue afresh",
+			cfg: config.ServiceConfig{
+				Agent: config.AgentConfig{Kind: "kind-a"},
+			},
+			frozen: DispatchResolution{AgentKind: "legacy", RuleName: "backend"},
+			issue:  issueWithLabels("backend"),
+			want:   DispatchResolution{AgentKind: "kind-a"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := retrySelection(tt.cfg, templateHeld, tt.frozen, tt.issue)
+
+			if got.AgentKind != tt.want.AgentKind || got.TemplateID != tt.want.TemplateID || got.RuleName != tt.want.RuleName {
+				t.Errorf("retrySelection(frozen %+v) = {%q, %q, %q}, want {%q, %q, %q}", tt.frozen,
+					got.AgentKind, got.TemplateID, got.RuleName, tt.want.AgentKind, tt.want.TemplateID, tt.want.RuleName)
 			}
 		})
 	}

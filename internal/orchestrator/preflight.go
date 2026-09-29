@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -190,17 +192,6 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Command is mandatory for adapters that declare it required.
-	if cfg.Agent.Kind != "" {
-		agentMeta, _ := params.AgentRegistry.Meta(cfg.Agent.Kind)
-		if agentMeta.RequiresCommand && cfg.Agent.Command == "" {
-			errs = append(errs, PreflightError{
-				Check:   "agent.command",
-				Message: "agent.command is required for agent kind " + strconv.Quote(cfg.Agent.Kind),
-			})
-		}
-	}
-
 	// Agent adapter must be registered in the registry.
 	if cfg.Agent.Kind != "" {
 		if _, err := params.AgentRegistry.Get(cfg.Agent.Kind); err != nil {
@@ -238,6 +229,13 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	for _, ref := range orderedUniqueAgentKinds(cfg) {
 		agentMeta, registered := params.AgentRegistry.Meta(ref.Kind)
 		settings := config.ResolveAgentSettings(cfg, ref.Kind, "")
+
+		if registered && agentMeta.RequiresCommand && !launchesExecutable(cfg, agentMeta, ref.Kind, remote) {
+			errs = append(errs, PreflightError{
+				Check:   "agent.command",
+				Message: missingCommandMessage(ref, cmp.Or(cfg.Dispatch.Default.AgentKind, cfg.Agent.Kind)),
+			})
+		}
 
 		// A kind the dispatch block introduces, rather than the
 		// workflow-wide default, must carry its own settings block.
@@ -403,11 +401,9 @@ func orderedUniqueAgentKinds(cfg config.ServiceConfig) []agentKindRef {
 }
 
 // agentKindOriginPrefix names the front-matter field that introduced
-// ref.Kind, in the wording the dispatch.agent.missing_block messages
-// use to point the operator at the exact selector. Returns "" for
-// agentKindOriginDefault, which never reaches a message: that origin
-// is excluded from the covered set before either message function is
-// called.
+// ref.Kind, in the wording the dispatch.agent.missing_block and
+// agent.command messages use to point the operator at the exact
+// selector.
 func agentKindOriginPrefix(ref agentKindRef) string {
 	switch ref.Origin {
 	case agentKindOriginRule:
@@ -419,8 +415,27 @@ func agentKindOriginPrefix(ref agentKindRef) string {
 	case agentKindOriginDispatchDefault:
 		return "dispatch.default.agent"
 	default:
-		return ""
+		return "agent.kind"
 	}
+}
+
+// launchesExecutable reports whether a session of kind, in the given
+// launch mode, would launch a process: its own command names an
+// executable, or the kind has a default command.
+func launchesExecutable(cfg config.ServiceConfig, meta registry.AgentMeta, kind string, remote bool) bool {
+	return cfg.AgentCommand(kind, remote).NamesExecutable() || domain.AgentCommand{Line: meta.DefaultCommand}.NamesExecutable()
+}
+
+// missingCommandMessage renders the agent.command message for a kind
+// that would launch no executable. Only the default agent kind reads
+// agent.command, so any other kind is pointed at its selector.
+func missingCommandMessage(ref agentKindRef, defaultKind string) string {
+	kind := strconv.Quote(ref.Kind)
+	if ref.Kind == defaultKind {
+		return "agent.command is required for agent kind " + kind
+	}
+	return agentKindOriginPrefix(ref) + " selects agent kind " + kind +
+		", which has no default command and launches agent.command only as the default agent kind (dispatch.default.agent, else agent.kind)"
 }
 
 // missingBlockAbsentMessage renders the dispatch.agent.missing_block

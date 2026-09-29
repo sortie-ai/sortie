@@ -38,9 +38,13 @@ var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // call and the session continues.
 const copilotToolDeniedCode = "denied"
 
+// defaultCommand is what a session launches when it is given no command.
+const defaultCommand = "copilot"
+
 func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
+		DefaultCommand:      defaultCommand,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionSupported,
 		UsageArrival:        registry.UsageArrivalTurnEnd,
@@ -260,7 +264,7 @@ func NewCopilotAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // initializes per-session state. No subprocess is spawned; that happens in
 // [CopilotAdapter.RunTurn].
 func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "copilot")
+	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}

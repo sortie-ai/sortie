@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/maputil"
 	"github.com/sortie-ai/sortie/internal/redact"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -95,6 +97,12 @@ type ServiceConfig struct {
 	// was built or loaded. Read and written only through
 	// [ServiceConfig.Advisories] and [ServiceConfig.AddAdvisories].
 	advisories []Advisory
+
+	// conversions records each retired agent kind the load converted
+	// onto its replacement kind. Read through
+	// [ServiceConfig.AgentKindConversions] and
+	// [ServiceConfig.AgentCommand].
+	conversions []AgentKindConversion
 }
 
 // SetDispatch attaches a parsed [DispatchConfig] to the service
@@ -240,8 +248,17 @@ type HooksConfig struct {
 // AgentConfig holds coding-agent adapter selection, timeouts, and
 // concurrency limits.
 type AgentConfig struct {
-	Kind                 string
-	Command              string
+	Kind string
+
+	// Command is agent.command in its string form. Empty when the key
+	// is absent or holds a list.
+	Command string
+
+	// CommandArgv is agent.command in its list form: element zero names
+	// the executable and each later element is one argument. Nil unless
+	// the key holds a list, and then Command is empty.
+	CommandArgv []string
+
 	TurnTimeoutMS        int
 	ReadTimeoutMS        int
 	StallTimeoutMS       int
@@ -350,7 +367,7 @@ func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
 func agentAdapterConfig(cfg ServiceConfig, kind string) (m map[string]any, presence ExtensionBlockPresence, description string) {
 	m = map[string]any{
 		"kind":             kind,
-		"command":          cfg.Agent.Command,
+		"command":          localCommandValue(cfg.Agent),
 		"turn_timeout_ms":  cfg.Agent.TurnTimeoutMS,
 		"read_timeout_ms":  cfg.Agent.ReadTimeoutMS,
 		"stall_timeout_ms": cfg.Agent.StallTimeoutMS,
@@ -358,6 +375,15 @@ func agentAdapterConfig(cfg ServiceConfig, kind string) (m map[string]any, prese
 	}
 	presence, description = mergeExtensionSection(m, cfg.extensions, kind)
 	return m, presence, description
+}
+
+// localCommandValue returns agent.command in the form a local launch
+// reads: the string, or a copy of the list.
+func localCommandValue(a AgentConfig) any {
+	if len(a.CommandArgv) > 0 {
+		return slices.Clone(a.CommandArgv)
+	}
+	return a.Command
 }
 
 // AgentSettings is the resolved answer to what one agent kind
@@ -498,9 +524,18 @@ var knownTopLevelKeys = map[string]bool{
 // fields, coerces string-encoded integers, and normalizes per-state
 // concurrency map keys to lowercase. Returns a [*ConfigError] when a
 // field value cannot be coerced to the expected type.
-func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
+//
+// Under [WithRetiredAgents] it then converts every reference to a
+// retired agent kind onto the replacement kind, rewriting raw in place
+// as it does for environment overrides. A conversion the retired kind
+// cannot carry returns a [*ConfigError].
+func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceConfig, error) {
 	if raw == nil {
 		raw = map[string]any{}
+	}
+	var options serviceConfigOptions
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	envKeys, envAdvisories, err := applyEnvOverrides(raw)
@@ -509,6 +544,25 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	}
 	var advisories []Advisory
 	advisories = append(advisories, envAdvisories...)
+
+	extensions := make(map[string]any)
+	for k, v := range raw {
+		if !knownTopLevelKeys[k] {
+			extensions[k] = v
+		}
+	}
+
+	preResolution := resolveExtensionEnvRefs(extensions)
+
+	var conversions []AgentKindConversion
+	if options.retiredAgents != nil {
+		var conversionAdvisories []Advisory
+		conversions, conversionAdvisories, err = convertRetiredAgents(raw, extensions, options.retiredAgents)
+		if err != nil {
+			return ServiceConfig{}, err
+		}
+		advisories = append(advisories, conversionAdvisories...)
+	}
 
 	rawTracker := extractSubMap(raw, "tracker")
 	tracker, err := buildTrackerConfig(rawTracker, envKeys)
@@ -648,15 +702,6 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
-	extensions := make(map[string]any)
-	for k, v := range raw {
-		if !knownTopLevelKeys[k] {
-			extensions[k] = v
-		}
-	}
-
-	preResolution := resolveExtensionEnvRefs(extensions)
-
 	registerConfigSecrets(tracker, reactions, notifications, extensions)
 
 	cfg := ServiceConfig{
@@ -673,6 +718,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		extensions:              extensions,
 		extensionsPreResolution: preResolution,
 		Notifications:           notifications,
+		conversions:             conversions,
 	}
 	cfg.AddAdvisories(advisories...)
 	return cfg, nil
@@ -970,18 +1016,65 @@ func buildDBPath(raw map[string]any, envKeys map[string]bool) (string, error) {
 	return expanded, nil
 }
 
+// builtinAgentKind is the agent kind a configuration without
+// agent.kind runs.
+const builtinAgentKind = "claude-code"
+
+// parseAgentCommand reads a raw agent.command value: absent or null
+// yields the zero command, a string yields its string form, and a list
+// of strings yields its list form. It returns a [*ConfigError] for any
+// other value, an empty list, a non-string or empty element, and a
+// whitespace-only element zero.
+func parseAgentCommand(v any) (domain.AgentCommand, error) {
+	switch typed := v.(type) {
+	case nil:
+		return domain.AgentCommand{}, nil
+	case string:
+		return domain.AgentCommand{Line: typed}, nil
+	case []any:
+		return parseAgentCommandList(typed)
+	default:
+		return domain.AgentCommand{}, &ConfigError{
+			Field:   "agent.command",
+			Message: "expected string or list, got " + typeutil.DescribeYAMLType(v),
+		}
+	}
+}
+
+func parseAgentCommandList(list []any) (domain.AgentCommand, error) {
+	if len(list) == 0 {
+		return domain.AgentCommand{}, &ConfigError{Field: "agent.command", Message: "must not be an empty list"}
+	}
+	argv := make([]string, len(list))
+	for i, elem := range list {
+		field := fmt.Sprintf("agent.command[%d]", i)
+		s, ok := elem.(string)
+		if !ok {
+			return domain.AgentCommand{}, &ConfigError{
+				Field:   field,
+				Message: "expected string, got " + typeutil.DescribeYAMLType(elem),
+			}
+		}
+		if s == "" || (i == 0 && strings.TrimSpace(s) == "") {
+			return domain.AgentCommand{}, &ConfigError{Field: field, Message: "must not be empty"}
+		}
+		argv[i] = s
+	}
+	return domain.AgentCommand{Argv: argv}, nil
+}
+
 func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 	kind, fault := typeutil.StringField(m, "kind")
 	if fault != nil {
 		return AgentConfig{}, &ConfigError{Field: "agent.kind", Message: fault.Reason()}
 	}
 	if kind == "" {
-		kind = "claude-code"
+		kind = builtinAgentKind
 	}
 
-	command, fault := typeutil.StringField(m, "command")
-	if fault != nil {
-		return AgentConfig{}, &ConfigError{Field: "agent.command", Message: fault.Reason()}
+	command, err := parseAgentCommand(m["command"])
+	if err != nil {
+		return AgentConfig{}, err
 	}
 
 	turnTimeoutMS := 3600000
@@ -1134,7 +1227,8 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 
 	return AgentConfig{
 		Kind:                   kind,
-		Command:                command,
+		Command:                command.Line,
+		CommandArgv:            command.Argv,
 		TurnTimeoutMS:          turnTimeoutMS,
 		ReadTimeoutMS:          readTimeoutMS,
 		StallTimeoutMS:         stallTimeoutMS,

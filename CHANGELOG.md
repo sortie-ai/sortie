@@ -6,10 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The command that starts your agent (`agent.command`) can now also be written as a list with one part per line, so a program path or an agent name that contains a space reaches the agent intact. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
+
+### Changed
+
+- The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
+
 ### Fixed
 
 - Workflows that run Gemini CLI through the `agent-client-protocol` agent kind now report token usage on current Gemini CLI releases, not only on 0.59.0, so `agent.max_tokens` applies to them and their spend counts in the token and cost totals. Token usage for these workflows needs Gemini CLI 0.59.0 or later. ([#1189](https://github.com/sortie-ai/sortie/issues/1189))
 - Workflows that run an agent other than Gemini CLI through the `agent-client-protocol` agent kind no longer start with Gemini CLI's telemetry settings in their environment or an unused temporary directory left behind. An agent whose command line does not show which runtime it starts, or names Gemini CLI while starting a different runtime, is now started a second time before its session begins, so a Gemini CLI started through a wrapper script still reports token usage. ([#1198](https://github.com/sortie-ai/sortie/issues/1198))
+- An agent kind selected by a dispatch rule now starts its own program instead of the `agent.command` written for the default agent kind, and `sortie validate` now refuses a route to a kind that needs a program to start but has none. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
+- A retry that is waiting when the workflow changes now continues on the agent kind and prompt the workflow selects afterwards, instead of starting another agent kind's command, failing on a prompt that was removed, or being dropped. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 
 ## [1.25.0] - 2026-09-27
 

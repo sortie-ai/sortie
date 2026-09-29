@@ -16,9 +16,9 @@ type RetryEntry struct {
 	DueAtMs    int64   // Unix epoch milliseconds when the retry timer should fire.
 	Error      *string // Last error message; nil when no error.
 	SessionID  *string // Adapter-assigned session identifier from the previous worker attempt. Nil when no session was established.
-	RuleName   string  // Dispatch rule name frozen at initial dispatch; empty for legacy rows and fallback dispatches.
-	TemplateID string  // Resolved template path frozen at initial dispatch; empty selects the WORKFLOW.md body template.
-	AgentKind  string  // Agent adapter kind frozen at initial dispatch; empty for legacy rows.
+	RuleName   string  // Dispatch rule name; empty for legacy rows and fallback dispatches.
+	TemplateID string  // Resolved template path; empty selects the WORKFLOW.md body template.
+	AgentKind  string  // Agent adapter kind; empty for legacy rows.
 }
 
 // PendingRetry pairs a persisted [RetryEntry] with the computed delay

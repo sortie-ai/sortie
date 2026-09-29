@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -3181,27 +3182,76 @@ func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
 	}
 }
 
-func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
+func stopRetryTimer(state *State, id string) {
+	if entry, ok := state.RetryAttempts[id]; ok && entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func logRecords(t *testing.T, buf *lockedBuf, message string) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line %q is not JSON: %v", line, err)
+		}
+		if record["msg"] == message {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
+const selectionChangedMessage = "retry dispatching on the selection the configuration in force gives it"
+
+type dispatchedWorker struct {
+	resumeSessionID string
+	host            string
+	agentKind       string
+	templateID      string
+	reactionKind    string
+}
+
+func capturingRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryTracker, dispatched *[]dispatchedWorker) HandleRetryTimerParams {
+	t.Helper()
+	params := defaultRetryParams(t, store, tracker)
+	params.MakeWorkerFn = func(resumeSessionID, host, agentKind, templateID, reactionKind string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		*dispatched = append(*dispatched, dispatchedWorker{resumeSessionID, host, agentKind, templateID, reactionKind})
+		return func(context.Context, domain.Issue, *int) {}
+	}
+	return params
+}
+
+func frozenRetryState(id string, entry RetryEntry) *State {
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
+	entry.IssueID, entry.Identifier = id, id
+	state.RetryAttempts[id] = &entry
+	state.Claimed[id] = struct{}{}
+	return state
+}
+
+func TestHandleRetryTimer_AdapterLookupFailureReschedulesWithBackoff(t *testing.T) {
 	t.Parallel()
 
 	const id = "ISS-BADKIND"
 	const frozenKind = "unknown-agent"
+	continuation := map[string]any{"review": "thread-1"}
 
-	state := NewState(5000, 4, 0, nil, AgentTotals{})
-	state.RetryAttempts[id] = &RetryEntry{
-		IssueID:    id,
-		Identifier: id,
-		Attempt:    1,
-		AgentKind:  frozenKind,
-		RuleName:   "some-rule",
-		TemplateID: "",
-	}
-	state.Claimed[id] = struct{}{}
-
+	state := frozenRetryState(id, RetryEntry{
+		Attempt:             2,
+		AgentKind:           frozenKind,
+		RuleName:            "some-rule",
+		TemplateID:          "/prompts/some.md",
+		SessionID:           "sess-keep",
+		LastSSHHost:         "host-a",
+		ContinuationContext: continuation,
+	})
 	store := &mockRetryStore{}
-	tracker := &mockRetryTracker{
-		fetchedIssue: candidateIssue(id, id, "To Do"),
-	}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}
 	params := defaultRetryParams(t, store, tracker)
 	params.AgentAdapterByKind = func(kind string) (domain.AgentAdapter, error) {
 		if kind != frozenKind {
@@ -3211,15 +3261,266 @@ func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
 	}
 
 	HandleRetryTimer(state, id, params)
+	defer stopRetryTimer(state, id)
 
-	if _, claimed := state.Claimed[id]; claimed {
-		t.Error("Claimed[id] still present after adapter lookup failure, want released")
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Error("Claimed[id] released after adapter lookup failure, want the claim kept")
 	}
-	if _, ok := state.Running[id]; ok {
+	if _, running := state.Running[id]; running {
 		t.Error("Running[id] present after adapter lookup failure, want not dispatched")
 	}
-	if len(store.deletedIssueID) == 0 {
-		t.Error("DeleteRetryEntry not called after adapter lookup failure")
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatal("RetryAttempts[id] missing after adapter lookup failure, want a rescheduled retry")
+	}
+	if entry.Attempt != 3 {
+		t.Errorf("rescheduled RetryEntry.Attempt = %d, want 3", entry.Attempt)
+	}
+	if want := computeBackoffDelay(3, params.MaxRetryBackoffMS); entry.scheduledDelayMS != want {
+		t.Errorf("rescheduled delay = %d ms, want the backoff of attempt 3, %d ms", entry.scheduledDelayMS, want)
+	}
+	if entry.AgentKind != frozenKind || entry.RuleName != "some-rule" || entry.TemplateID != "/prompts/some.md" ||
+		entry.SessionID != "sess-keep" || entry.LastSSHHost != "host-a" || entry.ContinuationContext["review"] != "thread-1" {
+		t.Errorf("rescheduled RetryEntry = %+v, want the frozen selection, session, host and continuation carried over", entry)
+	}
+	if len(store.savedEntries) != 1 || store.savedEntries[0].Attempt != 3 {
+		t.Errorf("SaveRetryEntry calls = %+v, want one row at attempt 3", store.savedEntries)
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %v, want none", store.deletedIssueID)
+	}
+}
+
+func TestHandleRetryTimer_AdapterLookupFailureReleasesTheHost(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-HOST"
+	state := frozenRetryState(id, RetryEntry{Attempt: 1, AgentKind: "unknown-agent"})
+	params := defaultRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")})
+	params.HostPool = NewHostPool([]string{"host-a"}, 1)
+	params.AgentAdapterByKind = func(string) (domain.AgentAdapter, error) { return nil, errors.New("adapter not registered") }
+
+	HandleRetryTimer(state, id, params)
+	defer stopRetryTimer(state, id)
+
+	if used := params.HostPool.Snapshot()["host-a"]; used != 0 {
+		t.Errorf("HostPool usage of host-a = %d after adapter lookup failure, want the host released", used)
+	}
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Error("Claimed[id] released after adapter lookup failure, want the claim kept")
+	}
+}
+
+func TestHandleRetryTimer_ReactionRetryKeepsItsClaimWhenTheAdapterIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-REACTION"
+	state := frozenRetryState(id, RetryEntry{Attempt: 1, AgentKind: "unknown-agent", ReactionKind: ReactionKindCI, SessionID: "sess-keep"})
+	params := defaultRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "Ready For Review")})
+	params.HandoffState = "Ready For Review"
+	params.AgentAdapterByKind = func(string) (domain.AgentAdapter, error) { return nil, errors.New("adapter not registered") }
+
+	HandleRetryTimer(state, id, params)
+	defer stopRetryTimer(state, id)
+
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatal("RetryAttempts[id] missing, want the reaction retry rescheduled instead of dropped")
+	}
+	if entry.ReactionKind != ReactionKindCI || entry.SessionID != "sess-keep" || entry.Attempt != 2 {
+		t.Errorf("rescheduled RetryEntry = %+v, want reaction %q, session %q, attempt 2", entry, ReactionKindCI, "sess-keep")
+	}
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Error("Claimed[id] released, want the claim kept")
+	}
+}
+
+func TestHandleRetryTimer_LaterFireDispatchesOnceTheAdapterExists(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-LATER"
+	state := frozenRetryState(id, RetryEntry{Attempt: 1, AgentKind: "late-agent", TemplateID: "/prompts/late.md", SessionID: "sess-keep"})
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}
+	var dispatched []dispatchedWorker
+	params := capturingRetryParams(t, &mockRetryStore{}, tracker, &dispatched)
+	available := false
+	params.AgentAdapterByKind = func(string) (domain.AgentAdapter, error) {
+		if !available {
+			return nil, errors.New("adapter not registered")
+		}
+		return &mockAgentAdapter{}, nil
+	}
+
+	HandleRetryTimer(state, id, params)
+	entry := state.RetryAttempts[id]
+	if entry == nil {
+		t.Fatal("RetryAttempts[id] missing after the failed lookup")
+	}
+	stopRetryTimer(state, id)
+	entry.scheduledAt = time.Time{}
+	available = true
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; !running {
+		t.Fatal("Running[id] missing after the later fire, want the retry dispatched")
+	}
+	if _, pending := state.RetryAttempts[id]; pending {
+		t.Error("RetryAttempts[id] still present after the dispatch")
+	}
+	want := dispatchedWorker{resumeSessionID: "sess-keep", agentKind: "late-agent", templateID: "/prompts/late.md"}
+	if len(dispatched) != 1 || dispatched[0] != want {
+		t.Errorf("dispatched = %+v, want one worker %+v", dispatched, want)
+	}
+}
+
+func TestHandleRetryTimer_ResolveSelection(t *testing.T) {
+	t.Parallel()
+
+	frozenEntry := RetryEntry{Attempt: 1, AgentKind: "kind-a", TemplateID: "/prompts/a.md", RuleName: "rule-a", SessionID: "sess-1"}
+	frozen := DispatchResolution{AgentKind: "kind-a", TemplateID: "/prompts/a.md", RuleName: "rule-a"}
+
+	tests := []struct {
+		name         string
+		entry        RetryEntry
+		resolve      func(t *testing.T, gotFrozen DispatchResolution, issue domain.Issue) DispatchResolution
+		wantFrozen   DispatchResolution
+		want         dispatchedWorker
+		wantLogged   bool
+		wantSelected DispatchResolution
+	}{
+		{
+			name:         "nil keeps the frozen selection",
+			entry:        frozenEntry,
+			want:         dispatchedWorker{resumeSessionID: "sess-1", agentKind: "kind-a", templateID: "/prompts/a.md"},
+			wantSelected: frozen,
+		},
+		{
+			name:  "unchanged selection logs nothing",
+			entry: frozenEntry,
+			resolve: func(_ *testing.T, f DispatchResolution, _ domain.Issue) DispatchResolution {
+				return f
+			},
+			wantFrozen:   frozen,
+			want:         dispatchedWorker{resumeSessionID: "sess-1", agentKind: "kind-a", templateID: "/prompts/a.md"},
+			wantSelected: frozen,
+		},
+		{
+			name:  "kind change clears the resume identifier",
+			entry: frozenEntry,
+			resolve: func(_ *testing.T, f DispatchResolution, _ domain.Issue) DispatchResolution {
+				return DispatchResolution{AgentKind: "kind-b", TemplateID: f.TemplateID, RuleName: f.RuleName}
+			},
+			wantFrozen:   frozen,
+			want:         dispatchedWorker{resumeSessionID: "", agentKind: "kind-b", templateID: "/prompts/a.md"},
+			wantLogged:   true,
+			wantSelected: DispatchResolution{AgentKind: "kind-b", TemplateID: "/prompts/a.md", RuleName: "rule-a"},
+		},
+		{
+			name:  "template change clears the resume identifier",
+			entry: frozenEntry,
+			resolve: func(_ *testing.T, f DispatchResolution, _ domain.Issue) DispatchResolution {
+				return DispatchResolution{AgentKind: f.AgentKind, TemplateID: "/prompts/b.md", RuleName: f.RuleName}
+			},
+			wantFrozen:   frozen,
+			want:         dispatchedWorker{resumeSessionID: "", agentKind: "kind-a", templateID: "/prompts/b.md"},
+			wantLogged:   true,
+			wantSelected: DispatchResolution{AgentKind: "kind-a", TemplateID: "/prompts/b.md", RuleName: "rule-a"},
+		},
+		{
+			name:  "rule name change keeps the resume identifier",
+			entry: frozenEntry,
+			resolve: func(_ *testing.T, f DispatchResolution, _ domain.Issue) DispatchResolution {
+				return DispatchResolution{AgentKind: f.AgentKind, TemplateID: f.TemplateID, RuleName: "rule-b"}
+			},
+			wantFrozen:   frozen,
+			want:         dispatchedWorker{resumeSessionID: "sess-1", agentKind: "kind-a", templateID: "/prompts/a.md"},
+			wantLogged:   true,
+			wantSelected: DispatchResolution{AgentKind: "kind-a", TemplateID: "/prompts/a.md", RuleName: "rule-b"},
+		},
+		{
+			name:  "legacy row without a kind is resolved from the default kind",
+			entry: RetryEntry{Attempt: 1, TemplateID: "/prompts/a.md", RuleName: "rule-a", SessionID: "sess-1"},
+			resolve: func(_ *testing.T, f DispatchResolution, _ domain.Issue) DispatchResolution {
+				return f
+			},
+			wantFrozen:   DispatchResolution{AgentKind: "default-kind", TemplateID: "/prompts/a.md", RuleName: "rule-a"},
+			want:         dispatchedWorker{resumeSessionID: "sess-1", agentKind: "default-kind", templateID: "/prompts/a.md"},
+			wantSelected: DispatchResolution{AgentKind: "default-kind", TemplateID: "/prompts/a.md", RuleName: "rule-a"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "ISS-SELECT"
+			state := frozenRetryState(id, tt.entry)
+			tracker := &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}
+			var dispatched []dispatchedWorker
+			var logs lockedBuf
+			params := capturingRetryParams(t, &mockRetryStore{}, tracker, &dispatched)
+			params.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			params.DefaultAgentKind = "default-kind"
+			var adapterKinds []string
+			params.AgentAdapterByKind = func(kind string) (domain.AgentAdapter, error) {
+				adapterKinds = append(adapterKinds, kind)
+				return &mockAgentAdapter{}, nil
+			}
+			if tt.resolve != nil {
+				params.ResolveSelection = func(gotFrozen DispatchResolution, issue domain.Issue) DispatchResolution {
+					if gotFrozen != tt.wantFrozen {
+						t.Errorf("ResolveSelection frozen = %+v, want %+v", gotFrozen, tt.wantFrozen)
+					}
+					if issue.ID != id {
+						t.Errorf("ResolveSelection issue.ID = %q, want the fetched issue %q", issue.ID, id)
+					}
+					return tt.resolve(t, gotFrozen, issue)
+				}
+			}
+
+			HandleRetryTimer(state, id, params)
+
+			if len(dispatched) != 1 || dispatched[0] != tt.want {
+				t.Fatalf("dispatched = %+v, want one worker %+v", dispatched, tt.want)
+			}
+			if len(adapterKinds) != 1 || adapterKinds[0] != tt.want.agentKind {
+				t.Errorf("AgentAdapterByKind kinds = %v, want [%q]", adapterKinds, tt.want.agentKind)
+			}
+			running := state.Running[id]
+			if running == nil {
+				t.Fatal("Running[id] missing after dispatch")
+			}
+			if running.AgentKind != tt.wantSelected.AgentKind || running.TemplateID != tt.wantSelected.TemplateID || running.RuleName != tt.wantSelected.RuleName {
+				t.Errorf("RunningEntry selection = {%q, %q, %q}, want {%q, %q, %q}", running.AgentKind, running.TemplateID, running.RuleName,
+					tt.wantSelected.AgentKind, tt.wantSelected.TemplateID, tt.wantSelected.RuleName)
+			}
+			records := logRecords(t, &logs, selectionChangedMessage)
+			if !tt.wantLogged {
+				if len(records) != 0 {
+					t.Errorf("selection records = %v, want none", records)
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("selection records = %v, want exactly one", records)
+			}
+			wantAttrs := map[string]string{
+				"agent_kind":           tt.wantFrozen.AgentKind,
+				"template_id":          tt.wantFrozen.TemplateID,
+				"rule_name":            tt.wantFrozen.RuleName,
+				"dispatch_agent_kind":  tt.wantSelected.AgentKind,
+				"dispatch_template_id": tt.wantSelected.TemplateID,
+				"dispatch_rule_name":   tt.wantSelected.RuleName,
+			}
+			if records[0]["level"] != "INFO" {
+				t.Errorf("selection record level = %v, want INFO", records[0]["level"])
+			}
+			for key, want := range wantAttrs {
+				if records[0][key] != want {
+					t.Errorf("selection record %q = %v, want %q", key, records[0][key], want)
+				}
+			}
+		})
 	}
 }
 

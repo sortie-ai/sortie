@@ -34,8 +34,8 @@ type RunHistory struct {
 	WorkflowFile   string // Base filename; empty for pre-migration rows.
 	TurnsCompleted int
 	ReviewMetadata *string // JSON ReviewMetadata; nil when self-review did not run.
-	RuleName       string  // Frozen at initial dispatch; empty for legacy rows and fallback dispatches.
-	TemplateID     string  // Frozen at initial dispatch; empty for legacy rows and the workflow body template.
+	RuleName       string  // Empty for legacy rows and fallback dispatches.
+	TemplateID     string  // Empty for legacy rows and the workflow body template.
 
 	InputTokens      int64 // 0 for pre-migration rows.
 	OutputTokens     int64 // 0 for pre-migration rows.

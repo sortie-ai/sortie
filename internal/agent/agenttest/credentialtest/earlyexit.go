@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
@@ -34,6 +35,11 @@ const conformanceRuntimeVersion = "1.0.0"
 // conformance runtime.
 const earlyExitConformanceMessage = "the agent runtime exited before responding: exit status 2"
 
+// emptyCommandMessage is the [*domain.AgentError] message
+// [agentcore.ResolveLaunchTarget] reports for a zero command with no
+// default.
+const emptyCommandMessage = "agent command is empty or whitespace-only"
+
 // unreadableConformanceLine is the fixed line the fourth conformance
 // case's runtime writes to standard output: text no structured-output
 // decoder accepts, so a kind with that format never counts it as a
@@ -60,7 +66,14 @@ const (
 // report: a verification session through [agentcore.VerifyCredential],
 // a working session, a working session routed through a stand-in ssh
 // placed first on PATH, and a working session whose runtime writes one
-// line no structured-output decoder accepts. A working session is
+// line no structured-output decoder accepts. Each of the four runs
+// twice, with the command as [domain.AgentConfig.Command] and as
+// [domain.AgentConfig.CommandArgv], so a kind that reads the command
+// around [agentcore.ResolveLaunchTarget] fails. A further pair of
+// launches gives the kind a zero command: a kind with a
+// [registry.AgentMeta.DefaultCommand] must launch it and fail with the
+// early-exit report, and a kind with none must fail with the empty
+// command error. A working session is
 // [domain.AgentAdapter.StartSession] followed, when it succeeds, by
 // its first [domain.AgentAdapter.RunTurn]. The first three cases'
 // runtime is a fake writing [earlyExitConformanceLine] to standard
@@ -104,47 +117,8 @@ func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapte
 		Version:  conformanceRuntimeVersion,
 	})
 
-	baseConfig := config
-	baseConfig.Command = runtimePath + " " + earlyExitConformanceSwitch
-
-	verifyParams := domain.StartSessionParams{
-		WorkspacePath:          t.TempDir(),
-		AgentConfig:            baseConfig,
-		CredentialVerification: true,
-	}
-	_, verifyErr := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
-		Session: verifyParams,
-		Issue:   domain.Issue{},
-	})
-	assertEarlyExitReportOutcome(t, kind+": verification session", verifyErr)
-
-	workingParams := domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   baseConfig,
-	}
-	assertEarlyExitWorkingSession(t, kind+": working session", adapter, workingParams)
-
-	remoteParams := domain.StartSessionParams{
-		WorkspacePath: t.TempDir(),
-		AgentConfig:   baseConfig,
-		SSHHost:       "user@sortie-conformance-host",
-	}
-	assertEarlyExitWorkingSession(t, kind+": working session through ssh", adapter, remoteParams)
-
-	assertUnreadableLineConformance(t, kind, adapter, config, format)
-}
-
-// assertUnreadableLineConformance drives a working session against a
-// fake runtime that writes [unreadableConformanceLine] on standard
-// output, then [earlyExitConformanceLine] on standard error, then
-// exits 2, and fails t unless the outcome matches format: the shared
-// early-exit report under [StructuredOutput], or a failure that chains
-// no [*agentcore.EarlyExitError] under [PlainTextOutput].
-func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.AgentAdapter, config domain.AgentConfig, format OutputFormat) {
-	t.Helper()
-
-	binDir := t.TempDir()
-	runtimePath := agenttest.FakeRuntime(t, binDir, "agent-unreadable", agenttest.OutputScenario, agenttest.Output{
+	unreadableDir := t.TempDir()
+	unreadablePath := agenttest.FakeRuntime(t, unreadableDir, "agent-unreadable", agenttest.OutputScenario, agenttest.Output{
 		Stdout:   unreadableConformanceLine + "\n",
 		Stderr:   earlyExitConformanceLine + "\n",
 		ExitCode: 2,
@@ -152,8 +126,121 @@ func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.A
 		Version:  conformanceRuntimeVersion,
 	})
 
-	unreadableConfig := config
-	unreadableConfig.Command = runtimePath + " " + earlyExitConformanceSwitch
+	for _, form := range commandForms {
+		formKind := kind + " (" + form.name + ")"
+		baseConfig := form.apply(config, runtimePath)
+
+		verifyParams := domain.StartSessionParams{
+			WorkspacePath:          t.TempDir(),
+			AgentConfig:            baseConfig,
+			CredentialVerification: true,
+		}
+		_, verifyErr := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
+			Session: verifyParams,
+			Issue:   domain.Issue{},
+		})
+		assertEarlyExitReportOutcome(t, formKind+": verification session", verifyErr)
+
+		workingParams := domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   baseConfig,
+		}
+		assertEarlyExitWorkingSession(t, formKind+": working session", adapter, workingParams)
+
+		remoteParams := domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   baseConfig,
+			SSHHost:       "user@sortie-conformance-host",
+		}
+		assertEarlyExitWorkingSession(t, formKind+": working session through ssh", adapter, remoteParams)
+
+		assertUnreadableLineConformance(t, formKind, adapter, form.apply(config, unreadablePath), format)
+	}
+
+	assertZeroCommandLaunch(t, kind, adapter, config, meta.DefaultCommand)
+}
+
+type commandForm struct {
+	name  string
+	apply func(config domain.AgentConfig, runtimePath string) domain.AgentConfig
+}
+
+var commandForms = []commandForm{
+	{
+		name: "string command",
+		apply: func(config domain.AgentConfig, runtimePath string) domain.AgentConfig {
+			config.Command = runtimePath + " " + earlyExitConformanceSwitch
+			config.CommandArgv = nil
+			return config
+		},
+	},
+	{
+		name: "list command",
+		apply: func(config domain.AgentConfig, runtimePath string) domain.AgentConfig {
+			config.Command = ""
+			config.CommandArgv = []string{runtimePath, earlyExitConformanceSwitch}
+			return config
+		},
+	},
+}
+
+// assertZeroCommandLaunch gives kind no command. A non-empty
+// defaultCommand names the runtime the launch must reach, which a fake
+// of that name placed first on PATH makes fail with the early-exit
+// report; an empty one must fail with the empty command error.
+func assertZeroCommandLaunch(t *testing.T, kind string, adapter domain.AgentAdapter, config domain.AgentConfig, defaultCommand string) {
+	t.Helper()
+
+	config.Command = ""
+	config.CommandArgv = nil
+	name := kind + ": zero command"
+
+	if strings.TrimSpace(defaultCommand) == "" {
+		err := runWorking(context.Background(), adapter, domain.StartSessionParams{
+			WorkspacePath: t.TempDir(),
+			AgentConfig:   config,
+		}, 0, 0)
+		var agentErr *domain.AgentError
+		if !errors.As(err, &agentErr) || agentErr.Message != emptyCommandMessage {
+			t.Errorf("case %q: error %v, want an *domain.AgentError with message %q", name, err, emptyCommandMessage)
+		}
+		return
+	}
+
+	defaultDir := t.TempDir()
+	agenttest.FakeRuntime(t, defaultDir, strings.Fields(defaultCommand)[0], agenttest.OutputScenario, agenttest.Output{
+		Stderr:   earlyExitConformanceLine + "\n",
+		ExitCode: 2,
+		Version:  conformanceRuntimeVersion,
+	})
+	t.Setenv("PATH", defaultDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, verifyErr := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
+		Session: domain.StartSessionParams{
+			WorkspacePath:          t.TempDir(),
+			AgentConfig:            config,
+			CredentialVerification: true,
+		},
+		Issue: domain.Issue{},
+	})
+	assertEarlyExitReportOutcome(t, name+": verification session", verifyErr)
+
+	assertEarlyExitWorkingSession(t, name+": working session", adapter, domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   config,
+	})
+}
+
+// assertUnreadableLineConformance drives a working session with
+// unreadableConfig, whose command names a fake runtime that writes
+// [unreadableConformanceLine] on standard output, then
+// [earlyExitConformanceLine] on standard error, then exits 2, and fails
+// t unless the outcome matches format: the shared early-exit report
+// under [StructuredOutput], or a failure that chains no
+// [*agentcore.EarlyExitError] under [PlainTextOutput].
+func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.AgentAdapter, unreadableConfig domain.AgentConfig, format OutputFormat) {
+	t.Helper()
+
 	name := kind + ": unreadable standard-output line"
 
 	err := runWorking(context.Background(), adapter, domain.StartSessionParams{

@@ -23,7 +23,9 @@ const extensionsConfigImportPath = "github.com/sortie-ai/sortie/internal/config"
 // the field selector form (c.extensions[...]); mergeExtensionSection
 // and resolveExtensionEnvRefs own the identifier form on a parameter
 // named extensions; NewServiceConfig owns the identifier form on the
-// local map it assembles before storing it in the field.
+// local map it assembles before storing it in the field;
+// rewriteRetiredGroup owns the identifier form on the same map while it
+// moves a converted kind's settings block under the replacement kind.
 // lookupExtensionValue indexes only a local variable named current,
 // never extensions itself, so it can never trip the rule below, but it
 // stays listed because it is the function the field's own godoc names
@@ -35,6 +37,7 @@ var extensionsIndexAllowlist = map[string]bool{
 	"mergeExtensionSection":   true,
 	"lookupExtensionValue":    true,
 	"resolveExtensionEnvRefs": true,
+	"rewriteRetiredGroup":     true,
 	"NewServiceConfig":        true,
 }
 

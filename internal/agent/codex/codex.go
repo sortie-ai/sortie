@@ -32,9 +32,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// defaultCommand is what a session launches when it is given no command.
+const defaultCommand = "codex app-server"
+
 func init() {
 	registry.Agents.RegisterWithMeta("codex", NewCodexAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
+		DefaultCommand:      defaultCommand,
 		ValidateAgentConfig: validateConfig,
 		MCPInjection:        registry.MCPInjectionTranslated,
 		UsageArrival:        registry.UsageArrivalIncremental,
@@ -385,7 +389,7 @@ func NewCodexAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // launches the app-server subprocess, performs the initialization handshake,
 // authenticates if needed, and starts or resumes a thread.
 func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
+	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}

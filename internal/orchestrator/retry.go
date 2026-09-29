@@ -62,8 +62,14 @@ type HandleRetryTimerParams struct {
 
 	// AgentAdapterByKind resolves the agent adapter for the given kind.
 	// Required when MakeWorkerFn is set. On an unknown kind the retry
-	// handler logs, releases the claim, and deletes the persisted row.
+	// handler logs and reschedules the retry with backoff, keeping the
+	// claim.
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
+
+	// ResolveSelection maps the selection frozen on the retry entry and
+	// the freshly fetched issue to the selection the retry dispatches on.
+	// Nil dispatches on the frozen selection.
+	ResolveSelection func(frozen DispatchResolution, issue domain.Issue) DispatchResolution
 
 	// DefaultAgentKind is the workflow-wide default coalesced onto a
 	// popped retry entry whose AgentKind is empty (legacy rows persisted
@@ -570,24 +576,45 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if agentKind == "" {
 		agentKind = params.DefaultAgentKind
 	}
+	templateID := popped.TemplateID
+	ruleName := popped.RuleName
+	resumeSessionID := popped.SessionID
+
+	if params.ResolveSelection != nil {
+		frozen := DispatchResolution{AgentKind: agentKind, TemplateID: templateID, RuleName: ruleName}
+		selection := params.ResolveSelection(frozen, issue)
+		if selection.AgentKind != frozen.AgentKind || selection.TemplateID != frozen.TemplateID || selection.RuleName != frozen.RuleName {
+			log.Info("retry dispatching on the selection the configuration in force gives it",
+				slog.String("agent_kind", frozen.AgentKind),
+				slog.String("template_id", frozen.TemplateID),
+				slog.String("rule_name", frozen.RuleName),
+				slog.String("dispatch_agent_kind", selection.AgentKind),
+				slog.String("dispatch_template_id", selection.TemplateID),
+				slog.String("dispatch_rule_name", selection.RuleName),
+			)
+		}
+		if selection.AgentKind != frozen.AgentKind || selection.TemplateID != frozen.TemplateID {
+			resumeSessionID = ""
+		}
+		agentKind, templateID, ruleName = selection.AgentKind, selection.TemplateID, selection.RuleName
+	}
 
 	adapter, adapterErr := params.AgentAdapterByKind(agentKind)
 	if adapterErr != nil {
+		nextAttempt := popped.Attempt + 1
+		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
 		log.Error("retry agent kind unavailable",
-			slog.String("rule_name", popped.RuleName),
+			slog.String("rule_name", ruleName),
 			slog.String("agent_kind", agentKind),
+			slog.Int("attempt", nextAttempt),
+			slog.Int64("delay_ms", delayMS),
 			slog.Any("error", adapterErr),
 		)
-		delete(state.Claimed, issueID)
-		if delErr := params.Store.DeleteRetryEntry(ctx, issueID); delErr != nil {
-			log.Error("failed to delete retry entry after agent kind lookup failure",
-				slog.Any("error", delErr),
-			)
-		}
 		if params.HostPool != nil && host != "" {
 			params.HostPool.ReleaseHost(issueID)
 		}
-		metrics.IncRetries(triggerError)
+		reschedule(nextAttempt, delayMS, "retry agent kind unavailable")
 		return
 	}
 
@@ -599,12 +626,12 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
 	arrival, attribution := params.ResolveUsageDisposition(agentKind, host)
-	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host, agentKind, popped.TemplateID, popped.ReactionKind, adapter, arrival))
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host, agentKind, templateID, popped.ReactionKind, adapter, arrival))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = agentKind
-		entry.RuleName = popped.RuleName
-		entry.TemplateID = popped.TemplateID
+		entry.RuleName = ruleName
+		entry.TemplateID = templateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
 		entry.UsageArrival, entry.UsageAttribution = arrival, attribution

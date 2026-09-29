@@ -83,11 +83,29 @@ Retry handling behavior:
 2. Find the specific issue by `issue_id`.
 3. If not found, release claim.
 4. If found and still candidate-eligible:
-   - Dispatch if slots are available.
+   - Dispatch if slots are available, on the selection the configuration in force gives the retry (Retry selection, below).
    - Otherwise requeue with error `no available orchestrator slots`.
 5. If found but no longer active, release claim.
 6. A reaction retry the issue's own current state does not permit to dispatch is rescheduled with backoff, but only for as long as it has been pausing consecutively for that reason; past 30 minutes of consecutive pausing it is dropped instead, its persisted row deleted and its claim released, with a warning naming the kind and the dwell (Section 7.5).
 7. A retry entry whose timer event was never delivered is re-armed with a zero delay once its due time is more than 60 seconds in the past, so a dropped timer event self-heals within a few ticks instead of holding its slot for the process lifetime (Section 7.5).
+
+Retry selection:
+
+- Every frozen `(agent_kind, template_id, rule_name)` selection returns through the retry handler: rows reloaded at startup, retries queued at worker exit and by the reaction and label-command reconcilers, and reactions rebuilt from `run_history`. After the empty-kind coalescing and before the adapter lookup, the handler selects again from the configuration in force at that timer.
+- Selection algorithm:
+
+```
+retry_selection(cfg, template_held, frozen, issue):
+  target = replacement of the conversion record in cfg whose kind is frozen.agent_kind,
+           else frozen.agent_kind
+  if target is among the agent kinds cfg reaches and template_held(frozen.template_id):
+    return (target, frozen.template_id, frozen.rule_name)
+  return resolve_rule(issue, cfg.dispatch, cfg.agent.kind)
+```
+
+- A frozen kind that is still reached, through `agent.kind`, `dispatch.default.agent`, or any rule, keeps its selection whether or not the rule matches the issue now. The kind launches its own command as the configuration states it at that timer.
+- A selection that differs from the frozen one in kind or template clears the resume session identifier, because session identifiers are adapter-specific; the continuation context, reaction kind, attempt number, and last SSH host carry over. A changed selection is logged once at `Info` (Section 13.1).
+- When the adapter for the selected kind is unavailable because its construction failed at startup, the handler logs the failure, releases the acquired host, and reschedules with the backoff of the next attempt instead of releasing the claim. The claim and the continuation stay until a restart constructs the adapter. Releasing the claim would drop a reaction that a reconciler already consumed, and no poll dispatches an issue in the handoff state.
 
 Per-issue effort budget (defense-in-depth):
 

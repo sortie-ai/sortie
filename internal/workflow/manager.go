@@ -63,6 +63,15 @@ func WithAgentKindProbe(probe func(kind string) bool) ManagerOption {
 	return func(m *Manager) { m.agentKindProbe = probe }
 }
 
+// WithRetiredAgents sets the lookup the manager passes to every
+// configuration load, so a workflow naming a retired agent kind loads
+// converted onto its replacement kind. Callers wire the closure to the
+// retirement registry; the workflow package never imports the registry
+// package itself. A nil lookup, the default, converts nothing.
+func WithRetiredAgents(lookup config.RetiredAgentLookup) ManagerOption {
+	return func(m *Manager) { m.retiredAgents = lookup }
+}
+
 // Manager watches a workflow file for changes and maintains the current
 // effective configuration. The latest config and prompt template are
 // available via [Manager.Config] and [Manager.PromptTemplate]. Safe for
@@ -72,6 +81,7 @@ type Manager struct {
 	logger         *slog.Logger
 	validateFunc   ValidateFunc
 	agentKindProbe func(kind string) bool
+	retiredAgents  config.RetiredAgentLookup
 	advisoryFunc   AdvisoryFunc
 
 	mu                   sync.RWMutex
@@ -360,7 +370,7 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		return config.ServiceConfig{}, nil, nil, err
 	}
 
-	cfg, err := config.NewServiceConfig(wf.Config)
+	cfg, err := config.NewServiceConfig(wf.Config, config.WithRetiredAgents(m.retiredAgents))
 	if err != nil {
 		return config.ServiceConfig{}, nil, nil, err
 	}

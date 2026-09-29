@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -33,8 +34,10 @@ type LaunchTarget struct {
 
 	// Args contains initial CLI arguments inserted before per-turn
 	// arguments. Non-empty only in local mode when the configured command
-	// contains multiple tokens (e.g., "codex app-server" yields
-	// Args: ["app-server"]). Empty in SSH mode.
+	// holds more than its executable: the words after the first of a
+	// string command (e.g., "codex app-server" yields Args:
+	// ["app-server"]), or the elements after element zero of a list
+	// command. Empty in SSH mode.
 	Args []string
 
 	// WorkspacePath is the validated absolute path to the agent workspace
@@ -65,8 +68,12 @@ type LaunchTarget struct {
 // params.SSHHost. It returns a populated [LaunchTarget] and a nil error on
 // success, or a zero [LaunchTarget] and a [*domain.AgentError] on failure.
 //
-// defaultCommand is the fallback agent command when params.AgentConfig.Command
-// is empty (e.g., "claude", "copilot", "codex app-server").
+// defaultCommand is the fallback agent command when params.AgentConfig holds
+// no command (e.g., "claude", "copilot", "codex app-server"). A non-empty
+// params.AgentConfig.CommandArgv is the command instead: locally element zero
+// resolves whole, whitespace included, and the rest become Args; over SSH
+// every element is single-quoted into RemoteCommand. This is the only reader
+// of CommandArgv.
 //
 // Adapter-specific post-resolution steps (canary version checks, auth
 // preflights) are the caller's responsibility and must run after
@@ -77,8 +84,13 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 		return LaunchTarget{}, agentErr
 	}
 
-	command := cmp.Or(params.AgentConfig.Command, defaultCommand)
 	sshHost := strings.TrimSpace(params.SSHHost)
+
+	if argv := params.AgentConfig.CommandArgv; len(argv) > 0 {
+		return resolveArgvLaunch(params, absPath, sshHost, argv)
+	}
+
+	command := cmp.Or(params.AgentConfig.Command, defaultCommand)
 
 	if strings.TrimSpace(command) == "" {
 		return LaunchTarget{}, &domain.AgentError{
@@ -88,23 +100,7 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 	}
 
 	if sshHost != "" {
-		sshPath, lookErr := exec.LookPath("ssh")
-		if lookErr != nil {
-			return LaunchTarget{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "ssh binary not found on orchestrator host",
-				Err:     lookErr,
-			}
-		}
-		return LaunchTarget{
-			Command:                  sshPath,
-			Args:                     nil,
-			WorkspacePath:            absPath,
-			RemoteCommand:            command,
-			SSHHost:                  sshHost,
-			SSHStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
-			SSHEnvNames:              params.SSHEnvNames,
-		}, nil
+		return resolveSSHLaunch(params, absPath, sshHost, command)
 	}
 
 	parts := strings.Fields(command)
@@ -125,6 +121,68 @@ func ResolveLaunchTarget(params domain.StartSessionParams, defaultCommand string
 		Args:          slices.Clone(parts[1:]),
 		WorkspacePath: absPath,
 	}, nil
+}
+
+func resolveSSHLaunch(params domain.StartSessionParams, absPath, sshHost, remoteCommand string) (LaunchTarget, *domain.AgentError) {
+	sshPath, lookErr := exec.LookPath("ssh")
+	if lookErr != nil {
+		return LaunchTarget{}, &domain.AgentError{
+			Kind:    domain.ErrAgentNotFound,
+			Message: "ssh binary not found on orchestrator host",
+			Err:     lookErr,
+		}
+	}
+	return LaunchTarget{
+		Command:                  sshPath,
+		Args:                     nil,
+		WorkspacePath:            absPath,
+		RemoteCommand:            remoteCommand,
+		SSHHost:                  sshHost,
+		SSHStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
+		SSHEnvNames:              params.SSHEnvNames,
+	}, nil
+}
+
+func resolveArgvLaunch(params domain.StartSessionParams, absPath, sshHost string, argv []string) (LaunchTarget, *domain.AgentError) {
+	if sshHost != "" {
+		return resolveSSHLaunch(params, absPath, sshHost, sshutil.QuoteArgv(argv))
+	}
+	resolved, agentErr := lookPath(argv[0])
+	if agentErr != nil {
+		return LaunchTarget{}, agentErr
+	}
+	return LaunchTarget{
+		Command:       resolved,
+		Args:          slices.Clone(argv[1:]),
+		WorkspacePath: absPath,
+	}, nil
+}
+
+// AppendCommandArgs returns command, which names an executable,
+// followed by args, in the form that launches exactly that argv. A list
+// stays a list in both launch modes. A string launched locally stays a
+// string only when every argument is non-empty and holds no space rune,
+// since the local launch splits it on whitespace; otherwise it becomes
+// the list of its whitespace-separated words followed by args. A string
+// launched remotely stays a string with args quoted for the remote
+// shell and placed where the launch places its own arguments.
+func AppendCommandArgs(command domain.AgentCommand, remote bool, args ...string) domain.AgentCommand {
+	switch {
+	case len(command.Argv) > 0:
+		return domain.AgentCommand{Argv: append(slices.Clone(command.Argv), args...)}
+	case remote:
+		return domain.AgentCommand{Line: sshutil.AppendArgs(command.Line, args...)}
+	case slices.ContainsFunc(args, breaksWhitespaceSplit):
+		return domain.AgentCommand{Argv: append(strings.Fields(command.Line), args...)}
+	}
+	words := append([]string{strings.TrimRightFunc(command.Line, unicode.IsSpace)}, args...)
+	return domain.AgentCommand{Line: strings.Join(words, " ")}
+}
+
+// breaksWhitespaceSplit reports whether a whitespace split would not
+// yield arg as one word: it is empty or holds a space rune.
+func breaksWhitespaceSplit(arg string) bool {
+	return arg == "" || strings.ContainsFunc(arg, unicode.IsSpace)
 }
 
 // SSHOptions resolves t's SSH transport options for one remote

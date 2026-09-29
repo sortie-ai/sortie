@@ -214,9 +214,9 @@ type RunningEntry struct {
 	// active at dispatch.
 	AgentKind string
 
-	// RuleName is the dispatch rule frozen at initial dispatch. Empty when
-	// the workflow-wide fallback fired, "default" when the default block
-	// matched.
+	// RuleName is the dispatch rule the run was dispatched under. Empty
+	// when the workflow-wide fallback fired, "default" when the default
+	// block matched.
 	RuleName string
 
 	// TemplateID is the resolved template registry key frozen at dispatch.
@@ -307,17 +307,14 @@ type RetryEntry struct {
 	// dispatch. Runtime-only.
 	ReactionKind string
 
-	// RuleName is the dispatch rule frozen at initial dispatch, propagated
-	// verbatim through every retry.
+	// RuleName is the dispatch rule of the run this retry follows.
 	RuleName string
 
-	// TemplateID is the resolved template registry key frozen at initial
-	// dispatch, propagated verbatim through every retry.
+	// TemplateID is the resolved template registry key of the run this
+	// retry follows.
 	TemplateID string
 
-	// AgentKind is the adapter kind frozen at initial dispatch, propagated
-	// so [HandleRetryTimer] resolves the adapter without re-running rule
-	// resolution.
+	// AgentKind is the adapter kind of the run this retry follows.
 	AgentKind string
 
 	// pausedSinceMS is the wall-clock ms at which this entry first took one
@@ -473,16 +470,13 @@ type PendingReaction struct {
 	// Each kind's reconcile function asserts the type once.
 	KindData any
 
-	// AgentKind is the dispatch-frozen adapter kind from the completed
-	// worker, propagated so the same adapter handles the follow-up turn.
+	// AgentKind is the adapter kind of the completed worker.
 	AgentKind string
 
-	// RuleName is the dispatch-frozen rule name from the completed worker,
-	// propagated so the continuation appears under the same rule.
+	// RuleName is the rule name of the completed worker.
 	RuleName string
 
-	// TemplateID is the dispatch-frozen template key from the completed
-	// worker, propagated so the continuation renders the same template.
+	// TemplateID is the template key of the completed worker.
 	TemplateID string
 
 	// Triage is the in-flight or finished triage run for the current

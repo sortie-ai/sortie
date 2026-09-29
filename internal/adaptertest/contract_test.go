@@ -211,7 +211,7 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleANCHOR: "owns the workspace-anchoring mechanism",
 	},
 	"kiro": {
-		ruleIDENTITY: "declares its own registered deprecation, naming its replacement kind",
+		ruleIDENTITY: "declares its own registered deprecation and retirement, naming its replacement kind",
 	},
 }
 
@@ -1610,53 +1610,12 @@ func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 		}
 		importPath := contractPackageImportPath(dir, contractAgentFamilyPath, filepath.Dir(walkPath))
 
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, isCall := n.(*ast.CallExpr)
-			if !isCall {
-				return true
-			}
-			outer, isSel := call.Fun.(*ast.SelectorExpr)
-			if !isSel {
-				return true
-			}
-			inner, isSel := outer.X.(*ast.SelectorExpr)
-			if !isSel {
-				return true
-			}
-			ident, isIdent := inner.X.(*ast.Ident)
-			if !isIdent || ident.Name != registryIdent || inner.Sel.Name != "Agents" {
-				return true
-			}
-			if outer.Sel.Name != "Register" && outer.Sel.Name != "RegisterWithMeta" {
-				return true
-			}
-			if len(call.Args) == 0 {
-				extractionErrors = append(extractionErrors, contractViolation{
-					pos:  fset.Position(call.Pos()),
-					text: registryIdent + ".Agents." + outer.Sel.Name + " call has no kind argument",
-				})
-				return true
-			}
-			lit, isBasicLit := call.Args[0].(*ast.BasicLit)
-			if !isBasicLit || lit.Kind != token.STRING {
-				extractionErrors = append(extractionErrors, contractViolation{
-					pos:  fset.Position(call.Args[0].Pos()),
-					text: registryIdent + ".Agents." + outer.Sel.Name + " call's kind argument is not a string literal",
-				})
-				return true
-			}
-			kind, unquoteErr := strconv.Unquote(lit.Value)
-			if unquoteErr != nil {
-				extractionErrors = append(extractionErrors, contractViolation{
-					pos:  fset.Position(lit.Pos()),
-					text: "unquote " + registryIdent + ".Agents." + outer.Sel.Name + " kind argument: " + unquoteErr.Error(),
-				})
-				return true
-			}
+		kinds, kindErrors := contractAgentRegisteredKinds(fset, file, registryIdent)
+		extractionErrors = append(extractionErrors, kindErrors...)
+		for _, kind := range kinds {
 			tokenSet[strings.ToLower(kind)] = true
 			kindImportPaths[importPath] = append(kindImportPaths[importPath], kind)
-			return true
-		})
+		}
 		return nil
 	})
 	if walkErr != nil {
@@ -1678,6 +1637,52 @@ func buildContractAgentIdentitySnapshot() contractAgentIdentitySnapshot {
 		profileDeclaredTokens: profileDeclaredTokens,
 		extractionErrors:      extractionErrors,
 	}
+}
+
+// A retired registration counts as its package's kind registration, so a kind
+// registered only as retired stays anchored to its package.
+func contractAgentRegisteredKinds(fset *token.FileSet, file *ast.File, registryIdent string) ([]string, []contractViolation) {
+	var kinds []string
+	var errs []contractViolation
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, isCall := n.(*ast.CallExpr)
+		if !isCall {
+			return true
+		}
+		outer, isSel := call.Fun.(*ast.SelectorExpr)
+		if !isSel {
+			return true
+		}
+		inner, isSel := outer.X.(*ast.SelectorExpr)
+		if !isSel {
+			return true
+		}
+		ident, isIdent := inner.X.(*ast.Ident)
+		if !isIdent || ident.Name != registryIdent || (inner.Sel.Name != "Agents" && inner.Sel.Name != "RetiredAgents") {
+			return true
+		}
+		if outer.Sel.Name != "Register" && outer.Sel.Name != "RegisterWithMeta" {
+			return true
+		}
+		callName := registryIdent + "." + inner.Sel.Name + "." + outer.Sel.Name
+		if len(call.Args) == 0 {
+			errs = append(errs, contractViolation{pos: fset.Position(call.Pos()), text: callName + " call has no kind argument"})
+			return true
+		}
+		lit, isBasicLit := call.Args[0].(*ast.BasicLit)
+		if !isBasicLit || lit.Kind != token.STRING {
+			errs = append(errs, contractViolation{pos: fset.Position(call.Args[0].Pos()), text: callName + " call's kind argument is not a string literal"})
+			return true
+		}
+		kind, unquoteErr := strconv.Unquote(lit.Value)
+		if unquoteErr != nil {
+			errs = append(errs, contractViolation{pos: fset.Position(lit.Pos()), text: "unquote " + callName + " kind argument: " + unquoteErr.Error()})
+			return true
+		}
+		kinds = append(kinds, kind)
+		return true
+	})
+	return kinds, errs
 }
 
 // contractRuntimeProfilesGlob matches every runtime profile document. A
@@ -6184,5 +6189,128 @@ func doWork() {}
 				t.Errorf("contractPackageRegistersKind() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestContractAgentRegisteredKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		src       string
+		wantKinds []string
+		wantErrs  int
+	}{
+		{
+			name: "live registration",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Agents.RegisterWithMeta("live-kind", newFixtureAgent, registry.AgentMeta{})
+}
+`,
+			wantKinds: []string{"live-kind"},
+		},
+		{
+			name: "retired registration alone",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.RetiredAgents.Register("retired-only-kind", registry.RetiredAgent{})
+}
+`,
+			wantKinds: []string{"retired-only-kind"},
+		},
+		{
+			name: "live and retired registrations of one kind",
+			src: `package fixture
+
+import reg "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	reg.Agents.Register("both-kind", newFixtureAgent)
+	reg.RetiredAgents.Register("both-kind", reg.RetiredAgent{})
+}
+`,
+			wantKinds: []string{"both-kind", "both-kind"},
+		},
+		{
+			name: "another registry is not an agent kind",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.Trackers.Register("tracker-kind", newFixtureTracker)
+}
+`,
+		},
+		{
+			name: "retired registration without a literal kind is reported",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.RetiredAgents.Register(kindName, registry.RetiredAgent{})
+}
+`,
+			wantErrs: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tt.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+			registryIdent := resolveContractImportName(file, contractRegistryImportPath)
+
+			kinds, errs := contractAgentRegisteredKinds(fset, file, registryIdent)
+
+			if !slices.Equal(kinds, tt.wantKinds) {
+				t.Errorf("contractAgentRegisteredKinds() kinds = %v, want %v", kinds, tt.wantKinds)
+			}
+			if len(errs) != tt.wantErrs {
+				t.Errorf("contractAgentRegisteredKinds() errors = %v, want %d", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestContractTokenIsKindAnchored_RetiredOnlyKind(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "retired.go", `package fixture
+
+import "github.com/sortie-ai/sortie/internal/registry"
+
+func init() {
+	registry.RetiredAgents.Register("retired-only-kind", registry.RetiredAgent{})
+}
+`, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parser.ParseFile: %v", err)
+	}
+	kinds, errs := contractAgentRegisteredKinds(fset, file, resolveContractImportName(file, contractRegistryImportPath))
+	if len(errs) != 0 {
+		t.Fatalf("contractAgentRegisteredKinds() errors = %v", errs)
+	}
+	kindImportPaths := map[string][]string{"github.com/sortie-ai/sortie/internal/agent/fixturekind": kinds}
+
+	if !contractTokenIsKindAnchored("retired-only-kind", kindImportPaths) {
+		t.Error(`contractTokenIsKindAnchored("retired-only-kind", ...) = false, want true: a retired registration anchors its kind to its package`)
+	}
+	if !contractPackageRegistersKind([]*ast.File{file}) {
+		t.Error("contractPackageRegistersKind() = false for a package that registers only a retired kind, want true")
 	}
 }

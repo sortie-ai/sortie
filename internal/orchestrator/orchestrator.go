@@ -556,6 +556,10 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
+			templateHeld := func(id string) bool { return o.workflowManager.PromptTemplateByID(id) != nil }
+			resolveSelection := func(frozen DispatchResolution, issue domain.Issue) DispatchResolution {
+				return retrySelection(cfg, templateHeld, frozen, issue)
+			}
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
 				Store:                   o.store,
 				TrackerAdapter:          o.trackerAdapter,
@@ -565,6 +569,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				MaxRetryBackoffMS:       cfg.Agent.MaxRetryBackoffMS,
 				MakeWorkerFn:            o.makeWorkerFn,
 				AgentAdapterByKind:      o.agentAdapterByKind,
+				ResolveSelection:        resolveSelection,
 				ResolveUsageDisposition: o.resolveUsageDisposition,
 				DefaultAgentKind:        cfg.Agent.Kind,
 				OnRetryFire:             o.onRetryFire,
@@ -942,6 +947,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 	if agentKind == "" {
 		agentKind = o.workflowManager.Config().Agent.Kind
 	}
+	convertedCredentialEnv := o.convertedCredentialEnv(agentKind)
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
@@ -994,7 +1000,8 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			SSHStrictHostKeyChecking: strictHostKeyChecking,
 			SSHEnvNamesFunc: func(kind string) []string {
 				meta, _ := o.preflightParams.AgentRegistry.Meta(kind)
-				return carriedEnvNames(meta.CredentialEnv.Names(), sshPassEnv, sshDisallowPassEnv)
+				declared := append(meta.CredentialEnv.Names(), convertedCredentialEnv...)
+				return carriedEnvNames(declared, sshPassEnv, sshDisallowPassEnv)
 			},
 			Metrics:         o.metrics,
 			WorkflowPath:    o.workflowManager.WorkflowAbsPath(),
@@ -1005,6 +1012,20 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
 	}
+}
+
+// convertedCredentialEnv returns the credential variable names carried by
+// the conversions that landed on kind under the configuration in force, in
+// conversion order. A session captures them at dispatch so it keeps the
+// names it started with across a reload.
+func (o *Orchestrator) convertedCredentialEnv(kind string) []string {
+	var names []string
+	for _, conversion := range o.workflowManager.Config().AgentKindConversions() {
+		if conversion.Replacement == kind {
+			names = append(names, conversion.CredentialEnv...)
+		}
+	}
+	return names
 }
 
 // workflowFile returns the base filename of the active workflow file, or

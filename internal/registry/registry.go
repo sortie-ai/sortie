@@ -184,9 +184,13 @@ type AgentMeta struct {
 	// registration.
 	Deprecation *AgentDeprecation
 
-	// RequiresCommand indicates the agent adapter requires a
-	// non-empty agent.command config value.
+	// RequiresCommand indicates the kind launches a command.
 	RequiresCommand bool
+
+	// DefaultCommand is the command the kind launches when its own
+	// command is zero: the value its StartSession hands to the shared
+	// launch resolution. Empty for a kind that has none.
+	DefaultCommand string
 
 	// ValidateAgentConfig is an optional function the preflight
 	// pipeline calls to run agent-specific config validation. Nil
