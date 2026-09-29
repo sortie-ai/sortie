@@ -26,8 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget && \
     rm -rf /var/lib/apt/lists/*
 
-# Install OpenCode globally.
-RUN npm install -g opencode-ai@latest && npm cache clean --force
+# Install OpenCode 2.x globally. The @2 range never resolves to a later major,
+# which Sortie refuses at session start.
+RUN npm install -g @opencode/cli@2 && npm cache clean --force
 
 # Create a non-root user. The node base image ships a "node" user at UID 1000;
 # remove it so we can claim that UID for the sortie user.
