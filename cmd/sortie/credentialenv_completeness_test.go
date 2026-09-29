@@ -68,10 +68,10 @@ func checkCredentialEnvCoverage(kinds []string, lookup func(kind string) (regist
 // TestEveryAgentKindHasCredentialEnvCoverage enumerates every agent
 // kind registry.Agents held once main's own blank imports had run and
 // fails, naming the kind, when checkCredentialEnvCoverage reports an
-// issue for it. This closes the hole a hand-maintained list of "the
-// seven known kinds" would reopen on an eighth adapter: a kind that is
-// registered but declares no credential names, or declares one that is
-// not a valid environment variable name.
+// issue for it. This closes the hole a hand-maintained list of the known
+// kinds would reopen on each new adapter: a kind that is registered but
+// declares no credential names, or declares one that is not a valid
+// environment variable name.
 func TestEveryAgentKindHasCredentialEnvCoverage(t *testing.T) {
 	t.Parallel()
 

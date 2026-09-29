@@ -13,7 +13,6 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	_ "github.com/sortie-ai/sortie/internal/agent/codex"
 	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
-	_ "github.com/sortie-ai/sortie/internal/agent/kiro"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
@@ -112,17 +111,16 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		t.Parallel()
 
 		tests := []struct {
-			name                       string
-			kind                       string
-			wantCommand                bool
-			wantMCPInjection           registry.MCPInjection
-			wantUsageArrival           registry.UsageArrival
-			wantUsageAttribution       registry.UsageAttribution
-			declaresResumeBlocker      bool
-			samplePassthrough          map[string]any
-			wantKey                    string
-			wantCredentialEnvNames     []string
-			wantDeprecationReplacement string
+			name                   string
+			kind                   string
+			wantCommand            bool
+			wantMCPInjection       registry.MCPInjection
+			wantUsageArrival       registry.UsageArrival
+			wantUsageAttribution   registry.UsageAttribution
+			declaresResumeBlocker  bool
+			samplePassthrough      map[string]any
+			wantKey                string
+			wantCredentialEnvNames []string
 		}{
 			{
 				name:                   "agent-client-protocol requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
@@ -162,16 +160,6 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				wantUsageArrival:       registry.UsageArrivalIncremental,
 				wantUsageAttribution:   registry.UsageAttributionPerModel,
 				wantCredentialEnvNames: nil,
-			},
-			{
-				name:                       "kiro requires command, declares MCP injection unsupported, declares none/none usage, declares no resume blocker, declares its API key credential name, and is deprecated in favor of agent-client-protocol",
-				kind:                       "kiro",
-				wantCommand:                true,
-				wantMCPInjection:           registry.MCPInjectionUnsupported,
-				wantUsageArrival:           registry.UsageArrivalNone,
-				wantUsageAttribution:       registry.UsageAttributionNone,
-				wantCredentialEnvNames:     []string{"KIRO_API_KEY"},
-				wantDeprecationReplacement: "agent-client-protocol",
 			},
 			{
 				name:                   "opencode requires command, declares MCP injection translated, declares turn_end/per_model usage, declares no resume blocker, and declares no credential names",
@@ -242,17 +230,8 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 					t.Errorf("Agents.Meta(%q).CredentialEnv.Names() = %v, want %v", tt.kind, got, tt.wantCredentialEnvNames)
 				}
 
-				if tt.wantDeprecationReplacement == "" {
-					if meta.Deprecation != nil {
-						t.Errorf("Agents.Meta(%q).Deprecation = %+v, want nil", tt.kind, meta.Deprecation)
-					}
-				} else {
-					if meta.Deprecation == nil {
-						t.Fatalf("Agents.Meta(%q).Deprecation = nil, want non-nil naming replacement %q", tt.kind, tt.wantDeprecationReplacement)
-					}
-					if meta.Deprecation.Replacement != tt.wantDeprecationReplacement {
-						t.Errorf("Agents.Meta(%q).Deprecation.Replacement = %q, want %q", tt.kind, meta.Deprecation.Replacement, tt.wantDeprecationReplacement)
-					}
+				if meta.Deprecation != nil {
+					t.Errorf("Agents.Meta(%q).Deprecation = %+v, want nil", tt.kind, meta.Deprecation)
 				}
 
 				if !tt.declaresResumeBlocker {

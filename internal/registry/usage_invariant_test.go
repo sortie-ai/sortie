@@ -11,7 +11,6 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/clientprotocol"
 	_ "github.com/sortie-ai/sortie/internal/agent/codex"
 	_ "github.com/sortie-ai/sortie/internal/agent/copilot"
-	_ "github.com/sortie-ai/sortie/internal/agent/kiro"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 )

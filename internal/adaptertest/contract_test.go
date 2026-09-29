@@ -211,7 +211,7 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleANCHOR: "owns the workspace-anchoring mechanism",
 	},
 	"kiro": {
-		ruleIDENTITY: "declares its own registered deprecation and retirement, naming its replacement kind",
+		ruleIDENTITY: "declares its retirement, naming its replacement kind",
 	},
 }
 

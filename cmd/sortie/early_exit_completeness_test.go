@@ -40,7 +40,7 @@ func TestEveryEarlyExitKindHasCoverage(t *testing.T) {
 
 	kinds := earlyExitKindsRequiringCommand(mcpCompletenessRegisteredKinds, registry.Agents.Meta)
 	if len(kinds) == 0 {
-		t.Fatal("no registered agent kind requires an agent command, want at least one (claude-code, copilot-cli, kiro, opencode, codex, agent-client-protocol)")
+		t.Fatal("no registered agent kind requires an agent command, want at least one (claude-code, copilot-cli, opencode, codex, agent-client-protocol)")
 	}
 
 	missing := kindsMissingCoverage(kinds, mcpCompletenessAgentRoot, credentialCompletenessImportPath, earlyExitAssertFuncName)

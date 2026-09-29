@@ -357,11 +357,6 @@ func TestCredentialErrorBuilders(t *testing.T) {
 			err:         CredentialRefusedError("API key is invalid.", cause),
 			wantMessage: "the agent runtime refused its credential: API key is invalid.",
 		},
-		{
-			name:        "absent",
-			err:         CredentialAbsentError("whoami exited with status 1", cause),
-			wantMessage: "the agent runtime reports no usable credential: whoami exited with status 1",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

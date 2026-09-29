@@ -1735,10 +1735,6 @@ func TestValidateAgentConfigOfflineVerdict_CopilotToolScoping(t *testing.T) {
 	}
 }
 
-// kiroUntrustedToolsWorkflow returns a workflow selecting the kiro agent
-// with a trust_tools allowlist and no trust_all_tools, which resolves to a
-// trust posture short of full trust, used to trigger the agent-side
-// offline verdict without constructing any adapter.
 func kiroUntrustedToolsWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -1762,16 +1758,9 @@ Do {{ .issue.title }}.
 `)
 }
 
-// TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools drives the
-// offline sortie validate path against a workflow whose kiro configuration
-// resolves to a trust posture short of full trust, asserting valid: false,
-// exit code 1, and the check name kiro.trust_tools.untrusted, without
-// constructing any adapter (the offline path never calls a constructor).
-// This exercises the same verdict channel established for codex,
-// confirming kiro's validator is wired into agent registration and its
-// diagnostic actually reaches sortie validate, not only validateConfig
-// called directly.
-func TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools(t *testing.T) {
+const kiroTrustToolsUntrustedMessage = `a converted launch appends "acp -a" to the command, and -a trusts every tool, more than this trust setting allows; to convert, set trust_all_tools: true and remove trust_tools, or remove both; to keep the narrower set, name agent kind "agent-client-protocol" and put "kiro-cli acp --trust-tools=<names>" in agent.command`
+
+func TestValidate_RetiredKindWithUntrustedToolsFailsTheLoad(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1781,10 +1770,10 @@ func TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools(t *testing.T) {
 	ctx := context.Background()
 
 	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
 	if code != 1 {
 		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
 	}
-
 	var out validateOutput
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
@@ -1792,16 +1781,10 @@ func TestValidateAgentConfigOfflineVerdict_KiroUntrustedTools(t *testing.T) {
 	if out.Valid {
 		t.Errorf("validateOutput.Valid = true, want false")
 	}
-
-	foundErr := false
-	for _, e := range out.Errors {
-		if e.Check == "kiro.trust_tools.untrusted" {
-			foundErr = true
-			break
-		}
-	}
-	if !foundErr {
-		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "kiro.trust_tools.untrusted")
+	wantMessage := `agent kind "kiro" was removed and this configuration cannot be converted to agent kind "agent-client-protocol": ` + kiroTrustToolsUntrustedMessage
+	want := []validateDiag{{Severity: "error", Check: "config.kiro.trust_tools", Message: wantMessage}}
+	if !slices.Equal(out.Errors, want) {
+		t.Errorf("validateOutput.Errors = %+v, want %+v", out.Errors, want)
 	}
 }
 
@@ -4693,9 +4676,6 @@ reactions:
 `)
 }
 
-// kiroAgentKindWorkflow selects the deprecated kiro kind, with
-// trust_all_tools set so it passes kiro's own offline trust-posture
-// check and the only warning is the deprecation advisory.
 func kiroAgentKindWorkflow() []byte {
 	return advisoryWorkflow(`agent:
   kind: kiro
@@ -4717,18 +4697,6 @@ kiro:
 `)
 }
 
-// TestRunValidate_ConfigurationAdvisories asserts that sortie validate
-// renders exactly one warning per configuration advisory, with valid
-// and the exit code unaffected, and that the agent-client-protocol
-// route draws no agent.kind.deprecated warning even with a leftover
-// kiro: block no selector names. Text-format rendering of a warning is
-// generic, pre-existing behavior exercised elsewhere in this file; this
-// covers only the two distinct wiring points that feed validate's
-// advisory loop: a config-sourced advisory (ci_feedback, built inside
-// NewServiceConfig) and a manager-sourced one (the kiro deprecation,
-// added through [workflow.WithAdvisoryFunc]). Every other advisory
-// producer shares one of these two wiring points and is proven at the
-// unit level where it is built.
 func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -4736,6 +4704,7 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 		wantCheck   string
 		wantTextSub string
 		wantAbsent  bool
+		wantNoCheck string
 	}{
 		{
 			name:        "ci_feedback deprecated in favor of reactions.ci_failure",
@@ -4744,10 +4713,11 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 			wantTextSub: "ci_feedback is deprecated and ignored because reactions.ci_failure is set",
 		},
 		{
-			name:        "kiro agent kind deprecated in favor of agent-client-protocol",
+			name:        "kiro agent kind removed and converted onto agent-client-protocol",
 			workflow:    kiroAgentKindWorkflow(),
-			wantCheck:   "agent.kind.deprecated",
-			wantTextSub: `agent kind "kiro" is deprecated and will be removed in a later release; use agent kind "agent-client-protocol" instead`,
+			wantCheck:   "agent.kind.retired",
+			wantTextSub: `agent kind "kiro" was removed, so this configuration was converted to agent kind "agent-client-protocol"`,
+			wantNoCheck: "agent.kind.deprecated",
 		},
 		{
 			name:       "agent-client-protocol route with a leftover kiro block draws no deprecation warning",
@@ -4801,7 +4771,59 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 			if !strings.Contains(matches[0].Message, tt.wantTextSub) {
 				t.Errorf("warning Message = %q, want to contain %q", matches[0].Message, tt.wantTextSub)
 			}
+			for _, w := range out.Warnings {
+				if tt.wantNoCheck != "" && w.Check == tt.wantNoCheck {
+					t.Errorf("validateOutput.Warnings holds %+v, want no warning with check %q", w, tt.wantNoCheck)
+				}
+			}
 		})
+	}
+}
+
+func kiroRetiredKindWorkflow() []byte {
+	return advisoryWorkflow(`agent:
+  kind: kiro
+kiro:
+  model: claude-sonnet-4.6
+  agent: reviewer
+  mcp_config: mcp.json
+dispatch:
+  rules:
+    - name: review
+      match:
+        labels:
+          - review
+      agent: kiro
+`)
+}
+
+func TestRunValidate_RetiredKindDrawsOneWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeIssuesFixture(t, dir)
+	wfPath := writeCustomWorkflowFile(t, dir, kiroRetiredKindWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	if len(out.Errors) != 0 {
+		t.Errorf("validateOutput.Errors = %+v, want none", out.Errors)
+	}
+	wantMessage := `agent kind "kiro" was removed, so this configuration was converted to agent kind "agent-client-protocol" (agent.kind, dispatch.rules[0].agent); its sessions launch "kiro-cli acp -a --model claude-sonnet-4.6 --agent reviewer"; not carried: kiro.mcp_config. This conversion is temporary and will be removed in a later release: name agent kind "agent-client-protocol" where the workflow names "kiro" and give it this invocation in agent.command`
+	want := []validateDiag{{Severity: "warning", Check: "agent.kind.retired", Message: wantMessage}}
+	if !slices.Equal(out.Warnings, want) {
+		t.Errorf("validateOutput.Warnings = %+v, want %+v", out.Warnings, want)
 	}
 }
 

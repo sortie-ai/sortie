@@ -15,10 +15,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// earlyExitConformingAdapter's StartSession drives a real fake runtime
-// through [agentcore.ExitedEarly] and [agentcore.EarlyExit.Report], so
-// its error carries a genuine *agentcore.EarlyExitError rather than a
-// hand-built lookalike.
 type earlyExitConformingAdapter struct {
 	runtimePath string
 }
@@ -51,10 +47,6 @@ func (a *earlyExitConformingAdapter) RunTurn(context.Context, domain.Session, do
 
 func (a *earlyExitConformingAdapter) StopSession(context.Context, domain.Session) error { return nil }
 
-// earlyExitNegativeControlAdapter's StartSession returns a port_exit
-// error carrying [earlyExitConformanceMessage] but no
-// *agentcore.EarlyExitError in its chain, the shape
-// [requireEarlyExitReport] must reject.
 type earlyExitNegativeControlAdapter struct{}
 
 var _ domain.AgentAdapter = (*earlyExitNegativeControlAdapter)(nil)
@@ -107,10 +99,6 @@ func TestRequireEarlyExitReport_ReporterSeam(t *testing.T) {
 	}
 }
 
-// alwaysSucceedsAdapter's StartSession and RunTurn both always succeed,
-// ignoring whatever runtime params.AgentConfig.Command names: the
-// negative control AssertEarlyExitReport must reject, since neither
-// launch ever fails.
 type alwaysSucceedsAdapter struct{}
 
 var _ domain.AgentAdapter = (*alwaysSucceedsAdapter)(nil)
@@ -125,17 +113,6 @@ func (a *alwaysSucceedsAdapter) RunTurn(context.Context, domain.Session, domain.
 
 func (a *alwaysSucceedsAdapter) StopSession(context.Context, domain.Session) error { return nil }
 
-// forkPerTurnFixtureAdapter wraps the real fork-per-turn skeleton, so a
-// launch driven through it against a real runtime path produces a
-// genuine *agentcore.EarlyExitError chain rather than a hand-built
-// lookalike, for every one of AssertEarlyExitReport's three launch
-// shapes: a verification request, a working session, and one through
-// SSH.
-//
-// parseLine decides which lines the skeleton counts as the runtime's
-// response. A nil parseLine accepts every line, matching a
-// PlainTextOutput kind; jsonDecodingParseLine rejects a line that is
-// not valid JSON, matching a StructuredOutput kind.
 type forkPerTurnFixtureAdapter struct {
 	parseLine func([]byte, func(domain.AgentEvent), string) (any, error)
 	session   *agentcore.ForkPerTurnSession
@@ -143,8 +120,6 @@ type forkPerTurnFixtureAdapter struct {
 
 var _ domain.AgentAdapter = (*forkPerTurnFixtureAdapter)(nil)
 
-// jsonDecodingParseLine rejects a line that does not decode as JSON,
-// the shape a StructuredOutput kind's own decoder rejects.
 func jsonDecodingParseLine(line []byte, _ func(domain.AgentEvent), _ string) (any, error) {
 	var v any
 	if err := json.Unmarshal(line, &v); err != nil {
@@ -196,7 +171,7 @@ func (a *forkPerTurnFixtureAdapter) StopSession(context.Context, domain.Session)
 // package. AssertEarlyExitReport's own t.Setenv("PATH", ...) call
 // registers its restore as a Cleanup that a parentless *testing.T never
 // runs, so the caller must save and restore PATH itself.
-func runAssertEarlyExitReport(kind string, adapter domain.AgentAdapter, format OutputFormat) bool {
+func runAssertEarlyExitReport(kind string, adapter domain.AgentAdapter) bool {
 	origPath, hadPath := os.LookupEnv("PATH")
 	defer func() {
 		if hadPath {
@@ -207,7 +182,7 @@ func runAssertEarlyExitReport(kind string, adapter domain.AgentAdapter, format O
 	}()
 
 	stand := new(testing.T)
-	AssertEarlyExitReport(stand, kind, adapter, domain.AgentConfig{}, format)
+	AssertEarlyExitReport(stand, kind, adapter, domain.AgentConfig{})
 	return !stand.Failed()
 }
 
@@ -218,54 +193,35 @@ func runAssertEarlyExitReport(kind string, adapter domain.AgentAdapter, format O
 // warns a parallel caller into.
 
 func TestAssertEarlyExitReport_NegativeControls(t *testing.T) {
-	if runAssertEarlyExitReport(credentialTestKindWithCommand, &earlyExitNegativeControlAdapter{}, StructuredOutput) {
+	if runAssertEarlyExitReport(credentialTestKindWithCommand, &earlyExitNegativeControlAdapter{}) {
 		t.Error("AssertEarlyExitReport() passed for a hand-built error with no *agentcore.EarlyExitError, want it to fail")
 	}
 
-	if runAssertEarlyExitReport(credentialTestKindWithCommand, &alwaysSucceedsAdapter{}, StructuredOutput) {
+	if runAssertEarlyExitReport(credentialTestKindWithCommand, &alwaysSucceedsAdapter{}) {
 		t.Error("AssertEarlyExitReport() passed for an adapter that never fails, want it to fail")
 	}
 }
 
-// TestAssertEarlyExitReport_OutputFormatArmsAreFalsifiable proves each
-// OutputFormat arm of the fourth conformance case is falsifiable: a
-// fixture whose decoder shape matches the declared format passes, and
-// the same fixture fails under the other format.
-func TestAssertEarlyExitReport_OutputFormatArmsAreFalsifiable(t *testing.T) {
+func TestAssertEarlyExitReport_UnreadableLineCaseIsFalsifiable(t *testing.T) {
 	tests := []struct {
 		name     string
 		adapter  func() domain.AgentAdapter
-		format   OutputFormat
 		wantPass bool
 	}{
 		{
-			name:     "accepts every line passes under PlainTextOutput",
+			name:     "counting every line as a response fails",
 			adapter:  func() domain.AgentAdapter { return &forkPerTurnFixtureAdapter{} },
-			format:   PlainTextOutput,
-			wantPass: true,
-		},
-		{
-			name:     "accepts every line fails under StructuredOutput",
-			adapter:  func() domain.AgentAdapter { return &forkPerTurnFixtureAdapter{} },
-			format:   StructuredOutput,
 			wantPass: false,
 		},
 		{
-			name:     "rejects non-JSON passes under StructuredOutput",
+			name:     "rejecting a line that is not JSON passes",
 			adapter:  func() domain.AgentAdapter { return &forkPerTurnFixtureAdapter{parseLine: jsonDecodingParseLine} },
-			format:   StructuredOutput,
 			wantPass: true,
-		},
-		{
-			name:     "rejects non-JSON fails under PlainTextOutput",
-			adapter:  func() domain.AgentAdapter { return &forkPerTurnFixtureAdapter{parseLine: jsonDecodingParseLine} },
-			format:   PlainTextOutput,
-			wantPass: false,
 		},
 	}
 
 	for _, tt := range tests {
-		if got := runAssertEarlyExitReport(credentialTestKindWithCommand, tt.adapter(), tt.format); got != tt.wantPass {
+		if got := runAssertEarlyExitReport(credentialTestKindWithCommand, tt.adapter()); got != tt.wantPass {
 			t.Errorf("case %q: AssertEarlyExitReport() passed = %v, want %v", tt.name, got, tt.wantPass)
 		}
 	}
