@@ -710,25 +710,6 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantChecks: []string{"type_mismatch"},
 			wantFields: []string{"self_review.max_iterations"},
 		},
-		{
-			// ci_feedback without a "kind" is never read by the config
-			// layer (buildCIFeedbackConfig returns early), but the same
-			// unconditional type check applies.
-			name: "kind-less ci_feedback block accepts out-of-range integer without warning",
-			raw: map[string]any{
-				"ci_feedback": map[string]any{"max_retries": float64(1e20)},
-			},
-			wantCount: 0,
-		},
-		{
-			name: "kind-less ci_feedback block still warns on non-numeric value",
-			raw: map[string]any{
-				"ci_feedback": map[string]any{"max_retries": "abc"},
-			},
-			wantCount:  1,
-			wantChecks: []string{"type_mismatch"},
-			wantFields: []string{"ci_feedback.max_retries"},
-		},
 
 		{
 			name: "fully valid config with all known keys produces no warnings",

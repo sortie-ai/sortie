@@ -2012,6 +2012,55 @@ func TestRunLabelCommandsBothLabelsEmpty_ConfigRejected(t *testing.T) {
 	}
 }
 
+func TestRunCIFeedbackSection_ConfigRejected(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+workspace:
+  root: %s
+
+ci_feedback:
+  kind: github
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, filepath.Join(dir, "workspaces")))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (ci_feedback section); stderr:\n%s", code, stderr.String())
+	}
+
+	const wantErr = "config: ci_feedback: no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
+	if logs := stderr.String(); !strings.Contains(logs, wantErr) {
+		t.Errorf("expected %q in stderr, got:\n%s", wantErr, logs)
+	}
+}
+
 // fiveKindsWiringWorkflow returns a WORKFLOW.md activating
 // reactions.review_comments, reactions.bot_review,
 // reactions.merge_conflicts, reactions.merge_completion, and a

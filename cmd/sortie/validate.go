@@ -237,13 +237,13 @@ func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
 // activationChecks reports the offline-decidable SCM and CI activation
 // faults in the resolved config: an active SCM reaction naming an
 // unregistered provider, active SCM reactions disagreeing on the
-// provider, and a reactions.ci_failure.provider (or its deprecated
-// ci_feedback.kind equivalent) naming no registered CI provider. The
-// resolved CI feedback kind joins the same active-SCM-reaction provider
-// set the runtime uses, so a disagreement between reactions.ci_failure
-// and another active SCM reaction is caught here too. It reuses
-// scmProviderConflict and the adapter registries the runtime consults at
-// construction, so it constructs no adapter and opens no socket.
+// provider, and a reactions.ci_failure.provider naming no registered CI
+// provider. The resolved CI feedback kind joins the same
+// active-SCM-reaction provider set the runtime uses, so a disagreement
+// between reactions.ci_failure and another active SCM reaction is caught
+// here too. It reuses scmProviderConflict and the adapter registries the
+// runtime consults at construction, so it constructs no adapter and
+// opens no socket.
 func activationChecks(cfg config.ServiceConfig) []validateDiag {
 	var diags []validateDiag
 

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -2198,14 +2199,14 @@ func TestNewServiceConfig_TypeFaultOwnerGroups(t *testing.T) {
 			wrongGot:   "boolean",
 		},
 		{
-			name:  "ci_feedback.kind",
-			field: "ci_feedback.kind",
+			name:  "reactions.ci_failure.provider",
+			field: "reactions.ci_failure.provider",
 			buildRaw: func(v any) map[string]any {
 				m := map[string]any{}
 				if v != nil {
-					m["kind"] = v
+					m["provider"] = v
 				}
-				return map[string]any{"ci_feedback": m}
+				return map[string]any{"reactions": map[string]any{"ci_failure": m}}
 			},
 			wrongValue: []any{"webhook"},
 			wrongGot:   "list",
@@ -2773,14 +2774,14 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 			t.Fatalf("NewServiceConfig: %v", err)
 		}
 		if cfg.CIFeedback != (CIFeedbackConfig{}) {
-			t.Errorf("CIFeedback = %+v, want zero value when ci_feedback absent", cfg.CIFeedback)
+			t.Errorf("CIFeedback = %+v, want zero value when no CI feedback is configured", cfg.CIFeedback)
 		}
 	})
 
 	t.Run("KindWithDefaults", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github"},
+			"reactions": map[string]any{"ci_failure": map[string]any{"provider": "github"}},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
@@ -2795,7 +2796,7 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 	t.Run("ExplicitMaxRetries", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github", "max_retries": 5},
+			"reactions": map[string]any{"ci_failure": map[string]any{"provider": "github", "max_retries": 5}},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
@@ -2806,7 +2807,7 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 	t.Run("ValidEscalation/Comment", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github", "escalation": "comment"},
+			"reactions": map[string]any{"ci_failure": map[string]any{"provider": "github", "escalation": "comment"}},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
@@ -2817,7 +2818,7 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 	t.Run("ValidEscalation/Label", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github", "escalation": "label"},
+			"reactions": map[string]any{"ci_failure": map[string]any{"provider": "github", "escalation": "label"}},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
@@ -2828,18 +2829,20 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 	t.Run("InvalidEscalation/Rejected", func(t *testing.T) {
 		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github", "escalation": "slack"},
+			"reactions": map[string]any{"ci_failure": map[string]any{"provider": "github", "escalation": "slack"}},
 		})
-		assertConfigErrorField(t, err, "ci_feedback.escalation")
+		assertConfigErrorField(t, err, "reactions.ci_failure.escalation")
 	})
 
 	t.Run("CustomEscalationLabel", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{
-				"kind":             "github",
-				"escalation":       "label",
-				"escalation_label": "blocked-by-ci",
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider":         "github",
+					"escalation":       "label",
+					"escalation_label": "blocked-by-ci",
+				},
 			},
 		})
 		if err != nil {
@@ -2847,48 +2850,124 @@ func TestNewServiceConfig_CIFeedback(t *testing.T) {
 		}
 		assertStringEqual(t, "CIFeedback.EscalationLabel", "blocked-by-ci", cfg.CIFeedback.EscalationLabel)
 	})
-
-	t.Run("NotLeakedToExtensions", func(t *testing.T) {
-		t.Parallel()
-		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{"kind": "github"},
-		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig: %v", err)
-		}
-		if _, ok := cfg.extensions["ci_feedback"]; ok {
-			t.Error("ci_feedback leaked into cfg.extensions; want absent")
-		}
-	})
 }
 
-func TestNewServiceConfig_CIFeedbackAndLabelCommandsAdvisoriesAccumulate(t *testing.T) {
+func TestNewServiceConfig_CIFeedbackSectionRefused(t *testing.T) {
 	t.Parallel()
 
-	cfg, err := NewServiceConfig(map[string]any{
-		"ci_feedback": map[string]any{"kind": "github"},
-		"reactions": map[string]any{
-			"ci_failure": map[string]any{"provider": "github-actions"},
-			"label_commands": map[string]any{
-				"provider":         "github",
-				"poll_interval_ms": 5000,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+	const (
+		moveMessage   = "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
+		deleteMessage = "no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings"
+	)
+
+	withReactions := func(ciFailure any) map[string]any {
+		return map[string]any{
+			"ci_feedback": map[string]any{"kind": "github"},
+			"reactions":   map[string]any{"ci_failure": ciFailure},
+		}
 	}
 
-	got := cfg.Advisories()
-	if len(got) != 2 {
-		t.Fatalf("Advisories() = %+v, want 2 entries", got)
+	tests := []struct {
+		name        string
+		raw         map[string]any
+		wantMessage string
+	}{
+		{
+			name:        "bare key",
+			raw:         map[string]any{"ci_feedback": nil},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "empty mapping",
+			raw:         map[string]any{"ci_feedback": map[string]any{}},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "mapping without kind",
+			raw:         map[string]any{"ci_feedback": map[string]any{"max_retries": 3}},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "mapping with kind",
+			raw:         map[string]any{"ci_feedback": map[string]any{"kind": "github"}},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "string value",
+			raw:         map[string]any{"ci_feedback": "github"},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "list value",
+			raw:         map[string]any{"ci_feedback": []any{"github"}},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "reactions is not a mapping",
+			raw:         map[string]any{"ci_feedback": map[string]any{"kind": "github"}, "reactions": "none"},
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "ci_failure with provider",
+			raw:         withReactions(map[string]any{"provider": "github"}),
+			wantMessage: deleteMessage,
+		},
+		{
+			name:        "ci_failure empty mapping",
+			raw:         withReactions(map[string]any{}),
+			wantMessage: deleteMessage,
+		},
+		{
+			name:        "ci_failure bare key",
+			raw:         withReactions(nil),
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "ci_failure string",
+			raw:         withReactions("github"),
+			wantMessage: moveMessage,
+		},
 	}
-	if !hasAdvisory(got, "ci_feedback.deprecated", "ci_feedback section is deprecated; using reactions.ci_failure instead") {
-		t.Errorf("Advisories() = %+v, want the ci_feedback.deprecated advisory", got)
+
+	variants := []struct {
+		name string
+		opts []ServiceConfigOption
+	}{
+		{name: "default", opts: nil},
+		{name: "retired agents", opts: []ServiceConfigOption{WithRetiredAgents(fixtureLookup)}},
 	}
-	if !hasAdvisory(got, "reactions.label_commands.poll_interval_ms.clamped", "clamped label_commands poll_interval_ms to floor") {
-		t.Errorf("Advisories() = %+v, want the poll_interval_ms.clamped advisory", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, v := range variants {
+				t.Run(v.name, func(t *testing.T) {
+					t.Parallel()
+
+					_, err := NewServiceConfig(maps.Clone(tt.raw), v.opts...)
+
+					assertConfigErrorField(t, err, "ci_feedback")
+					var ce *ConfigError
+					if !errors.As(err, &ce) {
+						t.Fatalf("error type = %T, want *ConfigError", err)
+					}
+					assertStringEqual(t, "ConfigError.Message", tt.wantMessage, ce.Message)
+				})
+			}
+		})
 	}
+
+	t.Run("reported before a later type fault", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github"},
+			"polling":     map[string]any{"interval_ms": "notanumber"},
+		})
+
+		assertConfigErrorField(t, err, "ci_feedback")
+	})
 }
 
 func TestNewServiceConfig_SelfReview(t *testing.T) {
@@ -3580,13 +3659,9 @@ func TestCIFailureMigration(t *testing.T) {
 		assertStringEqual(t, "CIFeedback.Kind", "", cfg.CIFeedback.Kind)
 	})
 
-	t.Run("Precedence/BothPresent/ReactionsWins", func(t *testing.T) {
+	t.Run("ReactionsCIFailure/ExplicitValues", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{
-				"kind":        "circle-ci",
-				"max_retries": 1,
-			},
 			"reactions": map[string]any{
 				"ci_failure": map[string]any{
 					"provider":         "github-actions",
@@ -3605,25 +3680,6 @@ func TestCIFailureMigration(t *testing.T) {
 		assertIntEqual(t, "CIFeedback.MaxLogLines", 75, cfg.CIFeedback.MaxLogLines)
 		assertStringEqual(t, "CIFeedback.Escalation", "comment", cfg.CIFeedback.Escalation)
 		assertStringEqual(t, "CIFeedback.EscalationLabel", "ci-blocked", cfg.CIFeedback.EscalationLabel)
-
-		if !hasAdvisory(cfg.Advisories(), "ci_feedback.deprecated", "ci_feedback section is deprecated; using reactions.ci_failure instead") {
-			t.Errorf("Advisories() = %+v, want the ci_feedback.deprecated advisory", cfg.Advisories())
-		}
-	})
-
-	t.Run("Precedence/CIFeedbackOnly", func(t *testing.T) {
-		t.Parallel()
-		cfg, err := NewServiceConfig(map[string]any{
-			"ci_feedback": map[string]any{
-				"kind":        "github",
-				"max_retries": 3,
-			},
-		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig: %v", err)
-		}
-		assertStringEqual(t, "CIFeedback.Kind", "github", cfg.CIFeedback.Kind)
-		assertIntEqual(t, "CIFeedback.MaxRetries", 3, cfg.CIFeedback.MaxRetries)
 	})
 
 	t.Run("Precedence/NeitherPresent", func(t *testing.T) {

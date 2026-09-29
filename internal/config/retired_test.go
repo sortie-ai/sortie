@@ -669,18 +669,17 @@ func TestRetiredConversion_AdvisoriesFollowEnvAndPrecedeTheRest(t *testing.T) {
 	t.Setenv("SORTIE_ENV_FILE", t.TempDir()+"/absent.env")
 
 	cfg := loadConverted(t, map[string]any{
-		"agent":       map[string]any{"kind": retiredKind},
-		"dispatch":    map[string]any{"rules": []any{ruleNaming(retiredTwinKind)}},
-		retiredKind:   map[string]any{},
-		"ci_feedback": map[string]any{"kind": "github"},
-		"reactions":   map[string]any{"ci_failure": map[string]any{"provider": "github-actions"}},
+		"agent":     map[string]any{"kind": retiredKind},
+		"dispatch":  map[string]any{"rules": []any{ruleNaming(retiredTwinKind)}},
+		retiredKind: map[string]any{},
+		"reactions": map[string]any{"label_commands": map[string]any{"provider": "github", "poll_interval_ms": 5000}},
 	})
 
 	var got []string
 	for _, advisory := range cfg.Advisories() {
 		got = append(got, advisory.Check)
 	}
-	want := []string{"env_file.missing", "agent.kind.retired", "agent.kind.retired", "ci_feedback.deprecated"}
+	want := []string{"env_file.missing", "agent.kind.retired", "agent.kind.retired", "reactions.label_commands.poll_interval_ms.clamped"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Advisories() checks = %v, want %v", got, want)
 	}
