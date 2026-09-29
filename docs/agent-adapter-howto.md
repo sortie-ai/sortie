@@ -81,7 +81,7 @@ This is the procedure for a runtime that has never been measured: no tracked pro
 
 ## Move an existing native adapter onto the protocol
 
-A runtime already reachable through its own native kind (`kiro`, for example, alongside `agent-client-protocol`) is a candidate for this migration once the protocol route has been measured against it. Nothing retires the native kind automatically; this procedure is what decides whether the operator can be pointed at the protocol route without losing anything, and it leaves the native package in place until a maintainer removes it separately.
+A runtime already reachable through its own native kind is a candidate for this migration once the protocol route has been measured against it. Nothing retires the native kind automatically; this procedure is what decides whether the operator can be pointed at the protocol route without losing anything, and it leaves the native package in place until a maintainer removes it separately.
 
 1. **Qualify the runtime for the first time, if it has no tracked profile yet.** A runtime with only a native adapter today has nothing under `tools/qualify/profiles/`. Write one (see [Add a new runtime through the Agent Client Protocol](#add-a-new-runtime-through-the-agent-client-protocol), step 1) naming both the protocol entry point and the runtime's own native structured surfaces, then follow [Qualify a runtime for the first time](#qualify-a-runtime-for-the-first-time) in full. The reference the report compares against is the runtime's own native surfaces, not Sortie's existing native Go adapter; see [Transport parity and product conformance](agent-adapter-concepts.md#transport-parity-and-product-conformance) for what that reference is and is not.
 

@@ -196,7 +196,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/agent/codex/`  | Integration   | Codex adapter behind `AgentAdapter` interface        |
 | `internal/agent/copilot/` | Integration  | Copilot adapter behind `AgentAdapter` interface      |
 | `internal/agent/opencode/` | Integration | OpenCode adapter behind `AgentAdapter` interface     |
-| `internal/agent/kiro/`   | Integration   | Kiro adapter behind `AgentAdapter` interface         |
+| `internal/agent/kiro/`   | Integration   | Conversion of the removed `kiro` kind onto `agent-client-protocol` |
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
 | `internal/notify/slack/` | Integration   | Slack notifier behind `Notifier` interface           |
 | `internal/notify/webhook/` | Integration | Outbound webhook notifier behind `Notifier` interface |
