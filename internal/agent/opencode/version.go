@@ -22,11 +22,12 @@ var opencodeVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]
 
 // detectRuntimeMajor launches the configured command with --version,
 // bounded by [agentcore.AuxiliaryTimeout], and resolves the outcome
-// into the OpenCode major that command reports. It re-verifies the
+// into the OpenCode major that command reports, along with the version
+// it reported. It re-verifies the
 // workspace through the same [agentcore.LaunchTarget.AuxiliaryCommand]
 // path every other auxiliary launch uses, so a session start on a
 // removed workspace fails here rather than at the first turn.
-func detectRuntimeMajor(ctx context.Context, state *sessionState) (runtimeMajor, *domain.AgentError) {
+func detectRuntimeMajor(ctx context.Context, state *sessionState) (string, runtimeMajor, *domain.AgentError) {
 	queryCtx, cancel := context.WithTimeout(ctx, agentcore.AuxiliaryTimeout(state.agentConfig))
 	defer cancel()
 
@@ -36,7 +37,7 @@ func detectRuntimeMajor(ctx context.Context, state *sessionState) (runtimeMajor,
 	cmd, agentErr := state.target.AuxiliaryCommand(queryCtx, []string{"--version"}, nil, versionQueryEnv(os.Environ()),
 		sshutil.EnvVar{Name: "OPENCODE_DISABLE_AUTOUPDATE", Value: "true"})
 	if agentErr != nil {
-		return majorUnknown, agentErr
+		return "", majorUnknown, agentErr
 	}
 
 	result, startErr := procutil.RunCapture(cmd, procutil.StopGrace(state.agentConfig.StopGraceMS), procutil.CaptureParams{
@@ -47,28 +48,28 @@ func detectRuntimeMajor(ctx context.Context, state *sessionState) (runtimeMajor,
 
 	switch {
 	case startErr != nil:
-		return majorUnknown, &domain.AgentError{
+		return "", majorUnknown, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
 			Message: "could not start the agent runtime to read its version",
 			Err:     startErr,
 		}
 	case ctx.Err() != nil:
-		return majorUnknown, &domain.AgentError{
+		return "", majorUnknown, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
 			Message: "the session start ended while the agent runtime was reporting its version",
 			Err:     ctx.Err(),
 		}
 	case queryCtx.Err() != nil:
-		return majorUnknown, &domain.AgentError{
+		return "", majorUnknown, &domain.AgentError{
 			Kind: domain.ErrResponseTimeout,
 			Message: fmt.Sprintf("the agent runtime did not report its version within %d ms",
 				agentcore.AuxiliaryTimeout(state.agentConfig).Milliseconds()),
 		}
 	case result.WaitErr != nil:
 		if state.target.RemoteCommand != "" && sshutil.ConnectionFailed(procutil.ExtractExitCode(result.WaitErr)) {
-			return majorUnknown, agentcore.ConnectionFailedError()
+			return "", majorUnknown, agentcore.ConnectionFailedError()
 		}
-		return majorUnknown, agentcore.ExitedEarly(state.target, result).Report(stderr.Collector(state.logger()))
+		return "", majorUnknown, agentcore.ExitedEarly(state.target, result).Report(stderr.Collector(state.logger()))
 	}
 
 	version, major, ok := parseRuntimeVersion(stdout.Bytes(), stdout.Truncated())
@@ -77,19 +78,19 @@ func detectRuntimeMajor(ctx context.Context, state *sessionState) (runtimeMajor,
 		if line := firstReadableLine(stdout.Bytes()); line != "" {
 			message = redact.Truncate(line, 200)
 		}
-		return majorUnknown, &domain.AgentError{
+		return "", majorUnknown, &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
 			Message: "the configured OpenCode command reported no version Sortie can read: " + message,
 		}
 	}
 	if major != 1 && major != 2 {
-		return majorUnknown, &domain.AgentError{
+		return "", majorUnknown, &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
 			Message: fmt.Sprintf("OpenCode %s is not supported; install a 1.x or 2.x release", version),
 		}
 	}
 
-	return runtimeMajor(major), nil
+	return version, runtimeMajor(major), nil
 }
 
 // versionQueryEnv scrubs base of every managed variable a turn's own

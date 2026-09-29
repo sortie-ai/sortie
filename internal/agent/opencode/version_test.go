@@ -1,6 +1,23 @@
 package opencode
 
-import "testing"
+import (
+	"context"
+	"log/slog"
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/domain"
+)
+
+func deprecationWarnings(entries []agenttest.LogSpyEntry, msg string) []agenttest.LogSpyEntry {
+	var out []agenttest.LogSpyEntry
+	for _, e := range entries {
+		if e.Level == slog.LevelWarn && e.Msg == msg {
+			out = append(out, e)
+		}
+	}
+	return out
+}
 
 func TestParseRuntimeVersion(t *testing.T) {
 	t.Parallel()
@@ -98,6 +115,65 @@ func TestCheckMajorSettings(t *testing.T) {
 			}
 			if got.Message != tt.wantMsg {
 				t.Errorf("checkMajorSettings().Message = %q, want %q", got.Message, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestStartSession_MajorOneDeprecationWarning(t *testing.T) {
+	const wantMsg = "support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli"
+
+	tests := []struct {
+		name                   string
+		reportedVersion        string
+		credentialVerification bool
+		wantMajor              int
+		wantVersionAttr        string
+	}{
+		{name: "major 1 working session logs one warning", reportedVersion: "1.18.33", wantMajor: 1, wantVersionAttr: "1.18.33"},
+		{name: "major 2 working session logs none", reportedVersion: "opencode v2.0.19", wantMajor: 2},
+		{name: "major 1 credential verification session logs none", reportedVersion: "1.18.33", credentialVerification: true, wantMajor: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spy := agenttest.InstallLogSpy(t)
+			dir := t.TempDir()
+			command := agenttest.FakeRuntime(t, dir, "opencode", agenttest.OutputScenario, agenttest.Output{Version: tt.reportedVersion})
+			a, err := NewOpenCodeAdapter(map[string]any{})
+			if err != nil {
+				t.Fatalf("NewOpenCodeAdapter() error = %v", err)
+			}
+
+			session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+				WorkspacePath:          dir,
+				AgentConfig:            domain.AgentConfig{Command: command},
+				CredentialVerification: tt.credentialVerification,
+			})
+			if err != nil {
+				t.Fatalf("StartSession(version %q, credentialVerification=%v) error = %v, want nil", tt.reportedVersion, tt.credentialVerification, err)
+			}
+
+			gotMajor, err := RuntimeMajorForTest(session)
+			if err != nil {
+				t.Fatalf("RuntimeMajorForTest() error = %v", err)
+			}
+			if gotMajor != tt.wantMajor {
+				t.Errorf("RuntimeMajorForTest(version %q) = %d, want %d", tt.reportedVersion, gotMajor, tt.wantMajor)
+			}
+
+			warnings := deprecationWarnings(spy.Entries(), wantMsg)
+			if tt.wantVersionAttr == "" {
+				if len(warnings) != 0 {
+					t.Fatalf("StartSession(version %q, credentialVerification=%v) logged %d deprecation warnings, want 0", tt.reportedVersion, tt.credentialVerification, len(warnings))
+				}
+				return
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("StartSession(version %q) logged %d deprecation warnings, want 1", tt.reportedVersion, len(warnings))
+			}
+			if got := warnings[0].Attrs["version"]; got != tt.wantVersionAttr {
+				t.Errorf("deprecation warning version attribute = %q, want %q", got, tt.wantVersionAttr)
 			}
 		})
 	}
