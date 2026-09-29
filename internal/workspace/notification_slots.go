@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
@@ -16,6 +18,33 @@ const (
 	slotLockSuffix       = ".lock"
 	slotPendingSuffix    = ".pending"
 )
+
+// heldSlotLocks names the slot lock files this process holds a claim on.
+// NFS grants a flock lock to the whole process rather than to one open file,
+// and closing any open file drops that lock, so a claim must not lock, or
+// even open, a lock file its own process already holds.
+var heldSlotLocks = struct {
+	sync.Mutex
+	paths map[string]struct{}
+}{paths: map[string]struct{}{}}
+
+// holdSlotLock records path as held and reports false when it already is.
+func holdSlotLock(path string) bool {
+	heldSlotLocks.Lock()
+	defer heldSlotLocks.Unlock()
+	if _, held := heldSlotLocks.paths[path]; held {
+		return false
+	}
+	heldSlotLocks.paths[path] = struct{}{}
+	return true
+}
+
+// forgetSlotLock must run only after the lock file is closed.
+func forgetSlotLock(path string) {
+	heldSlotLocks.Lock()
+	defer heldSlotLocks.Unlock()
+	delete(heldSlotLocks.paths, path)
+}
 
 // tryLockFunc takes an exclusive lock on the file without waiting. It
 // reports locked == false with a nil error when another open file holds the
@@ -42,6 +71,7 @@ const (
 type NotificationSlot struct {
 	slots     *os.Root
 	lock      *os.File // nil for a fallback claim
+	lockPath  string
 	name      string
 	workspace string
 	logger    *slog.Logger
@@ -63,6 +93,7 @@ func (s *NotificationSlot) Commit() {
 	if s.lock != nil {
 		s.recordSlotFile()
 		dropLock(s.lock)
+		forgetSlotLock(s.lockPath)
 	}
 	_ = s.slots.Close() //nolint:errcheck // the handle is not needed once the claim ends
 }
@@ -82,6 +113,7 @@ func (s *NotificationSlot) Release() {
 	if s.lock != nil {
 		s.removeEntry(s.name + slotPendingSuffix)
 		dropLock(s.lock)
+		forgetSlotLock(s.lockPath)
 	} else {
 		s.removeEntry(s.name)
 	}
@@ -158,7 +190,7 @@ func reserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 		return nil, false, fmt.Errorf("%s directory: %w", notificationSlotsDir, err)
 	}
 
-	slot, err := claimLowestSlot(slotsRoot, workspacePath, dispatchID, limit, logger, tryLock)
+	slot, err := claimLowestSlot(slotsRoot, slotsDirPath(workspacePath), workspacePath, dispatchID, limit, logger, tryLock)
 	if slot == nil {
 		_ = slotsRoot.Close() //nolint:errcheck // the handle is not needed once no claim owns it
 	}
@@ -168,9 +200,22 @@ func reserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 	return slot, slot != nil, nil
 }
 
+// slotsDirPath names the slot directory alike for every spelling of
+// workspacePath, so that one process sees its own locks under any of them.
+func slotsDirPath(workspacePath string) string {
+	dir, err := filepath.Abs(workspacePath)
+	if err != nil {
+		dir = workspacePath
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	return filepath.Join(dir, workspacekit.SortieDir, notificationSlotsDir)
+}
+
 // claimLowestSlot returns a claim that owns slots, or nil without an error
-// when every slot is occupied.
-func claimLowestSlot(slots *os.Root, workspacePath, dispatchID string, limit int, logger *slog.Logger, tryLock tryLockFunc) (*NotificationSlot, error) {
+// when every slot is occupied. slotsPath is the path slots was opened at.
+func claimLowestSlot(slots *os.Root, slotsPath, workspacePath, dispatchID string, limit int, logger *slog.Logger, tryLock tryLockFunc) (*NotificationSlot, error) {
 	fallback := false
 	for n := 1; n <= limit; n++ {
 		name := dispatchID + "-" + strconv.Itoa(n)
@@ -183,7 +228,7 @@ func claimLowestSlot(slots *os.Root, workspacePath, dispatchID string, limit int
 		}
 
 		if !fallback {
-			slot, attempt, err := claimUnderLock(slots, workspacePath, name, logger, tryLock)
+			slot, attempt, err := claimUnderLock(slots, slotsPath, workspacePath, name, logger, tryLock)
 			if err != nil {
 				return nil, err
 			}
@@ -212,7 +257,17 @@ func claimLowestSlot(slots *os.Root, workspacePath, dispatchID string, limit int
 // claimUnderLock tries to claim the slot at name through its lock file. The
 // slot file is checked again once the lock is held: a claim that committed
 // between the first check and the lock leaves a slot file behind.
-func claimUnderLock(slots *os.Root, workspacePath, name string, logger *slog.Logger, tryLock tryLockFunc) (*NotificationSlot, slotAttempt, error) {
+func claimUnderLock(slots *os.Root, slotsPath, workspacePath, name string, logger *slog.Logger, tryLock tryLockFunc) (slot *NotificationSlot, attempt slotAttempt, err error) {
+	lockPath := filepath.Join(slotsPath, name+slotLockSuffix)
+	if !holdSlotLock(lockPath) {
+		return nil, slotOccupied, nil
+	}
+	defer func() {
+		if slot == nil {
+			forgetSlotLock(lockPath)
+		}
+	}()
+
 	lock, occupied, err := openLockFile(slots, name+slotLockSuffix)
 	if err != nil {
 		return nil, slotOccupied, err
@@ -253,7 +308,7 @@ func claimUnderLock(slots *os.Root, workspacePath, name string, logger *slog.Log
 		dropLock(lock)
 		return nil, slotOccupied, nil
 	}
-	return &NotificationSlot{slots: slots, lock: lock, name: name, workspace: workspacePath, logger: logger}, slotClaimed, nil
+	return &NotificationSlot{slots: slots, lock: lock, lockPath: lockPath, name: name, workspace: workspacePath, logger: logger}, slotClaimed, nil
 }
 
 // openLockFile returns the lock file at lockName, creating it when absent.

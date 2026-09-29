@@ -653,3 +653,39 @@ func TestReserveNotificationSlot_LockUnavailableFallsBackToSlotFile(t *testing.T
 		})
 	}
 }
+
+// On NFS a flock lock belongs to the process, so a second lock attempt from
+// the process that holds it succeeds.
+func TestReserveNotificationSlot_ProcessWideLockKeepsOneClaimPerSlot(t *testing.T) {
+	t.Parallel()
+
+	ws := newSlotWorkspace(t)
+	const dispatchID = "dispatch-process-lock"
+	grantLock := func(*os.File) (bool, error) { return true, nil }
+
+	first, reserved, err := reserveNotificationSlot(ws, dispatchID, 1, nil, grantLock)
+	if first != nil {
+		endOnCleanup(t, first)
+	}
+	if err != nil || !reserved {
+		t.Fatalf("first reserveNotificationSlot() = reserved=%v err=%v, want a claim", reserved, err)
+	}
+
+	second, reserved, err := reserveNotificationSlot(ws, dispatchID, 1, nil, grantLock)
+	if second != nil {
+		endOnCleanup(t, second)
+	}
+	if err != nil || reserved {
+		t.Fatalf("second reserveNotificationSlot() = reserved=%v err=%v, want nil, false while the first claim holds the slot", reserved, err)
+	}
+
+	first.Release()
+
+	third, reserved, err := reserveNotificationSlot(ws, dispatchID, 1, nil, grantLock)
+	if third != nil {
+		endOnCleanup(t, third)
+	}
+	if err != nil || !reserved {
+		t.Fatalf("reserveNotificationSlot() after release = reserved=%v err=%v, want a claim", reserved, err)
+	}
+}
