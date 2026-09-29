@@ -14,8 +14,8 @@ import (
 )
 
 // EarlyExitCaptureBytes is the byte budget a one-shot launch retains
-// per stream, such as the kiro credential guard's standard output and
-// standard error, before [ExitedEarly] decides its outcome.
+// per stream, standard output and standard error alike, before
+// [ExitedEarly] decides its outcome.
 const EarlyExitCaptureBytes = 64 * 1024
 
 const (
@@ -89,9 +89,8 @@ func ObserveEarlyExit(ctx context.Context, target LaunchTarget, reaper *procutil
 }
 
 // ExitedEarly records the observation for a launch the caller has
-// already waited for, such as the kiro credential guard's canary,
-// whose context was still live when result was produced. It is always
-// observed.
+// already waited for, whose context was still live when result was
+// produced. It is always observed.
 func ExitedEarly(target LaunchTarget, result procutil.CaptureResult) EarlyExit {
 	return EarlyExit{
 		observed:   true,

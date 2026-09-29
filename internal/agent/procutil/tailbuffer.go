@@ -11,8 +11,8 @@ import (
 // TailBuffer retains the last max bytes written to it, masking every
 // registered secret value before applying the retention cut. It
 // implements [io.Writer] for use as a bounded capture sink, such as a
-// workspace hook's combined-output stream or the kiro credential
-// guard's standard error, and is safe for concurrent use.
+// workspace hook's combined-output stream, and is safe for concurrent
+// use.
 type TailBuffer struct {
 	mu        sync.Mutex
 	masker    *redact.Writer

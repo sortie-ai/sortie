@@ -42,23 +42,8 @@ const emptyCommandMessage = "agent command is empty or whitespace-only"
 
 // unreadableConformanceLine is the fixed line the fourth conformance
 // case's runtime writes to standard output: text no structured-output
-// decoder accepts, so a kind with that format never counts it as a
-// response.
+// decoder accepts, so a kind never counts it as a response.
 const unreadableConformanceLine = "Usage: sortie-early-exit-conformance [options]"
-
-// OutputFormat identifies how a kind's adapter decides that a line its
-// runtime wrote on standard output counts as the runtime having
-// responded.
-type OutputFormat int
-
-const (
-	// StructuredOutput counts a line only once the kind's own decoder
-	// accepts it as its protocol message.
-	StructuredOutput OutputFormat = iota + 1
-	// PlainTextOutput counts every readable line as the runtime's
-	// response, matching a kind whose output is a plain-text transcript.
-	PlainTextOutput
-)
 
 // AssertEarlyExitReport fails t unless kind is registered with
 // [registry.AgentMeta.RequiresCommand] true, and four launches driven
@@ -81,15 +66,9 @@ const (
 // [earlyExitConformanceSwitch]; any other launch writes nothing and
 // exits 0. A launch that succeeds is stopped and fails t.
 //
-// format is the caller's own kind's answer to how its adapter decides a
-// line counts as the runtime's response: [StructuredOutput] for a kind
-// whose decoder accepts only its own protocol messages, [PlainTextOutput]
-// for a kind that counts every readable line. It decides only the
-// fourth case's expected outcome.
-//
 // AssertEarlyExitReport sets PATH through [testing.T.Setenv], so its
 // caller must not run it in parallel with a sibling test.
-func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapter, config domain.AgentConfig, format OutputFormat) {
+func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapter, config domain.AgentConfig) {
 	t.Helper()
 
 	meta, registered := registry.Agents.Meta(kind)
@@ -154,7 +133,7 @@ func AssertEarlyExitReport(t *testing.T, kind string, adapter domain.AgentAdapte
 		}
 		assertEarlyExitWorkingSession(t, formKind+": working session through ssh", adapter, remoteParams)
 
-		assertUnreadableLineConformance(t, formKind, adapter, form.apply(config, unreadablePath), format)
+		assertUnreadableLineConformance(t, formKind, adapter, form.apply(config, unreadablePath))
 	}
 
 	assertZeroCommandLaunch(t, kind, adapter, config, meta.DefaultCommand)
@@ -235,10 +214,8 @@ func assertZeroCommandLaunch(t *testing.T, kind string, adapter domain.AgentAdap
 // unreadableConfig, whose command names a fake runtime that writes
 // [unreadableConformanceLine] on standard output, then
 // [earlyExitConformanceLine] on standard error, then exits 2, and fails
-// t unless the outcome matches format: the shared early-exit report
-// under [StructuredOutput], or a failure that chains no
-// [*agentcore.EarlyExitError] under [PlainTextOutput].
-func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.AgentAdapter, unreadableConfig domain.AgentConfig, format OutputFormat) {
+// t unless the session fails with the shared early-exit report.
+func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.AgentAdapter, unreadableConfig domain.AgentConfig) {
 	t.Helper()
 
 	name := kind + ": unreadable standard-output line"
@@ -247,27 +224,11 @@ func assertUnreadableLineConformance(t *testing.T, kind string, adapter domain.A
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   unreadableConfig,
 	}, 0, 0)
-
-	switch format {
-	case StructuredOutput:
-		if err == nil {
-			t.Errorf("case %q: StartSession and RunTurn against the conformance runtime unexpectedly both succeeded", name)
-			return
-		}
-		assertEarlyExitReportOutcome(t, name, err)
-	case PlainTextOutput:
-		if err == nil {
-			t.Errorf("case %q: StartSession and RunTurn against the conformance runtime unexpectedly both succeeded", name)
-			return
-		}
-		var agentErr *domain.AgentError
-		var earlyExitErr *agentcore.EarlyExitError
-		if errors.As(err, &agentErr) && errors.As(agentErr.Err, &earlyExitErr) {
-			t.Errorf("case %q: error %v chains an *agentcore.EarlyExitError, want the standard-output line counted as the runtime's response", name, err)
-		}
-	default:
-		t.Fatalf("kind %q: unrecognized OutputFormat %v", kind, format)
+	if err == nil {
+		t.Errorf("case %q: StartSession and RunTurn against the conformance runtime unexpectedly both succeeded", name)
+		return
 	}
+	assertEarlyExitReportOutcome(t, name, err)
 }
 
 // assertEarlyExitWorkingSession drives one working session through
