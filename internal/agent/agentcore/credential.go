@@ -193,13 +193,3 @@ func CredentialRefusedError(runtimeText string, cause error) *domain.AgentError 
 		Err:     cause,
 	}
 }
-
-// CredentialAbsentError builds the error for a presence guard that found
-// no credential before starting a runtime that would block waiting for one.
-func CredentialAbsentError(reason string, cause error) *domain.AgentError {
-	return &domain.AgentError{
-		Kind:    domain.ErrCredentialUnverified,
-		Message: fmt.Sprintf("the agent runtime reports no usable credential: %s", reason),
-		Err:     cause,
-	}
-}

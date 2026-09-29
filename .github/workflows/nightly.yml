@@ -105,19 +105,6 @@ jobs:
             source: "npm: @opencode/cli@2 (latest 2.x)"
             opencode_major: "2"
 
-          - name: Kiro
-            adapter: kiro
-            kind: agent
-            guard: SORTIE_KIRO_TEST
-            credential_env: KIRO_API_KEY
-            run_filter: Integration
-            test_path: ./internal/agent/kiro/...
-            timeout: 300s
-            node: false
-            install: curl -fsSL https://cli.kiro.dev/install | bash
-            version_cmd: kiro-cli --version
-            source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
-
           - name: Gemini - ACP
             adapter: acp-gemini
             kind: agent

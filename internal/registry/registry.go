@@ -177,11 +177,10 @@ type AgentDeprecation struct {
 // by the orchestrator at preflight time. Zero value means no special
 // requirements.
 type AgentMeta struct {
-	// Deprecation is nil when the kind is not deprecated, which holds
-	// for every registered kind but one. Non-nil declares the kind
-	// deprecated in favor of Deprecation.Replacement: the kind stays
-	// registered, and it constructs and runs unchanged. Read-only after
-	// registration.
+	// Deprecation is nil when the kind is not deprecated. Non-nil
+	// declares the kind deprecated in favor of Deprecation.Replacement:
+	// the kind stays registered, and it constructs and runs unchanged.
+	// Read-only after registration.
 	Deprecation *AgentDeprecation
 
 	// RequiresCommand indicates the kind launches a command.

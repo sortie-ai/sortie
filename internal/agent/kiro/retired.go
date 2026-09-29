@@ -1,3 +1,8 @@
+// Package kiro declares the retirement of agent kind "kiro". A
+// configuration naming that kind converts at load onto the
+// "agent-client-protocol" kind, launching the same executable's protocol
+// entry point. No adapter is registered under "kiro"; the package holds the
+// retirement declaration and the settings checks its conversion runs.
 package kiro
 
 import (
@@ -7,9 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
-
-// This file holds every runtime fact the retirement declaration needs,
-// so it stands without the adapter's own files.
 
 // defaultCommand is the executable a session launches when it is given
 // no command.
@@ -32,8 +34,8 @@ func init() {
 }
 
 // convertRetired maps the kiro command and settings onto the protocol
-// entry point of the same executable. It refuses exactly the settings
-// [validateConfig] refuses, by running the same checks.
+// entry point of the same executable. It refuses a model or agent that is
+// not a string, and a trust posture the converted launch cannot honor.
 func convertRetired(in registry.AgentConversionInput) (registry.AgentConversion, *registry.AgentConversionFault) {
 	settings := in.Settings
 	if settings == nil {

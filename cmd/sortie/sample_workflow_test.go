@@ -235,7 +235,6 @@ var shippedExampleWorkflows = []string{
 	"WORKFLOW.copilot.md",
 	"WORKFLOW.opencode.md",
 	"WORKFLOW.linear.md",
-	"WORKFLOW.kiro.md",
 	"WORKFLOW.gitea.md",
 	"WORKFLOW.gitlab.md",
 	"WORKFLOW.agent-client-protocol.md",

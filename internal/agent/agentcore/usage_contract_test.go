@@ -384,9 +384,7 @@ func checkTurnEndUsageWiring(arrival string, facts turnEndUsageFacts) []usageCon
 // an error by design because the harness supplies the adapter through
 // AgentAdapterByKind, and it is test-only, build-tagged unix, imported
 // by no production package. A disposition describes a runtime's
-// emission behavior, and this kind has no runtime. A repository-wide
-// search for RegisterWithMeta therefore finds eight registrations
-// against the seven declarations this test checks.
+// emission behavior, and this kind has no runtime.
 func TestUsageDeclarationContractInvariant(t *testing.T) {
 	root := ".."
 

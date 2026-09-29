@@ -2,7 +2,6 @@ package kiro
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,9 +19,8 @@ import (
 
 const acpKind = "agent-client-protocol"
 
-func retiredLookup(kind string) (registry.RetiredAgent, bool) {
-	decl, err := registry.RetiredAgents.Get(kind)
-	return decl, err == nil
+func TestMain(m *testing.M) {
+	agenttest.Main(m, nil)
 }
 
 func fixtureW() map[string]any {
@@ -35,9 +33,9 @@ func fixtureW() map[string]any {
 	}
 }
 
-func loadW(t *testing.T, raw map[string]any, lookup config.RetiredAgentLookup) config.ServiceConfig {
+func loadW(t *testing.T, raw map[string]any) config.ServiceConfig {
 	t.Helper()
-	cfg, err := config.NewServiceConfig(raw, config.WithRetiredAgents(lookup))
+	cfg, err := config.NewServiceConfig(raw, config.WithRetiredAgents(registry.RetiredAgentOf))
 	if err != nil {
 		t.Fatalf("NewServiceConfig() error = %v", err)
 	}
@@ -49,7 +47,7 @@ func TestRetiredKiro_LoadsOntoTheProtocolKind(t *testing.T) {
 
 	raw := fixtureW()
 
-	cfg := loadW(t, raw, retiredLookup)
+	cfg := loadW(t, raw)
 
 	if cfg.Agent.Kind != acpKind {
 		t.Errorf("Agent.Kind = %q, want %q", cfg.Agent.Kind, acpKind)
@@ -79,7 +77,7 @@ func TestRetiredKiro_LoadsOntoTheProtocolKind(t *testing.T) {
 func TestRetiredKiro_AdvisoryNamesWhatIsNotCarried(t *testing.T) {
 	t.Parallel()
 
-	cfg := loadW(t, fixtureW(), retiredLookup)
+	cfg := loadW(t, fixtureW())
 
 	advisories := cfg.Advisories()
 	if len(advisories) != 1 {
@@ -94,7 +92,7 @@ func TestRetiredKiro_AdvisoryNamesWhatIsNotCarried(t *testing.T) {
 func TestRetiredKiro_LocalLaunchArgv(t *testing.T) {
 	binPath := agenttest.FakeRuntime(t, t.TempDir(), "kiro-cli", agenttest.OutputScenario, agenttest.Output{})
 	t.Setenv("PATH", filepath.Dir(binPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := loadW(t, fixtureW(), retiredLookup)
+	cfg := loadW(t, fixtureW())
 	command := cfg.AgentCommand(acpKind, false)
 
 	target, agentErr := agentcore.ResolveLaunchTarget(domain.StartSessionParams{
@@ -120,7 +118,7 @@ func TestRetiredKiro_RemoteLaunchAndCredential(t *testing.T) {
 	raw := fixtureW()
 	raw["worker"] = map[string]any{"ssh_hosts": []any{"host-1"}}
 
-	cfg := loadW(t, raw, retiredLookup)
+	cfg := loadW(t, raw)
 
 	command := cfg.AgentCommand(acpKind, true)
 	launch := sshutil.BuildSSHLaunch("host-1", "/w", command.Line, nil, sshutil.SSHOptions{})
@@ -145,7 +143,7 @@ func TestRetiredKiro_NonDefaultKindLaunchesItsOwnExecutable(t *testing.T) {
 	raw := fixtureW()
 	raw["agent"] = map[string]any{"kind": "plain-kind", "command": "plain-cmd"}
 
-	cfg := loadW(t, raw, retiredLookup)
+	cfg := loadW(t, raw)
 
 	want := "kiro-cli acp -a --model claude-sonnet-4.6 --agent reviewer"
 	if got := cfg.AgentCommand(acpKind, false); got.Line != want {
@@ -159,7 +157,7 @@ func TestRetiredKiro_SpacedAgentNameKeepsOneArgument(t *testing.T) {
 	raw := fixtureW()
 	raw["kiro"] = map[string]any{"model": "claude-sonnet-4.6", "agent": "space name"}
 
-	cfg := loadW(t, raw, retiredLookup)
+	cfg := loadW(t, raw)
 
 	wantLocal := []string{"kiro-cli", "acp", "-a", "--model", "claude-sonnet-4.6", "--agent", "space name"}
 	if got := cfg.AgentCommand(acpKind, false); got.Line != "" || !slices.Equal(got.Argv, wantLocal) {
@@ -171,97 +169,135 @@ func TestRetiredKiro_SpacedAgentNameKeepsOneArgument(t *testing.T) {
 	}
 }
 
-func TestRetiredKiro_LiveKindRunsUnconverted(t *testing.T) {
+func TestRetiredKiro_IsRetiredNotRegistered(t *testing.T) {
 	t.Parallel()
 
-	if _, converts := registry.RetiredAgentOf("kiro"); converts {
-		t.Fatal(`RetiredAgentOf("kiro") = true while the kind is registered live, want false`)
-	}
+	decl, retired := registry.RetiredAgentOf("kiro")
 
-	cfg := loadW(t, fixtureW(), registry.RetiredAgentOf)
-
-	if cfg.Agent.Kind != "kiro" {
-		t.Errorf("Agent.Kind = %q, want %q", cfg.Agent.Kind, "kiro")
+	if registry.Agents.Has("kiro") {
+		t.Error(`registry.Agents.Has("kiro") = true, want false`)
 	}
-	if records := cfg.AgentKindConversions(); len(records) != 0 {
-		t.Errorf("AgentKindConversions() = %+v, want none", records)
+	if !retired {
+		t.Fatal(`RetiredAgentOf("kiro") = false, want a declaration`)
 	}
-	if advisories := cfg.Advisories(); len(advisories) != 0 {
-		t.Errorf("Advisories() = %+v, want none", advisories)
+	if decl.Replacement != acpKind {
+		t.Errorf(`RetiredAgentOf("kiro").Replacement = %q, want %q`, decl.Replacement, acpKind)
 	}
 }
 
-var validatorSettings = []map[string]any{
-	nil,
-	{},
-	{"trust_all_tools": true, "trust_tools": []any{"read", "grep"}},
-	{"trust_all_tools": true},
-	{"trust_tools": []any{"read", "grep"}},
-	{"trust_all_tools": true, "trust_tools": []any{}},
-	{"trust_all_tools": false},
-	{"trust_tools": []any{"read"}},
-	{"model": 123},
-	{"model": "claude-sonnet-4.6", "agent": "reviewer"},
-	{"model": "claude-sonnet-4.6", "agent": 7},
-	{"agent": true, "trust_tools": []any{"read"}},
-	{"model": 1, "trust_all_tools": true, "trust_tools": []any{"read"}},
-	{"model": "m", "trust_all_tools": false, "trust_tools": []any{"read"}},
-	{"agent": "space name", "mcp_config": "mcp.json", "unknown": "x"},
-}
-
-func firstErrorDiagnostic(settings map[string]any) *registry.ValidationDiag {
-	diags := validateConfig(registry.AgentConfigFields{Kind: "kiro", Passthrough: settings})
-	for i := range diags {
-		if diags[i].Severity == "error" {
-			return &diags[i]
-		}
-	}
-	return nil
-}
-
-func keyOfCheck(check string) string {
-	key := strings.TrimPrefix(check, "kiro.")
-	if i := strings.LastIndex(key, "."); i >= 0 {
-		key = key[:i]
-	}
-	return key
-}
-
-func TestRetiredKiro_ConvertFaultsExactlyWhenTheValidatorDoes(t *testing.T) {
+func TestRetiredKiro_ConvertVerdicts(t *testing.T) {
 	t.Parallel()
 
-	decl, ok := retiredLookup("kiro")
-	if !ok {
-		t.Fatal(`registry.RetiredAgents holds no "kiro" declaration`)
+	untrusted := &registry.AgentConversionFault{Key: "trust_tools", Message: trustToolsUntrustedMessage}
+	tests := []struct {
+		name     string
+		settings map[string]any
+		want     *registry.AgentConversionFault
+	}{
+		{name: "nil settings", settings: nil},
+		{name: "empty settings", settings: map[string]any{}},
+		{
+			name:     "full trust with an allowlist",
+			settings: map[string]any{"trust_all_tools": true, "trust_tools": []any{"read", "grep"}},
+			want:     &registry.AgentConversionFault{Key: "trust_tools", Message: trustToolsConflictMessage},
+		},
+		{name: "full trust", settings: map[string]any{"trust_all_tools": true}},
+		{
+			name:     "allowlist only",
+			settings: map[string]any{"trust_tools": []any{"read", "grep"}},
+			want:     untrusted,
+		},
+		{
+			name:     "full trust with an empty allowlist",
+			settings: map[string]any{"trust_all_tools": true, "trust_tools": []any{}},
+		},
+		{name: "trust explicitly off", settings: map[string]any{"trust_all_tools": false}, want: untrusted},
+		{name: "single allowlisted tool", settings: map[string]any{"trust_tools": []any{"read"}}, want: untrusted},
+		{
+			name:     "model not a string",
+			settings: map[string]any{"model": 123},
+			want:     &registry.AgentConversionFault{Key: "model", Message: "model: expected string, got integer"},
+		},
+		{name: "model and agent", settings: map[string]any{"model": "claude-sonnet-4.6", "agent": "reviewer"}},
+		{
+			name:     "agent not a string beside a model",
+			settings: map[string]any{"model": "claude-sonnet-4.6", "agent": 7},
+			want:     &registry.AgentConversionFault{Key: "agent", Message: "agent: expected string, got integer"},
+		},
+		{
+			name:     "agent not a string beside an allowlist",
+			settings: map[string]any{"agent": true, "trust_tools": []any{"read"}},
+			want:     &registry.AgentConversionFault{Key: "agent", Message: "agent: expected string, got boolean"},
+		},
+		{
+			name:     "model type fault outranks the trust conflict",
+			settings: map[string]any{"model": 1, "trust_all_tools": true, "trust_tools": []any{"read"}},
+			want:     &registry.AgentConversionFault{Key: "model", Message: "model: expected string, got integer"},
+		},
+		{
+			name:     "trust off with an allowlist",
+			settings: map[string]any{"model": "m", "trust_all_tools": false, "trust_tools": []any{"read"}},
+			want:     untrusted,
+		},
+		{
+			name:     "uncarried keys are not faults",
+			settings: map[string]any{"agent": "space name", "mcp_config": "mcp.json", "unknown": "x"},
+		},
+	}
+	decl, retired := registry.RetiredAgentOf("kiro")
+	if !retired {
+		t.Fatal(`RetiredAgentOf("kiro") = false, want a declaration`)
 	}
 
-	for i, settings := range validatorSettings {
+	for _, tt := range tests {
 		for _, remote := range []bool{false, true} {
-			t.Run(fmt.Sprintf("settings %d remote %v", i, remote), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s remote %v", tt.name, remote), func(t *testing.T) {
 				t.Parallel()
 
-				before := maps.Clone(settings)
-				want := firstErrorDiagnostic(settings)
+				before := cloneSettings(tt.settings)
 
-				conversion, fault := decl.Convert(registry.AgentConversionInput{Command: domain.AgentCommand{Line: "kiro-cli"}, Settings: settings, Remote: remote})
+				conversion, fault := decl.Convert(registry.AgentConversionInput{
+					Command:  domain.AgentCommand{Line: "kiro-cli"},
+					Settings: tt.settings,
+					Remote:   remote,
+				})
 
-				if (fault != nil) != (want != nil) {
-					t.Fatalf("Convert(%v, remote=%v) fault = %+v, validator error = %+v, want both or neither", settings, remote, fault, want)
-				}
-				if want != nil {
-					if fault.Message != want.Message || fault.Key != keyOfCheck(want.Check) {
-						t.Errorf("Convert(%v, remote=%v) fault = {Key: %q, Message: %q}, want {Key: %q, Message: %q}", settings, remote, fault.Key, fault.Message, keyOfCheck(want.Check), want.Message)
+				if tt.want == nil {
+					if fault != nil {
+						t.Fatalf("Convert(%v, remote=%v) fault = %+v, want none", tt.settings, remote, *fault)
+					}
+					if conversion.Command.IsZero() {
+						t.Errorf("Convert(%v, remote=%v) command is zero without a fault, want a launch command", tt.settings, remote)
+					}
+				} else {
+					if fault == nil {
+						t.Fatalf("Convert(%v, remote=%v) fault = nil, want %+v", tt.settings, remote, *tt.want)
+					}
+					if *fault != *tt.want {
+						t.Errorf("Convert(%v, remote=%v) fault = %+v, want %+v", tt.settings, remote, *fault, *tt.want)
 					}
 					if !conversion.Command.IsZero() {
-						t.Errorf("Convert(%v, remote=%v) returned command %+v beside a fault", settings, remote, conversion.Command)
+						t.Errorf("Convert(%v, remote=%v) command = %+v beside a fault, want zero", tt.settings, remote, conversion.Command)
 					}
-				} else if conversion.Command.IsZero() {
-					t.Errorf("Convert(%v, remote=%v) returned a zero command without a fault", settings, remote)
 				}
-				if !reflect.DeepEqual(before, settings) {
-					t.Errorf("Convert changed its settings to %v, want %v", settings, before)
+				if !reflect.DeepEqual(before, tt.settings) {
+					t.Errorf("Convert(%v, remote=%v) changed its settings, want them left as %v", tt.settings, remote, before)
 				}
 			})
 		}
 	}
+}
+
+func cloneSettings(settings map[string]any) map[string]any {
+	if settings == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(settings))
+	for key, value := range settings {
+		if list, ok := value.([]any); ok {
+			value = slices.Clone(list)
+		}
+		clone[key] = value
+	}
+	return clone
 }

@@ -166,11 +166,11 @@ Fields:
 
 - `kind` (string)
   - Specifies which agent adapter to use. Default: `claude-code`.
-  - Other supported values: `copilot-cli`, `codex`, `opencode`, `kiro`, `mock`, and `agent-client-protocol`.
+  - Other supported values: `copilot-cli`, `codex`, `opencode`, `mock`, and `agent-client-protocol`.
   - Other kinds (for example, HTTP-based adapters) are available only if you register them separately.
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.10 for the override mechanism.
-  - `kiro` is deprecated, with `agent-client-protocol` as its replacement. The kind stays registered and a configuration naming it keeps working.
+  - `kiro` is a retired kind whose replacement is `agent-client-protocol`. A configuration naming it is converted at load, as the next bullet describes.
   - A retired kind has no adapter, and its registry declaration names a replacement kind. A configuration that names a retired kind in `agent.kind`, `dispatch.default.agent`, or a `dispatch.rules` entry's `agent` is converted at load onto the replacement kind, together with the settings block the retired kind read. The conversion runs on startup, on reload, and in `sortie validate`, rewrites the configuration in memory only, and leaves the workflow file untouched. Each conversion emits one `agent.kind.retired` advisory, and a setting the conversion cannot carry fails the load as a configuration error (§6.1, §6.3). A kind that is registered as a live adapter is never converted, even when the registry also declares it retired.
 - `command` (string or list of strings)
   - The command the default agent kind's adapter uses to launch the agent process. The default kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. Adapter-defined default.
@@ -237,11 +237,11 @@ Fields:
   - `0`, a negative value, and a value above the largest millisecond count whose conversion to a duration stays positive are rejected as a configuration error at parse time, so startup, `sortie validate`, and the reload fail-safe path all reject them.
   - Overridable through `SORTIE_AGENT_STOP_GRACE_MS`.
   - Takes effect for future worker attempts, not an in-flight session.
-  - In `claude-code`, `copilot-cli`, `kiro`, and `opencode`, the same value also bounds a cancelled turn's escalation to a force kill.
+  - In `claude-code`, `copilot-cli`, and `opencode`, the same value also bounds a cancelled turn's escalation to a force kill.
 
 Adapter-specific pass-through config:
 
-Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`; a Kiro adapter may accept `kiro.model` and `kiro.trust_tools`. The orchestrator forwards the sub-object to the adapter. An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse a value of that sub-object.
+Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator forwards the sub-object to the adapter. An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse a value of that sub-object.
 
 #### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
 

@@ -2657,8 +2657,8 @@ func TestUsageEstCostRow_Golden(t *testing.T) {
 	}
 }
 
-// usageReportingKindStrings names every registered agent kind, so the
-// absent-string test can confirm none leaks into operator-facing copy.
+// usageReportingKindStrings lists the agent kind names the panel's copy must
+// not contain, "kiro" included because run history still shows that name.
 var usageReportingKindStrings = []string{
 	"agent-client-protocol",
 	"claude-code",

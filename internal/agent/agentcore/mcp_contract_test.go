@@ -19,7 +19,7 @@ const mcpContractRegistryImportPath = "github.com/sortie-ai/sortie/internal/regi
 // mcpConfigPathIdentifier is the bare identifier the injection rules
 // look for across a package's non-test files. Files feeding the check are
 // parsed without comments, so a doc comment naming the field, as
-// kiro's and opencode's package godoc both do, is never a reference.
+// opencode's package godoc does, is never a reference.
 const mcpConfigPathIdentifier = "MCPConfigPath"
 
 // mcpContractUndeclaredSelector is the selector name a meta literal
@@ -408,8 +408,7 @@ func init() {
 			// The doc comment names MCPConfigPath, but the check parses
 			// without comments, so this fixture must draw zero violations.
 			// Without this fixture, nothing stops a later rewrite from
-			// parsing comments and taking kiro's and opencode's package
-			// godoc with it.
+			// parsing comments and taking opencode's package godoc with it.
 			name:    "a comment-only mention of MCPConfigPath is not a reference",
 			dirName: "fixture",
 			src: `package fixture

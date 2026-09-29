@@ -98,6 +98,39 @@ func TestRunDryRunExitZero(t *testing.T) {
 	assertNoDatabaseFile(t, dir)
 }
 
+func TestRunDryRunRetiredKindLogsOneWarning(t *testing.T) {
+	// No t.Parallel: uses t.Chdir.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeCustomWorkflowFile(t, dir, kiroRetiredKindWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"--dry-run", wfPath}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("run(--dry-run) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var warnings []string
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
+		if strings.Contains(line, "level=WARN") {
+			warnings = append(warnings, line)
+		}
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("WARN records = %d, want 1\nstderr:\n%s", len(warnings), stderr.String())
+	}
+	for _, attr := range []string{"agent_kind=kiro", "replacement_kind=agent-client-protocol"} {
+		if !strings.Contains(warnings[0], attr) {
+			t.Errorf("WARN record = %q, want to contain %q", warnings[0], attr)
+		}
+	}
+	if strings.Contains(stderr.String(), "deprecated") {
+		t.Errorf("stderr contains %q, want no record naming a deprecation\nstderr:\n%s", "deprecated", stderr.String())
+	}
+	assertNoDatabaseFile(t, dir)
+}
+
 func TestRunDryRunNoCandidates(t *testing.T) {
 	// No t.Parallel: uses t.Chdir.
 	dir := t.TempDir()
