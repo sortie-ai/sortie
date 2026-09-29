@@ -41,6 +41,10 @@ var (
 	// was verified there immediately before the entry was opened.
 	ErrChanged = errors.New("changed while being opened")
 
+	// ErrLinkCount reports that a plain file opened for writing has a link
+	// count other than one, so another name reaches the same file.
+	ErrLinkCount = errors.New("has a link count other than one")
+
 	// ErrTooLarge reports that a file's content exceeds the caller's
 	// configured size limit.
 	ErrTooLarge = errors.New("exceeds the size limit")

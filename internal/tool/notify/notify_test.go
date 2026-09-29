@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// mockNotifier is a test double for domain.Notifier that records calls
-// and optionally returns a configured error.
 type mockNotifier struct {
 	received []domain.Notification
 	err      error
@@ -25,8 +24,6 @@ func (m *mockNotifier) Send(_ context.Context, n domain.Notification) error {
 	return m.err
 }
 
-// testEnv returns a NotificationEnvelopeContext with recognizable test
-// values.
 func testEnv() NotificationEnvelopeContext {
 	return NotificationEnvelopeContext{
 		IssueID:    "issue-42",
@@ -40,21 +37,52 @@ func testEnv() NotificationEnvelopeContext {
 
 func testSessionIDFunc() string { return "sess-001" }
 
-// alwaysReserve returns a [SlotReserver] that claims up to limit calls and
-// never fails. Each call gets its own counter, so concurrent tools sharing
-// this helper do not share state.
+type eventLog struct {
+	events []string
+}
+
+func (l *eventLog) add(event string) { l.events = append(l.events, event) }
+
+type eventNotifier struct {
+	name string
+	log  *eventLog
+	err  error
+}
+
+var _ domain.Notifier = (*eventNotifier)(nil)
+
+func (n *eventNotifier) Send(context.Context, domain.Notification) error {
+	n.log.add("send:" + n.name)
+	return n.err
+}
+
+type recordingClaim struct {
+	log       *eventLog
+	onRelease func()
+}
+
+var _ SlotClaim = (*recordingClaim)(nil)
+
+func (c *recordingClaim) Commit() { c.log.add("commit") }
+
+func (c *recordingClaim) Release() {
+	c.log.add("release")
+	if c.onRelease != nil {
+		c.onRelease()
+	}
+}
+
 func alwaysReserve() SlotReserver {
 	claimed := 0
-	return func(limit int) (func(), bool, error) {
+	return func(limit int) (SlotClaim, bool, error) {
 		if claimed >= limit {
 			return nil, false, nil
 		}
 		claimed++
-		return func() { claimed-- }, true, nil
+		return &recordingClaim{log: &eventLog{}, onRelease: func() { claimed-- }}, true, nil
 	}
 }
 
-// reserveSpy is a [SlotReserver] test double.
 type reserveSpy struct {
 	reserved bool
 	err      error
@@ -62,9 +90,10 @@ type reserveSpy struct {
 	calls   int
 	limits  []int
 	claimed bool
+	events  eventLog
 }
 
-func (s *reserveSpy) reserve(limit int) (func(), bool, error) {
+func (s *reserveSpy) reserve(limit int) (SlotClaim, bool, error) {
 	s.calls++
 	s.limits = append(s.limits, limit)
 	if s.err != nil {
@@ -74,11 +103,9 @@ func (s *reserveSpy) reserve(limit int) (func(), bool, error) {
 		return nil, false, nil
 	}
 	s.claimed = true
-	return func() { s.claimed = false }, true, nil
+	return &recordingClaim{log: &s.events, onRelease: func() { s.claimed = false }}, true, nil
 }
 
-// executeJSON runs Execute with the given JSON input and unmarshals the
-// result into a map.
 func executeJSON(t *testing.T, tool *NotifyTool, input string) map[string]any {
 	t.Helper()
 	raw, err := tool.Execute(context.Background(), json.RawMessage(input))
@@ -373,7 +400,6 @@ func TestExecute_SuccessResultShape(t *testing.T) {
 	if _, ok := data["notification_id"]; !ok {
 		t.Error("result[\"data\"] missing \"notification_id\" field")
 	}
-	// Payload fields must NOT appear at the top level.
 	if _, exists := m["delivered"]; exists {
 		t.Error("result has \"delivered\" at top level, want it under data")
 	}
@@ -484,7 +510,6 @@ func TestExecute_InvalidInput_GoErrorIsNil(t *testing.T) {
 	t.Parallel()
 
 	tool := New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, alwaysReserve())
-	// Unknown field triggers invalid_input; the Go error must be nil.
 	_, goErr := tool.Execute(context.Background(), json.RawMessage(`{"severity":"info","title":"T","body":"B","extra":1}`))
 	if goErr != nil {
 		t.Errorf("Execute(invalid input) Go error = %v, want nil", goErr)
@@ -504,7 +529,6 @@ func TestExecute_RateLimited_PastCap(t *testing.T) {
 		assertSuccess(t, m)
 	}
 
-	// The (cap+1)-th call must be rate_limited.
 	m := executeJSON(t, tool, input)
 	assertFailureKind(t, m, "rate_limited")
 }
@@ -542,10 +566,10 @@ func TestExecute_RateLimited_SendNotCalledWhenCapped(t *testing.T) {
 	tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 1, alwaysReserve())
 
 	input := `{"severity":"info","title":"T","body":"B"}`
-	executeJSON(t, tool, input) // consumes the cap
+	executeJSON(t, tool, input)
 
 	before := len(mock.received)
-	executeJSON(t, tool, input) // should be rate_limited, Send not called
+	executeJSON(t, tool, input)
 	after := len(mock.received)
 
 	if after != before {
@@ -591,8 +615,6 @@ func TestExecute_SendFailed_GoErrorIsNil(t *testing.T) {
 	}
 }
 
-// classifiedSendError simulates a backend-classified error that carries
-// only a category, never the URL or secret.
 type classifiedSendError struct {
 	Category string
 }
@@ -837,14 +859,105 @@ func TestNew_TouchesNoFile(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	reserve := func(int) (func(), bool, error) {
+	reserve := func(int) (SlotClaim, bool, error) {
 		called = true
-		return func() {}, true, nil
+		return &recordingClaim{log: &eventLog{}}, true, nil
 	}
 
 	New([]domain.Notifier{&mockNotifier{}}, testEnv(), testSessionIDFunc, 10, reserve)
 
 	if called {
 		t.Error("New invoked the SlotReserver during construction, want no invocation")
+	}
+}
+
+func TestExecute_ClaimResolution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		failFirst  bool
+		failSecond bool
+		second     bool
+		wantEvents []string
+		wantKind   string
+	}{
+		{name: "one accepting backend", wantEvents: []string{"send:a", "commit"}},
+		{name: "two accepting backends", second: true, wantEvents: []string{"send:a", "commit", "send:b"}},
+		{name: "failing first backend", failFirst: true, second: true, wantEvents: []string{"send:a", "release"}, wantKind: "send_failed"},
+		{name: "accepting first and failing second backend", second: true, failSecond: true, wantEvents: []string{"send:a", "commit", "send:b"}, wantKind: "send_failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			spy := &reserveSpy{reserved: true}
+			var failure error
+			if tt.failFirst || tt.failSecond {
+				failure = errors.New("boom")
+			}
+			first := &eventNotifier{name: "a", log: &spy.events}
+			if tt.failFirst {
+				first.err = failure
+			}
+			backends := []domain.Notifier{first}
+			if tt.second {
+				second := &eventNotifier{name: "b", log: &spy.events}
+				if tt.failSecond {
+					second.err = failure
+				}
+				backends = append(backends, second)
+			}
+			tool := New(backends, testEnv(), testSessionIDFunc, 10, spy.reserve)
+
+			m := executeJSON(t, tool, `{"severity":"info","title":"T","body":"B"}`)
+
+			if tt.wantKind == "" {
+				assertSuccess(t, m)
+			} else {
+				assertFailureKind(t, m, tt.wantKind)
+			}
+			if !slices.Equal(spy.events.events, tt.wantEvents) {
+				t.Errorf("Execute(%s) events = %q, want %q", tt.name, spy.events.events, tt.wantEvents)
+			}
+		})
+	}
+}
+
+func TestExecute_NoClaimEndedWithoutAClaim(t *testing.T) {
+	t.Parallel()
+
+	const validInput = `{"severity":"info","title":"T","body":"B"}`
+	tests := []struct {
+		name      string
+		spy       *reserveSpy
+		noBackend bool
+		input     string
+		wantKind  string
+	}{
+		{name: "invalid_input", spy: &reserveSpy{reserved: true}, input: `{"severity":"bogus","title":"T","body":"B"}`, wantKind: "invalid_input"},
+		{name: "backend_unavailable", spy: &reserveSpy{reserved: true}, noBackend: true, input: validInput, wantKind: "backend_unavailable"},
+		{name: "rate_limited", spy: &reserveSpy{}, input: validInput, wantKind: "rate_limited"},
+		{name: "state_unavailable", spy: &reserveSpy{err: errors.New("workspace unusable")}, input: validInput, wantKind: "state_unavailable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mock := &eventNotifier{name: "a", log: &tt.spy.events}
+			tool := New([]domain.Notifier{mock}, testEnv(), testSessionIDFunc, 10, tt.spy.reserve)
+			if tt.noBackend {
+				tool = &NotifyTool{env: testEnv(), sessionID: testSessionIDFunc, maxPerSession: 10, reserveSlot: tt.spy.reserve}
+			}
+
+			m := executeJSON(t, tool, tt.input)
+
+			assertFailureKind(t, m, tt.wantKind)
+			if len(tt.spy.events.events) != 0 {
+				t.Errorf("Execute(%s) events = %q, want none", tt.name, tt.spy.events.events)
+			}
+		})
 	}
 }

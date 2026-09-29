@@ -22,6 +22,25 @@ func isPlainMode(mode os.FileMode) bool {
 }
 
 func openPlain(dir *os.Root, name string) (*os.File, error) {
+	return OpenPlainFile(dir, name, os.O_RDONLY)
+}
+
+// OpenPlainFile opens the existing plain file name inside dir. flag MUST be
+// [os.O_RDONLY] or [os.O_RDWR]; any other value is an error and touches
+// nothing. A symbolic link yields [ErrLink], any other non-plain entry
+// yields [ErrNotPlainFile], and an entry replaced between the check and the
+// open yields [ErrChanged]. The open never creates, truncates, or appends,
+// and never blocks on a pipe planted at name.
+//
+// Read-write access exists for callers that lock the file, because an
+// exclusive lock over NFS needs a file opened for writing. Only that mode
+// also refuses a file with a link count other than one with [ErrLinkCount]:
+// a hard link passes the mode and identity checks yet names a file outside
+// the directory. The caller closes the returned file.
+func OpenPlainFile(dir *os.Root, name string, flag int) (*os.File, error) {
+	if flag != os.O_RDONLY && flag != os.O_RDWR {
+		return nil, fmt.Errorf("%s: unsupported open flag %#x", name, flag)
+	}
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -38,7 +57,7 @@ func openPlain(dir *os.Root, name string) (*os.File, error) {
 	}
 
 	seam()
-	f, err := dir.OpenFile(name, os.O_RDONLY|readOpenFlag, 0)
+	f, err := dir.OpenFile(name, flag|readOpenFlag, 0)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
@@ -50,6 +69,17 @@ func openPlain(dir *os.Root, name string) (*os.File, error) {
 	if !isPlainMode(post.Mode()) || !os.SameFile(pre, post) {
 		_ = f.Close()
 		return nil, fmt.Errorf("%s: %w", name, ErrChanged)
+	}
+	if flag == os.O_RDWR {
+		links, err := linkCount(f)
+		if err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("%s: read link count: %w", name, err)
+		}
+		if links != 1 {
+			_ = f.Close()
+			return nil, fmt.Errorf("%s: %w", name, ErrLinkCount)
+		}
 	}
 	return f, nil
 }

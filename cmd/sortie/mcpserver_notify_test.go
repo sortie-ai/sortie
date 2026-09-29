@@ -24,6 +24,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/workflow"
+	"github.com/sortie-ai/sortie/internal/workspacekit"
 )
 
 // Preflight resolves configured kinds through the registries even when this
@@ -1002,7 +1004,7 @@ func (a *processPerTurnAgent) RunTurn(_ context.Context, session domain.Session,
 
 func (a *processPerTurnAgent) StopSession(_ context.Context, _ domain.Session) error { return nil }
 
-func writeMultiProcessWorkflowFile(t *testing.T, path, webhookURL string) {
+func writeMultiProcessWorkflowFile(t *testing.T, path, webhookURL string, maxPerSession int) {
 	t.Helper()
 	content := fmt.Sprintf(`---
 polling:
@@ -1021,10 +1023,10 @@ file:
 notifications:
   - kind: webhook
     url: %q
-    max_per_session: 2
+    max_per_session: %d
 ---
 Do {{ .issue.title }}.
-`, webhookURL)
+`, webhookURL, maxPerSession)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", path, err)
 	}
@@ -1049,7 +1051,7 @@ func TestMCPServerNotify_MultiProcessCapSharing(t *testing.T) {
 
 	dbPath := filepath.Join(tmpDir, "notify-multiprocess.db")
 	workflowPath := filepath.Join(filepath.Dir(dbPath), "WORKFLOW.md")
-	writeMultiProcessWorkflowFile(t, workflowPath, srv.URL)
+	writeMultiProcessWorkflowFile(t, workflowPath, srv.URL, 2)
 
 	agent := newProcessPerTurnAgent(cfg)
 
@@ -1092,4 +1094,172 @@ func TestMCPServerNotify_MultiProcessCapSharing(t *testing.T) {
 			t.Errorf("request %d dispatch_id = %q, want %q", i, got, dispatchID)
 		}
 	}
+}
+
+type mcpServerChild struct {
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *bufio.Scanner
+	stderr   *lockedBuf
+	waitOnce sync.Once
+	waitErr  error
+}
+
+func (c *mcpServerChild) wait() error {
+	c.waitOnce.Do(func() { c.waitErr = c.cmd.Wait() })
+	return c.waitErr
+}
+
+func startMCPServerChild(t *testing.T, workflowPath, workspacePath, dispatchID string) *mcpServerChild {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestMCPServerNotify_MultiProcessCapSharing")
+	cmd.Env = append(os.Environ(),
+		"SORTIE_TEST_MCP_HELPER=1",
+		"SORTIE_TEST_MCP_WORKFLOW="+workflowPath,
+		"SORTIE_WORKSPACE="+workspacePath,
+		"SORTIE_DISPATCH_ID="+dispatchID,
+	)
+	child := &mcpServerChild{cmd: cmd, stderr: &lockedBuf{}}
+	cmd.Stderr = child.stderr
+
+	var err error
+	if child.stdin, err = cmd.StdinPipe(); err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	child.stdout = bufio.NewScanner(stdout)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start mcp-server subprocess: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = child.wait()
+	})
+	return child
+}
+
+func (c *mcpServerChild) send(t *testing.T, method string, id int, params any) {
+	t.Helper()
+	line, err := buildMCPRequestLine(method, id, params)
+	if err != nil {
+		t.Fatalf("build %s request: %v", method, err)
+	}
+	if _, err := io.WriteString(c.stdin, line); err != nil {
+		t.Fatalf("write %s request: %v (stderr: %s)", method, err, c.stderr.String())
+	}
+}
+
+func (c *mcpServerChild) startNotifyCall(t *testing.T) {
+	t.Helper()
+	c.send(t, "initialize", 1, map[string]any{"protocolVersion": "2024-11-05"})
+	if !c.stdout.Scan() {
+		t.Fatalf("no initialize response (scanner err: %v, stderr: %s)", c.stdout.Err(), c.stderr.String())
+	}
+	c.send(t, "tools/call", 2, map[string]any{
+		"name":      "notify_operator",
+		"arguments": map[string]any{"severity": "info", "title": "T", "body": "B"},
+	})
+}
+
+func newHoldFirstRequestServer(t *testing.T) (*httptest.Server, *bodyRecorder, <-chan struct{}) {
+	t.Helper()
+	rec := &bodyRecorder{}
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The server notices a client disconnect only after the body is read.
+		body, err := io.ReadAll(r.Body)
+		if calls.Add(1) == 1 {
+			close(arrived)
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		if err == nil {
+			rec.add(body)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	return srv, rec, arrived
+}
+
+func assertRateLimited(t *testing.T, res notifyExecResult, when string) {
+	t.Helper()
+	if res.Success || res.Error.Kind != "rate_limited" {
+		t.Fatalf("notify_operator %s = %+v, want rate_limited", when, res)
+	}
+}
+
+func TestMCPServerNotify_KilledClaimant(t *testing.T) {
+	const (
+		dispatchID    = "dispatch-killed-claimant"
+		afterExitWait = 10 * time.Second
+	)
+
+	ws := t.TempDir()
+	if err := os.Mkdir(filepath.Join(ws, workspacekit.SortieDir), 0o750); err != nil {
+		t.Fatalf("Mkdir(.sortie): %v", err)
+	}
+	srv, bodies, arrived := newHoldFirstRequestServer(t)
+	workflowPath := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	writeMultiProcessWorkflowFile(t, workflowPath, srv.URL, 1)
+
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("workflow.Load(%q): %v", workflowPath, err)
+	}
+	cfg, err := config.NewServiceConfig(wf.Config)
+	if err != nil {
+		t.Fatalf("NewServiceConfig: %v", err)
+	}
+	tool := mustNotifyTool(t, buildNotifyRegistry(t, SessionToolParams{
+		WorkspacePath: ws,
+		DispatchID:    dispatchID,
+		Notifications: cfg.Notifications.Backends,
+	}))
+
+	child := startMCPServerChild(t, workflowPath, ws, dispatchID)
+	child.startNotifyCall(t)
+	select {
+	case <-arrived:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("timed out waiting for the claimant's request to reach the webhook (stderr: %s)", child.stderr.String())
+	}
+
+	assertRateLimited(t, execNotify(t, tool), "while the claimant lives")
+	if n := bodies.count(); n != 0 {
+		t.Fatalf("webhook recorded %d requests while the claimant lives, want 0", n)
+	}
+
+	if err := child.cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill the claimant: %v", err)
+	}
+	_ = child.wait()
+	exited := time.Now()
+
+	for {
+		res := execNotify(t, tool)
+		if res.Success {
+			t.Logf("exit-to-success latency: %v", time.Since(exited))
+			break
+		}
+		assertRateLimited(t, res, "after the claimant was killed")
+		if time.Since(exited) > afterExitWait {
+			t.Fatalf("notify_operator is still rate_limited %v after the claimant exited, want a free slot within %v", time.Since(exited), afterExitWait)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if n := bodies.count(); n != 1 {
+		t.Errorf("webhook recorded %d requests after the recovered call, want exactly 1", n)
+	}
+	assertRateLimited(t, execNotify(t, tool), "after the recovered call counted")
 }
