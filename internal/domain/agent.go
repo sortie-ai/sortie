@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -109,6 +110,29 @@ type AgentEvent struct {
 	ToolError bool
 }
 
+// AgentCommand is an agent launch command in one of two forms: the
+// string form in Line, or the list form in a non-empty Argv, never
+// both. The zero value holds no command.
+type AgentCommand struct {
+	// Line is the string form.
+	Line string
+
+	// Argv is the list form: element zero names the executable and
+	// each later element is one argument.
+	Argv []string
+}
+
+// IsZero reports whether c holds neither form.
+func (c AgentCommand) IsZero() bool {
+	return c.Line == "" && len(c.Argv) == 0
+}
+
+// NamesExecutable reports whether c can launch a process: it is a list,
+// or a string holding a non-whitespace character.
+func (c AgentCommand) NamesExecutable() bool {
+	return len(c.Argv) > 0 || strings.TrimSpace(c.Line) != ""
+}
+
 // AgentConfig is the subset of configuration relevant to agent
 // adapters, passed into [StartSessionParams] so adapters do not depend
 // on the full config package.
@@ -116,10 +140,18 @@ type AgentConfig struct {
 	// Kind identifies the agent adapter (e.g. "claude-code", "mock").
 	Kind string
 
-	// Command launches the agent process. Locally it is split on
-	// whitespace into an argv the adapter execs directly with no shell;
-	// in SSH mode it is passed through unsplit to the remote shell.
+	// Command is the string form of the launch command. Locally it is
+	// split on whitespace into an argv the adapter execs directly with
+	// no shell; in SSH mode it is passed through unsplit to the remote
+	// shell. Empty when CommandArgv holds the command or when the kind
+	// launches its own default command.
 	Command string
+
+	// CommandArgv is the list form of the launch command: element zero
+	// names the executable and each later element is one argument,
+	// launched exactly as written locally and single-quoted per element
+	// remotely. Set only when Command is empty.
+	CommandArgv []string
 
 	// TurnTimeoutMS bounds a single agent turn. Always positive: the
 	// config layer rejects a non-positive value rather than treating it

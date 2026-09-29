@@ -246,16 +246,7 @@ func ParseWorkerConfig(workerSection map[string]any, envRefPaths map[string]bool
 		return WorkerConfig{}
 	}
 
-	var hosts []string
-	if rawHosts, ok := workerSection["ssh_hosts"]; ok {
-		if hostList, ok := rawHosts.([]any); ok {
-			for _, h := range hostList {
-				if s, ok := h.(string); ok && s != "" {
-					hosts = append(hosts, s)
-				}
-			}
-		}
-	}
+	hosts := config.WorkerSSHHosts(workerSection)
 
 	var maxPerHost int
 	if rawMax, ok := workerSection["max_concurrent_agents_per_host"]; ok {

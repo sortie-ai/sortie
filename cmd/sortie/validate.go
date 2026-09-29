@@ -102,6 +102,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
 		workflow.WithAgentKindProbe(registry.Agents.Has),
+		workflow.WithRetiredAgents(registry.RetiredAgentOf),
 		workflow.WithAdvisoryFunc(workflowAdvisories))
 	if err != nil {
 		emitDiags(stdout, stderr, *format, mapManagerError(err), warningDiags)

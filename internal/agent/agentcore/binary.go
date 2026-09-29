@@ -25,6 +25,13 @@ func ResolveBinary(command string) (string, *domain.AgentError) {
 		}
 	}
 
+	return lookPath(command)
+}
+
+// lookPath resolves command through exec.LookPath with no check of its
+// shape, so a path through a directory whose name holds a space
+// resolves whole.
+func lookPath(command string) (string, *domain.AgentError) {
 	absPath, err := exec.LookPath(command)
 	if err != nil {
 		return "", &domain.AgentError{

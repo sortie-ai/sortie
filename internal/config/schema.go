@@ -15,13 +15,14 @@ import (
 type FieldType int
 
 const (
-	FieldString      FieldType = iota + 1 // string scalar
-	FieldInt                              // integer (or string-encoded integer)
-	FieldBool                             // boolean
-	FieldStringList                       // []string (YAML sequence)
-	FieldMap                              // map[string]any (YAML mapping)
-	FieldShellScript                      // multiline string (shell script)
-	FieldSequence                         // []any (YAML sequence of maps or scalars)
+	FieldString       FieldType = iota + 1 // string scalar
+	FieldInt                               // integer (or string-encoded integer)
+	FieldBool                              // boolean
+	FieldStringList                        // []string (YAML sequence)
+	FieldMap                               // map[string]any (YAML mapping)
+	FieldShellScript                       // multiline string (shell script)
+	FieldSequence                          // []any (YAML sequence of maps or scalars)
+	FieldStringOrList                      // string scalar or []any (YAML sequence)
 )
 
 // FieldDef describes a single known configuration field within a section.
@@ -86,7 +87,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 	"agent": {
 		Fields: []FieldDef{
 			{Name: "kind", Type: FieldString},
-			{Name: "command", Type: FieldString},
+			{Name: "command", Type: FieldStringOrList},
 			{Name: "turn_timeout_ms", Type: FieldInt},
 			{Name: "read_timeout_ms", Type: FieldInt},
 			{Name: "stall_timeout_ms", Type: FieldInt},
@@ -706,6 +707,12 @@ func typeMatches(v any, ft FieldType) bool {
 	case FieldSequence:
 		_, ok := v.([]any)
 		return ok
+	case FieldStringOrList:
+		switch v.(type) {
+		case string, []any:
+			return true
+		}
+		return false
 	case FieldInt:
 		_, err := coerceInt(v)
 		return err == nil || errors.Is(err, ErrIntegerOutOfRange)
@@ -729,6 +736,8 @@ func typeName(ft FieldType) string {
 		return "map"
 	case FieldSequence:
 		return "sequence"
+	case FieldStringOrList:
+		return "string or list"
 	default:
 		return "unknown"
 	}

@@ -398,17 +398,21 @@ func isTurnSuccess(reason domain.AgentEventType) bool {
 	return reason == domain.EventTurnCompleted
 }
 
-// toDomainAgentConfig converts a config-layer AgentConfig to the
-// domain-layer one. kind comes from the caller rather than c.Kind because
-// the dispatch-frozen kind and the configuration's default can differ.
-func toDomainAgentConfig(c config.AgentConfig, kind string) domain.AgentConfig {
+// toDomainAgentConfig builds the domain-layer agent configuration a
+// session of kind starts with. kind comes from the caller rather than
+// cfg.Agent.Kind because the dispatch-frozen kind and the configuration's
+// default can differ, and so does the command: it is the one written for
+// kind in the session's own launch mode, remote or local.
+func toDomainAgentConfig(cfg config.ServiceConfig, kind string, remote bool) domain.AgentConfig {
+	command := cfg.AgentCommand(kind, remote)
 	return domain.AgentConfig{
 		Kind:           kind,
-		Command:        c.Command,
-		TurnTimeoutMS:  c.TurnTimeoutMS,
-		ReadTimeoutMS:  c.ReadTimeoutMS,
-		StallTimeoutMS: c.StallTimeoutMS,
-		StopGraceMS:    c.StopGraceMS,
+		Command:        command.Line,
+		CommandArgv:    command.Argv,
+		TurnTimeoutMS:  cfg.Agent.TurnTimeoutMS,
+		ReadTimeoutMS:  cfg.Agent.ReadTimeoutMS,
+		StallTimeoutMS: cfg.Agent.StallTimeoutMS,
+		StopGraceMS:    cfg.Agent.StopGraceMS,
 	}
 }
 
@@ -968,14 +972,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		return
 	}
 
+	remote := strings.TrimSpace(deps.SSHHost) != ""
 	var sshEnvNames []string
-	if strings.TrimSpace(deps.SSHHost) != "" && deps.SSHEnvNamesFunc != nil {
+	if remote && deps.SSHEnvNamesFunc != nil {
 		sshEnvNames = deps.SSHEnvNamesFunc(agentKind)
 	}
 
 	params := domain.StartSessionParams{
 		WorkspacePath:            wsResult.Path,
-		AgentConfig:              toDomainAgentConfig(cfg.Agent, agentKind),
+		AgentConfig:              toDomainAgentConfig(cfg, agentKind, remote),
 		ResumeSessionID:          deps.ResumeSessionID,
 		SSHHost:                  deps.SSHHost,
 		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,

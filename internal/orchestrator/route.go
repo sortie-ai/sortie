@@ -44,10 +44,9 @@ func (l ResolutionLayer) String() string {
 }
 
 // DispatchResolution carries the agent kind, template ID, rule name,
-// and layer chosen for a single issue's initial dispatch. The
-// orchestrator persists these on [RunningEntry] and propagates them
-// through [RetryEntry] so retries and reaction continuations reuse
-// the original selection.
+// and layer chosen for a single issue's dispatch. The orchestrator
+// records these on [RunningEntry] and propagates them through
+// [RetryEntry].
 type DispatchResolution struct {
 	// AgentKind is the resolved adapter kind. Always non-empty for a
 	// well-configured workflow; the resolver coalesces missing values
@@ -101,6 +100,29 @@ func ResolveRule(issue domain.Issue, dispatch config.DispatchConfig, defaultAgen
 		RuleName:   "",
 		MatchedAt:  ResolvedFromFallback,
 	}
+}
+
+// retrySelection selects the agent kind, template ID, and rule name a
+// waiting retry dispatches on under cfg, the configuration in force.
+// frozen is the selection the retry entry carries. The frozen selection
+// stands, with a retired kind replaced by its replacement, while its
+// kind is still reachable and its template is still held; otherwise the
+// issue is routed afresh. templateHeld reports whether the workflow
+// holds a template for an ID.
+func retrySelection(cfg config.ServiceConfig, templateHeld func(id string) bool, frozen DispatchResolution, issue domain.Issue) DispatchResolution {
+	target := frozen.AgentKind
+	for _, conversion := range cfg.AgentKindConversions() {
+		if conversion.Kind == target {
+			target = conversion.Replacement
+			break
+		}
+	}
+
+	reachable := slices.ContainsFunc(orderedUniqueAgentKinds(cfg), func(ref agentKindRef) bool { return ref.Kind == target })
+	if reachable && templateHeld(frozen.TemplateID) {
+		return DispatchResolution{AgentKind: target, TemplateID: frozen.TemplateID, RuleName: frozen.RuleName, MatchedAt: frozen.MatchedAt}
+	}
+	return ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
 }
 
 // coalesce returns the first non-empty string from the arguments. An

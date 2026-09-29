@@ -23,9 +23,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
+// defaultCommand is what a session launches when it is given no command.
+const defaultCommand = "claude"
+
 func init() {
 	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
 		RequiresCommand:        true,
+		DefaultCommand:         defaultCommand,
 		ValidateAgentConfig:    validateConfig,
 		MCPInjection:           registry.MCPInjectionSupported,
 		SessionResumeBlockedBy: sessionResumeBlockedBy,
@@ -140,7 +144,7 @@ const detailAnswerToQuestion = "an answer to a question"
 // initializes per-session state. No subprocess is spawned; that happens in
 // [ClaudeCodeAdapter.RunTurn].
 func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	target, agentErr := agentcore.ResolveLaunchTarget(params, "claude")
+	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
 		return domain.Session{}, agentErr
 	}
