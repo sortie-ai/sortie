@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -9623,4 +9624,676 @@ func TestReconcilePasses_DoNotBlockOnInFlightTriage(t *testing.T) {
 			t.Errorf("GetMergeability calls = %d, want 0 while a triage run is in flight", scm.calls)
 		}
 	})
+}
+
+type sessionRecorder struct {
+	mu       sync.Mutex
+	sessions []domain.StartSessionParams
+	adapter  *mockAgentAdapter
+}
+
+func newSessionRecorder(kind string) *sessionRecorder {
+	r := &sessionRecorder{}
+	r.adapter = &mockAgentAdapter{startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+		r.mu.Lock()
+		r.sessions = append(r.sessions, params)
+		r.mu.Unlock()
+		return domain.Session{ID: "sess-" + kind}, nil
+	}}
+	return r
+}
+
+func (r *sessionRecorder) started() []domain.StartSessionParams {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.sessions)
+}
+
+type runTracker struct {
+	*mockTrackerAdapter
+	mu               sync.Mutex
+	candidates       []domain.Issue
+	issues           map[string]domain.Issue
+	candidateFetches atomic.Int64
+}
+
+func (r *runTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+	r.candidateFetches.Add(1)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.candidates), nil
+}
+
+func (r *runTracker) FetchIssueByID(_ context.Context, id string) (domain.Issue, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	issue, ok := r.issues[id]
+	if !ok {
+		return domain.Issue{}, &domain.TrackerError{Kind: domain.ErrTrackerNotFound, Message: "no such issue"}
+	}
+	return issue, nil
+}
+
+type runHarness struct {
+	t         *testing.T
+	wm        *stubWorkflowManager
+	state     *State
+	tracker   *runTracker
+	logs      *lockedBuf
+	recorders map[string]*sessionRecorder
+
+	mu          sync.Mutex
+	unavailable map[string]bool
+
+	o      *Orchestrator
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func runConfig(t *testing.T, raw map[string]any) config.ServiceConfig {
+	t.Helper()
+	cfg := convertedConfig(t, raw)
+	cfg.Tracker.Kind = "mock"
+	cfg.Tracker.APIKey = "test-key"
+	cfg.Tracker.ActiveStates = []string{"To Do"}
+	cfg.Tracker.TerminalStates = []string{"Done"}
+	cfg.Tracker.HandoffState = "In Review"
+	cfg.Workspace.Root = t.TempDir()
+	cfg.Polling.IntervalMS = 60000
+	cfg.Agent.MaxTurns = 1
+	cfg.Agent.MaxRetryBackoffMS = 50
+	return cfg
+}
+
+func newRunHarness(t *testing.T, cfg config.ServiceConfig, kinds ...string) *runHarness {
+	t.Helper()
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+	h := &runHarness{
+		t:           t,
+		wm:          &stubWorkflowManager{config: cfg, template: tmpl, templateIndex: map[string]*prompt.Template{"/prompts/held.md": tmpl}},
+		state:       NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, 0, nil, AgentTotals{}),
+		tracker:     &runTracker{mockTrackerAdapter: &mockTrackerAdapter{}, issues: map[string]domain.Issue{}},
+		logs:        &lockedBuf{},
+		recorders:   map[string]*sessionRecorder{},
+		unavailable: map[string]bool{},
+	}
+	for _, kind := range kinds {
+		h.recorders[kind] = newSessionRecorder(kind)
+	}
+	t.Cleanup(h.stop)
+	return h
+}
+
+func (h *runHarness) setAvailable(kind string, available bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.unavailable[kind] = !available
+}
+
+func (h *runHarness) build() {
+	h.t.Helper()
+	if h.o != nil {
+		return
+	}
+	regs := passingPreflightRegistries()
+	regs.AgentRegistry = &stubAgentRegistry{
+		getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, false },
+	}
+	cfg := h.wm.Config()
+	h.o = NewOrchestrator(OrchestratorParams{
+		State:          h.state,
+		Logger:         slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		TrackerAdapter: h.tracker,
+		AgentAdapter:   h.recorders[cfg.Agent.Kind].adapter,
+		AgentAdapterByKind: func(kind string) (domain.AgentAdapter, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			recorder, ok := h.recorders[kind]
+			if !ok || h.unavailable[kind] {
+				return nil, fmt.Errorf("agent kind %q has no constructed adapter", kind)
+			}
+			return recorder.adapter, nil
+		},
+		WorkflowManager: h.wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      h.wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+}
+
+func (h *runHarness) run() {
+	h.t.Helper()
+	h.build()
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.done = make(chan struct{})
+	go func() {
+		h.o.Run(ctx)
+		close(h.done)
+	}()
+}
+
+func (h *runHarness) stop() {
+	if h.cancel == nil {
+		return
+	}
+	h.cancel()
+	<-h.done
+	h.cancel = nil
+}
+
+func (h *runHarness) started() map[string][]domain.StartSessionParams {
+	got := map[string][]domain.StartSessionParams{}
+	for kind, recorder := range h.recorders {
+		if sessions := recorder.started(); len(sessions) > 0 {
+			got[kind] = sessions
+		}
+	}
+	return got
+}
+
+func (h *runHarness) waitForSessions(n int) map[string][]domain.StartSessionParams {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := h.started()
+		total := 0
+		for _, sessions := range got {
+			total += len(sessions)
+		}
+		if total >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatalf("sessions started = %v after 5s, want at least %d; log: %s", got, n, h.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (h *runHarness) waitForLog(message string) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(logRecords(h.t, h.logs, message)) == 0 {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("log holds no %q record after 5s; log: %s", message, h.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func rawWithBackendRule(agent map[string]any, ruleAgent string) map[string]any {
+	return map[string]any{
+		"agent":    agent,
+		"dispatch": map[string]any{"rules": []any{backendRuleRaw(ruleAgent)}},
+	}
+}
+
+func withSSHHosts(raw map[string]any) {
+	raw["worker"] = map[string]any{"ssh_hosts": []any{"host-1"}}
+}
+
+func candidate(id, identifier string, labels ...string) domain.Issue {
+	return domain.Issue{ID: id, Identifier: identifier, Title: identifier, State: "To Do", Labels: labels}
+}
+
+func sessionOfWorkspace(t *testing.T, sessions map[string][]domain.StartSessionParams, identifier string) (string, domain.StartSessionParams) {
+	t.Helper()
+	for kind, list := range sessions {
+		for _, params := range list {
+			if filepath.Base(params.WorkspacePath) == identifier {
+				return kind, params
+			}
+		}
+	}
+	t.Fatalf("no session started for %s; sessions: %v", identifier, sessions)
+	return "", domain.StartSessionParams{}
+}
+
+func TestRun_SessionsLaunchTheirOwnKindsCommand(t *testing.T) {
+	t.Parallel()
+
+	type want struct {
+		kind, local, remote string
+		argv                []string
+	}
+	tests := []struct {
+		name   string
+		raw    func() map[string]any
+		issues []domain.Issue
+		want   map[string]want
+	}{
+		{
+			name: "default kind is the retired kind",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "legacy", "command": "legacy-wrapper --x"}, "legacy")
+			},
+			issues: []domain.Issue{candidate("id-1", "P-1"), candidate("id-2", "B-1", "backend")},
+			want: map[string]want{
+				"P-1": {kind: "modern", local: "legacy-wrapper --x serve", remote: "legacy-wrapper --x serve --remote"},
+				"B-1": {kind: "modern", local: "legacy-wrapper --x serve", remote: "legacy-wrapper --x serve --remote"},
+			},
+		},
+		{
+			name: "another kind is the default and a rule selects the retired kind",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+			},
+			issues: []domain.Issue{candidate("id-1", "P-1"), candidate("id-2", "B-1", "backend")},
+			want: map[string]want{
+				"P-1": {kind: "plain", local: "plain-cmd", remote: "plain-cmd"},
+				"B-1": {kind: "modern", local: "legacy-cli serve", remote: "legacy-cli serve --remote"},
+			},
+		},
+		{
+			name: "the replacement kind is the default kind",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "modern", "command": "modern-cmd"}, "legacy")
+			},
+			issues: []domain.Issue{candidate("id-2", "B-1", "backend")},
+			want:   map[string]want{"B-1": {kind: "modern", local: "modern-cmd", remote: "modern-cmd"}},
+		},
+		{
+			name: "a rule selects a kind that no conversion covers",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "kind-b")
+			},
+			issues: []domain.Issue{candidate("id-1", "P-1"), candidate("id-2", "B-1", "backend")},
+			want: map[string]want{
+				"P-1": {kind: "plain", local: "plain-cmd", remote: "plain-cmd"},
+				"B-1": {kind: "kind-b"},
+			},
+		},
+		{
+			name: "list agent.command belongs to the default kind",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": []any{"plain cmd", "--x"}}, "kind-b")
+			},
+			issues: []domain.Issue{candidate("id-1", "P-1"), candidate("id-2", "B-1", "backend")},
+			want: map[string]want{
+				"P-1": {kind: "plain", argv: []string{"plain cmd", "--x"}},
+				"B-1": {kind: "kind-b"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		for _, remote := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, remote %v", tt.name, remote), func(t *testing.T) {
+				t.Parallel()
+
+				raw := tt.raw()
+				if remote {
+					withSSHHosts(raw)
+				}
+				h := newRunHarness(t, runConfig(t, raw), "plain", "modern", "kind-b", "legacy")
+				h.tracker.candidates = tt.issues
+
+				h.run()
+				sessions := h.waitForSessions(len(tt.issues))
+
+				for identifier, w := range tt.want {
+					kind, params := sessionOfWorkspace(t, sessions, identifier)
+					wantCommand := w.local
+					wantHost := ""
+					if remote {
+						wantCommand, wantHost = w.remote, "host-1"
+					}
+					if kind != w.kind || params.AgentConfig.Kind != w.kind {
+						t.Errorf("%s ran on adapter %q with AgentConfig.Kind %q, want %q", identifier, kind, params.AgentConfig.Kind, w.kind)
+					}
+					if params.AgentConfig.Command != wantCommand || !slices.Equal(params.AgentConfig.CommandArgv, w.argv) {
+						t.Errorf("%s AgentConfig command = %q / %q, want %q / %q", identifier, params.AgentConfig.Command, params.AgentConfig.CommandArgv, wantCommand, w.argv)
+					}
+					if params.SSHHost != wantHost {
+						t.Errorf("%s SSHHost = %q, want %q", identifier, params.SSHHost, wantHost)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRun_CredentialNamesFollowTheGovernedKind(t *testing.T) {
+	const credential = "LEGACY_KEY"
+
+	tests := []struct {
+		name          string
+		raw           func() map[string]any
+		set           bool
+		wantNames     []string
+		wantPlain     []string
+		wantOptionEnv bool
+		listedInPass  bool
+	}{
+		{
+			name: "variable set",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+			},
+			set:           true,
+			wantNames:     []string{credential},
+			wantOptionEnv: true,
+		},
+		{
+			name: "variable unset",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+			},
+			wantNames: []string{credential},
+		},
+		{
+			name: "variable disallowed",
+			raw: func() map[string]any {
+				raw := rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+				raw["worker"] = map[string]any{"ssh_hosts": []any{"host-1"}, "ssh_disallow_pass_env": []any{credential}}
+				return raw
+			},
+			set: true,
+		},
+		{
+			name: "conversion that governs nothing carries no name",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "modern", "command": "modern-cmd"}, "legacy")
+			},
+			set: true,
+		},
+		{
+			name: "operator lists the variable and it is unset",
+			raw: func() map[string]any {
+				raw := rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+				raw["worker"] = map[string]any{"ssh_hosts": []any{"host-1"}, "ssh_pass_env": []any{credential}}
+				return raw
+			},
+			wantNames:    []string{credential},
+			wantPlain:    []string{credential},
+			listedInPass: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv(credential, "secret-value")
+			} else {
+				unsetEnvForRun(t, credential)
+			}
+			raw := tt.raw()
+			if _, hasWorker := raw["worker"]; !hasWorker {
+				withSSHHosts(raw)
+			}
+			h := newRunHarness(t, runConfig(t, raw), "plain", "modern")
+			h.tracker.candidates = []domain.Issue{candidate("id-1", "P-1"), candidate("id-2", "B-1", "backend")}
+
+			h.run()
+			sessions := h.waitForSessions(2)
+			h.stop()
+
+			_, plain := sessionOfWorkspace(t, sessions, "P-1")
+			if !slices.Equal(plain.SSHEnvNames, tt.wantPlain) {
+				t.Errorf("default kind session SSHEnvNames = %v, want %v", plain.SSHEnvNames, tt.wantPlain)
+			}
+			_, governed := sessionOfWorkspace(t, sessions, "B-1")
+			if !slices.Equal(governed.SSHEnvNames, tt.wantNames) {
+				t.Errorf("governed kind session SSHEnvNames = %v, want %v", governed.SSHEnvNames, tt.wantNames)
+			}
+			target := agentcore.LaunchTarget{SSHEnvNames: governed.SSHEnvNames}
+			carried := len(target.SSHOptions().Env) == 1
+			if carried != tt.wantOptionEnv {
+				t.Errorf("SSHOptions carries the credential = %v, want %v", carried, tt.wantOptionEnv)
+			}
+			named := false
+			for _, record := range logRecords(t, h.logs, "ssh_pass_env variable is not set or empty in the orchestrator environment") {
+				named = named || record["variable"] == credential
+			}
+			for _, record := range logRecords(t, h.logs, "ssh_pass_env variable is disallowed by ssh_disallow_pass_env, not carrying it") {
+				named = named || record["variable"] == credential
+			}
+			if named != tt.listedInPass {
+				t.Errorf("worker ssh_pass_env advisory names %s = %v, want %v", credential, named, tt.listedInPass)
+			}
+		})
+	}
+}
+
+func unsetEnvForRun(t *testing.T, name string) {
+	t.Helper()
+	if prior, ok := os.LookupEnv(name); ok {
+		t.Setenv(name, prior)
+	}
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("Unsetenv(%s): %v", name, err)
+	}
+}
+
+func TestRun_ConversionAdvisoryIsLoggedOnceAcrossTicks(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfig(t, rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy"))
+	cfg.Polling.IntervalMS = 20
+	h := newRunHarness(t, cfg, "plain", "modern")
+
+	h.run()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.tracker.candidateFetches.Load() < 4 {
+		if time.Now().After(deadline) {
+			t.Fatalf("candidate fetches = %d after 5s, want at least 4 ticks", h.tracker.candidateFetches.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h.stop()
+
+	records := logRecords(t, h.logs, "agent kind was removed and its configuration was converted to the replacement kind; the conversion will be removed in a later release")
+	if len(records) != 1 {
+		t.Fatalf("advisory records after several ticks = %v, want exactly one", records)
+	}
+	if records[0]["level"] != "WARN" || records[0]["agent_kind"] != "legacy" || records[0]["replacement_kind"] != "modern" {
+		t.Errorf("advisory record = %v, want a WARN carrying agent_kind %q and replacement_kind %q", records[0], "legacy", "modern")
+	}
+}
+
+type retryRow struct {
+	name        string
+	timerOnly   bool
+	raw         func() map[string]any
+	frozen      RetryEntry
+	issue       domain.Issue
+	unavailable string
+	wantKind    string
+	wantCommand string
+	wantArgv    []string
+	wantResume  string
+	wantMoved   bool
+	wantMovedTo DispatchResolution
+}
+
+func seedRetry(h *runHarness, mode string, entry RetryEntry) {
+	h.t.Helper()
+	entry.IssueID, entry.Identifier = "id-retry", "R-1"
+	h.state.Claimed[entry.IssueID] = struct{}{}
+	if mode == "recovered" {
+		session := entry.SessionID
+		PopulateRetries(h.state, []persistence.PendingRetry{{Entry: persistence.RetryEntry{
+			IssueID: entry.IssueID, Identifier: entry.Identifier, Attempt: entry.Attempt, SessionID: &session,
+			RuleName: entry.RuleName, TemplateID: entry.TemplateID, AgentKind: entry.AgentKind,
+		}}}, nil)
+		h.build()
+		return
+	}
+	h.build()
+	ScheduleRetry(h.state, ScheduleRetryParams{
+		IssueID: entry.IssueID, Identifier: entry.Identifier, Attempt: entry.Attempt, DelayMS: 20,
+		SessionID: entry.SessionID, AgentKind: entry.AgentKind, RuleName: entry.RuleName, TemplateID: entry.TemplateID,
+		ReactionKind: entry.ReactionKind,
+	}, h.o.onRetryFire)
+}
+
+func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testing.T) {
+	t.Parallel()
+
+	const held = "/prompts/held.md"
+	plainDefault := func() map[string]any {
+		return map[string]any{"agent": map[string]any{"kind": "kind-b", "command": "b-cmd"}}
+	}
+	frozenA := RetryEntry{Attempt: 1, AgentKind: "kind-a", RuleName: "old-work", SessionID: "sess-old"}
+
+	rows := []retryRow{
+		{
+			name:        "kind moved off the frozen kind",
+			raw:         plainDefault,
+			frozen:      frozenA,
+			issue:       candidate("id-retry", "R-1"),
+			wantKind:    "kind-b",
+			wantCommand: "b-cmd",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-b"},
+		},
+		{
+			name:        "retired kind hand-migrated away",
+			raw:         plainDefault,
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "legacy", RuleName: "backend", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1"),
+			wantKind:    "kind-b",
+			wantCommand: "b-cmd",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-b"},
+		},
+		{
+			name:        "kind this binary does not register",
+			raw:         plainDefault,
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "ghost", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1"),
+			wantKind:    "kind-b",
+			wantCommand: "b-cmd",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-b"},
+		},
+		{
+			name: "kind only a rule reaches after agent.kind moved",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "kind-b", "command": "b-cmd"}, "kind-a")
+			},
+			frozen:     frozenA,
+			issue:      candidate("id-retry", "R-1", "unrelated"),
+			wantKind:   "kind-a",
+			wantResume: "sess-old",
+		},
+		{
+			name: "agent.command changed under the same kind",
+			raw: func() map[string]any {
+				return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "new-cmd"}}
+			},
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "kind-a", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1"),
+			wantKind:    "kind-a",
+			wantCommand: "new-cmd",
+			wantResume:  "sess-old",
+		},
+		{
+			name: "retired kind with a conversion record",
+			raw: func() map[string]any {
+				return rawWithBackendRule(map[string]any{"kind": "plain", "command": "plain-cmd"}, "legacy")
+			},
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "legacy", RuleName: "backend", TemplateID: held, SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1", "unrelated"),
+			wantKind:    "modern",
+			wantCommand: "legacy-cli serve",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "modern", TemplateID: held, RuleName: "backend"},
+		},
+		{
+			name: "template that is not held",
+			raw: func() map[string]any {
+				return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}}
+			},
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "kind-a", RuleName: "docs", TemplateID: "/prompts/gone.md", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1"),
+			wantKind:    "kind-a",
+			wantCommand: "a-cmd",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-a"},
+		},
+		{
+			name:        "review reaction on a handoff issue after the kind moved",
+			timerOnly:   true,
+			raw:         plainDefault,
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "ghost", ReactionKind: ReactionKindReview, SessionID: "sess-old"},
+			issue:       domain.Issue{ID: "id-retry", Identifier: "R-1", Title: "R-1", State: "In Review"},
+			wantKind:    "kind-b",
+			wantCommand: "b-cmd",
+			wantMoved:   true,
+			wantMovedTo: DispatchResolution{AgentKind: "kind-b"},
+		},
+		{
+			name: "adapter lookup that fails and later succeeds",
+			raw: func() map[string]any {
+				return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}}
+			},
+			frozen:      RetryEntry{Attempt: 1, AgentKind: "kind-a", SessionID: "sess-old"},
+			issue:       candidate("id-retry", "R-1"),
+			unavailable: "kind-a",
+			wantKind:    "kind-a",
+			wantCommand: "a-cmd",
+			wantResume:  "sess-old",
+		},
+	}
+
+	for _, tt := range rows {
+		modes := []string{"timer", "recovered"}
+		if tt.timerOnly {
+			modes = modes[:1]
+		}
+		for _, mode := range modes {
+			t.Run(tt.name+", "+mode, func(t *testing.T) {
+				t.Parallel()
+
+				h := newRunHarness(t, runConfig(t, tt.raw()), "kind-a", "kind-b", "plain", "modern")
+				h.tracker.issues["id-retry"] = tt.issue
+				if tt.unavailable != "" {
+					h.setAvailable(tt.unavailable, false)
+				}
+				seedRetry(h, mode, tt.frozen)
+
+				h.run()
+				if tt.unavailable != "" {
+					h.waitForLog("retry agent kind unavailable")
+					h.setAvailable(tt.unavailable, true)
+				}
+				sessions := h.waitForSessions(1)
+				h.stop()
+
+				kind, params := sessionOfWorkspace(t, sessions, "R-1")
+				if kind != tt.wantKind || params.AgentConfig.Kind != tt.wantKind {
+					t.Errorf("retry ran on adapter %q with AgentConfig.Kind %q, want %q", kind, params.AgentConfig.Kind, tt.wantKind)
+				}
+				if params.AgentConfig.Command != tt.wantCommand || !slices.Equal(params.AgentConfig.CommandArgv, tt.wantArgv) {
+					t.Errorf("retry AgentConfig command = %q / %q, want %q / %q", params.AgentConfig.Command, params.AgentConfig.CommandArgv, tt.wantCommand, tt.wantArgv)
+				}
+				if params.ResumeSessionID != tt.wantResume {
+					t.Errorf("retry ResumeSessionID = %q, want %q", params.ResumeSessionID, tt.wantResume)
+				}
+
+				records := logRecords(t, h.logs, selectionChangedMessage)
+				if !tt.wantMoved {
+					if len(records) != 0 {
+						t.Errorf("selection records = %v, want none", records)
+					}
+					return
+				}
+				if len(records) != 1 {
+					t.Fatalf("selection records = %v, want exactly one", records)
+				}
+				got := records[0]
+				if got["dispatch_agent_kind"] != tt.wantMovedTo.AgentKind || got["dispatch_template_id"] != tt.wantMovedTo.TemplateID || got["dispatch_rule_name"] != tt.wantMovedTo.RuleName ||
+					got["agent_kind"] != tt.frozen.AgentKind || got["template_id"] != tt.frozen.TemplateID || got["rule_name"] != tt.frozen.RuleName {
+					t.Errorf("selection record = %v, want frozen {%q %q %q} and dispatched %+v", got, tt.frozen.AgentKind, tt.frozen.TemplateID, tt.frozen.RuleName, tt.wantMovedTo)
+				}
+			})
+		}
+	}
 }

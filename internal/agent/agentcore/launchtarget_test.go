@@ -252,6 +252,223 @@ func TestResolveLaunchTarget(t *testing.T) {
 	}
 }
 
+func makeArgvParams(t *testing.T, workspace, sshHost string, argv []string) domain.StartSessionParams {
+	t.Helper()
+	return domain.StartSessionParams{
+		WorkspacePath: workspace,
+		SSHHost:       sshHost,
+		AgentConfig:   domain.AgentConfig{CommandArgv: argv},
+	}
+}
+
+func spacedDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "dir with space")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("Mkdir(%q): %v", dir, err)
+	}
+	return dir
+}
+
+func TestResolveLaunchTarget_CommandArgvLocal(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	binPath := agenttest.FakeRuntime(t, spacedDir(t), "agent", agenttest.OutputScenario, agenttest.Output{})
+	rest := []string{"one two", "$HOME", "it's", ""}
+
+	t.Run("element zero resolves whole and the rest are the arguments", func(t *testing.T) {
+		t.Parallel()
+
+		argv := append([]string{binPath}, rest...)
+
+		got, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "", argv), "sortie-no-such-binary-xyzzy")
+
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget(argv %q) error = %v", argv, agentErr)
+		}
+		if got.Command != binPath {
+			t.Errorf("LaunchTarget.Command = %q, want %q", got.Command, binPath)
+		}
+		if !slices.Equal(got.Args, rest) {
+			t.Errorf("LaunchTarget.Args = %q, want %q", got.Args, rest)
+		}
+		if got.RemoteCommand != "" {
+			t.Errorf("LaunchTarget.RemoteCommand = %q, want empty in local mode", got.RemoteCommand)
+		}
+	})
+
+	t.Run("arguments are a copy of the list", func(t *testing.T) {
+		t.Parallel()
+
+		argv := []string{binPath, "first"}
+
+		got, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "", argv), "")
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget(argv %q) error = %v", argv, agentErr)
+		}
+		argv[1] = "changed"
+
+		if !slices.Equal(got.Args, []string{"first"}) {
+			t.Errorf("LaunchTarget.Args = %q after the caller changed its list, want %q", got.Args, []string{"first"})
+		}
+	})
+
+	t.Run("a single element list has no arguments", func(t *testing.T) {
+		t.Parallel()
+
+		got, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "", []string{binPath}), "")
+
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget error = %v", agentErr)
+		}
+		if len(got.Args) != 0 {
+			t.Errorf("LaunchTarget.Args = %q, want none", got.Args)
+		}
+	})
+
+	t.Run("missing executable draws the not-found error", func(t *testing.T) {
+		t.Parallel()
+
+		_, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "", []string{filepath.Join(spacedDir(t), "absent"), "x"}), "")
+
+		if agentErr == nil {
+			t.Fatal("ResolveLaunchTarget returned no error, want ErrAgentNotFound")
+		}
+		if agentErr.Kind != domain.ErrAgentNotFound {
+			t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrAgentNotFound)
+		}
+	})
+
+	t.Run("list wins over the default command", func(t *testing.T) {
+		t.Parallel()
+
+		got, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "", []string{binPath}), "sortie-no-such-binary-xyzzy")
+
+		if agentErr != nil {
+			t.Fatalf("ResolveLaunchTarget error = %v, want the list to launch", agentErr)
+		}
+		if got.Command != binPath {
+			t.Errorf("LaunchTarget.Command = %q, want %q", got.Command, binPath)
+		}
+	})
+}
+
+func TestResolveLaunchTarget_CommandArgvRemote(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("PATH", fakeSSHDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	argv := []string{"/opt/dir with space/agent", "one two", "$HOME", "it's", ""}
+
+	got, agentErr := ResolveLaunchTarget(makeArgvParams(t, workspace, "user@host", argv), "claude")
+
+	if agentErr != nil {
+		t.Fatalf("ResolveLaunchTarget(argv %q) error = %v", argv, agentErr)
+	}
+	if want := sshutil.QuoteArgv(argv); got.RemoteCommand != want {
+		t.Errorf("LaunchTarget.RemoteCommand = %q, want %q", got.RemoteCommand, want)
+	}
+	if got.SSHHost != "user@host" {
+		t.Errorf("LaunchTarget.SSHHost = %q, want %q", got.SSHHost, "user@host")
+	}
+	if got.Args != nil {
+		t.Errorf("LaunchTarget.Args = %q, want nil in ssh mode", got.Args)
+	}
+}
+
+func TestAppendCommandArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command domain.AgentCommand
+		remote  bool
+		args    []string
+		want    domain.AgentCommand
+	}{
+		{
+			name:    "list stays a list locally",
+			command: domain.AgentCommand{Argv: []string{"agent", "x y"}},
+			args:    []string{"acp", "-a"},
+			want:    domain.AgentCommand{Argv: []string{"agent", "x y", "acp", "-a"}},
+		},
+		{
+			name:    "list stays a list remotely",
+			command: domain.AgentCommand{Argv: []string{"agent"}},
+			remote:  true,
+			args:    []string{"acp", "-a"},
+			want:    domain.AgentCommand{Argv: []string{"agent", "acp", "-a"}},
+		},
+		{
+			name:    "local string with plain arguments stays a string",
+			command: domain.AgentCommand{Line: "agent --fast"},
+			args:    []string{"acp", "--model", "m-1"},
+			want:    domain.AgentCommand{Line: "agent --fast acp --model m-1"},
+		},
+		{
+			name:    "local string drops trailing whitespace before the arguments",
+			command: domain.AgentCommand{Line: "agent \t\n"},
+			args:    []string{"acp"},
+			want:    domain.AgentCommand{Line: "agent acp"},
+		},
+		{
+			name:    "local string with a spaced argument becomes the list of its words",
+			command: domain.AgentCommand{Line: "agent  --fast"},
+			args:    []string{"acp", "--agent", "space name"},
+			want:    domain.AgentCommand{Argv: []string{"agent", "--fast", "acp", "--agent", "space name"}},
+		},
+		{
+			name:    "local string with an empty argument becomes a list",
+			command: domain.AgentCommand{Line: "agent"},
+			args:    []string{"--agent", ""},
+			want:    domain.AgentCommand{Argv: []string{"agent", "--agent", ""}},
+		},
+		{
+			name:    "local string with a tab in an argument becomes a list",
+			command: domain.AgentCommand{Line: "agent"},
+			args:    []string{"a\tb"},
+			want:    domain.AgentCommand{Argv: []string{"agent", "a\tb"}},
+		},
+		{
+			name:    "local string with a non-breaking space in an argument becomes a list",
+			command: domain.AgentCommand{Line: "agent"},
+			args:    []string{"a b"},
+			want:    domain.AgentCommand{Argv: []string{"agent", "a b"}},
+		},
+		{
+			name:    "remote string places arguments in front of the terminator",
+			command: domain.AgentCommand{Line: "agent;"},
+			remote:  true,
+			args:    []string{"acp", "--agent", "space name", ""},
+			want:    domain.AgentCommand{Line: `agent acp --agent 'space name' '' ;`},
+		},
+		{
+			name:    "remote string keeps a spaced argument in one word",
+			command: domain.AgentCommand{Line: "agent"},
+			remote:  true,
+			args:    []string{"--agent", "it's"},
+			want:    domain.AgentCommand{Line: `agent --agent 'it'\''s'`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := AppendCommandArgs(tt.command, tt.remote, tt.args...)
+
+			if got.Line != tt.want.Line || !slices.Equal(got.Argv, tt.want.Argv) {
+				t.Errorf("AppendCommandArgs(%+v, remote=%v, %q) = %+v, want %+v", tt.command, tt.remote, tt.args, got, tt.want)
+			}
+			if !tt.remote && got.Line != "" {
+				wantWords := append(strings.Fields(tt.command.Line), tt.args...)
+				if gotWords := strings.Fields(got.Line); !slices.Equal(gotWords, wantWords) {
+					t.Errorf("strings.Fields(AppendCommandArgs(%+v, %q).Line) = %q, want the base words then the arguments %q", tt.command, tt.args, gotWords, wantWords)
+				}
+			}
+		})
+	}
+}
+
 // TestResolveLaunchTarget_SSHEnvNames asserts that ResolveLaunchTarget
 // sets LaunchTarget.SSHEnvNames from params.SSHEnvNames in SSH mode and
 // leaves it nil in local mode, even when the caller sets it.

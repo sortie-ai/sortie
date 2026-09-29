@@ -4,6 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +70,178 @@ func TestShellQuote(t *testing.T) {
 			got := shellQuote(tt.input)
 			if got != tt.want {
 				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQuoteArgv(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"no elements", nil, ""},
+		{"one plain element is still quoted", []string{"agent"}, "'agent'"},
+		{"elements join by one space", []string{"agent", "acp", "-a"}, "'agent' 'acp' '-a'"},
+		{"space in an element", []string{"agent", "space name"}, "'agent' 'space name'"},
+		{"single quote in an element", []string{"agent", "it's"}, `'agent' 'it'\''s'`},
+		{"empty element", []string{"agent", ""}, "'agent' ''"},
+		{"assignment shaped element zero", []string{"FOO=bar", "x"}, "'FOO=bar' 'x'"},
+		{"reserved word element zero", []string{"if", "x"}, "'if' 'x'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := QuoteArgv(tt.argv)
+
+			if got != tt.want {
+				t.Errorf("QuoteArgv(%q) = %q, want %q", tt.argv, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppendArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fragment string
+		args     []string
+		want     string
+	}{
+		{"no arguments leave the fragment as written", "agent;\n", nil, "agent;\n"},
+		{"safe arguments stay unquoted", "agent", []string{"acp", "-a", "--model", "claude-sonnet-4.6"}, "agent acp -a --model claude-sonnet-4.6"},
+		{"safe charset covers path and assignment characters", "agent", []string{"a_b@c%d+e=f:g,h./i-j"}, "agent a_b@c%d+e=f:g,h./i-j"},
+		{"unsafe arguments are single-quoted", "agent", []string{"space name", "$HOME", "it's", "a;b"}, `agent 'space name' '$HOME' 'it'\''s' 'a;b'`},
+		{"empty argument is quoted", "agent", []string{""}, "agent ''"},
+		{"non-ASCII argument is quoted", "agent", []string{"héllo"}, "agent 'héllo'"},
+		{"trailing semicolon", "agent;", []string{"a"}, "agent a ;"},
+		{"trailing ampersand", "agent &", []string{"a"}, "agent a &"},
+		{"blanks around the terminator", "agent \t; ", []string{"a"}, "agent a ;"},
+		{"trailing newline", "agent\n", []string{"a"}, "agent a"},
+		{"trailing newline after a semicolon", "agent;\n", []string{"a"}, "agent a ;"},
+		{"escaped semicolon is the command's own argument", `find . -exec agent \;`, []string{"a"}, `find . -exec agent \; a`},
+		{"doubled ampersand is an incomplete operator", "agent &&", []string{"a"}, "agent && a"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := AppendArgs(tt.fragment, tt.args...)
+
+			if got != tt.want {
+				t.Errorf("AppendArgs(%q, %q) = %q, want %q", tt.fragment, tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+var awkwardArgs = []string{"plain", "$HOME", "$(id)", "`id`", "it's", `say "hi"`, "a;b", "two words", "", "-n", "*", `a\b`, "tab\there", "line\nbreak", "héllo"}
+
+func requirePOSIXShell(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a POSIX shell is not available on Windows")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found on PATH")
+	}
+	return sh
+}
+
+func runShellFragment(t *testing.T, sh, fragment, pathDir string) []string {
+	t.Helper()
+
+	cmd := exec.Command(sh, "-c", fragment)
+	cmd.Env = append(os.Environ(), "PATH="+pathDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v", fragment, err)
+	}
+	words := strings.Split(string(out), "\x00")
+	return words[:len(words)-1]
+}
+
+func writeArgPrinter(t *testing.T, dir, name string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\0' \"$@\"\n"), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func TestAppendArgs_ShellPassesEachArgumentAsOneWord(t *testing.T) {
+	sh := requirePOSIXShell(t)
+
+	tests := []struct {
+		name     string
+		fragment string
+	}{
+		{"plain command", `printf '%s\0'`},
+		{"trailing semicolon", `printf '%s\0';`},
+		{"trailing ampersand", `printf '%s\0' &`},
+		{"trailing newline", "printf '%s\\0'\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runShellFragment(t, sh, AppendArgs(tt.fragment, awkwardArgs...)+"\nwait", t.TempDir())
+
+			if !slices.Equal(got, awkwardArgs) {
+				t.Errorf("shell words after AppendArgs(%q, ...) = %q, want %q", tt.fragment, got, awkwardArgs)
+			}
+		})
+	}
+}
+
+func TestBuildSSHLaunch_QuoteArgvReachesTheRuntimeAsItsElements(t *testing.T) {
+	sh := requirePOSIXShell(t)
+	dir := filepath.Join(t.TempDir(), "dir with space")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	argv := []string{writeArgPrinter(t, dir, "agent"), "one two", "$HOME", "it's", ""}
+	agentArgs := []string{"--flag", "a b", "$(id)"}
+	launch := BuildSSHLaunch("h", t.TempDir(), QuoteArgv(argv), agentArgs, SSHOptions{})
+
+	got := runShellFragment(t, sh, launch.Args[len(launch.Args)-1], t.TempDir())
+
+	want := append(slices.Clone(argv[1:]), agentArgs...)
+	if !slices.Equal(got, want) {
+		t.Errorf("words the launched command received = %q, want %q", got, want)
+	}
+}
+
+func TestQuoteArgv_ShellNeverReadsElementZeroSpecially(t *testing.T) {
+	sh := requirePOSIXShell(t)
+	dir := t.TempDir()
+	writeArgPrinter(t, dir, "FOO=bar")
+	writeArgPrinter(t, dir, "if")
+
+	tests := []struct {
+		name string
+		argv []string
+	}{
+		{"assignment shaped", []string{"FOO=bar", "x"}},
+		{"reserved word", []string{"if", "x"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runShellFragment(t, sh, QuoteArgv(tt.argv), dir)
+
+			if want := tt.argv[1:]; !slices.Equal(got, want) {
+				t.Errorf("words the launched command received = %q, want %q", got, want)
 			}
 		})
 	}

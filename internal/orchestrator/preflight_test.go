@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1811,6 +1812,127 @@ func TestValidateDispatchConfig_MissingBlockFrontMatterShapes(t *testing.T) {
 				}
 			} else if len(messages) != 0 {
 				t.Errorf("dispatch.agent.missing_block messages = %v, want none", messages)
+			}
+		})
+	}
+}
+
+func agentCommandMessages(result PreflightResult) []string {
+	var messages []string
+	for _, e := range result.Errors {
+		if e.Check == "agent.command" {
+			messages = append(messages, e.Message)
+		}
+	}
+	return messages
+}
+
+func TestValidateDispatchConfig_AgentCommandPerReachedKind(t *testing.T) {
+	t.Parallel()
+
+	const noDefaultTail = `, which has no default command and launches agent.command only as the default agent kind (dispatch.default.agent, else agent.kind)`
+	tracker := config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"}
+	kindMeta := map[string]registry.AgentMeta{
+		"kind-a":  {RequiresCommand: true},
+		"kind-b":  {RequiresCommand: true, DefaultCommand: "kind-b-bin"},
+		"kind-c":  {RequiresCommand: true},
+		"kind-d":  {RequiresCommand: false},
+		"modern":  {RequiresCommand: true},
+		"kind-ws": {RequiresCommand: true, DefaultCommand: "   "},
+	}
+	converted := func(agent map[string]any) config.ServiceConfig {
+		cfg := convertedConfig(t, map[string]any{
+			"agent":    agent,
+			"dispatch": map[string]any{"rules": []any{backendRuleRaw("legacy")}},
+		})
+		cfg.Tracker = tracker
+		return cfg
+	}
+
+	tests := []struct {
+		name string
+		cfg  config.ServiceConfig
+		want []string
+	}{
+		{
+			name: "named rule selecting a kind with no default command beside another agent.kind",
+			cfg: config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", Command: "/bin/a"},
+				Dispatch: config.DispatchConfig{Rules: []config.DispatchRule{{Name: "docs-update", Selection: config.DispatchSelection{AgentKind: "kind-c"}}}}},
+			want: []string{`dispatch rule "docs-update" (dispatch.rules[0].agent) selects agent kind "kind-c"` + noDefaultTail},
+		},
+		{
+			name: "unnamed rule selecting a kind with no default command",
+			cfg: config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", Command: "/bin/a"},
+				Dispatch: config.DispatchConfig{Rules: []config.DispatchRule{{Selection: config.DispatchSelection{AgentKind: "kind-c"}}}}},
+			want: []string{`dispatch.rules[0].agent selects agent kind "kind-c"` + noDefaultTail},
+		},
+		{
+			name: "agent.kind is not the default kind when dispatch.default.agent names another",
+			cfg: config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", Command: "/bin/c"},
+				Dispatch: config.DispatchConfig{Default: config.DispatchSelection{AgentKind: "kind-c"}}},
+			want: []string{`agent.kind selects agent kind "kind-a"` + noDefaultTail},
+		},
+		{
+			name: "default kind without agent.command passes with a default command",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-b"}},
+		},
+		{
+			name: "default kind without agent.command and without a default command",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a"}},
+			want: []string{`agent.command is required for agent kind "kind-a"`},
+		},
+		{
+			name: "whitespace-only agent.command is no command",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", Command: "  \t"}},
+			want: []string{`agent.command is required for agent kind "kind-a"`},
+		},
+		{
+			name: "whitespace-only default command is no command",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-ws"}},
+			want: []string{`agent.command is required for agent kind "kind-ws"`},
+		},
+		{
+			name: "list agent.command names an executable",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", CommandArgv: []string{"kind a"}}},
+		},
+		{
+			name: "rule selecting a kind with a default command passes",
+			cfg: config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-a", Command: "/bin/a"},
+				Dispatch: config.DispatchConfig{Rules: []config.DispatchRule{{Name: "docs", Selection: config.DispatchSelection{AgentKind: "kind-b"}}}}},
+		},
+		{
+			name: "kind that launches no command is never checked",
+			cfg:  config.ServiceConfig{Tracker: tracker, Agent: config.AgentConfig{Kind: "kind-d"}},
+		},
+		{
+			name: "converted kind launches its converted command beside another default kind",
+			cfg:  converted(map[string]any{"kind": "kind-a", "command": "/bin/a"}),
+		},
+		{
+			name: "replacement kind that is already the default kind needs its own command",
+			cfg:  converted(map[string]any{"kind": "modern"}),
+			want: []string{`agent.command is required for agent kind "modern"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			params := validPreflightParams()
+			params.ConfigFunc = func() config.ServiceConfig { return tt.cfg }
+			params.AgentRegistry = &stubAgentRegistry{
+				getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+				metaFunc: func(kind string) (registry.AgentMeta, bool) {
+					meta, ok := kindMeta[kind]
+					return meta, ok
+				},
+			}
+
+			got := agentCommandMessages(ValidateDispatchConfig(params))
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("ValidateDispatchConfig() agent.command messages = %q, want %q", got, tt.want)
 			}
 		})
 	}

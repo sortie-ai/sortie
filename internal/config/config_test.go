@@ -8,10 +8,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
 )
 
@@ -4829,4 +4831,221 @@ func TestNewServiceConfig_RegistersNotificationBackendURLWhole(t *testing.T) {
 		t.Fatalf("NewServiceConfig() error = %v", err)
 	}
 	requireConfigMasked(t, url)
+}
+
+func TestParseAgentCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		raw         any
+		want        domain.AgentCommand
+		wantField   string
+		wantMessage string
+	}{
+		{name: "absent", raw: nil},
+		{name: "empty string", raw: ""},
+		{name: "string form", raw: "agent --fast", want: domain.AgentCommand{Line: "agent --fast"}},
+		{name: "list form", raw: []any{"agent", "--fast"}, want: domain.AgentCommand{Argv: []string{"agent", "--fast"}}},
+		{
+			name: "elements kept exactly as written",
+			raw:  []any{"/opt/dir with space/agent", "a b", "$HOME", "it's"},
+			want: domain.AgentCommand{Argv: []string{"/opt/dir with space/agent", "a b", "$HOME", "it's"}},
+		},
+		{name: "whitespace-only later element", raw: []any{"agent", "  "}, want: domain.AgentCommand{Argv: []string{"agent", "  "}}},
+		{name: "boolean", raw: true, wantField: "agent.command", wantMessage: "expected string or list, got boolean"},
+		{name: "integer", raw: 7, wantField: "agent.command", wantMessage: "expected string or list, got integer"},
+		{name: "mapping", raw: map[string]any{"a": "b"}, wantField: "agent.command", wantMessage: "expected string or list, got mapping"},
+		{name: "empty list", raw: []any{}, wantField: "agent.command", wantMessage: "must not be an empty list"},
+		{name: "non-string element", raw: []any{"agent", 7}, wantField: "agent.command[1]", wantMessage: "expected string, got integer"},
+		{name: "null element", raw: []any{"agent", nil}, wantField: "agent.command[1]", wantMessage: "expected string, got null"},
+		{name: "empty element", raw: []any{"agent", ""}, wantField: "agent.command[1]", wantMessage: "must not be empty"},
+		{name: "empty element zero", raw: []any{"", "x"}, wantField: "agent.command[0]", wantMessage: "must not be empty"},
+		{name: "whitespace-only element zero", raw: []any{" \t", "x"}, wantField: "agent.command[0]", wantMessage: "must not be empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseAgentCommand(tt.raw)
+
+			if tt.wantField != "" {
+				requireConversionError(t, err, tt.wantField, tt.wantMessage)
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAgentCommand(%v) error = %v", tt.raw, err)
+			}
+			if !commandsEqual(got, tt.want) {
+				t.Errorf("parseAgentCommand(%v) = %+v, want %+v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewServiceConfig_AgentCommandForms(t *testing.T) {
+	t.Parallel()
+
+	t.Run("list loads with no string form", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": []any{"agent dir/agent", "a b"}}})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() error = %v", err)
+		}
+
+		if cfg.Agent.Command != "" {
+			t.Errorf("Agent.Command = %q, want empty for the list form", cfg.Agent.Command)
+		}
+		if want := []string{"agent dir/agent", "a b"}; !slices.Equal(cfg.Agent.CommandArgv, want) {
+			t.Errorf("Agent.CommandArgv = %q, want %q", cfg.Agent.CommandArgv, want)
+		}
+	})
+
+	t.Run("string loads with no list form", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": "agent --fast"}})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() error = %v", err)
+		}
+
+		if cfg.Agent.Command != "agent --fast" || cfg.Agent.CommandArgv != nil {
+			t.Errorf("Agent.Command, Agent.CommandArgv = %q, %q, want the string form only", cfg.Agent.Command, cfg.Agent.CommandArgv)
+		}
+	})
+
+	t.Run("malformed list fails the load", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": []any{"agent", ""}}})
+
+		assertConfigErrorField(t, err, "agent.command[1]")
+	})
+
+	t.Run("wrong type fails the load", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": 5}})
+
+		assertConfigErrorField(t, err, "agent.command")
+	})
+}
+
+func TestAgentAdapterConfig_SeedsTheLocalCommandForm(t *testing.T) {
+	t.Parallel()
+
+	t.Run("string", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": "agent --fast"}})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() error = %v", err)
+		}
+
+		if got := AgentAdapterConfig(cfg, cfg.Agent.Kind)["command"]; got != "agent --fast" {
+			t.Errorf(`AgentAdapterConfig()["command"] = %#v, want %q`, got, "agent --fast")
+		}
+	})
+
+	t.Run("list is a copy", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": []any{"agent", "a b"}}})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() error = %v", err)
+		}
+
+		first, _ := AgentAdapterConfig(cfg, cfg.Agent.Kind)["command"].([]string)
+		if !slices.Equal(first, []string{"agent", "a b"}) {
+			t.Fatalf(`AgentAdapterConfig()["command"] = %#v, want the list []string{"agent", "a b"}`, first)
+		}
+		first[0] = "mutated"
+
+		if cfg.Agent.CommandArgv[0] != "agent" {
+			t.Errorf("Agent.CommandArgv[0] = %q after mutating the adapter map's list, want %q", cfg.Agent.CommandArgv[0], "agent")
+		}
+	})
+}
+
+func TestNewServiceConfigEnvOverrides_AgentCommandReplacesAList(t *testing.T) {
+	setDotEnvPathForTest(t, "")
+	t.Setenv("SORTIE_AGENT_COMMAND", "env-agent --flag")
+
+	cfg, err := NewServiceConfig(map[string]any{"agent": map[string]any{"command": []any{"file-agent", "a b"}}})
+	if err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+
+	if cfg.Agent.Command != "env-agent --flag" {
+		t.Errorf("Agent.Command = %q, want %q", cfg.Agent.Command, "env-agent --flag")
+	}
+	if cfg.Agent.CommandArgv != nil {
+		t.Errorf("Agent.CommandArgv = %q, want nil once SORTIE_AGENT_COMMAND replaced the list", cfg.Agent.CommandArgv)
+	}
+}
+
+func TestAgentCommand(t *testing.T) {
+	t.Parallel()
+
+	for _, row := range governanceRows {
+		for _, hosts := range []bool{false, true} {
+			for _, remote := range []bool{false, true} {
+				name := fmt.Sprintf("%s, ssh_hosts set %v, remote %v", row.name, hosts, remote)
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					raw := row.raw()
+					if hosts {
+						withSSHHosts(raw)
+					}
+					cfg := loadConvertedWithDispatch(t, raw)
+					want := row.wantLocal
+					if remote {
+						want = row.wantRemote
+					}
+
+					got := cfg.AgentCommand(replacementKind, remote)
+
+					if !commandsEqual(got, want) {
+						t.Errorf("AgentCommand(%q, %v) = %+v, want %+v", replacementKind, remote, got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestAgentCommand_OwnedByTheDefaultKind(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewServiceConfig(map[string]any{
+		"agent":    map[string]any{"kind": "kind-a", "command": []any{"cmd a", "--x"}},
+		"dispatch": map[string]any{"default": map[string]any{"agent": "kind-b"}},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	dispatch, err := BuildDispatchConfig(map[string]any{"dispatch": map[string]any{"default": map[string]any{"agent": "kind-b"}}}, mkDispatchDir(t), alwaysRegistered)
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig() error = %v", err)
+	}
+	cfg.SetDispatch(dispatch)
+
+	for _, remote := range []bool{false, true} {
+		got := cfg.AgentCommand("kind-b", remote)
+		if want := (domain.AgentCommand{Argv: []string{"cmd a", "--x"}}); !commandsEqual(got, want) {
+			t.Errorf("AgentCommand(%q, %v) = %+v, want agent.command %+v", "kind-b", remote, got, want)
+		}
+		if got := cfg.AgentCommand("kind-a", remote); !got.IsZero() {
+			t.Errorf("AgentCommand(%q, %v) = %+v, want zero for a kind that is not the default kind", "kind-a", remote, got)
+		}
+	}
+
+	first := cfg.AgentCommand("kind-b", false)
+	first.Argv[0] = "mutated"
+	if second := cfg.AgentCommand("kind-b", false); second.Argv[0] != "cmd a" {
+		t.Errorf("AgentCommand(%q, false).Argv[0] = %q after mutating an earlier result, want %q", "kind-b", second.Argv[0], "cmd a")
+	}
 }

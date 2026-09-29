@@ -471,50 +471,59 @@ func TestIsTurnSuccess(t *testing.T) {
 func TestToDomainAgentConfig(t *testing.T) {
 	t.Parallel()
 
-	src := config.AgentConfig{
-		Kind:           "claude-code",
-		Command:        "claude --json",
-		TurnTimeoutMS:  30000,
-		ReadTimeoutMS:  10000,
-		StallTimeoutMS: 60000,
+	timeouts := config.AgentConfig{TurnTimeoutMS: 30000, ReadTimeoutMS: 10000, StallTimeoutMS: 60000, StopGraceMS: 2000}
+	withCommand := func(kind, command string, argv []string) config.ServiceConfig {
+		agent := timeouts
+		agent.Kind, agent.Command, agent.CommandArgv = kind, command, argv
+		return config.ServiceConfig{Agent: agent}
+	}
+	converted := convertedConfig(t, map[string]any{
+		"agent":    map[string]any{"kind": "kind-a", "command": "kind-a-cmd"},
+		"dispatch": map[string]any{"rules": []any{backendRuleRaw("legacy")}},
+	})
+
+	tests := []struct {
+		name        string
+		cfg         config.ServiceConfig
+		kind        string
+		remote      bool
+		wantCommand string
+		wantArgv    []string
+	}{
+		{name: "default kind, string command", cfg: withCommand("kind-a", "kind-a --json", nil), kind: "kind-a", wantCommand: "kind-a --json"},
+		{name: "default kind, string command, remote", cfg: withCommand("kind-a", "kind-a --json", nil), kind: "kind-a", remote: true, wantCommand: "kind-a --json"},
+		{name: "default kind, list command", cfg: withCommand("kind-a", "", []string{"kind a", "--json"}), kind: "kind-a", wantArgv: []string{"kind a", "--json"}},
+		{name: "default kind, list command, remote", cfg: withCommand("kind-a", "", []string{"kind a", "--json"}), kind: "kind-a", remote: true, wantArgv: []string{"kind a", "--json"}},
+		{name: "routed kind has no command of its own", cfg: withCommand("kind-a", "kind-a --json", nil), kind: "codex"},
+		{name: "routed kind has no command of its own, remote", cfg: withCommand("kind-a", "", []string{"kind-a"}), kind: "codex", remote: true},
+		{name: "converted kind launches the converted command locally", cfg: converted, kind: "modern", wantCommand: "legacy-cli serve"},
+		{name: "converted kind launches the converted command remotely", cfg: converted, kind: "modern", remote: true, wantCommand: "legacy-cli serve --remote"},
+		{name: "default kind beside a converted kind keeps agent.command", cfg: converted, kind: "kind-a", wantCommand: "kind-a-cmd"},
 	}
 
-	t.Run("passed kind matches the configuration's default kind", func(t *testing.T) {
-		t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		got := toDomainAgentConfig(src, src.Kind)
+			got := toDomainAgentConfig(tt.cfg, tt.kind, tt.remote)
 
-		if got.Kind != src.Kind {
-			t.Errorf("Kind = %q, want %q", got.Kind, src.Kind)
-		}
-		if got.Command != src.Command {
-			t.Errorf("Command = %q, want %q", got.Command, src.Command)
-		}
-		if got.TurnTimeoutMS != src.TurnTimeoutMS {
-			t.Errorf("TurnTimeoutMS = %d, want %d", got.TurnTimeoutMS, src.TurnTimeoutMS)
-		}
-		if got.ReadTimeoutMS != src.ReadTimeoutMS {
-			t.Errorf("ReadTimeoutMS = %d, want %d", got.ReadTimeoutMS, src.ReadTimeoutMS)
-		}
-		if got.StallTimeoutMS != src.StallTimeoutMS {
-			t.Errorf("StallTimeoutMS = %d, want %d", got.StallTimeoutMS, src.StallTimeoutMS)
-		}
-	})
-
-	t.Run("passed kind differs from the configuration's default kind", func(t *testing.T) {
-		t.Parallel()
-
-		const routedKind = "codex"
-
-		got := toDomainAgentConfig(src, routedKind)
-
-		if got.Kind != routedKind {
-			t.Errorf("Kind = %q, want %q (the passed kind, not cfg.Agent.Kind %q)", got.Kind, routedKind, src.Kind)
-		}
-		if got.Command != src.Command {
-			t.Errorf("Command = %q, want %q", got.Command, src.Command)
-		}
-	})
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %q, want the passed kind %q", got.Kind, tt.kind)
+			}
+			if got.Command != tt.wantCommand {
+				t.Errorf("toDomainAgentConfig(kind %q, remote %v).Command = %q, want %q", tt.kind, tt.remote, got.Command, tt.wantCommand)
+			}
+			if !slices.Equal(got.CommandArgv, tt.wantArgv) {
+				t.Errorf("toDomainAgentConfig(kind %q, remote %v).CommandArgv = %q, want %q", tt.kind, tt.remote, got.CommandArgv, tt.wantArgv)
+			}
+			cfgAgent := tt.cfg.Agent
+			if got.TurnTimeoutMS != cfgAgent.TurnTimeoutMS || got.ReadTimeoutMS != cfgAgent.ReadTimeoutMS ||
+				got.StallTimeoutMS != cfgAgent.StallTimeoutMS || got.StopGraceMS != cfgAgent.StopGraceMS {
+				t.Errorf("timeouts = %d/%d/%d/%d, want %d/%d/%d/%d", got.TurnTimeoutMS, got.ReadTimeoutMS, got.StallTimeoutMS, got.StopGraceMS,
+					cfgAgent.TurnTimeoutMS, cfgAgent.ReadTimeoutMS, cfgAgent.StallTimeoutMS, cfgAgent.StopGraceMS)
+			}
+		})
+	}
 }
 
 func TestRunWorkerAttempt_SSHEnvNamesFunc(t *testing.T) {
