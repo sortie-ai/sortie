@@ -511,11 +511,29 @@ var knownTopLevelKeys = map[string]bool{
 	"hooks":         true,
 	"agent":         true,
 	"db_path":       true,
-	"ci_feedback":   true,
 	"self_review":   true,
 	"reactions":     true,
 	"dispatch":      true,
 	"notifications": true,
+}
+
+// refuseCIFeedbackSection rejects the ci_feedback key instead of collecting it as an extension, which would ignore it silently.
+func refuseCIFeedbackSection(raw map[string]any) error {
+	if _, ok := raw["ci_feedback"]; !ok {
+		return nil
+	}
+	if reactions, ok := raw["reactions"].(map[string]any); ok {
+		if _, ok := reactions["ci_failure"].(map[string]any); ok {
+			return &ConfigError{
+				Field:   "ci_feedback",
+				Message: "no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings",
+			}
+		}
+	}
+	return &ConfigError{
+		Field:   "ci_feedback",
+		Message: "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name",
+	}
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -540,6 +558,9 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 
 	envKeys, envAdvisories, err := applyEnvOverrides(raw)
 	if err != nil {
+		return ServiceConfig{}, err
+	}
+	if err := refuseCIFeedbackSection(raw); err != nil {
 		return ServiceConfig{}, err
 	}
 	var advisories []Advisory
@@ -656,13 +677,6 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 		return ServiceConfig{}, err
 	}
 
-	ciFeedback, err := buildCIFeedbackConfig(extractSubMap(raw, "ci_feedback"))
-	if err != nil {
-		return ServiceConfig{}, err
-	}
-
-	hasCIFeedbackSection := raw["ci_feedback"] != nil
-
 	selfReview, err := buildSelfReviewConfig(extractSubMap(raw, "self_review"))
 	if err != nil {
 		return ServiceConfig{}, err
@@ -673,18 +687,11 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 		return ServiceConfig{}, err
 	}
 
+	var ciFeedback CIFeedbackConfig
 	if ciReaction, ok := reactions["ci_failure"]; ok {
 		ciFeedback, err = populateCIFeedbackFromReactions(ciReaction)
 		if err != nil {
 			return ServiceConfig{}, err
-		}
-		if hasCIFeedbackSection {
-			advisories = append(advisories, Advisory{
-				Check:   "ci_feedback.deprecated",
-				Text:    "ci_feedback is deprecated and ignored because reactions.ci_failure is set; remove the ci_feedback section",
-				Message: "ci_feedback section is deprecated; using reactions.ci_failure instead",
-				Attrs:   []slog.Attr{slog.String("hint", "remove the ci_feedback section from your WORKFLOW.md")},
-			})
 		}
 		delete(reactions, "ci_failure")
 	}
@@ -1249,71 +1256,6 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 // covering a reviewer who returns the next working day and pushes a
 // fixup.
 const ciWatchWindowDefaultMS = 86400000
-
-func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
-	kind, fault := typeutil.StringField(m, "kind")
-	if fault != nil {
-		return CIFeedbackConfig{}, &ConfigError{Field: "ci_feedback.kind", Message: fault.Reason()}
-	}
-	if kind == "" {
-		return CIFeedbackConfig{}, nil
-	}
-
-	maxRetries, err := coerceIntField(m, "max_retries", "ci_feedback.max_retries")
-	if err != nil {
-		return CIFeedbackConfig{}, err
-	}
-	if _, exists := m["max_retries"]; !exists {
-		maxRetries = 2
-	}
-
-	maxLogLines, err := coerceIntField(m, "max_log_lines", "ci_feedback.max_log_lines")
-	if err != nil {
-		return CIFeedbackConfig{}, err
-	}
-	if _, exists := m["max_log_lines"]; !exists {
-		maxLogLines = 50
-	}
-	if maxRetries < 0 {
-		return CIFeedbackConfig{}, &ConfigError{
-			Field:   "ci_feedback.max_retries",
-			Message: "must be non-negative",
-		}
-	}
-	if maxLogLines < 0 {
-		return CIFeedbackConfig{}, &ConfigError{
-			Field:   "ci_feedback.max_log_lines",
-			Message: "must be non-negative",
-		}
-	}
-
-	escalation := extractString(m, "escalation")
-	if escalation == "" {
-		escalation = "label"
-	}
-	if escalation != "label" && escalation != "comment" {
-		return CIFeedbackConfig{}, &ConfigError{
-			Field:   "ci_feedback.escalation",
-			Message: fmt.Sprintf("must be \"label\" or \"comment\", got %q", escalation),
-		}
-	}
-
-	escalationLabel := extractString(m, "escalation_label")
-	if escalationLabel == "" {
-		escalationLabel = "needs-human"
-	}
-
-	// The deprecated ci_feedback section exposes no watch_window_ms key,
-	// so it always resolves to the default.
-	return CIFeedbackConfig{
-		Kind:            kind,
-		MaxRetries:      maxRetries,
-		MaxLogLines:     maxLogLines,
-		Escalation:      escalation,
-		EscalationLabel: escalationLabel,
-		WatchWindowMS:   ciWatchWindowDefaultMS,
-	}, nil
-}
 
 // populateCIFeedbackFromReactions converts a ReactionConfig for the
 // "ci_failure" reaction kind into a CIFeedbackConfig. Provider maps to

@@ -106,7 +106,7 @@ A verdict that withholds the write is, immediately before any of its effects, ch
 - `CI Status Failing`
   - Consult the retry slot (Section 7.5) first. If an incumbent occupies it, defer: re-enqueue the pending entry with a refreshed `CreatedAt` and take none of the actions below on this tick — no run-history row, no counter increment, no dispatch, and no escalation.
   - On a free slot: persist CI failure run history and increment the CI fix attempt counter.
-  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`): schedule a CI-fix dispatch with failure context injected into the prompt.
+  - If within `reactions.ci_failure.max_retries`: schedule a CI-fix dispatch with failure context injected into the prompt.
   - If retries exhausted: escalate (add label or post comment per escalation config), cancel retry, release claim.
 
 - `Review Comments Detected`

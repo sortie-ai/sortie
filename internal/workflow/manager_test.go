@@ -306,6 +306,46 @@ func TestManager_ReloadRetainsOnConfigTypeFault(t *testing.T) {
 	}
 }
 
+func TestManager_ReloadRetainsOnCIFeedbackSection(t *testing.T) {
+	t.Parallel()
+
+	const wantMessage = "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, []byte("---\nreactions:\n  ci_failure:\n    provider: github\n    max_retries: 4\n---\nDo the task.\n"))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	before := mgr.Config().CIFeedback
+	if before.Kind != "github" {
+		t.Fatalf("initial Config().CIFeedback.Kind = %q, want %q", before.Kind, "github")
+	}
+
+	mustWriteFile(t, path, []byte("---\nci_feedback:\n  kind: github\n  max_retries: 4\n---\nDo the task.\n"))
+
+	err = mgr.Reload()
+
+	var ce *config.ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Reload() error = %v (type %T), want *config.ConfigError", err, err)
+	}
+	if ce.Field != "ci_feedback" {
+		t.Errorf("Reload() ConfigError.Field = %q, want %q", ce.Field, "ci_feedback")
+	}
+	if ce.Message != wantMessage {
+		t.Errorf("Reload() ConfigError.Message = %q, want %q", ce.Message, wantMessage)
+	}
+	if got := mgr.Config().CIFeedback; got != before {
+		t.Errorf("after failed Reload: Config().CIFeedback = %+v, want %+v (retained)", got, before)
+	}
+	if got := mgr.LastLoadError(); !errors.Is(got, err) {
+		t.Errorf("LastLoadError() = %v, want %v", got, err)
+	}
+}
+
 // TestManager_ReloadRetainsOnInvalidRetentionDays asserts that a reload
 // whose workspace.retention_days fails validation leaves the previously
 // loaded configuration in force rather than disabling the bound or

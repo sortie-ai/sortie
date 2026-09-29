@@ -3154,10 +3154,6 @@ var forgeCheckKeys = []string{
 	"reactions.scm_provider_conflict",
 }
 
-// giteaForgeWorkflow returns a WORKFLOW.md whose front matter sets a
-// fully valid gitea tracker and agent so preflight passes cleanly;
-// extraYAML is appended before the closing front-matter delimiter to
-// vary the reactions/ci_feedback block under test.
 func giteaForgeWorkflow(extraYAML string) []byte {
 	return []byte(`---
 tracker:
@@ -3593,9 +3589,6 @@ func TestValidateWatchWindowMSAcrossKinds(t *testing.T) {
 	}
 }
 
-// TestValidateGiteaForge exercises the fold point end-to-end through
-// runValidate for a tracker.kind: gitea workflow, varying the reactions
-// and ci_feedback blocks to isolate one forge fault per case.
 func TestValidateGiteaForge(t *testing.T) {
 	t.Parallel()
 
@@ -3637,8 +3630,9 @@ func TestValidateGiteaForge(t *testing.T) {
 		},
 		{
 			name: "unregistered CI provider",
-			extraYAML: `ci_feedback:
-  kind: gitea-ci
+			extraYAML: `reactions:
+  ci_failure:
+    provider: gitea-ci
 `,
 			wantChecks: []string{"scm_adapter", "ci_provider"},
 			wantMessageContains: map[string]string{
@@ -3672,20 +3666,6 @@ func TestValidateGiteaForge(t *testing.T) {
 			wantCode: 1,
 		},
 		{
-			name: "modern ci_failure key joins the clean provider set",
-			extraYAML: `reactions:
-  bot_review:
-    provider: gitea
-  auto_merge:
-    provider: gitea
-    strategy: squash
-  ci_failure:
-    provider: gitea
-`,
-			wantChecks: nil,
-			wantCode:   0,
-		},
-		{
 			name: "fully valid gitea forge configuration",
 			extraYAML: `reactions:
   bot_review:
@@ -3695,8 +3675,8 @@ func TestValidateGiteaForge(t *testing.T) {
   auto_merge:
     provider: gitea
     strategy: squash
-ci_feedback:
-  kind: gitea
+  ci_failure:
+    provider: gitea
 `,
 			wantChecks: nil,
 			wantCode:   0,
@@ -4662,20 +4642,6 @@ Do {{ .issue.title }}.
 `)
 }
 
-// ciFeedbackDeprecatedAdvisoryWorkflow carries both the deprecated
-// ci_feedback section and its reactions.ci_failure replacement, so
-// NewServiceConfig records the ci_feedback.deprecated advisory.
-func ciFeedbackDeprecatedAdvisoryWorkflow() []byte {
-	return advisoryWorkflow(`agent:
-  kind: mock
-ci_feedback:
-  kind: github
-reactions:
-  ci_failure:
-    provider: github
-`)
-}
-
 func kiroAgentKindWorkflow() []byte {
 	return advisoryWorkflow(`agent:
   kind: kiro
@@ -4706,12 +4672,6 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 		wantAbsent  bool
 		wantNoCheck string
 	}{
-		{
-			name:        "ci_feedback deprecated in favor of reactions.ci_failure",
-			workflow:    ciFeedbackDeprecatedAdvisoryWorkflow(),
-			wantCheck:   "ci_feedback.deprecated",
-			wantTextSub: "ci_feedback is deprecated and ignored because reactions.ci_failure is set",
-		},
 		{
 			name:        "kiro agent kind removed and converted onto agent-client-protocol",
 			workflow:    kiroAgentKindWorkflow(),
@@ -4776,6 +4736,87 @@ func TestRunValidate_ConfigurationAdvisories(t *testing.T) {
 					t.Errorf("validateOutput.Warnings holds %+v, want no warning with check %q", w, tt.wantNoCheck)
 				}
 			}
+		})
+	}
+}
+
+func TestRunValidate_CIFeedbackSectionRefused(t *testing.T) {
+	t.Parallel()
+
+	const (
+		moveMessage   = "no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name"
+		deleteMessage = "no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings"
+	)
+
+	tests := []struct {
+		name        string
+		frontMatter string
+		wantMessage string
+	}{
+		{
+			name:        "mapping alone",
+			frontMatter: "ci_feedback:\n  kind: github\n  max_retries: 3\n",
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "bare key alone",
+			frontMatter: "ci_feedback:\n",
+			wantMessage: moveMessage,
+		},
+		{
+			name:        "mapping beside reactions.ci_failure",
+			frontMatter: "ci_feedback:\n  kind: github\nreactions:\n  ci_failure:\n    provider: github\n",
+			wantMessage: deleteMessage,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeIssuesFixture(t, dir)
+			wfPath := writeCustomWorkflowFile(t, dir, advisoryWorkflow("agent:\n  kind: mock\n"+tt.frontMatter))
+
+			t.Run("json", func(t *testing.T) {
+				t.Parallel()
+
+				var stdout, stderr bytes.Buffer
+				code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+				if code != 1 {
+					t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+				}
+
+				var out validateOutput
+				if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+					t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+				}
+				if out.Valid {
+					t.Error("validateOutput.Valid = true, want false")
+				}
+				wantErrors := []validateDiag{{Severity: "error", Check: "config.ci_feedback", Message: tt.wantMessage}}
+				if !slices.Equal(out.Errors, wantErrors) {
+					t.Errorf("validateOutput.Errors = %+v, want %+v", out.Errors, wantErrors)
+				}
+				if len(out.Warnings) != 0 {
+					t.Errorf("validateOutput.Warnings = %+v, want none", out.Warnings)
+				}
+			})
+
+			t.Run("text", func(t *testing.T) {
+				t.Parallel()
+
+				var stdout, stderr bytes.Buffer
+				code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+				if code != 1 {
+					t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+				}
+
+				wantLine := "error: config.ci_feedback: " + tt.wantMessage + "\n"
+				if !strings.Contains(stderr.String(), wantLine) {
+					t.Errorf("run(validate) stderr = %q, want it to contain %q", stderr.String(), wantLine)
+				}
+			})
 		})
 	}
 }

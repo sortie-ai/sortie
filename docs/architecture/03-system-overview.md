@@ -53,7 +53,7 @@
     - Fetches CI pipeline status for a given git ref.
     - Returns a normalized result including aggregate status, individual check runs, and an optional truncated log excerpt from the first failing check.
     - Read-only, single-method contract (`FetchCIStatus`); does not manage CI pipelines or trigger builds.
-    - Activated by `ci_feedback.kind` or `reactions.ci_failure.provider` presence in workflow front matter.
+    - Activated by `reactions.ci_failure.provider` presence in workflow front matter.
 
 11. `SCM Adapter`
     - Provides read and write access to SCM platform features beyond CI status: human and bot PR review comment fetching, review state queries, merge precondition reads, label-event journal reads, orchestrator-driven PR merge with optional branch deletion, and label removal.

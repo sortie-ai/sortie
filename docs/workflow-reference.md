@@ -20,10 +20,10 @@
   - [2.5 `hooks` — Workspace Lifecycle Hooks](#25-hooks--workspace-lifecycle-hooks)
   - [2.6 `agent` — Coding Agent Configuration](#26-agent--coding-agent-configuration)
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
-  - [2.8 `ci_feedback` — CI Feedback Loop (deprecated)](#28-ci_feedback--ci-feedback-loop-deprecated)
-  - [2.9 `self_review` — Self-Review Configuration](#29-self_review--self-review-configuration)
-  - [2.10 `reactions` — Reaction-Based Feedback Loops](#210-reactions--reaction-based-feedback-loops)
-  - [2.11 `dispatch` — Rule-based Routing](#211-dispatch--rule-based-routing)
+  - [2.8 `self_review` — Self-Review Configuration](#28-self_review--self-review-configuration)
+  - [2.9 `reactions` — Reaction-Based Feedback Loops](#29-reactions--reaction-based-feedback-loops)
+  - [2.10 `dispatch` — Rule-based Routing](#210-dispatch--rule-based-routing)
+  - [2.11 `notifications` (operator notification backends)](#211-notifications-operator-notification-backends)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -132,7 +132,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes eleven top-level keys:
+The core schema recognizes ten top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -141,7 +141,6 @@ workspace: # Workspace root path
 hooks: # Workspace lifecycle hook scripts
 agent: # Coding agent adapter, timeouts, and limits
 db_path: # SQLite database file path
-ci_feedback: # CI failure feedback loop (deprecated; use reactions.ci_failure)
 reactions: # Reaction-based feedback loops (CI failure, review comments)
 self_review: # Self-review verification loop (optional)
 dispatch: # Rule-based dispatch routing
@@ -230,7 +229,7 @@ tracker:
 
 **`no_change_state` runtime behavior:**
 
-- The declaration is the agent's own assertion. It is checked only by the self-review phase, through its `pass` verdict and its verification commands (Section 2.9); on a deployment with self-review disabled, the declaration is taken on the agent's word with no check at all.
+- The declaration is the agent's own assertion. It is checked only by the self-review phase, through its `pass` verdict and its verification commands (Section 2.8); on a deployment with self-review disabled, the declaration is taken on the agent's word with no check at all.
 - Under `tracker.handoff_evidence: observed` or `strict`, a run whose declaration stands is always treated as positive evidence: no absence verdict is computed, the run is recorded as `succeeded`, the consecutive-absence count is reset rather than advanced, and a park held for consecutive absences is released, on the same terms as any other work-observed verdict.
 - Under `tracker.handoff_evidence: off`, no verdict is computed for a declared run, so neither the count reset nor the park release occurs; the declaration's only effect there is the transition target.
 - A terminal `no_change_state` ends the issue with no reaction running for a pull request the run left behind: no CI feedback, no review comments, no bot review, no auto-merge, no merge-conflict handling, and no merge completion. This is the same residue any handoff to a terminal state carries, made the ordinary outcome rather than an operator's own terminal action once this field names a terminal state.
@@ -565,49 +564,7 @@ db_path: /var/lib/sortie/state.db
 
 ---
 
-### 2.8 `ci_feedback` — CI Feedback Loop (**deprecated**)
-
-> **Deprecated.** Use `reactions.ci_failure` instead (Section 2.10). When both `ci_feedback` and `reactions.ci_failure` are present, `reactions.ci_failure` takes precedence and the warning logs once while the workflow carries both sections; `sortie validate` reports it as `ci_feedback.deprecated`.
-
-```yaml
-ci_feedback:
-  kind: github
-  max_retries: 2
-  max_log_lines: 50
-  escalation: label
-  escalation_label: needs-human
-```
-
-| Field              | Type    | Required              | Default        | Dynamic Reload    | Description                                                                                                           |
-| ------------------ | ------- | --------------------- | -------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | string  | **Yes** (to activate) | _(absent)_     | Requires restart  | CI status provider adapter identifier (e.g., `github`). When absent or empty, CI feedback is disabled entirely.       |
-| `max_retries`      | integer | No                    | `2`            | Future dispatches | Maximum CI-fix continuation dispatches per issue before escalation. `0` means escalate immediately on first CI failure. Must be non-negative. |
-| `max_log_lines`    | integer | No                    | `50`           | Requires restart  | Maximum lines to fetch from the first failing CI check log. `0` disables log fetching. Must be non-negative.          |
-| `escalation`       | string  | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
-| `escalation_label` | string  | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
-
-The deprecated `ci_feedback` section exposes no `watch_window_ms` key. A deployment that still uses this section receives the default value described in Section 2.10.
-
-**Activation pattern:** CI feedback has no `enabled` flag. The feature is active when `ci_feedback.kind` is present and non-empty. Omit the entire `ci_feedback` section to disable the feature:
-
-```yaml
-# CI feedback disabled — section omitted entirely
-# ci_feedback:
-#   kind: github
-```
-
-**SCM coordinates:** Owner, repository, and token are not part of `ci_feedback`. They live in the adapter pass-through block (e.g., the existing `github:` top-level section) and are shared with the tracker adapter when both use the same SCM provider.
-
-**Validation rules:**
-
-- `max_retries` must be non-negative. Negative values are rejected with a configuration error.
-- `max_log_lines` must be non-negative. Negative values are rejected with a configuration error.
-- `escalation` must be `"label"` or `"comment"`. Other values are rejected with a configuration error.
-- When `kind` is absent or empty, all other fields in the section are ignored and the `CIFeedbackConfig` is a zero value.
-
----
-
-### 2.9 `self_review` — Self-Review Configuration
+### 2.8 `self_review` — Self-Review Configuration
 
 ```yaml
 self_review:
@@ -645,7 +602,7 @@ The self-review section configures an optional post-coding verification and iter
 
 ---
 
-### 2.10 `reactions` — Reaction-Based Feedback Loops
+### 2.9 `reactions` — Reaction-Based Feedback Loops
 
 ```yaml
 reactions:
@@ -670,7 +627,7 @@ The `reactions` section configures feedback loops that respond to external event
 | `escalation`       | string  | No                    | `label`       | Requires restart | Action taken when the kind hands the subject to a person, either because retries are exhausted or because a `triage` command answered `escalate`. Valid: `"label"`, `"comment"`. |
 | `escalation_label` | string  | No                    | `needs-human` | Requires restart | Label applied when `escalation` is `"label"`.                                                    |
 
-**Reload behavior:** every field of every reaction kind is read once when the orchestrator is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only on the next restart. `reactions.ci_failure` is the single exception: the orchestrator folds it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`, `escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its `max_log_lines` and its `triage` block still require a restart: the CI provider is constructed once at process start, and the triage configuration is frozen at construction for every kind that offers it, so a script or timeout changed mid-run cannot apply one configuration's timeout to another configuration's script.
+**Reload behavior:** every field of every reaction kind is read once when the orchestrator is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only on the next restart. `reactions.ci_failure` is the single exception: the orchestrator re-reads `max_retries`, `escalation`, `escalation_label`, and `watch_window_ms` from the reloaded config on each tick. Its `max_log_lines` and its `triage` block still require a restart: the CI provider is constructed once at process start, and the triage configuration is frozen at construction for every kind that offers it, so a script or timeout changed mid-run cannot apply one configuration's timeout to another configuration's script.
 
 **Escalation recurrence:** `escalation: label` is idempotent (re-applying a present label is a no-op); `escalation: comment` posts a new comment each time it fires. Two conditions fire it: the kind's own budget is exhausted, or a `triage` command answers `escalate`. Recurrence depends on the kind rather than on which condition fired. For kinds whose escalation releases the issue claim (`ci_failure`, `review_comments`), escalation fires once and the reaction stops. For kinds whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the reaction re-arms if its condition recurs and escalates again, so on a long-lived PR `escalation: comment` can accumulate repeated comments while `escalation: label` stays a single mark. Prefer `label` for kinds that may escalate repeatedly. A triage escalation is not re-posted for a subject already escalated: the answer is retained for as long as the subject's fingerprint stands, and a retained `escalate` re-applies without invoking the escalation a second time.
 
@@ -678,7 +635,7 @@ The `reactions` section configures feedback loops that respond to external event
 
 Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
 
-**SCM and CI provider selection.** The reaction `provider` field (and the deprecated `ci_feedback.kind`) names a registered SCM adapter or CI provider kind: `github`, `gitea`, or `gitlab`. The reaction kinds are provider-agnostic. Setting `provider: gitea` activates the Gitea adapter for that reaction. Its `endpoint`, `api_key`, and `project` come from the top-level `gitea:` pass-through block ([Section 4.5](#45-adapter-specific-pass-through-config)); when `tracker.kind` is also `gitea`, any of the three left unset in that block falls back to the matching `tracker:` value. A Gitea reaction can therefore pair with a non-Gitea tracker, as long as the `gitea:` block supplies the credentials, including the instance `endpoint` Gitea always requires. Setting `provider: gitlab` activates the GitLab adapter for that reaction and resolves the same three fields from the top-level `gitlab:` block by the same rule. `endpoint` is optional there, because the GitLab adapter defaults it to `https://gitlab.com`; only a self-managed instance sets one. The GitLab SCM adapter ignores `project` and takes the owner and repository from the pull request metadata on every call, while the GitLab CI provider requires `project`, so a GitLab `ci_failure` reaction paired with a non-GitLab tracker MUST set it in the `gitlab:` block. Every active SCM reaction in one workflow MUST name the same provider.
+**SCM and CI provider selection.** The reaction `provider` field names a registered SCM adapter or CI provider kind: `github`, `gitea`, or `gitlab`. The reaction kinds are provider-agnostic. Setting `provider: gitea` activates the Gitea adapter for that reaction. Its `endpoint`, `api_key`, and `project` come from the top-level `gitea:` pass-through block ([Section 4.5](#45-adapter-specific-pass-through-config)); when `tracker.kind` is also `gitea`, any of the three left unset in that block falls back to the matching `tracker:` value. A Gitea reaction can therefore pair with a non-Gitea tracker, as long as the `gitea:` block supplies the credentials, including the instance `endpoint` Gitea always requires. Setting `provider: gitlab` activates the GitLab adapter for that reaction and resolves the same three fields from the top-level `gitlab:` block by the same rule. `endpoint` is optional there, because the GitLab adapter defaults it to `https://gitlab.com`; only a self-managed instance sets one. The GitLab SCM adapter ignores `project` and takes the owner and repository from the pull request metadata on every call, while the GitLab CI provider requires `project`, so a GitLab `ci_failure` reaction paired with a non-GitLab tracker MUST set it in the `gitlab:` block. Every active SCM reaction in one workflow MUST name the same provider.
 
 #### Triage command (`triage`)
 
@@ -757,7 +714,7 @@ Exit code 0 together with a well-formed result file naming one of the three valu
 
 #### Reaction kind: `ci_failure`
 
-Equivalent to the deprecated `ci_feedback` section. Configures the CI failure feedback loop. The orchestrator resolves the pull request's current head on each pass and polls CI status for that head, dispatching continuation turns when CI fails on it.
+Configures the CI failure feedback loop. The orchestrator resolves the pull request's current head on each pass and polls CI status for that head, dispatching continuation turns when CI fails on it.
 
 Its `provider` must match the provider of every other active SCM reaction.
 
@@ -1065,7 +1022,7 @@ reactions:
 
 ---
 
-### 2.11 `dispatch` — Rule-based Routing
+### 2.10 `dispatch` — Rule-based Routing
 
 ```yaml
 dispatch:
@@ -1195,11 +1152,11 @@ The two named rules carry `match` blocks. The third rule has no `match` block an
 
 #### Further reading (optional)
 
-The design rationale is in [architecture §5.3.10](architecture/05-workflow-specification.md#5310-dispatch-object-optional) and [ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required to write a valid `dispatch` block; they explain why the feature is shaped as it is.
+The design rationale is in [architecture §5.3.9](architecture/05-workflow-specification.md#539-dispatch-object-optional) and [ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required to write a valid `dispatch` block; they explain why the feature is shaped as it is.
 
 ---
 
-### 2.12 `notifications` (operator notification backends)
+### 2.11 `notifications` (operator notification backends)
 
 ```yaml
 notifications: # ordered list of notifier backends; optional
@@ -1416,8 +1373,7 @@ For path fields (`workspace.root`, `db_path`), tilde (`~`) expansion still appli
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
 | `tracker.api_version`                  | No override variable exists; set it in the front matter or through `$VAR` indirection |
 | `tracker.handoff_evidence`             | No override variable exists; set it in the front matter. The value is matched against the closed set as written, so `$VAR` indirection does not apply. |
-| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.12), not as field-level overrides. |
-| `ci_feedback.*`                        | No override variables exist; the section is deprecated and rarely differs per environment |
+| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.11), not as field-level overrides. |
 | `reactions.*` (including `reactions.label_commands`) | No override variables exist; reaction configuration comes from WORKFLOW.md |
 | `dispatch.*`                           | No override variables exist; rule definitions and template paths come from WORKFLOW.md |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
@@ -1932,7 +1888,7 @@ An entry keyed to a kind whose usage-reporting declaration resolves to no token 
 
 Each adapter (tracker or agent) may define configuration in a top-level object named after its `kind` value. These values are passed through to the adapter without validation by the orchestrator core.
 
-A session reads the block belonging to the agent kind it was dispatched on, and reads it again on every attempt of that session. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.11](#211-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind.
+A session reads the block belonging to the agent kind it was dispatched on, and reads it again on every attempt of that session. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.10](#210-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind.
 
 **File tracker adapter:**
 
@@ -2265,7 +2221,7 @@ The following review comments were left on the PR. Address each one:
 
 #### `bot_review_comments` — Bot Review Comment Context (continuation key)
 
-Non-nil only on turn 1 of a bot-review-fix continuation dispatch. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.10). The per-element shape is identical to `review_comments`:
+Non-nil only on turn 1 of a bot-review-fix continuation dispatch. Contains a list of comments authored by automated review bots (see `reactions.bot_review` in Section 2.9). The per-element shape is identical to `review_comments`:
 
 | Field (per element)               | Type    | Description                                              |
 | --------------------------------- | ------- | -------------------------------------------------------- |
@@ -2297,7 +2253,7 @@ The following comments were left on the PR by automated review tools. Address ea
 
 #### `merge_conflict` — Merge Conflict Context (continuation key)
 
-Non-nil only on turn 1 of a merge-conflict-resolution continuation dispatch. Contains the PR identity and the rebase target read live from the PR object (see `reactions.merge_conflicts` in Section 2.10):
+Non-nil only on turn 1 of a merge-conflict-resolution continuation dispatch. Contains the PR identity and the rebase target read live from the PR object (see `reactions.merge_conflicts` in Section 2.9):
 
 | Field                      | Type    | Description                                                                 |
 | -------------------------- | ------- | --------------------------------------------------------------------------- |
@@ -2328,7 +2284,7 @@ its base branch {{ .merge_conflict.base }}. Resolve them:
 
 #### `label_review` — Label Review Context (continuation key)
 
-Non-nil only on turn 1 of a read-only label-review dispatch, triggered when an operator applies the configured review label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.10). Carries the PR coordinates the agent needs to fetch the diff and post its review:
+Non-nil only on turn 1 of a read-only label-review dispatch, triggered when an operator applies the configured review label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to fetch the diff and post its review:
 
 | Field                        | Type    | Description                                         |
 | ---------------------------- | ------- | --------------------------------------------------- |
@@ -2359,7 +2315,7 @@ Produce a code review of pull request #{{ .label_review.pr_number }} in
 
 #### `label_fix`: Label Fix Context (continuation key)
 
-Non-nil only on turn 1 of a fix dispatch, triggered when an operator applies the configured fix label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.10). Carries the PR coordinates the agent needs to check out the head branch, address the review comments, and push:
+Non-nil only on turn 1 of a fix dispatch, triggered when an operator applies the configured fix label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.9). Carries the PR coordinates the agent needs to check out the head branch, address the review comments, and push:
 
 | Field                     | Type    | Description                                           |
 | ------------------------- | ------- | ------------------------------------------------------ |
@@ -2681,11 +2637,6 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `agent.token_warning_percent`          | **Immediate** — the poll tick carries the new threshold to the event loop; an unwarned run in flight is evaluated against it from its next usage figure, a warned run never warns again, and a run dispatched after the tick is evaluated against it from dispatch. |
 | `agent.max_consecutive_absences`       | **Immediate** — affects future worker exits, retry timer evaluations, and poll-tick park sweeps. |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
-| `ci_feedback.kind`                     | **No effect** — requires restart. CI provider is created once at process start.                |
-| `ci_feedback.max_retries`              | Future dispatches.                                                                             |
-| `ci_feedback.max_log_lines`            | **No effect** — requires restart. CI provider is created once at process start.                |
-| `ci_feedback.escalation`               | Future dispatches.                                                                             |
-| `ci_feedback.escalation_label`                  | Future dispatches.                                                                             |
 | `reactions.<kind>.provider`                     | **No effect** — requires restart. Adapters are created once at process start.                  |
 | `reactions.ci_failure.max_retries`              | Future dispatches.                                                                             |
 | `reactions.ci_failure.escalation`               | Future dispatches.                                                                             |
@@ -2766,7 +2717,6 @@ These offline checks never contact Linear and never log the API key value. State
 
 | Check                                                     | Condition                                                                                          |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `ci_feedback.deprecated`                                    | A `ci_feedback` section is present and `reactions.ci_failure` is also configured.                    |
 | `reactions.label_commands.poll_interval_ms.clamped`         | `reactions.label_commands` names a provider and its `poll_interval_ms` is below 30000.               |
 | `env_file.missing`                                          | An env file path is set (`--env-file` or `SORTIE_ENV_FILE`) and no file exists there.                |
 | `env_override.section_replaced`                             | A `SORTIE_*` override targets a section whose value is present and not a mapping.                    |
@@ -2842,12 +2792,8 @@ These errors are raised during typed config construction from the parsed front m
 | `config: workspace.retention_days: must be 0 to disable or at least 30 days`    | `retention_days` is between `1` and `29` inclusive.                       | Use `0` to disable the bound, or a value of `30` or greater.                                                                         |
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
-| `config: ci_feedback.kind: expected string, got <type>`                         | `ci_feedback.kind` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
-| `config: ci_feedback.max_retries: invalid integer value: <val>`                 | Non-integer value for `max_retries`.                                     | Use a plain integer (e.g., `2`).                                                                                                     |
-| `config: ci_feedback.max_retries: must be non-negative`                         | Negative value for `max_retries`.                                        | Use `0` (escalate immediately) or a positive integer.                                                                                |
-| `config: ci_feedback.max_log_lines: invalid integer value: <val>`               | Non-integer value for `max_log_lines`.                                   | Use a plain integer (e.g., `50`).                                                                                                    |
-| `config: ci_feedback.max_log_lines: must be non-negative`                       | Negative value for `max_log_lines`.                                      | Use `0` (disable log fetching) or a positive integer.                                                                                |
-| `config: ci_feedback.escalation: must be "label" or "comment", got "<val>"`     | Invalid escalation strategy.                                             | Use `"label"` or `"comment"`.                                                                                                        |
+| `config: ci_feedback: no longer supported; configure CI feedback under reactions.ci_failure instead, where kind is named provider and every other setting keeps its name` | The workflow holds a `ci_feedback` key, whatever its value, and `reactions.ci_failure` is not set. `sortie validate` reports it under the check `config.ci_feedback`. | Move the settings under `reactions.ci_failure`, name the CI provider `provider` instead of `kind`, and keep every other key as written. Delete a bare or empty `ci_feedback:` line. |
+| `config: ci_feedback: no longer supported, and this workflow already sets reactions.ci_failure, which replaces it; delete ci_feedback without copying its settings` | The workflow holds a `ci_feedback` key next to a `reactions.ci_failure` mapping. | Delete the `ci_feedback` key. `reactions.ci_failure` already governs CI feedback, so its settings stay as they are. |
 | `config: reactions.ci_failure.watch_window_ms: must not exceed 9223372036854 (about 292 years); use 0 for no time limit, got <val>` | `watch_window_ms` exceeds the ceiling. | Lower the value, or use `0` for no time limit. |
 | `config: reactions.ci_failure.watch_window_ms: must be non-negative, got <val>` | Negative value for `watch_window_ms`.                                    | Use `0` (no time limit) or a positive integer.                                                                                       |
 | `config: notifications[N].kind: expected string, got <type>`                   | The `kind` of the `N`th `notifications` entry is not a string (e.g., integer, boolean, list). | Ensure the value is a string, quoted if necessary.                                                                 |
@@ -2925,11 +2871,6 @@ A flat reference of every configuration field, for quick lookup. The "Env Overri
 | `agent.token_warning_percent`           | integer          | `0`                          | `SORTIE_AGENT_TOKEN_WARNING_PERCENT`     | Off; `0` to `99`; dynamic reload                                                       |
 | `agent.max_consecutive_absences`        | integer          | `3`                          | `SORTIE_AGENT_MAX_CONSECUTIVE_ABSENCES`  | `0` and negative rejected; dynamic reload                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
-| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | **Deprecated;** absent = disabled; restart required                                    |
-| `ci_feedback.max_retries`               | integer          | `2`                          | —                                        | **Deprecated;** `0` = escalate immediately; non-negative                               |
-| `ci_feedback.max_log_lines`             | integer          | `50`                         | —                                        | **Deprecated;** `0` = disable log fetching; restart required                           |
-| `ci_feedback.escalation`                | string           | `label`                      | —                                        | **Deprecated;** `"label"` or `"comment"`                                               |
-| `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | **Deprecated;** applied when `escalation` is `"label"`                                 |
 | `reactions.<kind>.provider`             | string           | _(absent)_                   | —                                        | Adapter identifier; absent = disabled; restart required                                |
 | `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative; `merge_conflicts` defaults to `1`; restart required except for `ci_failure` |
 | `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`; restart required except for `ci_failure`                     |
@@ -3084,32 +3025,24 @@ claude-code:
   max_turns: 50 # CLI --max-turns (distinct from agent.max_turns)
   max_budget_usd: 5 # Per-session cost cap
 
-# ─── CI Feedback ───────────────────────────────────────────────
-# Omit this section entirely to disable CI feedback.
+# ─── Reactions ─────────────────────────────────────────────────
+# Omit ci_failure to disable CI feedback.
 # SCM coordinates (owner, repo, token) live in the github: adapter block.
-ci_feedback:
-  kind: github # Activate CI feedback via GitHub Checks API
-  max_retries: 2 # CI-fix attempts before escalation
-  max_log_lines: 50 # Lines from first failing check log
-  escalation: label # "label" or "comment" on exhaustion
-  escalation_label: needs-human # Label added when escalation is "label"
-
-# ─── Reactions (preferred over ci_feedback) ────────────────────
-# reactions:
-#   ci_failure:
-#     provider: github
-#     max_retries: 2
-#     max_log_lines: 50
-#     escalation: label
-#     escalation_label: needs-human
-#   review_comments:
-#     provider: github
-#     max_retries: 2
-#     escalation: label
-#     escalation_label: needs-human
-#     poll_interval_ms: 120000  # 2-minute review poll cycle
-#     debounce_ms: 60000        # 60s debounce after last comment
-#     max_continuation_turns: 3 # Max review-fix dispatches
+reactions:
+  ci_failure:
+    provider: github # Activate CI feedback via GitHub Checks API
+    max_retries: 2 # CI-fix attempts before escalation
+    max_log_lines: 50 # Lines from first failing check log
+    escalation: label # "label" or "comment" on exhaustion
+    escalation_label: needs-human # Label added when escalation is "label"
+  # review_comments:
+  #   provider: github
+  #   max_retries: 2
+  #   escalation: label
+  #   escalation_label: needs-human
+  #   poll_interval_ms: 120000  # 2-minute review poll cycle
+  #   debounce_ms: 60000        # 60s debounce after last comment
+  #   max_continuation_turns: 3 # Max review-fix dispatches
 
 # ─── Server ────────────────────────────────────────────────────
 server:

@@ -36,7 +36,7 @@ Loop body per `ReactionKindMergeConflict` entry in `state.PendingReactions`:
 2. Type-assert `KindData` to `*MergeConflictReactionData`; on mismatch, log and skip.
 3. Drop the entry when its age, measured from the entry's creation rather than from the last recorded head, exceeds the configured `reactions.merge_conflicts.watch_window_ms` (default `1800000`, thirty minutes; `0` removes the bound).
 4. Respect the `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
-5. If the entry holds a triage run that has not finished (Section 5.3.9), re-enqueue it ready for the next tick and continue. `GetMergeability` is not called and the pending-backoff counter is untouched.
+5. If the entry holds a triage run that has not finished (Section 5.3.8), re-enqueue it ready for the next tick and continue. `GetMergeability` is not called and the pending-backoff counter is untouched.
 6. Call `GetMergeability`. On error, increment the pending-backoff counter, set `PendingRetryAt`, re-enqueue, count `sortie_merge_conflict_checks_total{result="error"}`, and continue.
 7. Switch on `status.Mergeability`:
    - `MergeabilityUnknown` (U1): re-enqueue at `now + poll_interval`; count `"unknown"`; do not touch the fingerprint or the attempt counter.

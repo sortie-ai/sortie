@@ -155,7 +155,7 @@ Part B: Tracker state refresh
 - For an issue reported terminal, whether or not it has a running worker: release the issue's pending reaction entries, reaction attempt counters, pending retry, and dispatch claim, leaving `reaction_fingerprints` intact. An issue with no running worker and no terminal state is left untouched.
 - If state refresh fails, keep workers running and try again on the next tick, and release nothing.
 
-Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
+Part C: CI status reconciliation (when `reactions.ci_failure.provider` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
   - If the entry holds a triage run that has not finished, re-enqueue it ready for the next tick and continue to the next entry. The pass makes no provider call and leaves the pending attempt count untouched, because waiting on a triage run is not a fetch error.

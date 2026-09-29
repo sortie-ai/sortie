@@ -2,7 +2,7 @@
 
 ### 19.1 Overview
 
-Sortie uses an embedded SQLite database for durable state. The database file path defaults to `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path` front matter field (see Section 5.3.7). On startup, Sortie opens or creates the database and runs all pending schema migrations before beginning normal operation.
+Sortie uses an embedded SQLite database for durable state. The database file path defaults to `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path` front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and runs all pending schema migrations before beginning normal operation.
 
 ### 19.2 Tables
 
