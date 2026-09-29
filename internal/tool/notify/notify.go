@@ -46,12 +46,24 @@ var validCategories = map[string]bool{
 // "" when none is available.
 type SessionIDFunc func() string
 
+// SlotClaim is a claimed notification slot. Exactly one of its methods runs,
+// once, for each claim a [SlotReserver] returns.
+type SlotClaim interface {
+	// Commit records that a backend accepted the notification, so the slot
+	// counts against the cap from now on.
+	Commit()
+
+	// Release records that no backend accepted the notification, so the
+	// slot is free again.
+	Release()
+}
+
 // SlotReserver claims a dispatch-scoped notification slot. It returns
-// (release, true, nil) when a slot under limit is claimed, (nil, false,
-// nil) when every slot is occupied, and (nil, false, err) when the
-// reservation could not be evaluated. release removes the claimed slot
-// and is called at most once.
-type SlotReserver func(limit int) (release func(), reserved bool, err error)
+// (claim, true, nil) when a slot under limit is claimed, (nil, false, nil)
+// when every slot is occupied, and (nil, false, err) when the reservation
+// could not be evaluated. claim is a nil interface value whenever reserved
+// is false.
+type SlotReserver func(limit int) (claim SlotClaim, reserved bool, err error)
 
 // NotificationEnvelopeContext contains system-owned notification metadata.
 type NotificationEnvelopeContext struct {
@@ -134,12 +146,14 @@ type toolInput struct {
 // Execute validates the message, claims a slot through reserveSlot, and
 // delivers one [domain.Notification] to the configured backends in
 // configuration order. A reservation error yields state_unavailable and
-// sends nothing; an exhausted cap yields rate_limited. The first backend
-// that fails short-circuits the loop, releases the claimed slot when no
-// backend has yet accepted the notification, and yields a send_failed
-// result. Domain failures are encoded in the JSON result with success:
-// false and a nil Go error. The Go error return is reserved for a
-// result-marshal failure.
+// sends nothing; an exhausted cap yields rate_limited. The claimed slot is
+// committed as soon as the first backend accepts the notification, before
+// any later backend is called, so the notification counts against the cap
+// even when a later backend fails. When the first backend fails, the slot is
+// released and Execute yields send_failed without calling another backend.
+// Domain failures are encoded in the JSON result with success: false and a
+// nil Go error. The Go error return is reserved for a result-marshal
+// failure.
 func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var in toolInput
 	dec := json.NewDecoder(bytes.NewReader(input))
@@ -165,7 +179,7 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 		return toolresult.Failure("backend_unavailable", "no notification backend is configured")
 	}
 
-	release, reserved, err := t.reserveSlot(t.maxPerSession)
+	claim, reserved, err := t.reserveSlot(t.maxPerSession)
 	if err != nil {
 		return toolresult.Failure("state_unavailable", "the notification count could not be established, nothing was sent")
 	}
@@ -187,11 +201,14 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 	for _, backend := range t.backends {
 		if err := backend.Send(ctx, notification); err != nil {
 			if delivered == 0 {
-				release()
+				claim.Release()
 			}
 			return toolresult.Failure("send_failed", fmt.Sprintf("notification delivery failed: %s", err))
 		}
 		delivered++
+		if delivered == 1 {
+			claim.Commit()
+		}
 	}
 
 	return toolresult.Success(map[string]any{

@@ -122,12 +122,15 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	sessionIDFunc := func() string {
 		return workspace.ReadDispatchSessionID(params.WorkspacePath, params.DispatchID, logger)
 	}
-	reserveSlot := func(limit int) (func(), bool, error) {
-		release, reserved, err := workspace.ReserveNotificationSlot(params.WorkspacePath, params.DispatchID, limit, logger)
+	reserveSlot := func(limit int) (notify.SlotClaim, bool, error) {
+		slot, reserved, err := workspace.ReserveNotificationSlot(params.WorkspacePath, params.DispatchID, limit, logger)
 		if err != nil {
 			logger.Warn("notification slot directory unusable", slog.Any("error", err))
 		}
-		return release, reserved, err
+		if !reserved {
+			return nil, false, err
+		}
+		return slot, true, nil
 	}
 	notifyTool, err := buildNotifyTool(params.Notifications, notify.NotificationEnvelopeContext{
 		IssueID:    params.IssueID,

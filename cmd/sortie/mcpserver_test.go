@@ -619,9 +619,12 @@ func TestSessionToolParamsFromEnv_Attempt(t *testing.T) {
 
 func testNotifySessionIDFunc() string { return "" }
 
-// testAlwaysReserveSlot is a [notify.SlotReserver] test double that claims
-// unconditionally.
-func testAlwaysReserveSlot(int) (func(), bool, error) { return func() {}, true, nil }
+type noopSlotClaim struct{}
+
+func (noopSlotClaim) Commit()  {}
+func (noopSlotClaim) Release() {}
+
+func testAlwaysReserveSlot(int) (notify.SlotClaim, bool, error) { return noopSlotClaim{}, true, nil }
 
 func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 	t.Parallel()

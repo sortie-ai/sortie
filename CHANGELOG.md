@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Workflows that run an agent other than Gemini CLI through the `agent-client-protocol` agent kind no longer start with Gemini CLI's telemetry settings in their environment or an unused temporary directory left behind. An agent whose command line does not show which runtime it starts, or names Gemini CLI while starting a different runtime, is now started a second time before its session begins, so a Gemini CLI started through a wrapper script still reports token usage. ([#1198](https://github.com/sortie-ai/sortie/issues/1198))
 - An agent kind selected by a dispatch rule now starts its own program instead of the `agent.command` written for the default agent kind, and `sortie validate` now refuses a route to a kind that needs a program to start but has none. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 - A retry that is waiting when the workflow changes now continues on the agent kind and prompt the workflow selects afterwards, instead of starting another agent kind's command, failing on a prompt that was removed, or being dropped. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
+- A notification from an agent that never reached you no longer counts toward the limit on how many notifications an agent can send, so its later notifications still get through. ([#1163](https://github.com/sortie-ai/sortie/issues/1163))
 
 ## [1.25.0] - 2026-09-27
 

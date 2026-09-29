@@ -727,3 +727,107 @@ func TestNoHandleLeak(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenPlainFile(t *testing.T) {
+	t.Parallel()
+
+	const name = "lock"
+	plain := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatalf("WriteFile(%q): %v", name, err)
+		}
+	}
+	twoLinks := func(t *testing.T, dir string) {
+		t.Helper()
+		plain(t, dir)
+		if err := os.Link(filepath.Join(dir, name), filepath.Join(dir, "second-name")); err != nil {
+			t.Fatalf("Link(%q): %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		name       string
+		flag       int
+		setup      func(t *testing.T, dir string)
+		wantErr    error
+		wantAnyErr bool
+		wantAbsent bool
+	}{
+		{name: "read-write single link", flag: os.O_RDWR, setup: plain},
+		{name: "read-write second hard link", flag: os.O_RDWR, setup: twoLinks, wantErr: ErrLinkCount},
+		{name: "read-only second hard link", flag: os.O_RDONLY, setup: twoLinks},
+		{
+			name: "read-write symbolic link",
+			flag: os.O_RDWR,
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				target := filepath.Join(t.TempDir(), "elsewhere")
+				if err := os.WriteFile(target, nil, 0o600); err != nil {
+					t.Fatalf("WriteFile(target): %v", err)
+				}
+				mustSymlink(t, target, filepath.Join(dir, name))
+			},
+			wantErr: ErrLink,
+		},
+		{
+			name: "read-write directory",
+			flag: os.O_RDWR,
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(dir, name), 0o750); err != nil {
+					t.Fatalf("Mkdir(%q): %v", name, err)
+				}
+			},
+			wantErr: ErrNotPlainFile,
+		},
+		{name: "write-only flag", flag: os.O_WRONLY, setup: plain, wantAnyErr: true},
+		{name: "truncate flag", flag: os.O_RDWR | os.O_TRUNC, setup: plain, wantAnyErr: true},
+		{name: "create flag on an absent name", flag: os.O_RDWR | os.O_CREATE, setup: func(*testing.T, string) {}, wantAnyErr: true, wantAbsent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			tt.setup(t, dir)
+			root, err := os.OpenRoot(dir)
+			if err != nil {
+				t.Fatalf("OpenRoot(%q): %v", dir, err)
+			}
+			t.Cleanup(func() { _ = root.Close() })
+
+			f, err := OpenPlainFile(root, name, tt.flag)
+			if f != nil {
+				t.Cleanup(func() { _ = f.Close() })
+			}
+
+			wantErr := tt.wantErr != nil || tt.wantAnyErr
+			switch {
+			case !wantErr && err != nil:
+				t.Fatalf("OpenPlainFile(%q, %#x) error = %v, want nil", name, tt.flag, err)
+			case wantErr && err == nil:
+				t.Fatalf("OpenPlainFile(%q, %#x) error = nil, want non-nil", name, tt.flag)
+			case tt.wantErr != nil && !errors.Is(err, tt.wantErr):
+				t.Errorf("OpenPlainFile(%q, %#x) error = %v, want wrapping %v", name, tt.flag, err, tt.wantErr)
+			}
+			if wantErr && f != nil {
+				t.Errorf("OpenPlainFile(%q, %#x) file = non-nil alongside an error, want nil", name, tt.flag)
+			}
+			if !wantErr && f == nil {
+				t.Fatalf("OpenPlainFile(%q, %#x) file = nil, want non-nil", name, tt.flag)
+			}
+			if tt.wantAbsent {
+				if _, statErr := os.Lstat(filepath.Join(dir, name)); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("Lstat(%q) after refused flag = %v, want fs.ErrNotExist", name, statErr)
+				}
+			}
+			if !wantErr && tt.flag == os.O_RDWR {
+				if _, writeErr := f.Write([]byte("x")); writeErr != nil {
+					t.Errorf("Write on a read-write file: %v, want nil", writeErr)
+				}
+			}
+		})
+	}
+}
