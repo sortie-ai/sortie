@@ -2102,7 +2102,7 @@ The `kiro` kind was removed. A workflow that still names it loads converted onto
 
 - `kiro` in `agent.kind`, `dispatch.default.agent`, or a `dispatch.rules` entry's `agent` is converted at load. `WORKFLOW.md` is never rewritten, and `sortie validate` and the running orchestrator each warn once.
 - The converted launch is `kiro-cli acp -a`, or the program `agent.command` names when `kiro` is the default kind, followed by `--model <kiro.model>` and `--agent <kiro.agent>` when those keys are set.
-- Only full trust converts: `kiro.trust_all_tools: true`, or neither trust key set. Any other trust setting, or both keys set, fails the load as `config.kiro.trust_tools`. A `kiro.model` or `kiro.agent` that is not a string fails the load as `config.kiro.model` or `config.kiro.agent`.
+- Only full trust converts: `kiro.trust_all_tools: true`, or neither trust key set. Any other trust setting fails the load as `config.kiro.trust_tools`, and so does `kiro.trust_all_tools: true` alongside a non-empty `kiro.trust_tools` list. A `kiro.model` or `kiro.agent` that is not a string fails the load as `config.kiro.model` or `config.kiro.agent`.
 - `kiro.mcp_config` and every other key of the block are not carried, and the warning names them.
 - A remote launch of the converted route carries `KIRO_API_KEY`. The conversion is temporary: name `agent-client-protocol` with the invocation the warning prints, and the warning stops.
 
