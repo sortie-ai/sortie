@@ -19,31 +19,31 @@ const (
 	slotPendingSuffix    = ".pending"
 )
 
-// heldSlotLocks names the slot lock files this process holds a claim on.
+// heldSlotLocks keys the slot lock files this process holds a claim on.
 // NFS grants a flock lock to the whole process rather than to one open file,
 // and closing any open file drops that lock, so a claim must not lock, or
 // even open, a lock file its own process already holds.
 var heldSlotLocks = struct {
 	sync.Mutex
-	paths map[string]struct{}
-}{paths: map[string]struct{}{}}
+	keys map[string]struct{}
+}{keys: map[string]struct{}{}}
 
-// holdSlotLock records path as held and reports false when it already is.
-func holdSlotLock(path string) bool {
+// holdSlotLock records key as held and reports false when it already is.
+func holdSlotLock(key string) bool {
 	heldSlotLocks.Lock()
 	defer heldSlotLocks.Unlock()
-	if _, held := heldSlotLocks.paths[path]; held {
+	if _, held := heldSlotLocks.keys[key]; held {
 		return false
 	}
-	heldSlotLocks.paths[path] = struct{}{}
+	heldSlotLocks.keys[key] = struct{}{}
 	return true
 }
 
 // forgetSlotLock must run only after the lock file is closed.
-func forgetSlotLock(path string) {
+func forgetSlotLock(key string) {
 	heldSlotLocks.Lock()
 	defer heldSlotLocks.Unlock()
-	delete(heldSlotLocks.paths, path)
+	delete(heldSlotLocks.keys, key)
 }
 
 // tryLockFunc takes an exclusive lock on the file without waiting. It
@@ -71,7 +71,7 @@ const (
 type NotificationSlot struct {
 	slots     *os.Root
 	lock      *os.File // nil for a fallback claim
-	lockPath  string
+	lockKey   string
 	name      string
 	workspace string
 	logger    *slog.Logger
@@ -93,7 +93,7 @@ func (s *NotificationSlot) Commit() {
 	if s.lock != nil {
 		s.recordSlotFile()
 		dropLock(s.lock)
-		forgetSlotLock(s.lockPath)
+		forgetSlotLock(s.lockKey)
 	}
 	_ = s.slots.Close() //nolint:errcheck // the handle is not needed once the claim ends
 }
@@ -113,7 +113,7 @@ func (s *NotificationSlot) Release() {
 	if s.lock != nil {
 		s.removeEntry(s.name + slotPendingSuffix)
 		dropLock(s.lock)
-		forgetSlotLock(s.lockPath)
+		forgetSlotLock(s.lockKey)
 	} else {
 		s.removeEntry(s.name)
 	}
@@ -190,7 +190,7 @@ func reserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 		return nil, false, fmt.Errorf("%s directory: %w", notificationSlotsDir, err)
 	}
 
-	slot, err := claimLowestSlot(slotsRoot, slotsDirPath(workspacePath), workspacePath, dispatchID, limit, logger, tryLock)
+	slot, err := claimLowestSlot(slotsRoot, canonicalWorkspace(workspacePath), workspacePath, dispatchID, limit, logger, tryLock)
 	if slot == nil {
 		_ = slotsRoot.Close() //nolint:errcheck // the handle is not needed once no claim owns it
 	}
@@ -200,9 +200,9 @@ func reserveNotificationSlot(workspacePath, dispatchID string, limit int, logger
 	return slot, slot != nil, nil
 }
 
-// slotsDirPath names the slot directory alike for every spelling of
-// workspacePath, so that one process sees its own locks under any of them.
-func slotsDirPath(workspacePath string) string {
+// canonicalWorkspace names workspacePath alike for every spelling of it, so
+// that one process sees its own slot locks under any of them.
+func canonicalWorkspace(workspacePath string) string {
 	dir, err := filepath.Abs(workspacePath)
 	if err != nil {
 		dir = workspacePath
@@ -210,12 +210,12 @@ func slotsDirPath(workspacePath string) string {
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = resolved
 	}
-	return filepath.Join(dir, workspacekit.SortieDir, notificationSlotsDir)
+	return dir
 }
 
 // claimLowestSlot returns a claim that owns slots, or nil without an error
-// when every slot is occupied. slotsPath is the path slots was opened at.
-func claimLowestSlot(slots *os.Root, slotsPath, workspacePath, dispatchID string, limit int, logger *slog.Logger, tryLock tryLockFunc) (*NotificationSlot, error) {
+// when every slot is occupied. workspaceKey is the canonical workspacePath.
+func claimLowestSlot(slots *os.Root, workspaceKey, workspacePath, dispatchID string, limit int, logger *slog.Logger, tryLock tryLockFunc) (*NotificationSlot, error) {
 	fallback := false
 	for n := 1; n <= limit; n++ {
 		name := dispatchID + "-" + strconv.Itoa(n)
@@ -228,7 +228,7 @@ func claimLowestSlot(slots *os.Root, slotsPath, workspacePath, dispatchID string
 		}
 
 		if !fallback {
-			slot, attempt, err := claimUnderLock(slots, slotsPath, workspacePath, name, logger, tryLock)
+			slot, attempt, err := claimUnderLock(slots, workspaceKey, workspacePath, name, logger, tryLock)
 			if err != nil {
 				return nil, err
 			}
@@ -257,14 +257,14 @@ func claimLowestSlot(slots *os.Root, slotsPath, workspacePath, dispatchID string
 // claimUnderLock tries to claim the slot at name through its lock file. The
 // slot file is checked again once the lock is held: a claim that committed
 // between the first check and the lock leaves a slot file behind.
-func claimUnderLock(slots *os.Root, slotsPath, workspacePath, name string, logger *slog.Logger, tryLock tryLockFunc) (slot *NotificationSlot, attempt slotAttempt, err error) {
-	lockPath := filepath.Join(slotsPath, name+slotLockSuffix)
-	if !holdSlotLock(lockPath) {
+func claimUnderLock(slots *os.Root, workspaceKey, workspacePath, name string, logger *slog.Logger, tryLock tryLockFunc) (slot *NotificationSlot, attempt slotAttempt, err error) {
+	lockKey := filepath.Join(workspaceKey, name)
+	if !holdSlotLock(lockKey) {
 		return nil, slotOccupied, nil
 	}
 	defer func() {
 		if slot == nil {
-			forgetSlotLock(lockPath)
+			forgetSlotLock(lockKey)
 		}
 	}()
 
@@ -308,7 +308,7 @@ func claimUnderLock(slots *os.Root, slotsPath, workspacePath, name string, logge
 		dropLock(lock)
 		return nil, slotOccupied, nil
 	}
-	return &NotificationSlot{slots: slots, lock: lock, lockPath: lockPath, name: name, workspace: workspacePath, logger: logger}, slotClaimed, nil
+	return &NotificationSlot{slots: slots, lock: lock, lockKey: lockKey, name: name, workspace: workspacePath, logger: logger}, slotClaimed, nil
 }
 
 // openLockFile returns the lock file at lockName, creating it when absent.
