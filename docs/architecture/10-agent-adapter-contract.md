@@ -270,7 +270,7 @@ This result shape supersedes the five-field description of ADR-0013 (`docs/decis
 
 **`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured channel while a session runs. The agent uses it to escalate a decision it should not make alone, report progress on a long task, or flag a blocker, without terminating the session. The tool resolves the configured notifier backends and posts to them; it knows nothing about any specific channel.
 
-Availability: registered only when at least one valid notifier backend is configured in the `notifications` list (Section 5.3.11). The registration derives from the same workflow file the main process reads, so the sidecar and the main process agree on the tool set. When the list is empty or absent, the tool is not registered.
+Availability: registered only when at least one valid notifier backend is configured in the `notifications` list (Section 5.3.10). The registration derives from the same workflow file the main process reads, so the sidecar and the main process agree on the tool set. When the list is empty or absent, the tool is not registered.
 
 The agent supplies only the message; the system owns the envelope and the tool input cannot set any envelope field. The input schema rejects unknown fields:
 
@@ -359,7 +359,7 @@ The `NotifierConstructor` signature is:
 type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
 ```
 
-The `config` parameter receives the per-backend fields from the matching `notifications` list entry (Section 5.3.11), with `$VAR` references already resolved. A constructor rejects a missing required field or a secret that resolved to the empty string, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
+The `config` parameter receives the per-backend fields from the matching `notifications` list entry (Section 5.3.10), with `$VAR` references already resolved. A constructor rejects a missing required field or a secret that resolved to the empty string, which surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
 
 ### 10.5 Timeouts and Error Mapping
 

@@ -42,10 +42,11 @@ Top-level keys:
 - `workspace`
 - `hooks`
 - `agent`
-- `ci_feedback` (deprecated; use `reactions.ci_failure` instead)
-- `dispatch`
-- `reactions`
 - `db_path`
+- `self_review`
+- `reactions`
+- `dispatch`
+- `notifications`
 
 Unknown keys should be ignored for forward compatibility.
 
@@ -169,7 +170,7 @@ Fields:
   - Other supported values: `copilot-cli`, `codex`, `opencode`, `mock`, and `agent-client-protocol`.
   - Other kinds (for example, HTTP-based adapters) are available only if you register them separately.
   - Parallels `tracker.kind`.
-  - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.10 for the override mechanism.
+  - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.9 for the override mechanism.
   - `kiro` is a retired kind whose replacement is `agent-client-protocol`. A configuration naming it is converted at load, as the next bullet describes.
   - A retired kind has no adapter, and its registry declaration names a replacement kind. A configuration that names a retired kind in `agent.kind`, `dispatch.default.agent`, or a `dispatch.rules` entry's `agent` is converted at load onto the replacement kind, together with the settings block the retired kind read. The conversion runs on startup, on reload, and in `sortie validate`, rewrites the configuration in memory only, and leaves the workflow file untouched. Each conversion emits one `agent.kind.retired` advisory, and a setting the conversion cannot carry fails the load as a configuration error (§6.1, §6.3). A kind that is registered as a live adapter is never converted, even when the registry also declares it retired.
 - `command` (string or list of strings)
@@ -243,38 +244,7 @@ Adapter-specific pass-through config:
 
 Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator forwards the sub-object to the adapter. An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse a value of that sub-object.
 
-#### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
-
-**Deprecated.** Use `reactions.ci_failure` instead (Section 5.3.9). When both `ci_feedback` and `reactions.ci_failure` are present, `reactions.ci_failure` takes precedence and a deprecation warning is logged.
-
-CI feedback loop configuration. Feature activation follows the same pattern as other optional sections (`server.port`, `worker.ssh_hosts`): presence of the `kind` field activates the feature; there is no separate `enabled` flag. When the section is absent or `kind` is empty, CI feedback is disabled and no `CIStatusProvider` is constructed.
-
-Fields:
-
-- `kind` (string)
-  - Identifies the CI status provider adapter (e.g. `github`). Empty string or absent means CI feedback is disabled.
-  - The orchestrator resolves the adapter via the CI provider registry at startup.
-- `max_retries` (integer)
-  - Maximum number of CI-fix continuation dispatches per issue before escalation.
-  - Default: `2`. Zero means escalate immediately on first CI failure (no fix attempts).
-  - MUST be non-negative; negative values are rejected with a configuration error.
-- `max_log_lines` (integer)
-  - Maximum number of log tail lines fetched from the first failing check run for prompt injection.
-  - Default: `50`. Zero disables log fetching.
-  - MUST be non-negative; negative values are rejected with a configuration error.
-- `escalation` (string)
-  - Action taken when `max_retries` is exceeded.
-  - Valid values: `label` (default), `comment`.
-  - `label`: adds `escalation_label` to the tracker issue.
-  - `comment`: posts a plain-text escalation comment listing failing checks and the ref.
-  - Invalid values are rejected with a configuration error.
-- `escalation_label` (string)
-  - Label applied when escalation is `label`.
-  - Default: `needs-human`.
-
-The CI provider adapter receives `max_log_lines` and the pass-through config sub-object named by `ci_feedback.kind` from `Extensions[kind]`. The orchestrator merges tracker credentials (API key, project, endpoint) into that CI adapter config only when the tracker and CI feedback `kind` values match.
-
-#### 5.3.7 `db_path` (string, optional)
+#### 5.3.6 `db_path` (string, optional)
 
 Filesystem path for the SQLite database file.
 
@@ -287,7 +257,7 @@ Filesystem path for the SQLite database file.
 - If the value resolves to an empty string after environment expansion (e.g., an unset `$VAR`), startup fails with a configuration error.
 - Changes to `db_path` during dynamic reload update the in-memory config but have no effect on the already-open database connection; a restart is required.
 
-#### 5.3.8 `self_review` (object, optional)
+#### 5.3.7 `self_review` (object, optional)
 
 Self-review loop configuration. When `enabled` is true and `verification_commands` is non-empty, the orchestrator runs a bounded review-fix cycle after the coding turn loop completes. Each iteration executes verification commands, generates a workspace diff, and presents both to the agent for a structured verdict. Disabled by default; zero overhead when disabled.
 
@@ -309,11 +279,9 @@ Fields:
 - `reviewer` (string)
   - Which agent performs the review. Default: `"same"`. Only `"same"` (reuse the current session) is supported in v1.
 
-#### 5.3.9 `reactions` (object, optional)
+#### 5.3.8 `reactions` (object, optional)
 
 Reaction configuration. Each key under `reactions` identifies a reaction kind (e.g. `ci_failure`, `review_comments`). The orchestrator creates pending reaction entries on normal worker exit and processes them during the reconcile tick. Reaction kinds are extensible: unknown kind keys are parsed into a generic `ReactionConfig` and made available to future consumers.
-
-The `reactions` section supersedes the deprecated `ci_feedback` top-level key. When both `ci_feedback` and `reactions.ci_failure` are present, `reactions.ci_failure` takes precedence and a deprecation warning is logged.
 
 **Common fields per reaction kind:**
 
@@ -340,7 +308,7 @@ Remaining keys within a kind sub-object are collected into an `Extra` map for ki
 
 **Reaction kind: `ci_failure`**
 
-Equivalent to the deprecated `ci_feedback` section. See Section 11A for the CI feedback contract. Extra fields:
+See Section 11A for the CI feedback contract. Extra fields:
 
 - `max_log_lines` (integer, via Extra): maximum CI log tail lines. Default: `50`.
 - `watch_window_ms` (integer, via Extra): bounds a pending CI entry's age, measured from the last recorded head. Default: `86400000` (twenty-four hours). MUST be non-negative and MUST NOT exceed `9223372036854`. `0` removes the clock bound.
@@ -437,11 +405,11 @@ The kind carries no `watch_window_ms`: a pull request may remain unmerged for an
 
 - Reaction kind keys MUST match `[a-z][a-z0-9_-]*`.
 - Invalid kind keys are rejected with a configuration error.
-- Per-kind common fields follow the same validation as the deprecated `ci_feedback` equivalents.
+- Per-kind common fields are validated as follows: `max_retries` MUST be a non-negative integer, `escalation` MUST be `label` or `comment`, and `provider`, `escalation`, and `escalation_label` MUST be strings. Each violation is rejected with a configuration error.
 - Extra fields are kind-specific; the orchestrator validates them when constructing the kind-specific config (e.g. `BuildReviewReactionConfig`).
 - A `triage` block under any reaction key other than `ci_failure`, `review_comments`, `bot_review`, or `merge_conflicts` is rejected with a configuration error, as is a block whose `script` is absent, not a string, or blank, and one whose `timeout_ms` falls outside the closed range `1` to `600000`.
 
-#### 5.3.10 `dispatch` (object, optional)
+#### 5.3.9 `dispatch` (object, optional)
 
 Routes the initial dispatch to an `(agent_kind, template_id)` selection per first-match-wins rules. When absent, the orchestrator behaves identically to today: the resolver returns the top-level defaults (`agent.kind` and the Markdown body template).
 
@@ -485,7 +453,7 @@ A selection the retry changes emits one `Info` record (§13.1).
 
 **Template lifecycle**
 
-Per-rule template paths are relative to `filepath.Dir(workflow_path)`. Absolute paths, `~`-prefixed paths, and symlink escapes outside the workflow directory tree are rejected at load time. The `ResolveRule` function and full algorithm details are in §5.3.10's source spec.
+Per-rule template paths are relative to `filepath.Dir(workflow_path)`. Absolute paths, `~`-prefixed paths, and symlink escapes outside the workflow directory tree are rejected at load time. The `ResolveRule` function and full algorithm details are in §5.3.9's source spec.
 
 Example:
 
@@ -512,7 +480,7 @@ dispatch:
     template: templates/default.md
 ```
 
-#### 5.3.11 `notifications` (list, optional)
+#### 5.3.10 `notifications` (list, optional)
 
 The `notifications` list configures the backends behind the `notify_operator` tool (Section 10.4.5). While a session runs, the agent calls the tool to escalate a decision, report progress, or flag a blocker to a real-time channel. The tool is registered only when at least one valid backend is configured; an empty or absent list leaves it unregistered, so the agent is never offered a tool it cannot use.
 

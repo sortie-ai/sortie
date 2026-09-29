@@ -265,7 +265,7 @@ function dispatch_issue(issue, state, attempt):
   return state
 ```
 
-The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see §5.3.10 for match semantics and the `ResolveRule` function for the full algorithm. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.10).
+The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see §5.3.9 for match semantics and the `ResolveRule` function for the full algorithm. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
@@ -789,5 +789,5 @@ on_retry_timer(issue_id, state):
     resume_session_id=resume_session_id, selection=selection)
 ```
 
-`retry_selection` keeps the frozen triple, with a retired kind replaced by its replacement kind, while the kind is still reachable through `agent.kind`, `dispatch.default.agent`, or a rule and the template is still held, and otherwise returns `resolve_rule` over the configuration in force (§5.3.10, §8.4).
+`retry_selection` keeps the frozen triple, with a retired kind replaced by its replacement kind, while the kind is still reachable through `agent.kind`, `dispatch.default.agent`, or a rule and the template is still held, and otherwise returns `resolve_rule` over the configuration in force (§5.3.9, §8.4).
 

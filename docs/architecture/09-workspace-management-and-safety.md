@@ -107,7 +107,7 @@ The `after_run` contract itself is unchanged. Its failure remains logged and ign
 
 #### 9.4.2 Reaction triage command
 
-The reaction triage command is a fifth operator-owned script that runs in a per-issue workspace, distinct from the four hooks above. A reaction kind that carries a `triage` block runs it once the reconcile pass has found a new subject and before it dispatches an agent continuation, so deterministic work is resolved without spending an agent session. Four reaction kinds offer the block; Section 5.3.9 names them and Section 2.10 of the workflow reference gives the field, input, and result contracts.
+The reaction triage command is a fifth operator-owned script that runs in a per-issue workspace, distinct from the four hooks above. A reaction kind that carries a `triage` block runs it once the reconcile pass has found a new subject and before it dispatches an agent continuation, so deterministic work is resolved without spending an agent session. Four reaction kinds offer the block; Section 5.3.8 names them and Section 2.9 of the workflow reference gives the field, input, and result contracts.
 
 It executes through the same machinery as the hooks: a local shell with the workspace directory as `cwd`, the same restricted environment, the same process-tree termination when the command exits, times out, or is cancelled, and the same 8 KiB captured output tail. Three differences are load-bearing.
 
