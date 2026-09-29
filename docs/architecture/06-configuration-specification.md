@@ -15,6 +15,17 @@ Configuration precedence (highest to lowest):
 
 **Double-expansion prevention:** Values sourced from environment overrides MUST NOT be passed through `os.ExpandEnv`, `resolveEnv`, or `resolveEnvRef`. Section builders use the override set returned by `applyEnvOverrides` to skip `$VAR` expansion for env-sourced fields. Only tilde (`~`) expansion is permitted for path fields.
 
+**Retired kind conversion:** After the environment overrides and `$VAR` resolution, and before the section builders run, `NewServiceConfig` converts every agent kind the registry declares retired and the agent registry does not register. It reads `agent.kind`, `dispatch.default.agent`, and each `dispatch.rules` entry's `agent`, and for each retired kind it:
+
+1. Runs the declaration's conversion over the kind's settings block, once for a local launch and once for a remote one.
+2. Points every reference to the retired kind at the replacement kind.
+3. Removes the retired kind's settings block and adds the settings the conversion carries to the replacement kind's block, without overriding a key the replacement block already sets.
+4. Records one conversion record and one `agent.kind.retired` advisory.
+
+The rewrite happens in memory on every load; `WORKFLOW.md` is never written. A conversion advisory follows the environment-file and environment-override advisories and precedes every other advisory the build records. Only the workflow manager requests the conversion, so startup, reload, and `sortie validate` share it, while the front-matter analysis in `sortie validate` reads the configuration as written and names the keys the operator wrote.
+
+**Command governance:** A session launches only a command written for its own kind. The default kind is `dispatch.default.agent` when set and `agent.kind` otherwise. `agent.command`, in either form, is the default kind's command. A replacement kind that a conversion governs launches the converted command, whichever launch mode the session uses. A kind left with no command launches its adapter's default command. A conversion governs the sessions of its replacement kind unless that kind is already the default kind: then the sessions keep `agent.command` and carry none of the retired kind's settings. Two conversion records that share a replacement kind and hold different commands are a configuration error. A wrapper command written for several runtimes therefore reaches only the default kind. Retired-kind credential variable names follow the same rule: the converted configuration carries them on a remote launch of the governed replacement kind (Appendix A.1).
+
 Value coercion semantics:
 
 - Path fields support:
@@ -60,7 +71,13 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution, when required by the selected tracker adapter.
 - `tracker.project` is present when required by the selected tracker adapter.
-- `agent.command` is present and non-empty when `agent.kind` requires a local command.
+- `agent.command`: for each agent kind a selection can reach (`agent.kind`, `dispatch.default.agent`, and every `dispatch.rules` entry's `agent`) that launches a command, the command written for that kind, or else the adapter's default command, MUST name an executable, in the launch mode the configuration uses. The default kind draws `agent.command is required for agent kind "<kind>"`. Any other kind draws a message naming the selector that reaches it and stating that it launches `agent.command` only as the default agent kind. A kind that launches no command is not checked.
+- Configuration errors of the conversion and of the `agent.command` shape abort config construction, so they share the load path: startup fails, `sortie validate` reports an error under the check `config.<field>` and exits with code 1, and a reload keeps the previous configuration while each tick's preflight reports `workflow_load` and skips dispatch until the file is fixed. The errors are:
+  - A retired kind's setting the conversion cannot carry: field `<kind>.<key>`, stating that the kind was removed and the configuration cannot be converted to the replacement kind, followed by the reason. The conversion refuses exactly the settings the removed adapter's own validator refused.
+  - Two retired kinds that convert onto one replacement kind with different commands: the field is the second kind's first reference.
+  - `agent.command` that is neither a string nor a list: `expected string or list, got <type>`.
+  - `agent.command` as an empty list: `must not be an empty list`.
+  - An `agent.command` element that is not a string, or is empty (element 0: holds only whitespace): field `agent.command[<i>]`.
 - Tracker adapter for the configured `tracker.kind` is registered and available.
 - Agent adapter for the configured `agent.kind` is registered and available.
 - `agent.kind.session_resume`: for every agent kind the effective configuration can reach, the adapter's declared blocking key is evaluated against that kind's resolved pass-through, and the configuration is refused when the key is non-empty.
@@ -125,7 +142,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
 - `agent.kind`: string, default `claude-code`
-- `agent.command`: whitespace-delimited argument-vector string, adapter-defined default
+- `agent.command`: a whitespace-delimited argument-vector string, or a list of strings whose element zero names the executable and whose other elements are one argument each; adapter-defined default; belongs to the default agent kind; `SORTIE_AGENT_COMMAND` sets the string form and replaces a list
 - `agent.turn_timeout_ms`: positive integer, default `3600000`; the deadline the orchestrator places on the context of every agent turn it runs, self-review turns included; the expiry of that deadline cancels the turn's context, and the attempt then fails with the `turn_timeout` failure class, retryable per the retry path, once the adapter returns from the cancelled turn, which for an adapter that does not observe a done context promptly is later than the deadline; a non-positive value is rejected when the config is parsed, so startup, `sortie validate`, and the live-reload fail-safe path all reject it
 - `agent.read_timeout_ms`: integer, default `5000`
 - `agent.stall_timeout_ms`: integer, default `300000`

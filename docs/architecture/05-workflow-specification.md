@@ -171,10 +171,15 @@ Fields:
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see §5.3.10 for the override mechanism.
   - `kiro` is deprecated, with `agent-client-protocol` as its replacement. The kind stays registered and a configuration naming it keeps working.
-- `command` (string)
-  - The command the agent adapter uses to launch the agent process. A local subprocess adapter splits it on whitespace into an argument vector; an SSH worker passes it to the remote shell unsplit. Adapter-defined default.
-  - When `agent.kind` requires a local command, this field must be present and non-empty.
-  - HTTP-based agent adapters do not require a local command.
+  - A retired kind has no adapter, and its registry declaration names a replacement kind. A configuration that names a retired kind in `agent.kind`, `dispatch.default.agent`, or a `dispatch.rules` entry's `agent` is converted at load onto the replacement kind, together with the settings block the retired kind read. The conversion runs on startup, on reload, and in `sortie validate`, rewrites the configuration in memory only, and leaves the workflow file untouched. Each conversion emits one `agent.kind.retired` advisory, and a setting the conversion cannot carry fails the load as a configuration error (§6.1, §6.3). A kind that is registered as a live adapter is never converted, even when the registry also declares it retired.
+- `command` (string or list of strings)
+  - The command the default agent kind's adapter uses to launch the agent process. The default kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. Adapter-defined default.
+  - String form: a local subprocess adapter splits the string on whitespace into an argument vector; an SSH worker passes it to the remote shell unsplit.
+  - List form: element zero names the executable and each later element is one argument. A local launch resolves element zero whole, whitespace included, and passes the other elements verbatim, without splitting. An SSH worker quotes every element as one word for the remote shell, so the remote shell does not expand or split any of them. The list form is how a path or argument that holds whitespace reaches the agent process.
+  - A list MUST NOT be empty, every element MUST be a non-empty string, and element zero MUST hold a non-whitespace character. A violation is rejected when the configuration is parsed, and the failing check names the element (`agent.command[0]`). `SORTIE_AGENT_COMMAND` sets the string form and replaces a list the file holds.
+  - Command governance: a session launches only a command written for its own kind. `agent.command`, in either form, is the default kind's command. A kind that replaces a converted retired kind launches the converted command. Every other kind launches its adapter's default command, so `agent.command` MAY be omitted for a kind that has one.
+  - Preflight reports `agent.command` for each kind a selection can reach (`agent.kind`, `dispatch.default.agent`, and every `dispatch.rules` entry's `agent`) that launches a command and has neither a command written for it nor a default command. A kind other than the default kind draws a message naming the selector that reaches it.
+  - HTTP-based agent adapters do not launch a command.
 - `turn_timeout_ms` (integer)
   - Default: `3600000` (1 hour)
   - Must be positive. A non-positive value is rejected when the configuration is parsed.
@@ -466,7 +471,17 @@ Match keys are evaluated with AND semantics across keys and OR semantics within 
 
 First-match wins: evaluation stops at the first rule whose `match` block succeeds. Absent rule fields fall through to `dispatch.default`, then to the top-level `agent.kind` and the Markdown-body template (the pre-dispatch top-level defaults).
 
-The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at the initial dispatch and propagated through `RetryEntry`. Retries and reaction-driven continuations reuse the frozen selection without re-evaluating rules.
+The default agent kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. It is the kind every selection without an agent of its own runs, and the only kind that launches `agent.command` as written.
+
+The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
+
+- The frozen selection stands, with its session identifier, when its kind is still named by `agent.kind`, `dispatch.default.agent`, or a rule, and its template is still held. The kind launches its own command as the configuration now states it.
+- A frozen kind that a conversion record retired is replaced by its replacement kind, keeping the frozen template and rule name.
+- Otherwise the issue is routed afresh by first-match rule evaluation. This covers a kind the configuration no longer names, a kind this binary does not register, and a template the workflow no longer holds.
+- A selection that differs from the frozen one in kind or template starts without a resume session identifier, because session identifiers are adapter-specific. The continuation context, reaction kind, attempt number, and last SSH host carry over.
+- When the selected kind's adapter is unavailable because its construction failed at startup, the retry is rescheduled with backoff and keeps its claim and continuation (§8.4).
+
+A selection the retry changes emits one `Info` record (§13.1).
 
 **Template lifecycle**
 
