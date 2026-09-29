@@ -40,6 +40,9 @@ import (
 // defaultCommand is what a session launches when it is given no command.
 const defaultCommand = "opencode"
 
+// majorOneDeprecationMessage is the record a working session on OpenCode 1.x logs.
+const majorOneDeprecationMessage = "support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli"
+
 func init() {
 	registry.Agents.RegisterWithMeta("opencode", NewOpenCodeAdapter, registry.AgentMeta{
 		RequiresCommand:     true,
@@ -138,7 +141,8 @@ func NewOpenCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
 // StartSession resolves the launch target, detects the installed
 // OpenCode major, and initializes adapter-owned session state without
 // starting a turn subprocess. It refuses a major other than 1 or 2, and
-// a passthrough setting that major cannot carry.
+// a passthrough setting that major cannot carry. A working session on
+// major 1 logs one deprecation warning naming the detected version.
 func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
 	target, agentErr := agentcore.ResolveLaunchTarget(params, defaultCommand)
 	if agentErr != nil {
@@ -168,11 +172,17 @@ func (a *OpenCodeAdapter) StartSession(ctx context.Context, params domain.StartS
 		credentialVerification: params.CredentialVerification,
 	}
 
-	major, majorErr := detectRuntimeMajor(ctx, state)
+	version, major, majorErr := detectRuntimeMajor(ctx, state)
 	if majorErr != nil {
 		return domain.Session{}, majorErr
 	}
 	state.major = major
+
+	// The credential-verification session runs the same version query right
+	// before the working session, so only the working session logs.
+	if major == major1 && !state.credentialVerification {
+		state.logger().Warn(majorOneDeprecationMessage, slog.String("version", version))
+	}
 
 	if settingsErr := checkMajorSettings(state.passthrough, state.major); settingsErr != nil {
 		return domain.Session{}, settingsErr

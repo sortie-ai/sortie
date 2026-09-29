@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 
+### Deprecated
+
+- Running the `opencode` agent kind on OpenCode 1.x is deprecated, and a later release removes it: runs on 1.x keep working and each logs a warning naming the installed version. OpenCode 2.x is published on npm as `@opencode/cli`, while `opencode-ai` ships only 1.x, so uninstall `opencode-ai` before installing `@opencode/cli`, and before switching remove `opencode.pure` and give any `opencode.variant` an `opencode.model` without a `#` suffix, or 2.x refuses the session. The OpenCode Docker example now installs 2.x. ([#1178](https://github.com/sortie-ai/sortie/issues/1178))
+
 ### Removed
 
 - The `kiro` agent kind is removed, and Kiro CLI now runs only through the `agent-client-protocol` kind. A workflow that still names `kiro` and trusts every tool, which is the default, keeps running without an edit: it is converted when loaded, and `sortie validate` and each run warn once with the `kiro-cli acp -a` invocation to write in `agent.command` under `agent-client-protocol`, which ends the warning; the conversion is temporary and a later release removes it. A workflow that limits which tools Kiro may use, with `kiro.trust_all_tools: false` or a `kiro.trust_tools` list, fails to load until it is moved to `agent-client-protocol`, and the error says how. Sessions now start `kiro-cli acp -a` instead of `kiro-cli chat` and receive Sortie's tools on a local launch under a stored login, but not under `KIRO_API_KEY` or on `worker.ssh_hosts`, `kiro.mcp_config` is not carried over, and new runs are recorded under `agent-client-protocol` in run history, the dashboard, and `sortie stats` while earlier `kiro` rows stay. ([#1169](https://github.com/sortie-ai/sortie/issues/1169))

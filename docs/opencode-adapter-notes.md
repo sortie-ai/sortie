@@ -2,7 +2,7 @@
 
 Working notes for anyone changing Sortie's OpenCode adapter in `internal/agent/opencode`: why this one does not use the shared subprocess skeleton, where OpenCode's session and permission model collide with ours, the two launch contracts the adapter drives, and the failures that look like something else.
 
-Last updated: 2026-09-26
+Last updated: 2026-09-29
 
 ## Where to get the volatile facts
 
@@ -19,6 +19,8 @@ One trap to carry into that work if it ever happens: nothing in this adapter wir
 ## Two contracts, one detected major
 
 OpenCode ships two majors with incompatible launch surfaces, and both are current: the older major never published a newer release, and the newer major's own npm package never published the older one. `StartSession` runs the configured command with `--version` before anything else, parses whichever line of output first carries a bare semantic version, and picks the contract that version's leading number selects. Any other leading number, or output with no readable version at all, refuses the session outright rather than guessing; the version query itself is bounded the same way any other auxiliary launch is.
+
+Sortie deprecates the older major. Right after `StartSession` detects that major on a working session it logs one `Warn` record reading `support for OpenCode 1.x is deprecated and will be removed in a later Sortie release; install OpenCode 2.x, published on npm as @opencode/cli` with the detected `version`; the credential-verification session and every turn log nothing of the kind, and nothing else on that path changes. The record repeats every session by design, because detection runs at each session start and is never cached. `sortie validate` cannot report it, because it never launches the runtime.
 
 The two contracts differ in the working directory, the prompt, the tool policy, and process isolation:
 
