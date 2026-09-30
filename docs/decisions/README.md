@@ -16,7 +16,7 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0008](0008-observability-model.md)                  | Use Embedded Dashboard with Prometheus Metrics for Observability  | Accepted |
 | [0009](0009-mcp-stdio-sidecar-for-tool-execution.md) | Use MCP stdio sidecar for agent tool execution                    | Accepted |
 | [0010](0010-keep-tracker-adapter-unified.md)         | Keep TrackerAdapter as a Unified Interface                        | Accepted |
-| [0011](0011-dispatch-rule-configuration.md)          | Use First-Match-Wins Dispatch Rules in `WORKFLOW.md` Front Matter | Accepted |
+| [0011](0011-dispatch-rule-configuration.md)          | Use First-Match-Wins Dispatch Rules in `WORKFLOW.md` Front Matter | Superseded by 0031 |
 | [0012](0012-auto-merge-reaction.md)                  | Extend `SCMAdapter` with Write Methods for Auto-Merge Reactions   | Accepted |
 | [0013](0013-agent-cost-budget.md)                    | Use cumulative per-issue token counts for the agent cost budget   | Accepted |
 | [0014](0014-operator-notifications.md)               | Use an adapter family for operator notifications                  | Accepted |
@@ -36,3 +36,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0028](0028-let-the-agent-declare-that-nothing-needed-changing.md) | Let the Agent Declare That Nothing Needed Changing | Accepted |
 | [0029](0029-adopt-agent-client-protocol-as-a-generic-agent-transport.md) | Adopt the Agent Client Protocol as a Single Generic Agent Transport | Accepted |
 | [0030](0030-keep-both-kinds-registered-and-retire-only-at-parity.md) | Keep Both Kinds Registered and Retire a Hand-Written One Only at Parity | Accepted |
+| [0031](0031-let-a-dispatch-rule-carry-its-agent-kinds-settings.md) | Let a Dispatch Rule Carry the Settings of the Agent Kind It Selects | Accepted |

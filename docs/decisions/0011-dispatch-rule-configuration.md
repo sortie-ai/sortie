@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0031
 date: 2026-05-18
 decision-makers: Serghei Iakovlev
 ---
