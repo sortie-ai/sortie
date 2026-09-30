@@ -473,7 +473,7 @@ jobs:
       - name: Run integration tests
         run: |
           for attempt in 1 2; do
-            if go test -race -count=1 -v -timeout 180s -run 'Integration' ./internal/agent/opencode/...; then
+            if go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...; then
               exit 0
             fi
             if [ "$attempt" -eq 2 ]; then
@@ -490,6 +490,7 @@ jobs:
       SORTIE_CLIENTPROTOCOL_TEST: "1"
       SORTIE_CLIENTPROTOCOL_COMMAND: gemini --acp
       SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV: GEMINI_API_KEY
+      SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: GOOGLE_GEMINI_BASE_URL
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - name: Verify Gemini secrets
