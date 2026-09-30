@@ -252,6 +252,7 @@ function dispatch_issue(issue, state, attempt):
     agent_kind,
     template_id,
     rule_name,
+    rule_settings_applied: attempt_settings.settings.rule_name != "",
     session_id: null,
     agent_pid: null,
     last_agent_message: null,
@@ -274,7 +275,7 @@ function dispatch_issue(issue, state, attempt):
 
 The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see §5.3.9 for match semantics and the `ResolveRule` function for the full algorithm. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
-`resolve_attempt_settings` resolves the top-level settings block of the frozen kind and returns it, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
+`resolve_attempt_settings` lays the frozen rule's settings block over the top-level block of the frozen kind (§5.3.9) and returns the resolved block, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
@@ -802,6 +803,8 @@ on_retry_timer(issue_id, state):
       error: "retry agent settings refused",
       session_id: retry_entry.session_id
     })
+  if selection.rule_name == frozen.rule_name and retry_entry.rule_settings_applied and attempt_settings.settings.rule_name == "":
+    log_info("rule settings no longer present, attempt runs on the kind's top-level settings")
 
   return dispatch_issue(issue, state, attempt=retry_entry.attempt,
     resume_session_id=resume_session_id, selection=selection, attempt_settings=attempt_settings)
