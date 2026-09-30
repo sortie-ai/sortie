@@ -253,6 +253,8 @@ function dispatch_issue(issue, state, attempt):
     template_id,
     rule_name,
     rule_settings_applied: attempt_settings.settings.rule_name != "",
+    configured_model: attempt_settings.settings.model,
+    configured_effort: attempt_settings.settings.effort,
     session_id: null,
     agent_pid: null,
     last_agent_message: null,

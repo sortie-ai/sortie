@@ -1151,7 +1151,7 @@ dispatch:
         effort: max           # model inherited from the top-level block
 ```
 
-Issues with neither label run on the top-level block. `sortie stats` groups the runs by rule.
+Issues with neither label run on the top-level block. `sortie stats` groups the runs by rule and by configured model.
 
 Two work profiles on two kinds fit in one workflow. A rule that introduces a kind other than `agent.kind` and carries that kind's block needs no top-level block for it:
 
@@ -1588,6 +1588,9 @@ Returns the system-wide runtime state including running sessions, retry queue, a
         "cache_write_tokens": 100
       },
       "model_name": "claude-sonnet-4-20250514",
+      "rule_name": "hard",
+      "configured_model": "claude-sonnet-4-20250514",
+      "configured_effort": "high",
       "api_request_count": 3,
       "requests_by_model": {"claude-sonnet-4-20250514": 3},
       "tool_time_percent": 12.3,
@@ -1643,7 +1646,10 @@ Returns the system-wide runtime state including running sessions, retry queue, a
 | `tokens`                  | object            | Token counts for this session. Each of the five members, `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`, and `cache_write_tokens`, is an integer or `null`. The five are `null` together, exactly when `tokens_measured` is `false`, and each carries its figure otherwise. |
 | `tokens.cache_read_tokens` | integer or `null` | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. `null` when `tokens_measured` is `false`; `0` when the session is measured and the agent adapter reports no cache data. |
 | `tokens.cache_write_tokens` | integer or `null` | Cumulative cache-write token count. Reflects input tokens written to the LLM provider's prompt cache. `null` when `tokens_measured` is `false`; `0` when the session is measured and the agent adapter reports no cache-write count. |
-| `model_name`              | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model, and when `usage_arrival` is `none`.         |
+| `model_name`              | string or absent  | LLM model identifier the agent reported running (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model, and when `usage_arrival` is `none`. It can differ from `configured_model` under routing aliases and runtime fallbacks. |
+| `rule_name`               | string or absent  | The dispatch rule the session runs under. Omitted when the workflow-wide fallback routed the issue. |
+| `configured_model`        | string or absent  | The `model` the session's resolved settings block carries, which is what the operator asked for, as distinct from `model_name`, which is what the runtime reported. Omitted when no model is configured. |
+| `configured_effort`       | string or absent  | The `effort` the session's resolved settings block carries. Omitted when no level is configured. |
 | `api_request_count` | integer or `null` | Number of `token_usage` events received during this session, and a count of actual API requests only when `api_requests_measured` is `true`. `null` exactly when that field is `false`. |
 | `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when `api_requests_measured` is `false`, and when `usage_attribution` does not name a model. Enables tracking model usage when the agent switches models mid-session. |
 | `tool_time_percent` | number or `null`  | Cumulative tool call execution time as a percentage of session wall-clock time. Computed at response time. `null` when no tool timing data has been received. |
@@ -1705,6 +1711,9 @@ Returns issue-specific runtime and debug details for a single issue. Returns `40
       "cache_write_tokens": 100
     },
     "model_name": "claude-sonnet-4-20250514",
+    "rule_name": "hard",
+    "configured_model": "claude-sonnet-4-20250514",
+    "configured_effort": "high",
     "api_request_count": 3,
     "requests_by_model": {"claude-sonnet-4-20250514": 3},
     "tool_time_percent": 12.3,
