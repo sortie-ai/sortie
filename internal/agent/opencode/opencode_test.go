@@ -335,16 +335,22 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 		name    string
 		content string
 		sshHost string
-		want    bool
+		major2  bool
+		wantMCP bool
 	}{
-		{name: "local launch carries the document", content: withServer, want: true},
-		{name: "remote launch carries none", content: withServer, sshHost: "build-host", want: false},
-		{name: "no declared server carries none", content: `{"mcpServers":{}}`},
+		{name: "local launch carries the document", content: withServer, wantMCP: true},
+		{name: "local 2.x launch carries the document", content: withServer, major2: true, wantMCP: true},
+		{name: "remote launch stores the agent member alone", content: withServer, sshHost: "build-host"},
+		{name: "no declared server stores the agent member alone", content: `{"mcpServers":{}}`},
+		{name: "no declared server on 2.x stores the agent member", content: `{"mcpServers":{}}`, major2: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			command := fakeMinimalRuntime(t)
+			if tt.major2 {
+				command = writeOpenCodeScriptMajor2(t, t.TempDir(), "exit 0")
+			}
 			if tt.sshHost == "" {
 				t.Parallel()
 			} else {
@@ -371,8 +377,15 @@ func TestStartSession_MCPConfigContent(t *testing.T) {
 			if !ok {
 				t.Fatalf("session.Internal = %T, want *sessionState", session.Internal)
 			}
-			if got := state.turnConfigContent != ""; got != tt.want {
-				t.Errorf("StartSession() delivered content = %v, want %v (content %q)", got, tt.want, state.turnConfigContent)
+			if state.turnConfigContent == "" {
+				t.Fatal("StartSession() stored an empty turn configuration, want a document carrying the title agent switch")
+			}
+
+			doc := decodeConfigDocument(t, state.turnConfigContent)
+
+			assertTitleAgentDisabled(t, doc)
+			if _, ok := doc["mcp"]; ok != tt.wantMCP {
+				t.Errorf("StartSession() stored mcp present = %v, want %v (content %q)", ok, tt.wantMCP, state.turnConfigContent)
 			}
 		})
 	}

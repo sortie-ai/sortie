@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -64,6 +65,24 @@ func assertEnvAbsent(t *testing.T, env []string, key string) {
 	t.Helper()
 	if _, ok := envLookup(env, key); ok {
 		t.Errorf("env %q is present, want absent", key)
+	}
+}
+
+const titleAgentDisabledMember = `{"title":{"disable":true}}`
+
+func decodeConfigDocument(t *testing.T, content string) map[string]json.RawMessage {
+	t.Helper()
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", content, err)
+	}
+	return doc
+}
+
+func assertTitleAgentDisabled(t *testing.T, doc map[string]json.RawMessage) {
+	t.Helper()
+	if got := string(doc["agent"]); got != titleAgentDisabledMember {
+		t.Errorf("document agent = %s, want %s", got, titleAgentDisabledMember)
 	}
 }
 
@@ -498,8 +517,9 @@ func TestTranslateMCPServers(t *testing.T) {
 }
 
 // TestBuildInlineConfig asserts the 2.x inline document's marshaled
-// shape: share is always present as "disabled"; permission, compaction,
-// and mcp are each present only when their source data is non-empty.
+// shape: share is always present as "disabled" and the title agent is
+// always disabled; permission, compaction, and mcp are each present only
+// when their source data is non-empty.
 func TestBuildInlineConfig(t *testing.T) {
 	t.Parallel()
 
@@ -538,6 +558,7 @@ func TestBuildInlineConfig(t *testing.T) {
 			if string(doc["share"]) != `"disabled"` {
 				t.Errorf("buildInlineConfig() share = %s, want %q", doc["share"], "disabled")
 			}
+			assertTitleAgentDisabled(t, doc)
 			if _, ok := doc["permission"]; ok != tt.wantPerm {
 				t.Errorf("buildInlineConfig() permission present = %v, want %v", ok, tt.wantPerm)
 			}
@@ -550,6 +571,80 @@ func TestBuildInlineConfig(t *testing.T) {
 			if _, ok := doc["mcp"]; ok != tt.wantMCP {
 				t.Errorf("buildInlineConfig() mcp present = %v, want %v", ok, tt.wantMCP)
 			}
+		})
+	}
+}
+
+func TestBuildTurnConfigContent(t *testing.T) {
+	t.Parallel()
+
+	servers := map[string]mcpConfigDocumentEntry{
+		"sortie-tools": {Type: "local", Command: []string{"/usr/local/bin/sortie"}, Enabled: true},
+	}
+
+	tests := []struct {
+		name          string
+		major         runtimeMajor
+		servers       map[string]mcpConfigDocumentEntry
+		wantMCP       bool
+		wantOnlyAgent bool
+	}{
+		{name: "1.x without servers carries the agent member alone", major: major1, wantOnlyAgent: true},
+		{name: "1.x with servers carries mcp beside the agent member", major: major1, servers: servers, wantMCP: true},
+		{name: "2.x without servers carries the agent member", major: major2},
+		{name: "2.x with servers carries mcp beside the agent member", major: major2, servers: servers, wantMCP: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			content, err := buildTurnConfigContent(tt.major, passthroughConfig{}, tt.servers)
+			if err != nil {
+				t.Fatalf("buildTurnConfigContent(%v) error = %v", tt.major, err)
+			}
+			if content == "" {
+				t.Fatalf("buildTurnConfigContent(%v) = %q, want a non-empty document", tt.major, content)
+			}
+
+			doc := decodeConfigDocument(t, content)
+
+			assertTitleAgentDisabled(t, doc)
+			if _, ok := doc["mcp"]; ok != tt.wantMCP {
+				t.Errorf("buildTurnConfigContent(%v) mcp present = %v, want %v", tt.major, ok, tt.wantMCP)
+			}
+			if tt.wantOnlyAgent && len(doc) != 1 {
+				t.Errorf("buildTurnConfigContent(%v) members = %d, want 1", tt.major, len(doc))
+			}
+		})
+	}
+}
+
+func TestBuildTurnEnv_CarriesTitleAgentDisabled(t *testing.T) {
+	t.Parallel()
+
+	for _, major := range []runtimeMajor{major1, major2} {
+		t.Run(fmt.Sprintf("major %v", major), func(t *testing.T) {
+			t.Parallel()
+
+			content, err := buildTurnConfigContent(major, passthroughConfig{}, nil)
+			if err != nil {
+				t.Fatalf("buildTurnConfigContent(%v) error = %v", major, err)
+			}
+			state := newTestSessionState("/workspace", "")
+			state.major = major
+			state.turnConfigContent = content
+
+			env, err := buildTurnEnv(state)
+			if err != nil {
+				t.Fatalf("buildTurnEnv() error = %v", err)
+			}
+
+			carried, ok := envLookup(env, "OPENCODE_CONFIG_CONTENT")
+			if !ok {
+				t.Fatalf("buildTurnEnv() env lacks OPENCODE_CONFIG_CONTENT, want the turn document")
+			}
+			assertTitleAgentDisabled(t, decodeConfigDocument(t, carried))
 		})
 	}
 }

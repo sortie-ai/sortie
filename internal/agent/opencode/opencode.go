@@ -88,8 +88,9 @@ type sessionState struct {
 
 	// turnConfigContent is the configuration value every turn carries
 	// through OPENCODE_CONFIG_CONTENT: the 1.x MCP document on major1,
-	// the 2.x inline document on major2. Empty when there is nothing to
-	// carry. Set once in StartSession and never mutated after.
+	// the 2.x inline document on major2. Never empty, because both carry
+	// the title-agent switch. Set once in StartSession and never mutated
+	// after.
 	turnConfigContent string
 
 	credentialVerification bool
