@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose a new capability or a change to existing behavior.
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. An idea that is still open-ended fits better in [Ideas](https://github.com/sortie-ai/sortie/discussions/categories/ideas) or on [Discord](https://discord.gg/MCNrc8Wf9M).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, what stops you today, and what it costs you. An example from a real workflow helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The behavior you would like. Configuration or examples are welcome. The final design may differ.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround
+      description: Optional. How you cope today, and what it costs.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Other approaches and why you rejected them.
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Optional. What this request deliberately does not ask for.
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Optional. Decisions you are leaving to the maintainer.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Done when
+      description: Optional. Observable outcomes that show the feature works, including that existing workflows behave as before.
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Existing issues
+      options:
+        - label: I searched open and closed issues and found no request for this.
+          required: true

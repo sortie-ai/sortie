@@ -1,0 +1,85 @@
+name: Bug report
+description: Sortie behaves differently from its documentation or from what you expected.
+type: Bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One problem per issue. If you are not sure it is a bug, ask in [Q&A](https://github.com/sortie-ai/sortie/discussions/categories/q-a) first. Remove tokens, hostnames and private repository names from everything you paste.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph. What Sortie does, and how that differs from what you expected or what the docs say.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest `WORKFLOW.md` front matter, tracker state and commands that trigger the problem.
+      placeholder: |
+        1. Configure:
+           ```yaml
+           tracker:
+             kind: github
+           ```
+        2. Move an issue to ...
+        3. Sortie ...
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened. Exact error messages, numbers and the comments Sortie posted help most.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened. Link the docs page if it says otherwise.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: Only the lines around the failure. This field is rendered as a code block.
+      render: text
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root cause
+      description: Optional. If you traced the problem to code, link the file at a specific commit.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Fixed when
+      description: Optional. Observable conditions that show the bug is gone.
+  - type: input
+    id: version
+    attributes:
+      label: Sortie version
+      description: Output of `sortie version`. Say so if you also reproduced it on `main`.
+      placeholder: "1.25.0"
+    validations:
+      required: true
+  - type: input
+    id: adapters
+    attributes:
+      label: Tracker and agent
+      placeholder: GitHub tracker, copilot-cli agent
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04, amd64
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Existing issues
+      options:
+        - label: I searched open and closed issues and found no report of this problem.
+          required: true

@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/sortie-ai/sortie/discussions/categories/q-a
+    about: How-to questions and "is this expected?" checks before you know whether something is a bug.
+  - name: Report a security vulnerability
+    url: https://github.com/sortie-ai/sortie/security/advisories/new
+    about: Report privately. Do not open a public issue for a vulnerability.
+  - name: Read the documentation
+    url: https://docs.sortie-ai.com
+    about: Guides, configuration reference and adapter pages.
+  - name: Chat on Discord
+    url: https://discord.gg/MCNrc8Wf9M
+    about: Talk an idea through before writing it down.

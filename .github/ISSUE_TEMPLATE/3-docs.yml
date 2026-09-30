@@ -1,0 +1,33 @@
+name: Documentation problem
+description: A docs page is wrong, unclear or missing, or two pages contradict each other.
+type: Docs
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: URL on docs.sortie-ai.com, or a path in this repository.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+      description: Quote the text in question. If two pages disagree, link both.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What Sortie actually does
+      description: Optional. If the page disagrees with Sortie's behavior, show the configuration, command and output.
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: Optional.
+  - type: input
+    id: version
+    attributes:
+      label: Sortie version
+      description: Optional. Output of `sortie version`, if you checked the behavior.
