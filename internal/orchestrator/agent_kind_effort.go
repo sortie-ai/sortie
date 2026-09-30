@@ -22,7 +22,7 @@ func AgentKindEffortAdvisories(cfg config.ServiceConfig, metaOf func(kind string
 		if !registered || meta.EffortForwarding != registry.EffortNotForwarded {
 			continue
 		}
-		level, fault := registry.EffortSetting(config.AgentAdapterConfig(cfg, ref.Kind))
+		level, fault := registry.EffortSetting(config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: ref.Kind}, "").Passthrough)
 		if level == "" && fault == nil {
 			continue
 		}

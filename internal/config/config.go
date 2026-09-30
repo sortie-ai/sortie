@@ -69,8 +69,8 @@ type ServiceConfig struct {
 	// construction. Unexported: every access goes through
 	// [ServiceConfig.ExtensionSection], [ServiceConfig.ExtensionValue],
 	// or [ServiceConfig.SetExtensionSection], and a kind-scoped read
-	// goes through [AgentAdapterConfig], [ResolveAgentSettings], or
-	// [MergeAdapterExtensions] instead.
+	// goes through [ResolveAgentSettings] or [MergeAdapterExtensions]
+	// instead.
 	extensions map[string]any
 
 	// extensionsPreResolution maps a dotted-and-indexed extension field
@@ -115,8 +115,8 @@ func (c *ServiceConfig) SetDispatch(d DispatchConfig) {
 // ExtensionSection returns the top-level extension section named
 // name, or nil when the section is absent or is not a
 // map[string]any. name is a section name known at compile time, never
-// a kind; a kind-scoped read goes through [AgentAdapterConfig],
-// [ResolveAgentSettings], or [MergeAdapterExtensions] instead. The
+// a kind; a kind-scoped read goes through [ResolveAgentSettings] or
+// [MergeAdapterExtensions] instead. The
 // returned map is the one stored inside c, not a copy; callers MUST
 // treat it as read-only.
 func (c ServiceConfig) ExtensionSection(name string) map[string]any {
@@ -334,36 +334,13 @@ const (
 	ExtensionBlockNotAMapping
 )
 
-// AgentAdapterConfig returns the effective pass-through config map for
-// the agent adapter kind, the single producer both the offline
-// preflight validator and the adapter constructor read, so the two can
-// never disagree about what an adapter of that kind would see.
-//
-// The map carries exactly six keys derived from cfg.Agent's typed
-// fields: kind (set to the kind parameter rather than cfg.Agent.Kind,
-// so a dispatch-rule-routed kind resolves correctly), command,
-// turn_timeout_ms, read_timeout_ms, stall_timeout_ms, and
-// stop_grace_ms. Every other
-// [AgentConfig] field is intentionally excluded: those fields are
-// orchestrator-only, consumed through the typed [AgentConfig] before
-// this map reaches a constructor, and including them would shadow an
-// adapter extension key of the same name during the merge below.
-//
-// The kind-named sub-object under cfg.extensions, if present, is
-// merged in without overwriting any of the six keys above. The
-// returned map is freshly allocated on every call.
-func AgentAdapterConfig(cfg ServiceConfig, kind string) map[string]any {
-	m, _, _ := agentAdapterConfig(cfg, kind)
-	return m
-}
-
-// agentAdapterConfig builds the pass-through config map [AgentAdapterConfig]
-// returns and reports what the front matter carried under kind, so
-// [ResolveAgentSettings] can expose that value without a second,
-// unsanctioned read of the extensions field. description is empty
-// unless presence is [ExtensionBlockNotAMapping], in which case it
-// names the found value's shape in fixed, operator-facing vocabulary
-// that never includes a Go type name.
+// agentAdapterConfig builds the pass-through map of kind, freshly
+// allocated: six keys derived from cfg.Agent (kind is the parameter, not
+// cfg.Agent.Kind, so a rule-routed kind resolves correctly), with the
+// kind-named sub-object merged in without overwriting them. Other
+// [AgentConfig] fields stay out so they cannot shadow an extension key.
+// description names a non-mapping block in operator vocabulary, and is
+// empty otherwise.
 func agentAdapterConfig(cfg ServiceConfig, kind string) (m map[string]any, presence ExtensionBlockPresence, description string) {
 	m = map[string]any{
 		"kind":             kind,
@@ -386,14 +363,22 @@ func localCommandValue(a AgentConfig) any {
 	return a.Command
 }
 
+// SettingsSelection names the attempt whose settings
+// [ResolveAgentSettings] resolves: its dispatch-frozen agent kind and the
+// dispatch rule that routed it, empty when none did.
+type SettingsSelection struct {
+	Kind     string
+	RuleName string
+}
+
 // AgentSettings is the resolved answer to what one agent kind
-// resolves to for one session, returned by [ResolveAgentSettings].
+// resolves to for one attempt, returned by [ResolveAgentSettings].
 type AgentSettings struct {
 	Kind string
 
-	// Passthrough is the same map [AgentAdapterConfig] returns for
-	// Kind: freshly allocated on every call, and safe for the caller
-	// to keep.
+	// Passthrough is the settings block the session starts with, freshly
+	// allocated; nested values are shared with the configuration and
+	// read-only.
 	Passthrough map[string]any
 
 	// MCPConfigPath is the operator-declared MCP config path resolved
@@ -404,8 +389,7 @@ type AgentSettings struct {
 
 	// BlockPresence reports what the front matter carries under the
 	// top-level key named Kind. Passthrough is never empty and cannot
-	// answer this: AgentAdapterConfig seeds six keys before any
-	// merge.
+	// answer this: six derived keys are seeded before any merge.
 	BlockPresence ExtensionBlockPresence
 
 	// BlockDescription names, in fixed operator-facing vocabulary, the
@@ -415,12 +399,11 @@ type AgentSettings struct {
 	BlockDescription string
 }
 
-// ResolveAgentSettings resolves kind to the settings a session running
-// on that kind uses for one attempt. kind is the session's
-// dispatch-frozen agent kind, never the workflow default: a session
-// routed to a different kind than cfg.Agent.Kind resolves against the
-// routed kind's own block. Callers MUST call ResolveAgentSettings once
-// per attempt, never once per session, so a workflow reloaded between
+// ResolveAgentSettings resolves selection to the settings a session
+// running on selection.Kind uses for one attempt. A session routed to a
+// different kind than cfg.Agent.Kind resolves against the routed
+// kind's own block. Callers MUST call ResolveAgentSettings once per
+// attempt, never once per session, so a workflow reloaded between
 // attempts takes effect on the next one.
 //
 // A relative mcp_config value is resolved against workflowDir when
@@ -428,8 +411,8 @@ type AgentSettings struct {
 // are both returned unchanged. ResolveAgentSettings is pure: it reads
 // no environment variable and touches no file, and is safe for
 // concurrent use.
-func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) AgentSettings {
-	passthrough, presence, description := agentAdapterConfig(cfg, kind)
+func ResolveAgentSettings(cfg ServiceConfig, selection SettingsSelection, workflowDir string) AgentSettings {
+	passthrough, presence, description := agentAdapterConfig(cfg, selection.Kind)
 
 	var mcpConfigPath string
 	if v, ok := passthrough["mcp_config"].(string); ok {
@@ -440,7 +423,7 @@ func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) Ag
 	}
 
 	return AgentSettings{
-		Kind:             kind,
+		Kind:             selection.Kind,
 		Passthrough:      passthrough,
 		MCPConfigPath:    mcpConfigPath,
 		BlockPresence:    presence,
@@ -451,8 +434,7 @@ func ResolveAgentSettings(cfg ServiceConfig, kind string, workflowDir string) Ag
 // MergeAdapterExtensions copies the kind-named sub-object from
 // cfg's extensions into dst without overwriting an existing key. It
 // serves the tracker, CI-provider, and SCM adapter families; the
-// agent family goes through [AgentAdapterConfig] and
-// [ResolveAgentSettings] instead.
+// agent family goes through [ResolveAgentSettings] instead.
 func MergeAdapterExtensions(dst map[string]any, cfg ServiceConfig, kind string) {
 	mergeExtensionSection(dst, cfg.extensions, kind)
 }

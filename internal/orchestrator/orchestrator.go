@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
-	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // WorkflowManager provides the current workflow config and prompt template.
@@ -228,11 +226,6 @@ type Orchestrator struct {
 	preflightParams PreflightParams
 	observers       []Observer
 
-	// startupConfig is the configuration in force when the orchestrator
-	// was built. A session takes its kind's settings block from it, so a
-	// block edit reaches the agent only after a restart.
-	startupConfig config.ServiceConfig
-
 	// drainTimeout overrides the worker-drain wait when positive. Zero
 	// resolves to the ceiling [Orchestrator.drainRunningWorkers] derives
 	// from the current configuration.
@@ -360,9 +353,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 
 	handoffParkingLabel := defaultHandoffParkingLabel
 	var ciTriage config.ReactionTriageConfig
-	var startupConfig config.ServiceConfig
 	if params.WorkflowManager != nil {
-		startupConfig = params.WorkflowManager.Config()
 		handoffParkingLabel = resolveHandoffParkingLabel(params.WorkflowManager.Config().Reactions)
 		ciTriage = params.WorkflowManager.Config().CIFeedback.Triage
 	}
@@ -374,7 +365,6 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		agentAdapter:                      params.AgentAdapter,
 		agentAdapterByKind:                agentAdapterByKind,
 		workflowManager:                   params.WorkflowManager,
-		startupConfig:                     startupConfig,
 		store:                             params.Store,
 		metrics:                           metrics,
 		workerExitCh:                      make(chan WorkerResult, exitBuf),
@@ -568,29 +558,32 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			resolveSelection := func(frozen DispatchResolution, issue domain.Issue) DispatchResolution {
 				return retrySelection(cfg, templateHeld, frozen, issue)
 			}
+			resolveAttemptSettings := func(selection DispatchResolution, sshHost string) AttemptSettings {
+				return o.resolveAttemptSettings(cfg, selection, sshHost)
+			}
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:                   o.store,
-				TrackerAdapter:          o.trackerAdapter,
-				ActiveStates:            cfg.Tracker.ActiveStates,
-				TerminalStates:          cfg.Tracker.TerminalStates,
-				HandoffState:            cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS:       cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:            o.makeWorkerFn,
-				AgentAdapterByKind:      o.agentAdapterByKind,
-				ResolveSelection:        resolveSelection,
-				ResolveUsageDisposition: o.resolveUsageDisposition,
-				DefaultAgentKind:        cfg.Agent.Kind,
-				OnRetryFire:             o.onRetryFire,
-				Ctx:                     ctx,
-				Logger:                  o.logger,
-				MaxSessions:             cfg.Agent.MaxSessions,
-				MaxConsecutiveAbsences:  cfg.Agent.MaxConsecutiveAbsences,
-				HandoffParkingLabel:     o.handoffParkingLabel,
-				HandoffEvidencePolicy:   cfg.Tracker.HandoffEvidence,
-				MaxTokens:               cfg.Agent.MaxTokens,
-				Metrics:                 o.metrics,
-				HostPool:                o.hostPool,
-				WorkflowFile:            o.workflowFile(),
+				Store:                  o.store,
+				TrackerAdapter:         o.trackerAdapter,
+				ActiveStates:           cfg.Tracker.ActiveStates,
+				TerminalStates:         cfg.Tracker.TerminalStates,
+				HandoffState:           cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:      cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:           o.makeWorkerFn,
+				AgentAdapterByKind:     o.agentAdapterByKind,
+				ResolveSelection:       resolveSelection,
+				ResolveAttemptSettings: resolveAttemptSettings,
+				DefaultAgentKind:       cfg.Agent.Kind,
+				OnRetryFire:            o.onRetryFire,
+				Ctx:                    ctx,
+				Logger:                 o.logger,
+				MaxSessions:            cfg.Agent.MaxSessions,
+				MaxConsecutiveAbsences: cfg.Agent.MaxConsecutiveAbsences,
+				HandoffParkingLabel:    o.handoffParkingLabel,
+				HandoffEvidencePolicy:  cfg.Tracker.HandoffEvidence,
+				MaxTokens:              cfg.Agent.MaxTokens,
+				Metrics:                o.metrics,
+				HostPool:               o.hostPool,
+				WorkflowFile:           o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -842,14 +835,27 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !ok {
 			break
 		}
-		arrival, attribution := o.resolveUsageDisposition(resolution.AgentKind, host)
-		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, arrival))
+		attemptSettings := o.resolveAttemptSettings(cfg, resolution, host)
+		if len(attemptSettings.Refusals) > 0 {
+			o.hostPool.ReleaseHost(issue.ID)
+			o.logger.Error("agent settings refused",
+				slog.Any("error", PreflightResult{Errors: attemptSettings.Refusals}),
+				slog.String("rule_name", resolution.RuleName),
+				slog.String("agent_kind", resolution.AgentKind),
+				slog.String("check", attemptSettings.Refusals[0].Check),
+				slog.String("diagnostic", attemptSettings.Refusals[0].Message),
+			)
+			o.metrics.IncDispatches(outcomeError)
+			o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
+			continue
+		}
+		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter, attemptSettings))
 		if entry := o.state.Running[issue.ID]; entry != nil {
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
 			entry.TemplateID = resolution.TemplateID
-			entry.UsageArrival, entry.UsageAttribution = arrival, attribution
+			entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 			freezeIssueTokenBaseline(ctx, o.state, issue.ID, o.store, o.logger)
 		}
 		o.metrics.IncDispatches(outcomeSuccess)
@@ -940,11 +946,13 @@ func (o *Orchestrator) recordCandidateHold(decision CandidateDecision, pass *Tic
 
 // makeWorkerFn returns a [WorkerFunc] closure running [RunWorkerAttempt]
 // with the orchestrator's shared dependencies. agentKind, templateID, and
-// adapter carry the rule-resolved selection from the caller; usageArrival
-// must be the value the caller freezes onto the running entry; reactionKind
-// selects the worker posture. resumeSessionID must be read by the caller on
-// the event loop before the goroutine starts, to avoid a Running-map race.
-func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, usageArrival registry.UsageArrival) WorkerFunc {
+// adapter carry the rule-resolved selection from the caller;
+// attemptSettings carries the settings resolved for this attempt, whose
+// usage arrival must be the value the caller freezes onto the running
+// entry; reactionKind selects the worker posture. resumeSessionID must be
+// read by the caller on the event loop before the goroutine starts, to
+// avoid a Running-map race.
+func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, attemptSettings AttemptSettings) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
 	sshPassEnv := o.sshPassEnv
 	sshDisallowPassEnv := o.sshDisallowPassEnv
@@ -967,8 +975,8 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			PromptTemplateByIDFunc: o.workflowManager.PromptTemplateByID,
 			TemplateID:             templateID,
 			AgentKind:              agentKind,
-			UsageArrival:           usageArrival,
-			AgentSettings:          config.ResolveAgentSettings(o.startupConfig, agentKind, filepath.Dir(o.workflowManager.WorkflowAbsPath())),
+			UsageArrival:           attemptSettings.UsageArrival,
+			AgentSettings:          attemptSettings.Settings,
 			OnEvent: func(issueID string, event domain.AgentEvent) {
 				select {
 				case o.agentEventCh <- agentEventMsg{IssueID: issueID, Event: event}:
@@ -1044,19 +1052,6 @@ func (o *Orchestrator) workflowFile() string {
 		return o.workflowFileFunc()
 	}
 	return ""
-}
-
-// resolveUsageDisposition resolves the usage-reporting disposition for a
-// session of the given kind and SSH host (empty for local), reading the
-// registered kind's declaration and the passthrough config in force. An
-// unknown kind returns the undeclared pair.
-func (o *Orchestrator) resolveUsageDisposition(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution) {
-	meta, registered := o.preflightParams.AgentRegistry.Meta(kind)
-	if !registered {
-		return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
-	}
-	settings := config.ResolveAgentSettings(o.workflowManager.Config(), kind, filepath.Dir(o.workflowManager.WorkflowAbsPath()))
-	return meta.UsageDisposition(settings.Passthrough, sshHost != "")
 }
 
 // onRetryFire delivers a retry timer event to the event loop channel, using

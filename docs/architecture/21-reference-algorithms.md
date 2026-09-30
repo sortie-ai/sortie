@@ -227,8 +227,15 @@ function dispatch_issue(issue, state, attempt):
     issue, state.dispatch_cfg, state.default_agent_kind, state.default_template_id
   )
 
+  // The selection is frozen per claim; the settings are resolved for every attempt.
+  attempt_settings = resolve_attempt_settings(state.cfg, (agent_kind, rule_name), ssh_host)
+  if attempt_settings.refusals is not empty:
+    release_host(issue.id)
+    log_error("agent settings refused")
+    return state
+
   worker = spawn_worker(
-    fn -> run_agent_attempt(issue, attempt, parent_orchestrator_pid) end
+    fn -> run_agent_attempt(issue, attempt, attempt_settings.settings, parent_orchestrator_pid) end
   )
 
   if worker spawn failed:
@@ -267,10 +274,12 @@ function dispatch_issue(issue, state, attempt):
 
 The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see §5.3.9 for match semantics and the `ResolveRule` function for the full algorithm. The resolved triple is recorded on `RunningEntry` and rides through retries and reaction-driven continuations. Each retry timer selects again from the configuration in force and keeps the recorded triple while that configuration still launches it (`on_retry_timer` in §16.6; §5.3.9).
 
+`resolve_attempt_settings` resolves the top-level settings block of the frozen kind and returns it, the usage-reporting disposition it produces, and the error-severity settings checks the block fails. It runs on the event loop once per attempt, from the configuration snapshot the dispatching lane already holds, and the worker receives the result by value. The first dispatch, every retry, and every reaction continuation resolve it the same way (§8.4).
+
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 
 ```text
-function run_agent_attempt(issue, attempt, orchestrator_channel):
+function run_agent_attempt(issue, attempt, settings, orchestrator_channel):
   cfg = current_config()
   turn_timeout_ms = cfg.agent.turn_timeout_ms  // snapshot at attempt start; bounds every turn below, including the self-review phase's turns (not re-read per turn)
 
@@ -298,7 +307,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
   // Credential-verification step (§10.9): a separate session, one
   // fixed request, stopped, before the working session starts.
   notify("verifying the agent credential")
-  verify_result, verify_err = agent_adapter.verify_credential(workspace=workspace.path)
+  verify_result, verify_err = agent_adapter.verify_credential(workspace=workspace.path, settings=settings.passthrough)
   fold verify_result into the run's usage mirror
   offset = the mirror's componentwise watermark
   if verify_err failed:
@@ -306,7 +315,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
     fail_worker("agent session start error", verify_err)
   log_info("agent credential verified", duration_ms)
 
-  session = agent_adapter.start_session(workspace=workspace.path)
+  session = agent_adapter.start_session(workspace=workspace.path, settings=settings.passthrough)
   if session failed:
     run_hook_best_effort("after_run", workspace.path)
     fail_worker("agent session startup error")
@@ -785,9 +794,20 @@ on_retry_timer(issue_id, state):
       session_id: retry_entry.session_id
     })
 
+  attempt_settings = resolve_attempt_settings(state.cfg, selection, ssh_host)
+  if attempt_settings.refusals is not empty:
+    log_error("retry agent settings refused")
+    return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
+      identifier: issue.identifier,
+      error: "retry agent settings refused",
+      session_id: retry_entry.session_id
+    })
+
   return dispatch_issue(issue, state, attempt=retry_entry.attempt,
-    resume_session_id=resume_session_id, selection=selection)
+    resume_session_id=resume_session_id, selection=selection, attempt_settings=attempt_settings)
 ```
+
+A changed settings result never clears `resume_session_id`; only a changed kind or template does.
 
 `retry_selection` keeps the frozen triple, with a retired kind replaced by its replacement kind, while the kind is still reachable through `agent.kind`, `dispatch.default.agent`, or a rule and the template is still held, and otherwise returns `resolve_rule` over the configuration in force (§5.3.9, §8.4).
 

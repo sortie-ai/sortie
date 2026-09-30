@@ -894,7 +894,7 @@ func TestMakeWorkerFn_SSHEnvNamesJoinsRegistryAndOperatorLists(t *testing.T) {
 		Issue:      issue,
 	}
 
-	wfn := o.makeWorkerFn("", "user@stand-in-host", kind, "", "", nil, registry.UsageArrivalUndeclared)
+	wfn := o.makeWorkerFn("", "user@stand-in-host", kind, "", "", nil, AttemptSettings{})
 
 	exitDone := make(chan struct{})
 	go func() {
@@ -1793,7 +1793,7 @@ func TestOrchestrator_TurnCountTracksWorkerTally(t *testing.T) {
 
 			// Built before Run, whose first tick writes
 			// o.sshStrictHostKeyChecking concurrently.
-			wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+			wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 
 			ctx, cancel := context.WithCancel(context.Background())
 			runDone := make(chan struct{})
@@ -1875,7 +1875,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -1935,7 +1935,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -1989,7 +1989,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			SessionID:  "resume-sess-42",
 		}
 
-		wfn := o.makeWorkerFn("resume-sess-42", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("resume-sess-42", "", "", "", "", nil, AttemptSettings{})
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -2043,7 +2043,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -2095,7 +2095,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -2166,7 +2166,7 @@ func TestMakeWorkerFn_DerivesPostureFromReactionKind(t *testing.T) {
 			})
 
 			issue := workerTestIssue()
-			wfn := o.makeWorkerFn("", "", "", "", tt.reactionKind, nil, registry.UsageArrivalUndeclared)
+			wfn := o.makeWorkerFn("", "", "", "", tt.reactionKind, nil, AttemptSettings{})
 
 			exitDone := make(chan struct{})
 			go func() {
@@ -9627,26 +9627,19 @@ func TestReconcilePasses_DoNotBlockOnInFlightTriage(t *testing.T) {
 }
 
 type sessionRecorder struct {
-	mu       sync.Mutex
-	sessions []domain.StartSessionParams
-	adapter  *mockAgentAdapter
+	adapter *startParamsRecorder
 }
 
 func newSessionRecorder(kind string) *sessionRecorder {
-	r := &sessionRecorder{}
-	r.adapter = &mockAgentAdapter{startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-		r.mu.Lock()
-		r.sessions = append(r.sessions, params)
-		r.mu.Unlock()
-		return domain.Session{ID: "sess-" + kind}, nil
-	}}
-	return r
+	return &sessionRecorder{adapter: &startParamsRecorder{mockAgentAdapter: mockAgentAdapter{
+		startSessionFn: func(context.Context, domain.StartSessionParams) (domain.Session, error) {
+			return domain.Session{ID: "sess-" + kind}, nil
+		},
+	}}}
 }
 
 func (r *sessionRecorder) started() []domain.StartSessionParams {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.sessions)
+	return slices.DeleteFunc(r.adapter.recorded(), func(p domain.StartSessionParams) bool { return p.CredentialVerification })
 }
 
 type runTracker struct {
@@ -9681,6 +9674,9 @@ type runHarness struct {
 	tracker   *runTracker
 	logs      *lockedBuf
 	recorders map[string]*sessionRecorder
+	store     *stubStore
+	metrics   domain.Metrics
+	meta      map[string]registry.AgentMeta
 
 	mu          sync.Mutex
 	unavailable map[string]bool
@@ -9715,6 +9711,7 @@ func newRunHarness(t *testing.T, cfg config.ServiceConfig, kinds ...string) *run
 		tracker:     &runTracker{mockTrackerAdapter: &mockTrackerAdapter{}, issues: map[string]domain.Issue{}},
 		logs:        &lockedBuf{},
 		recorders:   map[string]*sessionRecorder{},
+		store:       &stubStore{},
 		unavailable: map[string]bool{},
 	}
 	for _, kind := range kinds {
@@ -9737,8 +9734,11 @@ func (h *runHarness) build() {
 	}
 	regs := passingPreflightRegistries()
 	regs.AgentRegistry = &stubAgentRegistry{
-		getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
-		metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, false },
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(kind string) (registry.AgentMeta, bool) {
+			meta, ok := h.meta[kind]
+			return meta, ok
+		},
 	}
 	cfg := h.wm.Config()
 	h.o = NewOrchestrator(OrchestratorParams{
@@ -9756,7 +9756,8 @@ func (h *runHarness) build() {
 			return recorder.adapter, nil
 		},
 		WorkflowManager: h.wm,
-		Store:           &stubStore{},
+		Store:           h.store,
+		Metrics:         h.metrics,
 		PreflightParams: PreflightParams{
 			ReloadWorkflow:  func() error { return nil },
 			ConfigFunc:      h.wm.Config,
@@ -10292,6 +10293,110 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 				if got["dispatch_agent_kind"] != tt.wantMovedTo.AgentKind || got["dispatch_template_id"] != tt.wantMovedTo.TemplateID || got["dispatch_rule_name"] != tt.wantMovedTo.RuleName ||
 					got["agent_kind"] != tt.frozen.AgentKind || got["template_id"] != tt.frozen.TemplateID || got["rule_name"] != tt.frozen.RuleName {
 					t.Errorf("selection record = %v, want frozen {%q %q %q} and dispatched %+v", got, tt.frozen.AgentKind, tt.frozen.TemplateID, tt.frozen.RuleName, tt.wantMovedTo)
+				}
+			})
+		}
+	}
+}
+
+func interactiveModeRaw(withBadBlock bool) map[string]any {
+	raw := map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}}
+	if withBadBlock {
+		raw["kind-a"] = map[string]any{"permission_mode": "default"}
+	}
+	withSSHHosts(raw)
+	return raw
+}
+
+func TestHandleTick_RefusedSettingsBlockStartsNothing(t *testing.T) {
+	t.Parallel()
+
+	spy := &spyMetrics{}
+	h := newRunHarness(t, runConfig(t, interactiveModeRaw(true)), "kind-a")
+	h.metrics = spy
+	h.meta = map[string]registry.AgentMeta{"kind-a": settingsMeta()}
+	h.tracker.candidates = []domain.Issue{candidate("id-1", "A-1")}
+	h.build()
+	clean := runConfig(t, interactiveModeRaw(false))
+	h.o.preflightParams.ConfigFunc = func() config.ServiceConfig { return clean }
+
+	h.o.handleTick(context.Background())
+
+	if started := h.started(); len(started) != 0 || len(h.state.Running) != 0 || len(h.store.runHistories) != 0 {
+		t.Errorf("sessions, Running, run_history rows = %v, %v, %+v, want none for a refused block", started, h.state.Running, h.store.runHistories)
+	}
+	if used := h.o.hostPool.Snapshot()["host-1"]; used != 0 {
+		t.Errorf("host-1 usage = %d, want the acquired host released", used)
+	}
+	if !slices.Equal(spy.dispatches, []string{outcomeError}) {
+		t.Errorf("dispatch outcomes = %v, want one %q", spy.dispatches, outcomeError)
+	}
+	requireOneRecord(t, h.logs, "agent settings refused", map[string]any{"level": "ERROR", "agent_kind": "kind-a", "check": "kind-a.permission_mode.interactive"})
+
+	h.wm.setConfig(clean)
+	h.o.handleTick(context.Background())
+
+	if started := h.waitForSessions(1); len(started["kind-a"]) != 1 {
+		t.Errorf("sessions started after the block was fixed = %v, want the candidate dispatched on the next tick", started)
+	}
+}
+
+func TestRun_RetryAppliesTheSettingsInForceAtItsStart(t *testing.T) {
+	t.Parallel()
+
+	kindA := RetryEntry{Attempt: 1, AgentKind: "kind-a", SessionID: "sess-old"}
+	topLevelChanged := func() map[string]any {
+		return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}, "kind-a": map[string]any{"model": "new-model"}}
+	}
+
+	rows := []struct {
+		name                            string
+		raw                             func() map[string]any
+		meta                            bool
+		frozen                          RetryEntry
+		issue                           domain.Issue
+		modes                           []string
+		wantKind, wantModel, wantEffort string
+		wantRefusal                     bool
+	}{
+		{name: "top-level block changed since the frozen attempt", raw: topLevelChanged, frozen: kindA, issue: candidate("id-retry", "R-1"), wantKind: "kind-a", wantModel: "new-model"},
+		{name: "block a reload made refusable", modes: []string{"timer"}, meta: true, raw: func() map[string]any { return interactiveModeRaw(true) }, frozen: kindA, issue: candidate("id-retry", "R-1"), wantRefusal: true},
+	}
+
+	for _, tt := range rows {
+		modes := tt.modes
+		if modes == nil {
+			modes = []string{"timer", "recovered"}
+		}
+		for _, mode := range modes {
+			t.Run(tt.name+", "+mode, func(t *testing.T) {
+				t.Parallel()
+
+				h := newRunHarness(t, runConfig(t, tt.raw()), "kind-a", "kind-b")
+				h.tracker.issues["id-retry"] = tt.issue
+				if tt.meta {
+					h.meta = map[string]registry.AgentMeta{"kind-a": settingsMeta()}
+				}
+				seedRetry(h, mode, tt.frozen)
+
+				h.run()
+				if tt.wantRefusal {
+					h.waitForLog("retry agent settings refused")
+					h.stop()
+					if _, claimed := h.state.Claimed["id-retry"]; len(h.started()) != 0 || !claimed {
+						t.Errorf("sessions started, claim kept = %v, %v, want none and the claim kept for a refused retry", h.started(), claimed)
+					}
+					return
+				}
+				sessions := h.waitForSessions(1)
+				h.stop()
+
+				kind, params := sessionOfWorkspace(t, sessions, "R-1")
+				model, _ := params.Settings["model"].(string)
+				effort, _ := params.Settings["effort"].(string)
+				if kind != tt.wantKind || model != tt.wantModel || effort != tt.wantEffort || params.ResumeSessionID != "sess-old" {
+					t.Errorf("retry adapter, model, effort, resume = %q, %q, %q, %q, want %q, %q, %q, %q: a settings change never clears the resume identifier",
+						kind, model, effort, params.ResumeSessionID, tt.wantKind, tt.wantModel, tt.wantEffort, "sess-old")
 				}
 			})
 		}

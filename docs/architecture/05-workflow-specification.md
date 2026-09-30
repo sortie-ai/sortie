@@ -242,7 +242,7 @@ Fields:
 
 Adapter-specific pass-through config:
 
-Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator hands the sub-object to the adapter as a session input (§10.1); an adapter holds none of it between sessions. The keys `model` and `effort` mean the same in the block of every kind that reads them (§10.1): a string handed to the runtime as written, where an absent key, a null, and an empty string all leave the runtime's own default in charge. An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse, or to warn about, a value of that sub-object.
+Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator resolves the sub-object for each attempt and hands it to the adapter as a session input (§10.1); an adapter holds none of it between sessions. The keys `model` and `effort` mean the same in the block of every kind that reads them (§10.1): a string handed to the runtime as written, where an absent key, a null, and an empty string all leave the runtime's own default in charge. A change to a block applies from the next attempt without a restart, while a running session keeps the block it started with (§5.3.9). An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse, or to warn about, a value of that sub-object.
 
 #### 5.3.6 `db_path` (string, optional)
 
@@ -441,7 +441,7 @@ First-match wins: evaluation stops at the first rule whose `match` block succeed
 
 The default agent kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. It is the kind every selection without an agent of its own runs, and the only kind that launches `agent.command` as written.
 
-The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
+The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. The selection is frozen per claim; the settings are not. Every attempt, whether the first dispatch, a retry, or a reaction continuation, resolves its settings block from the configuration in force when it starts. A running session never changes settings. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
 
 - The frozen selection stands, with its session identifier, when its kind is still named by `agent.kind`, `dispatch.default.agent`, or a rule, and its template is still held. The kind launches its own command as the configuration now states it.
 - A frozen kind that a conversion record retired is replaced by its replacement kind, keeping the frozen template and rule name.
@@ -449,7 +449,9 @@ The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry
 - A selection that differs from the frozen one in kind or template starts without a resume session identifier, because session identifiers are adapter-specific. The continuation context, reaction kind, attempt number, and last SSH host carry over.
 - When the selected kind's adapter is unavailable because its construction failed at startup, the retry is rescheduled with backoff and keeps its claim and continuation (§8.4).
 
-A selection the retry changes emits one `Info` record (§13.1).
+A change of resolved settings between attempts never clears the session identifier; only a changed kind or template does. A selection the retry changes emits one `Info` record (§13.1).
+
+An attempt whose resolved block fails an error-severity settings check starts no session (§8.4).
 
 **Template lifecycle**
 

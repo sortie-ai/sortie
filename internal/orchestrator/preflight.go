@@ -208,27 +208,13 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// mode for every session this configuration can produce.
 	remote := len(ParseWorkerConfig(cfg.ExtensionSection("worker"), cfg.ExtensionEnvRefPaths("worker")).SSHHosts) > 0
 
-	// tokenRatePricedKinds is the set of kind strings token_rates
-	// prices, read once per validation call. Only the key set is
-	// needed here; the rate values themselves belong to internal/server,
-	// which internal/orchestrator must not import.
-	var tokenRatePricedKinds map[string]struct{}
-	if raw, present := cfg.ExtensionValue("token_rates"); present {
-		if topMap, ok := raw.(map[string]any); ok {
-			tokenRatePricedKinds = make(map[string]struct{}, len(topMap))
-			for kind := range topMap {
-				tokenRatePricedKinds[kind] = struct{}{}
-			}
-		}
-	}
-
 	// Adapter-specific agent config validation, for every distinct kind
 	// this configuration can reach. A registered kind the configuration
 	// never references is skipped, because that would report a fault in
 	// a block no run reads.
 	for _, ref := range orderedUniqueAgentKinds(cfg) {
 		agentMeta, registered := params.AgentRegistry.Meta(ref.Kind)
-		settings := config.ResolveAgentSettings(cfg, ref.Kind, "")
+		settings := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: ref.Kind}, "")
 
 		if registered && agentMeta.RequiresCommand && !launchesExecutable(cfg, agentMeta, ref.Kind, remote) {
 			errs = append(errs, PreflightError{
@@ -258,19 +244,6 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			}
 		}
 
-		// A kind whose adapter never hands the generated MCP config
-		// path to the agent process cannot make use of an mcp_config
-		// value in its own block. This is evaluated for every kind,
-		// including one with no config validator (for example
-		// "mock"), so it is not folded behind the early continue
-		// below.
-		if registered && agentMeta.MCPInjection == registry.MCPInjectionUnsupported && settings.MCPConfigPath != "" {
-			warns = append(warns, PreflightWarning{
-				Check:   "agent.mcp_config",
-				Message: "mcp_config in the " + strconv.Quote(ref.Kind) + " block cannot reach the agent: this agent kind receives no MCP configuration",
-			})
-		}
-
 		// A kind whose declared disposition delivers no channel on a
 		// local launch can neither call nor be told about Sortie's
 		// tools for any of its sessions.
@@ -281,60 +254,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			})
 		}
 
-		// A kind whose disposition reports no usage figure for the
-		// sessions this configuration produces makes a configured
-		// token ceiling inert and a priced rate un-billable. Each
-		// setting has its own remedy, so each earns its own check key.
-		if registered {
-			arrival, _ := agentMeta.UsageDisposition(settings.Passthrough, remote)
-			if !arrival.ReportsAnyFigure() {
-				if cfg.Agent.MaxTokens != 0 {
-					warns = append(warns, PreflightWarning{
-						Check: "agent.kind.no_usage_reporting",
-						Message: "agent.max_tokens is set but agent kind " + strconv.Quote(ref.Kind) +
-							" reports no token usage for the sessions this configuration produces: the per-issue token ceiling can never be reached for it",
-					})
-				}
-				if _, priced := tokenRatePricedKinds[ref.Kind]; priced {
-					warns = append(warns, PreflightWarning{
-						Check: "agent.kind.no_cost_estimate",
-						Message: "token_rates prices agent kind " + strconv.Quote(ref.Kind) +
-							", which reports no token usage for the sessions this configuration produces: no cost can be estimated for it",
-					})
-				}
-			}
-		}
-
-		// A kind whose declaration reports a blocking key under this
-		// configuration's passthrough cannot resume a session, but
-		// Sortie re-dispatches an issue with its earlier session on
-		// every retry, continuation, stall, or restart.
-		if registered && agentMeta.SessionResumeBlockedBy != nil {
-			if key := agentMeta.SessionResumeBlockedBy(settings.Passthrough); key != "" {
-				errs = append(errs, PreflightError{
-					Check: "agent.kind.session_resume",
-					Message: ref.Kind + "." + key + " stops this agent kind from resuming a session across separate agent launches, " +
-						"but Sortie re-dispatches an issue with its earlier session after a retry, a continuation, a stall, or a restart, " +
-						"and every such turn fails. Change " + ref.Kind + "." + key + ", or use an agent kind that can resume a session.",
-				})
-			}
-		}
-
-		if !registered || agentMeta.ValidateAgentConfig == nil {
-			continue
-		}
-		fields := registry.AgentConfigFields{
-			Kind:        ref.Kind,
-			Passthrough: settings.Passthrough,
-		}
-		for _, d := range agentMeta.ValidateAgentConfig(fields) {
-			switch d.Severity {
-			case "warning":
-				warns = append(warns, PreflightWarning{Check: d.Check, Message: d.Message})
-			default:
-				errs = append(errs, PreflightError{Check: d.Check, Message: d.Message})
-			}
-		}
+		settingsErrs, settingsWarns := settingsDiagnostics(cfg, agentMeta, registered, settings, remote)
+		errs = append(errs, settingsErrs...)
+		warns = append(warns, settingsWarns...)
 	}
 
 	// Workspace root must exist and be writable.

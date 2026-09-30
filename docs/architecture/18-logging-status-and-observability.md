@@ -22,6 +22,8 @@ A configuration advisory is recorded once, at construction or at workflow load, 
 
 A retry whose selection the configuration in force changes emits one `Info` record, message `"retry dispatching on the selection the configuration in force gives it"`, carrying `agent_kind`, `template_id`, and `rule_name` of the frozen selection and `dispatch_agent_kind`, `dispatch_template_id`, and `dispatch_rule_name` of the selection it dispatches on. A retry that finds the adapter of its selected kind unavailable emits one `Error` record, message `"retry agent kind unavailable"`, carrying `rule_name`, `agent_kind`, `attempt`, `delay_ms`, and `error`, and is rescheduled (Section 8.4).
 
+An attempt whose resolved settings block fails an error-severity check emits one `Error` record and starts no session: `"agent settings refused"` on the first dispatch, and `"retry agent settings refused"` on the retry lane, carrying `attempt` and `delay_ms` as well. Both carry `error` (the preflight result naming every failed check), `rule_name`, `agent_kind`, and the first failed check's `check` and `diagnostic`.
+
 Handoff-evidence records are part of the required operator surface:
 
 - A withheld verdict whose verification read (§11.5, §14.2) does not find the issue terminal emits a `Warn` record naming the verdict and carrying `turns_completed` plus the resulting `consecutive_absences` count. The standard issue context fields identify the affected issue.
