@@ -4484,6 +4484,7 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReacti
 	store := &mockExitStore{}
 	tracker := &mockTrackerAdapter{}
 	state := exitStateWithIssue(t, "HO-R1", "In Progress")
+	state.Running["HO-R1"].RuleSettingsApplied = true
 	params := defaultExitParams(t, store)
 	params.TrackerAdapter = tracker
 	params.HandoffState = "In Review"
@@ -4515,6 +4516,7 @@ func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReacti
 	if !ok {
 		t.Fatal("PendingReactions[HO-R1:review] missing after successful handoff with PR metadata")
 	}
+	requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 	reviewData, ok := pr.KindData.(*ReviewReactionData)
 	if !ok {
 		t.Fatalf("KindData type = %T, want *ReviewReactionData", pr.KindData)
@@ -6313,6 +6315,7 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 
 	store := &mockExitStore{}
 	state := exitState(t, "CI-ISS-1", nil)
+	state.Running["CI-ISS-1"].RuleSettingsApplied = true
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
 	params.SCMAdapter = &scmAdapterStubExit{}
@@ -6330,6 +6333,7 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	if !ok {
 		t.Fatal("PendingReactions[CI-ISS-1:ci] missing; want entry after normal exit with pull request identity")
 	}
+	requireRuleFlagCarried(t, entry.RuleSettingsApplied)
 	ciData, ok := entry.KindData.(*CIReactionData)
 	if !ok {
 		t.Fatal("KindData is not *CIReactionData")
@@ -6837,6 +6841,7 @@ func TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction(t *testing.T
 
 	store := &mockExitStore{}
 	state := exitState(t, "AM-1", nil)
+	state.Running["AM-1"].RuleSettingsApplied = true
 	params := defaultExitParams(t, store)
 	params.SCMAdapter = &scmAdapterStubExit{}
 	params.AutoMergeReactionConfigured = true
@@ -6854,6 +6859,7 @@ func TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction(t *testing.T
 	if !ok {
 		t.Fatal("PendingReactions[AM-1:merge] missing after normal exit with PR metadata")
 	}
+	requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 	mergeData, ok := pr.KindData.(*AutoMergeReactionData)
 	if !ok {
 		t.Fatalf("KindData type = %T, want *AutoMergeReactionData", pr.KindData)
@@ -7084,6 +7090,7 @@ func TestHandleWorkerExit_BotReviewEnqueue_PopulatesPendingReaction(t *testing.T
 
 	store := &mockExitStore{}
 	state := exitState(t, "BR-1", nil)
+	state.Running["BR-1"].RuleSettingsApplied = true
 	params := defaultExitParams(t, store)
 	params.SCMAdapter = &scmAdapterStubExit{}
 	params.BotReviewReactionConfigured = true
@@ -7101,6 +7108,7 @@ func TestHandleWorkerExit_BotReviewEnqueue_PopulatesPendingReaction(t *testing.T
 	if !ok {
 		t.Fatal("PendingReactions[BR-1:bot-review] missing after normal exit with PR metadata")
 	}
+	requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 	if pr.Kind != ReactionKindBotReview {
 		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindBotReview)
 	}
@@ -7362,6 +7370,7 @@ func TestHandleWorkerExit_MergeConflictEnqueue_PopulatesPendingReaction(t *testi
 
 	store := &mockExitStore{}
 	state := exitState(t, "MC-1", nil)
+	state.Running["MC-1"].RuleSettingsApplied = true
 	params := defaultExitParams(t, store)
 	params.SCMAdapter = &scmAdapterStubExit{}
 	params.MergeConflictReactionConfigured = true
@@ -7379,6 +7388,7 @@ func TestHandleWorkerExit_MergeConflictEnqueue_PopulatesPendingReaction(t *testi
 	if !ok {
 		t.Fatal("PendingReactions[MC-1:merge-conflict] missing after normal exit with PR metadata")
 	}
+	requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 	if pr.Kind != ReactionKindMergeConflict {
 		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeConflict)
 	}
@@ -7581,6 +7591,7 @@ func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
 
 		store := &mockExitStore{}
 		state := exitState(t, "LR-1", nil)
+		state.Running["LR-1"].RuleSettingsApplied = true
 		params := defaultExitParams(t, store)
 		params.SCMAdapter = &scmAdapterStubExit{}
 		params.LabelReviewReactionConfigured = true
@@ -7598,6 +7609,7 @@ func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
 		if !ok {
 			t.Fatal("PendingReactions[LR-1:label-review] missing after normal exit with PR metadata")
 		}
+		requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 		if pr.Kind != ReactionKindLabelReview {
 			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelReview)
 		}
@@ -7825,6 +7837,7 @@ func TestHandleWorkerExit_LabelFixEnqueue(t *testing.T) {
 
 		store := &mockExitStore{}
 		state := exitState(t, "LF-1", nil)
+		state.Running["LF-1"].RuleSettingsApplied = true
 		state.Running["LF-1"].AgentKind = "mock"
 		state.Running["LF-1"].RuleName = "default"
 		state.Running["LF-1"].TemplateID = "tmpl-1"
@@ -7845,6 +7858,7 @@ func TestHandleWorkerExit_LabelFixEnqueue(t *testing.T) {
 		if !ok {
 			t.Fatal("PendingReactions[LF-1:label-fix] missing after normal exit with branch-bearing PR metadata")
 		}
+		requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 		if pr.Kind != ReactionKindLabelFix {
 			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelFix)
 		}
@@ -8124,6 +8138,7 @@ func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
 
 		store := &mockExitStore{}
 		state := exitState(t, "MGC-1", nil)
+		state.Running["MGC-1"].RuleSettingsApplied = true
 		params := defaultExitParams(t, store)
 		params.SCMAdapter = &scmAdapterStubExit{}
 		params.MergeCompletionReactionConfigured = true
@@ -8141,6 +8156,7 @@ func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
 		if !ok {
 			t.Fatal("PendingReactions[MGC-1:merge-completion] missing after normal exit with PR metadata")
 		}
+		requireRuleFlagCarried(t, pr.RuleSettingsApplied)
 		if pr.Kind != ReactionKindMergeCompletion {
 			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeCompletion)
 		}
@@ -9850,5 +9866,45 @@ func TestHandleWorkerExit_UnreachableFromRuntimeSnapshot(t *testing.T) {
 	}
 	if len(snap.Running) != 0 {
 		t.Errorf("len(snap.Running) = %d, want 0 after HandleWorkerExit", len(snap.Running))
+	}
+}
+
+func requireRuleFlagCarried(t *testing.T, got bool) {
+	t.Helper()
+	if !got {
+		t.Error("PendingReaction.RuleSettingsApplied = false, want the exiting entry's flag carried")
+	}
+}
+
+func TestHandleWorkerExit_CarriesTheRuleSettingsFlagThroughRetries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result WorkerResult
+	}{
+		{name: "error retry", result: WorkerResult{ExitKind: WorkerExitError, Error: fmt.Errorf("something transient")}},
+		{name: "continuation retry", result: WorkerResult{ExitKind: WorkerExitNormal, SessionID: "sess-1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := exitState(t, "FLAG-1", nil)
+			state.Running["FLAG-1"].RuleName, state.Running["FLAG-1"].RuleSettingsApplied = "cheap", true
+			tt.result.IssueID, tt.result.Identifier, tt.result.AgentAdapter = "FLAG-1", "FLAG-1-ident", "mock"
+
+			HandleWorkerExit(state, tt.result, defaultExitParams(t, &mockExitStore{}))
+
+			retry, ok := state.RetryAttempts["FLAG-1"]
+			if !ok {
+				t.Fatal("RetryAttempts[FLAG-1] missing, want a scheduled retry")
+			}
+			defer retry.TimerHandle.Stop()
+			if !retry.RuleSettingsApplied || retry.RuleName != "cheap" {
+				t.Errorf("RetryEntry rule, flag = %q, %v, want %q, true", retry.RuleName, retry.RuleSettingsApplied, "cheap")
+			}
+		})
 	}
 }

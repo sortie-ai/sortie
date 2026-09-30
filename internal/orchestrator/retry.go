@@ -174,6 +174,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ReactionKind:        popped.ReactionKind,
 			AgentKind:           popped.AgentKind,
 			RuleName:            popped.RuleName,
+			RuleSettingsApplied: popped.RuleSettingsApplied,
 			TemplateID:          popped.TemplateID,
 			Logger:              log,
 		}, params.OnRetryFire)
@@ -637,6 +638,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	if ruleName == popped.RuleName && popped.RuleSettingsApplied && attemptSettings.Settings.RuleName == "" {
+		log.Info("rule settings no longer present, attempt runs on the kind's top-level settings",
+			slog.String("rule_name", ruleName),
+			slog.String("agent_kind", agentKind),
+		)
+	}
+
 	// NextAttempt increments only on the next worker exit, not at dispatch,
 	// so pass the popped attempt as-is.
 	attempt := popped.Attempt
@@ -649,6 +657,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = agentKind
 		entry.RuleName = ruleName
+		entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 		entry.TemplateID = templateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind

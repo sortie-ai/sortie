@@ -646,6 +646,7 @@ func TestReconcileReviewComments_NewFingerprint_Dispatches(t *testing.T) {
 
 	state := stateWithReviewReaction(t, "ISS-R-8", 10)
 	rkey := ReactionKey("ISS-R-8", ReactionKindReview)
+	state.PendingReactions[rkey].RuleSettingsApplied = true
 
 	// Comment submitted 5 minutes ago, outside the 30s debounce window (defaultReviewConfig).
 	comments := []domain.ReviewComment{
@@ -672,6 +673,9 @@ func TestReconcileReviewComments_NewFingerprint_Dispatches(t *testing.T) {
 		t.Fatal("retry not scheduled after review dispatch; want scheduled")
 	}
 	retry := state.RetryAttempts["ISS-R-8"]
+	if !retry.RuleSettingsApplied {
+		t.Error("RetryEntry.RuleSettingsApplied = false, want the pending reaction's flag carried")
+	}
 	if retry.ContinuationContext == nil {
 		t.Error("RetryEntry.ContinuationContext is nil; want review_comments map")
 	}

@@ -2,11 +2,15 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // DispatchConfig holds the parsed dispatch rule set and default
@@ -43,6 +47,14 @@ type DispatchRule struct {
 	// IsCatchAll is true when Match carries no keys. Set by the
 	// builder and immutable thereafter.
 	IsCatchAll bool
+
+	// SettingsKind is the kind the rule's settings block is named for,
+	// empty when the rule carries none.
+	SettingsKind string
+
+	// Settings is the rule's settings block with $VAR references
+	// resolved. A nil value removes the inherited key. Read-only.
+	Settings map[string]any
 }
 
 // DispatchMatch enumerates the per-key predicates a rule applies to
@@ -90,6 +102,21 @@ var matchKeyAllowed = map[string]bool{
 	"assignee":   true,
 }
 
+// ruleBlockForbiddenKeys maps each key a rule's settings block may not
+// write to its message: the agent section owns these keys.
+var ruleBlockForbiddenKeys = map[string]string{
+	"kind":             "a rule chooses its agent kind with its agent key",
+	"command":          "agent.command belongs to the default agent kind; a dispatch rule cannot set a command",
+	"turn_timeout_ms":  "agent.turn_timeout_ms is workflow-wide; a dispatch rule cannot override it",
+	"read_timeout_ms":  "agent.read_timeout_ms is workflow-wide; a dispatch rule cannot override it",
+	"stall_timeout_ms": "agent.stall_timeout_ms is workflow-wide; a dispatch rule cannot override it",
+	"stop_grace_ms":    "agent.stop_grace_ms is workflow-wide; a dispatch rule cannot override it",
+}
+
+// defaultRuleName is the name run history gives the dispatch.default
+// selection.
+const defaultRuleName = "default"
+
 // ruleKeyAllowed enumerates the closed set of recognized per-rule keys.
 var ruleKeyAllowed = map[string]bool{
 	"name":     true,
@@ -119,8 +146,10 @@ var priorityOpAllowed = map[string]bool{
 // agentKindProbe is the orchestrator-supplied closure that reports
 // whether the kind is currently registered. The builder rejects
 // unknown kinds at load time so dispatch never spawns workers for an
-// adapter that cannot be constructed.
-func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe func(kind string) bool) (DispatchConfig, error) {
+// adapter that cannot be constructed. A rule key that names a kind per
+// the probe, or equals the rule's own agent value, is its settings block.
+// agentKind is the workflow-wide kind a rule falls back to.
+func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe func(kind string) bool, agentKind string) (DispatchConfig, error) {
 	if raw == nil {
 		return DispatchConfig{}, nil
 	}
@@ -144,7 +173,7 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 		}
 	}
 
-	rules, err := parseDispatchRules(dispatchMap["rules"])
+	rules, blocks, err := parseDispatchRules(dispatchMap["rules"], agentKindProbe)
 	if err != nil {
 		return DispatchConfig{}, err
 	}
@@ -155,7 +184,7 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 		return DispatchConfig{}, err
 	}
 
-	defaultSel, err := parseDispatchDefault(dispatchMap["default"])
+	defaultSel, err := parseDispatchDefault(dispatchMap["default"], agentKindProbe)
 	if err != nil {
 		return DispatchConfig{}, err
 	}
@@ -167,6 +196,12 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 	}
 	if err := probeAgentKind(defaultSel.AgentKind, agentKindProbe, "dispatch.default.agent"); err != nil {
 		return DispatchConfig{}, err
+	}
+
+	for i := range rules {
+		if err := applyRuleSettingsBlock(&rules[i], blocks[i], i, defaultSel.AgentKind, agentKind); err != nil {
+			return DispatchConfig{}, err
+		}
 	}
 
 	for i := range rules {
@@ -189,47 +224,59 @@ func BuildDispatchConfig(raw map[string]any, workflowDir string, agentKindProbe 
 }
 
 // parseDispatchRules converts the raw dispatch.rules YAML sequence
-// into a typed slice. Returns an empty slice when the value is absent
-// or nil.
-func parseDispatchRules(raw any) ([]DispatchRule, error) {
+// into a typed slice and, index for index, each rule's settings block keys.
+func parseDispatchRules(raw any, agentKindProbe func(kind string) bool) ([]DispatchRule, []map[string]any, error) {
 	if raw == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	seq, ok := raw.([]any)
 	if !ok {
-		return nil, &ConfigError{
+		return nil, nil, &ConfigError{
 			Field:   "dispatch.rules",
 			Message: fmt.Sprintf("expected sequence, got %T", raw),
 		}
 	}
 	if len(seq) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rules := make([]DispatchRule, 0, len(seq))
+	blocks := make([]map[string]any, 0, len(seq))
 	for i, elem := range seq {
-		rule, err := parseDispatchRule(i, elem)
+		rule, block, err := parseDispatchRule(i, elem, agentKindProbe)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		rules = append(rules, rule)
+		blocks = append(blocks, block)
 	}
-	return rules, nil
+	return rules, blocks, nil
 }
 
-// parseDispatchRule converts a single rule element into a DispatchRule.
-func parseDispatchRule(index int, elem any) (DispatchRule, error) {
+// parseDispatchRule converts a single rule element into a DispatchRule
+// and its settings block keys, which [applyRuleSettingsBlock] checks once
+// every kind is known.
+func parseDispatchRule(index int, elem any, agentKindProbe func(kind string) bool) (DispatchRule, map[string]any, error) {
 	ruleField := fmt.Sprintf("dispatch.rules[%d]", index)
 	ruleMap, ok := elem.(map[string]any)
 	if !ok {
-		return DispatchRule{}, &ConfigError{
+		return DispatchRule{}, nil, &ConfigError{
 			Field:   ruleField,
 			Message: fmt.Sprintf("expected map, got %T", elem),
 		}
 	}
 
-	for key := range ruleMap {
-		if !ruleKeyAllowed[key] {
-			return DispatchRule{}, &ConfigError{
+	ownAgent, fault := typeutil.StringField(ruleMap, "agent")
+	if fault != nil {
+		return DispatchRule{}, nil, &ConfigError{Field: ruleField + ".agent", Message: fault.Reason()}
+	}
+	blockKeys := make(map[string]any)
+	for key, value := range ruleMap {
+		switch {
+		case ruleKeyAllowed[key]:
+		case namesAgentKind(key, ownAgent, agentKindProbe):
+			blockKeys[key] = value
+		default:
+			return DispatchRule{}, nil, &ConfigError{
 				Field:   ruleField + "." + key,
 				Message: "unknown key",
 			}
@@ -245,26 +292,26 @@ func parseDispatchRule(index int, elem any) (DispatchRule, error) {
 	if v, ok := ruleMap["template"]; ok && v != nil {
 		hasTemplate = true
 	}
-	if !hasMatch && !hasAgent && !hasTemplate {
-		return DispatchRule{}, &ConfigError{
+	if !hasMatch && !hasAgent && !hasTemplate && len(blockKeys) == 0 {
+		return DispatchRule{}, nil, &ConfigError{
 			Field:   ruleField,
-			Message: "rule must specify at least one of match, agent, or template",
+			Message: "rule must specify at least one of match, agent, template, or a settings block",
 		}
 	}
 
 	name, err := extractRuleName(ruleMap, ruleField)
 	if err != nil {
-		return DispatchRule{}, err
+		return DispatchRule{}, nil, err
 	}
 
 	match, err := parseDispatchMatch(ruleMap["match"], ruleField+".match")
 	if err != nil {
-		return DispatchRule{}, err
+		return DispatchRule{}, nil, err
 	}
 
 	selection, err := parseDispatchSelection(ruleMap, ruleField)
 	if err != nil {
-		return DispatchRule{}, err
+		return DispatchRule{}, nil, err
 	}
 
 	return DispatchRule{
@@ -272,7 +319,79 @@ func parseDispatchRule(index int, elem any) (DispatchRule, error) {
 		Match:      match,
 		Selection:  selection,
 		IsCatchAll: isEmptyMatch(match),
-	}, nil
+	}, blockKeys, nil
+}
+
+// namesAgentKind reports whether key is a registered kind or the rule's
+// own agent value.
+func namesAgentKind(key, ownAgent string, agentKindProbe func(kind string) bool) bool {
+	if ownAgent != "" && key == ownAgent {
+		return true
+	}
+	return agentKindProbe != nil && agentKindProbe(key)
+}
+
+// applyRuleSettingsBlock checks a rule's settings block against the kind
+// the rule runs (its own agent, else dispatch.default.agent, else
+// workflowKind) and stores it on the rule.
+func applyRuleSettingsBlock(rule *DispatchRule, block map[string]any, index int, defaultKind, workflowKind string) error {
+	if len(block) == 0 {
+		return nil
+	}
+	ruleField := fmt.Sprintf("dispatch.rules[%d]", index)
+
+	kind, origin := rule.Selection.AgentKind, ""
+	switch {
+	case kind != "":
+	case defaultKind != "":
+		kind, origin = defaultKind, ", taken from dispatch.default.agent"
+	default:
+		kind, origin = workflowKind, ", taken from agent.kind"
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(block)) {
+		if key != kind {
+			return &ConfigError{
+				Field:   ruleField + "." + key,
+				Message: fmt.Sprintf("settings block for agent kind %q, but this rule runs agent kind %q%s", key, kind, origin),
+			}
+		}
+	}
+
+	blockMap, isMap := block[kind].(map[string]any)
+	if !isMap {
+		shape := "no value"
+		if block[kind] != nil {
+			shape = describeExtensionValue(block[kind])
+		}
+		return &ConfigError{
+			Field:   ruleField + "." + kind,
+			Message: fmt.Sprintf("a rule's settings block must hold the kind's settings as keys, got %s; write {} for an empty block", shape),
+		}
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(blockMap)) {
+		if message, forbidden := ruleBlockForbiddenKeys[key]; forbidden {
+			return &ConfigError{Field: ruleField + "." + kind + "." + key, Message: message}
+		}
+	}
+
+	if rule.Name == "" {
+		return &ConfigError{
+			Field:   ruleField,
+			Message: "a rule that carries a settings block must have a name",
+		}
+	}
+	if rule.Name == defaultRuleName {
+		return &ConfigError{
+			Field:   ruleField + ".name",
+			Message: fmt.Sprintf("%q is the name run history and statistics give the dispatch.default selection; a rule that carries a settings block must use another name", defaultRuleName),
+		}
+	}
+
+	rule.SettingsKind = kind
+	rule.Settings = blockMap
+	return nil
 }
 
 // extractRuleName reads and validates the optional rule name.
@@ -510,7 +629,7 @@ func parseDispatchSelection(ruleMap map[string]any, ruleField string) (DispatchS
 }
 
 // parseDispatchDefault decodes the optional dispatch.default block.
-func parseDispatchDefault(raw any) (DispatchSelection, error) {
+func parseDispatchDefault(raw any, agentKindProbe func(kind string) bool) (DispatchSelection, error) {
 	if raw == nil {
 		return DispatchSelection{}, nil
 	}
@@ -524,11 +643,16 @@ func parseDispatchDefault(raw any) (DispatchSelection, error) {
 
 	allowed := map[string]bool{"agent": true, "template": true}
 	for key := range defaultMap {
-		if !allowed[key] {
-			return DispatchSelection{}, &ConfigError{
-				Field:   "dispatch.default." + key,
-				Message: "unknown key",
-			}
+		if allowed[key] {
+			continue
+		}
+		message := "unknown key"
+		if agentKindProbe != nil && agentKindProbe(key) {
+			message = fmt.Sprintf("dispatch.default carries no settings block; the top-level %s block holds the default settings", key)
+		}
+		return DispatchSelection{}, &ConfigError{
+			Field:   "dispatch.default." + key,
+			Message: message,
 		}
 	}
 

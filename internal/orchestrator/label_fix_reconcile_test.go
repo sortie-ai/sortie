@@ -176,6 +176,7 @@ func TestReconcileLabelFixCommands_Dispatch(t *testing.T) {
 	const issueID = "LF-D1"
 	state := stateWithLabelFixPending(t, issueID, 42, "feature/lf-42")
 	rkey := ReactionKey(issueID, ReactionKindLabelFix)
+	state.PendingReactions[rkey].RuleSettingsApplied = true
 	event := labelEvent("1", "sortie:fix", "alice", true, labelReviewBaseTime.Add(-1*time.Minute))
 	scm := &labelReviewSCMFake{events: []domain.LabelEvent{event}}
 	store := newLabelReviewFingerprintStore()
@@ -196,6 +197,9 @@ func TestReconcileLabelFixCommands_Dispatch(t *testing.T) {
 	if retry.AgentKind != "mock" || retry.RuleName != "default" || retry.TemplateID != "tmpl-1" {
 		t.Errorf("RetryEntry frozen dispatch fields = (%q, %q, %q), want (mock, default, tmpl-1)",
 			retry.AgentKind, retry.RuleName, retry.TemplateID)
+	}
+	if !retry.RuleSettingsApplied {
+		t.Error("RetryEntry.RuleSettingsApplied = false, want the pending reaction's flag carried")
 	}
 
 	raw, ok := retry.ContinuationContext["label_fix"]

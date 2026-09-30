@@ -4007,7 +4007,7 @@ func TestHandleRetryTimer_RefusedSettingsRescheduleAndKeepTheClaim(t *testing.T)
 
 	const id = "ISS-REFUSED"
 	state := frozenRetryState(id, RetryEntry{
-		Attempt: 2, AgentKind: "kind-a", RuleName: "cheap",
+		Attempt: 2, AgentKind: "kind-a", RuleName: "cheap", RuleSettingsApplied: true,
 		SessionID: "sess-keep", LastSSHHost: "host-a", ContinuationContext: map[string]any{"review": "thread-1"},
 	})
 	logs := &lockedBuf{}
@@ -4035,11 +4035,67 @@ func TestHandleRetryTimer_RefusedSettingsRescheduleAndKeepTheClaim(t *testing.T)
 	if entry.Attempt != 3 || entry.Error != "retry agent settings refused" || entry.scheduledDelayMS != computeBackoffDelay(3, params.MaxRetryBackoffMS) {
 		t.Errorf("rescheduled RetryEntry attempt, error, delay = %d, %q, %d ms, want 3, %q, the backoff of attempt 3", entry.Attempt, entry.Error, entry.scheduledDelayMS, "retry agent settings refused")
 	}
-	if entry.SessionID != "sess-keep" || entry.ContinuationContext["review"] != "thread-1" || entry.RuleName != "cheap" {
-		t.Errorf("rescheduled RetryEntry = %+v, want session, continuation and rule carried over", entry)
+	if entry.SessionID != "sess-keep" || entry.ContinuationContext["review"] != "thread-1" || !entry.RuleSettingsApplied || entry.RuleName != "cheap" {
+		t.Errorf("rescheduled RetryEntry = %+v, want session, continuation, rule and the settings flag carried over", entry)
 	}
 	requireOneRecord(t, logs, "retry agent settings refused", map[string]any{
 		"level": "ERROR", "rule_name": "cheap", "agent_kind": "kind-a", "check": "kind-a.permission_mode.interactive",
 		"diagnostic": "permission mode asks", "attempt": float64(3),
 	})
+}
+
+func TestHandleRetryTimer_RecordsTheResolvedSettingsAndLogsAVanishedRuleBlockOnce(t *testing.T) {
+	t.Parallel()
+
+	const message = "rule settings no longer present, attempt runs on the kind's top-level settings"
+	applied := RetryEntry{Attempt: 1, AgentKind: "kind-a", RuleName: "cheap", RuleSettingsApplied: true}
+	unapplied := RetryEntry{Attempt: 1, AgentKind: "kind-a", RuleName: "cheap"}
+	bare := AttemptSettings{Settings: config.AgentSettings{Kind: "kind-a"}}
+	inForce := AttemptSettings{
+		Settings:         config.AgentSettings{Kind: "kind-a", RuleName: "cheap", Model: "model-a", Effort: "low"},
+		UsageArrival:     registry.UsageArrivalTurnEnd,
+		UsageAttribution: registry.UsageAttributionSessionTotal,
+	}
+	tests := []struct {
+		name       string
+		entry      RetryEntry
+		resolved   AttemptSettings
+		selection  *DispatchResolution
+		wantRecord bool
+	}{
+		{name: "block applied before and gone now", entry: applied, resolved: bare, wantRecord: true},
+		{name: "block never applied", entry: unapplied, resolved: bare},
+		{name: "block still applies", entry: applied, resolved: inForce},
+		{name: "claim moved to another rule", entry: applied, resolved: bare, selection: &DispatchResolution{AgentKind: "kind-a", RuleName: "other"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const id = "ISS-RECORD"
+			state := frozenRetryState(id, tt.entry)
+			logs := &lockedBuf{}
+			params := defaultRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")})
+			params.Logger = jsonLogger(logs)
+			params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings { return tt.resolved }
+			if tt.selection != nil {
+				params.ResolveSelection = func(DispatchResolution, domain.Issue) DispatchResolution { return *tt.selection }
+			}
+
+			HandleRetryTimer(state, id, params)
+
+			settings := tt.resolved.Settings
+			entry := state.Running[id]
+			if entry == nil {
+				t.Fatal("Running[id] missing after dispatch")
+			}
+			if entry.RuleSettingsApplied != (settings.RuleName != "") || entry.UsageArrival != tt.resolved.UsageArrival || entry.UsageAttribution != tt.resolved.UsageAttribution {
+				t.Errorf("running entry = %+v, want the resolved rule flag and usage pair of %+v", entry, tt.resolved)
+			}
+			if vanished := logRecords(t, logs, message); len(vanished) != map[bool]int{true: 1}[tt.wantRecord] || (tt.wantRecord && (vanished[0]["level"] != "INFO" || vanished[0]["rule_name"] != "cheap" || vanished[0]["agent_kind"] != "kind-a")) {
+				t.Errorf("vanished-block records = %v, want %d, an INFO with rule_name and agent_kind", vanished, map[bool]int{true: 1}[tt.wantRecord])
+			}
+		})
+	}
 }

@@ -645,6 +645,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
+					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
 				}, params.OnRetryFire)
@@ -681,18 +682,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						slog.Bool("no_change_declared", noChangeDeclared),
 					)
 					ScheduleRetry(state, ScheduleRetryParams{
-						IssueID:     workerResult.IssueID,
-						Identifier:  workerResult.Identifier,
-						DisplayID:   entry.Issue.DisplayID,
-						Attempt:     NextAttempt(entry.RetryAttempt),
-						DelayMS:     continuationDelayMS,
-						Error:       "",
-						LastSSHHost: workerResult.SSHHost,
-						SessionID:   sessionID,
-						AgentKind:   entry.AgentKind,
-						RuleName:    entry.RuleName,
-						TemplateID:  entry.TemplateID,
-						Logger:      log,
+						IssueID:             workerResult.IssueID,
+						Identifier:          workerResult.Identifier,
+						DisplayID:           entry.Issue.DisplayID,
+						Attempt:             NextAttempt(entry.RetryAttempt),
+						DelayMS:             continuationDelayMS,
+						Error:               "",
+						LastSSHHost:         workerResult.SSHHost,
+						SessionID:           sessionID,
+						AgentKind:           entry.AgentKind,
+						RuleName:            entry.RuleName,
+						RuleSettingsApplied: entry.RuleSettingsApplied,
+						TemplateID:          entry.TemplateID,
+						Logger:              log,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -752,18 +754,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							slog.Any("error", err),
 						)
 						ScheduleRetry(state, ScheduleRetryParams{
-							IssueID:     workerResult.IssueID,
-							Identifier:  workerResult.Identifier,
-							DisplayID:   entry.Issue.DisplayID,
-							Attempt:     NextAttempt(entry.RetryAttempt),
-							DelayMS:     continuationDelayMS,
-							Error:       "",
-							LastSSHHost: workerResult.SSHHost,
-							SessionID:   sessionID,
-							AgentKind:   entry.AgentKind,
-							RuleName:    entry.RuleName,
-							TemplateID:  entry.TemplateID,
-							Logger:      log,
+							IssueID:             workerResult.IssueID,
+							Identifier:          workerResult.Identifier,
+							DisplayID:           entry.Issue.DisplayID,
+							Attempt:             NextAttempt(entry.RetryAttempt),
+							DelayMS:             continuationDelayMS,
+							Error:               "",
+							LastSSHHost:         workerResult.SSHHost,
+							SessionID:           sessionID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
+							Logger:              log,
 						}, params.OnRetryFire)
 						metrics.IncRetries(triggerContinuation)
 						retryScheduled = true
@@ -817,18 +820,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				retryDeferred = true
 			} else {
 				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:     workerResult.IssueID,
-					Identifier:  workerResult.Identifier,
-					DisplayID:   entry.Issue.DisplayID,
-					Attempt:     NextAttempt(entry.RetryAttempt),
-					DelayMS:     continuationDelayMS,
-					Error:       "",
-					LastSSHHost: workerResult.SSHHost,
-					SessionID:   sessionID,
-					AgentKind:   entry.AgentKind,
-					RuleName:    entry.RuleName,
-					TemplateID:  entry.TemplateID,
-					Logger:      log,
+					IssueID:             workerResult.IssueID,
+					Identifier:          workerResult.Identifier,
+					DisplayID:           entry.Issue.DisplayID,
+					Attempt:             NextAttempt(entry.RetryAttempt),
+					DelayMS:             continuationDelayMS,
+					Error:               "",
+					LastSSHHost:         workerResult.SSHHost,
+					SessionID:           sessionID,
+					AgentKind:           entry.AgentKind,
+					RuleName:            entry.RuleName,
+					RuleSettingsApplied: entry.RuleSettingsApplied,
+					TemplateID:          entry.TemplateID,
+					Logger:              log,
 				}, params.OnRetryFire)
 				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
@@ -887,9 +891,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							Branch:   scm.Branch,
 							SHA:      scm.SHA,
 						},
-						AgentKind:  entry.AgentKind,
-						RuleName:   entry.RuleName,
-						TemplateID: entry.TemplateID,
+						AgentKind:           entry.AgentKind,
+						RuleName:            entry.RuleName,
+						RuleSettingsApplied: entry.RuleSettingsApplied,
+						TemplateID:          entry.TemplateID,
 					}
 				} else if scm.Branch != "" {
 					log.Debug("ci watch not seeded: workspace metadata missing pull request identity",
@@ -929,9 +934,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -966,9 +972,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1002,9 +1009,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1039,9 +1047,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1077,9 +1086,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1115,9 +1125,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Repo:     scm.Repo,
 								Branch:   scm.Branch,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1150,9 +1161,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,
 							},
-							AgentKind:  entry.AgentKind,
-							RuleName:   entry.RuleName,
-							TemplateID: entry.TemplateID,
+							AgentKind:           entry.AgentKind,
+							RuleName:            entry.RuleName,
+							RuleSettingsApplied: entry.RuleSettingsApplied,
+							TemplateID:          entry.TemplateID,
 						}
 					}
 				}
@@ -1201,6 +1213,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					ReactionKind:        entry.ReactionKind,
 					AgentKind:           entry.AgentKind,
 					RuleName:            entry.RuleName,
+					RuleSettingsApplied: entry.RuleSettingsApplied,
 					TemplateID:          entry.TemplateID,
 					Logger:              log,
 				}, params.OnRetryFire)

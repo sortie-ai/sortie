@@ -433,11 +433,12 @@ func handleCIFailure(
 		ContinuationContext: map[string]any{
 			"ci_failure": ciContext,
 		},
-		ReactionKind: ReactionKindCI,
-		AgentKind:    pending.AgentKind,
-		RuleName:     pending.RuleName,
-		TemplateID:   pending.TemplateID,
-		Logger:       log,
+		ReactionKind:        ReactionKindCI,
+		AgentKind:           pending.AgentKind,
+		RuleName:            pending.RuleName,
+		RuleSettingsApplied: pending.RuleSettingsApplied,
+		TemplateID:          pending.TemplateID,
+		Logger:              log,
 	}, params.OnRetryFire)
 	metrics.IncRetries(triggerCIFix)
 

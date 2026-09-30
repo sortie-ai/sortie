@@ -164,11 +164,12 @@ func reconcileLabelFixCommands(state *State, params ReconcileParams, log *slog.L
 				ContinuationContext: map[string]any{
 					"label_fix": buildLabelFixMap(data, newestMatch.Actor, newestMatch.At),
 				},
-				ReactionKind: ReactionKindLabelFix,
-				AgentKind:    pending.AgentKind,
-				RuleName:     pending.RuleName,
-				TemplateID:   pending.TemplateID,
-				Logger:       entryLog,
+				ReactionKind:        ReactionKindLabelFix,
+				AgentKind:           pending.AgentKind,
+				RuleName:            pending.RuleName,
+				RuleSettingsApplied: pending.RuleSettingsApplied,
+				TemplateID:          pending.TemplateID,
+				Logger:              entryLog,
 			}, params.OnRetryFire)
 
 			// Best-effort acknowledgment: the label's disappearance tells the

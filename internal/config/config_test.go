@@ -9,10 +9,13 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/redact"
@@ -5088,7 +5091,7 @@ func TestAgentCommand_OwnedByTheDefaultKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServiceConfig() error = %v", err)
 	}
-	dispatch, err := BuildDispatchConfig(map[string]any{"dispatch": map[string]any{"default": map[string]any{"agent": "kind-b"}}}, mkDispatchDir(t), alwaysRegistered)
+	dispatch, err := BuildDispatchConfig(map[string]any{"dispatch": map[string]any{"default": map[string]any{"agent": "kind-b"}}}, mkDispatchDir(t), alwaysRegistered, "")
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v", err)
 	}
@@ -5109,4 +5112,158 @@ func TestAgentCommand_OwnedByTheDefaultKind(t *testing.T) {
 	if second := cfg.AgentCommand("kind-b", false); second.Argv[0] != "cmd a" {
 		t.Errorf("AgentCommand(%q, false).Argv[0] = %q after mutating an earlier result, want %q", "kind-b", second.Argv[0], "cmd a")
 	}
+}
+
+func overlayConfig(topLevel map[string]any, rules ...DispatchRule) ServiceConfig {
+	cfg := ServiceConfig{
+		Agent:    AgentConfig{Kind: "opencode", Command: "oc", TurnTimeoutMS: 3600000, ReadTimeoutMS: 5000, StallTimeoutMS: 300000, StopGraceMS: 5000},
+		Dispatch: DispatchConfig{Rules: rules},
+	}
+	if topLevel != nil {
+		cfg.extensions = map[string]any{"opencode": topLevel}
+	}
+	return cfg
+}
+
+func withDerivedKeys(extra map[string]any) map[string]any {
+	want := map[string]any{
+		"kind": "opencode", "command": "oc", "turn_timeout_ms": 3600000,
+		"read_timeout_ms": 5000, "stall_timeout_ms": 300000, "stop_grace_ms": 5000,
+	}
+	maps.Copy(want, extra)
+	return want
+}
+
+func lowCostRule(kind string, block map[string]any) DispatchRule {
+	return DispatchRule{Name: "low-cost", SettingsKind: kind, Settings: block}
+}
+
+func TestResolveAgentSettings_RuleBlockOverlay(t *testing.T) {
+	t.Parallel()
+
+	topModel := map[string]any{"model": "a"}
+	tests := []struct {
+		name     string
+		cfg      ServiceConfig
+		ruleName string
+		wantPass map[string]any
+		applied  bool
+	}{
+		{
+			name:     "value replaces, null removes, the rest is inherited",
+			cfg:      overlayConfig(map[string]any{"model": "a", "effort": "h", "x": 1}, lowCostRule("opencode", map[string]any{"model": "b", "effort": nil, "y": map[string]any{"k": "v"}})),
+			ruleName: "low-cost",
+			wantPass: withDerivedKeys(map[string]any{"model": "b", "x": 1, "y": map[string]any{"k": "v"}}),
+			applied:  true,
+		},
+		{
+			name:     "a kind with no top-level block takes the rule block whole",
+			cfg:      overlayConfig(nil, lowCostRule("opencode", map[string]any{"model": "b", "effort": nil})),
+			ruleName: "low-cost",
+			wantPass: withDerivedKeys(map[string]any{"model": "b"}),
+			applied:  true,
+		},
+		{
+			name:     "maps, lists and strings replace the inherited value whole",
+			cfg:      overlayConfig(map[string]any{"policy": map[string]any{"a": 1, "b": 2}, "tools": []any{"read", "edit"}, "effort": "h"}, lowCostRule("opencode", map[string]any{"policy": map[string]any{"c": 3}, "tools": []any{"glob"}, "effort": "low"})),
+			ruleName: "low-cost",
+			wantPass: withDerivedKeys(map[string]any{"policy": map[string]any{"c": 3}, "tools": []any{"glob"}, "effort": "low"}),
+			applied:  true,
+		},
+		{name: "a rule block for another kind is ignored", cfg: overlayConfig(topModel, lowCostRule("codex", map[string]any{"model": "b"})), ruleName: "low-cost", wantPass: withDerivedKeys(topModel)},
+		{name: "a rule name no rule carries leaves the top-level block", cfg: overlayConfig(topModel, lowCostRule("opencode", map[string]any{"model": "b"})), ruleName: "gone", wantPass: withDerivedKeys(topModel)},
+		{name: "a rule without a block leaves the top-level block", cfg: overlayConfig(topModel, DispatchRule{Name: "low-cost"}), ruleName: "low-cost", wantPass: withDerivedKeys(topModel)},
+		{name: "no rule selected leaves the top-level block", cfg: overlayConfig(topModel, lowCostRule("opencode", map[string]any{"model": "b"})), wantPass: withDerivedKeys(topModel)},
+		{name: "null model and effort resolve to the empty string", cfg: overlayConfig(map[string]any{"model": nil, "effort": nil}), wantPass: withDerivedKeys(map[string]any{"model": nil, "effort": nil})},
+		{name: "wrong-typed model resolves to the empty string", cfg: overlayConfig(map[string]any{"model": 7, "effort": "high"}), wantPass: withDerivedKeys(map[string]any{"model": 7, "effort": "high"})},
+		{name: "wrong-typed effort resolves to the empty string", cfg: overlayConfig(map[string]any{"model": "m", "effort": []any{"high"}}), wantPass: withDerivedKeys(map[string]any{"model": "m", "effort": []any{"high"}})},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ResolveAgentSettings(tt.cfg, SettingsSelection{Kind: "opencode", RuleName: tt.ruleName}, "")
+
+			wantModel, _ := tt.wantPass["model"].(string)
+			wantEffort, _ := tt.wantPass["effort"].(string)
+			if !reflect.DeepEqual(got.Passthrough, tt.wantPass) || got.Model != wantModel || got.Effort != wantEffort {
+				t.Errorf("ResolveAgentSettings(rule %q) Passthrough, Model, Effort = %v, %q, %q, want %v, %q, %q",
+					tt.ruleName, got.Passthrough, got.Model, got.Effort, tt.wantPass, wantModel, wantEffort)
+			}
+			if wantRule := map[bool]string{true: tt.ruleName}[tt.applied]; got.RuleName != wantRule {
+				t.Errorf("ResolveAgentSettings(rule %q).RuleName = %q, want %q", tt.ruleName, got.RuleName, wantRule)
+			}
+		})
+	}
+}
+
+func TestResolveAgentSettings_RuleBlockNeverMutatesTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	topLevel := map[string]any{"model": "a", "y": map[string]any{"k": "old"}}
+	block := map[string]any{"model": "b", "effort": nil, "y": map[string]any{"k": "v"}}
+	cfg := overlayConfig(topLevel, lowCostRule("opencode", block))
+
+	_ = ResolveAgentSettings(cfg, SettingsSelection{Kind: "opencode", RuleName: "low-cost"}, "")
+
+	if want := map[string]any{"model": "a", "y": map[string]any{"k": "old"}}; !reflect.DeepEqual(topLevel, want) {
+		t.Errorf("top-level block after resolve = %v, want %v", topLevel, want)
+	}
+	if want := map[string]any{"model": "b", "effort": nil, "y": map[string]any{"k": "v"}}; !reflect.DeepEqual(block, want) {
+		t.Errorf("rule block after resolve = %v, want %v", block, want)
+	}
+}
+
+func TestResolveAgentSettings_RuleBlockRecomputesMCPConfigPath(t *testing.T) {
+	t.Parallel()
+
+	cfg := overlayConfig(map[string]any{"mcp_config": "top.json"}, lowCostRule("opencode", map[string]any{"mcp_config": "rule.json"}))
+
+	got := ResolveAgentSettings(cfg, SettingsSelection{Kind: "opencode", RuleName: "low-cost"}, "/wf")
+
+	if want := filepath.Join("/wf", "rule.json"); got.MCPConfigPath != want {
+		t.Errorf("MCPConfigPath = %q, want %q", got.MCPConfigPath, want)
+	}
+}
+
+func ruleBlockRaw(t *testing.T, doc string) map[string]any {
+	t.Helper()
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(doc), &raw); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	return raw
+}
+
+func TestNewServiceConfig_ResolvesDollarVarInRuleBlockOncePerAlias(t *testing.T) {
+	secret := randomConfigSecret(t)
+	t.Setenv("SORTIE_TEST_1191_MODEL", "x$SORTIE_TEST_1191_NESTED")
+	t.Setenv("SORTIE_TEST_1191_NESTED", "expanded-twice")
+	t.Setenv("SORTIE_TEST_1191_SECRET", secret)
+	raw := ruleBlockRaw(t, `
+agent: {kind: opencode}
+opencode: &oc {model: "$SORTIE_TEST_1191_MODEL", env: {OPENAI_API_KEY: "$SORTIE_TEST_1191_SECRET"}}
+dispatch:
+  rules:
+    - {name: r, match: {labels: [x]}, opencode: *oc}
+`)
+
+	cfg, err := NewServiceConfig(raw)
+	if err != nil {
+		t.Fatalf("NewServiceConfig() error = %v", err)
+	}
+	dispatch, err := BuildDispatchConfig(raw, mkDispatchDir(t), kindsRegistered("opencode"), "opencode")
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig() error = %v", err)
+	}
+
+	const want = "x$SORTIE_TEST_1191_NESTED"
+	if top, rule := cfg.ExtensionSection("opencode")["model"], dispatch.Rules[0].Settings["model"]; top != want || rule != want {
+		t.Errorf("model in the top-level block, rule block = %v, %v, want %q in both (one resolution per alias)", top, rule, want)
+	}
+	if got := cfg.extensionsPreResolution["dispatch.rules[0].opencode.model"]; got != "$SORTIE_TEST_1191_MODEL" {
+		t.Errorf("pre-resolution literal at dispatch.rules[0].opencode.model = %q, want %q", got, "$SORTIE_TEST_1191_MODEL")
+	}
+	requireConfigMasked(t, secret)
 }

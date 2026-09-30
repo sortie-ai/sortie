@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/maputil"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // RetiredAgentLookup reports the retirement declaration for an agent
@@ -176,6 +177,25 @@ type retiredGroup struct {
 	local    registry.AgentConversion
 	remote   registry.AgentConversion
 	record   AgentKindConversion
+
+	ruleBlocks []ruleBlockConversion
+}
+
+// ruleBlockConversion is one dispatch rule's settings block for a
+// retired kind and its conversion.
+type ruleBlockConversion struct {
+	index    int
+	rule     map[string]any
+	settings map[string]any
+	local    registry.AgentConversion
+	remote   registry.AgentConversion
+}
+
+func (c ruleBlockConversion) conversionFor(remote bool) registry.AgentConversion {
+	if remote {
+		return c.remote
+	}
+	return c.local
 }
 
 func (g *retiredGroup) fields() []string {
@@ -247,6 +267,9 @@ func convertRetiredAgents(raw, extensions map[string]any, lookup RetiredAgentLoo
 			group.record.RemoteCommand = group.remote.Command
 			group.record.CredentialEnv = group.decl.CredentialEnv.Names()
 		}
+		if err := group.convertRuleBlocks(raw, defaultKind); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	records := make([]AgentKindConversion, len(groups))
@@ -261,6 +284,7 @@ func convertRetiredAgents(raw, extensions map[string]any, lookup RetiredAgentLoo
 	for i, group := range groups {
 		advisories[i] = retiredAgentAdvisory(group, remote, group.kind == defaultKind)
 		rewriteRetiredGroup(raw, extensions, group, remote)
+		rewriteRuleBlocks(group, remote)
 	}
 	return records, advisories, nil
 }
@@ -268,22 +292,81 @@ func convertRetiredAgents(raw, extensions map[string]any, lookup RetiredAgentLoo
 // convert runs the declaration's conversion for both launch modes and
 // reports a fault as the configuration error the operator sees.
 func (g *retiredGroup) convert() error {
-	for _, remote := range []bool{false, true} {
-		conv, fault := g.decl.Convert(registry.AgentConversionInput{Command: g.command, Settings: g.settings, Remote: remote})
+	var err error
+	g.local, g.remote, err = g.convertSettings(g.settings, g.kind)
+	return err
+}
+
+// convertSettings converts settings for both launch modes, reporting a
+// fault under field.
+func (g *retiredGroup) convertSettings(settings map[string]any, field string) (local, remote registry.AgentConversion, err error) {
+	for _, isRemote := range []bool{false, true} {
+		conv, fault := g.decl.Convert(registry.AgentConversionInput{Command: g.command, Settings: settings, Remote: isRemote})
 		if fault != nil {
-			return &ConfigError{
-				Field: g.kind + "." + fault.Key,
+			return local, remote, &ConfigError{
+				Field: field + "." + fault.Key,
 				Message: fmt.Sprintf("agent kind %q was removed and this configuration cannot be converted to agent kind %q: %s",
 					g.kind, g.decl.Replacement, fault.Message),
 			}
 		}
-		if remote {
-			g.remote = conv
+		if isRemote {
+			remote = conv
 		} else {
-			g.local = conv
+			local = conv
 		}
 	}
+	return local, remote, nil
+}
+
+// convertRuleBlocks converts every rule block of the retired kind. A rule
+// cannot set a command, so a conversion that changes the replacement's
+// command fails the load. It leaves raw untouched.
+func (g *retiredGroup) convertRuleBlocks(raw map[string]any, defaultKind string) error {
+	for i, rule := range dispatchRuleMaps(raw) {
+		kind := defaultKind
+		own, fault := typeutil.StringField(rule, "agent")
+		if fault != nil {
+			continue
+		}
+		if own != "" {
+			kind = own
+		}
+		block, held := rule[g.kind]
+		if kind != g.kind || !held {
+			continue
+		}
+
+		field := fmt.Sprintf("dispatch.rules[%d].%s", i, g.kind)
+		settings, _ := block.(map[string]any)
+		local, remote, err := g.convertSettings(settings, field)
+		if err != nil {
+			return err
+		}
+		if g.record.governs() && (!commandsEqual(local.Command, g.record.Command) || !commandsEqual(remote.Command, g.record.RemoteCommand)) {
+			return &ConfigError{
+				Field: field,
+				Message: fmt.Sprintf("agent kind %q was removed and this rule's settings cannot be converted to agent kind %q: they change the command the replacement kind launches, which a dispatch rule cannot set",
+					g.kind, g.decl.Replacement),
+			}
+		}
+		g.ruleBlocks = append(g.ruleBlocks, ruleBlockConversion{index: i, rule: rule, settings: settings, local: local, remote: remote})
+	}
 	return nil
+}
+
+// droppedRuleKeys lists, as "dispatch.rules[i].<kind>.<key>", the rule
+// block keys the conversion for the launch mode does not carry.
+func (g *retiredGroup) droppedRuleKeys(remote bool) []string {
+	var dropped []string
+	for _, block := range g.ruleBlocks {
+		carried := block.conversionFor(remote).Carried
+		for _, key := range maputil.SortedKeys(block.settings) {
+			if !slices.Contains(carried, key) {
+				dropped = append(dropped, fmt.Sprintf("dispatch.rules[%d].%s.%s", block.index, g.kind, key))
+			}
+		}
+	}
+	return dropped
 }
 
 // rawDefaultAgentKind is the default agent kind of the raw
@@ -359,6 +442,33 @@ func rewriteRetiredGroup(raw, extensions map[string]any, group *retiredGroup, re
 	}
 }
 
+// rewriteRuleBlocks replaces each converted rule's retired-kind block with
+// the conversion merged into its replacement-kind block, keeping keys the
+// rule already sets.
+func rewriteRuleBlocks(group *retiredGroup, remote bool) {
+	replacement := group.decl.Replacement
+	for _, converted := range group.ruleBlocks {
+		rule := converted.rule
+		registerCredentialLeaves(fmt.Sprintf("dispatch.rules[%d]", converted.index), map[string]any{group.kind: rule[group.kind]}, false)
+		delete(rule, group.kind)
+
+		existing, present := rule[replacement]
+		if !present || existing == nil {
+			existing = map[string]any{}
+			rule[replacement] = existing
+		}
+		block, isMapping := existing.(map[string]any)
+		if !isMapping {
+			continue
+		}
+		for key, value := range converted.conversionFor(remote).Settings {
+			if _, has := block[key]; !has {
+				block[key] = value
+			}
+		}
+	}
+}
+
 const retiredAgentAdvisoryMessage = "agent kind was removed and its configuration was converted to the replacement kind; the conversion will be removed in a later release"
 
 // retiredAgentAdvisory builds the advisory for one converted group,
@@ -385,7 +495,7 @@ func retiredAgentAdvisory(group *retiredGroup, remote, wasDefault bool) Advisory
 		if wasDefault {
 			remedy = fmt.Sprintf("name agent kind %q where the workflow names %q and give it this invocation in agent.command%s", record.Replacement, record.Kind, passenv)
 		}
-		text = prefix + "its sessions launch " + describeLaunch(conv, group.command) + credentials + describeDropped(record.Kind, group.settings, conv.Carried) + "." + suffix + remedy
+		text = prefix + "its sessions launch " + describeLaunch(conv, group.command) + credentials + describeDropped(record.Kind, group.settings, conv.Carried, group.droppedRuleKeys(remote)) + "." + suffix + remedy
 	}
 
 	return Advisory{
@@ -445,13 +555,14 @@ func displaySafe(arg string) bool {
 	return true
 }
 
-func describeDropped(kind string, settings map[string]any, carried []string) string {
+func describeDropped(kind string, settings map[string]any, carried, droppedRuleKeys []string) string {
 	var dropped []string
 	for _, key := range maputil.SortedKeys(settings) {
 		if !slices.Contains(carried, key) {
 			dropped = append(dropped, kind+"."+key)
 		}
 	}
+	dropped = append(dropped, droppedRuleKeys...)
 	if len(dropped) == 0 {
 		return ""
 	}

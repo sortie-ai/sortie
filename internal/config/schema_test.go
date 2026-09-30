@@ -71,6 +71,31 @@ func TestValidateFrontMatterDispatchRulesSequence(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			name:      "the key naming the rule's own agent draws no warning",
+			raw:       dispatchRaw("", map[string]any{"name": "r", "agent": "mock", "mock": map[string]any{"model": "m"}}),
+			wantCount: 0,
+		},
+		{
+			name:      "the key naming dispatch.default.agent draws no warning for a rule without agent",
+			raw:       dispatchRaw("codex", map[string]any{"name": "r", "codex": map[string]any{"model": "m"}}),
+			wantCount: 0,
+		},
+		{
+			name: "the key naming agent.kind draws no warning for a rule without agent",
+			raw: map[string]any{
+				"agent":    map[string]any{"kind": "opencode"},
+				"dispatch": dispatchRaw("", map[string]any{"name": "r", "opencode": map[string]any{"model": "m"}})["dispatch"],
+			},
+			wantCount: 0,
+		},
+		{
+			name:       "a kind key other than the rule's own kind still warns",
+			raw:        dispatchRaw("", map[string]any{"name": "r", "agent": "mock", "codex": map[string]any{}}),
+			wantCount:  1,
+			wantChecks: []string{"unknown_sub_key"},
+			wantFields: []string{"dispatch.rules[0].codex"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -212,6 +212,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// this configuration can reach. A registered kind the configuration
 	// never references is skipped, because that would report a fault in
 	// a block no run reads.
+	selectors := agentKindSelectors(cfg)
 	for _, ref := range orderedUniqueAgentKinds(cfg) {
 		agentMeta, registered := params.AgentRegistry.Meta(ref.Kind)
 		settings := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: ref.Kind}, "")
@@ -229,13 +230,21 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		// already resolves the "differs from cfg.Agent.Kind"
 		// comparison into the origin, so no second kind comparison
 		// belongs here.
+		//
+		// A kind selected only by rules that carry its block needs no
+		// top-level block: no attempt reads it alone.
+		blockOnly := false
 		if registered && ref.Origin != agentKindOriginDefault {
+			uncovered, hasUncovered := firstSelectorWithoutBlock(selectors, ref.Kind)
+			blockOnly = !hasUncovered
 			switch settings.BlockPresence {
 			case config.ExtensionBlockAbsent:
-				errs = append(errs, PreflightError{
-					Check:   "dispatch.agent.missing_block",
-					Message: missingBlockAbsentMessage(ref),
-				})
+				if hasUncovered {
+					errs = append(errs, PreflightError{
+						Check:   "dispatch.agent.missing_block",
+						Message: missingBlockAbsentMessage(uncovered),
+					})
+				}
 			case config.ExtensionBlockNotAMapping:
 				errs = append(errs, PreflightError{
 					Check:   "dispatch.agent.missing_block",
@@ -254,9 +263,29 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			})
 		}
 
+		if blockOnly {
+			continue
+		}
 		settingsErrs, settingsWarns := settingsDiagnostics(cfg, agentMeta, registered, settings, remote)
 		errs = append(errs, settingsErrs...)
 		warns = append(warns, settingsWarns...)
+	}
+
+	for i, rule := range cfg.Dispatch.Rules {
+		if rule.SettingsKind == "" {
+			continue
+		}
+		agentMeta, registered := params.AgentRegistry.Meta(rule.SettingsKind)
+		settings := config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: rule.SettingsKind, RuleName: rule.Name}, "")
+		prefix := ruleSettingsPrefix(i, rule)
+
+		ruleErrs, ruleWarns := settingsDiagnostics(cfg, agentMeta, registered, settings, remote)
+		for _, e := range ruleErrs {
+			errs = append(errs, PreflightError{Check: e.Check, Message: prefix + e.Message})
+		}
+		for _, w := range ruleWarns {
+			warns = append(warns, PreflightWarning{Check: w.Check, Message: prefix + w.Message})
+		}
 	}
 
 	// Workspace root must exist and be writable.
@@ -320,6 +349,50 @@ func orderedUniqueAgentKinds(cfg config.ServiceConfig) []agentKindRef {
 	}
 
 	return refs
+}
+
+// ruleSettingsPrefix opens every message about the settings block of
+// rules[index].
+func ruleSettingsPrefix(index int, rule config.DispatchRule) string {
+	return "dispatch rule " + strconv.Quote(rule.Name) + " (dispatch.rules[" + strconv.Itoa(index) + "]." + rule.SettingsKind + "): "
+}
+
+// agentKindSelector is a dispatch.default.agent or rule agent selection;
+// carriesBlock marks a rule holding a settings block for its kind.
+type agentKindSelector struct {
+	ref          agentKindRef
+	carriesBlock bool
+}
+
+// agentKindSelectors lists every non-empty selector, default first and
+// then rules in order, without [orderedUniqueAgentKinds]'s deduplication.
+func agentKindSelectors(cfg config.ServiceConfig) []agentKindSelector {
+	var selectors []agentKindSelector
+	if kind := cfg.Dispatch.Default.AgentKind; kind != "" {
+		selectors = append(selectors, agentKindSelector{ref: agentKindRef{Kind: kind, Origin: agentKindOriginDispatchDefault}})
+	}
+	for i, rule := range cfg.Dispatch.Rules {
+		kind := rule.Selection.AgentKind
+		if kind == "" {
+			continue
+		}
+		selectors = append(selectors, agentKindSelector{
+			ref:          agentKindRef{Kind: kind, Origin: agentKindOriginRule, RuleIndex: i, RuleName: rule.Name},
+			carriesBlock: rule.SettingsKind == kind,
+		})
+	}
+	return selectors
+}
+
+// firstSelectorWithoutBlock returns the first selector of kind that is not
+// a rule carrying its block.
+func firstSelectorWithoutBlock(selectors []agentKindSelector, kind string) (agentKindRef, bool) {
+	for _, selector := range selectors {
+		if selector.ref.Kind == kind && !selector.carriesBlock {
+			return selector.ref, true
+		}
+	}
+	return agentKindRef{}, false
 }
 
 // agentKindOriginPrefix names the front-matter field that introduced

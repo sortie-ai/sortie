@@ -219,6 +219,10 @@ type RunningEntry struct {
 	// block matched.
 	RuleName string
 
+	// RuleSettingsApplied reports that the rule's settings block applied
+	// to this attempt.
+	RuleSettingsApplied bool
+
 	// TemplateID is the resolved template registry key frozen at dispatch.
 	// Empty selects the WORKFLOW.md body template.
 	TemplateID string
@@ -309,6 +313,10 @@ type RetryEntry struct {
 
 	// RuleName is the dispatch rule of the run this retry follows.
 	RuleName string
+
+	// RuleSettingsApplied reports that the run this retry follows ran
+	// with its rule's settings block.
+	RuleSettingsApplied bool
 
 	// TemplateID is the resolved template registry key of the run this
 	// retry follows.
@@ -475,6 +483,10 @@ type PendingReaction struct {
 
 	// RuleName is the rule name of the completed worker.
 	RuleName string
+
+	// RuleSettingsApplied reports that the completed worker ran with its
+	// rule's settings block.
+	RuleSettingsApplied bool
 
 	// TemplateID is the template key of the completed worker.
 	TemplateID string

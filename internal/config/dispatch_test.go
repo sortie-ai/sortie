@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -67,7 +69,7 @@ func TestBuildDispatchConfig_NilOrAbsent(t *testing.T) {
 			t.Parallel()
 
 			dir := mkDispatchDir(t)
-			got, err := BuildDispatchConfig(tt.raw, dir, alwaysRegistered)
+			got, err := BuildDispatchConfig(tt.raw, dir, alwaysRegistered, "")
 
 			if err != nil {
 				t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -105,7 +107,7 @@ func TestBuildDispatchConfig_HappyPath(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -144,7 +146,7 @@ func TestBuildDispatchConfig_CatchAllNoMatchBlock(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -174,7 +176,7 @@ func TestBuildDispatchConfig_ANDSemantics(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -204,7 +206,7 @@ func TestBuildDispatchConfig_ORWithinKey(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -248,7 +250,7 @@ func TestBuildDispatchConfig_PriorityPredicates(t *testing.T) {
 				},
 			}
 
-			got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+			got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 			if err != nil {
 				t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -284,7 +286,7 @@ func TestBuildDispatchConfig_PriorityInPredicate(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -338,7 +340,7 @@ func TestBuildDispatchConfig_PriorityPredicateRange(t *testing.T) {
 					},
 				}
 
-				_, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+				_, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 				ce := requireConfigError(t, err)
 				if ce.Field != "dispatch.rules[0].match.priority.gt" {
 					t.Errorf("ConfigError.Field = %q, want %q", ce.Field, "dispatch.rules[0].match.priority.gt")
@@ -365,7 +367,7 @@ func TestBuildDispatchConfig_PriorityPredicateRange(t *testing.T) {
 			},
 		}
 
-		_, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+		_, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 		ce := requireConfigError(t, err)
 		if ce.Field != "dispatch.rules[0].match.priority.in[1]" {
 			t.Errorf("ConfigError.Field = %q, want %q", ce.Field, "dispatch.rules[0].match.priority.in[1]")
@@ -390,7 +392,7 @@ func TestBuildDispatchConfig_PriorityPredicateRange(t *testing.T) {
 			},
 		}
 
-		got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+		got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 		if err != nil {
 			t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
 		}
@@ -529,6 +531,11 @@ func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 			wantMsg:   "unknown agent kind",
 		},
 		{
+			name:      "non-string agent",
+			raw:       map[string]any{"dispatch": map[string]any{"rules": []any{map[string]any{"name": "bad-agent", "agent": 7}}}},
+			wantField: "dispatch.rules[0].agent",
+		},
+		{
 			name: "unknown default agent kind",
 			raw: map[string]any{
 				"dispatch": map[string]any{
@@ -633,7 +640,7 @@ func TestBuildDispatchConfig_ErrorCases(t *testing.T) {
 				tt.setup(dir)
 			}
 
-			_, err := BuildDispatchConfig(tt.raw, dir, neverRegistered)
+			_, err := BuildDispatchConfig(tt.raw, dir, neverRegistered, "")
 
 			ce := requireConfigError(t, err)
 			if ce.Field != tt.wantField {
@@ -672,7 +679,7 @@ func TestBuildDispatchConfig_SinglePassFirstError(t *testing.T) {
 		},
 	}
 
-	_, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	_, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	ce := requireConfigError(t, err)
 	if ce.Field != "dispatch.rules[0].match.labels[0]" {
@@ -695,7 +702,7 @@ func TestBuildDispatchConfig_TemplateResolvedToAbsPath(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, dir, alwaysRegistered, "")
 
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
@@ -754,7 +761,7 @@ func TestBuildDispatchConfig_TemplateIDIsCanonicalAcrossSymlinks(t *testing.T) {
 		},
 	}
 
-	got, err := BuildDispatchConfig(raw, via, alwaysRegistered)
+	got, err := BuildDispatchConfig(raw, via, alwaysRegistered, "")
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig(via=%q) error = %v, want nil", via, err)
 	}
@@ -784,9 +791,120 @@ func TestBuildDispatchConfig_NilProbeIsPermissive(t *testing.T) {
 		},
 	}
 
-	_, err := BuildDispatchConfig(raw, dir, nil)
+	_, err := BuildDispatchConfig(raw, dir, nil, "")
 
 	if err != nil {
 		t.Errorf("BuildDispatchConfig() with nil probe error = %v, want nil (permissive)", err)
+	}
+}
+
+func kindsRegistered(kinds ...string) func(string) bool {
+	return func(kind string) bool { return slices.Contains(kinds, kind) }
+}
+
+func dispatchRaw(defaultAgent string, rules ...map[string]any) map[string]any {
+	seq := make([]any, len(rules))
+	for i, rule := range rules {
+		seq[i] = rule
+	}
+	dispatch := map[string]any{"rules": seq}
+	if defaultAgent != "" {
+		dispatch["default"] = map[string]any{"agent": defaultAgent}
+	}
+	return map[string]any{"dispatch": dispatch}
+}
+
+func TestBuildDispatchConfig_RuleSettingsBlockFaults(t *testing.T) {
+	t.Parallel()
+
+	const (
+		fromAgentKind  = ", taken from agent.kind"
+		wrongKind      = `settings block for agent kind "kind-b", but this rule runs agent kind "kind-a"`
+		notMappingTail = "; write {} for an empty block"
+		notMappingHead = "a rule's settings block must hold the kind's settings as keys, got "
+		noCommand      = "agent.command belongs to the default agent kind; a dispatch rule cannot set a command"
+	)
+	rule := func(block map[string]any) map[string]any {
+		block["name"] = "r"
+		return block
+	}
+	kindA := func(block any) map[string]any { return rule(map[string]any{"kind-a": block}) }
+	type faultCase struct {
+		name      string
+		raw       map[string]any
+		wantField string
+		wantMsg   string
+	}
+	tests := []faultCase{
+		{name: "block for another kind than the rule's agent", raw: dispatchRaw("", rule(map[string]any{"agent": "kind-a", "kind-b": map[string]any{}})), wantField: "dispatch.rules[0].kind-b", wantMsg: wrongKind},
+		{name: "block for another kind than dispatch.default.agent", raw: dispatchRaw("kind-b", kindA(map[string]any{})), wantField: "dispatch.rules[0].kind-a", wantMsg: `settings block for agent kind "kind-a", but this rule runs agent kind "kind-b", taken from dispatch.default.agent`},
+		{name: "block for another kind than agent.kind", raw: dispatchRaw("", rule(map[string]any{"kind-b": map[string]any{}})), wantField: "dispatch.rules[0].kind-b", wantMsg: wrongKind + fromAgentKind},
+		{name: "block is a bare YAML null", raw: dispatchRaw("", kindA(nil)), wantField: "dispatch.rules[0].kind-a", wantMsg: notMappingHead + "no value" + notMappingTail},
+		{name: "block is a text value", raw: dispatchRaw("", kindA("m")), wantField: "dispatch.rules[0].kind-a", wantMsg: notMappingHead + "a text value" + notMappingTail},
+		{name: "block is a list", raw: dispatchRaw("", kindA([]any{"m"})), wantField: "dispatch.rules[0].kind-a", wantMsg: notMappingHead + "a list" + notMappingTail},
+		{name: "block writes kind", raw: dispatchRaw("", kindA(map[string]any{"kind": "kind-b"})), wantField: "dispatch.rules[0].kind-a.kind", wantMsg: "a rule chooses its agent kind with its agent key"},
+		{name: "block writes command", raw: dispatchRaw("", kindA(map[string]any{"command": "x"})), wantField: "dispatch.rules[0].kind-a.command", wantMsg: noCommand},
+		{name: "rule with a block has no name", raw: dispatchRaw("", map[string]any{"kind-a": map[string]any{"model": "m"}}), wantField: "dispatch.rules[0]", wantMsg: "a rule that carries a settings block must have a name"},
+		{name: "rule named default carries a block", raw: dispatchRaw("", map[string]any{"name": "default", "kind-a": map[string]any{"model": "m"}}), wantField: "dispatch.rules[0].name", wantMsg: `"default" is the name run history and statistics give the dispatch.default selection; a rule that carries a settings block must use another name`},
+		{name: "a wrong-kind block is reported before a non-mapping one", raw: dispatchRaw("", rule(map[string]any{"kind-b": nil})), wantField: "dispatch.rules[0].kind-b", wantMsg: wrongKind + fromAgentKind},
+		{name: "a non-mapping block is reported before a reserved key", raw: dispatchRaw("", kindA("x")), wantField: "dispatch.rules[0].kind-a", wantMsg: notMappingHead + "a text value" + notMappingTail},
+		{name: "a reserved key is reported before a missing name", raw: dispatchRaw("", map[string]any{"kind-a": map[string]any{"command": "x"}}), wantField: "dispatch.rules[0].kind-a.command", wantMsg: noCommand},
+		{name: "first failing rule in YAML order is returned", raw: dispatchRaw("", map[string]any{"name": "ok", "match": map[string]any{"labels": []any{"x"}}, "kind-a": map[string]any{}}, map[string]any{"name": "bad", "kind-a": "x"}), wantField: "dispatch.rules[1].kind-a", wantMsg: notMappingHead + "a text value" + notMappingTail},
+		{name: "a key that names no registered kind stays unknown", raw: dispatchRaw("", rule(map[string]any{"match": map[string]any{"labels": []any{"x"}}, "no-such-kind": map[string]any{}})), wantField: "dispatch.rules[0].no-such-kind", wantMsg: "unknown key"},
+		{name: "a rule with none of the four carries", raw: dispatchRaw("", rule(map[string]any{})), wantField: "dispatch.rules[0]", wantMsg: "rule must specify at least one of match, agent, template, or a settings block"},
+		{name: "dispatch.default names a registered kind", raw: map[string]any{"dispatch": map[string]any{"default": map[string]any{"kind-a": map[string]any{}}}}, wantField: "dispatch.default.kind-a", wantMsg: "dispatch.default carries no settings block; the top-level kind-a block holds the default settings"},
+		{name: "dispatch.default names no registered kind", raw: map[string]any{"dispatch": map[string]any{"default": map[string]any{"no-such-kind": map[string]any{}}}}, wantField: "dispatch.default.no-such-kind", wantMsg: "unknown key"},
+	}
+	for _, key := range []string{"turn_timeout_ms", "read_timeout_ms", "stall_timeout_ms", "stop_grace_ms"} {
+		tests = append(tests, faultCase{
+			name:      "block writes " + key,
+			raw:       dispatchRaw("", kindA(map[string]any{key: nil})),
+			wantField: "dispatch.rules[0].kind-a." + key,
+			wantMsg:   "agent." + key + " is workflow-wide; a dispatch rule cannot override it",
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := BuildDispatchConfig(tt.raw, mkDispatchDir(t), kindsRegistered("kind-a", "kind-b"), "kind-a")
+
+			ce := requireConfigError(t, err)
+			if ce.Field != tt.wantField || ce.Message != tt.wantMsg {
+				t.Errorf("BuildDispatchConfig() error = {Field:%q Message:%q}, want {Field:%q Message:%q}", ce.Field, ce.Message, tt.wantField, tt.wantMsg)
+			}
+		})
+	}
+}
+
+func TestBuildDispatchConfig_RuleSettingsBlockStored(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		raw          map[string]any
+		wantKind     string
+		wantSettings map[string]any
+	}{
+		{name: "rule agent names the kind", raw: dispatchRaw("kind-a", map[string]any{"name": "r", "agent": "kind-b", "kind-b": map[string]any{"model": "m"}}), wantKind: "kind-b", wantSettings: map[string]any{"model": "m"}},
+		{name: "dispatch.default.agent names the kind when the rule has no agent", raw: dispatchRaw("kind-b", map[string]any{"name": "r", "kind-b": map[string]any{"effort": nil}}), wantKind: "kind-b", wantSettings: map[string]any{"effort": nil}},
+		{name: "agent.kind names the kind when nothing else does", raw: dispatchRaw("", map[string]any{"name": "r", "kind-a": map[string]any{}}), wantKind: "kind-a", wantSettings: map[string]any{}},
+		{name: "a rule without a block carries none", raw: dispatchRaw("", map[string]any{"name": "r", "agent": "kind-a"}), wantKind: "", wantSettings: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := BuildDispatchConfig(tt.raw, mkDispatchDir(t), kindsRegistered("kind-a", "kind-b"), "kind-a")
+
+			if err != nil {
+				t.Fatalf("BuildDispatchConfig() error = %v, want nil", err)
+			}
+			if rule := got.Rules[0]; rule.SettingsKind != tt.wantKind || !reflect.DeepEqual(rule.Settings, tt.wantSettings) {
+				t.Errorf("Rules[0] SettingsKind, Settings = %q, %#v, want %q, %#v", rule.SettingsKind, rule.Settings, tt.wantKind, tt.wantSettings)
+			}
+		})
 	}
 }

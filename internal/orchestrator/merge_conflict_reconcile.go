@@ -317,11 +317,12 @@ func dispatchMergeConflictContinuation(
 		ContinuationContext: map[string]any{
 			"merge_conflict": mergeContext,
 		},
-		ReactionKind: ReactionKindMergeConflict,
-		AgentKind:    pending.AgentKind,
-		RuleName:     pending.RuleName,
-		TemplateID:   pending.TemplateID,
-		Logger:       log,
+		ReactionKind:        ReactionKindMergeConflict,
+		AgentKind:           pending.AgentKind,
+		RuleName:            pending.RuleName,
+		RuleSettingsApplied: pending.RuleSettingsApplied,
+		TemplateID:          pending.TemplateID,
+		Logger:              log,
 	}, params.OnRetryFire)
 
 	if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindMergeConflict); markErr != nil {

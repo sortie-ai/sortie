@@ -9642,6 +9642,10 @@ func (r *sessionRecorder) started() []domain.StartSessionParams {
 	return slices.DeleteFunc(r.adapter.recorded(), func(p domain.StartSessionParams) bool { return p.CredentialVerification })
 }
 
+func (r *sessionRecorder) verified() []domain.StartSessionParams {
+	return slices.DeleteFunc(r.adapter.recorded(), func(p domain.StartSessionParams) bool { return !p.CredentialVerification })
+}
+
 type runTracker struct {
 	*mockTrackerAdapter
 	mu               sync.Mutex
@@ -10130,7 +10134,7 @@ func seedRetry(h *runHarness, mode string, entry RetryEntry) {
 	ScheduleRetry(h.state, ScheduleRetryParams{
 		IssueID: entry.IssueID, Identifier: entry.Identifier, Attempt: entry.Attempt, DelayMS: 20,
 		SessionID: entry.SessionID, AgentKind: entry.AgentKind, RuleName: entry.RuleName, TemplateID: entry.TemplateID,
-		ReactionKind: entry.ReactionKind,
+		ReactionKind: entry.ReactionKind, RuleSettingsApplied: entry.RuleSettingsApplied,
 	}, h.o.onRetryFire)
 }
 
@@ -10299,6 +10303,60 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 	}
 }
 
+func ruleBlock(name, label, agent string, block map[string]any) map[string]any {
+	return map[string]any{"name": name, "match": map[string]any{"labels": []any{label}}, "agent": agent, agent: block}
+}
+
+func TestRun_TwoRulesOnOneKindDispatchWithTheirOwnSettings(t *testing.T) {
+	t.Parallel()
+
+	raw := map[string]any{
+		"agent":  map[string]any{"kind": "plain", "command": "plain-cmd"},
+		"kind-b": map[string]any{"model": "top-model", "effort": "high", "keep": 1},
+		"dispatch": map[string]any{"rules": []any{
+			ruleBlock("cheap", "cheap", "kind-b", map[string]any{"model": "model-a", "effort": nil}),
+			ruleBlock("strong", "strong", "kind-b", map[string]any{"model": "model-b"}),
+		}},
+	}
+	h := newRunHarness(t, runConfig(t, raw), "plain", "kind-b")
+	h.tracker.candidates = []domain.Issue{candidate("id-1", "C-1", "cheap"), candidate("id-2", "S-1", "strong"), candidate("id-3", "P-1")}
+
+	h.run()
+	sessions := h.waitForSessions(3)
+	h.stop()
+
+	tests := []struct {
+		identifier, kind string
+		wantSettings     map[string]any
+	}{
+		{identifier: "C-1", kind: "kind-b", wantSettings: map[string]any{"model": "model-a", "keep": 1}},
+		{identifier: "S-1", kind: "kind-b", wantSettings: map[string]any{"model": "model-b", "effort": "high", "keep": 1}},
+		{identifier: "P-1", kind: "plain", wantSettings: map[string]any{}},
+	}
+	for _, tt := range tests {
+		kind, params := sessionOfWorkspace(t, sessions, tt.identifier)
+		gotSettings := map[string]any{}
+		for _, key := range []string{"model", "effort", "keep"} {
+			if value, present := params.Settings[key]; present {
+				gotSettings[key] = value
+			}
+		}
+		if kind != tt.kind || !maps.Equal(gotSettings, tt.wantSettings) {
+			t.Errorf("%s working StartSession adapter, Settings = %q, %v, want %q, %v", tt.identifier, kind, gotSettings, tt.kind, tt.wantSettings)
+		}
+	}
+
+	var verifiedModels []string
+	for _, params := range h.recorders["kind-b"].verified() {
+		model, _ := params.Settings["model"].(string)
+		verifiedModels = append(verifiedModels, model)
+	}
+	slices.Sort(verifiedModels)
+	if !slices.Equal(verifiedModels, []string{"model-a", "model-b"}) {
+		t.Errorf("credential-verification StartSession models = %v, want each rule's model once", verifiedModels)
+	}
+}
+
 func interactiveModeRaw(withBadBlock bool) map[string]any {
 	raw := map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}}
 	if withBadBlock {
@@ -10344,6 +10402,20 @@ func TestHandleTick_RefusedSettingsBlockStartsNothing(t *testing.T) {
 func TestRun_RetryAppliesTheSettingsInForceAtItsStart(t *testing.T) {
 	t.Parallel()
 
+	ruleRaw := func(block map[string]any) func() map[string]any {
+		return func() map[string]any {
+			return map[string]any{
+				"agent":  map[string]any{"kind": "kind-a", "command": "a-cmd"},
+				"kind-b": map[string]any{"model": "top-model", "effort": "high"},
+				"dispatch": map[string]any{"rules": []any{
+					map[string]any{"name": "cheap", "match": map[string]any{"labels": []any{"cheap"}}, "agent": "kind-b", "kind-b": maps.Clone(block)},
+				}},
+			}
+		}
+	}
+	frozenRule := RetryEntry{Attempt: 1, AgentKind: "kind-b", RuleName: "cheap", SessionID: "sess-old", RuleSettingsApplied: true}
+	reaction := frozenRule
+	reaction.ReactionKind = ReactionKindReview
 	kindA := RetryEntry{Attempt: 1, AgentKind: "kind-a", SessionID: "sess-old"}
 	topLevelChanged := func() map[string]any {
 		return map[string]any{"agent": map[string]any{"kind": "kind-a", "command": "a-cmd"}, "kind-a": map[string]any{"model": "new-model"}}
@@ -10360,6 +10432,8 @@ func TestRun_RetryAppliesTheSettingsInForceAtItsStart(t *testing.T) {
 		wantRefusal                     bool
 	}{
 		{name: "top-level block changed since the frozen attempt", raw: topLevelChanged, frozen: kindA, issue: candidate("id-retry", "R-1"), wantKind: "kind-a", wantModel: "new-model"},
+		{name: "rule block in force, label since moved off the rule", raw: ruleRaw(map[string]any{"model": "rule-model"}), frozen: frozenRule, issue: candidate("id-retry", "R-1", "strong"), wantKind: "kind-b", wantModel: "rule-model", wantEffort: "high"},
+		{name: "reaction continuation of a held claim", modes: []string{"timer"}, raw: ruleRaw(map[string]any{"model": "rule-model", "effort": "low"}), frozen: reaction, issue: domain.Issue{ID: "id-retry", Identifier: "R-1", Title: "R-1", State: "In Review"}, wantKind: "kind-b", wantModel: "rule-model", wantEffort: "low"},
 		{name: "block a reload made refusable", modes: []string{"timer"}, meta: true, raw: func() map[string]any { return interactiveModeRaw(true) }, frozen: kindA, issue: candidate("id-retry", "R-1"), wantRefusal: true},
 	}
 

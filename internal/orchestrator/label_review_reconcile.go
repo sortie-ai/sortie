@@ -184,11 +184,12 @@ func reconcileLabelReviewCommands(state *State, params ReconcileParams, log *slo
 				ContinuationContext: map[string]any{
 					"label_review": buildLabelReviewMap(data, newestMatch.Actor, newestMatch.At),
 				},
-				ReactionKind: ReactionKindLabelReview,
-				AgentKind:    pending.AgentKind,
-				RuleName:     pending.RuleName,
-				TemplateID:   pending.TemplateID,
-				Logger:       entryLog,
+				ReactionKind:        ReactionKindLabelReview,
+				AgentKind:           pending.AgentKind,
+				RuleName:            pending.RuleName,
+				RuleSettingsApplied: pending.RuleSettingsApplied,
+				TemplateID:          pending.TemplateID,
+				Logger:              entryLog,
 			}, params.OnRetryFire)
 
 			// Best-effort acknowledgment: the label's disappearance tells the

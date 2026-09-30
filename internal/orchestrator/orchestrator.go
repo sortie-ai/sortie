@@ -854,6 +854,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
+			entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
 			entry.TemplateID = resolution.TemplateID
 			entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 			freezeIssueTokenBaseline(ctx, o.state, issue.ID, o.store, o.logger)

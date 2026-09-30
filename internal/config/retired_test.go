@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -109,7 +110,7 @@ func loadConverted(t *testing.T, raw map[string]any) ServiceConfig {
 func loadConvertedWithDispatch(t *testing.T, raw map[string]any) ServiceConfig {
 	t.Helper()
 	cfg := loadConverted(t, raw)
-	dispatch, err := BuildDispatchConfig(raw, mkDispatchDir(t), alwaysRegistered)
+	dispatch, err := BuildDispatchConfig(raw, mkDispatchDir(t), alwaysRegistered, "")
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v", err)
 	}
@@ -290,7 +291,7 @@ func TestRetiredConversion_RewritesEveryReference(t *testing.T) {
 	}
 
 	probe := func(kind string) bool { return kind == replacementKind || kind == plainKind }
-	dispatch, err := BuildDispatchConfig(raw, mkDispatchDir(t), probe)
+	dispatch, err := BuildDispatchConfig(raw, mkDispatchDir(t), probe, "")
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() on the rewritten map error = %v, want the converted kinds to pass the probe", err)
 	}
@@ -820,6 +821,94 @@ func TestWorkerSSHHosts(t *testing.T) {
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("WorkerSSHHosts(%v) = %v, want %v", tt.worker, got, tt.want)
 			}
+		})
+	}
+}
+
+func retiredRuleRaw(agentKind string, rule, topLevel, dispatchDefault map[string]any) map[string]any {
+	dispatch := map[string]any{"rules": []any{rule}}
+	if dispatchDefault != nil {
+		dispatch["default"] = dispatchDefault
+	}
+	raw := map[string]any{"agent": map[string]any{"kind": agentKind, "command": "plain-cmd"}, "dispatch": dispatch}
+	if topLevel != nil {
+		raw[retiredKind] = topLevel
+	}
+	return raw
+}
+
+func retiredRule(withAgent bool, block map[string]any) map[string]any {
+	rule := map[string]any{"name": "r", "match": map[string]any{"labels": []any{"backend"}}, retiredKind: block}
+	if withAgent {
+		rule["agent"] = retiredKind
+	}
+	return rule
+}
+
+func TestRetiredConversion_RuleBlockConvertsWithItsKind(t *testing.T) {
+	t.Parallel()
+
+	modern := map[string]any{"mode": "local", "literal": "$NOT_RESOLVED_AGAIN"}
+	top := func() map[string]any { return map[string]any{"model": "m1"} }
+	own := retiredRule(true, top())
+	own[replacementKind] = map[string]any{"mode": "own"}
+	tests := []struct {
+		name          string
+		raw           map[string]any
+		wantModern    map[string]any
+		wantNotCarry  string
+		wantRuleAgent string
+	}{
+		{name: "block is converted and replaced under the replacement kind", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"model": "m1", "extra": "zz"}), top(), nil), wantModern: modern, wantNotCarry: "not carried: dispatch.rules[0].legacy.extra", wantRuleAgent: replacementKind},
+		{name: "a key the rule already sets under the replacement kind wins", raw: retiredRuleRaw(plainKind, own, top(), nil), wantModern: map[string]any{"mode": "own", "literal": "$NOT_RESOLVED_AGAIN"}, wantRuleAgent: replacementKind},
+		{name: "rule takes its kind from dispatch.default.agent", raw: retiredRuleRaw(plainKind, retiredRule(false, top()), top(), map[string]any{"agent": retiredKind}), wantModern: modern},
+		{name: "no top-level block and an empty rule block leave the command unchanged", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{}), nil, nil), wantModern: modern, wantRuleAgent: replacementKind},
+		{name: "conversion that does not govern sessions is advisory only", raw: retiredRuleRaw(replacementKind, retiredRule(true, map[string]any{"model": "m2"}), top(), nil), wantModern: modern, wantRuleAgent: replacementKind},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := loadConverted(t, tt.raw)
+
+			rule := tt.raw["dispatch"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+			if _, present := rule[retiredKind]; present || !reflect.DeepEqual(rule[replacementKind], tt.wantModern) {
+				t.Errorf("rule blocks %q, %q = %v, %v, want the first removed and the second %v", retiredKind, replacementKind, rule[retiredKind], rule[replacementKind], tt.wantModern)
+			}
+			if tt.wantRuleAgent != "" && rule["agent"] != tt.wantRuleAgent {
+				t.Errorf("rule agent = %v, want %q", rule["agent"], tt.wantRuleAgent)
+			}
+			if advisories := cfg.Advisories(); tt.wantNotCarry != "" && (len(advisories) != 1 || !strings.Contains(advisories[0].Text, tt.wantNotCarry)) {
+				t.Errorf("Advisories() = %+v, want one whose text contains %q", advisories, tt.wantNotCarry)
+			}
+		})
+	}
+}
+
+func TestRetiredConversion_RuleBlockRefusals(t *testing.T) {
+	t.Parallel()
+
+	const changesCommand = `agent kind "legacy" was removed and this rule's settings cannot be converted to agent kind "modern": they change the command the replacement kind launches, which a dispatch rule cannot set`
+	top := func() map[string]any { return map[string]any{"model": "m1"} }
+	tests := []struct {
+		name      string
+		raw       map[string]any
+		wantField string
+		wantMsg   string
+	}{
+		{name: "rule block converts to a different command than the top-level block", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"model": "m2"}), top(), nil), wantField: "dispatch.rules[0].legacy", wantMsg: changesCommand},
+		{name: "rule block changes the command when no top-level block exists", raw: retiredRuleRaw(plainKind, retiredRule(true, top()), nil, nil), wantField: "dispatch.rules[0].legacy", wantMsg: changesCommand},
+		{name: "conversion fault in the rule block", raw: retiredRuleRaw(plainKind, retiredRule(true, map[string]any{"bad": true}), top(), nil), wantField: "dispatch.rules[0].legacy.bad", wantMsg: `agent kind "legacy" was removed and this configuration cannot be converted to agent kind "modern": bad is refused`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewServiceConfig(tt.raw, WithRetiredAgents(fixtureLookup))
+
+			requireConversionError(t, err, tt.wantField, tt.wantMsg)
 		})
 	}
 }

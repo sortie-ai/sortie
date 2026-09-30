@@ -2490,3 +2490,163 @@ func TestValidateDispatchConfig_WorkspaceRootWritable(t *testing.T) {
 		})
 	}
 }
+
+func ruleBlockPreflight(cfg config.ServiceConfig) PreflightParams {
+	params := validPreflightParams()
+	params.ConfigFunc = func() config.ServiceConfig { return cfg }
+	params.AgentRegistry = &stubAgentRegistry{
+		getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
+		metaFunc: func(kind string) (registry.AgentMeta, bool) {
+			if kind == "codex" {
+				return settingsMeta(), true
+			}
+			return registry.AgentMeta{}, true
+		},
+	}
+	return params
+}
+
+func ruleBlockConfig(topLevel map[string]any, defaultKind string, rules ...config.DispatchRule) config.ServiceConfig {
+	cfg := config.ServiceConfig{
+		Tracker:  config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"},
+		Agent:    config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"},
+		Dispatch: config.DispatchConfig{Default: config.DispatchSelection{AgentKind: defaultKind}, Rules: rules},
+	}
+	if topLevel != nil {
+		cfg.SetExtensionSection("codex", topLevel)
+	}
+	return cfg
+}
+
+func codexRule(name string, block map[string]any) config.DispatchRule {
+	rule := config.DispatchRule{Name: name, Match: config.DispatchMatch{Labels: []string{name}}, Selection: config.DispatchSelection{AgentKind: "codex"}}
+	if block != nil {
+		rule.SettingsKind, rule.Settings = "codex", block
+	}
+	return rule
+}
+
+func settingsChecks(result PreflightResult, prefix string) []string {
+	var got []string
+	for _, e := range result.Errors {
+		if e.Check != "dispatch.agent.missing_block" && strings.HasPrefix(e.Message, prefix) {
+			got = append(got, "error "+e.Check)
+		}
+	}
+	for _, w := range result.Warnings {
+		if w.Check != "agent.kind.no_tool_channel" && strings.HasPrefix(w.Message, prefix) {
+			got = append(got, "warning "+w.Check)
+		}
+	}
+	slices.Sort(got)
+	return got
+}
+
+func TestValidateDispatchConfig_RuleBlockDrawsTheChecksTheTopLevelBlockDraws(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		block      map[string]any
+		wantChecks []string
+	}{
+		{name: "error check", block: map[string]any{"permission_mode": "default"}, wantChecks: []string{"error codex.permission_mode.interactive"}},
+		{name: "warning check", block: map[string]any{"noisy": true}, wantChecks: []string{"warning codex.noisy"}},
+		{name: "type fault", block: map[string]any{"model": 7}, wantChecks: []string{"error codex.model.wrong_type"}},
+		{name: "session resume blocker", block: map[string]any{"session_persistence": false}, wantChecks: []string{"error agent.kind.session_resume"}},
+		{name: "clean block", block: map[string]any{"model": "m"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			topLevel := ValidateDispatchConfig(ruleBlockPreflight(ruleBlockConfig(tt.block, "", codexRule("", nil))))
+			inRule := ValidateDispatchConfig(ruleBlockPreflight(ruleBlockConfig(nil, "", codexRule("cheap", tt.block))))
+
+			gotTop := settingsChecks(topLevel, "")
+			gotRule := settingsChecks(inRule, `dispatch rule "cheap" (dispatch.rules[0].codex): `)
+			if !slices.Equal(gotTop, tt.wantChecks) || !slices.Equal(gotRule, tt.wantChecks) {
+				t.Errorf("checks drawn by the top-level block, the rule block = %v, %v, want %v for both", gotTop, gotRule, tt.wantChecks)
+			}
+			requireNoCheck(t, inRule, "dispatch.agent.missing_block")
+			wantErrors := slices.DeleteFunc(slices.Clone(tt.wantChecks), func(c string) bool { return !strings.HasPrefix(c, "error ") })
+			if len(inRule.Errors) != len(wantErrors) {
+				t.Errorf("rule block errors = %+v, want %d: the absent top-level block draws no second report", inRule.Errors, len(wantErrors))
+			}
+		})
+	}
+}
+
+func TestValidateDispatchConfig_FaultInheritedFromTheTopLevelBlockIsReportedForEachInheritingRule(t *testing.T) {
+	t.Parallel()
+
+	first, second := codexRule("first", map[string]any{"model": "a"}), codexRule("second", map[string]any{"model": "b"})
+
+	result := ValidateDispatchConfig(ruleBlockPreflight(ruleBlockConfig(map[string]any{"permission_mode": "default"}, "codex", first, second)))
+
+	var messages []string
+	for _, e := range result.Errors {
+		if e.Check == "codex.permission_mode.interactive" {
+			messages = append(messages, e.Message)
+		}
+	}
+	want := []string{
+		"permission mode asks",
+		`dispatch rule "first" (dispatch.rules[0].codex): permission mode asks`,
+		`dispatch rule "second" (dispatch.rules[1].codex): permission mode asks`,
+	}
+	if !slices.Equal(messages, want) {
+		t.Errorf("permission_mode errors = %q, want the top-level report then one per inheriting rule: %q", messages, want)
+	}
+}
+
+func TestValidateDispatchConfig_MissingBlockWithRuleBlocks(t *testing.T) {
+	t.Parallel()
+
+	const tail = `, but the workflow front matter carries no "codex" settings block; add a top-level "codex:" block for that kind, or write "codex: {}"`
+	withBlock := func(name string) config.DispatchRule { return codexRule(name, map[string]any{}) }
+	tests := []struct {
+		name        string
+		defaultKind string
+		rules       []config.DispatchRule
+		wantMessage string
+	}{
+		{name: "first selector without a block is a rule after a block rule", defaultKind: "", rules: []config.DispatchRule{withBlock("a"), codexRule("second", nil)}, wantMessage: `dispatch rule "second" (dispatch.rules[1].agent) selects agent kind "codex"` + tail},
+		{name: "dispatch.default.agent is named before any rule", defaultKind: "codex", rules: []config.DispatchRule{withBlock("a"), codexRule("second", nil)}, wantMessage: `dispatch.default.agent selects agent kind "codex"` + tail},
+		{name: "a rule with a block does not cover dispatch.default.agent", defaultKind: "codex", rules: []config.DispatchRule{withBlock("a")}, wantMessage: `dispatch.default.agent selects agent kind "codex"` + tail},
+		{name: "every selector is a rule carrying the block", defaultKind: "", rules: []config.DispatchRule{withBlock("a"), withBlock("b")}, wantMessage: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := ValidateDispatchConfig(ruleBlockPreflight(ruleBlockConfig(nil, tt.defaultKind, tt.rules...)))
+
+			if tt.wantMessage == "" {
+				requireNoCheck(t, result, "dispatch.agent.missing_block")
+				return
+			}
+			assertMissingBlockMessage(t, result, tt.wantMessage)
+		})
+	}
+
+	t.Run("a top-level value that is not a mapping draws the error as today", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := config.NewServiceConfig(map[string]any{"codex": "text"})
+		if err != nil {
+			t.Fatalf("NewServiceConfig() error = %v", err)
+		}
+		cfg.Tracker = config.TrackerConfig{Kind: "test-tracker", APIKey: "secret"}
+		cfg.Agent = config.AgentConfig{Kind: "claude-code", Command: "/usr/bin/agent"}
+		cfg.SetDispatch(config.DispatchConfig{Rules: []config.DispatchRule{withBlock("a")}})
+
+		result := ValidateDispatchConfig(ruleBlockPreflight(cfg))
+
+		if !hasCheck(t, result, "dispatch.agent.missing_block") {
+			t.Errorf("errors = %+v, want dispatch.agent.missing_block for a non-mapping top-level block even when every selector carries its own block", result.Errors)
+		}
+	})
+}

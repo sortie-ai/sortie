@@ -322,7 +322,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			// Sequence descent for sections that carry a YAML sequence
 			// of maps (e.g. dispatch.rules).
 			if field.Type == FieldSequence && sectionName == "dispatch" && field.Name == "rules" {
-				warnings = descendDispatchRules(warnings, v)
+				warnings = descendDispatchRules(warnings, v, rawDefaultAgentKind(raw))
 			}
 			// Nested map type checking (e.g. tracker.comments sub-fields).
 			if field.Nested != nil {
@@ -364,7 +364,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	// snapshot captured during NewServiceConfig. A non-empty resolved
 	// leaf indicates the variable was set; a resolved empty leaf is the
 	// warning trigger.
-	warnings = checkUnresolvedExtensionVars(warnings, cfg)
+	warnings = checkUnresolvedExtensionVars(warnings, cfg, raw)
 	warnings = checkIneffectiveTokenWarningSetting(warnings, cfg)
 
 	return warnings
@@ -393,15 +393,22 @@ func checkIneffectiveTokenWarningSetting(warnings []FrontMatterWarning, cfg Serv
 // "https://$HOST:$PORT/path" still warns about PORT when only HOST is
 // set. Entries whose extracted variable name is empty (e.g. the $$
 // literal) are excluded.
-func checkUnresolvedExtensionVars(warnings []FrontMatterWarning, cfg ServiceConfig) []FrontMatterWarning {
+//
+// A path under dispatch is looked up in raw, where a rule's block lives,
+// because a caller that only validates the front matter has not set
+// cfg.Dispatch.
+func checkUnresolvedExtensionVars(warnings []FrontMatterWarning, cfg ServiceConfig, raw map[string]any) []FrontMatterWarning {
 	if len(cfg.extensionsPreResolution) == 0 {
 		return warnings
 	}
 	paths := maputil.SortedKeys(cfg.extensionsPreResolution)
 	for _, path := range paths {
 		before := cfg.extensionsPreResolution[path]
-		_, ok := lookupExtensionValue(cfg.extensions, path)
-		if !ok {
+		source := cfg.extensions
+		if strings.HasPrefix(path, "dispatch.") {
+			source = raw
+		}
+		if _, ok := lookupExtensionValue(source, path); !ok {
 			continue
 		}
 		unsetNames := extractUnsetExtensionVars(before)
@@ -736,8 +743,10 @@ func typeName(ft FieldType) string {
 
 // descendDispatchRules walks the dispatch.rules sequence and emits
 // unknown_sub_key warnings for unrecognized per-rule keys and per-match
-// keys. The sequence shape itself is already type-checked.
-func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any) []FrontMatterWarning {
+// keys. A key naming the rule's agent kind (its agent, else defaultKind)
+// is its settings block and draws none. The sequence shape is already
+// type-checked.
+func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any, defaultKind string) []FrontMatterWarning {
 	seq, ok := rulesVal.([]any)
 	if !ok {
 		return warnings
@@ -748,9 +757,13 @@ func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any) []FrontMa
 			continue
 		}
 		rulePath := fmt.Sprintf("dispatch.rules[%d]", i)
+		ruleKind := defaultKind
+		if own, ok := ruleMap["agent"].(string); ok && own != "" {
+			ruleKind = own
+		}
 		keys := maputil.SortedKeys(ruleMap)
 		for _, key := range keys {
-			if !dispatchRuleAllowedKeys[key] {
+			if !dispatchRuleAllowedKeys[key] && key != ruleKind {
 				warnings = append(warnings, FrontMatterWarning{
 					Check:   "unknown_sub_key",
 					Field:   rulePath + "." + key,

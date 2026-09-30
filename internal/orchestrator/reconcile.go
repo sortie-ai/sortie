@@ -334,6 +334,7 @@ func reconcileOverdueRetries(state *State, params ReconcileParams, log *slog.Log
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
 		}, params.OnRetryFire)
@@ -402,6 +403,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			ReactionKind:        entry.ReactionKind,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			RuleSettingsApplied: entry.RuleSettingsApplied,
 			TemplateID:          entry.TemplateID,
 			Logger:              entryLog,
 		}, params.OnRetryFire)

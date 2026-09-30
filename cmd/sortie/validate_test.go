@@ -5152,3 +5152,58 @@ func TestValidateRetiredKind_ConversionFaultReportsTheRetiredKey(t *testing.T) {
 		t.Errorf("errors = %v, want %v", got, want)
 	}
 }
+
+func ruleBlockValidateWorkflow(extraRule string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  active_states: [To Do]
+  terminal_states: [Done]
+agent: {kind: opencode, command: /usr/bin/true}
+opencode: {model: provider/strong, effort: high}
+dispatch:
+  rules:
+    - {name: low-cost, match: {labels: [cheap]}, opencode: {model: $SORTIE_TEST_1191_MODEL}}
+%sfile: {path: issues.json}
+---
+Do {{ .issue.title }}.
+`, extraRule)
+}
+
+func TestValidateRuleSettingsBlocks(t *testing.T) {
+	t.Setenv("SORTIE_TEST_1191_MODEL", "")
+
+	const wrongTypedRule = "    - {name: bad, match: {labels: [bad]}, opencode: {effort: 5}}\n"
+	tests := []struct {
+		name      string
+		extraRule string
+		wantCode  int
+		wantError bool
+	}{
+		{name: "a rule's wrong-typed key draws its diagnostic and exits 1", extraRule: wrongTypedRule, wantCode: 1, wantError: true},
+		{name: "a clean rule block exits 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, out := validateEffortJSON(t, ruleBlockValidateWorkflow(tt.extraRule))
+
+			if code != tt.wantCode || out.Valid == tt.wantError {
+				t.Errorf("validate exit code, valid = %d, %v, want %d, %v; errors: %+v", code, out.Valid, tt.wantCode, !tt.wantError, out.Errors)
+			}
+			wrongType := slices.ContainsFunc(out.Errors, func(d validateDiag) bool {
+				return d.Check == "opencode.effort.wrong_type" && strings.HasPrefix(d.Message, `dispatch rule "bad" (dispatch.rules[1].opencode): `)
+			})
+			if wrongType != tt.wantError {
+				t.Errorf("errors = %+v, want opencode.effort.wrong_type prefixed with the second rule: %v", out.Errors, tt.wantError)
+			}
+			unresolved := slices.ContainsFunc(out.Warnings, func(d validateDiag) bool {
+				return d.Check == "unresolved_extension_var" && strings.HasPrefix(d.Message, "dispatch.rules[0].opencode.model: ")
+			})
+			inherited := slices.ContainsFunc(out.Warnings, func(d validateDiag) bool { return d.Check == "agent.effort.inherited" })
+			if !unresolved || !inherited {
+				t.Errorf("warnings = %+v, want unresolved_extension_var on dispatch.rules[0].opencode.model and agent.effort.inherited", out.Warnings)
+			}
+		})
+	}
+}
