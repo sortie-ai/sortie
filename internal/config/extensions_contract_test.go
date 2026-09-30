@@ -123,11 +123,6 @@ func checkExtensionsIndexing(fset *token.FileSet, file *ast.File) []extensionsVi
 	return violations
 }
 
-// checkExtensionsCallArgs appends a violation for every call inside file
-// that passes a non-literal argument to ExtensionSection or
-// ExtensionValue, or a kind argument ending in Agent.Kind to
-// ResolveAgentSettings. Both rules apply
-// anywhere in the two walked roots, not only inside internal/config.
 func checkExtensionsCallArgs(fset *token.FileSet, file *ast.File) []extensionsViolation {
 	configIdent := resolveExtensionsImportName(file, extensionsConfigImportPath)
 
@@ -169,11 +164,28 @@ func checkExtensionsCallArgs(fset *token.FileSet, file *ast.File) []extensionsVi
 	return violations
 }
 
-// checkResolveAgentSettingsKind reports a violation for a single
-// ResolveAgentSettings call whose kind argument (the second parameter)
-// is a selector expression ending in Agent.Kind.
+func selectionNamesDefaultKind(expr ast.Expr) bool {
+	if isAgentKindSelector(expr) {
+		return true
+	}
+	lit, ok := ast.Unparen(expr).(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Kind" && isAgentKindSelector(kv.Value) {
+			return true
+		}
+	}
+	return false
+}
+
 func checkResolveAgentSettingsKind(fset *token.FileSet, call *ast.CallExpr) []extensionsViolation {
-	if len(call.Args) < 2 || !isAgentKindSelector(call.Args[1]) {
+	if len(call.Args) < 2 || !selectionNamesDefaultKind(call.Args[1]) {
 		return nil
 	}
 	return []extensionsViolation{{
@@ -288,7 +300,7 @@ func readSection(cfg ServiceConfig, name string) map[string]any {
 import "github.com/sortie-ai/sortie/internal/config"
 
 func resolve(cfg ServiceConfig, dir string) config.AgentSettings {
-	return config.ResolveAgentSettings(cfg, cfg.Agent.Kind, dir)
+	return config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: cfg.Agent.Kind}, dir)
 }
 `,
 			wantCount: 1,
@@ -308,7 +320,7 @@ func readSection(cfg ServiceConfig, name string) map[string]any {
 }
 
 func resolve(cfg ServiceConfig, dir string) config.AgentSettings {
-	return config.ResolveAgentSettings(cfg, (cfg.Agent).Kind, dir)
+	return config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: (cfg.Agent).Kind}, dir)
 }
 `,
 			wantCount: 3,

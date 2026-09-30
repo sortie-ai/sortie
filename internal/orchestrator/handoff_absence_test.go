@@ -14,7 +14,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
-	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 type handoffLabelCall struct {
@@ -1025,12 +1024,12 @@ func TestParkRetryLaneBackfillAndRelease(t *testing.T) {
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,
-		MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 			return func(context.Context, domain.Issue, *int) {}
 		},
 		AgentAdapterByKind: func(string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		ResolveUsageDisposition: func(_, _ string) (registry.UsageArrival, registry.UsageAttribution) {
-			return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+		ResolveAttemptSettings: func(_ DispatchResolution, _ string) AttemptSettings {
+			return AttemptSettings{}
 		},
 		OnRetryFire: noopRetryFire,
 		Ctx:         context.Background(),

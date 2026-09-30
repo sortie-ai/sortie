@@ -4033,6 +4033,11 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 	})
 }
 
+func agentAdapterMap(cfg ServiceConfig, kind string) map[string]any {
+	passthrough, _, _ := agentAdapterConfig(cfg, kind)
+	return passthrough
+}
+
 // TestAgentAdapterConfig_ExactlySixKeysWithNoExtensions asserts that
 // AgentAdapterConfig returns exactly the six documented keys when
 // cfg.extensions carries no sub-object for kind.
@@ -4050,7 +4055,7 @@ func TestAgentAdapterConfig_ExactlySixKeysWithNoExtensions(t *testing.T) {
 		},
 	}
 
-	got := AgentAdapterConfig(cfg, "claude-code")
+	got := agentAdapterMap(cfg, "claude-code")
 
 	want := map[string]any{
 		"kind":             "claude-code",
@@ -4078,7 +4083,7 @@ func TestAgentAdapterConfig_KindParameterOverridesAgentKind(t *testing.T) {
 
 	cfg := ServiceConfig{Agent: AgentConfig{Kind: "claude-code"}}
 
-	got := AgentAdapterConfig(cfg, "codex")
+	got := agentAdapterMap(cfg, "codex")
 
 	if got["kind"] != "codex" {
 		t.Errorf(`AgentAdapterConfig(cfg, "codex")["kind"] = %v, want "codex"`, got["kind"])
@@ -4108,7 +4113,7 @@ func TestAgentAdapterConfig_ExtensionCollisionWithOrchestratorOnlyFieldSurvives(
 		},
 	}
 
-	got := AgentAdapterConfig(cfg, "codex")
+	got := agentAdapterMap(cfg, "codex")
 
 	if got["max_turns"] != float64(5) {
 		t.Errorf(`AgentAdapterConfig()["max_turns"] = %v, want the extension value 5 (not shadowed by cfg.Agent.MaxTurns)`, got["max_turns"])
@@ -4146,7 +4151,7 @@ func TestAgentAdapterConfig_DoesNotOverwriteDocumentedKeys(t *testing.T) {
 		},
 	}
 
-	got := AgentAdapterConfig(cfg, "codex")
+	got := agentAdapterMap(cfg, "codex")
 
 	if got["command"] != "codex" {
 		t.Errorf(`AgentAdapterConfig()["command"] = %v, want "codex" (the typed field, not the extension override)`, got["command"])
@@ -4161,10 +4166,10 @@ func TestAgentAdapterConfig_FreshMapPerCall(t *testing.T) {
 
 	cfg := ServiceConfig{Agent: AgentConfig{Kind: "codex", Command: "codex"}}
 
-	first := AgentAdapterConfig(cfg, "codex")
+	first := agentAdapterMap(cfg, "codex")
 	first["command"] = "mutated"
 
-	second := AgentAdapterConfig(cfg, "codex")
+	second := agentAdapterMap(cfg, "codex")
 	if second["command"] != "codex" {
 		t.Errorf(`AgentAdapterConfig() second call ["command"] = %v, want "codex" (unaffected by mutating the first call's map)`, second["command"])
 	}
@@ -4285,7 +4290,7 @@ func TestResolveAgentSettings_BlockPresenceMatchesAgentAdapterConfig(t *testing.
 	cfg := ServiceConfig{extensions: map[string]any{"codex": "o3"}}
 
 	_, wantPresence, wantDescription := agentAdapterConfig(cfg, "codex")
-	got := ResolveAgentSettings(cfg, "codex", "")
+	got := ResolveAgentSettings(cfg, SettingsSelection{Kind: "codex"}, "")
 
 	if got.BlockPresence != wantPresence {
 		t.Errorf("ResolveAgentSettings().BlockPresence = %v, want %v", got.BlockPresence, wantPresence)
@@ -4395,7 +4400,7 @@ func TestResolveAgentSettings_MCPConfigPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ResolveAgentSettings(tt.cfg, tt.kind, tt.workflowDir)
+			got := ResolveAgentSettings(tt.cfg, SettingsSelection{Kind: tt.kind}, tt.workflowDir)
 
 			if got.MCPConfigPath != tt.wantPath {
 				t.Errorf("ResolveAgentSettings(cfg, %q, %q).MCPConfigPath = %q, want %q", tt.kind, tt.workflowDir, got.MCPConfigPath, tt.wantPath)
@@ -4420,8 +4425,8 @@ func TestResolveAgentSettings_PassthroughMatchesAgentAdapterConfig(t *testing.T)
 		},
 	}
 
-	got := ResolveAgentSettings(cfg, "codex", "")
-	want := AgentAdapterConfig(cfg, "codex")
+	got := ResolveAgentSettings(cfg, SettingsSelection{Kind: "codex"}, "")
+	want := agentAdapterMap(cfg, "codex")
 
 	if len(got.Passthrough) != len(want) {
 		t.Fatalf("ResolveAgentSettings().Passthrough = %v (len %d), want %v (len %d)", got.Passthrough, len(got.Passthrough), want, len(want))
@@ -4441,10 +4446,10 @@ func TestResolveAgentSettings_IndependentAllocationAcrossCalls(t *testing.T) {
 
 	cfg := ServiceConfig{Agent: AgentConfig{Kind: "codex", Command: "codex"}}
 
-	first := ResolveAgentSettings(cfg, "codex", "")
+	first := ResolveAgentSettings(cfg, SettingsSelection{Kind: "codex"}, "")
 	first.Passthrough["command"] = "mutated"
 
-	second := ResolveAgentSettings(cfg, "codex", "")
+	second := ResolveAgentSettings(cfg, SettingsSelection{Kind: "codex"}, "")
 	if second.Passthrough["command"] != "codex" {
 		t.Errorf(`ResolveAgentSettings() second call Passthrough["command"] = %v, want "codex" (unaffected by mutating the first call's map)`, second.Passthrough["command"])
 	}
@@ -5000,7 +5005,7 @@ func TestAgentAdapterConfig_SeedsTheLocalCommandForm(t *testing.T) {
 			t.Fatalf("NewServiceConfig() error = %v", err)
 		}
 
-		if got := AgentAdapterConfig(cfg, cfg.Agent.Kind)["command"]; got != "agent --fast" {
+		if got := agentAdapterMap(cfg, cfg.Agent.Kind)["command"]; got != "agent --fast" {
 			t.Errorf(`AgentAdapterConfig()["command"] = %#v, want %q`, got, "agent --fast")
 		}
 	})
@@ -5013,7 +5018,7 @@ func TestAgentAdapterConfig_SeedsTheLocalCommandForm(t *testing.T) {
 			t.Fatalf("NewServiceConfig() error = %v", err)
 		}
 
-		first, _ := AgentAdapterConfig(cfg, cfg.Agent.Kind)["command"].([]string)
+		first, _ := agentAdapterMap(cfg, cfg.Agent.Kind)["command"].([]string)
 		if !slices.Equal(first, []string{"agent", "a b"}) {
 			t.Fatalf(`AgentAdapterConfig()["command"] = %#v, want the list []string{"agent", "a b"}`, first)
 		}

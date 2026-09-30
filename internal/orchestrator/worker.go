@@ -287,7 +287,7 @@ type WorkerDeps struct {
 	// admits every figure.
 	UsageArrival registry.UsageArrival
 
-	// AgentSettings is the settings block of the attempt's agent kind.
+	// AgentSettings is the settings block resolved for this attempt.
 	AgentSettings config.AgentSettings
 
 	// OnEvent relays agent events to the serialized event loop. Called from
@@ -902,8 +902,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		settings := config.ResolveAgentSettings(cfg, agentKind, filepath.Dir(deps.WorkflowPath))
-
 		generatedPath, genErr := GenerateMCPConfig(MCPConfigParams{
 			BinaryPath:            execPath,
 			WorkflowPath:          deps.WorkflowPath,
@@ -914,7 +912,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			DispatchID:            deps.DispatchID,
 			Attempt:               attempt,
 			AgentKind:             agentKind,
-			OperatorMCPConfigPath: settings.MCPConfigPath,
+			OperatorMCPConfigPath: deps.AgentSettings.MCPConfigPath,
 			ProcessEnv:            CollectSortieEnv(),
 		})
 		if genErr != nil {
@@ -941,7 +939,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		logger.Info("mcp config written",
 			slog.String("mcp_config_path", generatedPath),
 			slog.String("agent_kind", agentKind),
-			slog.String("operator_mcp_config_path", settings.MCPConfigPath))
+			slog.String("operator_mcp_config_path", deps.AgentSettings.MCPConfigPath))
 	}
 
 	writeDispatchIdentity := func(sessionID string) {

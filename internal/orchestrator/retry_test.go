@@ -228,12 +228,12 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,
-		MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) {}
 		},
 		AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
-		ResolveUsageDisposition: func(_, _ string) (registry.UsageArrival, registry.UsageAttribution) {
-			return registry.UsageArrivalUndeclared, registry.UsageAttributionUndeclared
+		ResolveAttemptSettings: func(_ DispatchResolution, _ string) AttemptSettings {
+			return AttemptSettings{}
 		},
 		OnRetryFire: noopRetryFire,
 		Ctx:         context.Background(),
@@ -1348,7 +1348,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			if tt.workerFn != nil {
 				ch := make(chan struct{}, 1)
 				wf := tt.workerFn(ch)
-				params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc { return wf }
+				params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc { return wf }
 				HandleRetryTimer(state, id, params)
 				select {
 				case <-ch:
@@ -1418,7 +1418,7 @@ func TestHandleRetryTimer_TokenBudgetIncomplete(t *testing.T) {
 	params := defaultRetryParams(t, store, tracker)
 	params.MaxTokens = 1000
 	params.Logger = logger
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			dispatched <- struct{}{}
 		}
@@ -1479,7 +1479,7 @@ func TestHandleRetryTimer_TokenBudgetUnaccountedTurns(t *testing.T) {
 	params := defaultRetryParams(t, store, tracker)
 	params.MaxTokens = 1000
 	params.Logger = logger
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			dispatched <- struct{}{}
 		}
@@ -1527,7 +1527,7 @@ func TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning(t *testing.T) {
 	params := defaultRetryParams(t, store, tracker)
 	params.MaxTokens = 1000
 	params.Logger = logger
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			dispatched <- struct{}{}
 		}
@@ -1566,7 +1566,7 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	params := defaultRetryParams(t, store, tracker)
 
 	workerCalled := false
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled = true
 		}
@@ -1626,7 +1626,7 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		params.HostPool = hp
 
 		ch := make(chan struct{}, 1)
-		params.MakeWorkerFn = func(_, sshHost, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		params.MakeWorkerFn = func(_, sshHost, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) {
 				if sshHost != "host-b" {
 					t.Errorf("MakeWorkerFn sshHost = %q, want \"host-b\" (preferred)", sshHost)
@@ -1766,7 +1766,7 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	params.WorkflowFile = "infra.WORKFLOW.md"
 
 	workerCalled := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled <- struct{}{}
 		}
@@ -1801,15 +1801,15 @@ func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
 
 	params := defaultRetryParams(t, store, tracker)
 	var resolveCalls int
-	params.ResolveUsageDisposition = func(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution) {
+	params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings {
 		resolveCalls++
-		return registry.UsageArrivalNone, registry.UsageAttributionNone
+		return AttemptSettings{UsageArrival: registry.UsageArrivalNone, UsageAttribution: registry.UsageAttributionNone}
 	}
 
 	workerCalled := make(chan struct{}, 1)
 	var capturedArrival registry.UsageArrival
-	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, arrival registry.UsageArrival) WorkerFunc {
-		capturedArrival = arrival
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, attempt AttemptSettings) WorkerFunc {
+		capturedArrival = attempt.UsageArrival
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled <- struct{}{}
 		}
@@ -1835,7 +1835,7 @@ func TestHandleRetryTimer_UsageDispositionFrozen(t *testing.T) {
 		t.Errorf("MakeWorkerFn received arrival = %q, want %q (the same value frozen onto the entry)", capturedArrival, registry.UsageArrivalNone)
 	}
 	if resolveCalls != 1 {
-		t.Errorf("ResolveUsageDisposition called %d times, want 1 (resolved once and shared with the worker)", resolveCalls)
+		t.Errorf("ResolveAttemptSettings called %d times, want 1 (resolved once and shared with the worker)", resolveCalls)
 	}
 }
 
@@ -2330,7 +2330,7 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 
 	var gotSessionID string
 	ch := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(resumeSessionID, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(resumeSessionID, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		gotSessionID = resumeSessionID
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			ch <- struct{}{}
@@ -2368,7 +2368,7 @@ func TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn(t *testing.T) {
 
 	var gotReactionKind string
 	ch := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(_, _, _, _, reactionKind string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, reactionKind string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		gotReactionKind = reactionKind
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			ch <- struct{}{}
@@ -3053,7 +3053,7 @@ func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
 
 	var capturedAgentKind, capturedTemplateID string
 	params := defaultRetryParams(t, store, tracker)
-	params.MakeWorkerFn = func(_, _, agentKind, templateID, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, agentKind, templateID, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		capturedAgentKind = agentKind
 		capturedTemplateID = templateID
 		return func(_ context.Context, _ domain.Issue, _ *int) {}
@@ -3219,7 +3219,7 @@ type dispatchedWorker struct {
 func capturingRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryTracker, dispatched *[]dispatchedWorker) HandleRetryTimerParams {
 	t.Helper()
 	params := defaultRetryParams(t, store, tracker)
-	params.MakeWorkerFn = func(resumeSessionID, host, agentKind, templateID, reactionKind string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+	params.MakeWorkerFn = func(resumeSessionID, host, agentKind, templateID, reactionKind string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 		*dispatched = append(*dispatched, dispatchedWorker{resumeSessionID, host, agentKind, templateID, reactionKind})
 		return func(context.Context, domain.Issue, *int) {}
 	}
@@ -3982,5 +3982,64 @@ func TestHandleRetryTimer_BudgetHoldNotice(t *testing.T) {
 		if len(tracker.commentCalls) != 1 {
 			t.Errorf("commentCalls after the second fire = %+v, want still exactly one (same reason already noticed)", tracker.commentCalls)
 		}
+	})
+}
+
+func jsonLogger(buf *lockedBuf) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+func requireOneRecord(t *testing.T, buf *lockedBuf, message string, want map[string]any) {
+	t.Helper()
+	records := logRecords(t, buf, message)
+	if len(records) != 1 {
+		t.Fatalf("log records %q = %v, want exactly one", message, records)
+	}
+	for key, value := range want {
+		if records[0][key] != value {
+			t.Errorf("log record %q field %q = %v, want %v", message, key, records[0][key], value)
+		}
+	}
+}
+
+func TestHandleRetryTimer_RefusedSettingsRescheduleAndKeepTheClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-REFUSED"
+	state := frozenRetryState(id, RetryEntry{
+		Attempt: 2, AgentKind: "kind-a", RuleName: "cheap",
+		SessionID: "sess-keep", LastSSHHost: "host-a", ContinuationContext: map[string]any{"review": "thread-1"},
+	})
+	logs := &lockedBuf{}
+	var dispatched []dispatchedWorker
+	params := capturingRetryParams(t, &mockRetryStore{}, &mockRetryTracker{fetchedIssue: candidateIssue(id, id, "To Do")}, &dispatched)
+	params.Logger = jsonLogger(logs)
+	params.HostPool = NewHostPool([]string{"host-a"}, 1)
+	params.ResolveAttemptSettings = func(DispatchResolution, string) AttemptSettings {
+		return AttemptSettings{Refusals: []PreflightError{{Check: "kind-a.permission_mode.interactive", Message: "permission mode asks"}}}
+	}
+
+	HandleRetryTimer(state, id, params)
+	defer stopRetryTimer(state, id)
+
+	if _, claimed := state.Claimed[id]; len(dispatched) != 0 || state.Running[id] != nil || !claimed {
+		t.Errorf("MakeWorkerFn calls, Running[id], claimed = %+v, %v, %v, want no session and the claim kept", dispatched, state.Running[id], claimed)
+	}
+	if used := params.HostPool.Snapshot()["host-a"]; used != 0 {
+		t.Errorf("HostPool usage of host-a = %d, want the host released", used)
+	}
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatal("RetryAttempts[id] missing, want a rescheduled retry")
+	}
+	if entry.Attempt != 3 || entry.Error != "retry agent settings refused" || entry.scheduledDelayMS != computeBackoffDelay(3, params.MaxRetryBackoffMS) {
+		t.Errorf("rescheduled RetryEntry attempt, error, delay = %d, %q, %d ms, want 3, %q, the backoff of attempt 3", entry.Attempt, entry.Error, entry.scheduledDelayMS, "retry agent settings refused")
+	}
+	if entry.SessionID != "sess-keep" || entry.ContinuationContext["review"] != "thread-1" || entry.RuleName != "cheap" {
+		t.Errorf("rescheduled RetryEntry = %+v, want session, continuation and rule carried over", entry)
+	}
+	requireOneRecord(t, logs, "retry agent settings refused", map[string]any{
+		"level": "ERROR", "rule_name": "cheap", "agent_kind": "kind-a", "check": "kind-a.permission_mode.interactive",
+		"diagnostic": "permission mode asks", "attempt": float64(3),
 	})
 }

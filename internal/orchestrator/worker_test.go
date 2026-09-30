@@ -73,6 +73,26 @@ func readWorkerTestMCPServers(t *testing.T, path string) map[string]any {
 	return servers
 }
 
+type startParamsRecorder struct {
+	mockAgentAdapter
+
+	mu     sync.Mutex
+	params []domain.StartSessionParams
+}
+
+func (r *startParamsRecorder) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	r.mu.Lock()
+	r.params = append(r.params, params)
+	r.mu.Unlock()
+	return r.mockAgentAdapter.StartSession(ctx, params)
+}
+
+func (r *startParamsRecorder) recorded() []domain.StartSessionParams {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.params)
+}
+
 func workerTestIssue() domain.Issue {
 	return domain.Issue{
 		ID:         "issue-1",
@@ -3832,6 +3852,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 				},
 			},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			AgentSettings:          config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: "mock"}, ""),
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
@@ -3891,6 +3912,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 				},
 			},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			AgentSettings:          config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: "mock"}, ""),
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
@@ -3980,6 +4002,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 				},
 			},
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			AgentSettings:          config.ResolveAgentSettings(cfg, config.SettingsSelection{Kind: "codex"}, workflowDir),
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
 			OnExit:                 ec.onExit,
@@ -4034,38 +4057,34 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("relative_operator_path_resolved_from_workflow_dir", func(t *testing.T) {
+	t.Run("agent_settings_reach_both_sessions_and_the_mcp_config", func(t *testing.T) {
 		t.Parallel()
 
 		workflowDir := t.TempDir()
-		workspaceTmpDir := t.TempDir()
-		cfg := defaultWorkerConfig(workspaceTmpDir)
+		cfg := defaultWorkerConfig(t.TempDir())
 		cfg.Agent.MaxTurns = 1
 
-		relName := "op.json"
-		opData, _ := json.Marshal(map[string]any{
-			"mcpServers": map[string]any{
-				"relative-tool": map[string]any{"type": "stdio", "command": "/bin/rel"},
-			},
-		})
-		if err := os.WriteFile(filepath.Join(workflowDir, relName), opData, 0o600); err != nil {
-			t.Fatalf("WriteFile: %v", err)
+		suppliedPath := filepath.Join(workflowDir, "supplied-mcp.json")
+		configPath := filepath.Join(workflowDir, "config-mcp.json")
+		for path, marker := range map[string]string{suppliedPath: "supplied-marker", configPath: "config-marker"} {
+			body := `{"mcpServers": {"` + marker + `": {"type": "stdio", "command": "/bin/x"}}}`
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatalf("WriteFile %s: %v", path, err)
+			}
 		}
+		cfg.SetExtensionSection("mock", map[string]any{"model": "from-config-func", "mcp_config": configPath})
 
-		// Relative path, worker must resolve it via filepath.Dir(WorkflowPath).
-		cfg.SetExtensionSection("mock", map[string]any{"mcp_config": relName})
-
-		var capturedMCPConfigPath atomic.Value
+		settings := config.AgentSettings{
+			Kind:          "mock",
+			Passthrough:   map[string]any{"model": "from-attempt-settings"},
+			MCPConfigPath: suppliedPath,
+		}
+		adapter := &startParamsRecorder{}
 		ec := newExitCapture()
-
 		deps := WorkerDeps{
-			TrackerAdapter: &mockTrackerAdapter{},
-			AgentAdapter: &mockAgentAdapter{
-				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-					capturedMCPConfigPath.Store(params.MCPConfigPath)
-					return domain.Session{ID: "sess-1"}, nil
-				},
-			},
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           adapter,
+			AgentSettings:          settings,
 			ConfigFunc:             func() config.ServiceConfig { return cfg },
 			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent:                func(_ string, _ domain.AgentEvent) {},
@@ -4080,139 +4099,25 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		if result.ExitKind != WorkerExitNormal {
 			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
 		}
-
-		mcpPath, _ := capturedMCPConfigPath.Load().(string)
-		rawData, err := os.ReadFile(mcpPath)
-		if err != nil {
-			t.Fatalf("ReadFile(%q): %v", mcpPath, err)
-		}
-		var merged map[string]any
-		if err := json.Unmarshal(rawData, &merged); err != nil {
-			t.Fatalf("Unmarshal mcp.json: %v", err)
-		}
-		servers, _ := merged["mcpServers"].(map[string]any)
-		if _, ok := servers["relative-tool"]; !ok {
-			t.Errorf("relative-tool missing from merged config: relative operator path was not resolved from workflow dir")
-		}
-	})
-
-	// Hot-reload seam: the kind freezes at dispatch, but the settings it
-	// selects MUST be re-resolved through deps.ConfigFunc() on every
-	// attempt, never cached across attempts. A ConfigFunc that returns a
-	// different mcp_config on its second call simulates a workflow
-	// reloaded between two attempts of the same claim.
-	t.Run("settings_reresolve_per_attempt_through_config_func", func(t *testing.T) {
-		t.Parallel()
-
-		workflowDir := t.TempDir()
-		workspaceTmpDir := t.TempDir()
-
-		firstOperatorPath := filepath.Join(workflowDir, "first-mcp.json")
-		firstData, err := json.Marshal(map[string]any{
-			"mcpServers": map[string]any{
-				"first-attempt-marker": map[string]any{"type": "stdio", "command": "/bin/first"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("Marshal first operator config: %v", err)
-		}
-		if err := os.WriteFile(firstOperatorPath, firstData, 0o600); err != nil {
-			t.Fatalf("WriteFile first operator config: %v", err)
-		}
-
-		secondOperatorPath := filepath.Join(workflowDir, "second-mcp.json")
-		secondData, err := json.Marshal(map[string]any{
-			"mcpServers": map[string]any{
-				"second-attempt-marker": map[string]any{"type": "stdio", "command": "/bin/second"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("Marshal second operator config: %v", err)
-		}
-		if err := os.WriteFile(secondOperatorPath, secondData, 0o600); err != nil {
-			t.Fatalf("WriteFile second operator config: %v", err)
-		}
-
-		var configCalls atomic.Int32
-		configFunc := func() config.ServiceConfig {
-			cfg := defaultWorkerConfig(workspaceTmpDir)
-			cfg.Agent.MaxTurns = 1
-			operatorPath := firstOperatorPath
-			if configCalls.Add(1) > 1 {
-				operatorPath = secondOperatorPath
+		var verification, working int
+		for _, params := range adapter.recorded() {
+			if got := params.Settings["model"]; got != "from-attempt-settings" {
+				t.Errorf("StartSession(CredentialVerification=%v).Settings[model] = %v, want %q", params.CredentialVerification, got, "from-attempt-settings")
 			}
-			cfg.SetExtensionSection("mock", map[string]any{"mcp_config": operatorPath})
-			return cfg
+			if params.CredentialVerification {
+				verification++
+				continue
+			}
+			working++
+			servers := readWorkerTestMCPServers(t, params.MCPConfigPath)
+			_, hasSupplied := servers["supplied-marker"]
+			_, hasConfig := servers["config-marker"]
+			if !hasSupplied || hasConfig {
+				t.Errorf("generated config has supplied-marker, config-marker = %v, %v, want true, false: the operator path of AgentSettings.MCPConfigPath, never re-resolved from ConfigFunc", hasSupplied, hasConfig)
+			}
 		}
-
-		deps := WorkerDeps{
-			TrackerAdapter:         &mockTrackerAdapter{},
-			ConfigFunc:             configFunc,
-			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:                func(_ string, _ domain.AgentEvent) {},
-			Logger:                 discardLogger(),
-			WorkflowPath:           filepath.Join(workflowDir, "WORKFLOW.md"),
-		}
-
-		var firstCapturedPath atomic.Value
-		firstEC := newExitCapture()
-		deps.AgentAdapter = &mockAgentAdapter{
-			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-				firstCapturedPath.Store(params.MCPConfigPath)
-				return domain.Session{ID: "sess-1"}, nil
-			},
-		}
-		deps.OnExit = firstEC.onExit
-
-		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
-		firstResult := firstEC.waitResult(t)
-		if firstResult.ExitKind != WorkerExitNormal {
-			t.Fatalf("first attempt ExitKind = %q, want %q", firstResult.ExitKind, WorkerExitNormal)
-		}
-
-		firstPath, _ := firstCapturedPath.Load().(string)
-		if firstPath == "" {
-			t.Fatal("first attempt: MCPConfigPath is empty")
-		}
-		firstServers := readWorkerTestMCPServers(t, firstPath)
-		if _, ok := firstServers["first-attempt-marker"]; !ok {
-			t.Error("first attempt: first-attempt-marker missing, want present (ConfigFunc's first-call value)")
-		}
-		if _, ok := firstServers["second-attempt-marker"]; ok {
-			t.Error("first attempt: second-attempt-marker present, want absent")
-		}
-
-		attempt := 2
-		var secondCapturedPath atomic.Value
-		secondEC := newExitCapture()
-		deps.AgentAdapter = &mockAgentAdapter{
-			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-				secondCapturedPath.Store(params.MCPConfigPath)
-				return domain.Session{ID: "sess-2"}, nil
-			},
-		}
-		deps.OnExit = secondEC.onExit
-
-		RunWorkerAttempt(context.Background(), workerTestIssue(), &attempt, deps)
-		secondResult := secondEC.waitResult(t)
-		if secondResult.ExitKind != WorkerExitNormal {
-			t.Fatalf("second attempt ExitKind = %q, want %q", secondResult.ExitKind, WorkerExitNormal)
-		}
-
-		secondPath, _ := secondCapturedPath.Load().(string)
-		if secondPath == "" {
-			t.Fatal("second attempt: MCPConfigPath is empty")
-		}
-		secondServers := readWorkerTestMCPServers(t, secondPath)
-		if _, ok := secondServers["second-attempt-marker"]; !ok {
-			t.Error("second attempt: second-attempt-marker missing, want present (ConfigFunc's second-call value, proving settings re-resolve per attempt)")
-		}
-		if _, ok := secondServers["first-attempt-marker"]; ok {
-			t.Error("second attempt: first-attempt-marker present, want absent (stale value from the first attempt must not survive)")
-		}
-
-		if got := configCalls.Load(); got < 2 {
-			t.Errorf("ConfigFunc call count = %d, want at least 2", got)
+		if verification != 1 || working != 1 {
+			t.Errorf("StartSession calls = %d verification, %d working, want 1 of each", verification, working)
 		}
 	})
 
@@ -9580,7 +9485,7 @@ func TestMakeWorkerFn_OnTurnStartedBlocksThenEscapesOnContextDone(t *testing.T) 
 			},
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 		ctx := t.Context()
 
 		workerDone := make(chan struct{})
@@ -9635,7 +9540,7 @@ func TestMakeWorkerFn_OnTurnStartedBlocksThenEscapesOnContextDone(t *testing.T) 
 			},
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", "", nil, registry.UsageArrivalUndeclared)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil, AttemptSettings{})
 		ctx, cancel := context.WithCancel(context.Background())
 
 		workerDone := make(chan struct{})

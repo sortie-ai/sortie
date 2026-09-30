@@ -13,7 +13,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
-	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func TestPopulateRetries(t *testing.T) {
@@ -387,7 +386,7 @@ func TestActivateReconstructedRetries(t *testing.T) {
 		params.MaxTokens = 0
 
 		workerCalled := make(chan struct{}, 1)
-		params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ registry.UsageArrival) WorkerFunc {
+		params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter, _ AttemptSettings) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) { workerCalled <- struct{}{} }
 		}
 

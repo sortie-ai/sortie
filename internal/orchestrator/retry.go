@@ -11,7 +11,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
-	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // pausedRetryMaxDwell bounds how long a known-reaction retry may be
@@ -55,10 +54,10 @@ type HandleRetryTimerParams struct {
 	MaxRetryBackoffMS int
 
 	// MakeWorkerFn constructs a [WorkerFunc]. The retry handler resolves
-	// the adapter through AgentAdapterByKind before invoking it; the
+	// the adapter and the attempt's settings before invoking it; the
 	// reaction kind selects the read-only worker posture for label-review
 	// dispatches.
-	MakeWorkerFn func(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, usageArrival registry.UsageArrival) WorkerFunc
+	MakeWorkerFn func(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter, attempt AttemptSettings) WorkerFunc
 
 	// AgentAdapterByKind resolves the agent adapter for the given kind.
 	// Required when MakeWorkerFn is set. On an unknown kind the retry
@@ -111,11 +110,10 @@ type HandleRetryTimerParams struct {
 	// WorkflowFile is the base filename of the active WORKFLOW.md file.
 	WorkflowFile string
 
-	// ResolveUsageDisposition resolves the usage-reporting disposition for
-	// the agent kind and SSH host (empty for a local launch). Required;
-	// the resolved pair is frozen onto the running entry alongside
-	// AgentKind.
-	ResolveUsageDisposition func(kind, sshHost string) (registry.UsageArrival, registry.UsageAttribution)
+	// ResolveAttemptSettings resolves the retry attempt's settings from the
+	// configuration in force now; sshHost is empty for a local launch.
+	// Required. An attempt whose settings carry refusals is rescheduled.
+	ResolveAttemptSettings func(selection DispatchResolution, sshHost string) AttemptSettings
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue: it
@@ -566,8 +564,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil AgentAdapterByKind")
 	}
 
-	if params.ResolveUsageDisposition == nil {
-		panic("HandleRetryTimer: nil ResolveUsageDisposition")
+	if params.ResolveAttemptSettings == nil {
+		panic("HandleRetryTimer: nil ResolveAttemptSettings")
 	}
 
 	// Legacy retry rows persisted before dispatch rule routing carry an
@@ -618,6 +616,27 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	attemptSettings := params.ResolveAttemptSettings(DispatchResolution{AgentKind: agentKind, TemplateID: templateID, RuleName: ruleName}, host)
+	if len(attemptSettings.Refusals) > 0 {
+		nextAttempt := popped.Attempt + 1
+		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
+		log.Error("retry agent settings refused",
+			slog.Any("error", PreflightResult{Errors: attemptSettings.Refusals}),
+			slog.String("rule_name", ruleName),
+			slog.String("agent_kind", agentKind),
+			slog.String("check", attemptSettings.Refusals[0].Check),
+			slog.String("diagnostic", attemptSettings.Refusals[0].Message),
+			slog.Int("attempt", nextAttempt),
+			slog.Int64("delay_ms", delayMS),
+		)
+		if params.HostPool != nil && host != "" {
+			params.HostPool.ReleaseHost(issueID)
+		}
+		reschedule(nextAttempt, delayMS, "retry agent settings refused")
+		return
+	}
+
 	// NextAttempt increments only on the next worker exit, not at dispatch,
 	// so pass the popped attempt as-is.
 	attempt := popped.Attempt
@@ -625,8 +644,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
-	arrival, attribution := params.ResolveUsageDisposition(agentKind, host)
-	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host, agentKind, templateID, popped.ReactionKind, adapter, arrival))
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host, agentKind, templateID, popped.ReactionKind, adapter, attemptSettings))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = agentKind
@@ -634,7 +652,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.TemplateID = templateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
-		entry.UsageArrival, entry.UsageAttribution = arrival, attribution
+		entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 		freezeIssueTokenBaseline(ctx, state, issueID, params.Store, params.Logger)
 	}
 	metrics.IncDispatches(outcomeSuccess)
