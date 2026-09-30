@@ -658,6 +658,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.AgentKind = agentKind
 		entry.RuleName = ruleName
 		entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
+		entry.ConfiguredModel = attemptSettings.Settings.Model
+		entry.ConfiguredEffort = attemptSettings.Settings.Effort
 		entry.TemplateID = templateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
@@ -679,6 +681,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 
 	log.Info("retried issue dispatched",
 		slog.Int("attempt", attempt),
+		slog.String("agent_kind", agentKind),
+		slog.String("rule_name", ruleName),
+		slog.String("model", attemptSettings.Settings.Model),
+		slog.String("effort", attemptSettings.Settings.Effort),
 	)
 
 	// DispatchIssue's CancelRetry clears the in-memory entry, but the

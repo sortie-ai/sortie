@@ -1506,3 +1506,149 @@ func TestPriceOf_EmptyAgentAdapterNotPricedAfterEmptyKeyDrop(t *testing.T) {
 		t.Errorf("priceOf(row with empty AgentAdapter) = %v, want nil after the empty-key drop", *got)
 	}
 }
+
+func withModelBreakdown(caps persistence.RunHistoryCapabilities) persistence.RunHistoryCapabilities {
+	caps.HasConfiguredSettings = true
+	return caps
+}
+
+func modelRow(adapter, model, status string, input int64) persistence.RunStatsRow {
+	return persistence.RunStatsRow{
+		Status: status, AgentAdapter: adapter, ConfiguredModel: model,
+		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+		InputTokens: input, TokensMeasured: true,
+	}
+}
+
+func renderText(report statsReport) string {
+	var stdout, stderr bytes.Buffer
+	renderStatsText(&stdout, &stderr, report)
+	return stdout.String()
+}
+
+func sumRuns(groups []statsGroup) int {
+	var runs int
+	for _, g := range groups {
+		runs += g.Runs
+	}
+	return runs
+}
+
+func TestStatsByModel(t *testing.T) {
+	t.Parallel()
+
+	rates := server.TokenRates{"claude-code": server.TokenRateConfig{InputPerMtok: new(float64(10)), OutputPerMtok: new(float64(0))}}
+	agg := newStatsAggregator(withModelBreakdown(fullCaps), rates)
+	addRows(t, agg,
+		modelRow("claude-code", "model-a", "succeeded", 1_000_000),
+		modelRow("claude-code", "model-a", "failed", 0),
+		modelRow("codex", "model-b", "succeeded", 1_000_000),
+		modelRow("claude-code", "", "succeeded", 1_000_000),
+	)
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+	if got := sumRuns(report.ByModel); got != report.Summary.Runs {
+		t.Errorf("by_model run counts sum to %d, want the report's runs: %d", got, report.Summary.Runs)
+	}
+	modelA, modelB, none := findGroup(t, report.ByModel, "model-a"), findGroup(t, report.ByModel, "model-b"), findGroup(t, report.ByModel, "<none>")
+	if modelA.Runs != 2 || modelA.Succeeded != 1 || none.Runs != 1 {
+		t.Errorf("model-a runs, succeeded and <none> runs = %d, %d, %d, want 2, 1, 1", modelA.Runs, modelA.Succeeded, none.Runs)
+	}
+	if modelA.CostUSD == nil || *modelA.CostUSD != 10 || modelB.CostUSD != nil {
+		t.Errorf("model-a, model-b CostUSD = %v, %v, want 10 (priced by its kind's rate) and nil (its kind has no rate)", modelA.CostUSD, modelB.CostUSD)
+	}
+	out := renderText(report)
+	if template, model := strings.Index(out, "by prompt template"), strings.Index(out, "by configured model"); template < 0 || model < template {
+		t.Errorf("text report table offsets by prompt template, by configured model = %d, %d, want the model table after the template table", template, model)
+	}
+}
+
+func TestStatsByModel_WithoutTheBreakdown(t *testing.T) {
+	t.Parallel()
+
+	agg := newStatsAggregator(fullCaps, nil)
+	addRows(t, agg, modelRow("claude-code", "model-a", "succeeded", 1))
+
+	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+	data, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"by_model":[]`) || strings.Contains(renderText(report), "by configured model") {
+		t.Errorf("JSON = %s, text = %s, want by_model as an empty list, never null, and no by configured model table", data, renderText(report))
+	}
+}
+
+func TestRunStatsByModelAgainstDatabases(t *testing.T) {
+	t.Parallel()
+
+	const warning = "this database was written before sortie recorded the model each run was configured with, so the report leaves out the breakdown by configured model. Run sortie once with this workflow to add it."
+	runOf := func(adapter, model, status string) persistence.RunHistory {
+		return persistence.RunHistory{IssueID: "I-" + status, Identifier: "P-" + status, Attempt: 1, AgentAdapter: adapter, Workspace: "/tmp/ws", StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: status, ConfiguredModel: model}
+	}
+	tests := []struct {
+		name        string
+		build       func(t *testing.T, dbPath string)
+		wantRuns    map[string]int
+		wantWarning bool
+	}{
+		{"migrated database groups runs by configured model", func(t *testing.T, dbPath string) {
+			createStatsDB(t, dbPath, runOf("mock", "model-a", "succeeded"), runOf("mock", "", "failed"))
+		}, map[string]int{"model-a": 1, "<none>": 1}, false},
+		{"full tier database without the column warns and leaves the list empty", func(t *testing.T, dbPath string) {
+			createFullSchemaWithoutCacheWriteTokensDB(t, dbPath, 1, 1, 1)
+		}, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"stats", "--format", "json", newStatsWorkspace(t, tt.build)}, &stdout, &stderr)
+			var report statsReport
+			if err := json.Unmarshal(stdout.Bytes(), &report); code != 0 || err != nil {
+				t.Fatalf("run(stats) = %d, %v, want 0; stdout: %s; stderr: %s", code, err, stdout.String(), stderr.String())
+			}
+
+			for name, runs := range tt.wantRuns {
+				if got := findGroup(t, report.ByModel, name).Runs; got != runs {
+					t.Errorf("by_model group %q Runs = %d, want %d", name, got, runs)
+				}
+			}
+			if len(report.ByModel) != len(tt.wantRuns) || report.ByModel == nil || slices.Contains(report.Warnings, warning) != tt.wantWarning {
+				t.Errorf("ByModel, Warnings = %#v, %q, want %d groups (non-nil) and the configured-model warning present: %v", report.ByModel, report.Warnings, len(tt.wantRuns), tt.wantWarning)
+			}
+		})
+	}
+}
+
+func TestDegradedSchemaWarning_NamesTheConfiguredModelGroup(t *testing.T) {
+	t.Parallel()
+
+	const group = "the model each run was configured with"
+
+	without := degradedSchemaWarning(persistence.RunHistoryCapabilities{})
+	with := degradedSchemaWarning(persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasConfiguredSettings: true})
+
+	if !strings.Contains(without, "before sortie recorded") || !strings.Contains(without, group) {
+		t.Errorf("degradedSchemaWarning(no columns) = %q, want the group listed as unrecorded", without)
+	}
+	if strings.Contains(with, "before sortie recorded turns") || !strings.Contains(with, group+", which this database does carry") {
+		t.Errorf("degradedSchemaWarning(with configured settings) = %q, want the group listed among those the database does carry", with)
+	}
+}
+
+func TestPrintStatsHelp_NamesTheModelBreakdown(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	printStatsHelp(&out)
+
+	if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), "by the model each run was configured with") {
+		t.Errorf("stats help = %q, want it to name the breakdown by configured model", out.String())
+	}
+}

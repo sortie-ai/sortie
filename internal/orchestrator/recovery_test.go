@@ -836,6 +836,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-1", "PROJ-1", "owner/repo#42", 2)
 	run.RuleName = "cheap"
+	run.ConfiguredModel = "model-a"
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)

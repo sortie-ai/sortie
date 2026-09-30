@@ -10303,6 +10303,23 @@ func TestRun_RetriesDispatchOnTheSelectionTheConfigurationInForceGives(t *testin
 	}
 }
 
+func (h *runHarness) waitForRunHistories(n int) []persistence.RunHistory {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.store.mu.Lock()
+		rows := slices.Clone(h.store.runHistories)
+		h.store.mu.Unlock()
+		if len(rows) >= n {
+			return rows
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatalf("run_history rows = %d after 5s, want at least %d; log: %s", len(rows), n, h.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func ruleBlock(name, label, agent string, block map[string]any) map[string]any {
 	return map[string]any{"name": name, "match": map[string]any{"labels": []any{label}}, "agent": agent, agent: block}
 }
@@ -10323,15 +10340,20 @@ func TestRun_TwoRulesOnOneKindDispatchWithTheirOwnSettings(t *testing.T) {
 
 	h.run()
 	sessions := h.waitForSessions(3)
+	rows := h.waitForRunHistories(3)
 	h.stop()
 
 	tests := []struct {
-		identifier, kind string
-		wantSettings     map[string]any
+		identifier, kind, rule, model, effort string
+		wantSettings                          map[string]any
 	}{
-		{identifier: "C-1", kind: "kind-b", wantSettings: map[string]any{"model": "model-a", "keep": 1}},
-		{identifier: "S-1", kind: "kind-b", wantSettings: map[string]any{"model": "model-b", "effort": "high", "keep": 1}},
+		{identifier: "C-1", kind: "kind-b", rule: "cheap", model: "model-a", wantSettings: map[string]any{"model": "model-a", "keep": 1}},
+		{identifier: "S-1", kind: "kind-b", rule: "strong", model: "model-b", effort: "high", wantSettings: map[string]any{"model": "model-b", "effort": "high", "keep": 1}},
 		{identifier: "P-1", kind: "plain", wantSettings: map[string]any{}},
+	}
+	dispatched := map[string]map[string]any{}
+	for _, record := range logRecords(t, h.logs, "issue dispatched") {
+		dispatched[record["issue_identifier"].(string)] = record
 	}
 	for _, tt := range tests {
 		kind, params := sessionOfWorkspace(t, sessions, tt.identifier)
@@ -10344,6 +10366,14 @@ func TestRun_TwoRulesOnOneKindDispatchWithTheirOwnSettings(t *testing.T) {
 		if kind != tt.kind || !maps.Equal(gotSettings, tt.wantSettings) {
 			t.Errorf("%s working StartSession adapter, Settings = %q, %v, want %q, %v", tt.identifier, kind, gotSettings, tt.kind, tt.wantSettings)
 		}
+		row := rowOfIdentifier(t, rows, tt.identifier)
+		if row.ConfiguredModel != tt.model || row.ConfiguredEffort != tt.effort || row.RuleName != tt.rule {
+			t.Errorf("%s run_history configured model, effort, rule = %q, %q, %q, want %q, %q, %q", tt.identifier, row.ConfiguredModel, row.ConfiguredEffort, row.RuleName, tt.model, tt.effort, tt.rule)
+		}
+		record := dispatched[tt.identifier]
+		if record["agent_kind"] != tt.kind || record["rule_name"] != tt.rule || record["model"] != tt.model || record["effort"] != tt.effort {
+			t.Errorf("%s dispatch record = %v, want agent_kind %q, rule_name %q, model %q, effort %q", tt.identifier, record, tt.kind, tt.rule, tt.model, tt.effort)
+		}
 	}
 
 	var verifiedModels []string
@@ -10355,6 +10385,17 @@ func TestRun_TwoRulesOnOneKindDispatchWithTheirOwnSettings(t *testing.T) {
 	if !slices.Equal(verifiedModels, []string{"model-a", "model-b"}) {
 		t.Errorf("credential-verification StartSession models = %v, want each rule's model once", verifiedModels)
 	}
+}
+
+func rowOfIdentifier(t *testing.T, rows []persistence.RunHistory, identifier string) persistence.RunHistory {
+	t.Helper()
+	for _, row := range rows {
+		if row.Identifier == identifier {
+			return row
+		}
+	}
+	t.Fatalf("no run_history row for %s; rows: %+v", identifier, rows)
+	return persistence.RunHistory{}
 }
 
 func interactiveModeRaw(withBadBlock bool) map[string]any {

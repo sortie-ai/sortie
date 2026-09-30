@@ -855,10 +855,18 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			entry.AgentKind = resolution.AgentKind
 			entry.RuleName = resolution.RuleName
 			entry.RuleSettingsApplied = attemptSettings.Settings.RuleName != ""
+			entry.ConfiguredModel = attemptSettings.Settings.Model
+			entry.ConfiguredEffort = attemptSettings.Settings.Effort
 			entry.TemplateID = resolution.TemplateID
 			entry.UsageArrival, entry.UsageAttribution = attemptSettings.UsageArrival, attemptSettings.UsageAttribution
 			freezeIssueTokenBaseline(ctx, o.state, issue.ID, o.store, o.logger)
 		}
+		logging.WithIssue(o.logger, issue.ID, issue.Identifier).Info("issue dispatched",
+			slog.String("agent_kind", resolution.AgentKind),
+			slog.String("rule_name", resolution.RuleName),
+			slog.String("model", attemptSettings.Settings.Model),
+			slog.String("effort", attemptSettings.Settings.Effort),
+		)
 		o.metrics.IncDispatches(outcomeSuccess)
 		o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
 		switch resolution.MatchedAt {

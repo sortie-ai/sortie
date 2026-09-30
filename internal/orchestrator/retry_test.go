@@ -4085,14 +4085,19 @@ func TestHandleRetryTimer_RecordsTheResolvedSettingsAndLogsAVanishedRuleBlockOnc
 
 			HandleRetryTimer(state, id, params)
 
-			settings := tt.resolved.Settings
+			settings, rule := tt.resolved.Settings, tt.entry.RuleName
+			if tt.selection != nil {
+				rule = tt.selection.RuleName
+			}
 			entry := state.Running[id]
 			if entry == nil {
 				t.Fatal("Running[id] missing after dispatch")
 			}
-			if entry.RuleSettingsApplied != (settings.RuleName != "") || entry.UsageArrival != tt.resolved.UsageArrival || entry.UsageAttribution != tt.resolved.UsageAttribution {
-				t.Errorf("running entry = %+v, want the resolved rule flag and usage pair of %+v", entry, tt.resolved)
+			if entry.ConfiguredModel != settings.Model || entry.ConfiguredEffort != settings.Effort || entry.RuleSettingsApplied != (settings.RuleName != "") ||
+				entry.UsageArrival != tt.resolved.UsageArrival || entry.UsageAttribution != tt.resolved.UsageAttribution {
+				t.Errorf("running entry = %+v, want the resolved model, effort, rule flag and usage pair of %+v", entry, tt.resolved)
 			}
+			requireOneRecord(t, logs, "retried issue dispatched", map[string]any{"agent_kind": "kind-a", "rule_name": rule, "model": settings.Model, "effort": settings.Effort})
 			if vanished := logRecords(t, logs, message); len(vanished) != map[bool]int{true: 1}[tt.wantRecord] || (tt.wantRecord && (vanished[0]["level"] != "INFO" || vanished[0]["rule_name"] != "cheap" || vanished[0]["agent_kind"] != "kind-a")) {
 				t.Errorf("vanished-block records = %v, want %d, an INFO with rule_name and agent_kind", vanished, map[bool]int{true: 1}[tt.wantRecord])
 			}

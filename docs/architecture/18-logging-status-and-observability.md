@@ -22,7 +22,7 @@ A configuration advisory is recorded once, at construction or at workflow load, 
 
 A retry whose selection the configuration in force changes emits one `Info` record, message `"retry dispatching on the selection the configuration in force gives it"`, carrying `agent_kind`, `template_id`, and `rule_name` of the frozen selection and `dispatch_agent_kind`, `dispatch_template_id`, and `dispatch_rule_name` of the selection it dispatches on. A retry that finds the adapter of its selected kind unavailable emits one `Error` record, message `"retry agent kind unavailable"`, carrying `rule_name`, `agent_kind`, `attempt`, `delay_ms`, and `error`, and is rescheduled (Section 8.4).
 
-An attempt whose resolved settings block fails an error-severity check emits one `Error` record and starts no session: `"agent settings refused"` on the first dispatch, and `"retry agent settings refused"` on the retry lane, carrying `attempt` and `delay_ms` as well. Both carry `error` (the preflight result naming every failed check), `rule_name`, `agent_kind`, and the first failed check's `check` and `diagnostic`. A retry whose claim held a rule's settings block on its previous attempt, whose selection still names that rule, and whose rule no longer carries a block for the kind, emits one `Info` record, message `"rule settings no longer present, attempt runs on the kind's top-level settings"`, carrying `rule_name` and `agent_kind`, once, on the attempt that runs without the block.
+Four records carry the settings an attempt dispatches with (Section 8.4). The first dispatch of a claim emits one `Info` record, message `"issue dispatched"`, through the issue-scoped logger, carrying `agent_kind`, `rule_name`, `model`, and `effort`, the last two being the configured values and empty when unset. A retry or continuation dispatch emits the same four attributes on its `"retried issue dispatched"` record, beside `attempt`. An attempt whose resolved settings block fails an error-severity check emits one `Error` record and starts no session: `"agent settings refused"` on the first dispatch, and `"retry agent settings refused"` on the retry lane, carrying `attempt` and `delay_ms` as well. Both carry `error` (the preflight result naming every failed check), `rule_name`, `agent_kind`, and the first failed check's `check` and `diagnostic`. A retry whose claim held a rule's settings block on its previous attempt, whose selection still names that rule, and whose rule no longer carries a block for the kind, emits one `Info` record, message `"rule settings no longer present, attempt runs on the kind's top-level settings"`, carrying `rule_name` and `agent_kind`, once, on the attempt that runs without the block.
 
 Handoff-evidence records are part of the required operator surface:
 
@@ -88,6 +88,7 @@ If the implementation exposes a synchronous runtime snapshot (for dashboards or 
 - each running row should include `tokens_pending`, true only when the frozen arrival settles at most one figure per turn, the session is measured, and the turn that figure would settle for is still in flight
 - each running row should include `tokens_awaited`, true only when the session has recorded no figure and the moment its frozen arrival names for one has not passed: no turn has begun for an arrival that reports during a turn, and no turn has ended for one that settles at most one figure per turn. A row whose arrival reports figures and whose `tokens_awaited` is false recorded nothing and will record nothing, so a consumer must not present it as a figure still to come
 - each running row should include `api_requests_measured`, true when the row's `api_request_count` is a count of model API requests the session measured
+- each running row should include `rule_name`, `configured_model`, and `configured_effort`, the dispatch rule the session runs under and the model and reasoning level its resolved settings block carries, empty (and omitted from the JSON form) when unset; `model_name` keeps the model the runtime reported, which can differ from the configured one under routing aliases and runtime fallbacks
 - `retrying` (list of retry queue rows)
 - `agent_totals`
   - `input_tokens`
@@ -225,6 +226,9 @@ Minimum endpoints:
             "cache_write_tokens": 100
           },
           "model_name": "claude-sonnet-4-20250514",
+          "rule_name": "hard",
+          "configured_model": "claude-sonnet-4-20250514",
+          "configured_effort": "high",
           "api_request_count": 3,
           "requests_by_model": {"claude-sonnet-4-20250514": 3},
           "tool_time_percent": 12.3,

@@ -50,6 +50,9 @@ type runningEntryResponse struct {
 	WorkspacePath     string         `json:"workspace_path"`
 	Tokens            tokenInfo      `json:"tokens"`
 	ModelName         string         `json:"model_name,omitempty"`
+	RuleName          string         `json:"rule_name,omitempty"`
+	ConfiguredModel   string         `json:"configured_model,omitempty"`
+	ConfiguredEffort  string         `json:"configured_effort,omitempty"`
 	APIRequestCount   *int           `json:"api_request_count"`
 	RequestsByModel   map[string]int `json:"requests_by_model,omitempty"`
 	ToolTimePercent   *float64       `json:"tool_time_percent"`
@@ -158,6 +161,9 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 		LastEventAt:         e.LastAgentTimestamp.UTC(),
 		WorkspacePath:       e.WorkspacePath,
 		ModelName:           e.ModelName,
+		RuleName:            e.RuleName,
+		ConfiguredModel:     e.ConfiguredModel,
+		ConfiguredEffort:    e.ConfiguredEffort,
 		RequestsByModel:     e.RequestsByModel,
 		TokensMeasured:      e.UsageMeasured,
 		UsageArrival:        string(e.UsageArrival),

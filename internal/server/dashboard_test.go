@@ -2754,7 +2754,7 @@ func TestHandleDashboard_UsageReportingPanel_StatesOnceAndFirst(t *testing.T) {
 	if usageIdx < 0 {
 		t.Fatal("body missing the Usage reporting row label")
 	}
-	for _, label := range []string{"<dt>Model</dt>", "<dt>API Requests</dt>", "<dt>Tokens</dt>", "<dt>Est. Cost</dt>"} {
+	for _, label := range []string{"<dt>Reported model</dt>", "<dt>API Requests</dt>", "<dt>Tokens</dt>", "<dt>Est. Cost</dt>"} {
 		idx := strings.Index(dr.Body, label)
 		if idx < 0 {
 			t.Fatalf("body missing the %s row label", label)
@@ -2969,5 +2969,42 @@ func TestDashboard_SessionInsideItsFirstTurnStillAwaitsFigures(t *testing.T) {
 	}
 	if got := data.RunningNonReportingNote; got != "" {
 		t.Errorf("RunningNonReportingNote = %q, want empty", got)
+	}
+}
+
+func TestHandleDashboard_RunningPanelShowsRuleAndConfiguredSettings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name                            string
+		rule, model, effort             string
+		wantRule, wantModel, wantEffort string
+	}{
+		{name: "rule and both settings", rule: "cheap", model: "provider/cheap-model", effort: "low", wantRule: "cheap", wantModel: "provider/cheap-model", wantEffort: "low"},
+		{name: "no rule and no settings", wantRule: "—", wantModel: "runtime default", wantEffort: "runtime default"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			snap := orchestrator.RuntimeSnapshotResult{GeneratedAt: now, Running: []orchestrator.SnapshotRunningEntry{{
+				IssueID: "id-1", Identifier: "MT-1", State: "In Progress", StartedAt: now.Add(-time.Minute),
+				RuleName: tt.rule, ConfiguredModel: tt.model, ConfiguredEffort: tt.effort, ModelName: "reported-model",
+			}}}
+			ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+
+			dr := getDashboard(t, ts, "/")
+
+			for label, value := range map[string]string{"Rule": tt.wantRule, "Configured model": tt.wantModel, "Configured effort": tt.wantEffort} {
+				if !regexp.MustCompile("<dt>" + label + `</dt>\s*<dd>` + regexp.QuoteMeta(value) + "</dd>").MatchString(dr.Body) {
+					t.Errorf("dashboard body lacks the %q row with value %q", label, value)
+				}
+			}
+			if !strings.Contains(dr.Body, "<dt>Reported model</dt>") || strings.Contains(dr.Body, "<dt>Model</dt>") {
+				t.Error("dashboard body must label the runtime's model Reported model and keep no bare Model row")
+			}
+		})
 	}
 }

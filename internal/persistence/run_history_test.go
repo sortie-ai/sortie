@@ -96,6 +96,41 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 1100, 2200, 3300, 440, true)
 }
 
+func TestRunHistoryConfiguredSettingsColumns_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.ConfiguredModel, run.ConfiguredEffort, run.ReportedModel = "provider/cheap", "low", "provider/cheap-20260101"
+	inserted := appendOrFatal(t, s, run)
+
+	readers := map[string]func() ([]RunHistory, error){
+		"QueryRunHistoryByIssue":         func() ([]RunHistory, error) { return s.QueryRunHistoryByIssue(ctx, run.IssueID) },
+		"QueryRecentRunHistory":          func() ([]RunHistory, error) { return s.QueryRecentRunHistory(ctx, 1, 0) },
+		"QueryRecentRunHistory(afterID)": func() ([]RunHistory, error) { return s.QueryRecentRunHistory(ctx, 1, inserted.ID+1) },
+		"LoadLatestSuccessfulRunsForReactionRecovery": func() ([]RunHistory, error) {
+			return s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, time.Time{}, 10)
+		},
+	}
+	got := map[string][]RunHistory{"AppendRunHistory": {inserted}}
+	for name, read := range readers {
+		rows, err := read()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got[name] = rows
+	}
+
+	for name, rows := range got {
+		if len(rows) != 1 || rows[0].ConfiguredModel != "provider/cheap" || rows[0].ConfiguredEffort != "low" || rows[0].ReportedModel != "provider/cheap-20260101" {
+			t.Errorf("%s = %+v, want one row with ConfiguredModel, ConfiguredEffort, ReportedModel %q, %q, %q", name, rows, "provider/cheap", "low", "provider/cheap-20260101")
+		}
+	}
+}
+
 func TestRunHistoryTokenColumns_UnmeasuredRoundTrip(t *testing.T) {
 	t.Parallel()
 

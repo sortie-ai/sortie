@@ -223,6 +223,11 @@ type RunningEntry struct {
 	// to this attempt.
 	RuleSettingsApplied bool
 
+	// ConfiguredModel and ConfiguredEffort are what the operator asked
+	// for, empty when unset; ModelName is what the runtime reported.
+	ConfiguredModel  string
+	ConfiguredEffort string
+
 	// TemplateID is the resolved template registry key frozen at dispatch.
 	// Empty selects the WORKFLOW.md body template.
 	TemplateID string
@@ -976,6 +981,8 @@ type SnapshotRunningEntry struct {
 	SelfReviewIteration int                       `json:"self_review_iteration,omitempty"`
 	AgentKind           string                    `json:"agent_kind,omitempty"`
 	RuleName            string                    `json:"rule_name,omitempty"`
+	ConfiguredModel     string                    `json:"configured_model,omitempty"`
+	ConfiguredEffort    string                    `json:"configured_effort,omitempty"`
 	UsageMeasured       bool                      `json:"tokens_measured"`
 	UsageArrival        registry.UsageArrival     `json:"usage_arrival"`
 	UsageAttribution    registry.UsageAttribution `json:"usage_attribution"`
@@ -1172,6 +1179,8 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			SelfReviewIteration: entry.SelfReviewIteration,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			ConfiguredModel:     entry.ConfiguredModel,
+			ConfiguredEffort:    entry.ConfiguredEffort,
 			UsageMeasured:       entry.UsageMeasured,
 			UsageArrival:        entry.UsageArrival,
 			UsageAttribution:    entry.UsageAttribution,

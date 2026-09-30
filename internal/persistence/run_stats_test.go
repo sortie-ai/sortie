@@ -69,6 +69,24 @@ func TestRunHistoryCapabilities(t *testing.T) {
 		}
 	})
 
+	t.Run("configured settings columns follow migration 021 and stay outside the schema tier", func(t *testing.T) {
+		t.Parallel()
+
+		current, before := openTestStore(t), openTestStore(t)
+		migrateOrFatal(t, current)
+		migrateToVersion(t, before, 20)
+
+		for s, want := range map[*Store]bool{current: true, before: false} {
+			caps, err := s.RunHistoryCapabilities(context.Background())
+			if err != nil {
+				t.Fatalf("RunHistoryCapabilities: %v", err)
+			}
+			if !caps.Full() || caps.HasConfiguredSettings != want || caps.ModelBreakdown() != want {
+				t.Errorf("RunHistoryCapabilities() = %+v, ModelBreakdown() = %v, want Full() and HasConfiguredSettings, ModelBreakdown() both %v", caps, caps.ModelBreakdown(), want)
+			}
+		}
+	})
+
 	t.Run("migration-001-only table reports all five flags false", func(t *testing.T) {
 		t.Parallel()
 
@@ -148,6 +166,33 @@ func TestRunHistoryCapabilities(t *testing.T) {
 			t.Errorf("RunHistoryCapabilities() error = %q, want to contain %q", err.Error(), "run_history")
 		}
 	})
+}
+
+func TestRunHistoryCapabilities_ModelBreakdown(t *testing.T) {
+	t.Parallel()
+
+	full := RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true, HasTokens: true, HasTokenMeasurement: true}
+	withSettings := full
+	withSettings.HasConfiguredSettings = true
+	tests := []struct {
+		name string
+		caps RunHistoryCapabilities
+		want bool
+	}{
+		{"full tier with configured settings", withSettings, true},
+		{"full tier without configured settings", full, false},
+		{"configured settings without the full tier", RunHistoryCapabilities{HasConfiguredSettings: true}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.caps.ModelBreakdown(); got != tt.want {
+				t.Errorf("%+v.ModelBreakdown() = %v, want %v", tt.caps, got, tt.want)
+			}
+		})
+	}
 }
 
 // runAt returns a minimal RunHistory whose StartedAt and CompletedAt are
@@ -446,4 +491,51 @@ func TestScanRunHistoryRange(t *testing.T) {
 			t.Errorf("RunStatsRow.CacheWriteTokens = %d, want 38948", got[0].CacheWriteTokens)
 		}
 	})
+}
+
+func TestScanRunHistoryRange_ConfiguredModel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, s *Store)
+		want  []string
+	}{
+		{"filled when the model breakdown is available", func(t *testing.T, s *Store) {
+			migrateOrFatal(t, s)
+			row := runAt("with-model", "2026-01-01T00:00:00Z")
+			row.ConfiguredModel = "provider/cheap"
+			appendOrFatal(t, s, row)
+			appendOrFatal(t, s, runAt("no-model", "2026-01-02T00:00:00Z"))
+		}, []string{"provider/cheap", ""}},
+		{"left empty without error on a database before migration 021", func(t *testing.T, s *Store) {
+			migrateToVersion(t, s, 20)
+			insertBareRun(t, s, "old")
+		}, []string{""}},
+		{"a legacy table with only the base columns still scans", createLegacyRunHistoryTable, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openTestStore(t)
+			tt.setup(t, s)
+			ctx := context.Background()
+			caps, err := s.RunHistoryCapabilities(ctx)
+			if err != nil {
+				t.Fatalf("RunHistoryCapabilities: %v", err)
+			}
+
+			var got []string
+			err = s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+				got = append(got, row.ConfiguredModel)
+				return nil
+			})
+
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Errorf("ScanRunHistoryRange ConfiguredModel values, error = %q, %v, want %q, nil", got, err, tt.want)
+			}
+		})
+	}
 }

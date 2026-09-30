@@ -211,6 +211,9 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"tokens_measured", "INTEGER", true, 0},
 				{"unaccounted_turns", "INTEGER", true, 0},
 				{"cache_write_tokens", "INTEGER", true, 0},
+				{"configured_model", "TEXT", true, 0},
+				{"configured_effort", "TEXT", true, 0},
+				{"reported_model", "TEXT", true, 0},
 			},
 		},
 		{
@@ -406,6 +409,36 @@ func TestMigrate_Migration020_CacheWriteTokensDefault(t *testing.T) {
 		if got != 0 {
 			t.Errorf("%s.cache_write_tokens for a pre-migration-020 row = %d, want 0", tt.table, got)
 		}
+	}
+}
+
+func insertBareRun(t *testing.T, s *Store, issueID string) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		 VALUES (?, 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded')`, issueID,
+	); err != nil {
+		t.Fatalf("insert run_history row %s: %v", issueID, err)
+	}
+}
+
+func TestMigrate_Migration021_ConfiguredSettingsDefaultToEmpty(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 20)
+	insertBareRun(t, s, "rh-pre021")
+
+	migrateOrFatal(t, s)
+
+	var model, effort, reported string
+	if err := s.db.QueryRowContext(context.Background(),
+		`SELECT configured_model, configured_effort, reported_model FROM run_history WHERE issue_id = 'rh-pre021'`,
+	).Scan(&model, &effort, &reported); err != nil {
+		t.Fatalf("query migration-021 columns: %v", err)
+	}
+	if model != "" || effort != "" || reported != "" {
+		t.Errorf("configured_model, configured_effort, reported_model for a pre-migration-021 row = %q, %q, %q, want all empty", model, effort, reported)
 	}
 }
 

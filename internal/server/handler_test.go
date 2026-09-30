@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -231,6 +232,47 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 	rbm := decoded["requests_by_model"].(map[string]any)
 	if rbm["test-model"] != float64(7) {
 		t.Errorf("JSON requests_by_model[test-model] = %v, want 7", rbm["test-model"])
+	}
+}
+
+func TestToRunningEntryResponse_ConfiguredSettingsBesideTheReportedModel(t *testing.T) {
+	t.Parallel()
+
+	bare := orchestrator.SnapshotRunningEntry{IssueID: "id-1", Identifier: "MT-1", State: "In Progress", StartedAt: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)}
+	populated := bare
+	populated.RuleName, populated.ConfiguredModel, populated.ConfiguredEffort, populated.ModelName = "cheap", "configured-model", "low", "reported-model"
+	tests := []struct {
+		name  string
+		entry orchestrator.SnapshotRunningEntry
+		want  map[string]any
+	}{
+		{"populated", populated, map[string]any{"rule_name": "cheap", "configured_model": "configured-model", "configured_effort": "low", "model_name": "reported-model"}},
+		{"bare omits every empty key", bare, map[string]any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			data, err := json.Marshal(toRunningEntryResponse(tt.entry))
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+
+			got := map[string]any{}
+			for _, key := range []string{"rule_name", "configured_model", "configured_effort", "model_name"} {
+				if value, present := decoded[key]; present {
+					got[key] = value
+				}
+			}
+			if !maps.Equal(got, tt.want) {
+				t.Errorf("running object settings keys = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -82,6 +82,12 @@ type dashboardRunningEntry struct {
 	EstimatedCostUSD string
 	UsageMeasured    bool
 
+	// RuleRow, ConfiguredModelRow, and ConfiguredEffortRow are
+	// pre-formatted panel rows.
+	RuleRow             string
+	ConfiguredModelRow  string
+	ConfiguredEffortRow string
+
 	// UsageReportingRow, ModelRow, APIRequestsRow, TokensRow, and
 	// EstCostRow are pre-formatted usage-disposition panel rows the
 	// template prints verbatim.
@@ -93,6 +99,25 @@ type dashboardRunningEntry struct {
 }
 
 const dashPlaceholder = "—"
+
+// runtimeDefaultLabel stands for a setting the attempt left unset.
+const runtimeDefaultLabel = "runtime default"
+
+// configuredSettingRow renders a configured model or effort row.
+func configuredSettingRow(value string) string {
+	if value == "" {
+		return runtimeDefaultLabel
+	}
+	return value
+}
+
+// ruleRow renders the Rule row, a dash when no rule routed the run.
+func ruleRow(name string) string {
+	if name == "" {
+		return dashPlaceholder
+	}
+	return name
+}
 
 // usageReportingRow renders the Usage reporting row: the one place a
 // session's reason for reporting nothing is stated. The "not declared" arm
@@ -445,24 +470,28 @@ func buildDashboardData(
 		}
 
 		running[i] = dashboardRunningEntry{
-			Identifier:        displayID,
-			State:             e.State,
-			TurnCount:         e.TurnCount,
-			Duration:          FormatDuration(dur),
-			LastEvent:         string(e.LastAgentEvent),
-			TotalTokens:       e.AgentTotalTokens,
-			CacheReadTokens:   e.CacheReadTokens,
-			CacheWriteTokens:  e.CacheWriteTokens,
-			ModelName:         e.ModelName,
-			DetailURL:         "/api/v1/" + url.PathEscape(e.Identifier),
-			Host:              e.SSHHost,
-			ToolTimePct:       toolPct,
-			APITimePct:        apiPct,
-			WorkflowFile:      e.WorkflowFile,
-			EstimatedCostUSD:  entryCostStr,
-			UsageMeasured:     e.UsageMeasured,
-			UsageReportingRow: usageReportingRow(e.UsageArrival, e.UsageAttribution),
-			ModelRow:          usageModelRow(e.UsageAttribution, e.ModelName),
+			Identifier:       displayID,
+			State:            e.State,
+			TurnCount:        e.TurnCount,
+			Duration:         FormatDuration(dur),
+			LastEvent:        string(e.LastAgentEvent),
+			TotalTokens:      e.AgentTotalTokens,
+			CacheReadTokens:  e.CacheReadTokens,
+			CacheWriteTokens: e.CacheWriteTokens,
+			ModelName:        e.ModelName,
+			DetailURL:        "/api/v1/" + url.PathEscape(e.Identifier),
+			Host:             e.SSHHost,
+			ToolTimePct:      toolPct,
+			APITimePct:       apiPct,
+			WorkflowFile:     e.WorkflowFile,
+			EstimatedCostUSD: entryCostStr,
+			UsageMeasured:    e.UsageMeasured,
+
+			RuleRow:             ruleRow(e.RuleName),
+			ConfiguredModelRow:  configuredSettingRow(e.ConfiguredModel),
+			ConfiguredEffortRow: configuredSettingRow(e.ConfiguredEffort),
+			UsageReportingRow:   usageReportingRow(e.UsageArrival, e.UsageAttribution),
+			ModelRow:            usageModelRow(e.UsageAttribution, e.ModelName),
 			APIRequestsRow: usageAPIRequestsRow(
 				e.UsageArrival, e.APIRequestsMeasured, e.APIRequestCount, e.RequestsByModel),
 			TokensRow:  usageTokensRow(e.UsageArrival, e.UsageMeasured, e.TokensAwaited, e.TokensPending, tokensStr),

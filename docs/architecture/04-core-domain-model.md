@@ -91,6 +91,16 @@ Fields (logical):
 - `status`
 - `agent_adapter` (string)
   - Which agent adapter was used for this attempt. Relevant when multiple agent types are configured.
+- `rule_name` (string)
+  - The dispatch rule the attempt was routed by. Empty when the workflow-wide fallback fired; `default` when the `dispatch.default` selection fired.
+- `template_id` (string)
+  - The prompt template the attempt used. Empty selects the `WORKFLOW.md` body.
+- `configured_model` (string)
+  - The `model` the attempt's resolved settings block carried. Empty when none was set, which leaves the runtime's own default in charge. It records what the operator asked for.
+- `configured_effort` (string)
+  - The `effort` the attempt's resolved settings block carried, empty by the same rule.
+- `reported_model` (string)
+  - The model the runtime reported running, taken from the last token-usage event that named one. Empty when the runtime reported none. A reported model never overwrites a configured one, and nothing compares the two: routing aliases and runtime fallbacks make them differ legitimately.
 - `error` (optional)
 
 #### 4.1.6 Live Session (Agent Session Metadata)
