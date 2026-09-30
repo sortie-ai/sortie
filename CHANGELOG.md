@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - An agent kind selected by a dispatch rule now starts its own program instead of the `agent.command` written for the default agent kind, and `sortie validate` now refuses a route to a kind that needs a program to start but has none. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 - A retry that is waiting when the workflow changes now continues on the agent kind and prompt the workflow selects afterwards, instead of starting another agent kind's command, failing on a prompt that was removed, or being dropped. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))
 - A notification from an agent that never reached you no longer counts toward the limit on how many notifications an agent can send, so its later notifications still get through. ([#1163](https://github.com/sortie-ai/sortie/issues/1163))
+- A `copilot-cli` turn that fails on an error from its model provider now reports the provider's message as the failure reason, instead of a generic non-zero exit message. ([#1205](https://github.com/sortie-ai/sortie/issues/1205))
+- A local `opencode` turn no longer spends tokens on a session title, so the token usage reported for it covers every model request the turn makes. ([#1205](https://github.com/sortie-ai/sortie/issues/1205))
 
 ## [1.25.0] - 2026-09-27
 

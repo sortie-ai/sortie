@@ -22,10 +22,11 @@ import (
 const envSurfaceAllowlistFile = "env_surface_contract_test.go"
 
 var envSurfaceOwnedNames = map[string]bool{
-	"SORTIE_CLIENTPROTOCOL_TEST":           true,
-	"SORTIE_CLIENTPROTOCOL_COMMAND":        true,
-	"SORTIE_CLIENTPROTOCOL_PROFILE":        true,
-	"SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV": true,
+	"SORTIE_CLIENTPROTOCOL_TEST":               true,
+	"SORTIE_CLIENTPROTOCOL_COMMAND":            true,
+	"SORTIE_CLIENTPROTOCOL_PROFILE":            true,
+	"SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV":     true,
+	"SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV": true,
 }
 
 // envSurfaceCallSelectors are the selector names an environment-access

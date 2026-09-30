@@ -2,21 +2,20 @@ package agenttest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
-// Fixture kinds registered once so assertUsageReporting's tests can
-// resolve a real registry.AgentMeta through registry.Agents.Meta,
-// mirroring how a production kind package registers itself in init().
-// These names are prefixed to avoid colliding with a real adapter kind.
+// Prefixed so the fixture kinds cannot collide with a real adapter kind.
 const (
 	usageTestKindIncremental = "agenttest-usage-incremental"
 	usageTestKindTurnEnd     = "agenttest-usage-turn-end"
 	usageTestKindNone        = "agenttest-usage-none"
 	usageTestKindWithRule    = "agenttest-usage-with-rule"
+	usageTestKindUndeclared  = "agenttest-usage-undeclared"
 )
 
 func usageTestConstructor(map[string]any) (domain.AgentAdapter, error) {
@@ -24,6 +23,7 @@ func usageTestConstructor(map[string]any) (domain.AgentAdapter, error) {
 }
 
 func init() {
+	registry.Agents.RegisterWithMeta(usageTestKindUndeclared, usageTestConstructor, registry.AgentMeta{})
 	registry.Agents.RegisterWithMeta(usageTestKindIncremental, usageTestConstructor, registry.AgentMeta{
 		UsageArrival:     registry.UsageArrivalIncremental,
 		UsageAttribution: registry.UsageAttributionPerModel,
@@ -49,10 +49,6 @@ func init() {
 	})
 }
 
-// fakeReporter is a minimal [contractReporter] double that records
-// Errorf calls instead of failing the enclosing test, so a
-// deliberately-violating input can be driven through
-// assertUsageContract without reddening the smoke test itself.
 type fakeReporter struct {
 	errors []string
 }
@@ -63,17 +59,30 @@ func (f *fakeReporter) Errorf(format string, args ...any) {
 	f.errors = append(f.errors, format)
 }
 
-// TestAssertUsageContract_Passing exercises the exported
-// AssertUsageContract entry point against a real *testing.T with a
-// sequence of events whose usage components are non-negative,
-// internally consistent (TotalTokens == InputTokens + OutputTokens,
-// CacheReadTokens <= InputTokens), and componentwise non-decreasing
-// across the run. It must report no failures.
+const kindPrefix = "kind %q: "
+
+func usageOf(input, output int64) domain.TokenUsage {
+	return domain.TokenUsage{InputTokens: input, OutputTokens: output, TotalTokens: input + output}
+}
+
+func requireFailures(t *testing.T, got, wantPrefixes []string) {
+	t.Helper()
+
+	if len(got) != len(wantPrefixes) {
+		t.Fatalf("recorded failures = %q, want %d failures starting %q", got, len(wantPrefixes), wantPrefixes)
+	}
+	for i, format := range got {
+		if !strings.HasPrefix(format, wantPrefixes[i]) {
+			t.Errorf("failure %d = %q, want prefix %q", i, format, wantPrefixes[i])
+		}
+	}
+}
+
 func TestAssertUsageContract_Passing(t *testing.T) {
 	t.Parallel()
 
 	events := []domain.AgentEvent{
-		{Type: domain.EventNotification}, // zero Usage, ignored by the contract
+		{Type: domain.EventNotification},
 		{
 			Type: domain.EventTokenUsage,
 			Usage: domain.TokenUsage{
@@ -91,11 +100,6 @@ func TestAssertUsageContract_Passing(t *testing.T) {
 	AssertUsageContract(t, events)
 }
 
-// TestAssertUsageContract_Violating drives the same checking logic via
-// assertUsageContract and a fakeReporter, over a sequence whose second
-// event lowers TotalTokens relative to the first. It asserts at least
-// one Errorf call was recorded, proving the helper actually inspects
-// its input rather than trivially passing.
 func TestAssertUsageContract_Violating(t *testing.T) {
 	t.Parallel()
 
@@ -122,10 +126,6 @@ func TestAssertUsageContract_Violating(t *testing.T) {
 	}
 }
 
-// TestAssertMeasurementAbsent_Passing exercises the exported
-// AssertMeasurementAbsent entry point against a real *testing.T with an
-// event slice carrying no token_usage event and no non-zero Usage, and a
-// result whose UsageMeasured is false. It must report no failures.
 func TestAssertMeasurementAbsent_Passing(t *testing.T) {
 	t.Parallel()
 
@@ -138,11 +138,6 @@ func TestAssertMeasurementAbsent_Passing(t *testing.T) {
 	AssertMeasurementAbsent(t, events, result)
 }
 
-// TestAssertMeasurementAbsent_Violating drives assertMeasurementAbsent
-// against a fakeReporter for each of the three ways a runtime that
-// reported nothing must not assert a measurement: a token_usage event, a
-// non-zero Usage on a differently typed event, and a true
-// result.UsageMeasured. Each case must record at least one failure.
 func TestAssertMeasurementAbsent_Violating(t *testing.T) {
 	t.Parallel()
 
@@ -184,10 +179,6 @@ func TestAssertMeasurementAbsent_Violating(t *testing.T) {
 	}
 }
 
-// TestAssertModelReported_Passing exercises the exported
-// AssertModelReported entry point against a real *testing.T with a
-// sequence of token_usage events that all carry the wanted model. It
-// must report no failures.
 func TestAssertModelReported_Passing(t *testing.T) {
 	t.Parallel()
 
@@ -201,12 +192,6 @@ func TestAssertModelReported_Passing(t *testing.T) {
 	AssertModelReported(t, events, "claude-sonnet-5")
 }
 
-// TestAssertModelReported_Violating drives assertModelReported against
-// a fakeReporter for each way a slice can fail to report the wanted
-// model: no token_usage event at all, a token_usage event carrying the
-// wrong model, and a token_usage event carrying a non-empty model when
-// wantModel is the empty string. Each case must record at least one
-// failure.
 func TestAssertModelReported_Violating(t *testing.T) {
 	t.Parallel()
 
@@ -246,10 +231,6 @@ func TestAssertModelReported_Violating(t *testing.T) {
 	}
 }
 
-// TestAssertUsageReporting_Passing exercises the exported
-// AssertUsageReporting entry point against a real *testing.T for each
-// of the three arrival dispositions with a stream matching the
-// witness table for that disposition. It must report no failures.
 func TestAssertUsageReporting_Passing(t *testing.T) {
 	t.Parallel()
 
@@ -298,9 +279,6 @@ func TestAssertUsageReporting_Passing(t *testing.T) {
 	})
 }
 
-// TestAssertUsageReporting_UnregisteredKind proves the
-// unregistered-kind arm: assertUsageReporting fails naming the kind
-// when registry.Agents.Meta reports it unregistered.
 func TestAssertUsageReporting_UnregisteredKind(t *testing.T) {
 	t.Parallel()
 
@@ -314,8 +292,6 @@ func TestAssertUsageReporting_UnregisteredKind(t *testing.T) {
 	}
 }
 
-// TestAssertUsageReporting_EmptyCases proves assertUsageReporting
-// fails when cases is empty, per the assertion's input validation.
 func TestAssertUsageReporting_EmptyCases(t *testing.T) {
 	t.Parallel()
 
@@ -327,9 +303,6 @@ func TestAssertUsageReporting_EmptyCases(t *testing.T) {
 	}
 }
 
-// TestAssertUsageReporting_RuleCoverageArm proves the rule-coverage
-// arm: a kind with one UsageSessionRules entry whose cases never
-// exercise it (every case is local) is reported by rule index.
 func TestAssertUsageReporting_RuleCoverageArm(t *testing.T) {
 	t.Parallel()
 
@@ -351,10 +324,6 @@ func TestAssertUsageReporting_RuleCoverageArm(t *testing.T) {
 	}
 }
 
-// TestAssertResolvedUsageReporting_AdmissibilityGuard proves the
-// admissibility guard: a stream with one usage figure and no tool
-// result cannot tell an incremental disposition from a turn_end one,
-// so both arms reject it.
 func TestAssertResolvedUsageReporting_AdmissibilityGuard(t *testing.T) {
 	t.Parallel()
 
@@ -377,10 +346,6 @@ func TestAssertResolvedUsageReporting_AdmissibilityGuard(t *testing.T) {
 	}
 }
 
-// TestAssertResolvedUsageReporting_IncrementalShapedFailsTurnEndArm
-// proves that an incremental-shaped stream fails the TurnEnd arm both
-// ways a stream can be incremental-shaped: a second figure, and a
-// figure preceding the last tool result.
 func TestAssertResolvedUsageReporting_IncrementalShapedFailsTurnEndArm(t *testing.T) {
 	t.Parallel()
 
@@ -423,9 +388,6 @@ func TestAssertResolvedUsageReporting_IncrementalShapedFailsTurnEndArm(t *testin
 	}
 }
 
-// TestAssertResolvedUsageReporting_TurnEndShapedFailsIncrementalArm
-// proves that a turn-end-shaped stream (one figure settled after the
-// last tool result) fails the Incremental arm.
 func TestAssertResolvedUsageReporting_TurnEndShapedFailsIncrementalArm(t *testing.T) {
 	t.Parallel()
 
@@ -445,9 +407,6 @@ func TestAssertResolvedUsageReporting_TurnEndShapedFailsIncrementalArm(t *testin
 	}
 }
 
-// TestAssertResolvedUsageReporting_AttributionArms proves the
-// PerModel, SessionTotal, and None attribution arms each fail on a
-// violating event set.
 func TestAssertResolvedUsageReporting_AttributionArms(t *testing.T) {
 	t.Parallel()
 
@@ -503,9 +462,6 @@ func TestAssertResolvedUsageReporting_AttributionArms(t *testing.T) {
 	})
 }
 
-// TestAssertResolvedUsageReporting_TurnEndTerminalOrdering proves that
-// a turn_end case whose usage event has no later turn-terminal event
-// fails, and the same case with turn_completed appended passes.
 func TestAssertResolvedUsageReporting_TurnEndTerminalOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -560,4 +516,348 @@ func TestAssertResolvedUsageReporting_TurnEndTerminalOrdering(t *testing.T) {
 			t.Error("assertResolvedUsageReporting(turn_end) recorded no failures for a zero-payload usage event with no trailing terminal event, want at least one")
 		}
 	})
+}
+
+func TestAssertLiveUsageCase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		kind         string
+		tc           UsageReportingCase
+		wantFailures []string
+	}{
+		{
+			name: "incremental accepts one model-naming figure and no tool result",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+		},
+		{
+			name: "turn_end accepts one figure before the terminal event and no tool result",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+		},
+		{
+			name: "none accepts a turn with no measurement",
+			kind: usageTestKindNone,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTurnCompleted}},
+			},
+		},
+		{
+			name: "unmeasured turn flagged unaccounted passes",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTurnCompleted}},
+				Result: domain.TurnResult{SpendUnaccounted: true},
+			},
+		},
+		{
+			name: "local session under a remote rule resolves the declared pair",
+			kind: usageTestKindWithRule,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+		},
+		{
+			name: "remote session resolves the rule's none arrival",
+			kind: usageTestKindWithRule,
+			tc: UsageReportingCase{
+				Remote: true,
+				Events: []domain.AgentEvent{{Type: domain.EventTurnCompleted}},
+			},
+		},
+		{
+			name:         "none arrival with a measurement",
+			kind:         usageTestKindNone,
+			tc:           UsageReportingCase{Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)}},
+			wantFailures: []string{kindPrefix + "result.UsageMeasured = true"},
+		},
+		{
+			name: "remote session measured under the rule's none arrival",
+			kind: usageTestKindWithRule,
+			tc: UsageReportingCase{
+				Remote: true,
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "result.UsageMeasured = true"},
+		},
+		{
+			name: "zero input tokens",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(0, 3), Model: "gpt-6-astra"}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(0, 3)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: declared %s, result.Usage = %+v, want positive input and output tokens"},
+		},
+		{
+			name: "zero output tokens",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(5, 0), Model: "gpt-6-astra"}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(5, 0)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: declared %s, result.Usage = %+v, want positive input and output tokens"},
+		},
+		{
+			name: "usage contract violation in an event",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{
+					Type:  domain.EventTokenUsage,
+					Usage: domain.TokenUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 99},
+					Model: "gpt-6-astra",
+				}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "event %d: TotalTokens = %d, want InputTokens+OutputTokens"},
+		},
+		{
+			name: "per_model with no usage-bearing event naming a model",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: declared per_model, no usage-bearing event named a model"},
+		},
+		{
+			name: "session_total with a usage-bearing event naming a model",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: event %d: declared session_total, a usage-bearing event named a model"},
+		},
+		{
+			name: "turn_end usage event with no later terminal event",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: event %d: declared turn_end, the usage event has no later turn-terminal event"},
+		},
+		{
+			name: "turn_end result that does not dominate a reported figure",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(5, 1)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: event %d: declared turn_end, result.Usage %+v does not dominate"},
+		},
+		{
+			name:         "unmeasured turn not flagged unaccounted",
+			kind:         usageTestKindIncremental,
+			tc:           UsageReportingCase{Events: []domain.AgentEvent{{Type: domain.EventTurnCompleted}}},
+			wantFailures: []string{kindPrefix + "case %q: the turn reported no measurement and did not flag its spend unaccounted"},
+		},
+		{
+			name: "unmeasured turn that leaked a usage event",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage}},
+				Result: domain.TurnResult{SpendUnaccounted: true},
+			},
+			wantFailures: []string{kindPrefix + "event %d: type = %q, want no token_usage event"},
+		},
+		{
+			name:         "kind that declares no usage arrival",
+			kind:         usageTestKindUndeclared,
+			tc:           UsageReportingCase{Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)}},
+			wantFailures: []string{kindPrefix + "case %q: want a kind that declares a usage arrival"},
+		},
+		{
+			name:         "unregistered kind",
+			kind:         "agenttest-usage-does-not-exist",
+			tc:           UsageReportingCase{},
+			wantFailures: []string{"kind %q is not registered"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := &fakeReporter{}
+			assertLiveUsageCase(reporter, tt.kind, tt.tc)
+
+			requireFailures(t, reporter.errors, tt.wantFailures)
+		})
+	}
+}
+
+func TestAssertLiveUsageCase_ExportedEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	conforming := UsageReportingCase{
+		Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"}},
+		Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+	}
+	violating := UsageReportingCase{Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)}}
+
+	AssertLiveUsageCase(t, usageTestKindIncremental, conforming)
+
+	stand := new(testing.T)
+	AssertLiveUsageCase(stand, usageTestKindIncremental, violating)
+	if !stand.Failed() {
+		t.Error("AssertLiveUsageCase(violating case) did not fail its *testing.T, want failure")
+	}
+}
+
+func TestAssertUsageReportingCase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		kind         string
+		tc           UsageReportingCase
+		wantFailures []string
+	}{
+		{
+			name: "incremental with a figure per model request passes",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"},
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: usageOf(20, 4), Model: "gpt-6-astra"},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(20, 4)},
+			},
+		},
+		{
+			name: "turn_end with one figure settled after the last tool result passes",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+		},
+		{
+			name: "none with no usage reported passes",
+			kind: usageTestKindNone,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
+			},
+		},
+		{
+			name: "one local case passes without reaching the session rule",
+			kind: usageTestKindWithRule,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: usageOf(5, 1)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(5, 1)},
+			},
+		},
+		{
+			name: "one remote case passes without reaching the declared pair",
+			kind: usageTestKindWithRule,
+			tc: UsageReportingCase{
+				Remote: true,
+				Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
+			},
+		},
+		{
+			name:         "unregistered kind",
+			kind:         "agenttest-usage-does-not-exist",
+			tc:           UsageReportingCase{},
+			wantFailures: []string{"kind %q is not registered"},
+		},
+		{
+			name: "turn_end kind whose stream carries two figures",
+			kind: usageTestKindTurnEnd,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2)},
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: usageOf(20, 4)},
+					{Type: domain.EventTurnCompleted},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(20, 4)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: declared turn_end, the turn reported a figure while it was still working"},
+		},
+		{
+			name: "incremental kind whose stream settles one figure after its last tool result",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{
+					{Type: domain.EventToolResult},
+					{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"},
+				},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: declared incremental, the turn settled one figure after its last tool result"},
+		},
+		{
+			name: "stream with neither a tool result nor a second figure",
+			kind: usageTestKindIncremental,
+			tc: UsageReportingCase{
+				Events: []domain.AgentEvent{{Type: domain.EventTokenUsage, Usage: usageOf(10, 2), Model: "gpt-6-astra"}},
+				Result: domain.TurnResult{UsageMeasured: true, Usage: usageOf(10, 2)},
+			},
+			wantFailures: []string{kindPrefix + "case %q: the stream carries neither a tool result nor a second usage event"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := &fakeReporter{}
+			assertUsageReportingCase(reporter, tt.kind, tt.tc)
+
+			requireFailures(t, reporter.errors, tt.wantFailures)
+		})
+	}
+}
+
+func TestAssertUsageReportingCase_ExportedEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	conforming := UsageReportingCase{
+		Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
+	}
+	violating := UsageReportingCase{
+		Events: []domain.AgentEvent{{Type: domain.EventToolResult}, {Type: domain.EventTurnCompleted}},
+		Result: domain.TurnResult{UsageMeasured: true},
+	}
+
+	AssertUsageReportingCase(t, usageTestKindNone, conforming)
+
+	stand := new(testing.T)
+	AssertUsageReportingCase(stand, usageTestKindNone, violating)
+	if !stand.Failed() {
+		t.Error("AssertUsageReportingCase(violating case) did not fail its *testing.T, want failure")
+	}
 }

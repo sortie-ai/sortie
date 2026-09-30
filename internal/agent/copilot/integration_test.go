@@ -5,8 +5,9 @@
 //	SORTIE_COPILOT_TEST=1          enable this suite
 //	SORTIE_COPILOT_COMMAND         path to copilot binary (default: "copilot")
 //
-// Authentication: at least one of COPILOT_GITHUB_TOKEN, GH_TOKEN, or
-// GITHUB_TOKEN must be set, or gh CLI must be authenticated.
+// Authentication: the live cases need at least one of COPILOT_GITHUB_TOKEN,
+// GH_TOKEN, or GITHUB_TOKEN, or an authenticated gh CLI. The scripted-model
+// case reads no credential and needs only SORTIE_COPILOT_TEST=1.
 //
 // Run:
 //
@@ -15,6 +16,7 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -74,17 +77,6 @@ func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType
 		types[i] = e.Type
 	}
 	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
-}
-
-// assertNoEventType asserts that no event in the slice has the given type.
-func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
-	t.Helper()
-	for _, e := range events {
-		if e.Type == eventType {
-			t.Errorf("unexpected event type %q found with message: %s", eventType, e.Message)
-			return
-		}
-	}
 }
 
 // collectEvents collects events from a turn using a mutex-safe callback.
@@ -181,200 +173,46 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunTurn executes a single-turn session, verifying that the
-// adapter delivers the mandatory event sequence and populates TurnResult
-// correctly. Its turn_completed assertion is this adapter's live-runtime
-// obligation for the shared disposition decision: the only check that can
-// catch an evidence mapping that is internally consistent but wrong against
-// the actual wire format.
-func TestIntegration_RunTurn(t *testing.T) {
+func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(integrationConfig())
-	if err != nil {
-		t.Fatalf("NewCopilotAdapter: %v", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(workspace+"/hello.txt", []byte("Hello"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	onEvent, collected := collectEvents(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  "Read the file hello.txt. Output EXACTLY the file content and absolutely nothing else. No preamble, no explanation.",
-		OnEvent: onEvent,
-	})
-	if err != nil {
-		t.Fatalf("RunTurn: %v", err)
-	}
-
-	events := collected()
-
-	if result.SessionID == "" {
-		t.Error("TurnResult.SessionID is empty; expected session ID from result event")
-	}
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-	if len(events) == 0 {
-		t.Fatal("no events received via OnEvent")
-	}
-
-	assertContainsEventType(t, events, domain.EventSessionStarted)
-	assertContainsEventType(t, events, domain.EventTurnCompleted)
-	assertNoEventType(t, events, domain.EventTurnFailed)
-	assertNoEventType(t, events, domain.EventStartupFailed)
-
-	// Exactly one token_usage event, positioned after the last tool_result
-	// and before turn_completed, carrying the recovered figure: no stream
-	// event carries an input count, so InputTokens > 0 fails exactly when
-	// journal recovery stops working.
-	var usageIdx, completedIdx, lastToolResultIdx = -1, -1, -1
-	usageCount := 0
-	for i, e := range events {
-		switch e.Type {
-		case domain.EventTokenUsage:
-			usageIdx = i
-			usageCount++
-		case domain.EventTurnCompleted:
-			completedIdx = i
-		case domain.EventToolResult:
-			lastToolResultIdx = i
-		}
-	}
-	if usageCount != 1 {
-		t.Fatalf("token_usage event count = %d, want 1", usageCount)
-	}
-	if completedIdx < 0 {
-		t.Fatal("no turn_completed event delivered")
-	}
-	if usageIdx <= lastToolResultIdx {
-		t.Errorf("token_usage event at index %d, want after the last tool_result at index %d", usageIdx, lastToolResultIdx)
-	}
-	if usageIdx >= completedIdx {
-		t.Errorf("token_usage event at index %d, want before turn_completed at index %d", usageIdx, completedIdx)
-	}
-
-	usageEvent := events[usageIdx]
-	if usageEvent.Usage != result.Usage {
-		t.Errorf("token_usage event Usage = %+v, want %+v (TurnResult.Usage)", usageEvent.Usage, result.Usage)
-	}
-	if usageEvent.Usage.InputTokens <= 0 {
-		t.Errorf("token_usage event Usage.InputTokens = %d, want > 0", usageEvent.Usage.InputTokens)
-	}
-	if usageEvent.Model == "" {
-		t.Error("token_usage event Model is empty, want non-empty")
-	}
-	if !result.UsageMeasured {
-		t.Error("TurnResult.UsageMeasured = false, want true")
-	}
-	if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want InputTokens+OutputTokens (%d)",
-			result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
-	}
-
-	// Verify at least one EventToolResult with a non-empty ToolName.
-	// The prompt causes Copilot CLI to use the view or read tool, producing
-	// tool.execution_start + tool.execution_complete events. Asserting
-	// ToolName != "" confirms tool start/complete correlation succeeded.
-	var foundToolResult bool
-	for _, e := range events {
-		if e.Type == domain.EventToolResult && e.ToolName != "" {
-			foundToolResult = true
-			if e.ToolDurationMS < 0 {
-				t.Errorf("EventToolResult.ToolDurationMS = %d, want >= 0", e.ToolDurationMS)
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind:          "copilot-cli",
+		Passthrough:   map[string]any{"model": "scripted-model", "max_autopilot_continues": float64(5)},
+		CredentialEnv: []string{"COPILOT_PROVIDER_API_KEY"},
+		Read:          fakemodel.ReadFile,
+		Finish:        fakemodel.Named("task_complete", json.RawMessage(`{"summary":"Read the file."}`)),
+		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			return fakemodel.Launch{
+				Config: domain.AgentConfig{
+					Command:       integrationCommand(),
+					TurnTimeoutMS: 300000,
+					ReadTimeoutMS: 30000,
+				},
+				Env: map[string]string{
+					"COPILOT_PROVIDER_BASE_URL": env.URL,
+					"COPILOT_PROVIDER_TYPE":     "anthropic",
+					"COPILOT_OFFLINE":           "1",
+					"COPILOT_HOME":              filepath.Join(env.Home, ".copilot"),
+				},
 			}
-			break
-		}
-	}
-	if !foundToolResult {
-		var toolNames []string
-		for _, e := range events {
-			if e.Type == domain.EventToolResult {
-				toolNames = append(toolNames, e.ToolName)
+		},
+		Inspect: func(t *testing.T, run fakemodel.Run) {
+			if run.Environment.Scenario != fakemodel.ScenarioTurn {
+				return
 			}
-		}
-		t.Errorf("expected EventToolResult with non-empty ToolName; got tool results: %v", toolNames)
-	}
-
-	// A normal turn decides at the terminal-success row and never
-	// consults Work, so the disposition above is not itself proof the
-	// observer fired against the installed runtime; read it directly.
-	state, ok := session.Internal.(*sessionState)
-	if !ok {
-		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
-	}
-	if !state.work.Observed() {
-		t.Error("state.work.Observed() = false after a real turn, want true")
-	}
-}
-
-// TestIntegration_RunTurn_InputTokenRecovery drives one real turn with
-// COPILOT_HOME pointed at a temporary directory, so a single assertion
-// covers both halves of the COPILOT_HOME contract: the runtime honors
-// the variable, and the adapter resolves the same session-state root
-// from it. It asserts the recorded input token count is greater than
-// zero and total_tokens equals input_tokens plus output_tokens.
-func TestIntegration_RunTurn_InputTokenRecovery(t *testing.T) {
-	skipUnlessCopilotIntegration(t)
-
-	copilotHome := t.TempDir()
-	t.Setenv("COPILOT_HOME", copilotHome)
-
-	adapter, err := NewCopilotAdapter(integrationConfig())
-	if err != nil {
-		t.Fatalf("NewCopilotAdapter: %v", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(workspace+"/hello.txt", []byte("Hello"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
+			state, ok := run.Session.Internal.(*sessionState)
+			if !ok {
+				t.Fatalf("session.Internal type = %T, want *sessionState", run.Session.Internal)
+			}
+			// A normal turn decides at the terminal-success row and never
+			// consults Work, so the disposition alone does not show the
+			// observer fired against the installed runtime.
+			if !state.work.Observed() {
+				t.Error("state.work.Observed() = false after a scripted turn, want true")
+			}
+		},
 	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  "Read the file hello.txt. Output EXACTLY the file content and absolutely nothing else. No preamble, no explanation.",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn: %v", err)
-	}
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Fatalf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-
-	if result.Usage.InputTokens <= 0 {
-		t.Errorf("TurnResult.Usage.InputTokens = %d, want > 0 (recovered from the session-state journal)", result.Usage.InputTokens)
-	}
-	if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want InputTokens+OutputTokens = %d",
-			result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
-	}
 }
 
 // TestIntegration_RunTurn_ContextCancellation verifies that cancelling the
@@ -562,7 +400,8 @@ func TestIntegration_ResumeSessionID(t *testing.T) {
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
-	adapter, err := NewCopilotAdapter(map[string]any{})
+	passthrough := map[string]any{}
+	adapter, err := NewCopilotAdapter(passthrough)
 	if err != nil {
 		t.Fatalf("NewCopilotAdapter: %v", err)
 	}
@@ -574,10 +413,9 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	}
 
 	t.Run("working credential verifies and leaves no session state", func(t *testing.T) {
-		result, err := credentialtest.VerifyLive(adapter, params(t))
-		if err != nil {
-			t.Fatalf("VerifyCredential() error = %v, want nil", err)
-		}
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		result := credentialtest.VerifyLiveUsage(t, "copilot-cli", adapter, params(t), passthrough)
 		if result.SessionID == "" {
 			t.Fatal("VerifyCredential() TurnResult.SessionID is empty, want the minted verification session id")
 		}

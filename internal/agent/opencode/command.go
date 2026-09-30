@@ -355,11 +355,31 @@ func shouldDropManagedEnv(entry string) bool {
 	}
 }
 
-// mcpConfigDocument is the runtime's own inline MCP configuration
-// document shape, delivered through its inline-configuration
-// environment variable.
+// mcpConfigDocument is the 1.x OPENCODE_CONFIG_CONTENT value: the
+// runtime's own inline configuration document, carrying the tool
+// servers and the per-agent settings a 1.x session delivers through
+// its inline-configuration environment variable.
 type mcpConfigDocument struct {
-	MCP map[string]mcpConfigDocumentEntry `json:"mcp"`
+	MCP   map[string]mcpConfigDocumentEntry `json:"mcp,omitempty"`
+	Agent *agentConfigDocument              `json:"agent,omitempty"`
+}
+
+// agentConfigDocument is the per-agent member both majors' turn
+// documents carry.
+type agentConfigDocument struct {
+	Title agentSwitch `json:"title"`
+}
+
+// agentSwitch is one agent's enablement setting.
+type agentSwitch struct {
+	Disable bool `json:"disable"`
+}
+
+// titleAgentDisabled returns the agent member that turns off the
+// runtime's title agent. The title request it would make is billed but
+// recorded in no message the per-message usage sum reads.
+func titleAgentDisabled() *agentConfigDocument {
+	return &agentConfigDocument{Title: agentSwitch{Disable: true}}
 }
 
 // mcpConfigDocumentEntry is one server entry of [mcpConfigDocument] and
@@ -382,6 +402,7 @@ type inlineConfigDocument struct {
 	Permission permissionPolicy                  `json:"permission,omitempty"`
 	Share      string                            `json:"share"`
 	Compaction *inlineCompaction                 `json:"compaction,omitempty"`
+	Agent      *agentConfigDocument              `json:"agent,omitempty"`
 	MCP        map[string]mcpConfigDocumentEntry `json:"mcp,omitempty"`
 }
 
@@ -411,16 +432,15 @@ func translateMCPServers(mcpConfigPath string, remote bool) (map[string]mcpConfi
 
 // buildTurnConfigContent returns the turn-carried configuration value
 // [sessionState.turnConfigContent] holds for major: the 1.x shape,
-// {"mcp":servers} rendered by json.Marshal, non-empty only when servers
-// is non-empty; or the 2.x inline document [buildInlineConfig] builds.
+// [mcpConfigDocument] rendered by json.Marshal with mcp present only
+// when servers is non-empty; or the 2.x inline document
+// [buildInlineConfig] builds. Both carry the title-agent switch, so the
+// value is never empty.
 func buildTurnConfigContent(major runtimeMajor, pt passthroughConfig, servers map[string]mcpConfigDocumentEntry) (string, error) {
 	if major == major2 {
 		return buildInlineConfig(pt, servers)
 	}
-	if len(servers) == 0 {
-		return "", nil
-	}
-	encoded, err := json.Marshal(mcpConfigDocument{MCP: servers})
+	encoded, err := json.Marshal(mcpConfigDocument{MCP: servers, Agent: titleAgentDisabled()})
 	if err != nil {
 		return "", fmt.Errorf("marshal opencode mcp document: %w", err)
 	}
@@ -429,9 +449,10 @@ func buildTurnConfigContent(major runtimeMajor, pt passthroughConfig, servers ma
 
 // buildInlineConfig returns the 2.x OPENCODE_CONFIG_CONTENT document:
 // the session's tool policy, sharing fixed to disabled, autocompaction
-// disabled when pt asks for it, and servers when non-empty.
+// disabled when pt asks for it, the title agent disabled, and servers
+// when non-empty.
 func buildInlineConfig(pt passthroughConfig, servers map[string]mcpConfigDocumentEntry) (string, error) {
-	doc := inlineConfigDocument{Share: "disabled"}
+	doc := inlineConfigDocument{Share: "disabled", Agent: titleAgentDisabled()}
 	if policy, ok := buildPermissionPolicy(pt); ok {
 		doc.Permission = policy
 	}

@@ -119,6 +119,7 @@ jobs:
             source: "npm: @google/gemini-cli (unpinned, installs latest)"
             clientprotocol_command: "gemini --acp"
             clientprotocol_profile: tools/qualify/profiles/gemini-cli.json
+            clientprotocol_model_base_url_env: GOOGLE_GEMINI_BASE_URL
 
           - name: Kiro - ACP
             adapter: acp-kiro
@@ -290,6 +291,7 @@ jobs:
           TIMEOUT: ${{ matrix.timeout }}
           SORTIE_CLIENTPROTOCOL_COMMAND: ${{ matrix.clientprotocol_command }}
           SORTIE_CLIENTPROTOCOL_PROFILE: ${{ matrix.clientprotocol_profile }}
+          SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV: ${{ matrix.clientprotocol_model_base_url_env }}
           SORTIE_OPENCODE_MAJOR: ${{ matrix.opencode_major }}
           GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
         run: |

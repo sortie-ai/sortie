@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,6 +141,55 @@ func VerifyLive(adapter domain.AgentAdapter, params domain.StartSessionParams) (
 	})
 }
 
+// VerifyLiveUsage runs [agentcore.VerifyCredential] against a real
+// runtime with the bounds [VerifyLive] uses, fails t when verification
+// errors, and asserts through [agenttest.AssertLiveUsageCase] that the
+// verification turn reported usage as kind declares for the session
+// passthrough configures. It returns the turn's result.
+func VerifyLiveUsage(t *testing.T, kind string, adapter domain.AgentAdapter, params domain.StartSessionParams, passthrough map[string]any) domain.TurnResult {
+	t.Helper()
+
+	var mu sync.Mutex
+	var events []domain.AgentEvent
+	result, err := agentcore.VerifyCredential(context.Background(), adapter, agentcore.CredentialVerification{
+		Session:   params,
+		TurnBound: 300 * time.Second,
+		StopBound: 30 * time.Second,
+		OnEvent: func(event domain.AgentEvent) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		},
+	})
+	if err != nil {
+		t.Fatalf("VerifyCredential() error = %v, want nil", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	agenttest.AssertLiveUsageCase(t, kind, agenttest.UsageReportingCase{
+		Name:        "working credential",
+		Passthrough: passthrough,
+		Remote:      params.SSHHost != "",
+		Events:      events,
+		Result:      result,
+	})
+	return result
+}
+
+// CredentialNames returns the trimmed, non-empty names the
+// comma-separated environment variable envVar lists, in order. It
+// returns nil when envVar is unset or lists no name.
+func CredentialNames(envVar string) []string {
+	var names []string
+	for name := range strings.SplitSeq(os.Getenv(envVar), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // SetRefusedCredential sets every name listed in the comma-separated
 // environment variable envVar to an invalid credential, and points
 // HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME, and
@@ -148,14 +198,11 @@ func VerifyLive(adapter domain.AgentAdapter, params domain.StartSessionParams) (
 // refused-credential case.
 func SetRefusedCredential(t *testing.T, envVar string) {
 	t.Helper()
-	raw := os.Getenv(envVar)
-	if raw == "" {
+	if os.Getenv(envVar) == "" {
 		t.Skipf("skipping refused-credential case: set %s to a comma-separated list of names the suite sets to an invalid value", envVar)
 	}
-	for name := range strings.SplitSeq(raw, ",") {
-		if name = strings.TrimSpace(name); name != "" {
-			t.Setenv(name, "sortie-invalid-credential")
-		}
+	for _, name := range CredentialNames(envVar) {
+		t.Setenv(name, "sortie-invalid-credential")
 	}
 
 	emptyRoot := t.TempDir()

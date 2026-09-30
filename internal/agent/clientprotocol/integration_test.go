@@ -22,6 +22,19 @@
 // known to satisfy that contract, since both were driven through the
 // handshake alone.
 //
+// The scripted-model cases launch the same runtime against a loopback
+// scripted model endpoint, replace every named credential with a
+// sentinel, spend no quota, and skip when either coordinate is unset:
+//
+//	SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV
+//	                                  the name of the environment variable
+//	                                  through which the runtime takes its
+//	                                  model base address
+//	SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV
+//	                                  comma-separated names of the
+//	                                  environment variables the runtime
+//	                                  reads its credential from
+//
 // Run:
 //
 //	SORTIE_CLIENTPROTOCOL_TEST=1 SORTIE_CLIENTPROTOCOL_COMMAND="..." \
@@ -35,12 +48,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -72,6 +87,12 @@ func skipUnlessClientProtocolIntegration(t *testing.T) {
 // accommodate a real model's latency.
 func integrationAgentConfig(t *testing.T, expect captureExpectation, events func() []domain.AgentEvent) domain.AgentConfig {
 	t.Helper()
+	config, _ := captureAgentConfig(t, expect, events)
+	return config
+}
+
+func captureAgentConfig(t *testing.T, expect captureExpectation, events func() []domain.AgentEvent) (domain.AgentConfig, liveProtocolCapture) {
+	t.Helper()
 	dir := t.TempDir()
 	capture := liveProtocolCapture{
 		clientPath: filepath.Join(dir, "client.jsonl"),
@@ -90,7 +111,7 @@ func integrationAgentConfig(t *testing.T, expect captureExpectation, events func
 		Command:       wrapperPath + " " + os.Getenv("SORTIE_CLIENTPROTOCOL_COMMAND"),
 		TurnTimeoutMS: 300000,
 		ReadTimeoutMS: 30000,
-	}
+	}, capture
 }
 
 func capturedJSONLines(t *testing.T, path string) [][]byte {
@@ -467,7 +488,8 @@ func TestIntegration_SessionContinuation(t *testing.T) {
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessClientProtocolIntegration(t)
 
-	adapter, err := NewClientProtocolAdapter(map[string]any{})
+	passthrough := map[string]any{}
+	adapter, err := NewClientProtocolAdapter(passthrough)
 	if err != nil {
 		t.Fatalf("NewClientProtocolAdapter() error = %v", err)
 	}
@@ -483,9 +505,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	}
 
 	t.Run("working credential verifies", func(t *testing.T) {
-		if _, err := credentialtest.VerifyLive(adapter, params(t)); err != nil {
-			t.Fatalf("VerifyCredential() error = %v, want nil", err)
-		}
+		credentialtest.VerifyLiveUsage(t, "agent-client-protocol", adapter, params(t), passthrough)
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
@@ -534,5 +554,42 @@ func TestIntegration_EarlyExit(t *testing.T) {
 		} else {
 			credentialtest.RequireEarlyExitReport(t, err)
 		}
+	})
+}
+
+var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func TestIntegration_ScriptedModel(t *testing.T) {
+	skipUnlessClientProtocolIntegration(t)
+
+	baseURLEnv := os.Getenv("SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV")
+	if baseURLEnv == "" {
+		t.Skip("skipping scripted model cases: SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV must name the variable through which the runtime takes its model base address")
+	}
+	credentialNames := credentialtest.CredentialNames("SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV")
+	if len(credentialNames) == 0 {
+		t.Skip("skipping scripted model cases: SORTIE_CLIENTPROTOCOL_CREDENTIAL_ENV must name the credential variables, or a real key in the environment would reach the endpoint")
+	}
+	if !environmentNamePattern.MatchString(baseURLEnv) {
+		t.Fatalf("SORTIE_CLIENTPROTOCOL_MODEL_BASE_URL_ENV = %q, want a name matching %s", baseURLEnv, environmentNamePattern)
+	}
+
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind:          "agent-client-protocol",
+		Passthrough:   map[string]any{},
+		CredentialEnv: credentialNames,
+		Read:          fakemodel.ReadFile,
+		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			expect := expectScriptedToolTurn
+			if env.Scenario == fakemodel.ScenarioExhaustion {
+				expect = expectHandshakeOnly
+			}
+			config, capture := captureAgentConfig(t, expect, env.Events)
+			return fakemodel.Launch{
+				Config:  config,
+				Env:     map[string]string{baseURLEnv: env.URL},
+				Streams: []string{capture.clientPath, capture.agentPath},
+			}
+		},
 	})
 }

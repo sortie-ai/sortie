@@ -84,6 +84,12 @@ type sessionWarningData struct {
 	Message     string `json:"message,omitempty"`
 }
 
+// sessionErrorData is the data payload of a session.error event: the
+// provider's own description of a failure the runtime could not recover from.
+type sessionErrorData struct {
+	Message string `json:"message,omitempty"`
+}
+
 // sessionTaskCompleteData is the data payload of a session.task_complete
 // event. Success is a pointer so a payload whose success field is absent
 // from the wire payload is distinguishable from one reporting an explicit
@@ -173,6 +179,14 @@ func parseSessionWarningData(data json.RawMessage) (sessionWarningData, error) {
 	var d sessionWarningData
 	if err := json.Unmarshal(data, &d); err != nil {
 		return sessionWarningData{}, fmt.Errorf("parse session warning data: %w", err)
+	}
+	return d, nil
+}
+
+func parseSessionErrorData(data json.RawMessage) (sessionErrorData, error) {
+	var d sessionErrorData
+	if err := json.Unmarshal(data, &d); err != nil {
+		return sessionErrorData{}, fmt.Errorf("parse session error data: %w", err)
 	}
 	return d, nil
 }
