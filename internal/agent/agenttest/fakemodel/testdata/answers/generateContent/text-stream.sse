@@ -1,0 +1,2 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"He said \"ok\".\nDone."}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":500,"candidatesTokenCount":40,"thoughtsTokenCount":12,"cachedContentTokenCount":100,"totalTokenCount":552},"modelVersion":"scripted-model"}
+

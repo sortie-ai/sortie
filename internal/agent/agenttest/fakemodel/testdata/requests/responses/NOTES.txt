@@ -1,0 +1,27 @@
+Request fixtures captured from one gated run of the responses binding against its installed runtime (Codex CLI 0.158.0, launched as `codex app-server`), through Server.Exchanges().
+
+Each fixture is the request body reduced to the members the responses codec reads. The codec reads: model; stream; tools[].type (only "function" entries count as declared tools), tools[].name and tools[].parameters; input[] items of type function_call_output: call_id, and output (a string, or parts whose text is joined in order); text.format.type (no captured request carries a text member).
+
+Files, with the request target and the credential header as captured:
+
+codex-first-turn.json      POST /v1/responses    Authorization = Bearer sentinel
+codex-second-turn.json     POST /v1/responses    Authorization = Bearer sentinel; carries one function_call_output (call_id call_scripted_1)
+
+Decoded values a test can assert:
+- first turn: model scripted-model, streaming true, 7 declared tools (function entries), first declared exec_command, with required property cmd (type string); a namespace entry and a web_search entry are present and are not declared tools; no tool results.
+- second turn: the same tools; exactly one tool result, CallID call_scripted_1, Output the string "Chunk ID: 415843\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 6\nOutput:\nnonce-e4b641abb1af099f\n" (the runtime wraps the command's output in its own report), with the nonce nonce-e4b641abb1af099f.
+- Neither request declares a response schema, and the runtime sent no request that declares no function tool.
+- The runtime sent streaming requests only.
+
+Members dropped from every fixture:
+- instructions (whole member)
+- tool_choice, parallel_tool_calls, reasoning, store, include, prompt_cache_key, client_metadata
+- tools[].description and tools[].strict on every function entry
+- tools[].description and tools[].tools on the namespace entry (its nested tool list)
+- tools[].external_web_access on the web_search entry
+- input[].id and input[].content on every message item
+- input[].arguments on the function_call item (it held the workspace path of the run)
+
+Consequences of the reduction: the three message items remain as objects holding their type and role only; the namespace entry holds its type and name, the web_search entry its type; the function_call item keeps its id, name and call_id. No captured header, sentinel, absolute path or system text remains in a fixture.
+
+Members kept although the codec does not read them: input[].role on message items, input[].id, input[].name and input[].call_id on the function_call item, input[].id on the function_call_output item, and the schema descriptions inside tools[].parameters, because those are part of the schema exactly as declared.

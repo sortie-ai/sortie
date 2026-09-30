@@ -1,0 +1,35 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {}
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {}
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "responseJsonSchema": {
+      "type": "OBJECT",
+      "properties": {
+        "complexity_reasoning": {
+          "type": "STRING",
+          "description": "Brief explanation for the score."
+        },
+        "complexity_score": {
+          "type": "INTEGER",
+          "description": "Complexity score from 1-100."
+        }
+      },
+      "required": [
+        "complexity_reasoning",
+        "complexity_score"
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+Request fixtures captured from one gated run of each messages binding against its installed runtime (Claude Code 2.1.285 launched as `claude`; GitHub Copilot CLI 1.0.88 launched as `copilot`), through Server.Exchanges().
+
+Each fixture is the request body reduced to the members the messages codec reads. The codec reads: model; stream; tools[].name and tools[].input_schema; messages[].content, and in it the blocks of type tool_result: tool_use_id, and content (a string, or blocks whose text parts are joined in order).
+
+Files, with the request target and the credential headers as captured:
+
+claude-first-turn.json      POST /v1/messages?beta=true    x-api-key = sentinel, Authorization = Bearer sentinel
+claude-second-turn.json     POST /v1/messages?beta=true    x-api-key = sentinel, Authorization = Bearer sentinel; carries one tool_result (tool_use_id toolu_scripted_1)
+copilot-first-turn.json     POST /v1/messages              x-api-key = sentinel
+copilot-second-turn.json    POST /v1/messages              x-api-key = sentinel; carries one tool_result (tool_use_id toolu_scripted_1)
+
+Decoded values a test can assert:
+- claude first turn: model claude-haiku-4-5, streaming true, 24 tools, first declared Agent, Read among them with required property file_path (type string); no tool results.
+- claude second turn: the same 24 tools; exactly one tool result, CallID toolu_scripted_1, content the string "1\tnonce-9f68d9642a82d8aa\n" (the runtime numbers the file's lines). The runtime appended a reminder block of its session after the file text; it is cut from the fixture.
+- copilot first turn: model scripted-model, streaming true, 19 tools, first declared bash, view among them with required property path (type string), task_complete with required property summary; no tool results.
+- copilot second turn: the same 19 tools; exactly one tool result, CallID toolu_scripted_1, content the string "nonce-0fd2d815f4006fd8\n".
+- Neither runtime sent a request that declares no tool, and both sent streaming requests only.
+
+The claude runtime also sends a body-less HEAD request to /api/hello on the base address before the first turn unless a proxy variable is set; it carries no credential and no model, so it has no fixture.
+
+Members dropped from every fixture:
+- system (whole member)
+- metadata, max_tokens, temperature, thinking, context_management
+- tools[].description
+- messages[].content[].text on every text block
+- messages[].content[].cache_control
+- messages[].content[].input on the assistant's tool_use block (it held the workspace path of the run)
+
+Consequences of the reduction: the text blocks remain as objects holding only their type, so the claude turn fixtures hold nine of them in the first user message and the copilot fixtures one; the assistant's tool_use block keeps its id and name. No captured header, sentinel, absolute path or system text remains in a fixture.
+
+Members kept although the codec does not read them: messages[].role, tool_use.id and tool_use.name, and the schema descriptions inside input_schema, because those are part of the schema exactly as declared.

@@ -1,0 +1,286 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {}
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {}
+      ],
+      "role": "model"
+    },
+    {
+      "parts": [
+        {
+          "functionResponse": {
+            "name": "read",
+            "response": {
+              "name": "read",
+              "content": "<path>/workspace/scripted-nonce-091507c2df524f73.txt</path>\n<type>file</type>\n<content>\n1: nonce-091507c2df524f73\n\n(End of file - total 1 lines)\n</content>"
+            }
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "tools": [
+    {
+      "functionDeclarations": [
+        {
+          "name": "bash",
+          "parameters": {
+            "required": [
+              "command"
+            ],
+            "type": "object",
+            "properties": {
+              "command": {
+                "description": "The command to execute",
+                "type": "string"
+              },
+              "timeout": {
+                "description": "Optional timeout in milliseconds",
+                "type": "integer"
+              },
+              "workdir": {
+                "description": "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "edit",
+          "parameters": {
+            "required": [
+              "filePath",
+              "oldString",
+              "newString"
+            ],
+            "type": "object",
+            "properties": {
+              "filePath": {
+                "description": "The absolute path to the file to modify",
+                "type": "string"
+              },
+              "oldString": {
+                "description": "The text to replace",
+                "type": "string"
+              },
+              "newString": {
+                "description": "The text to replace it with (must be different from oldString)",
+                "type": "string"
+              },
+              "replaceAll": {
+                "description": "Replace all occurrences of oldString (default false)",
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "name": "glob",
+          "parameters": {
+            "required": [
+              "pattern"
+            ],
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "description": "The glob pattern to match files against",
+                "type": "string"
+              },
+              "path": {
+                "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter \"undefined\" or \"null\" - simply omit it for the default behavior. Must be a valid directory path if provided.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "grep",
+          "parameters": {
+            "required": [
+              "pattern"
+            ],
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "description": "The regex pattern to search for in file contents",
+                "type": "string"
+              },
+              "path": {
+                "description": "The directory to search in. Defaults to the current working directory.",
+                "type": "string"
+              },
+              "include": {
+                "description": "File pattern to include in the search (e.g. \"*.js\", \"*.{ts,tsx}\")",
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "read",
+          "parameters": {
+            "required": [
+              "filePath"
+            ],
+            "type": "object",
+            "properties": {
+              "filePath": {
+                "description": "The absolute path to the file or directory to read",
+                "type": "string"
+              },
+              "offset": {
+                "description": "The line number to start reading from (1-indexed)",
+                "type": "integer"
+              },
+              "limit": {
+                "description": "The maximum number of lines to read (defaults to 2000)",
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "name": "skill",
+          "parameters": {
+            "required": [
+              "name"
+            ],
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "The name of the skill from available_skills",
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "task",
+          "parameters": {
+            "required": [
+              "description",
+              "prompt",
+              "subagent_type"
+            ],
+            "type": "object",
+            "properties": {
+              "description": {
+                "description": "A short (3-5 words) description of the task",
+                "type": "string"
+              },
+              "prompt": {
+                "description": "The task for the agent to perform",
+                "type": "string"
+              },
+              "subagent_type": {
+                "description": "The type of specialized agent to use for this task",
+                "type": "string"
+              },
+              "task_id": {
+                "description": "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
+                "type": "string"
+              },
+              "command": {
+                "description": "The command that triggered this task",
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "name": "todowrite",
+          "parameters": {
+            "required": [
+              "todos"
+            ],
+            "type": "object",
+            "properties": {
+              "todos": {
+                "description": "The updated todo list",
+                "type": "array",
+                "items": {
+                  "required": [
+                    "content",
+                    "status",
+                    "priority"
+                  ],
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "description": "Brief description of the task",
+                      "type": "string"
+                    },
+                    "status": {
+                      "description": "Current status of the task: pending, in_progress, completed, cancelled",
+                      "type": "string"
+                    },
+                    "priority": {
+                      "description": "Priority level of the task: high, medium, low",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "webfetch",
+          "parameters": {
+            "required": [
+              "url"
+            ],
+            "type": "object",
+            "properties": {
+              "url": {
+                "description": "The URL to fetch content from",
+                "type": "string"
+              },
+              "format": {
+                "description": "The format to return the content in (text, markdown, or html). Defaults to markdown.",
+                "type": "string",
+                "enum": [
+                  "text",
+                  "markdown",
+                  "html"
+                ]
+              },
+              "timeout": {
+                "description": "Optional timeout in seconds (max 120)",
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "name": "write",
+          "parameters": {
+            "required": [
+              "content",
+              "filePath"
+            ],
+            "type": "object",
+            "properties": {
+              "content": {
+                "description": "The content to write to the file",
+                "type": "string"
+              },
+              "filePath": {
+                "description": "The absolute path to the file to write (must be absolute, not relative)",
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

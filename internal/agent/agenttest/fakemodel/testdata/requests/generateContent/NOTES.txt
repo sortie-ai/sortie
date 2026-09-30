@@ -1,0 +1,59 @@
+Request fixtures captured from one gated run of the protocol binding against the installed Gemini runtime (gemini-cli 0.61.0, launched as `gemini --acp`), through Server.Exchanges().
+
+Each fixture is the request body reduced to the members the generateContent codec reads. The codec reads: tools[].functionDeclarations[].name, .parametersJsonSchema (else .parameters); contents[].parts[].functionResponse.name and .response; generationConfig.responseSchema and generationConfig.responseJsonSchema. The model and the streaming flag come from the request target, not the body.
+
+Files, with the request target and the credential header as captured:
+
+gemini-first-turn.json        POST /v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse    x-goog-api-key = sentinel
+gemini-second-turn.json       POST /v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse    x-goog-api-key = sentinel; carries one functionResponse (name read_file, id read_file_1790752286619_0)
+gemini-auxiliary.json         POST /v1beta/models/gemini-3.5-flash-lite:generateContent             x-goog-api-key = sentinel; the routing classifier, no tools, non-streaming
+
+Decoded values a test can assert:
+- first turn: 15 tools, first declared update_topic, read_file among them with required property file_path (type string); no tool results; streaming true; model gemini-3.8-flash.
+- second turn: the same 15 tools; exactly one tool result, Name read_file, Output the compact re-encoding of {"output":"nonce-12d198c2596b0a12\n"}; streaming true.
+- auxiliary: no tools; response schema declares complexity_reasoning and complexity_score with types spelled STRING and INTEGER (upper case), the top-level type spelled OBJECT; streaming false; model gemini-3.5-flash-lite.
+
+Members dropped from every fixture:
+- systemInstruction (whole member)
+- contents[].parts[].text
+- contents[].parts[].functionCall
+- contents[].parts[].thoughtSignature
+- tools[].functionDeclarations[].description
+- generationConfig.temperature, generationConfig.topP, generationConfig.topK, generationConfig.thinkingConfig (whole generationConfig member dropped from both turn fixtures, where it held nothing else)
+- generationConfig.responseMimeType (auxiliary fixture only)
+
+Consequences of the reduction: the text parts and the model's functionCall part in contents remain as empty objects, so the second-turn fixture holds three contents entries with two, one and one parts, the last one the functionResponse. No captured header, sentinel, absolute path or system text remains in a fixture.
+
+Members kept although the codec does not read them: contents[].role, functionResponse.id, and the schema descriptions inside parametersJsonSchema and responseJsonSchema, because those are part of the schema exactly as declared.
+
+
+Further request fixtures captured from one gated run of the scripted-model binding against each installed major of a second runtime (OpenCode 1.18.33 and OpenCode 2.0.20, each launched as `opencode`), through Server.Exchanges(). The second runtime reaches the endpoint through its bundled Google provider on the same wire, and both majors declare tools, so neither sent an auxiliary request.
+
+The codec reads the same members as above. These fixtures carry no generationConfig member, so no response schema.
+
+Files, with the request target and the credential header as captured:
+
+opencode1-first-turn.json     POST /v1beta/models/scripted-model:streamGenerateContent?alt=sse    x-goog-api-key = sentinel
+opencode1-second-turn.json    POST /v1beta/models/scripted-model:streamGenerateContent?alt=sse    x-goog-api-key = sentinel; carries one functionResponse (name read)
+opencode2-first-turn.json     POST /v1beta/models/scripted-model:streamGenerateContent?alt=sse    x-goog-api-key = sentinel
+opencode2-second-turn.json    POST /v1beta/models/scripted-model:streamGenerateContent?alt=sse    x-goog-api-key = sentinel; carries one functionResponse (name read, id tool_d93326fdd356418cb07ef3b44d17b1d9)
+
+Decoded values a test can assert:
+- opencode1 first turn: one tools entry holding 10 declarations, first declared bash, read among them declaring its schema under parameters with required property filePath (type string); no tool results; streaming true; model scripted-model.
+- opencode2 first turn: one tools entry holding 12 declarations, first declared edit, read among them declaring its schema under parametersJsonSchema with required property path (type string); no tool results; streaming true; model scripted-model.
+- second turns: the same declarations as the first turn of the same major; exactly one tool result, Name read, Output the compact re-encoding of the response member (an object with the members name and content; content holds the file's text, whose last line carries the nonce).
+- ReadFile selects the read declaration on both majors: it renames the argument to filePath on opencode1 and to path on opencode2.
+
+Members dropped from every one of these fixtures:
+- systemInstruction (whole member)
+- toolConfig (opencode1 only; it held functionCallingConfig mode AUTO)
+- generationConfig (whole member, where it held maxOutputTokens alone)
+- contents[].parts[].text
+- contents[].parts[].functionCall
+- tools[].functionDeclarations[].description
+
+Value replaced rather than dropped: in functionResponse.response.content of both second-turn fixtures the run's temporary workspace directory prefix is replaced by /workspace, so the value still carries the nonce and the file name. The replaced text sat inside a member the codec reads, so a test asserting Output asserts the text with /workspace in it.
+
+Consequences of the reduction: the text parts and the model's functionCall part in contents remain as empty objects, so each second-turn fixture holds three contents entries with one part each, the last one the functionResponse. No captured header, sentinel, temporary path or system text remains in a fixture.
+
+Members kept although the codec does not read them: contents[].role, functionResponse.id (opencode2 only), and the schema descriptions inside parameters and parametersJsonSchema, because those are part of the schema exactly as declared.

@@ -1,0 +1,27 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_scripted_1","object":"response","status":"in_progress","output":[],"model":"scripted-model"}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_scripted_1","object":"response","status":"in_progress","output":[],"model":"scripted-model"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_scripted_1","type":"message","role":"assistant","status":"in_progress","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"msg_scripted_1","part":{"type":"output_text","text":"","annotations":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"msg_scripted_1","delta":"He said \"ok\".\nDone."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_scripted_1","text":"He said \"ok\".\nDone."}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","output_index":0,"content_index":0,"item_id":"msg_scripted_1","part":{"type":"output_text","text":"He said \"ok\".\nDone.","annotations":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_scripted_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"He said \"ok\".\nDone.","annotations":[]}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_scripted_1","object":"response","status":"completed","output":[{"id":"msg_scripted_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"He said \"ok\".\nDone.","annotations":[]}]}],"model":"scripted-model","usage":{"input_tokens":500,"input_tokens_details":{"cached_tokens":100},"output_tokens":52,"output_tokens_details":{"reasoning_tokens":12},"total_tokens":552}}}
+

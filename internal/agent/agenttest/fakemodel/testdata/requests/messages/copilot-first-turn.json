@@ -1,0 +1,528 @@
+{
+  "model": "scripted-model",
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "bash",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The Bash command and arguments to run."
+          },
+          "description": {
+            "type": "string",
+            "description": "A short human-readable description of what the command does, limited to 100 characters, for example \"List files in the current directory\", \"Install dependencies with npm\" or \"Run RSpec tests\"."
+          },
+          "shellId": {
+            "type": "string",
+            "description": "(Optional) Identifier for this command execution. Use to track the command with read_bash and stop_bash. Each command runs in a fresh process that starts in the session working directory (a reused shellId keeps the directory its shell was created in) \u2014 environment variables and any cd do not persist across calls. For independent probes, use separate calls or ;. Prefer short inspect-then-act-then-verify loops over dense one-liner chains."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "description": "Execution mode: \"sync\" runs synchronously and waits for completion (default), \"async\" runs in the background. You can read output from \"async\" commands using the `read_bash` tool."
+          },
+          "detach": {
+            "type": "boolean",
+            "description": "(Optional) Only valid when mode=\"async\". If true, the process runs as a fully independent background process. Only set this when the user explicitly requires the process to survive after the CLI session exits; a request to run or leave a command in the background is not by itself a reason to detach. If false or omitted, the async process is attached to the session: it keeps running across later turns and is terminated at session shutdown."
+          },
+          "initial_wait": {
+            "type": "number",
+            "description": "(Optional) Time in seconds to wait for initial output when mode is \"sync\". The command continues running in the background after this time. Default is 30 seconds if not provided. Increase to 120+ seconds for any command you're not confident should finish quickly."
+          }
+        },
+        "required": [
+          "command",
+          "description"
+        ]
+      }
+    },
+    {
+      "name": "read_bash",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "shellId": {
+            "type": "string",
+            "description": "The ID of the shell session used to invoke the Bash command. Look back to the bash call to find the shellId."
+          },
+          "delay": {
+            "type": "number",
+            "description": "The amount of time in seconds to wait before reading the output."
+          }
+        },
+        "required": [
+          "shellId",
+          "delay"
+        ]
+      }
+    },
+    {
+      "name": "stop_bash",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "shellId": {
+            "type": "string",
+            "description": "The ID of the Bash session used to invoke the bash command."
+          }
+        },
+        "required": [
+          "shellId"
+        ]
+      }
+    },
+    {
+      "name": "list_bash",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "view",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Existing file or directory's absolute path."
+          },
+          "view_range": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "description": "Optional 1-based inclusive line range. [start,-1] reads through EOF. Prefer for files over 20KB, which are otherwise truncated."
+          },
+          "forceReadLargeFiles": {
+            "type": "boolean",
+            "description": "Read an entire large file despite the size limit; default false. Use only when full content justifies the context cost."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    {
+      "name": "create",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Full absolute path to file to create. File MUST not exist before creating."
+          },
+          "file_text": {
+            "type": "string",
+            "description": "The content of the file to be created."
+          }
+        },
+        "required": [
+          "path",
+          "file_text"
+        ]
+      }
+    },
+    {
+      "name": "edit",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Full absolute path to file to edit. File MUST exist to edit."
+          },
+          "old_str": {
+            "type": "string",
+            "description": "The string in the file to replace. Leading and ending whitespaces from file content should be preserved!"
+          },
+          "new_str": {
+            "type": "string",
+            "description": "The new string to replace old_str with."
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    {
+      "name": "web_fetch",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to fetch"
+          },
+          "max_length": {
+            "type": "number",
+            "description": "Maximum number of characters to return (default: 5000, maximum: 20000)"
+          },
+          "start_index": {
+            "type": "number",
+            "description": "Start index for pagination. Use this to continue reading if content was truncated (default: 0)"
+          },
+          "raw": {
+            "type": "boolean",
+            "description": "If true, returns raw HTML. If false, converts to simplified markdown (default: false)"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "name": "fetch_copilot_cli_documentation",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "skill",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "skill": {
+            "type": "string",
+            "description": "The skill name to invoke. E.g., \"pdf\" or \"code-reviewer\""
+          }
+        },
+        "required": [
+          "skill"
+        ]
+      }
+    },
+    {
+      "name": "sql",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A 2-5 word summary of what this query does (e.g., 'Insert auth todos', 'Query ready todos')."
+          },
+          "query": {
+            "type": "string",
+            "description": "The SQL query to execute. Supports SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, ALTER TABLE, DROP TABLE, and other SQLite-compatible SQL."
+          }
+        },
+        "required": [
+          "description",
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "session_store_sql",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A 2-5 word summary of what this query does (e.g., 'Recent sessions overview', 'Find PR sessions')."
+          },
+          "query": {
+            "type": "string",
+            "description": "One read-only SQL query (SELECT or WITH); DuckDB for cloud, SQLite for `source: \"local\"`; never combine statements with semicolons."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "cloud",
+              "local"
+            ],
+            "description": "Which session store to query. `cloud` (default) queries the cloud store and supplements with local rows when the scope is personal. `local` restricts the query to the local session store only (SQLite syntax, current machine's sessions). Defaults to `cloud`. `local` cannot be combined with `org` or `repo` \u2014 the local store only contains this machine's personal sessions."
+          }
+        },
+        "required": [
+          "description",
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "task_complete",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "A summary of what was accomplished."
+          }
+        },
+        "required": [
+          "summary"
+        ]
+      }
+    },
+    {
+      "name": "read_agent",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "Background agent ID from a task result or notification."
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Wait for completion; default false returns current status."
+          },
+          "timeout": {
+            "type": "number",
+            "description": "Wait timeout in seconds (default 30, max 180)."
+          },
+          "since_turn": {
+            "type": "integer",
+            "description": "Inclusive 0-based start index. For example, since_turn: 0 returns turns 0, 1, ...\n\n{minimum: 0}"
+          }
+        },
+        "required": [
+          "agent_id"
+        ]
+      }
+    },
+    {
+      "name": "list_agents",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "include_completed": {
+            "type": "boolean",
+            "description": "Include completed/failed agents (default true); false returns only running/idle."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "siblings",
+              "children",
+              "all"
+            ],
+            "description": "Visibility: omit for nearby; siblings=peers, children=descendants, all=read-only visible-tree inspection."
+          }
+        }
+      }
+    },
+    {
+      "name": "write_agent",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "description": "The ID of one background agent to send a message to."
+          },
+          "agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "{minLength: 1}"
+            },
+            "description": "A small explicit set of background agent IDs to send the same message to.\n\n{minItems: 1, maxItems: 16, uniqueItems: true}"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "siblings",
+              "children"
+            ],
+            "description": "Visible agent group to send the same message to. Use only for same-message coordination with all current sibling agents or child/descendant agents."
+          },
+          "message": {
+            "type": "string",
+            "description": "The message to send to the selected agent or agents. Each recipient will process this as a new conversation turn."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      }
+    },
+    {
+      "name": "grep",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Regex to search for in file contents."
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "description": "One directory or an array of directories; defaults to cwd. Omit for the default\u2014never pass null/undefined or join paths into one string."
+          },
+          "output_mode": {
+            "type": "string",
+            "enum": [
+              "content",
+              "files_with_matches",
+              "count"
+            ],
+            "description": "Output: matching lines (content, with context/line-number options), matching file paths (files_with_matches, default), or per-file counts (count)."
+          },
+          "glob": {
+            "type": "string",
+            "description": "File glob filter, e.g. \"*.js\" or \"*.{ts,tsx}\"."
+          },
+          "type": {
+            "type": "string",
+            "description": "File type filter, e.g. js, py, rust, go, or java; tsx/jsx normalize to ts/js."
+          },
+          "-i": {
+            "type": "boolean",
+            "description": "Case-insensitive search."
+          },
+          "-A": {
+            "type": "number",
+            "description": "Context lines after matches; requires content mode."
+          },
+          "-B": {
+            "type": "number",
+            "description": "Context lines before matches; requires content mode."
+          },
+          "-C": {
+            "type": "number",
+            "description": "Context lines around matches; requires content mode."
+          },
+          "-n": {
+            "type": "boolean",
+            "description": "\"-n\": true adds line numbers; requires content mode."
+          },
+          "head_limit": {
+            "type": "number",
+            "description": "Return first N results."
+          },
+          "multiline": {
+            "type": "boolean",
+            "description": "Allow cross-line patterns; default false."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "glob",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Glob to match, e.g. \"**/*.js\", \"src/**/*.ts\", or \"*.{ts,tsx}\"."
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "description": "One directory or an array of directories; defaults to cwd. Omit for the default\u2014never pass null/undefined or join paths into one string."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "task",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "3-5 word UI intent."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Task; include complete context."
+          },
+          "agent_type": {
+            "type": "string",
+            "enum": [
+              "explore",
+              "task",
+              "general-purpose",
+              "code-review",
+              "research",
+              "security-review"
+            ],
+            "description": "Agent type."
+          },
+          "name": {
+            "type": "string",
+            "description": "Short agent name."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional model override. Specify a value only when the user's current request or applicable persistent custom instructions (including global instructions) explicitly require that value for the subagent. Do not reuse values from earlier requests or infer unspecified values from the parent configuration. The runtime resolves `/subagents` preferences when these fields are omitted; do not copy them merely because they appear in `<subagent_model_preferences>`."
+          },
+          "reasoning_effort": {
+            "type": "string",
+            "description": "Optional reasoning effort override. Specify a value only when the user's current request or applicable persistent custom instructions (including global instructions) explicitly require that value for the subagent. Do not reuse values from earlier requests or infer unspecified values from the parent configuration. The runtime resolves `/subagents` preferences when these fields are omitted; do not copy them merely because they appear in `<subagent_model_preferences>`."
+          },
+          "context_tier": {
+            "type": "string",
+            "enum": [
+              "default",
+              "long_context"
+            ],
+            "description": "Optional context tier override. Specify a value only when the user's current request or applicable persistent custom instructions (including global instructions) explicitly require that value for the subagent. Do not reuse values from earlier requests or infer unspecified values from the parent configuration. The runtime resolves `/subagents` preferences when these fields are omitted; do not copy them merely because they appear in `<subagent_model_preferences>`."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "background"
+            ],
+            "description": "sync waits; background returns immediately. Await results before use."
+          }
+        },
+        "required": [
+          "name",
+          "prompt",
+          "agent_type",
+          "description"
+        ]
+      }
+    }
+  ]
+}

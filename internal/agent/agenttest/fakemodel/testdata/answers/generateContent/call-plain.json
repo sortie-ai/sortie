@@ -1,0 +1,1 @@
+{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"read_file","args":{"path":"/workspace/nonce.txt"}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":500,"candidatesTokenCount":40,"thoughtsTokenCount":12,"cachedContentTokenCount":100,"totalTokenCount":552},"modelVersion":"scripted-model"}
