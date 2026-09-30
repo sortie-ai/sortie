@@ -197,11 +197,12 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			ContinuationContext: map[string]any{
 				"bot_review_comments": botContext,
 			},
-			ReactionKind: ReactionKindBotReview,
-			AgentKind:    pending.AgentKind,
-			RuleName:     pending.RuleName,
-			TemplateID:   pending.TemplateID,
-			Logger:       entryLog,
+			ReactionKind:        ReactionKindBotReview,
+			AgentKind:           pending.AgentKind,
+			RuleName:            pending.RuleName,
+			RuleSettingsApplied: pending.RuleSettingsApplied,
+			TemplateID:          pending.TemplateID,
+			Logger:              entryLog,
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++

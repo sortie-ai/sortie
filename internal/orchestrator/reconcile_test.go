@@ -451,6 +451,8 @@ func TestReconcileStalled_ReactionRetryPreservesContext(t *testing.T) {
 		CancelFunc:          cc.cancel,
 		ContinuationContext: contContext,
 		ReactionKind:        ReactionKindReview,
+		RuleName:            "cheap",
+		RuleSettingsApplied: true,
 	}
 	state.Claimed["ISSUE-R"] = struct{}{}
 
@@ -474,6 +476,9 @@ func TestReconcileStalled_ReactionRetryPreservesContext(t *testing.T) {
 	}
 	if retryEntry.SessionID != "sess-r" {
 		t.Errorf("RetryEntry.SessionID = %q, want %q", retryEntry.SessionID, "sess-r")
+	}
+	if retryEntry.RuleName != "cheap" || !retryEntry.RuleSettingsApplied {
+		t.Errorf("RetryEntry rule, flag = %q, %v, want %q, true", retryEntry.RuleName, retryEntry.RuleSettingsApplied, "cheap")
 	}
 	if retryEntry.LastSSHHost != "host-r" {
 		t.Errorf("RetryEntry.LastSSHHost = %q, want %q", retryEntry.LastSSHHost, "host-r")
@@ -2883,6 +2888,7 @@ func TestReconcileOverdueRetries_ReArmsOverdueEntry(t *testing.T) {
 		ContinuationContext: map[string]any{"ci_failure": map[string]any{"x": 1}},
 		ReactionKind:        ReactionKindCI,
 		RuleName:            "rule-1",
+		RuleSettingsApplied: true,
 		TemplateID:          "tmpl-1",
 		AgentKind:           "claude",
 	}
@@ -2917,8 +2923,8 @@ func TestReconcileOverdueRetries_ReArmsOverdueEntry(t *testing.T) {
 	if entry.LastSSHHost != "host-a" {
 		t.Errorf("LastSSHHost = %q, want %q", entry.LastSSHHost, "host-a")
 	}
-	if entry.RuleName != "rule-1" {
-		t.Errorf("RuleName = %q, want %q", entry.RuleName, "rule-1")
+	if entry.RuleName != "rule-1" || !entry.RuleSettingsApplied {
+		t.Errorf("RuleName, RuleSettingsApplied = %q, %v, want %q, true", entry.RuleName, entry.RuleSettingsApplied, "rule-1")
 	}
 	if entry.TemplateID != "tmpl-1" {
 		t.Errorf("TemplateID = %q, want %q", entry.TemplateID, "tmpl-1")

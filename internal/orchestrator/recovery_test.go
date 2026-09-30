@@ -571,6 +571,22 @@ func TestPopulateRetries_SessionID(t *testing.T) {
 	}
 }
 
+func TestPopulateRetries_RestoredClaimStartsWithoutTheRuleSettingsFlag(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, 0, nil, AgentTotals{})
+	entries := []persistence.PendingRetry{{
+		Entry:       persistence.RetryEntry{IssueID: "id-flag", Identifier: "PROJ-FLAG", Attempt: 1, DueAtMs: 10000, RuleName: "cheap", AgentKind: "kind-b"},
+		RemainingMs: 5000,
+	}}
+
+	PopulateRetries(state, entries, nil)
+
+	if got := state.RetryAttempts["id-flag"]; got == nil || got.RuleName != "cheap" || got.RuleSettingsApplied {
+		t.Errorf("restored RetryEntry = %+v, want rule %q and no settings flag", got, "cheap")
+	}
+}
+
 func TestPopulateRetries_SessionID_Nil(t *testing.T) {
 	t.Parallel()
 
@@ -819,6 +835,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-1": "In Review"}}
 	state := NewState(5000, 4, 0, nil, AgentTotals{})
 	run := freshRun("ISS-1", "PROJ-1", "owner/repo#42", 2)
+	run.RuleName = "cheap"
 	params := defaultRecoveryParams(wsRoot, tracker)
 
 	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
@@ -839,6 +856,9 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	}
 	if pr.Attempt != 2 {
 		t.Errorf("PendingReaction.Attempt = %d, want 2", pr.Attempt)
+	}
+	if pr.RuleName != "cheap" || pr.RuleSettingsApplied {
+		t.Errorf("PendingReaction rule, flag = %q, %v, want %q, false: a restored claim starts without the flag", pr.RuleName, pr.RuleSettingsApplied, "cheap")
 	}
 	if pr.DisplayID != "owner/repo#42" {
 		t.Errorf("PendingReaction.DisplayID = %q, want %q", pr.DisplayID, "owner/repo#42")

@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/maputil"
 	"github.com/sortie-ai/sortie/internal/redact"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -376,10 +377,20 @@ type SettingsSelection struct {
 type AgentSettings struct {
 	Kind string
 
+	// RuleName is the rule whose block was laid over the kind's
+	// top-level block, or empty when none was.
+	RuleName string
+
 	// Passthrough is the settings block the session starts with, freshly
 	// allocated; nested values are shared with the configuration and
 	// read-only.
 	Passthrough map[string]any
+
+	// Model and Effort are what Passthrough carries under
+	// [registry.ModelKey] and [registry.EffortKey], empty when absent,
+	// null, empty, or not a string.
+	Model  string
+	Effort string
 
 	// MCPConfigPath is the operator-declared MCP config path resolved
 	// from Passthrough["mcp_config"]. Empty when the kind has no
@@ -413,6 +424,7 @@ type AgentSettings struct {
 // concurrent use.
 func ResolveAgentSettings(cfg ServiceConfig, selection SettingsSelection, workflowDir string) AgentSettings {
 	passthrough, presence, description := agentAdapterConfig(cfg, selection.Kind)
+	ruleName := overlayRuleSettings(passthrough, cfg.Dispatch.Rules, selection)
 
 	var mcpConfigPath string
 	if v, ok := passthrough["mcp_config"].(string); ok {
@@ -422,13 +434,51 @@ func ResolveAgentSettings(cfg ServiceConfig, selection SettingsSelection, workfl
 		mcpConfigPath = filepath.Join(workflowDir, mcpConfigPath)
 	}
 
+	model, _ := registry.ModelSetting(passthrough)
+	effort, _ := registry.EffortSetting(passthrough)
+
 	return AgentSettings{
 		Kind:             selection.Kind,
+		RuleName:         ruleName,
 		Passthrough:      passthrough,
+		Model:            model,
+		Effort:           effort,
 		MCPConfigPath:    mcpConfigPath,
 		BlockPresence:    presence,
 		BlockDescription: description,
 	}
+}
+
+// overlaySettings lays block over base in place: a written key replaces
+// the inherited value whole, a null key removes it.
+func overlaySettings(base, block map[string]any) {
+	for key, value := range block {
+		if value == nil {
+			delete(base, key)
+		} else {
+			base[key] = value
+		}
+	}
+}
+
+// overlayRuleSettings lays the block of the rule selection names over
+// passthrough: a written key replaces the inherited value whole, a null
+// key removes it. It returns the rule's name when a block applied, else "".
+func overlayRuleSettings(passthrough map[string]any, rules []DispatchRule, selection SettingsSelection) string {
+	if selection.RuleName == "" {
+		return ""
+	}
+	for _, rule := range rules {
+		if rule.Name != selection.RuleName {
+			continue
+		}
+		if rule.SettingsKind != selection.Kind {
+			return ""
+		}
+		overlaySettings(passthrough, rule.Settings)
+		return rule.Name
+	}
+	return ""
 }
 
 // MergeAdapterExtensions copies the kind-named sub-object from
@@ -556,6 +606,7 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 	}
 
 	preResolution := resolveExtensionEnvRefs(extensions)
+	preResolution = resolveRuleBlockEnvRefs(raw, preResolution)
 
 	var conversions []AgentKindConversion
 	if options.retiredAgents != nil {
@@ -691,7 +742,7 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 		return ServiceConfig{}, err
 	}
 
-	registerConfigSecrets(tracker, reactions, notifications, extensions)
+	registerConfigSecrets(tracker, reactions, notifications, extensions, raw)
 
 	cfg := ServiceConfig{
 		Tracker:                 tracker,
@@ -717,7 +768,7 @@ func NewServiceConfig(raw map[string]any, opts ...ServiceConfigOption) (ServiceC
 // [ServiceConfig] load carries with [internal/redact], so a log record,
 // a stored row, or a runtime-derived text can mask it later. Call it
 // once every value has its final, environment-resolved form.
-func registerConfigSecrets(tracker TrackerConfig, reactions map[string]ReactionConfig, notifications NotificationsConfig, extensions map[string]any) {
+func registerConfigSecrets(tracker TrackerConfig, reactions map[string]ReactionConfig, notifications NotificationsConfig, extensions, raw map[string]any) {
 	redact.Add("tracker.api_key", tracker.APIKey)
 	redact.AddURLCredentials("tracker.endpoint", tracker.Endpoint)
 
@@ -736,6 +787,10 @@ func registerConfigSecrets(tracker TrackerConfig, reactions map[string]ReactionC
 	}
 
 	registerCredentialLeaves("", extensions, false)
+
+	for i, rule := range dispatchRuleMaps(raw) {
+		registerCredentialLeaves(fmt.Sprintf("dispatch.rules[%d]", i), ruleSettingsKeys(rule), false)
+	}
 }
 
 // registerCredentialLeaves walks m at any depth, registering each
@@ -1526,6 +1581,46 @@ func resolveExtensionEnvRefs(extensions map[string]any) map[string]string {
 	var snapshot map[string]string
 	for k, v := range extensions {
 		extensions[k] = resolveExtensionEnvValue(k, v, &snapshot)
+	}
+	return snapshot
+}
+
+// dispatchRuleMaps returns the dispatch.rules elements of raw, a nil map
+// for an element that is not a mapping.
+func dispatchRuleMaps(raw map[string]any) []map[string]any {
+	dispatch, _ := raw["dispatch"].(map[string]any)
+	sequence, _ := dispatch["rules"].([]any)
+	if len(sequence) == 0 {
+		return nil
+	}
+	rules := make([]map[string]any, len(sequence))
+	for i, element := range sequence {
+		rules[i], _ = element.(map[string]any)
+	}
+	return rules
+}
+
+// ruleSettingsKeys returns the entries of a rule map that are not the
+// rule's own keys.
+func ruleSettingsKeys(rule map[string]any) map[string]any {
+	blocks := make(map[string]any, len(rule))
+	for key, value := range rule {
+		if !ruleKeyAllowed[key] {
+			blocks[key] = value
+		}
+	}
+	return blocks
+}
+
+// resolveRuleBlockEnvRefs resolves $VAR references in every rule settings
+// block of raw in place, as [resolveExtensionEnvRefs] does for an
+// extension section, recording each pre-resolution literal in snapshot
+// under "dispatch.rules[<i>].<key>.<leaf path>".
+func resolveRuleBlockEnvRefs(raw map[string]any, snapshot map[string]string) map[string]string {
+	for i, rule := range dispatchRuleMaps(raw) {
+		for key, value := range ruleSettingsKeys(rule) {
+			rule[key] = resolveExtensionEnvValue(fmt.Sprintf("dispatch.rules[%d].%s", i, key), value, &snapshot)
+		}
 	}
 	return snapshot
 }

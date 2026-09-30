@@ -414,7 +414,7 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		probe = func(string) bool { return true }
 	}
 
-	dispatchCfg, err := config.BuildDispatchConfig(wf.Config, filepath.Dir(m.path), probe)
+	dispatchCfg, err := config.BuildDispatchConfig(wf.Config, filepath.Dir(m.path), probe, cfg.Agent.Kind)
 	if err != nil {
 		return config.ServiceConfig{}, nil, nil, err
 	}

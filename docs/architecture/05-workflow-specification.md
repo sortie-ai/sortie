@@ -242,7 +242,7 @@ Fields:
 
 Adapter-specific pass-through config:
 
-Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator resolves the sub-object for each attempt and hands it to the adapter as a session input (§10.1); an adapter holds none of it between sessions. The keys `model` and `effort` mean the same in the block of every kind that reads them (§10.1): a string handed to the runtime as written, where an absent key, a null, and an empty string all leave the runtime's own default in charge. A change to a block applies from the next attempt without a restart, while a running session keeps the block it started with (§5.3.9). An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse, or to warn about, a value of that sub-object.
+Each adapter may define its own configuration fields in a sub-object named after its `kind` value. These are pass-through values interpreted by the adapter and not by the orchestrator core. For example, a Codex adapter may accept `codex.approval_policy` and `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The orchestrator resolves the sub-object for each attempt and hands it to the adapter as a session input (§10.1); an adapter holds none of it between sessions. The keys `model` and `effort` mean the same in the block of every kind that reads them (§10.1): a string handed to the runtime as written, where an absent key, a null, and an empty string all leave the runtime's own default in charge. The orchestrator reads only those two keys, for validation advisories, and never interprets their values. A change to a block applies from the next attempt without a restart, while a running session keeps the block it started with (§5.3.9). An adapter may declare a validator that preflight runs over its own sub-object, and an adapter may declare metadata that a core preflight rule reads to refuse, or to warn about, a value of that sub-object.
 
 #### 5.3.6 `db_path` (string, optional)
 
@@ -418,12 +418,29 @@ Fields:
 - `rules` (list of `DispatchRule`, optional): ordered list of dispatch rules; first-match-wins.
 - `default` (object, optional): carries `agent` and `template` overrides applied when no rule matches.
 
-Each `DispatchRule` has four keys:
+Each `DispatchRule` has four keys and an optional settings block:
 
-- `name` (optional): operator-supplied rule identifier used in metrics labels and freeze-on-dispatch persistence. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`.
+- `name` (optional unless the rule carries a settings block): operator-supplied rule identifier used in metrics labels, in run history, and to find the rule again after a reload. When present, the value MUST match the pattern `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics label the rule as the sentinel `<none>`. A rule that carries a settings block MUST have a name, and the name MUST NOT be `default`, which run history and statistics give the `dispatch.default` selection.
 - `match`: a block whose keys define the predicate evaluated against the issue.
 - `agent`: optional override of the agent kind for matching issues.
 - `template`: optional override of the prompt template path for matching issues.
+- `<kind>`: an optional settings block named for the agent kind the rule runs.
+
+A rule MUST carry at least one of `match`, `agent`, `template`, or a settings block. A rule key that names a registered agent kind, or equals the rule's own `agent` value, is its settings block; any other unrecognized key is a configuration error. `dispatch.default` carries no settings block: a key in it that names an agent kind is a configuration error, because the top-level block of each kind holds the default settings.
+
+**Rule settings blocks**
+
+The rule's kind is its `agent`, else `dispatch.default.agent`, else `agent.kind`. The block MUST be named for that kind, MUST be a mapping (an empty block is written `{}`), and MUST NOT write `kind`, `command`, or any of the four `agent` timeouts, which the orchestrator derives from the `agent` section and which stay workflow-wide. Each violation is a configuration error, so a reload that introduces one keeps the last good configuration, and so does a change of `agent.kind` or `dispatch.default.agent` that leaves a block under a rule now running another kind.
+
+The block an attempt runs with is the top-level block of the rule's kind with the rule's block laid over it, one level deep:
+
+- A key the rule writes replaces the inherited value whole, whatever its type; maps are not merged and lists are not appended.
+- A key the rule writes as null removes the inherited key, so the adapter applies its own default.
+- Every other key is inherited.
+- A kind with no top-level block inherits nothing, and the rule's block is the whole block.
+- A block is laid only over the top-level block of its own kind.
+
+No key is defaulted or coerced before the overlay. `$VAR` references in a rule's block resolve as they do in a top-level block. A block for a removed agent kind converts together with the kind; a conversion that would change the command the replacement kind launches fails the load, because a rule cannot set a command.
 
 **Match-block keys and semantics**
 
@@ -441,7 +458,7 @@ First-match wins: evaluation stops at the first rule whose `match` block succeed
 
 The default agent kind is `dispatch.default.agent` when set, and `agent.kind` otherwise. It is the kind every selection without an agent of its own runs, and the only kind that launches `agent.command` as written.
 
-The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. The selection is frozen per claim; the settings are not. Every attempt, whether the first dispatch, a retry, or a reaction continuation, resolves its settings block from the configuration in force when it starts. A running session never changes settings. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
+The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at dispatch and propagated through `RetryEntry`. The selection is frozen per claim; the settings are not. Every attempt, whether the first dispatch, a retry, or a reaction continuation, resolves its settings block from the configuration in force when it starts: the top-level block of the frozen kind with the frozen rule's block laid over it. A running session never changes settings. When no rule carries the frozen name any longer, or the rule no longer carries a block for the frozen kind, the attempt runs on the top-level block and logs one `Info` record naming the rule. A retry or reaction-driven continuation does not re-evaluate rules while the configuration in force still launches its frozen selection. At each retry timer the orchestrator selects again from the configuration in force:
 
 - The frozen selection stands, with its session identifier, when its kind is still named by `agent.kind`, `dispatch.default.agent`, or a rule, and its template is still held. The kind launches its own command as the configuration now states it.
 - A frozen kind that a conversion record retired is replaced by its replacement kind, keeping the frozen template and rule name.

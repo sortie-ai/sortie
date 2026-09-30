@@ -537,6 +537,7 @@ func TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce(t *testing.T) {
 
 	state := stateWithBotReviewReaction(t, "BOT-IMM", 10)
 	rkey := ReactionKey("BOT-IMM", ReactionKindBotReview)
+	state.PendingReactions[rkey].RuleSettingsApplied = true
 
 	// Comment submitted just 2 seconds ago, within any plausible debounce window.
 	// The review path would NOT dispatch yet; the bot-review path MUST dispatch immediately.
@@ -561,6 +562,9 @@ func TestReconcileBotReviewComments_ImmediateDispatch_NoDebounce(t *testing.T) {
 		t.Fatal("retry not scheduled after bot-review dispatch; want scheduled")
 	}
 	retry := state.RetryAttempts["BOT-IMM"]
+	if !retry.RuleSettingsApplied {
+		t.Error("RetryEntry.RuleSettingsApplied = false, want the pending reaction's flag carried")
+	}
 	if retry.ReactionKind != ReactionKindBotReview {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindBotReview)
 	}

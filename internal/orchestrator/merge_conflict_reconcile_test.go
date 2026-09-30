@@ -291,6 +291,7 @@ func TestReconcileMergeConflicts_Dispatch(t *testing.T) {
 
 	state := stateWithMergeConflict(t, "MC-D1", 42)
 	rkey := ReactionKey("MC-D1", ReactionKindMergeConflict)
+	state.PendingReactions[rkey].RuleSettingsApplied = true
 	store := newStatefulFingerprintStore()
 	metrics := newMergeConflictMetricsSpy()
 	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
@@ -312,6 +313,9 @@ func TestReconcileMergeConflicts_Dispatch(t *testing.T) {
 	}
 	if retry.ReactionKind != ReactionKindMergeConflict {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindMergeConflict)
+	}
+	if !retry.RuleSettingsApplied {
+		t.Error("RetryEntry.RuleSettingsApplied = false, want the pending reaction's flag carried")
 	}
 	if retry.ContinuationContext == nil {
 		t.Fatal("RetryEntry.ContinuationContext is nil; want merge_conflict map")

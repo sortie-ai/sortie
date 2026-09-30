@@ -291,6 +291,7 @@ func TestReconcileLabelReviewCommands_Dispatch(t *testing.T) {
 	const issueID = "LR-D1"
 	state := stateWithLabelReviewPending(t, issueID, 42)
 	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+	state.PendingReactions[rkey].RuleSettingsApplied = true
 	scm := &labelReviewSCMFake{
 		events: []domain.LabelEvent{
 			labelEvent("1", "sortie:review", "alice", true, labelReviewBaseTime.Add(-1*time.Minute)),
@@ -314,6 +315,9 @@ func TestReconcileLabelReviewCommands_Dispatch(t *testing.T) {
 	if retry.AgentKind != "mock" || retry.RuleName != "default" || retry.TemplateID != "tmpl-1" {
 		t.Errorf("RetryEntry frozen dispatch fields = (%q, %q, %q), want (mock, default, tmpl-1)",
 			retry.AgentKind, retry.RuleName, retry.TemplateID)
+	}
+	if !retry.RuleSettingsApplied {
+		t.Error("RetryEntry.RuleSettingsApplied = false, want the pending reaction's flag carried")
 	}
 
 	raw, ok := retry.ContinuationContext["label_review"]

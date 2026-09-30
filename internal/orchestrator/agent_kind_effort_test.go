@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 
@@ -210,6 +211,122 @@ func TestAgentKindEffortAdvisories_Fields(t *testing.T) {
 			if len(advisory.Attrs) != 1 || advisory.Attrs[0].Key != "agent_kind" || advisory.Attrs[0].Value.String() != tt.kind {
 				t.Errorf("Advisory.Attrs = %v, want [agent_kind=%s]", advisory.Attrs, tt.kind)
 			}
+		})
+	}
+}
+
+func withRuleBlock(cfg config.ServiceConfig, kind string, block map[string]any) config.ServiceConfig {
+	cfg.Dispatch.Rules = append(cfg.Dispatch.Rules, config.DispatchRule{
+		Name:         "cheap",
+		Selection:    config.DispatchSelection{AgentKind: kind},
+		SettingsKind: kind,
+		Settings:     block,
+	})
+	return cfg
+}
+
+func attrValues(advisory config.Advisory) map[string]string {
+	values := map[string]string{}
+	for _, attr := range advisory.Attrs {
+		values[attr.Key] = attr.Value.String()
+	}
+	return values
+}
+
+func requireOneAdvisory(t *testing.T, got []config.Advisory, check, text string, attrs map[string]string) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("advisories = %+v, want exactly one", got)
+	}
+	if gotAttrs := attrValues(got[0]); got[0].Check != check || got[0].Text != text || !maps.Equal(gotAttrs, attrs) {
+		t.Errorf("advisory check, text, attrs = %q, %q, %v, want %q, %q, %v", got[0].Check, got[0].Text, gotAttrs, check, text, attrs)
+	}
+}
+
+func TestAgentKindEffortAdvisories_RuleBlocks(t *testing.T) {
+	t.Parallel()
+
+	const kind = "required-command-fixture"
+	tests := []struct {
+		name     string
+		kind     string
+		topLevel map[string]any
+		block    map[string]any
+		want     bool
+	}{
+		{name: "rule writes a level", kind: kind, block: effortBlock("high"), want: true},
+		{name: "rule writes a non-string", kind: kind, block: effortBlock(7), want: true},
+		{name: "rule inherits a level from the top-level block", kind: kind, topLevel: effortBlock("high"), block: map[string]any{"model": "m"}, want: true},
+		{name: "rule clears the inherited level with null", kind: kind, topLevel: effortBlock("high"), block: effortBlock(nil)},
+		{name: "rule writes an empty level", kind: kind, topLevel: effortBlock("high"), block: effortBlock("")},
+		{name: "rule block without a level and no inherited one", kind: kind, block: map[string]any{"model": "m"}},
+		{name: "rule block of a forwarding kind", kind: "forwarding-fixture", block: effortBlock("high")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			blocks := map[string]map[string]any{}
+			if tt.topLevel != nil {
+				blocks[tt.kind] = tt.topLevel
+			}
+			cfg := withRuleBlock(effortConfigFor("other-fixture", "", nil, blocks), tt.kind, tt.block)
+
+			var got []config.Advisory
+			for _, advisory := range AgentKindEffortAdvisories(cfg, fixtureEffortLookup) {
+				if attrValues(advisory)["rule_name"] != "" {
+					got = append(got, advisory)
+				}
+			}
+
+			if !tt.want {
+				if len(got) != 0 {
+					t.Errorf("rule advisories = %+v, want none", got)
+				}
+				return
+			}
+			const text = `dispatch rule "cheap" (dispatch.rules[0].required-command-fixture): required-command-fixture.effort has no effect: agent kind "required-command-fixture" passes no reasoning level to its agent; where the agent takes a reasoning option on its command line, write it in agent.command`
+			requireOneAdvisory(t, got, "agent.effort.not_forwarded", text, map[string]string{"rule_name": "cheap", "agent_kind": kind})
+		})
+	}
+}
+
+func TestDispatchRuleEffortAdvisories(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		topLevel map[string]any
+		block    map[string]any
+		want     bool
+	}{
+		{name: "model set and level inherited", topLevel: effortBlock("high"), block: map[string]any{"model": "m"}, want: true},
+		{name: "model null and level inherited", topLevel: effortBlock("high"), block: map[string]any{"model": nil}, want: true},
+		{name: "effort written beside the model", topLevel: effortBlock("high"), block: map[string]any{"model": "m", "effort": "low"}},
+		{name: "effort null beside the model", topLevel: effortBlock("high"), block: map[string]any{"model": "m", "effort": nil}},
+		{name: "no inherited level", topLevel: map[string]any{"model": "top"}, block: map[string]any{"model": "m"}},
+		{name: "empty inherited level", topLevel: effortBlock(""), block: map[string]any{"model": "m"}},
+		{name: "rule does not write a model", topLevel: effortBlock("high"), block: map[string]any{"keep": 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const kind = "forwarding-fixture"
+			cfg := withRuleBlock(effortConfigFor("other-fixture", "", nil, map[string]map[string]any{kind: tt.topLevel}), kind, tt.block)
+
+			got := DispatchRuleEffortAdvisories(cfg)
+
+			if !tt.want {
+				if len(got) != 0 {
+					t.Errorf("DispatchRuleEffortAdvisories() = %+v, want none", got)
+				}
+				return
+			}
+			const text = `dispatch rule "cheap" (dispatch.rules[0].forwarding-fixture) sets model and inherits effort "high" from the top-level forwarding-fixture block; level names depend on the model, so write effort in the rule to choose the level for its model, or effort: null to clear it`
+			requireOneAdvisory(t, got, "agent.effort.inherited", text, map[string]string{"rule_name": "cheap", "agent_kind": kind, "effort": "high"})
 		})
 	}
 }

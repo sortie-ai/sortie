@@ -653,7 +653,7 @@ func convertedConfig(t *testing.T, raw map[string]any) config.ServiceConfig {
 	if err != nil {
 		t.Fatalf("NewServiceConfig() error = %v", err)
 	}
-	dispatch, err := config.BuildDispatchConfig(raw, t.TempDir(), func(string) bool { return true })
+	dispatch, err := config.BuildDispatchConfig(raw, t.TempDir(), func(string) bool { return true }, cfg.Agent.Kind)
 	if err != nil {
 		t.Fatalf("BuildDispatchConfig() error = %v", err)
 	}

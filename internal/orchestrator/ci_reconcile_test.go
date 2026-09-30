@@ -484,6 +484,7 @@ func TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation(
 
 	const issueID = "ISS-CI-CORE"
 	state := stateWithPendingReaction(t, issueID, "main", 1)
+	state.PendingReactions[ReactionKey(issueID, ReactionKindCI)].RuleSettingsApplied = true
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	scm := &ciReconcileSCM{result: domain.PRMergeStatus{HeadSHA: "head-A"}}
@@ -516,6 +517,9 @@ func TestReconcileCIStatus_EarlierPassingLaterFailing_DispatchesOneContinuation(
 	retryEntry, ok := state.RetryAttempts[issueID]
 	if !ok {
 		t.Fatal("continuation not scheduled after the later head failed; want scheduled")
+	}
+	if !retryEntry.RuleSettingsApplied {
+		t.Error("RetryAttempts.RuleSettingsApplied = false, want the pending reaction's flag carried")
 	}
 	if retryEntry.ReactionKind != ReactionKindCI {
 		t.Errorf("RetryAttempts.ReactionKind = %q, want %q", retryEntry.ReactionKind, ReactionKindCI)

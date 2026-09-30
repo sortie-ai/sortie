@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `sortie validate` and the run log now warn when `effort` is set for an agent kind that passes no reasoning level on, such as `agent-client-protocol`, whose users write the agent's own reasoning option in `agent.command`. ([#1182](https://github.com/sortie-ai/sortie/issues/1182))
 
+- A dispatch rule can now carry a settings block for the agent kind it runs, such as a `model` and `effort` for routine issues and another pair for hard ones, laid over that kind's top-level settings. ([#1191](https://github.com/sortie-ai/sortie/issues/1191))
+
+- `sortie validate` now checks a dispatch rule's settings as it checks the agent kind's own block, and warns when a rule changes the model but keeps an `effort` level inherited from the top-level settings. ([#1191](https://github.com/sortie-ai/sortie/issues/1191))
+
 ### Changed
 
 - The command that starts your agent (`agent.command`) now defaults to the agent's standard program, such as `claude` for `claude-code`, so it can be left out for every agent kind except `agent-client-protocol`. ([#1168](https://github.com/sortie-ai/sortie/issues/1168))

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -303,6 +304,70 @@ func TestManager_ReloadRetainsOnConfigTypeFault(t *testing.T) {
 	}
 	if lastCe.Field != "tracker.endpoint" {
 		t.Errorf("LastLoadError() ConfigError.Field = %q, want %q", lastCe.Field, "tracker.endpoint")
+	}
+}
+
+func ruleBlockWorkflow(agentKind, ruleBlockKind string) []byte {
+	return fmt.Appendf(nil, `---
+polling:
+  interval_ms: 5000
+agent:
+  kind: %s
+dispatch:
+  rules:
+    - name: cheap
+      match:
+        labels: [cheap]
+      %s:
+        model: provider/cheap
+---
+Do the task for {{ .issue.title }}.
+`, agentKind, ruleBlockKind)
+}
+
+func kindsProbe(kinds ...string) ManagerOption {
+	return WithAgentKindProbe(func(kind string) bool { return slices.Contains(kinds, kind) })
+}
+
+func TestManager_ReloadRetainsOnRuleBlockFault(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		workflow    []byte
+		wantField   string
+		wantMessage string
+	}{
+		{name: "rule block for another kind than the one the rule runs", workflow: ruleBlockWorkflow("kind-a", "kind-b"), wantField: "dispatch.rules[0].kind-b", wantMessage: `settings block for agent kind "kind-b", but this rule runs agent kind "kind-a", taken from agent.kind`},
+		{name: "default kind changed under a rule block", workflow: ruleBlockWorkflow("kind-b", "kind-a"), wantField: "dispatch.rules[0].kind-a", wantMessage: `settings block for agent kind "kind-a", but this rule runs agent kind "kind-b", taken from agent.kind`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+			mustWriteFile(t, path, ruleBlockWorkflow("kind-a", "kind-a"))
+			mgr, err := NewManager(path, testLogger(), kindsProbe("kind-a", "kind-b"))
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			mustWriteFile(t, path, tt.workflow)
+
+			err = mgr.Reload()
+
+			var ce *config.ConfigError
+			if !errors.As(err, &ce) || ce.Field != tt.wantField || ce.Message != tt.wantMessage {
+				t.Fatalf("Reload() error = %v, want a *config.ConfigError {Field:%q Message:%q}", err, tt.wantField, tt.wantMessage)
+			}
+			if !errors.As(mgr.LastLoadError(), &ce) {
+				t.Errorf("LastLoadError() = %v, want the reload fault", mgr.LastLoadError())
+			}
+			after := mgr.Config()
+			if len(after.Dispatch.Rules) != 1 || after.Dispatch.Rules[0].SettingsKind != "kind-a" || after.Dispatch.Rules[0].Settings["model"] != "provider/cheap" || after.Agent.Kind != "kind-a" {
+				t.Errorf("Config() after the failed reload = agent %q, rules %+v, want the previous kind and rule block retained", after.Agent.Kind, after.Dispatch.Rules)
+			}
+		})
 	}
 }
 

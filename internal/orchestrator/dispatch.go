@@ -555,6 +555,10 @@ type ScheduleRetryParams struct {
 	// into the new [RetryEntry].
 	RuleName string
 
+	// RuleSettingsApplied reports that the dispatch ran with its rule's
+	// settings block. Propagated into the new [RetryEntry].
+	RuleSettingsApplied bool
+
 	// TemplateID is the template registry key of the dispatch.
 	// Propagated verbatim into the new [RetryEntry].
 	TemplateID string
@@ -622,6 +626,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		ContinuationContext: params.ContinuationContext,
 		ReactionKind:        params.ReactionKind,
 		RuleName:            params.RuleName,
+		RuleSettingsApplied: params.RuleSettingsApplied,
 		TemplateID:          params.TemplateID,
 		AgentKind:           params.AgentKind,
 		scheduledAt:         time.Now(),

@@ -1027,7 +1027,7 @@ reactions:
 ```yaml
 dispatch:
   rules: # ordered list; first-match-wins; optional
-    - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; used in logs
+    - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; required with a settings block; never "default"
       match: # optional; absent or empty match block matches every issue (catch-all)
         labels: ["bug", "p0-*"]  # string or list; glob; OR within key
         issue_type: ["Bug"]      # string or list; case-insensitive equality
@@ -1036,6 +1036,9 @@ dispatch:
         assignee: ["alice"]     # string or list; case-insensitive equality
       agent: <kind>    # optional; overrides the agent kind for matching issues
       template: ./prompts/bug.md # optional; path relative to the WORKFLOW.md directory
+      <kind>: # optional; settings block for the agent kind this rule runs
+        model: <model>
+        effort: <level>
   default: # optional
     agent: <kind>     # optional; defaults to top-level agent.kind
     template: <path>  # optional; defaults to the WORKFLOW.md Markdown body
@@ -1048,14 +1051,15 @@ dispatch:
 | `rules` | list of rule objects | No | _(none)_ | Ordered dispatch rules; first-match-wins. Evaluated in YAML order. |
 | `default` | map | No | _(none)_ | Fallback selection when no rule matches. Keys: `agent`, `template`. |
 
-Each rule in `dispatch.rules` is a map with the following keys (all other keys are unrecognized):
+Each rule in `dispatch.rules` is a map with the following keys. A rule must carry at least one of `match`, `agent`, `template`, or a settings block. A key that names a registered agent kind is the rule's settings block; any other key is unrecognized and fails the load.
 
 | Field | Type | Required | Default | Description |
 | ----- | ---- | -------- | ------- | ----------- |
-| `name` | string | No | _(absent)_ | Operator-supplied identifier used in logs. Must match `^[a-z][a-z0-9_-]*$` when present. |
+| `name` | string | With a settings block | _(absent)_ | Operator-supplied identifier used in logs, in run history, and to find the rule again after a reload. Must match `^[a-z][a-z0-9_-]*$` when present, and must not be `default`, the name run history and statistics give the `dispatch.default` selection, when the rule carries a settings block. Names are unique. |
 | `match` | map | No | _(absent)_ | Predicate block. An absent or empty block matches every issue (catch-all). |
 | `agent` | string | No | _(fallback)_ | Agent adapter kind for matching issues. Falls through to `dispatch.default.agent`, then to `agent.kind`. |
 | `template` | string | No | _(fallback)_ | Prompt template path (relative to `WORKFLOW.md` directory). Falls through to `dispatch.default.template`, then to the Markdown body. |
+| `<kind>` | map | No | _(absent)_ | Settings block named for the agent kind the rule runs: the rule's `agent`, else `dispatch.default.agent`, else `agent.kind`. Holds the keys that kind's top-level block accepts. See [Rule settings blocks](#rule-settings-blocks). |
 
 The `match` block accepts only these keys:
 
@@ -1067,7 +1071,7 @@ The `match` block accepts only these keys:
 | `identifier` | string or list | Glob (any element) | Matches when `issue.identifier` glob-matches any pattern, in the case the adapter produced. |
 | `assignee` | string or list | Case-insensitive equality (any element) | Matches when the issue assignee equals any list entry. |
 
-The `dispatch.default` block accepts only `agent` and `template`, with the same types and fallback behavior as the per-rule fields.
+The `dispatch.default` block accepts only `agent` and `template`, with the same types and fallback behavior as the per-rule fields. It carries no settings block: a key that names an agent kind fails the load, and the top-level block of each kind holds the default settings.
 
 #### Matching semantics
 
@@ -1106,13 +1110,89 @@ The kind that steps 2 and 3 produce for an agent is the default kind: `dispatch.
 
 When no rule matches and `dispatch.default` supplies an agent or template, the default is applied with the same fallback chain for any unset field.
 
-A kind an `agent` selector introduces here, rather than falling through to the top-level `agent.kind`, must carry its own top-level settings block; see [Section 4.5](#45-adapter-specific-pass-through-config) for the requirement and the `dispatch.agent.missing_block` check that enforces it.
+A kind an `agent` selector introduces here, rather than falling through to the top-level `agent.kind`, must carry its own settings block, either as a top-level block or, when every selector of that kind is a rule that carries the kind's block, in those rules; see [Section 4.5](#45-adapter-specific-pass-through-config) for the requirement and the `dispatch.agent.missing_block` check that enforces it.
+
+#### Rule settings blocks
+
+A rule may carry one settings block, named for the agent kind the rule runs and holding the keys that kind's top-level block accepts. `model` and `effort` are the usual keys; every other key the kind reads from its block is overridable the same way, including the per-invocation limits some kinds keep there. A block for any other kind fails the load, which also catches a block left behind after the rule's `agent`, `dispatch.default.agent`, or `agent.kind` changed.
+
+The block an attempt runs with is the top-level block of the rule's kind with the rule's block laid over it, one level deep:
+
+- A key the rule writes replaces the inherited value whole, whatever its type. A map or a list is replaced, never merged or appended: `codex.turn_sandbox_policy`, `opencode.allowed_tools`, and `opencode.denied_tools` are the keys that hold one.
+- A key the rule writes as `null` removes the inherited key, so the adapter sees it as never written and applies its own default. For `model` and `effort` that is the runtime's own default.
+- Every key the rule does not write is inherited.
+- A kind with no top-level block inherits nothing; the rule's block is the whole block.
+- A rule's block is laid only over the top-level block of its own kind.
+
+No key is defaulted or coerced before the overlay; the adapter applies its defaults after it.
+
+A rule's block cannot write `kind`, `command`, `turn_timeout_ms`, `read_timeout_ms`, `stall_timeout_ms`, or `stop_grace_ms`. Sortie derives them from the `agent` section, which stays workflow-wide, so writing one in a rule would read as an override that does not happen. A block must be a map; write `{}` for an empty one.
+
+```yaml
+agent:
+  kind: opencode
+
+opencode:
+  model: provider/strong-model
+  effort: high
+
+dispatch:
+  rules:
+    - name: low-cost
+      match:
+        labels: ["model:low-cost"]
+      opencode:
+        model: provider/cheap-model
+        effort: null          # clear the inherited level; the cheap model may not offer it
+    - name: hard
+      match:
+        labels: ["model:strong"]
+      opencode:
+        effort: max           # model inherited from the top-level block
+```
+
+Issues with neither label run on the top-level block. `sortie stats` groups the runs by rule.
+
+Two work profiles on two kinds fit in one workflow. A rule that introduces a kind other than `agent.kind` and carries that kind's block needs no top-level block for it:
+
+```yaml
+agent:
+  kind: claude-code
+
+claude-code:
+  permission_mode: bypassPermissions
+  model: strong-model
+  effort: high
+
+dispatch:
+  rules:
+    - name: specify
+      match:
+        labels: ["specify"]
+      template: ./prompts/specify.md
+      claude-code:
+        effort: max
+    - name: implement
+      match:
+        labels: ["implement"]
+      agent: opencode
+      template: ./prompts/implement.md
+      opencode:
+        model: provider/coding-model
+        effort: high
+```
+
+Level names depend on the model. A rule that writes `model`, does not write `effort`, and inherits a non-empty `effort` draws the `agent.effort.inherited` warning: write `effort` in the rule to choose the level for its model, or `effort: null` to clear it.
+
+Changing `agent.kind` or `dispatch.default.agent` is rejected when a rule without its own `agent` carries a block for the old kind, because the rule would run another kind than its block names. Fix the block or the rule's `agent`, and the next reload applies.
 
 #### Freeze-on-dispatch
 
 An issue keeps its agent kind, template, and rule until its claim is released. The resolved `(agent_kind, template_id, rule_name)` is recorded at dispatch and reused by retries and reaction-driven continuations for the same claim. Rules are re-evaluated only after the claim is released, with one exception: a waiting retry checks its recorded selection against the configuration in force when its timer fires. Moving a label on an issue whose claim is still held does not re-route it; the next claim does.
 
-What the selection contains is read from `WORKFLOW.md` at the start of every attempt: the agent settings (`model`, `effort`, and the rest of the kind's block), the template text, and the `agent.*` timeouts. A reload therefore reaches the next attempt of a claim that is already held, while a running session keeps the settings it started with. A retry or continuation that resumes a session resumes it with the settings it resolved, and a change of `model` or `effort` between attempts does not end the session.
+What the selection contains is read from `WORKFLOW.md` at the start of every attempt: the agent settings (`model`, `effort`, and the rest of the kind's block, from the rule and from the top-level block), the template text, and the `agent.*` timeouts. A reload therefore reaches the next attempt of a claim that is already held, while a running session keeps the settings it started with. A retry or continuation that resumes a session resumes it with the settings it resolved, and a change of `model` or `effort` between attempts does not end the session.
+
+When the rule named in a held claim no longer exists, or no longer carries a block for the claim's kind, the attempt runs on the top-level block of that kind and Sortie logs one `Info` record naming the rule.
 
 An attempt whose resolved block fails an error-severity check (see [Section 8](#8-dispatch-preflight-validation)) starts no session. The first dispatch skips the issue for that tick; a retry or continuation is rescheduled with backoff and keeps its claim, its continuation data, and its session to resume.
 
@@ -1156,7 +1236,7 @@ The two named rules carry `match` blocks. The third rule has no `match` block an
 
 #### Further reading (optional)
 
-The design rationale is in [architecture §5.3.9](architecture/05-workflow-specification.md#539-dispatch-object-optional) and [ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required to write a valid `dispatch` block; they explain why the feature is shaped as it is.
+The design rationale is in [architecture §5.3.9](architecture/05-workflow-specification.md#539-dispatch-object-optional) and [ADR-0031](decisions/0031-let-a-dispatch-rule-carry-its-agent-kinds-settings.md). Neither document is required to write a valid `dispatch` block; they explain why the feature is shaped as it is.
 
 ---
 
@@ -1863,6 +1943,8 @@ When `token_rates` is configured, the dashboard displays estimated USD cost for 
 
 Every figure Sortie prices is a fresh-input token, a cache-read token, a cache-write token, or an output token, priced once each at its own rate. An unset `cache_read_per_mtok` or `cache_write_per_mtok` prices that class at `input_per_mtok`, so a configuration that sets neither keeps pricing every input token, cached or not, at the input rate. `claude-code`, `copilot-cli`, and `opencode` report a cache-write count; an operator of one of those kinds sets `cache_write_per_mtok` to that provider's cache-write rate to price it separately.
 
+One rate set prices every model of a kind alike: two models of one kind run under different dispatch rules are priced at the same rates, so the savings from routing show in token counts before they show in money.
+
 When `token_rates` is absent or empty, the dashboard shows raw token counts without cost estimates and `sortie stats` reports no cost figures.
 
 An entry keyed to a kind whose usage-reporting declaration resolves to no token usage for the sessions a configuration produces has no effect: no cost can be estimated for it. `sortie validate` reports this under the check `agent.kind.no_cost_estimate`, naming the kind, so an operator who prices a non-reporting kind learns why the dashboard's Est. Cost column stays blank rather than discovering it by reading source.
@@ -1892,9 +1974,11 @@ An entry keyed to a kind whose usage-reporting declaration resolves to no token 
 
 Each adapter (tracker or agent) may define configuration in a top-level object named after its `kind` value. These values are passed through to the adapter without validation by the orchestrator core.
 
-A session uses the block belonging to the agent kind it was dispatched on. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.10](#210-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind. The block an attempt runs with is resolved from `WORKFLOW.md` at the start of every attempt, so a change to a block applies from the next attempt without a restart, while a running session keeps the settings it started with. A key with the wrong YAML type fails validation and, if it reaches a session, the session start; nothing is constructed from a block in advance.
+A session uses the block belonging to the agent kind it was dispatched on. That kind is the one a matching `dispatch.rules` entry selected, otherwise `dispatch.default.agent`, otherwise `agent.kind`, following the fallback chain in [Section 2.10](#210-dispatch--rule-based-routing). The block named by `agent.kind` therefore applies only when neither a matching rule nor the dispatch default chose another kind. The block an attempt runs with is resolved from `WORKFLOW.md` at the start of every attempt, so a change to a block applies from the next attempt without a restart, while a running session keeps the settings it started with. A rule may carry its own block for the kind it runs, laid over the kind's top-level block key by key; see [Rule settings blocks](#rule-settings-blocks). A key whose value is a map or a list, such as `codex.turn_sandbox_policy`, `opencode.allowed_tools`, and `opencode.denied_tools`, is replaced whole by a rule that writes it, never merged. A key with the wrong YAML type fails validation and, if it reaches a session, the session start; nothing is constructed from a block in advance.
 
 **Model:** `model` is an optional string key that means the same in the block of every agent kind that reads it, as `effort` does. An absent key, a YAML null, and an empty string leave the model unset, and the agent runs at its own default. Any other string is handed to the runtime exactly as written, and the runtime judges the name. A value of any other YAML type fails validation under the check `<kind>.model.wrong_type` and fails the session start. The `claude-code`, `codex`, `copilot-cli`, and `opencode` kinds read it.
+
+**Source order for `model` and `effort`:** the effective value comes from the first of these that sets it: the rule's block, the kind's top-level block, the runtime's own host settings, and the runtime's default. A cap the runtime's own settings impose applies on top of all of them. A rule that writes the key as `null` removes the top-level value, which leaves the runtime's own settings and default in charge.
 
 **Reasoning effort:** `effort` is an optional string key that means the same in the block of every agent kind that reads it. An absent key, a YAML null, and an empty string leave the level unset, and the agent runs at its own default. Any other string is the level, delivered exactly as written: Sortie does not trim it, change its case, or check it against a list of names, because the names a runtime accepts depend on its version and on the model. A set level rides every turn of every session, credential verification included, and outranks every host setting that names a level, `CLAUDE_CODE_EFFORT_LEVEL` included. A cap a runtime's own settings impose, such as Claude Code's `maxEffortLevel`, still applies. The runtime judges the name, and it takes one of three courses with a name it does not accept: it refuses the run before any work, it runs at its default level with a warning in Sortie's log, or it runs at another level and reports nothing. The table of each adapter below states which course its runtime takes. A value of any other YAML type fails the session start and, offline, is reported by `sortie validate` under the check `<kind>.effort.wrong_type`. The `claude-code`, `codex`, `copilot-cli`, and `opencode` kinds forward the level. The `agent-client-protocol` and `mock` kinds pass none, and a workflow that reaches either one with `effort` set in its block draws the advisory `agent.effort.not_forwarded`.
 
@@ -2664,6 +2748,7 @@ Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads a
 | `reactions.label_commands.*`                    | **No effect.** Requires restart. The reaction config is built once at construction.            |
 | `reactions.merge_completion.*`                  | **No effect.** Requires restart. The reaction config, `target_state` included, is built once at construction. |
 | `claude-code.*`, `codex.*`, `copilot-cli.*`, `opencode.*`, `agent-client-protocol.*` | Future worker attempts, not in-flight sessions. Each attempt resolves its kind's block when it starts. |
+| `dispatch.rules[].<kind>` (rule settings block) | Future worker attempts of claims that hold the rule, not in-flight sessions. The rule's own selection (match, agent, template) reaches future claims only. |
 | `notifications`                        | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
@@ -2695,7 +2780,7 @@ Before dispatching work, the orchestrator validates the workflow configuration. 
 | Agent adapter registered and available         | No adapter registered for the configured `agent.kind`.      |
 | `workspace.root` writable                      | The resolved root cannot be created, or a probe file cannot be written inside it. Reported under check `workspace.root_writable`. |
 | `dispatch` is a map; `dispatch.rules` is a sequence; `dispatch.default` is a map | Wrong YAML node type for `dispatch`, `dispatch.rules`, or `dispatch.default`. |
-| Each rule has at least one of `match`, `agent`, `template` | A rule map carries none of the three. |
+| Each rule has at least one of `match`, `agent`, `template`, or a settings block | A rule map carries none of them. |
 | Rule `name`, when present, matches `^[a-z][a-z0-9_-]*$` | Malformed rule name. |
 | No duplicate rule name | Two rules share the same non-empty `name`. |
 | No non-final catch-all (`unreachable_rules`) | A rule with no `match` block precedes another rule. |
@@ -2703,12 +2788,17 @@ Before dispatching work, the orchestrator validates the workflow configuration. 
 | `priority` predicate has exactly one operator | Zero or more than one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`. |
 | Glob patterns syntactically valid | A `labels` or `identifier` pattern fails `path.Match`. |
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
+| Every rule settings block well formed | A block is named for a kind other than the one the rule runs, is not a map, writes `kind`, `command`, or one of the four `agent` timeouts, belongs to a rule with no `name` or named `default`, or a key of `dispatch.default` names an agent kind. The errors and their fields are listed in [Section 9.2](#92-configuration-errors). |
+| `dispatch.agent.missing_block` | A kind other than `agent.kind` that `dispatch.default.agent` or a rule's `agent` names has a top-level block that is not a map, or has no top-level block while some selector of the kind is not a rule carrying the kind's block. The message names the first such selector. |
+| Every rule's resolved settings block passes the adapter checks | The top-level block of the rule's kind with the rule's block laid over it fails a check the top-level block would fail: key types, the adapter's own checks, `agent.kind.session_resume`, and conflicts between keys such as `opencode.allowed_tools.overlap` and `opencode.effort.conflict`. The message opens with `dispatch rule "<name>" (dispatch.rules[<i>].<kind>): `, and the check key is the one the top-level block draws. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
 | `tracker.handoff_state` and `tracker.in_progress_state` free of collisions against the effective state lists | The state collides with the effective `active_states` or `terminal_states`, where an empty workflow list takes the tracker adapter's own fallback list. |
 | `tracker.no_change_state` requires `tracker.handoff_state` | `no_change_state` is set while `handoff_state` is empty. Checked entirely offline, with no tracker call and no adapter fallback. |
 | `tracker.no_change_state` names a permitted value | `no_change_state` is neither equal to `handoff_state` nor a member of `terminal_states` exactly as written in front matter. Checked entirely offline, with no tracker call and no adapter fallback. |
 
-**Advisory warnings vs. configuration errors:** An unknown key placed directly under `dispatch` (alongside `rules` and `default`) produces an `unknown_sub_key` advisory warning and does not block startup. Unknown keys nested deeper are rejected as configuration errors that fail the load: an unrecognized key inside a rule map (`dispatch.rules[*]`), inside `dispatch.default`, or inside a `match` block. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key on a rule, is caught as an error so it cannot silently disable a rule, while a typo at the top `dispatch` level is flagged as a warning without preventing startup.
+**Rule settings blocks in preflight.** Every adapter check that reads a settings block runs once for the top-level block of each kind the configuration reaches and again for each rule's resolved block, so a fault a rule inherits from the top-level block is reported for the top-level block and again for each rule that inherits it. A kind other than `agent.kind` whose every selector is a rule carrying that kind's block needs no top-level block, and its top-level block alone is not checked, because no attempt reads it alone. The same checks run for each attempt when it starts: an attempt whose resolved block fails an error-severity check starts no session (see [Freeze-on-dispatch](#freeze-on-dispatch)), which keeps a reload from carrying a bad block into a retry or a continuation that never passes the per-tick preflight.
+
+**Advisory warnings vs. configuration errors:** An unknown key placed directly under `dispatch` (alongside `rules` and `default`) produces an `unknown_sub_key` advisory warning and does not block startup. Unknown keys nested deeper are rejected as configuration errors that fail the load: an unrecognized key inside a rule map (`dispatch.rules[*]`) that does not name a registered agent kind, inside `dispatch.default`, or inside a `match` block. The key that names a rule's own agent kind is its settings block and draws no `unknown_sub_key` warning. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key on a rule, is caught as an error so it cannot silently disable a rule, while a typo at the top `dispatch` level is flagged as a warning without preventing startup.
 
 **Adapter-specific tracker diagnostics.** A tracker adapter may contribute its own offline checks, which run during the same preflight without any network call. An `error`-severity diagnostic blocks dispatch like any other preflight error; a `warning`-severity diagnostic is advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
 
@@ -2739,7 +2829,8 @@ These offline checks never contact Linear and never log the API key value. State
 | `reactions.label_commands.fix_branch_missing`               | `reactions.label_commands` names a provider, the fix label is non-empty, and the prompt template has no `label_fix` branch. |
 | `agent.kind.deprecated`                                     | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) is registered as deprecated. |
 | `agent.kind.retired`                                        | A kind the configuration reaches (`agent.kind`, `dispatch.default.agent`, or a `dispatch.rules[*].agent`) was removed and converted onto its replacement kind. The warning names the converted fields, the launch the replacement kind performs, and the settings not carried, and states that the conversion is temporary. |
-| `agent.effort.not_forwarded`                                | A kind the configuration reaches whose adapter passes no reasoning level (`agent-client-protocol`, `mock`) has a non-empty `effort` in its settings block, or a value of another type there. |
+| `agent.effort.not_forwarded`                                | A kind the configuration reaches whose adapter passes no reasoning level (`agent-client-protocol`, `mock`) has a non-empty `effort` in its settings block, or a value of another type there. A rule's settings block for such a kind whose resolved `effort` is non-empty draws it again, with the text opening `dispatch rule "<name>" (dispatch.rules[<i>].<kind>)`. |
+| `agent.effort.inherited`                                    | A rule's settings block writes `model` (`null` included), does not write `effort`, and inherits a non-empty `effort` from its kind's top-level block. Level names depend on the model; write `effort` in the rule to choose the level for its model, or `effort: null` to clear it. |
 | `token_rates`                                               | `token_rates` or one of its entries is not a map, an entry has an empty agent kind, a rate is not a finite, non-negative number, an entry names a key Sortie does not recognize, or an entry lacks `input_per_mtok` or `output_per_mtok`. |
 
 ---
@@ -2778,6 +2869,17 @@ These errors are raised during typed config construction from the parsed front m
 | `config: agent.command[<i>]: must not be empty`                                 | Element `<i>` of an `agent.command` list is empty; element `0` may not be only whitespace. | Give the element a value, or remove it. Element `0` names the program.                 |
 | `config: <kind>.<key>: agent kind "<kind>" was removed and this configuration cannot be converted to agent kind "<replacement>": <reason>` | The workflow names a removed agent kind, and `<key>` in that kind's settings block has a value the replacement kind cannot carry. `sortie validate` reports it as `config.<kind>.<key>`. | Fix the setting as the reason states, or name the replacement kind in the workflow file. |
 | `config: <field>: agent kinds "<kind>" and "<kind>" were removed and convert to agent kind "<replacement>" with different commands` | Two removed kinds in one workflow convert onto the same replacement kind and would launch different commands. | Name the replacement kind in the workflow file with one `agent.command`.                    |
+| `config: dispatch.rules[<i>].<kind>.<key>: agent kind "<kind>" was removed and this configuration cannot be converted to agent kind "<replacement>": <reason>` | A rule runs a removed agent kind and its settings block for that kind has a value the replacement kind cannot carry. | Fix the setting as the reason states, or name the replacement kind in the rule. |
+| `config: dispatch.rules[<i>].<kind>: agent kind "<kind>" was removed and this rule's settings cannot be converted to agent kind "<replacement>": they change the command the replacement kind launches, which a dispatch rule cannot set` | A rule's block for a removed kind converts to a launch command other than the one the kind's own conversion produces. | Remove the setting that changes the command, or name the replacement kind in the workflow file with the launch you want in `agent.command`. |
+| `config: dispatch.rules[<i>]: rule must specify at least one of match, agent, template, or a settings block` | A rule map carries none of those keys. | Add one of them. |
+| `config: dispatch.rules[<i>].<key>: settings block for agent kind "<key>", but this rule runs agent kind "<kind>"` | A rule carries a block named for a kind other than the one it runs. The message ends with `, taken from dispatch.default.agent` or `, taken from agent.kind` when the rule has no `agent`. It also appears after `agent.kind`, `dispatch.default.agent`, or a rule's `agent` changed under an existing block. | Name the block for the rule's kind, or set the rule's `agent` to the block's kind. |
+| `config: dispatch.rules[<i>].<kind>: a rule's settings block must hold the kind's settings as keys, got <shape>; write {} for an empty block` | A rule's block is not a map. `<shape>` is `no value` for a bare `<kind>:` line. | Write the settings as keys under the block, or `{}` for an empty block. |
+| `config: dispatch.rules[<i>].<kind>.kind: a rule chooses its agent kind with its agent key` | A rule's block writes `kind`. | Remove the key and set the rule's `agent`. |
+| `config: dispatch.rules[<i>].<kind>.command: agent.command belongs to the default agent kind; a dispatch rule cannot set a command` | A rule's block writes `command`. | Remove the key. |
+| `config: dispatch.rules[<i>].<kind>.<key>: agent.<key> is workflow-wide; a dispatch rule cannot override it` | A rule's block writes `turn_timeout_ms`, `read_timeout_ms`, `stall_timeout_ms`, or `stop_grace_ms`. | Remove the key and set the limit in the `agent` section. |
+| `config: dispatch.rules[<i>]: a rule that carries a settings block must have a name` | A rule carries a settings block and no `name`. | Give the rule a `name`. |
+| `config: dispatch.rules[<i>].name: "default" is the name run history and statistics give the dispatch.default selection; a rule that carries a settings block must use another name` | A rule named `default` carries a settings block. | Rename the rule. |
+| `config: dispatch.default.<key>: dispatch.default carries no settings block; the top-level <key> block holds the default settings` | A key of `dispatch.default` names an agent kind. | Move the settings to the top-level block of that kind. |
 | `config: tracker.kind: expected string, got <type>`                             | `tracker.kind` is not a string (e.g., integer, boolean, list).           | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.endpoint: expected string, got <type>`                         | `tracker.endpoint` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.api_key: expected string, got <type>`                          | `tracker.api_key` is not a string (e.g., integer, boolean, list).        | Ensure the value is a string, quoted if necessary.                                                                                   |
