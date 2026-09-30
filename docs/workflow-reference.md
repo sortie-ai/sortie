@@ -2052,7 +2052,7 @@ On 1.x the adapter runs `opencode run --format json --dir <workspace>` once per 
 **Validation rules:**
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
-- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one for the detected major.
+- The adapter always removes any inherited `OPENCODE_PERMISSION` or `OPENCODE_CONFIG_CONTENT` value before launching OpenCode. If either tool list is non-empty, it replaces the tool policy with the adapter-managed one for the detected major. The configuration document the adapter writes disables OpenCode's title agent on both majors, so a local turn makes no title request and a session keeps OpenCode's default title.
 
 **Removed `kiro` kind:**
 
