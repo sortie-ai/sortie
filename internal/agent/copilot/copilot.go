@@ -147,6 +147,12 @@ type sessionState struct {
 	// unreadable.
 	turnCompletionSummary string
 
+	// turnErrorMessage is the trimmed message of the turn's last
+	// session.error event, empty when none arrived or its payload was
+	// unreadable. It is the failure reason when the result event reports a
+	// failed exit.
+	turnErrorMessage string
+
 	// turnContinuations counts the user.message events this turn whose
 	// payload marked them as autopilot continuations. Diagnostic only;
 	// never consulted by the turn disposition.
@@ -442,6 +448,19 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				"session.tools_updated":
 				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
+			case "session.error":
+				if len(event.Data) > 0 {
+					errData, dataErr := parseSessionErrorData(event.Data)
+					if dataErr == nil {
+						state.turnErrorMessage = strings.TrimSpace(errData.Message)
+					}
+				}
+				emit(domain.AgentEvent{
+					Type:      domain.EventOtherMessage,
+					Timestamp: now,
+					Message:   event.Type,
+				})
+
 			case "user.message":
 				if len(event.Data) > 0 {
 					msgData, dataErr := parseUserMessageData(event.Data)
@@ -496,6 +515,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				case lastResult.ExitCode == nil || *lastResult.ExitCode != 0:
 					ev.Terminal = agentcore.TerminalFailure
 					ev.TerminalMessage = "non-zero exit in result event"
+					if state.turnErrorMessage != "" {
+						ev.TerminalMessage = state.turnErrorMessage
+					}
 				case !state.turnCompletionSeen:
 					ev.Terminal = agentcore.TerminalIncomplete
 					ev.TerminalMessage = "raise copilot-cli.max_autopilot_continues if the turn needs more steps"
@@ -549,6 +571,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	state.turnCompletionSeen = false
 	state.turnCompletionSuccess = false
 	state.turnCompletionSummary = ""
+	state.turnErrorMessage = ""
 	state.turnContinuations = 0
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
