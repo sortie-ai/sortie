@@ -174,6 +174,7 @@ var contractSharedFamilyPackages = map[string]contractSharedPackage{
 	"github.com/sortie-ai/sortie/internal/agent/agenttest":                 {reason: "shared agent-adapter test support; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest": {reason: "shared turn-disposition conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest":  {reason: "shared credential-verification conformance assertion, keyed separately because keys match exactly; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel":       {reason: "shared scripted model endpoint and scripted-model conformance driver; registers no kind and holds no adapter; its non-test files import testing, so production code must not reach it", coreImportable: false},
 }
 
 // contractPackageBannedImports maps one package's import path to the
@@ -197,6 +198,9 @@ var contractAllowlist = map[string]map[contractRule]string{
 		ruleCAPTURE:   "owns StartCapture and RunCapture, the capture every other launcher calls",
 	},
 	"agenttest": {
+		ruleCAPTURE: "test-support package that cmd/sortie does not link",
+	},
+	"fakemodel": {
 		ruleCAPTURE: "test-support package that cmd/sortie does not link",
 	},
 	"probe": {

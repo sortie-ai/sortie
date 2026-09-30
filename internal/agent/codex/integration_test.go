@@ -3,7 +3,9 @@
 // Required environment variables:
 //
 //	SORTIE_CODEX_TEST=1     enable this suite
-//	CODEX_API_KEY           Codex API key for authentication
+//	CODEX_API_KEY           Codex API key for authentication; the live cases
+//	                        need it, the scripted-model case reads no
+//	                        credential and needs only the gate
 //
 // Optional environment variables:
 //
@@ -23,11 +25,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -41,6 +45,14 @@ func skipUnlessCodexIntegration(t *testing.T) {
 	}
 	if os.Getenv("CODEX_API_KEY") == "" {
 		t.Skip("skipping Codex integration test: CODEX_API_KEY must be set")
+	}
+}
+
+// skipUnlessCodexGate is the skip check for cases that read no credential.
+func skipUnlessCodexGate(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SORTIE_CODEX_TEST") != "1" {
+		t.Skip("skipping Codex integration test: set SORTIE_CODEX_TEST=1 to enable")
 	}
 }
 
@@ -270,91 +282,61 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	requireAgentErrorKind(t, err, domain.ErrAgentNotFound)
 }
 
-// TestIntegration_RunTurn executes a single turn and verifies the mandatory
-// event sequence, token usage, and tool result correlation. A file-read
-// prompt is used so the adapter emits at least one EventToolResult with a
-// populated ToolName. Its turn_completed assertion is this adapter's
-// live-runtime obligation for the shared disposition decision: the only
-// check that can catch an evidence mapping that is internally consistent
-// but wrong against the actual wire format.
-func TestIntegration_RunTurn(t *testing.T) {
-	skipUnlessCodexIntegration(t)
-
-	adapter := mustNewAdapter(t)
-	workspace := gitInitWorkspace(t)
-	if err := os.WriteFile(filepath.Join(workspace, "hello.txt"), []byte("Hello"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+// scriptedProviderCommand appends the overrides that point the runtime at a
+// custom provider on url. Overrides carry the redirect because the runtime
+// ignores OPENAI_BASE_URL and a project-local config file; the retry counts
+// are zero so a refused request ends the turn instead of being replayed.
+func scriptedProviderCommand(url string) string {
+	pairs := []string{
+		"model_provider=\"scripted\"",
+		"model_providers.scripted.name=\"scripted\"",
+		fmt.Sprintf("model_providers.scripted.base_url=%q", url+"/v1"),
+		"model_providers.scripted.wire_api=\"responses\"",
+		"model_providers.scripted.env_key=\"CODEX_API_KEY\"",
+		"model_providers.scripted.request_max_retries=0",
+		"model_providers.scripted.stream_max_retries=0",
+		"model_providers.scripted.supports_websockets=false",
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	session := mustStartSession(t, ctx, adapter, workspace)
-	onEvent, collected := makeEventCollector(t)
-
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  "Read the file hello.txt. Output EXACTLY the file content and absolutely nothing else. No preamble, no explanation.",
-		OnEvent: onEvent,
-	})
-	if err != nil {
-		t.Fatalf("RunTurn: %v", err)
+	args := []string{integrationCommand()}
+	for _, pair := range pairs {
+		args = append(args, "-c", pair)
 	}
+	return strings.Join(args, " ")
+}
 
-	events := collected()
-	t.Logf("received %d events, exit reason: %q", len(events), result.ExitReason)
+func TestIntegration_ScriptedModel(t *testing.T) {
+	skipUnlessCodexGate(t)
 
-	// Session ID must equal the thread ID established by StartSession.
-	if result.SessionID != session.ID {
-		t.Errorf("TurnResult.SessionID = %q, want %q", result.SessionID, session.ID)
-	}
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-	if len(events) == 0 {
-		t.Fatal("no events received via OnEvent")
-	}
-
-	assertContainsEventType(t, events, domain.EventSessionStarted)
-	assertContainsEventType(t, events, domain.EventTurnCompleted)
-	assertContainsEventType(t, events, domain.EventTokenUsage)
-	assertNoEventType(t, events, domain.EventTurnFailed)
-	assertNoEventType(t, events, domain.EventStartupFailed)
-
-	for _, e := range events {
-		if e.Type == domain.EventTokenUsage && e.Model == "" {
-			t.Error("EventTokenUsage.Model is empty; expected the effective model reported by thread/start")
-		}
-	}
-
-	// Token totals must be internally consistent if the app-server provides
-	// usage data. Some app-server versions omit the usage field; log rather
-	// than fail so the test remains useful across versions.
-	if result.Usage.TotalTokens > 0 {
-		if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
-			t.Errorf("TurnResult.Usage.TotalTokens = %d, want %d (input + output)",
-				result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
-		}
-	} else {
-		t.Log("token usage not provided by this app-server version (TotalTokens = 0)")
-	}
-
-	// The file-read prompt typically causes at least one commandExecution
-	// or fileChange item, producing a correlated EventToolResult with a
-	// populated ToolName. Some models may complete without tool use, so
-	// log rather than fail.
-	var foundToolResult bool
-	for _, e := range events {
-		if e.Type == domain.EventToolResult && e.ToolName != "" {
-			foundToolResult = true
-			if e.ToolDurationMS < 0 {
-				t.Errorf("EventToolResult.ToolDurationMS = %d, want >= 0", e.ToolDurationMS)
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind: "codex",
+		Passthrough: map[string]any{
+			"approval_policy": "never",
+			"thread_sandbox":  "workspaceWrite",
+			"model":           "scripted-model",
+		},
+		CredentialEnv: []string{"CODEX_API_KEY"},
+		Read:          fakemodel.CatFile,
+		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			return fakemodel.Launch{
+				Config: domain.AgentConfig{
+					Command:       scriptedProviderCommand(env.URL),
+					TurnTimeoutMS: 300000,
+					ReadTimeoutMS: 30000,
+				},
+				// CODEX_HOME also confines the runtime's automatic
+				// trusted-project record to the isolated home.
+				Env: map[string]string{"CODEX_HOME": env.Home},
 			}
-			break
-		}
-	}
-	if !foundToolResult {
-		t.Log("no EventToolResult with non-empty ToolName observed (model may have completed without tool use)")
-	}
+		},
+		Inspect: func(t *testing.T, run fakemodel.Run) {
+			if run.Environment.Scenario != fakemodel.ScenarioTurn {
+				return
+			}
+			if run.Result.SessionID != run.Session.ID {
+				t.Errorf("TurnResult.SessionID = %q, want %q", run.Result.SessionID, run.Session.ID)
+			}
+		},
+	})
 }
 
 // TestIntegration_RunTurn_StopDuringTurn verifies that calling StopSession
@@ -718,7 +700,8 @@ func TestIntegration_ToolRoundTrip(t *testing.T) {
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 
-	adapter, err := NewCodexAdapter(map[string]any{})
+	passthrough := map[string]any{}
+	adapter, err := NewCodexAdapter(passthrough)
 	if err != nil {
 		t.Fatalf("NewCodexAdapter: %v", err)
 	}
@@ -727,9 +710,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	}
 
 	t.Run("working credential verifies", func(t *testing.T) {
-		if _, err := credentialtest.VerifyLive(adapter, params(t)); err != nil {
-			t.Fatalf("VerifyCredential() error = %v, want nil", err)
-		}
+		credentialtest.VerifyLiveUsage(t, "codex", adapter, params(t), passthrough)
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {

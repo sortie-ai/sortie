@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -48,33 +50,6 @@ func integrationCommand(t *testing.T) string {
 		return cmd
 	}
 	return "claude"
-}
-
-// assertContainsEventType asserts that at least one event in the slice
-// has the given type.
-func assertContainsEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
-	t.Helper()
-	for _, e := range events {
-		if e.Type == eventType {
-			return
-		}
-	}
-	types := make([]domain.AgentEventType, len(events))
-	for i, e := range events {
-		types[i] = e.Type
-	}
-	t.Errorf("expected event type %q not found; got types: %v", eventType, types)
-}
-
-// assertNoEventType asserts that no event in the slice has the given type.
-func assertNoEventType(t *testing.T, events []domain.AgentEvent, eventType domain.AgentEventType) {
-	t.Helper()
-	for _, e := range events {
-		if e.Type == eventType {
-			t.Errorf("unexpected event type %q found with message: %s", eventType, e.Message)
-			return
-		}
-	}
 }
 
 func TestIntegration_StartSession(t *testing.T) {
@@ -152,129 +127,48 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunTurn drives one real turn against the live
-// claude-code binary and asserts turn_completed, satisfying the shared
-// disposition decision's live-runtime obligation for this adapter: the
-// only check that can catch an evidence mapping that is internally
-// consistent but wrong against the actual wire format.
-func TestIntegration_RunTurn(t *testing.T) {
+func TestIntegration_ScriptedModel(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(singleTurnIntegrationConfig(t))
-	if err != nil {
-		t.Fatalf("NewClaudeCodeAdapter: %v", err)
-	}
-
-	workspace := t.TempDir()
-	if err := os.WriteFile(workspace+"/hello.txt", []byte("Hello"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: workspace,
-		AgentConfig:   domain.AgentConfig{Command: integrationCommand(t)},
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind:        "claude-code",
+		Passthrough: map[string]any{"model": "claude-haiku-4-5", "session_persistence": false},
+		Read:        fakemodel.ReadFile,
+		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			return fakemodel.Launch{
+				Config: domain.AgentConfig{
+					Command:       integrationCommand(t),
+					TurnTimeoutMS: 300000,
+					ReadTimeoutMS: 30000,
+				},
+				Env: map[string]string{
+					"ANTHROPIC_BASE_URL":                       env.URL,
+					"CLAUDE_CONFIG_DIR":                        filepath.Join(env.Home, ".claude"),
+					"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+					// The runtime warms its connection with a HEAD request to
+					// the base address unless a proxy variable is set, and the
+					// endpoint answers only model requests. An https proxy
+					// leaves the plain-http loopback requests direct.
+					"HTTPS_PROXY": "http://127.0.0.1:9",
+				},
+			}
+		},
+		Inspect: func(t *testing.T, run fakemodel.Run) {
+			if run.Environment.Scenario != fakemodel.ScenarioTurn {
+				return
+			}
+			state, ok := run.Session.Internal.(*sessionState)
+			if !ok {
+				t.Fatalf("session.Internal type = %T, want *sessionState", run.Session.Internal)
+			}
+			// A normal turn decides at the terminal-success row and never
+			// consults Work, so the disposition alone does not show the
+			// observer fired against the installed runtime.
+			if !state.work.Observed() {
+				t.Error("state.work.Observed() = false after a scripted turn, want true")
+			}
+		},
 	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
-
-	var mu sync.Mutex
-	var events []domain.AgentEvent
-	onEvent := func(e domain.AgentEvent) {
-		mu.Lock()
-		events = append(events, e)
-		mu.Unlock()
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	prompt := "Read the file hello.txt. Output EXACTLY the file content and absolutely nothing else. No preamble, no explanation."
-
-	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
-		Prompt:  prompt,
-		OnEvent: onEvent,
-	})
-	if err != nil {
-		t.Fatalf("RunTurn: %v", err)
-	}
-
-	mu.Lock()
-	collected := make([]domain.AgentEvent, len(events))
-	copy(collected, events)
-	mu.Unlock()
-
-	if result.SessionID == "" {
-		t.Error("TurnResult.SessionID is empty")
-	}
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-	if len(collected) == 0 {
-		t.Fatal("no events received via OnEvent")
-	}
-
-	assertContainsEventType(t, collected, domain.EventSessionStarted)
-	assertContainsEventType(t, collected, domain.EventTurnCompleted)
-	assertContainsEventType(t, collected, domain.EventTokenUsage)
-	assertNoEventType(t, collected, domain.EventTurnFailed)
-	assertNoEventType(t, collected, domain.EventStartupFailed)
-
-	// Verify at least one EventToolResult with a correlated ToolName.
-	// The prompt causes Claude Code to use the Read tool, producing
-	// tool_use + tool_result content blocks. Asserting != "unknown"
-	// validates that tool_use and tool_result correlation succeeded.
-	var foundToolResult bool
-	for _, e := range collected {
-		if e.Type == domain.EventToolResult && e.ToolName != "" && e.ToolName != "unknown" {
-			foundToolResult = true
-			if e.ToolDurationMS < 0 {
-				t.Errorf("EventToolResult.ToolDurationMS = %d, want >= 0", e.ToolDurationMS)
-			}
-			break
-		}
-	}
-	if !foundToolResult {
-		var toolNames []string
-		for _, e := range collected {
-			if e.Type == domain.EventToolResult {
-				toolNames = append(toolNames, e.ToolName)
-			}
-		}
-		t.Errorf("expected EventToolResult with correlated ToolName; got tool results: %v", toolNames)
-	}
-
-	for _, e := range collected {
-		if e.Type == domain.EventTokenUsage {
-			if e.Usage.InputTokens <= 0 {
-				t.Errorf("EventTokenUsage.InputTokens = %d, want > 0", e.Usage.InputTokens)
-			}
-			if e.Usage.OutputTokens <= 0 {
-				t.Errorf("EventTokenUsage.OutputTokens = %d, want > 0", e.Usage.OutputTokens)
-			}
-			if e.Usage.TotalTokens != e.Usage.InputTokens+e.Usage.OutputTokens {
-				t.Errorf("EventTokenUsage.TotalTokens = %d, want %d (input + output)",
-					e.Usage.TotalTokens, e.Usage.InputTokens+e.Usage.OutputTokens)
-			}
-			break
-		}
-	}
-
-	if result.Usage.TotalTokens <= 0 {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want > 0", result.Usage.TotalTokens)
-	}
-
-	// A normal turn decides at the terminal-success row and never
-	// consults Work, so the disposition above is not itself proof the
-	// observer fired against the installed runtime; read it directly.
-	state, ok := session.Internal.(*sessionState)
-	if !ok {
-		t.Fatalf("session.Internal type = %T, want *sessionState", session.Internal)
-	}
-	if !state.work.Observed() {
-		t.Error("state.work.Observed() = false after a real turn, want true")
-	}
 }
 
 func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
@@ -427,7 +321,8 @@ func TestIntegration_SessionResume(t *testing.T) {
 func TestIntegration_CredentialVerification(t *testing.T) {
 	skipUnlessIntegration(t)
 
-	adapter, err := NewClaudeCodeAdapter(map[string]any{})
+	passthrough := map[string]any{}
+	adapter, err := NewClaudeCodeAdapter(passthrough)
 	if err != nil {
 		t.Fatalf("NewClaudeCodeAdapter: %v", err)
 	}
@@ -439,9 +334,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 	}
 
 	t.Run("working credential verifies", func(t *testing.T) {
-		if _, err := credentialtest.VerifyLive(adapter, params(t)); err != nil {
-			t.Fatalf("VerifyCredential() error = %v, want nil", err)
-		}
+		credentialtest.VerifyLiveUsage(t, "claude-code", adapter, params(t), passthrough)
 	})
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {

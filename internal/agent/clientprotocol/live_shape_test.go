@@ -33,6 +33,11 @@ const (
 	// expectToolForcingTurn adds the tool-call rule, for the one prompt
 	// that forces a tool call.
 	expectToolForcingTurn
+
+	// expectScriptedToolTurn adds the tool-call rule as a violation, for a
+	// turn whose model endpoint scripts the call, so a missing pair is a
+	// regression rather than a model's choice.
+	expectScriptedToolTurn
 )
 
 // shapeObservation is what one capture was measured to carry.
@@ -223,8 +228,13 @@ func recordedShapeViolations(clientLines, agentLines [][]byte, events []domain.A
 		}
 	}
 
-	if expect == expectToolForcingTurn && observed.toolCallPairs == 0 {
-		observations = append(observations, "model-dependent observation: no tool_call was paired with a terminal tool_call_update (completed or failed)")
+	if observed.toolCallPairs == 0 {
+		switch expect {
+		case expectToolForcingTurn:
+			observations = append(observations, "model-dependent observation: no tool_call was paired with a terminal tool_call_update (completed or failed)")
+		case expectScriptedToolTurn:
+			violations = append(violations, "S-10: no tool_call was paired with a terminal tool_call_update (completed or failed)")
+		}
 	}
 
 	return violations, observations, observed
@@ -732,6 +742,27 @@ func TestRecordedShapeViolations(t *testing.T) {
 		if len(observations) != 1 || !strings.HasPrefix(observations[0], "model-dependent observation: ") {
 			t.Errorf("recordedShapeViolations() observations = %v, want exactly one entry prefixed %q", observations, "model-dependent observation: ")
 		}
+		if observed.toolCallPairs != 0 {
+			t.Errorf("observed.toolCallPairs = %d, want 0", observed.toolCallPairs)
+		}
+	})
+
+	t.Run("scripted_turn/clean_capture", func(t *testing.T) {
+		t.Parallel()
+		violations, observations, observed := base.violations(t, expectScriptedToolTurn, toolResultEvents)
+		assertNoViolations(t, violations)
+		assertNoObservations(t, observations)
+		if observed.toolCallPairs == 0 {
+			t.Errorf("observed.toolCallPairs = %d, want greater than 0", observed.toolCallPairs)
+		}
+	})
+
+	t.Run("scripted_turn/S-10/tool_call_removed", func(t *testing.T) {
+		t.Parallel()
+		capture := mutateEveryToolCallRemoved(t, base)
+		violations, observations, observed := capture.violations(t, expectScriptedToolTurn, toolResultEvents)
+		assertViolationsExactly(t, violations, "S-10: no tool_call was paired with a terminal tool_call_update (completed or failed)")
+		assertNoObservations(t, observations)
 		if observed.toolCallPairs != 0 {
 			t.Errorf("observed.toolCallPairs = %d, want 0", observed.toolCallPairs)
 		}

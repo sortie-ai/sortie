@@ -16,6 +16,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest/credentialtest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/fakemodel"
 	"github.com/sortie-ai/sortie/internal/agent/opencode"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -116,39 +117,45 @@ func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Sessio
 	return events, result
 }
 
-// TestIntegration_HappyPathFreshTurn drives one real turn against the
-// live opencode binary and asserts turn_completed, satisfying the
-// shared disposition decision's live-runtime obligation for this
-// adapter. A live opencode turn reports no terminal outcome of its own,
-// so turn_completed is reachable only when the work predicate resolves
-// to present; this test therefore also exercises that predicate against
-// the real wire format, which is the only check that can catch it being
-// internally consistent but wrong.
-func TestIntegration_HappyPathFreshTurn(t *testing.T) {
+// scriptedProviderDocument is the provider configuration that points the
+// runtime's bundled Google provider at the scripted endpoint on url. The key
+// is an {env:} reference because 2.x does not read the provider's key
+// variable on its own.
+func scriptedProviderDocument(url string) string {
+	return fmt.Sprintf(`{"$schema":"https://opencode.ai/config.json","provider":{"scripted":{"npm":"@ai-sdk/google","name":"scripted","options":{"baseURL":"%s/v1beta","apiKey":"{env:GOOGLE_GENERATIVE_AI_API_KEY}"},"models":{"scripted-model":{"name":"scripted-model"}}}}}`, url)
+}
+
+func TestIntegration_ScriptedModel(t *testing.T) {
 	skipIfNotEnabled(t)
 
-	a := mustNewAdapter(t)
-	session := mustStartIntegrationSession(t, a)
-	t.Cleanup(func() { _ = a.StopSession(context.Background(), session) })
-
-	events, result := collectAllEvents(t, a, session, "Reply with exactly: hello")
-
-	if result.ExitReason != domain.EventTurnCompleted {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
-	}
-
-	var sessionStarted bool
-	for _, e := range events {
-		if e.Type == domain.EventSessionStarted {
-			sessionStarted = true
-			if e.SessionID == "" {
-				t.Error("EventSessionStarted has empty SessionID")
+	fakemodel.AssertConformance(t, fakemodel.Binding{
+		Kind: "opencode",
+		Passthrough: map[string]any{
+			"model":                        "scripted/scripted-model",
+			"dangerously_skip_permissions": true,
+			"disable_autocompact":          true,
+		},
+		CredentialEnv: []string{"GOOGLE_GENERATIVE_AI_API_KEY"},
+		Read:          fakemodel.ReadFile,
+		Launch: func(t *testing.T, env fakemodel.Environment) fakemodel.Launch {
+			// The adapter drops an inherited OPENCODE_CONFIG_CONTENT and writes
+			// its own, so the provider rides in a file OPENCODE_CONFIG names.
+			document := filepath.Join(env.Home, "scripted-provider.json")
+			if err := os.WriteFile(document, []byte(scriptedProviderDocument(env.URL)), 0o600); err != nil {
+				t.Fatalf("write %s: %v", document, err)
 			}
-		}
-	}
-	if !sessionStarted {
-		t.Error("no session_started event emitted")
-	}
+			return fakemodel.Launch{
+				Config: domain.AgentConfig{
+					Command: integrationCommand(),
+					// A first launch on an isolated home runs the database
+					// migration every time.
+					TurnTimeoutMS: 300000,
+					ReadTimeoutMS: 180000,
+				},
+				Env: map[string]string{"OPENCODE_CONFIG": document},
+			}
+		},
+	})
 }
 
 func TestIntegration_SessionResume(t *testing.T) {
@@ -678,9 +685,7 @@ func TestIntegration_CredentialVerification(t *testing.T) {
 		WorkspacePath: t.TempDir(),
 		AgentConfig:   domain.AgentConfig{Command: integrationCommand(), ReadTimeoutMS: 30000},
 	}
-	if _, err := credentialtest.VerifyLive(adapter, params); err != nil {
-		t.Fatalf("VerifyCredential() error = %v, want nil", err)
-	}
+	credentialtest.VerifyLiveUsage(t, "opencode", adapter, params, integrationConfig())
 
 	t.Run("refused credential ends credential_unverified", func(t *testing.T) {
 		credentialtest.SetRefusedCredential(t, "SORTIE_OPENCODE_CREDENTIAL_ENV")
