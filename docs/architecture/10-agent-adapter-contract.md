@@ -6,8 +6,9 @@ This section defines the interface contract that all agent adapters must satisfy
 
 An agent adapter must implement the following operations:
 
-- `StartSession(workspace, config) -> Session`
+- `StartSession(workspace, config, settings) -> Session`
   - Launch or connect to an agent process/service in the given workspace.
+  - `settings` is the settings block of the session's agent kind. It is read-only, and absent reads as an empty block.
   - Returns an opaque session handle.
 - `RunTurn(session, prompt, issue, on_event) -> TurnResult`
   - Execute one agent turn with the given prompt.
@@ -15,6 +16,8 @@ An agent adapter must implement the following operations:
   - Returns when the turn completes (success, failure, or timeout).
 - `StopSession(session)`
   - Terminate the agent process/service cleanly.
+
+An adapter is constructed once per process, with no settings, and holds none: every setting reaches it as the `settings` input of the session it starts, and the adapter keeps what it parsed in that session's own state for `RunTurn` and `StopSession`. A block the adapter cannot parse fails `StartSession` before anything launches, with the `agent_not_found` error kind wrapping the fault and carrying the text the kind's offline validator reports for the same fault. Preflight refuses such a block before a session starts, so this is the second line. A kind that reads `model` and `effort` reads `model` through the one shared reader, as it reads `effort`, and delivers its session's values on every turn, the first turn of a resumed session included, exactly as for a new session. It never relies on the runtime remembering an earlier value: a runtime may keep a session's model and forget its level.
 
 A registered kind declares `Deprecation`, `nil` for a kind that is not deprecated and non-nil naming the replacement kind for one that is, and no built-in kind declares a deprecation. A deprecated kind stays registered and constructs and runs unchanged; the declaration is read-only after registration. A configuration reaching a deprecated kind draws one advisory, reported once as a `sortie validate` warning and once per appearance in the run log, naming the kind and its replacement.
 
@@ -497,7 +500,7 @@ One adapter sits outside the common shape. Codex reaches no work row at all, bec
 
 ### 10.9 Credential Verification
 
-Before the working session's first turn, the worker runs one shared step, common to every kind that launches a runtime: it starts a separate session through the adapter's own `StartSession`, sends one fixed request with `RunTurn`, stops that session, and judges the outcome with one verdict table. A failure ends the run before any working session, with the `credential_unverified` error kind (§10.5), or, for a runtime that exits before it responds, the early-exit report (§10.7), retried with exponential backoff; a success is followed by the working `StartSession` with the worker's own parameters, the same ones the verification step started from before overriding three of them for its own session. The step's own spend joins the run's usage as an offset applied to every later figure the working session reports (§13.5).
+Before the working session's first turn, the worker runs one shared step, common to every kind that launches a runtime: it starts a separate session through the adapter's own `StartSession`, sends one fixed request with `RunTurn`, stops that session, and judges the outcome with one verdict table. A failure ends the run before any working session, with the `credential_unverified` error kind (§10.5), or, for a runtime that exits before it responds, the early-exit report (§10.7), retried with exponential backoff; a success is followed by the working `StartSession` with the worker's own parameters, the same ones the verification step started from before overriding three of them for its own session. The session's settings block is one of the shared parameters, so the verification session runs with the same `model` and `effort` the working session will. The step's own spend joins the run's usage as an offset applied to every later figure the working session reports (§13.5).
 
 The step is shared across every kind; an adapter contributes only three things:
 
