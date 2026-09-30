@@ -353,6 +353,32 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 	}
 }
 
+func TestRunTurn_TokenAccumulationIsPerSession(t *testing.T) {
+	t.Parallel()
+
+	adapter, cheap := mustStartMock(t, map[string]any{"input_tokens_per_turn": 10, "output_tokens_per_turn": 1})
+	costly := startMockSession(t, adapter, map[string]any{"input_tokens_per_turn": 1000, "output_tokens_per_turn": 100})
+
+	turns := []struct {
+		sess domain.Session
+		want domain.TokenUsage
+	}{
+		{cheap, domain.TokenUsage{InputTokens: 10, OutputTokens: 1, TotalTokens: 11}},
+		{costly, domain.TokenUsage{InputTokens: 1000, OutputTokens: 100, TotalTokens: 1100}},
+		{cheap, domain.TokenUsage{InputTokens: 20, OutputTokens: 2, TotalTokens: 22}},
+		{costly, domain.TokenUsage{InputTokens: 2000, OutputTokens: 200, TotalTokens: 2200}},
+	}
+	for i, turn := range turns {
+		result, err := adapter.RunTurn(context.Background(), turn.sess, defaultParams())
+		if err != nil {
+			t.Fatalf("turn %d: RunTurn() error = %v", i+1, err)
+		}
+		if result.Usage != turn.want {
+			t.Errorf("turn %d: Usage = %+v, want %+v", i+1, result.Usage, turn.want)
+		}
+	}
+}
+
 // TestRunTurn_AssertUsageContract drives three turns and checks the
 // full emitted event sequence against the shared usage contract: every
 // component non-negative, TotalTokens equal to InputTokens plus

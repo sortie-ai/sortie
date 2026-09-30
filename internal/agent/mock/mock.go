@@ -81,9 +81,17 @@ type mockSettings struct {
 	credentialError        string
 }
 
+func (s *mockSessionState) accrueTurnUsage() {
+	s.usage.InputTokens += int64(s.inputTokensPerTurn)
+	s.usage.OutputTokens += int64(s.outputTokensPerTurn)
+	s.usage.CacheReadTokens += int64(s.cacheReadTokensPerTurn)
+	s.usage.TotalTokens = s.usage.InputTokens + s.usage.OutputTokens
+}
+
 type mockSessionState struct {
 	mockSettings
 	credentialVerification bool
+	usage                  domain.TokenUsage
 }
 
 // mockToolCall describes a single tool call to emit as a tool_result
@@ -106,7 +114,7 @@ type mockToolCall struct {
 // cache reads, so cache_read_tokens_per_turn is a subset of it rather
 // than an addition to it. The adapter reports run-cumulative counts by
 // construction: each turn's contribution accrues onto the totals of
-// every prior turn the adapter ran, whichever session ran it.
+// every prior turn in the same session.
 // report_token_usage defaults to true; when false, the adapter emits no
 // token_usage event, leaves [domain.TurnResult] Usage at the zero
 // value, and reports UsageMeasured false, simulating a runtime that
@@ -252,6 +260,10 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	currentIndex := m.turnIndex
 	m.turnIndex++
 	outcome := state.outcomeAt(currentIndex)
+	if state.reportTokenUsage {
+		state.accrueTurnUsage()
+	}
+	usage := state.usage
 	m.mu.Unlock()
 
 	// Artificial delay (outside lock).
@@ -289,18 +301,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
-	var usage domain.TokenUsage
 	if state.reportTokenUsage {
-		cumulativeInput := int64(currentIndex+1) * int64(state.inputTokensPerTurn)
-		cumulativeOutput := int64(currentIndex+1) * int64(state.outputTokensPerTurn)
-		cumulativeCacheRead := int64(currentIndex+1) * int64(state.cacheReadTokensPerTurn)
-		usage = domain.TokenUsage{
-			InputTokens:     cumulativeInput,
-			OutputTokens:    cumulativeOutput,
-			TotalTokens:     cumulativeInput + cumulativeOutput,
-			CacheReadTokens: cumulativeCacheRead,
-		}
-
 		tokenEvt := domain.AgentEvent{
 			Type:      domain.EventTokenUsage,
 			Timestamp: time.Now().UTC(),
